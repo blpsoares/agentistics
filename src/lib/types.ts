@@ -48,6 +48,8 @@ export interface SessionMeta {
   user_message_count: number
   assistant_message_count: number
   tool_counts: Record<string, number>
+  tool_output_tokens: Record<string, number>
+  agent_file_reads: Record<string, number>
   languages: string[]
   git_commits: number
   git_pushes: number

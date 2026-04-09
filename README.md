@@ -102,6 +102,8 @@ Arquivo .jsonl
   ├── Conta mensagens do usuário (excluindo tool_result)
   ├── Conta mensagens do assistente (type: 'assistant')
   ├── Mapeia tool_use → tool_counts { Bash: N, Read: N, Edit: N, ... }
+  ├── Atribui tokens de saída por ferramenta (tool_output_tokens)
+  ├── Detecta leituras de arquivos de instrução (CLAUDE.md, AGENTS.md, etc.)
   ├── Extrai tokens do campo usage (input, output, cacheRead, cacheWrite)
   ├── Detecta commits: regex /^git commit\b/ em inputs do Bash
   ├── Detecta pushes: regex /^git push\b/ em inputs do Bash
@@ -123,6 +125,8 @@ interface SessionMeta {
   user_message_count: number      // Mensagens reais do usuário
   assistant_message_count: number // Respostas do modelo
   tool_counts: Record<string, number>  // ex: { Bash: 12, Read: 8 }
+  tool_output_tokens: Record<string, number>  // tokens de saída por ferramenta
+  agent_file_reads: Record<string, number>    // leituras de arquivos de instrução
   languages: string[]             // Linguagens detectadas
   git_commits: number             // Commits via Claude
   git_pushes: number              // Pushes via Claude
@@ -354,6 +358,51 @@ Todos os cards são **drag-and-drop** e a ordem é salva em `localStorage`. Cada
 
 ---
 
+## Métricas Profundas de Ferramentas (Deep Tool Metrics)
+
+O painel de **Métricas de Ferramentas** oferece uma análise detalhada do uso de cada ferramenta pelo Claude:
+
+### Ranking por Chamadas ou Tokens
+
+Duas visualizações disponíveis via toggle:
+
+- **Por chamadas** — ranking de ferramentas pelo número de invocações
+- **Por tokens gastos** — ranking pelo total de tokens de saída atribuídos a cada ferramenta
+
+A atribuição de tokens funciona assim:
+```
+Para cada mensagem do assistente com N tool_use blocks:
+  tokens_por_ferramenta = output_tokens ÷ N
+  Acumula em tool_output_tokens[ferramenta] += tokens_por_ferramenta
+```
+
+Ferramentas que consomem mais de 40% do total são destacadas em vermelho como "vilões" de token.
+
+### Leituras de Arquivos de Instrução (Agent Files)
+
+Detecta e contabiliza leituras de arquivos de instrução/configuração de agentes:
+
+| Padrão Detectado | Categoria |
+|-------------------|-----------|
+| `CLAUDE.md` | CLAUDE.md |
+| `AGENTS.md` | AGENTS.md |
+| `.cursorrules`, `.cursorignore` | .cursorrules |
+| `.claude/*` (qualquer arquivo) | .claude/* |
+| `copilot-instructions.md` | copilot-instructions |
+| `CONVENTIONS.md` | CONVENTIONS.md |
+| `.windsurfrules` | .windsurfrules |
+
+Cada leitura de arquivo de instrução adiciona tokens ao contexto do modelo. Quando o total de leituras é alto, o painel exibe uma dica sugerindo consolidação.
+
+### Alertas de Saúde (Health Alerts)
+
+Integração com o sistema de alertas existente:
+
+- **Tool token villain** (info) — disparado quando uma ferramenta consome >60% dos tokens totais de saída
+- **Agent file reads high** (info) — disparado quando arquivos de instrução são lidos mais de 50 vezes no total
+
+---
+
 ## Exportação PDF
 
 O modal de exportação permite configurar um relatório completo:
@@ -438,7 +487,8 @@ claude-stats/
 │   │   ├── ProjectsList.tsx
 │   │   ├── ProjectsModal.tsx
 │   │   ├── RecentSessions.tsx
-│   │   └── StatCard.tsx
+│   │   ├── StatCard.tsx
+│   │   └── ToolMetricsPanel.tsx
 │   └── lib/
 │       ├── types.ts         # Tipos TypeScript + MODEL_PRICING
 │       ├── i18n.ts          # Traduções PT/EN
@@ -504,6 +554,7 @@ App.tsx
 ├── HourChart
 ├── ModelBreakdown
 ├── ProjectsList
+├── ToolMetricsPanel         # Ranking de ferramentas + arquivos de instrução
 ├── RecentSessions
 └── HighlightsBoard
 ```

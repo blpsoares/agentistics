@@ -21,6 +21,7 @@ import { HighlightsBoard } from './components/HighlightsBoard'
 import { InfoModal } from './components/InfoModal'
 import { PDFExportModal } from './components/PDFExportModal'
 import { HealthWarnings } from './components/HealthWarnings'
+import { ToolMetricsPanel } from './components/ToolMetricsPanel'
 import { format, parseISO, parse } from 'date-fns'
 
 function Section({ title, children, action, onExpand }: {
@@ -1065,8 +1066,13 @@ export default function App() {
           </Section>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Section title={<><Wrench size={14} /> {lang === 'pt' ? 'Ferramentas mais usadas' : 'Most used tools'}</>}>
-              <TagCloud data={derived.toolCounts} color="var(--accent-green)" />
+            <Section title={<><Wrench size={14} /> {lang === 'pt' ? 'Métricas de ferramentas' : 'Tool metrics'}</>}>
+              <ToolMetricsPanel
+                toolCounts={derived.toolCounts}
+                toolOutputTokens={derived.toolOutputTokens}
+                agentFileReads={derived.agentFileReads}
+                lang={lang}
+              />
             </Section>
 
             <Section title={<><FileCode size={14} /> {lang === 'pt' ? 'Linguagens' : 'Languages'}</>}>

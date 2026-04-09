@@ -53,7 +53,14 @@ export const translations: Record<Lang, Record<string, string>> = {
     'section.top_projects': 'Principais projetos',
     'section.recent_sessions': 'Sessões recentes',
     'section.tools': 'Ferramentas',
+    'section.tool_metrics': 'Métricas de ferramentas',
     'section.languages': 'Linguagens',
+
+    // Tool metrics
+    'tools.by_calls': 'Por chamadas',
+    'tools.by_tokens': 'Por tokens gastos',
+    'tools.agent_file_reads': 'Leituras de arquivos de instrução',
+    'tools.agent_file_tip': 'Dica: Cada leitura de arquivo de instrução adiciona tokens ao contexto. Consolide arquivos quando possível.',
 
     // Sessions
     'sessions.filter': 'Filtrar',
@@ -187,7 +194,14 @@ export const translations: Record<Lang, Record<string, string>> = {
     'section.top_projects': 'Top projects',
     'section.recent_sessions': 'Recent sessions',
     'section.tools': 'Tools',
+    'section.tool_metrics': 'Tool metrics',
     'section.languages': 'Languages',
+
+    // Tool metrics
+    'tools.by_calls': 'By calls',
+    'tools.by_tokens': 'By token spend',
+    'tools.agent_file_reads': 'Agent instruction file reads',
+    'tools.agent_file_tip': 'Tip: Each instruction file read adds tokens to context. Consolidate files when possible.',
 
     // Sessions
     'sessions.filter': 'Filter',
