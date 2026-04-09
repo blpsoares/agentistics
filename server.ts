@@ -5,7 +5,7 @@ import { promisify } from 'util'
 
 const execAsync = promisify(exec)
 
-const CLAUDE_DIR = join(process.env.HOME || '/home/mithrandir', '.claude')
+const CLAUDE_DIR = join(process.env.HOME ?? process.env.USERPROFILE ?? '', '.claude')
 const PROJECTS_DIR = join(CLAUDE_DIR, 'projects')
 const SESSION_META_DIR = join(CLAUDE_DIR, 'usage-data', 'session-meta')
 const STATS_CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json')
@@ -187,14 +187,23 @@ async function parseSessionJsonl(
   let cwd = '', startTime = '', lastTime = '', firstPrompt = ''
   let userMsgs = 0, assistantMsgs = 0, inputTokens = 0, outputTokens = 0
   let gitCommits = 0, gitPushes = 0
+  let toolErrors = 0, userInterruptions = 0
+  let hasMcp = false
   const toolCounts: Record<string, number> = {}
+  const toolErrorCategories: Record<string, number> = {}
   const messageHours: number[] = []
+  const userMessageTimestamps: string[] = []
+  const userResponseTimes: number[] = []
+  const languageSet = new Set<string>()
+  // Maps tool_use_id → tool name for error attribution
+  const toolUseIdToName = new Map<string, string>()
+  let lastAssistantTs = ''
 
   for (const raw of content.split('\n')) {
-    const trimmed = raw.trim()
-    if (!trimmed) continue
+    const line = raw.trim()
+    if (!line) continue
     let e: Record<string, unknown>
-    try { e = JSON.parse(trimmed) } catch { continue }
+    try { e = JSON.parse(line) } catch { continue }
 
     if (!cwd && e.cwd) cwd = e.cwd as string
     const ts = e.timestamp as string | undefined
@@ -205,14 +214,50 @@ async function parseSessionJsonl(
     }
 
     if (e.type === 'user') {
-      userMsgs++
-      if (!firstPrompt && Array.isArray((e.message as Record<string,unknown>)?.content)) {
-        for (const p of (e.message as Record<string, unknown[]>).content as Record<string,unknown>[]) {
-          if (p.type === 'text' && typeof p.text === 'string') { firstPrompt = (p.text as string).slice(0, 200); break }
+      const msgContent = (e.message as Record<string, unknown> | undefined)?.content
+      const contentArr = Array.isArray(msgContent) ? msgContent as Record<string, unknown>[] : null
+
+      // Tool result messages: content is an array where every item is type='tool_result'
+      const isPureToolResult = contentArr !== null && contentArr.length > 0 &&
+        contentArr.every(p => p.type === 'tool_result')
+
+      if (isPureToolResult) {
+        // Count tool errors and attribute them to the originating tool
+        for (const p of contentArr!) {
+          if (p.is_error === true) {
+            toolErrors++
+            const toolName = toolUseIdToName.get(p.tool_use_id as string) ?? 'unknown'
+            toolErrorCategories[toolName] = (toolErrorCategories[toolName] ?? 0) + 1
+          }
+        }
+      } else {
+        // Real human message (initial prompt or interruption)
+        userMsgs++
+        if (ts) {
+          userMessageTimestamps.push(ts)
+          // Response time: how long since the last assistant message
+          if (lastAssistantTs) {
+            const delta = (new Date(ts).getTime() - new Date(lastAssistantTs).getTime()) / 1000
+            if (delta >= 0 && delta < 3600) userResponseTimes.push(Math.round(delta))
+          }
+        }
+        // All messages after the first count as interruptions
+        if (userMsgs > 1) userInterruptions++
+
+        if (!firstPrompt && contentArr) {
+          for (const p of contentArr) {
+            if (p.type === 'text' && typeof p.text === 'string') {
+              firstPrompt = (p.text as string).slice(0, 200)
+              break
+            }
+          }
+        } else if (!firstPrompt && typeof msgContent === 'string') {
+          firstPrompt = msgContent.slice(0, 200)
         }
       }
     } else if (e.type === 'assistant') {
       assistantMsgs++
+      if (ts) lastAssistantTs = ts
       const msg = e.message as Record<string, unknown> | undefined
       if (msg?.usage) {
         const u = msg.usage as Record<string, number>
@@ -220,19 +265,34 @@ async function parseSessionJsonl(
         outputTokens += u.output_tokens ?? 0
       }
       if (Array.isArray(msg?.content)) {
-        for (const p of msg!.content as Record<string,unknown>[]) {
+        for (const p of msg!.content as Record<string, unknown>[]) {
           if (p.type === 'tool_use' && typeof p.name === 'string') {
-            toolCounts[p.name] = (toolCounts[p.name] ?? 0) + 1
-            // Count git commits and pushes from Bash tool calls.
-            // Split on shell operators so we only match actual shell commands,
-            // not git commands embedded inside python -c "..." strings.
-            if (p.name === 'Bash') {
+            const toolName = p.name as string
+            toolCounts[toolName] = (toolCounts[toolName] ?? 0) + 1
+
+            // Track id→name for error attribution
+            if (typeof p.id === 'string') toolUseIdToName.set(p.id, toolName)
+
+            if (toolName.startsWith('mcp__')) hasMcp = true
+
+            // Count git commits/pushes from Bash tool calls
+            if (toolName === 'Bash') {
               const cmd = (p.input as Record<string, string> | undefined)?.command ?? ''
-              const segments = cmd.split(/&&|\|\||;|\n/)
-              for (const seg of segments) {
-                const trimmed = seg.trim()
-                if (/^(cd\s+\S+\s+&&\s+)?git\s+commit\b/.test(trimmed)) gitCommits++
-                if (/^(cd\s+\S+\s+&&\s+)?git\s+push\b/.test(trimmed)) gitPushes++
+              for (const seg of cmd.split(/&&|\|\||;|\n/)) {
+                const s = seg.trim()
+                if (/^(cd\s+\S+\s+&&\s+)?git\s+commit\b/.test(s)) gitCommits++
+                if (/^(cd\s+\S+\s+&&\s+)?git\s+push\b/.test(s)) gitPushes++
+              }
+            }
+
+            // Detect language from file-based tool calls
+            if (['Read', 'Edit', 'Write', 'MultiEdit'].includes(toolName)) {
+              const inp = p.input as Record<string, string> | undefined
+              const fp = inp?.file_path ?? inp?.path ?? ''
+              if (fp) {
+                const ext = fp.split('.').pop()?.toLowerCase() ?? ''
+                const lang = EXT_TO_LANG[ext]
+                if (lang) languageSet.add(lang)
               }
             }
           }
@@ -258,25 +318,25 @@ async function parseSessionJsonl(
     user_message_count: userMsgs,
     assistant_message_count: assistantMsgs,
     tool_counts: toolCounts,
-    languages: [],
+    languages: Array.from(languageSet),
     git_commits: gitCommits,
     git_pushes: gitPushes,
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     first_prompt: firstPrompt,
-    user_interruptions: 0,
-    user_response_times: [],
-    tool_errors: 0,
-    tool_error_categories: {},
-    uses_task_agent: false,
-    uses_mcp: false,
-    uses_web_search: false,
-    uses_web_fetch: false,
+    user_interruptions: userInterruptions,
+    user_response_times: userResponseTimes,
+    tool_errors: toolErrors,
+    tool_error_categories: toolErrorCategories,
+    uses_task_agent: 'Task' in toolCounts || 'Agent' in toolCounts,
+    uses_mcp: hasMcp,
+    uses_web_search: 'WebSearch' in toolCounts,
+    uses_web_fetch: 'WebFetch' in toolCounts,
     lines_added: gitFileStats.linesAdded,
     lines_removed: gitFileStats.linesRemoved,
     files_modified: gitFileStats.filesModified,
     message_hours: messageHours,
-    user_message_timestamps: [],
+    user_message_timestamps: userMessageTimestamps,
     _source: source,
   }
 }
@@ -350,6 +410,22 @@ async function getProjectGitStats(projectPath: string): Promise<ProjectGitStats 
 
 // UUID regex: 8-4-4-4-12 hex groups
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// File extension → language name (used when session-meta is absent)
+const EXT_TO_LANG: Record<string, string> = {
+  ts: 'TypeScript', tsx: 'TypeScript', js: 'JavaScript', jsx: 'JavaScript',
+  mjs: 'JavaScript', cjs: 'JavaScript',
+  py: 'Python', rb: 'Ruby', go: 'Go', rs: 'Rust', java: 'Java',
+  cs: 'C#', cpp: 'C++', cc: 'C++', cxx: 'C++', c: 'C', h: 'C', hpp: 'C++',
+  php: 'PHP', swift: 'Swift', kt: 'Kotlin', scala: 'Scala',
+  sh: 'Shell', bash: 'Shell', zsh: 'Shell',
+  sql: 'SQL', html: 'HTML', css: 'CSS', scss: 'CSS', sass: 'CSS',
+  json: 'JSON', yaml: 'YAML', yml: 'YAML', toml: 'TOML', xml: 'XML',
+  md: 'Markdown', mdx: 'Markdown',
+  r: 'R', lua: 'Lua', dart: 'Dart', ex: 'Elixir', exs: 'Elixir',
+  clj: 'Clojure', hs: 'Haskell', ml: 'OCaml', fs: 'F#',
+  vue: 'Vue', svelte: 'Svelte',
+}
 
 // ---------------------------------------------------------------------------
 // Load session-meta files (rich data, recent sessions only)
