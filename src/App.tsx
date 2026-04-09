@@ -361,23 +361,27 @@ export default function App() {
       },
       {
         label: pt ? 'Commits' : 'Commits',
-        source: '~/.claude/usage-data/session-meta/*.json → git_commits, git_pushes',
+        source: pt
+          ? '~/.claude/projects/**/*.jsonl → comandos git commit/push nas chamadas Bash'
+          : '~/.claude/projects/**/*.jsonl → git commit/push commands in Bash tool calls',
         formula: pt
           ? 'Σ git_commits das sessões no período\nΣ git_pushes das sessões no período'
           : 'Σ git_commits for sessions in the period\nΣ git_pushes for sessions in the period',
         note: pt
-          ? '⚠ Cobertura parcial: session-meta só existe para ~21% das sessões (Mar–Abr 2026). O valor exibido NÃO representa o total histórico de commits — apenas os capturados durante sessões com meta. O período de cobertura é mostrado no card.'
-          : '⚠ Partial coverage: session-meta only exists for ~21% of sessions (Mar–Apr 2026). The value shown does NOT represent the total historical commits — only those captured during sessions with meta files. Coverage period is shown on the card.',
+          ? 'Conta apenas commits e pushes executados pelo Claude via ferramenta Bash. Commits feitos manualmente no terminal não são capturados. Para histórico completo do repositório, use git log diretamente.'
+          : 'Counts only commits and pushes executed by Claude via the Bash tool. Commits made manually in the terminal are not captured. For full repository history, use git log directly.',
       },
       {
         label: pt ? 'Arquivos modificados' : 'Files modified',
-        source: '~/.claude/usage-data/session-meta/*.json → files_modified, lines_added, lines_removed',
+        source: pt
+          ? '~/.claude/projects/**/*.jsonl → git log --numstat por sessão'
+          : '~/.claude/projects/**/*.jsonl → git log --numstat per session',
         formula: pt
           ? 'Σ files_modified das sessões filtradas\nΣ lines_added  |  Σ lines_removed'
           : 'Σ files_modified for filtered sessions\nΣ lines_added  |  Σ lines_removed',
         note: pt
-          ? '⚠ Mesma limitação de cobertura que Commits: dados disponíveis apenas nas sessões com session-meta (Mar–Abr 2026). Não reflete o histórico completo de arquivos modificados.'
-          : '⚠ Same coverage limitation as Commits: data only available from sessions with session-meta (Mar–Apr 2026). Does not reflect the full history of modified files.',
+          ? 'Calculado via git log --numstat no intervalo de tempo de cada sessão. Requer que o projeto seja um repositório git e que git esteja instalado.'
+          : 'Calculated via git log --numstat over each session\'s time window. Requires the project to be a git repository and git to be installed.',
       },
       {
         label: pt ? 'Tokens de entrada' : 'Input tokens',
@@ -648,52 +652,28 @@ export default function App() {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Commits' : 'Commits'}
-          value={derived.metaCoverageFrom ? derived.gitCommits : '—'}
-          sub={(() => {
-            if (!derived.metaCoverageFrom) return lang === 'pt' ? 'sem dados session-meta' : 'no session-meta data'
-            const from = derived.metaCoverageFrom ? format(parseISO(derived.metaCoverageFrom), 'MMM d') : ''
-            const to = derived.metaCoverageTo ? format(parseISO(derived.metaCoverageTo), 'MMM d') : ''
-            return `${derived.gitPushes} pushes · ${from}–${to} only`
-          })()}
+          value={derived.gitCommits}
+          sub={derived.gitPushes > 0
+            ? `${derived.gitPushes} ${lang === 'pt' ? 'pushes via Claude' : 'pushes via Claude'}`
+            : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls'}
           icon={<GitCommit size={15} />}
           accent="var(--accent-cyan)"
           info={infoItems[6]}
           onInfoClick={() => setInfoModalIndex(6)}
-          action={
-            <button
-              onClick={() => setInfoModalIndex(6)}
-              title={lang === 'pt' ? 'Cobertura parcial — clique para detalhes' : 'Partial coverage — click for details'}
-              style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color: '#f59e0b' }}
-            >
-              <AlertTriangle size={13} />
-            </button>
-          }
         />
       )
     } else if (id === 'files') {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Arquivos' : 'Files'}
-          value={derived.metaCoverageFrom ? derived.filesModified : '—'}
-          sub={(() => {
-            if (!derived.metaCoverageFrom) return lang === 'pt' ? 'sem dados session-meta' : 'no session-meta data'
-            const from = derived.metaCoverageFrom ? format(parseISO(derived.metaCoverageFrom), 'MMM d') : ''
-            const to = derived.metaCoverageTo ? format(parseISO(derived.metaCoverageTo), 'MMM d') : ''
-            return `+${fmt(derived.linesAdded)} / -${fmt(derived.linesRemoved)} · ${from}–${to} only`
-          })()}
+          value={derived.filesModified}
+          sub={derived.linesAdded + derived.linesRemoved > 0
+            ? `+${fmt(derived.linesAdded)} / -${fmt(derived.linesRemoved)} linhas`
+            : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls'}
           icon={<FileCode size={15} />}
           accent="var(--accent-green)"
           info={infoItems[7]}
           onInfoClick={() => setInfoModalIndex(7)}
-          action={
-            <button
-              onClick={() => setInfoModalIndex(7)}
-              title={lang === 'pt' ? 'Cobertura parcial — clique para detalhes' : 'Partial coverage — click for details'}
-              style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color: '#f59e0b' }}
-            >
-              <AlertTriangle size={13} />
-            </button>
-          }
         />
       )
     }
