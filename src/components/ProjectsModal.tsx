@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Search, X, Check } from 'lucide-react'
+import { formatProjectName } from '../lib/types'
 
 interface Props {
   projects: { path: string; sessions: { sessionId: string; created: string }[] }[]
@@ -10,13 +11,6 @@ interface Props {
   lang: 'pt' | 'en'
 }
 
-const HOME = '/home/mithrandir'
-
-function formatProjectName(path: string): string {
-  if (path === HOME) return '~ (home)'
-  if (path.startsWith(HOME + '/')) return '~/' + path.slice(HOME.length + 1)
-  return path.split('/').filter(Boolean).pop() ?? path
-}
 
 const T = {
   pt: {
