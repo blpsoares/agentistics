@@ -57,7 +57,7 @@ Claude Stats é um dashboard local de analytics para uso do **Claude Code**. Ele
 
 ```bash
 # Clone o repositório
-git clone <url-do-repositório>
+git clone https://github.com/blpsoares/claude-stats.git
 cd claude-stats
 
 # Instale as dependências
