@@ -8,7 +8,7 @@ import {
 import { useData, useDerivedStats } from './hooks/useData'
 import type { Filters } from './lib/types'
 import type { Lang, Theme } from './lib/types'
-import { formatProjectName, MODEL_PRICING } from './lib/types'
+import { formatProjectName, setHomeDir, MODEL_PRICING } from './lib/types'
 import { StatCard } from './components/StatCard'
 import { ActivityHeatmap } from './components/ActivityHeatmap'
 import { ActivityChart } from './components/ActivityChart'
@@ -20,6 +20,7 @@ import { RecentSessions } from './components/RecentSessions'
 import { HighlightsBoard } from './components/HighlightsBoard'
 import { InfoModal } from './components/InfoModal'
 import { PDFExportModal } from './components/PDFExportModal'
+import { HealthWarnings } from './components/HealthWarnings'
 import { format, parseISO, parse } from 'date-fns'
 
 function Section({ title, children, action, onExpand }: {
@@ -217,6 +218,10 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
+
+  useEffect(() => {
+    if (data?.homeDir) setHomeDir(data.homeDir)
+  }, [data?.homeDir])
 
   useEffect(() => {
     // Compare against window.scrollY (not getBoundingClientRect) so layout shifts
@@ -861,6 +866,11 @@ export default function App() {
               <Download size={13} />
               {lang === 'pt' ? 'Exportar' : 'Export'}
             </button>
+
+            {/* Health warnings */}
+            {data?.healthIssues && data.healthIssues.length > 0 && (
+              <HealthWarnings issues={data.healthIssues} lang={lang} />
+            )}
 
             {/* Refresh */}
             <button

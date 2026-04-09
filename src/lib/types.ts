@@ -98,11 +98,22 @@ export interface Project {
   git_stats?: ProjectGitStats
 }
 
+export interface HealthIssue {
+  id: string
+  severity: 'error' | 'warning' | 'info'
+  title: string
+  description: string
+  guide?: string
+  auto_fixed?: boolean
+}
+
 export interface AppData {
   statsCache: StatsCache
   sessions: SessionMeta[]
   projects: Project[]
   allSessions: SessionIndex[]
+  healthIssues?: HealthIssue[]
+  homeDir?: string
 }
 
 export type DateRange = '7d' | '30d' | '90d' | 'all'
@@ -162,14 +173,18 @@ export function formatModel(modelId: string): string {
   return map[modelId] ?? modelId
 }
 
-const HOME = '/home/mithrandir'
+let _homeDir = ''
+
+export function setHomeDir(dir: string) {
+  _homeDir = dir
+}
 
 export function formatProjectName(projectPath: string): string {
   if (!projectPath) return 'Unknown'
   const normalized = projectPath.replace(/\\/g, '/')
-  if (normalized === HOME) return '~ (home)'
-  if (normalized.startsWith(HOME + '/')) {
-    return '~/' + normalized.slice(HOME.length + 1)
+  if (_homeDir) {
+    if (normalized === _homeDir) return '~ (home)'
+    if (normalized.startsWith(_homeDir + '/')) return '~/' + normalized.slice(_homeDir.length + 1)
   }
   return normalized
 }

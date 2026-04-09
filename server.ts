@@ -1,11 +1,12 @@
-import { readdir, readFile, stat } from 'fs/promises'
+import { readdir, readFile, stat, unlink } from 'fs/promises'
 import { join } from 'path'
 import { exec } from 'child_process'
 import { promisify } from 'util'
 
 const execAsync = promisify(exec)
 
-const CLAUDE_DIR = join(process.env.HOME ?? process.env.USERPROFILE ?? '', '.claude')
+const HOME_DIR = process.env.HOME ?? process.env.USERPROFILE ?? ''
+const CLAUDE_DIR = join(HOME_DIR, '.claude')
 const PROJECTS_DIR = join(CLAUDE_DIR, 'projects')
 const SESSION_META_DIR = join(CLAUDE_DIR, 'usage-data', 'session-meta')
 const STATS_CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json')
@@ -64,11 +65,22 @@ interface SessionMeta {
   _source: 'meta' | 'jsonl' | 'subdir'
 }
 
+interface HealthIssue {
+  id: string
+  severity: 'error' | 'warning' | 'info'
+  title: string
+  description: string
+  guide?: string
+  auto_fixed?: boolean
+}
+
 interface ApiResponse {
   statsCache: StatsCache
   projects: Project[]
   allSessions: []
   sessions: SessionMeta[]
+  healthIssues: HealthIssue[]
+  homeDir: string
 }
 
 // ---------------------------------------------------------------------------
@@ -674,6 +686,122 @@ function enrichProjectSessions(projects: Project[], metaMap: Map<string, Session
 }
 
 // ---------------------------------------------------------------------------
+// Health checks — run on every request, auto-fix what's possible silently
+// ---------------------------------------------------------------------------
+
+async function runHealthChecks(): Promise<HealthIssue[]> {
+  const issues: HealthIssue[] = []
+
+  // 1. Check projects dir
+  const projDirStat = await safeStat(PROJECTS_DIR)
+  if (!projDirStat?.isDirectory()) {
+    issues.push({
+      id: 'projects-dir-missing',
+      severity: 'error',
+      title: 'Projects directory not found',
+      description: `~/.claude/projects/ was not found (looked at: ${PROJECTS_DIR}).`,
+      guide: [
+        'Make sure Claude Code is installed:',
+        '  npm install -g @anthropic-ai/claude-code',
+        '',
+        'Then use it at least once inside a project directory.',
+        'Also verify that the HOME environment variable is set correctly.',
+      ].join('\n'),
+    })
+    return issues
+  }
+
+  // 2. Check for any JSONL sessions and sample one for format checks
+  const projectDirs = await safeReadDir(PROJECTS_DIR)
+  let totalJsonl = 0
+  let sampleJsonlPath: string | null = null
+
+  for (const dir of projectDirs) {
+    const entries = await safeReadDir(join(PROJECTS_DIR, dir))
+    for (const entry of entries) {
+      if (entry.endsWith('.jsonl')) {
+        totalJsonl++
+        if (!sampleJsonlPath) sampleJsonlPath = join(PROJECTS_DIR, dir, entry)
+      }
+    }
+    if (totalJsonl >= 5 && sampleJsonlPath) break
+  }
+
+  if (totalJsonl === 0) {
+    issues.push({
+      id: 'no-sessions',
+      severity: 'warning',
+      title: 'No session files found',
+      description: 'No JSONL session files were found in ~/.claude/projects/.',
+      guide: [
+        'Open a project in VS Code or a terminal and start a Claude Code session.',
+        'Session files are created automatically when you first use Claude Code.',
+      ].join('\n'),
+    })
+  }
+
+  // 3. Check JSONL timestamp presence (old Claude Code versions didn't include it)
+  if (sampleJsonlPath) {
+    let hasTimestamp = false
+    try {
+      const content = await readFile(sampleJsonlPath, 'utf-8')
+      for (const line of content.split('\n').slice(0, 30)) {
+        const t = line.trim()
+        if (!t) continue
+        try {
+          const obj = JSON.parse(t) as Record<string, unknown>
+          if (obj.timestamp) { hasTimestamp = true; break }
+        } catch { continue }
+      }
+    } catch { /* ignore */ }
+
+    if (!hasTimestamp) {
+      issues.push({
+        id: 'jsonl-no-timestamps',
+        severity: 'warning',
+        title: 'Session files missing timestamps',
+        description: 'JSONL files do not contain the "timestamp" field. Duration, hourly activity, and response-time metrics will be unavailable.',
+        guide: 'Update Claude Code to the latest version:\n  npm install -g @anthropic-ai/claude-code',
+      })
+    }
+  }
+
+  // 4. Check git availability
+  try {
+    await execAsync('git --version', { timeout: 3000 })
+  } catch {
+    issues.push({
+      id: 'git-unavailable',
+      severity: 'info',
+      title: 'git not found in PATH',
+      description: 'Commit counts and line-change metrics will be zero because the git binary is unavailable.',
+      guide: 'Install git:\n  https://git-scm.com/downloads\n\nOn Debian/Ubuntu:\n  sudo apt install git',
+    })
+  }
+
+  // 5. Auto-fix: stats-cache.json corrupt
+  const cacheStat = await safeStat(STATS_CACHE_FILE)
+  if (cacheStat !== null) {
+    const cacheData = await safeReadJson<StatsCache>(STATS_CACHE_FILE)
+    if (cacheData === null) {
+      try {
+        await unlink(STATS_CACHE_FILE)
+        console.log('[health] Deleted corrupt stats-cache.json')
+        issues.push({
+          id: 'stats-cache-reset',
+          severity: 'info',
+          title: 'Stats cache was corrupt — auto-fixed',
+          description: 'stats-cache.json was corrupt and has been automatically removed. Token counts and model breakdowns will be recalculated on the next Claude Code session.',
+          auto_fixed: true,
+        })
+      } catch { /* ignore */ }
+    }
+  }
+
+  return issues
+}
+
+// ---------------------------------------------------------------------------
 // Main data loader
 // ---------------------------------------------------------------------------
 
@@ -681,9 +809,10 @@ async function buildApiResponse(): Promise<ApiResponse> {
   const timeoutMs = 25000
 
   const buildPromise = async () => {
-    const [statsCache, metaMap] = await Promise.all([
+    const [statsCache, metaMap, healthIssues] = await Promise.all([
       safeReadJson<StatsCache>(STATS_CACHE_FILE).then(v => v ?? {}),
       loadSessionMetas(),
+      runHealthChecks(),
     ])
 
     const knownIds = new Set(metaMap.keys())
@@ -710,7 +839,7 @@ async function buildApiResponse(): Promise<ApiResponse> {
     // Sort sessions by start_time descending (most recent first)
     sessions.sort((a, b) => b.start_time.localeCompare(a.start_time))
 
-    return { statsCache, projects, allSessions: [] as [], sessions }
+    return { statsCache, projects, allSessions: [] as [], sessions, healthIssues, homeDir: HOME_DIR }
   }
 
   return Promise.race([
