@@ -1,0 +1,173 @@
+export interface DailyActivity {
+  date: string
+  messageCount: number
+  sessionCount: number
+  toolCallCount: number
+}
+
+export interface DailyModelTokens {
+  date: string
+  tokensByModel: Record<string, number>
+}
+
+export interface ModelUsage {
+  inputTokens: number
+  outputTokens: number
+  cacheReadInputTokens: number
+  cacheCreationInputTokens: number
+  webSearchRequests: number
+  costUSD: number
+}
+
+export interface LongestSession {
+  sessionId: string
+  duration: number
+  messageCount: number
+  timestamp: string
+}
+
+export interface StatsCache {
+  version: number
+  lastComputedDate: string
+  dailyActivity: DailyActivity[]
+  dailyModelTokens: DailyModelTokens[]
+  modelUsage: Record<string, ModelUsage>
+  totalSessions: number
+  totalMessages: number
+  longestSession: LongestSession
+  firstSessionDate: string
+  hourCounts: Record<string, number>
+  totalSpeculationTimeSavedMs: number
+}
+
+export interface SessionMeta {
+  session_id: string
+  project_path: string
+  start_time: string
+  duration_minutes: number
+  user_message_count: number
+  assistant_message_count: number
+  tool_counts: Record<string, number>
+  languages: Record<string, number>
+  git_commits: number
+  git_pushes: number
+  input_tokens: number
+  output_tokens: number
+  first_prompt: string
+  user_interruptions: number
+  user_response_times: number[]
+  tool_errors: number
+  tool_error_categories: Record<string, number>
+  uses_task_agent: boolean
+  uses_mcp: boolean
+  uses_web_search: boolean
+  uses_web_fetch: boolean
+  lines_added: number
+  lines_removed: number
+  files_modified: number
+  message_hours: number[]
+  user_message_timestamps: string[]
+}
+
+export interface SessionIndex {
+  sessionId: string
+  fullPath: string
+  fileMtime: number
+  firstPrompt: string
+  summary: string
+  messageCount: number
+  created: string
+  modified: string
+  gitBranch: string
+  projectPath: string
+  isSidechain: boolean
+}
+
+export interface Project {
+  path: string
+  name: string
+  sessions: SessionIndex[]
+}
+
+export interface AppData {
+  statsCache: StatsCache
+  sessions: SessionMeta[]
+  projects: Project[]
+  allSessions: SessionIndex[]
+}
+
+export type DateRange = '7d' | '30d' | '90d' | 'all'
+
+export interface Filters {
+  dateRange: DateRange
+  customStart: string
+  customEnd: string
+  projects: string[]   // empty = all projects
+  model: string
+}
+
+export type Lang = 'pt' | 'en'
+export type Theme = 'dark' | 'light'
+
+export const MODEL_PRICING: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
+  // Current models
+  'claude-opus-4-6':            { input: 5,    output: 25,   cacheRead: 0.50, cacheWrite: 6.25  },
+  'claude-sonnet-4-6':          { input: 3,    output: 15,   cacheRead: 0.30, cacheWrite: 3.75  },
+  'claude-haiku-4-5-20251001':  { input: 1,    output: 5,    cacheRead: 0.10, cacheWrite: 1.25  },
+  // Legacy models
+  'claude-opus-4-5-20251101':   { input: 5,    output: 25,   cacheRead: 0.50, cacheWrite: 6.25  },
+  'claude-opus-4-1-20250805':   { input: 15,   output: 75,   cacheRead: 1.50, cacheWrite: 18.75 },
+  'claude-opus-4-20250514':     { input: 15,   output: 75,   cacheRead: 1.50, cacheWrite: 18.75 },
+  'claude-sonnet-4-5-20250929': { input: 3,    output: 15,   cacheRead: 0.30, cacheWrite: 3.75  },
+  'claude-sonnet-4-20250514':   { input: 3,    output: 15,   cacheRead: 0.30, cacheWrite: 3.75  },
+  'claude-haiku-3-5-20241022':  { input: 0.80, output: 4,    cacheRead: 0.08, cacheWrite: 1.00  },
+  'claude-3-haiku-20240307':    { input: 0.25, output: 1.25, cacheRead: 0.03, cacheWrite: 0.30  },
+}
+
+export function getModelPrice(modelId: string) {
+  if (MODEL_PRICING[modelId]) return MODEL_PRICING[modelId]
+  for (const [key, price] of Object.entries(MODEL_PRICING)) {
+    if (modelId.startsWith(key) || key.startsWith(modelId)) return price
+  }
+  return { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }
+}
+
+export function calcCost(usage: ModelUsage, modelId: string): number {
+  const price = getModelPrice(modelId)
+  return (
+    (usage.inputTokens / 1_000_000) * price.input +
+    (usage.outputTokens / 1_000_000) * price.output +
+    (usage.cacheReadInputTokens / 1_000_000) * price.cacheRead +
+    (usage.cacheCreationInputTokens / 1_000_000) * price.cacheWrite
+  )
+}
+
+export function formatModel(modelId: string): string {
+  const map: Record<string, string> = {
+    'claude-opus-4-6': 'Opus 4.6',
+    'claude-opus-4-5-20251101': 'Opus 4.5',
+    'claude-sonnet-4-6': 'Sonnet 4.6',
+    'claude-sonnet-4-5-20250929': 'Sonnet 4.5',
+    'claude-haiku-4-5-20251001': 'Haiku 4.5',
+  }
+  return map[modelId] ?? modelId
+}
+
+const HOME = '/home/mithrandir'
+
+export function formatProjectName(projectPath: string): string {
+  if (!projectPath) return 'Unknown'
+  const normalized = projectPath.replace(/\\/g, '/')
+  if (normalized === HOME) return '~ (home)'
+  if (normalized.startsWith(HOME + '/')) {
+    return '~/' + normalized.slice(HOME.length + 1)
+  }
+  return normalized
+}
+
+export function getModelColor(modelId: string): string {
+  if (modelId.includes('opus')) return '#D97706'
+  if (modelId.includes('sonnet')) return '#6366f1'
+  if (modelId.includes('haiku')) return '#10b981'
+  return '#8b5cf6'
+}

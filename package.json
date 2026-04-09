@@ -1,0 +1,33 @@
+{
+  "name": "claude-stats",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev:api": "bun run server.ts",
+    "dev:ui": "vite",
+    "dev": "bun run --bun concurrently \"bun run dev:api\" \"bun run dev:ui\"",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/html2canvas": "^1.0.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "vite": "^8.0.7"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "date-fns": "^4.1.0",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
+    "lucide-react": "^1.7.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "recharts": "^3.8.1"
+  }
+}
