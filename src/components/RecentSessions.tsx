@@ -8,7 +8,6 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Search,
-  SlidersHorizontal,
   Clock,
   Wrench,
   FileCode,
@@ -219,10 +218,7 @@ export function RecentSessions({ sessions, lang }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>('date')
 
   // Filter state
-  const [showFilters, setShowFilters] = useState(false)
   const [search, setSearch] = useState('')
-  const [minTokens, setMinTokens] = useState('')
-  const [minMessages, setMinMessages] = useState('')
 
   // Pagination state
   const [page, setPage] = useState(0)
@@ -240,18 +236,6 @@ export function RecentSessions({ sessions, lang }: Props) {
           (s.first_prompt ?? '').toLowerCase().includes(q) ||
           (s.project_path ?? '').toLowerCase().includes(q)
       )
-    }
-
-    // Filter: min tokens
-    const minTok = parseInt(minTokens, 10)
-    if (!isNaN(minTok) && minTok > 0) {
-      list = list.filter(s => totalTokens(s) >= minTok)
-    }
-
-    // Filter: min messages
-    const minMsg = parseInt(minMessages, 10)
-    if (!isNaN(minMsg) && minMsg > 0) {
-      list = list.filter(s => totalMessages(s) >= minMsg)
     }
 
     // Sort
@@ -273,7 +257,7 @@ export function RecentSessions({ sessions, lang }: Props) {
     })
 
     return list
-  }, [sessions, search, minTokens, minMessages, sortKey])
+  }, [sessions, search, sortKey])
 
   // Reset to page 0 when filters/sort/pageSize change
   const totalItems = processed.length
@@ -295,16 +279,6 @@ export function RecentSessions({ sessions, lang }: Props) {
 
   function handleSearchChange(v: string) {
     setSearch(v)
-    setPage(0)
-  }
-
-  function handleMinTokensChange(v: string) {
-    setMinTokens(v)
-    setPage(0)
-  }
-
-  function handleMinMessagesChange(v: string) {
-    setMinMessages(v)
     setPage(0)
   }
 
@@ -340,98 +314,28 @@ export function RecentSessions({ sessions, lang }: Props) {
         {/* Spacer */}
         <div style={{ flex: 1 }} />
 
-        {/* Filter toggle */}
-        <button
-          onClick={() => setShowFilters(v => !v)}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 5,
-            padding: '4px 10px',
-            borderRadius: 999,
-            border: showFilters
-              ? '1px solid var(--anthropic-orange, #e8690b)'
-              : '1px solid var(--border-subtle)',
-            background: showFilters ? 'rgba(232,105,11,0.12)' : 'transparent',
-            color: showFilters ? 'var(--anthropic-orange, #e8690b)' : 'var(--text-secondary)',
-            fontSize: 11,
-            fontWeight: showFilters ? 600 : 400,
-            cursor: 'pointer',
-            transition: 'all 0.15s',
-          }}
-        >
-          <SlidersHorizontal size={11} />
-          {t.filters}
-        </button>
-      </div>
-
-      {/* Filter controls */}
-      {showFilters && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            flexWrap: 'wrap',
-            padding: '8px 12px',
-            background: 'var(--bg-elevated)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 8,
-          }}
-        >
-          {/* Search */}
-          <div style={{ position: 'relative', flex: '1 1 180px', minWidth: 140 }}>
-            <Search
-              size={11}
-              style={{
-                position: 'absolute',
-                left: 8,
-                top: '50%',
-                transform: 'translateY(-50%)',
-                color: 'var(--text-tertiary)',
-                pointerEvents: 'none',
-              }}
-            />
-            <input
-              type="text"
-              value={search}
-              onChange={e => handleSearchChange(e.target.value)}
-              placeholder={t.search_placeholder}
-              style={{ ...inputStyle, paddingLeft: 24, width: '100%', boxSizing: 'border-box' }}
-            />
-          </div>
-
-          {/* Min tokens */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-            <span style={{ fontSize: 11, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
-              {t.min_tokens}
-            </span>
-            <input
-              type="number"
-              min={0}
-              value={minTokens}
-              onChange={e => handleMinTokensChange(e.target.value)}
-              style={{ ...inputStyle, width: 80 }}
-              placeholder="0"
-            />
-          </div>
-
-          {/* Min messages */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-            <span style={{ fontSize: 11, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
-              {t.min_messages}
-            </span>
-            <input
-              type="number"
-              min={0}
-              value={minMessages}
-              onChange={e => handleMinMessagesChange(e.target.value)}
-              style={{ ...inputStyle, width: 70 }}
-              placeholder="0"
-            />
-          </div>
+        {/* Search — always visible */}
+        <div style={{ position: 'relative', width: 180 }}>
+          <Search
+            size={11}
+            style={{
+              position: 'absolute',
+              left: 8,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              color: 'var(--text-tertiary)',
+              pointerEvents: 'none',
+            }}
+          />
+          <input
+            type="text"
+            value={search}
+            onChange={e => handleSearchChange(e.target.value)}
+            placeholder={t.search_placeholder}
+            style={{ ...inputStyle, paddingLeft: 24, width: '100%', boxSizing: 'border-box' }}
+          />
         </div>
-      )}
+      </div>
 
       {/* Session list */}
       {pageItems.length === 0 ? (

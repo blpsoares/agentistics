@@ -212,8 +212,7 @@ export default function App() {
   })
   const dragCardRef = useRef<CardId | null>(null)
   const [dragOverCard, setDragOverCard] = useState<CardId | null>(null)
-  const filtersSentinelRef = useRef<HTMLDivElement>(null)
-  const [filtersStuck, setFiltersStuck] = useState(false)
+  const [scrolled, setScrolled] = useState(false)
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -224,33 +223,12 @@ export default function App() {
   }, [data?.homeDir])
 
   useEffect(() => {
-    // Compare against window.scrollY (not getBoundingClientRect) so layout shifts
-    // from the sticky bar itself don't cause oscillation.
-    const STICKY_TOP = 56   // matches the sticky `top` value
-    const HYSTERESIS = 20   // extra scroll-up distance required to unstick
     let rafId: number | null = null
-    let stickThreshold: number | null = null
-
-    const computeThreshold = () => {
-      const sentinel = filtersSentinelRef.current
-      if (!sentinel) return null
-      return sentinel.getBoundingClientRect().top + window.scrollY - STICKY_TOP
-    }
-
     const check = () => {
       if (rafId !== null) return
       rafId = requestAnimationFrame(() => {
         rafId = null
-        if (stickThreshold === null) {
-          stickThreshold = computeThreshold()
-          if (stickThreshold === null) return
-        }
-        const scrollY = window.scrollY
-        setFiltersStuck(prev => {
-          if (!prev && scrollY >= stickThreshold!) return true
-          if (prev && scrollY < stickThreshold! - HYSTERESIS) return false
-          return prev
-        })
+        setScrolled(window.scrollY > 0)
       })
     }
     check()
@@ -411,6 +389,20 @@ export default function App() {
   }, [filters.projects.length, lang])
 
   if (loading) {
+    const bars = [
+      { anim: 'eq1', delay: '0s',    opacity: 0.45 },
+      { anim: 'eq2', delay: '0.12s', opacity: 0.65 },
+      { anim: 'eq3', delay: '0.22s', opacity: 0.85 },
+      { anim: 'eq4', delay: '0.08s', opacity: 1    },
+      { anim: 'eq5', delay: '0.18s', opacity: 0.85 },
+      { anim: 'eq6', delay: '0.28s', opacity: 0.65 },
+      { anim: 'eq7', delay: '0.38s', opacity: 0.45 },
+      { anim: 'eq8', delay: '0.05s', opacity: 0.30 },
+      { anim: 'eq9', delay: '0.32s', opacity: 0.25 },
+    ]
+    const ptTexts = ['Lendo conversas...', 'Contando tokens...', 'Construindo métricas...']
+    const enTexts = ['Reading conversations...', 'Counting tokens...', 'Building metrics...']
+    const texts = lang === 'pt' ? ptTexts : enTexts
     return (
       <div style={{
         minHeight: '100vh',
@@ -418,21 +410,105 @@ export default function App() {
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 20,
+        gap: 28,
+        background: 'var(--bg-base)',
       }}>
-        <div style={{
-          width: 48, height: 48,
-          background: 'var(--anthropic-orange-dim)',
-          borderRadius: 14,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          animation: 'pulse 1.5s ease-in-out infinite',
-        }}>
-          <BarChart2 size={24} color="var(--anthropic-orange)" />
+        <style>{`
+          @keyframes eq1 { 0%,100%{height:22%} 25%{height:88%} 60%{height:35%} }
+          @keyframes eq2 { 0%,100%{height:55%} 20%{height:30%} 65%{height:95%} }
+          @keyframes eq3 { 0%,100%{height:75%} 30%{height:55%} 70%{height:45%} }
+          @keyframes eq4 { 0%,100%{height:40%} 15%{height:100%} 55%{height:60%} }
+          @keyframes eq5 { 0%,100%{height:65%} 35%{height:40%} 75%{height:85%} }
+          @keyframes eq6 { 0%,100%{height:45%} 20%{height:78%} 60%{height:28%} }
+          @keyframes eq7 { 0%,100%{height:85%} 40%{height:22%} 70%{height:65%} }
+          @keyframes eq8 { 0%,100%{height:30%} 25%{height:70%} 55%{height:15%} }
+          @keyframes eq9 { 0%,100%{height:18%} 35%{height:55%} 65%{height:80%} }
+          @keyframes iconGlow {
+            0%,100%{box-shadow:0 0 0 0 rgba(217,119,6,0),0 0 12px 2px rgba(217,119,6,0.25)}
+            50%{box-shadow:0 0 0 8px rgba(217,119,6,0),0 0 24px 6px rgba(217,119,6,0.45)}
+          }
+          @keyframes ring1 { 0%,100%{transform:scale(1);opacity:0.5} 50%{transform:scale(1.18);opacity:0.1} }
+          @keyframes ring2 { 0%,100%{transform:scale(1);opacity:0.25} 50%{transform:scale(1.32);opacity:0.05} }
+          @keyframes scanBar {
+            0%{left:-100%} 100%{left:200%}
+          }
+          @keyframes txt1 { 0%,26%{opacity:1;transform:translateY(0)} 33%,100%{opacity:0;transform:translateY(-7px)} }
+          @keyframes txt2 { 0%,32%{opacity:0;transform:translateY(7px)} 39%,59%{opacity:1;transform:translateY(0)} 66%,100%{opacity:0;transform:translateY(-7px)} }
+          @keyframes txt3 { 0%,65%{opacity:0;transform:translateY(7px)} 72%,93%{opacity:1;transform:translateY(0)} 100%{opacity:0;transform:translateY(-7px)} }
+        `}</style>
+
+        {/* Icon with glow rings */}
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{
+            position: 'absolute',
+            width: 72, height: 72,
+            borderRadius: '50%',
+            border: '1px solid rgba(217,119,6,0.3)',
+            animation: 'ring1 2.4s ease-in-out infinite',
+          }}/>
+          <div style={{
+            position: 'absolute',
+            width: 96, height: 96,
+            borderRadius: '50%',
+            border: '1px solid rgba(217,119,6,0.15)',
+            animation: 'ring2 2.4s ease-in-out infinite 0.4s',
+          }}/>
+          <div style={{
+            width: 48, height: 48,
+            background: 'var(--anthropic-orange-dim)',
+            borderRadius: 14,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            animation: 'iconGlow 2.4s ease-in-out infinite',
+          }}>
+            <BarChart2 size={22} color="var(--anthropic-orange)" />
+          </div>
         </div>
-        <div style={{ color: 'var(--text-secondary)', fontSize: 14 }}>
-          {lang === 'pt' ? 'Carregando estatísticas...' : 'Loading your stats...'}
+
+        {/* Equalizer bars */}
+        <div style={{ position: 'relative', overflow: 'hidden', padding: '0 2px' }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'flex-end',
+            gap: 5,
+            height: 48,
+          }}>
+            {bars.map((bar, i) => (
+              <div key={i} style={{
+                width: 5,
+                height: '60%',
+                background: `rgba(217,119,6,${bar.opacity})`,
+                borderRadius: 3,
+                animation: `${bar.anim} 1.4s ease-in-out infinite`,
+                animationDelay: bar.delay,
+              }}/>
+            ))}
+          </div>
+          {/* scan shimmer */}
+          <div style={{
+            position: 'absolute',
+            top: 0, bottom: 0,
+            width: '35%',
+            background: 'linear-gradient(90deg,transparent,rgba(217,119,6,0.12),transparent)',
+            animation: 'scanBar 2s ease-in-out infinite',
+            pointerEvents: 'none',
+          }}/>
         </div>
-        <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }`}</style>
+
+        {/* Cycling text */}
+        <div style={{ position: 'relative', height: 18, width: 220, textAlign: 'center' }}>
+          {texts.map((txt, i) => (
+            <div key={i} style={{
+              position: 'absolute', inset: 0,
+              color: 'var(--text-secondary)',
+              fontSize: 13,
+              letterSpacing: '0.02em',
+              animation: `txt${i + 1} 6s ease-in-out infinite`,
+              opacity: 0,
+            }}>
+              {txt}
+            </div>
+          ))}
+        </div>
       </div>
     )
   }
@@ -707,12 +783,15 @@ export default function App() {
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
       {/* Header */}
       <header style={{
-        borderBottom: '1px solid var(--border)',
         background: 'var(--bg-surface)',
         position: 'sticky',
         top: 0,
         zIndex: 100,
         backdropFilter: 'blur(12px)',
+        WebkitBackdropFilter: 'blur(12px)',
+        boxShadow: scrolled ? '0 4px 24px rgba(0,0,0,0.25)' : 'none',
+        borderBottom: '1px solid var(--border)',
+        transition: 'box-shadow 0.25s ease',
       }}>
         <div style={{
           maxWidth: 1400,
@@ -879,32 +958,30 @@ export default function App() {
             </button>
           </div>
         </div>
+
+        {/* Filters row — second row of sticky header */}
+        {data && (
+          <div style={{
+            borderTop: '1px solid var(--border)',
+            maxWidth: 1400,
+            margin: '0 auto',
+            padding: '0 32px',
+            width: '100%',
+            boxSizing: 'border-box',
+          }}>
+            <FiltersBar
+              filters={filters}
+              onChange={setFilters}
+              projects={data.projects}
+              models={models}
+              lang={lang}
+            />
+          </div>
+        )}
       </header>
 
       {/* Main content */}
-      <main style={{ maxWidth: 1400, margin: '0 auto', padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 20 }}>
-
-        {/* Filters — sticky sentinel + wrapper */}
-        <div ref={filtersSentinelRef} style={{ height: 0, marginTop: -1, pointerEvents: 'none' }} />
-        <div style={{
-          position: 'sticky',
-          top: 56,
-          zIndex: 350,
-          marginLeft: -32,
-          marginRight: -32,
-          paddingLeft: 32,
-          paddingRight: 32,
-          willChange: 'transform',
-        }}>
-          <FiltersBar
-            filters={filters}
-            onChange={setFilters}
-            projects={data.projects}
-            models={models}
-            lang={lang}
-            stuck={filtersStuck}
-          />
-        </div>
+      <main style={{ maxWidth: 1400, margin: '0 auto', padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 20 }}>
 
         {/* KPI Cards — draggable 5×2 grid */}
         <style>{`
@@ -1080,6 +1157,159 @@ export default function App() {
           onClose={() => setShowExportModal(false)}
         />
       )}
+
+      {/* Footer */}
+      <footer style={{
+        marginTop: 64,
+        borderTop: '1px solid var(--border)',
+        background: 'linear-gradient(to bottom, transparent, var(--bg-surface))',
+      }}>
+        <div style={{
+          maxWidth: 1400,
+          margin: '0 auto',
+          padding: '40px 24px 32px',
+        }}>
+          {/* Top row */}
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            flexWrap: 'wrap',
+            gap: 32,
+            marginBottom: 32,
+          }}>
+            {/* Brand block */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 320 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 10,
+                  background: 'var(--anthropic-orange-dim)',
+                  border: '1px solid rgba(217,119,6,0.35)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 0 12px rgba(217,119,6,0.1)',
+                }}>
+                  <Zap size={15} style={{ color: 'var(--anthropic-orange-light)' }} />
+                </div>
+                <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.3px' }}>
+                  Claude Stats
+                </span>
+              </div>
+              <p style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.6, margin: 0 }}>
+                {lang === 'pt'
+                  ? 'Dashboard local de uso do Claude Code. Seus dados ficam no seu computador — sem servidores, sem rastreamento.'
+                  : 'Local Claude Code usage dashboard. Your data stays on your machine — no servers, no tracking.'}
+              </p>
+              {/* Live stats pill */}
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '5px 12px',
+                borderRadius: 20,
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border)',
+                width: 'fit-content',
+              }}>
+                <div style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: 'var(--accent-green)',
+                  boxShadow: '0 0 8px var(--accent-green)',
+                }} />
+                <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                  {derived.totalSessions.toLocaleString()} {lang === 'pt' ? 'sessões' : 'sessions'}
+                  {' · '}
+                  {derived.totalMessages.toLocaleString()} {lang === 'pt' ? 'mensagens' : 'messages'}
+                </span>
+              </div>
+            </div>
+
+            {/* Links columns */}
+            <div style={{ display: 'flex', gap: 48, flexWrap: 'wrap' }}>
+              {/* Project */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  {lang === 'pt' ? 'Projeto' : 'Project'}
+                </span>
+                {[
+                  { href: 'https://github.com/blpsoares/claude-stats', label: lang === 'pt' ? 'Repositório' : 'Repository', icon: <GitCommit size={13} /> },
+                  { href: 'https://github.com/blpsoares/claude-stats/issues', label: 'Issues', icon: <AlertTriangle size={13} /> },
+                  { href: 'https://github.com/blpsoares/claude-stats/releases', label: 'Releases', icon: <Zap size={13} /> },
+                ].map(({ href, label, icon }) => (
+                  <a key={href} href={href} target="_blank" rel="noreferrer" style={{
+                    display: 'flex', alignItems: 'center', gap: 7,
+                    fontSize: 13, color: 'var(--text-secondary)', textDecoration: 'none',
+                    transition: 'color 0.15s',
+                  }}
+                    onMouseEnter={e => (e.currentTarget.style.color = 'var(--text-primary)')}
+                    onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-secondary)')}
+                  >
+                    <span style={{ opacity: 0.5 }}>{icon}</span>
+                    {label}
+                  </a>
+                ))}
+              </div>
+
+              {/* Author */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  {lang === 'pt' ? 'Autor' : 'Author'}
+                </span>
+                {[
+                  { href: 'https://github.com/blpsoares', label: 'blpsoares', icon: <GitCommit size={13} /> },
+                  { href: 'https://linkedin.com/in/blpsoares', label: 'LinkedIn', icon: <Globe size={13} /> },
+                ].map(({ href, label, icon }) => (
+                  <a key={href} href={href} target="_blank" rel="noreferrer" style={{
+                    display: 'flex', alignItems: 'center', gap: 7,
+                    fontSize: 13, color: 'var(--text-secondary)', textDecoration: 'none',
+                    transition: 'color 0.15s',
+                  }}
+                    onMouseEnter={e => (e.currentTarget.style.color = 'var(--text-primary)')}
+                    onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-secondary)')}
+                  >
+                    <span style={{ opacity: 0.5 }}>{icon}</span>
+                    {label}
+                  </a>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom bar */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 12,
+            paddingTop: 20,
+            borderTop: '1px solid var(--border-subtle)',
+          }}>
+            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+              {lang === 'pt' ? 'Feito com' : 'Made with'}{' '}
+              <span style={{ color: 'var(--anthropic-orange)', fontWeight: 700 }}>♥</span>
+              {' '}{lang === 'pt' ? 'por' : 'by'}{' '}
+              <a href="https://github.com/blpsoares" target="_blank" rel="noreferrer" style={{
+                color: 'var(--text-secondary)', textDecoration: 'none', fontWeight: 500,
+                transition: 'color 0.15s',
+              }}
+                onMouseEnter={e => (e.currentTarget.style.color = 'var(--text-primary)')}
+                onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-secondary)')}
+              >
+                Bryan Soares
+              </a>
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+              {lang === 'pt' ? 'Não afiliado à Anthropic' : 'Not affiliated with Anthropic'}
+            </span>
+          </div>
+        </div>
+      </footer>
     </div>
   )
 }
