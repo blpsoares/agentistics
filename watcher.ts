@@ -491,10 +491,13 @@ async function main() {
     }
   }, WATCH_INTERVAL_SEC * 1000)
 
-  // Start the API server unless OTEL-only mode
+  // Hint: to also run the API server, use `bun run dev` alongside `bun run watch`
   if (!OTEL_ONLY) {
-    console.log('[server] Starting API server on port 3001 (from server.ts)')
-    console.log('[server] Tip: set CLAUDE_STATS_OTEL_ONLY=true to run without the HTTP server')
+    console.log('[watcher] Running in watch mode (metrics export + file watching)')
+    console.log('[watcher] Tip: use `bun run dev` in a separate terminal to also start the API + UI')
+    console.log('[watcher] Tip: set CLAUDE_STATS_OTEL_ONLY=true to silence this message')
+  } else {
+    console.log('[watcher] Running in daemon mode (OTLP export only)')
   }
 
   // Graceful shutdown
