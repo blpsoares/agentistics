@@ -48,7 +48,7 @@ export interface SessionMeta {
   user_message_count: number
   assistant_message_count: number
   tool_counts: Record<string, number>
-  languages: Record<string, number>
+  languages: string[]
   git_commits: number
   git_pushes: number
   input_tokens: number
@@ -67,6 +67,7 @@ export interface SessionMeta {
   files_modified: number
   message_hours: number[]
   user_message_timestamps: string[]
+  _source?: 'meta' | 'jsonl' | 'subdir'
 }
 
 export interface SessionIndex {

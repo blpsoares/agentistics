@@ -24,8 +24,6 @@ interface Props {
 
 type SortKey = 'date' | 'tokens' | 'messages' | 'tools' | 'files'
 
-// SessionMeta may carry an optional source tag from the data pipeline
-type SessionMetaWithSource = SessionMeta & { source?: 'meta' | 'jsonl' | 'subdir' }
 
 // ─── Translations ─────────────────────────────────────────────────────────────
 
@@ -231,8 +229,8 @@ export function RecentSessions({ sessions, lang }: Props) {
   const [pageSize, setPageSize] = useState(10)
 
   // Derived: sorted + filtered
-  const processed = useMemo<SessionMetaWithSource[]>(() => {
-    let list = [...sessions] as SessionMetaWithSource[]
+  const processed = useMemo<SessionMeta[]>(() => {
+    let list = [...sessions]
 
     // Filter: text search
     if (search.trim()) {
@@ -490,7 +488,7 @@ export function RecentSessions({ sessions, lang }: Props) {
                         marginBottom: 3,
                       }}
                     >
-                      <SourceDot source={(s as SessionMetaWithSource).source} />
+                      <SourceDot source={s._source} />
                       <span
                         style={{
                           overflow: 'hidden',

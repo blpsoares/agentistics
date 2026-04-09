@@ -225,10 +225,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       for (const [tool, count] of Object.entries(s.tool_counts ?? {})) {
         toolCounts[tool] = (toolCounts[tool] ?? 0) + count
       }
-      const langs = Array.isArray(s.languages)
-        ? s.languages as string[]
-        : Object.keys(s.languages ?? {})
-      for (const lang of langs) {
+      for (const lang of s.languages ?? []) {
         langCounts[lang] = (langCounts[lang] ?? 0) + 1
       }
     }
