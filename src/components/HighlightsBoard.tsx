@@ -1,5 +1,5 @@
-import React from 'react'
-import { Clock, Download, Upload, MessageSquare, Wrench, FolderOpen, Trophy } from 'lucide-react'
+import React, { useState } from 'react'
+import { Clock, Download, Upload, MessageSquare, Wrench, FolderOpen } from 'lucide-react'
 import type { SessionMeta, Project } from '../lib/types'
 import { formatProjectName } from '../lib/types'
 
@@ -14,6 +14,18 @@ function fmtDuration(minutes: number): string {
   const m = Math.round(minutes % 60)
   if (h > 0) return `${h}h ${m}m`
   return `${m}m`
+}
+
+function avg(arr: number[]): number {
+  if (arr.length === 0) return 0
+  return arr.reduce((a, b) => a + b, 0) / arr.length
+}
+
+function multiplier(value: number, mean: number): string | null {
+  if (mean === 0 || value === 0) return null
+  const x = value / mean
+  if (x < 1.5) return null
+  return `${x.toFixed(1)}× avg`
 }
 
 interface HighlightsBoardProps {
@@ -33,242 +45,269 @@ export function HighlightsBoard({ sessions, projects, lang }: HighlightsBoardPro
     )
   }
 
-  // 1. Longest session
-  const longestSession = sessions.reduce((best, s) =>
-    (s.duration_minutes ?? 0) > (best.duration_minutes ?? 0) ? s : best, sessions[0])
+  // ── Record finders ──────────────────────────────────────────────────────────
+  const longestSession = sessions.reduce((b, s) =>
+    (s.duration_minutes ?? 0) > (b.duration_minutes ?? 0) ? s : b, sessions[0])
 
-  // 2. Most input tokens
-  const mostInputTokens = sessions.reduce((best, s) =>
-    (s.input_tokens ?? 0) > (best.input_tokens ?? 0) ? s : best, sessions[0])
+  const mostInputTokens = sessions.reduce((b, s) =>
+    (s.input_tokens ?? 0) > (b.input_tokens ?? 0) ? s : b, sessions[0])
 
-  // 3. Most output tokens
-  const mostOutputTokens = sessions.reduce((best, s) =>
-    (s.output_tokens ?? 0) > (best.output_tokens ?? 0) ? s : best, sessions[0])
+  const mostOutputTokens = sessions.reduce((b, s) =>
+    (s.output_tokens ?? 0) > (b.output_tokens ?? 0) ? s : b, sessions[0])
 
-  // 4. Most messages
-  const mostMessages = sessions.reduce((best, s) => {
-    const msgs = (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
-    const bestMsgs = (best.user_message_count ?? 0) + (best.assistant_message_count ?? 0)
-    return msgs > bestMsgs ? s : best
+  const mostMessages = sessions.reduce((b, s) => {
+    const v = (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
+    const bv = (b.user_message_count ?? 0) + (b.assistant_message_count ?? 0)
+    return v > bv ? s : b
   }, sessions[0])
 
-  // 5. Most tool calls
-  const mostToolCalls = sessions.reduce((best, s) => {
-    const tools = Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
-    const bestTools = Object.values(best.tool_counts ?? {}).reduce((a, b) => a + b, 0)
-    return tools > bestTools ? s : best
+  const mostToolCalls = sessions.reduce((b, s) => {
+    const v = Object.values(s.tool_counts ?? {}).reduce((a, x) => a + x, 0)
+    const bv = Object.values(b.tool_counts ?? {}).reduce((a, x) => a + x, 0)
+    return v > bv ? s : b
   }, sessions[0])
 
-  // 6. Project with most sessions (count from filtered sessions list)
   const projectSessionCounts: Record<string, number> = {}
   for (const s of sessions) {
-    if (s.project_path) {
-      projectSessionCounts[s.project_path] = (projectSessionCounts[s.project_path] ?? 0) + 1
-    }
+    if (s.project_path) projectSessionCounts[s.project_path] = (projectSessionCounts[s.project_path] ?? 0) + 1
   }
   const topProjectEntry = Object.entries(projectSessionCounts).sort((a, b) => b[1] - a[1])[0]
 
-  // Helper: get session id (first 8 chars)
-  function shortId(id: string | undefined) {
-    return id ? id.slice(0, 8) : '—'
-  }
+  // ── Averages for comparison ─────────────────────────────────────────────────
+  const avgDuration = avg(sessions.map(s => s.duration_minutes ?? 0).filter(v => v > 0))
+  const avgInput    = avg(sessions.map(s => s.input_tokens ?? 0).filter(v => v > 0))
+  const avgOutput   = avg(sessions.map(s => s.output_tokens ?? 0).filter(v => v > 0))
+  const avgMessages = avg(sessions.map(s => (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)).filter(v => v > 0))
+  const avgTools    = avg(sessions.map(s => Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)).filter(v => v > 0))
 
-  // Helper: truncate prompt
   function truncate(str: string | undefined, len: number) {
     if (!str) return pt ? 'Sem título' : 'Untitled'
     return str.length > len ? str.slice(0, len) + '…' : str
   }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+    <>
+      <style>{`
+        .hl-card {
+          background: var(--bg-card);
+          border: 1px solid var(--border);
+          border-radius: var(--radius-lg);
+          padding: 20px 22px 18px;
+          position: relative;
+          overflow: hidden;
+          transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+          cursor: default;
+        }
+        .hl-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+        }
+        .hl-value {
+          font-size: 38px;
+          font-weight: 800;
+          line-height: 1;
+          letter-spacing: -0.02em;
+          color: var(--text-primary);
+        }
+        .hl-prompt {
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+          font-size: 12px;
+          line-height: 1.5;
+          color: var(--text-secondary);
+          font-style: italic;
+        }
+      `}</style>
 
-      {/* Longest session */}
-      <HighlightCard
-        label={pt ? 'Sessão mais longa' : 'Longest session'}
-        icon={<Clock size={15} />}
-        accent="var(--accent-purple)"
-        value={fmtDuration(longestSession.duration_minutes ?? 0)}
-        sessionId={shortId(longestSession.session_id)}
-        sessionName={truncate(longestSession.first_prompt, 60)}
-        project={formatProjectName(longestSession.project_path ?? '')}
-      />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
 
-      {/* Most input tokens */}
-      <HighlightCard
-        label={pt ? 'Mais tokens de entrada' : 'Most input tokens'}
-        icon={<Download size={15} />}
-        accent="var(--accent-blue)"
-        value={fmt(mostInputTokens.input_tokens ?? 0)}
-        sessionId={shortId(mostInputTokens.session_id)}
-        sessionName={truncate(mostInputTokens.first_prompt, 60)}
-        project={formatProjectName(mostInputTokens.project_path ?? '')}
-      />
-
-      {/* Most output tokens */}
-      <HighlightCard
-        label={pt ? 'Mais tokens de saída' : 'Most output tokens'}
-        icon={<Upload size={15} />}
-        accent="var(--accent-purple)"
-        value={fmt(mostOutputTokens.output_tokens ?? 0)}
-        sessionId={shortId(mostOutputTokens.session_id)}
-        sessionName={truncate(mostOutputTokens.first_prompt, 60)}
-        project={formatProjectName(mostOutputTokens.project_path ?? '')}
-      />
-
-      {/* Most messages */}
-      <HighlightCard
-        label={pt ? 'Mais mensagens' : 'Most messages'}
-        icon={<MessageSquare size={15} />}
-        accent="var(--anthropic-orange)"
-        value={fmt((mostMessages.user_message_count ?? 0) + (mostMessages.assistant_message_count ?? 0))}
-        sessionId={shortId(mostMessages.session_id)}
-        sessionName={truncate(mostMessages.first_prompt, 60)}
-        project={formatProjectName(mostMessages.project_path ?? '')}
-      />
-
-      {/* Most tool calls */}
-      <HighlightCard
-        label={pt ? 'Mais chamadas de ferramentas' : 'Most tool calls'}
-        icon={<Wrench size={15} />}
-        accent="var(--accent-green)"
-        value={fmt(Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0))}
-        sessionId={shortId(mostToolCalls.session_id)}
-        sessionName={truncate(mostToolCalls.first_prompt, 60)}
-        project={formatProjectName(mostToolCalls.project_path ?? '')}
-      />
-
-      {/* Project with most sessions */}
-      {topProjectEntry && (
         <HighlightCard
-          label={pt ? 'Projeto mais ativo' : 'Most active project'}
-          icon={<FolderOpen size={15} />}
-          accent="var(--accent-cyan)"
-          value={String(topProjectEntry[1])}
-          valueSub={pt ? 'sessões' : 'sessions'}
-          sessionId={topProjectEntry[0].split('/').pop() ?? '—'}
-          sessionName={formatProjectName(topProjectEntry[0])}
-          project={`${topProjectEntry[1]} ${pt ? 'sessões no período' : 'sessions in period'}`}
+          label={pt ? 'Sessão mais longa' : 'Longest session'}
+          icon={<Clock size={14} />}
+          accent="#a855f7"
+          value={fmtDuration(longestSession.duration_minutes ?? 0)}
+          comparison={multiplier(longestSession.duration_minutes ?? 0, avgDuration)}
+          prompt={truncate(longestSession.first_prompt, 90)}
+          project={formatProjectName(longestSession.project_path ?? '')}
         />
-      )}
-    </div>
+
+        <HighlightCard
+          label={pt ? 'Mais tokens de entrada' : 'Most input tokens'}
+          icon={<Download size={14} />}
+          accent="#3b82f6"
+          value={fmt(mostInputTokens.input_tokens ?? 0)}
+          comparison={multiplier(mostInputTokens.input_tokens ?? 0, avgInput)}
+          prompt={truncate(mostInputTokens.first_prompt, 90)}
+          project={formatProjectName(mostInputTokens.project_path ?? '')}
+        />
+
+        <HighlightCard
+          label={pt ? 'Mais tokens de saída' : 'Most output tokens'}
+          icon={<Upload size={14} />}
+          accent="#8b5cf6"
+          value={fmt(mostOutputTokens.output_tokens ?? 0)}
+          comparison={multiplier(mostOutputTokens.output_tokens ?? 0, avgOutput)}
+          prompt={truncate(mostOutputTokens.first_prompt, 90)}
+          project={formatProjectName(mostOutputTokens.project_path ?? '')}
+        />
+
+        <HighlightCard
+          label={pt ? 'Mais mensagens' : 'Most messages'}
+          icon={<MessageSquare size={14} />}
+          accent="#e8690b"
+          value={fmt((mostMessages.user_message_count ?? 0) + (mostMessages.assistant_message_count ?? 0))}
+          comparison={multiplier(
+            (mostMessages.user_message_count ?? 0) + (mostMessages.assistant_message_count ?? 0),
+            avgMessages
+          )}
+          prompt={truncate(mostMessages.first_prompt, 90)}
+          project={formatProjectName(mostMessages.project_path ?? '')}
+        />
+
+        <HighlightCard
+          label={pt ? 'Mais chamadas de ferramentas' : 'Most tool calls'}
+          icon={<Wrench size={14} />}
+          accent="#10b981"
+          value={fmt(Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0))}
+          comparison={multiplier(
+            Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0),
+            avgTools
+          )}
+          prompt={truncate(mostToolCalls.first_prompt, 90)}
+          project={formatProjectName(mostToolCalls.project_path ?? '')}
+        />
+
+        {topProjectEntry && (
+          <HighlightCard
+            label={pt ? 'Projeto mais ativo' : 'Most active project'}
+            icon={<FolderOpen size={14} />}
+            accent="#06b6d4"
+            value={String(topProjectEntry[1])}
+            valueSub={pt ? 'sessões' : 'sessions'}
+            comparison={topProjectEntry[1] > 1
+              ? `${Math.round((topProjectEntry[1] / sessions.length) * 100)}% ${pt ? 'do período' : 'of period'}`
+              : null}
+            prompt={formatProjectName(topProjectEntry[0])}
+            project={`${topProjectEntry[0]}`}
+          />
+        )}
+
+      </div>
+    </>
   )
 }
 
 function HighlightCard({
-  label, icon, accent, value, valueSub, sessionId, sessionName, project,
+  label, icon, accent, value, valueSub, comparison, prompt, project,
 }: {
   label: string
   icon: React.ReactNode
   accent: string
   value: string
   valueSub?: string
-  sessionId?: string
-  sessionName?: string
+  comparison?: string | null
+  prompt?: string
   project?: string
 }) {
+  const [hovered, setHovered] = useState(false)
+
   return (
     <div
-      style={{
-        background: 'var(--bg-card)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-lg)',
-        padding: '16px 18px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 10,
-        position: 'relative',
-        overflow: 'hidden',
-        transition: 'border-color 0.2s, background 0.2s',
-      }}
-      onMouseEnter={e => {
-        const el = e.currentTarget as HTMLDivElement
-        el.style.borderColor = `${accent}40`
-        el.style.background = 'var(--bg-card-hover)'
-      }}
-      onMouseLeave={e => {
-        const el = e.currentTarget as HTMLDivElement
-        el.style.borderColor = 'var(--border)'
-        el.style.background = 'var(--bg-card)'
-      }}
+      className="hl-card"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{ borderColor: hovered ? `${accent}50` : 'var(--border)' }}
     >
-      {/* Top accent line */}
+      {/* Ambient glow — top-left radial */}
       <div style={{
-        position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-        background: `linear-gradient(90deg, ${accent}60, ${accent}10, transparent)`,
+        position: 'absolute', inset: 0, pointerEvents: 'none',
+        background: `radial-gradient(ellipse at -10% -10%, ${accent}22 0%, transparent 65%)`,
+        transition: 'opacity 0.3s',
+        opacity: hovered ? 1 : 0.6,
       }} />
 
-      {/* Header row */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      {/* Accent bar — left edge */}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, bottom: 0, width: 3,
+        background: `linear-gradient(180deg, ${accent}, ${accent}00)`,
+        borderRadius: '0 0 0 var(--radius-lg)',
+      }} />
+
+      {/* Label + icon */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 7,
+        marginBottom: 14,
+      }}>
         <span style={{
-          fontSize: 11, fontWeight: 500, color: 'var(--text-secondary)',
-          letterSpacing: '0.05em', textTransform: 'uppercase',
-        }}>
-          {label}
-        </span>
-        <span style={{
-          width: 28, height: 28, borderRadius: 7,
-          background: `${accent}18`,
+          width: 26, height: 26, borderRadius: 7,
+          background: `${accent}20`,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           color: accent, flexShrink: 0,
         }}>
           {icon}
         </span>
+        <span style={{
+          fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)',
+          textTransform: 'uppercase', letterSpacing: '0.08em',
+        }}>
+          {label}
+        </span>
       </div>
 
       {/* Value */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 5 }}>
-        <div style={{ fontSize: 26, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.1 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 4 }}>
+        <div className="hl-value" style={{ color: hovered ? accent : 'var(--text-primary)', transition: 'color 0.2s' }}>
           {value}
         </div>
         {valueSub && (
-          <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{valueSub}</div>
+          <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-tertiary)' }}>
+            {valueSub}
+          </span>
         )}
       </div>
 
-      {/* Session / project details */}
-      <div style={{
-        borderTop: '1px solid var(--border)',
-        paddingTop: 8,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 4,
-      }}>
-        {sessionId && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Trophy size={10} style={{ color: accent, flexShrink: 0 }} />
-            <code style={{
-              fontSize: 10, color: 'var(--text-tertiary)',
-              background: 'var(--bg-elevated)',
-              padding: '1px 5px', borderRadius: 3,
-              letterSpacing: '0.03em',
-            }}>
-              {sessionId}
-            </code>
-          </div>
-        )}
-        {sessionName && (
-          <div
-            title={sessionName}
-            style={{
-              fontSize: 12, color: 'var(--text-secondary)',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}
-          >
-            {sessionName}
-          </div>
-        )}
-        {project && (
-          <div
-            title={project}
-            style={{
-              fontSize: 11, color: 'var(--text-tertiary)',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}
-          >
+      {/* Comparison badge */}
+      {comparison && (
+        <div style={{
+          display: 'inline-flex', alignItems: 'center',
+          fontSize: 11, fontWeight: 600,
+          color: accent,
+          background: `${accent}18`,
+          border: `1px solid ${accent}30`,
+          borderRadius: 20,
+          padding: '2px 8px',
+          marginBottom: 14,
+        }}>
+          {comparison}
+        </div>
+      )}
+      {!comparison && <div style={{ marginBottom: 14 }} />}
+
+      {/* Divider */}
+      <div style={{ height: 1, background: 'var(--border)', marginBottom: 12 }} />
+
+      {/* Prompt */}
+      {prompt && (
+        <div className="hl-prompt" title={prompt} style={{ marginBottom: project ? 8 : 0 }}>
+          "{prompt}"
+        </div>
+      )}
+
+      {/* Project */}
+      {project && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 5,
+          fontSize: 11, color: 'var(--text-tertiary)',
+          overflow: 'hidden',
+        }}>
+          <FolderOpen size={10} style={{ flexShrink: 0, color: accent }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {project}
-          </div>
-        )}
-      </div>
+          </span>
+        </div>
+      )}
     </div>
   )
 }
