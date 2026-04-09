@@ -1,7 +1,7 @@
 import React, { useRef, useState, useMemo } from 'react'
 import {
   X, Download, Sun, Moon, Check, Calendar, Cpu, Search,
-  BarChart2, TrendingUp, Clock, Wrench, FolderOpen, List, LayoutGrid,
+  BarChart2, TrendingUp, Clock, Wrench, FolderOpen, List, LayoutGrid, Trophy,
 } from 'lucide-react'
 import { format, parseISO, subDays } from 'date-fns'
 import type { AppData, Filters, Lang, ModelUsage, SessionMeta } from '../lib/types'
@@ -12,7 +12,7 @@ import { useDerivedStats } from '../hooks/useData'
 
 type PDFTheme = 'light' | 'dark'
 
-const SECTION_IDS = ['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools', 'sessions'] as const
+const SECTION_IDS = ['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools', 'sessions', 'highlights'] as const
 type SectionId = typeof SECTION_IDS[number]
 
 interface Colors {
@@ -61,7 +61,8 @@ const SECTIONS: { id: SectionId; labelPt: string; labelEn: string; Icon: React.E
   { id: 'models',   labelPt: 'Modelos',      labelEn: 'Models',     Icon: Cpu         },
   { id: 'projects', labelPt: 'Projetos',     labelEn: 'Projects',   Icon: FolderOpen  },
   { id: 'tools',    labelPt: 'Ferramentas',  labelEn: 'Tools',      Icon: Wrench      },
-  { id: 'sessions', labelPt: 'Sessões',      labelEn: 'Sessions',   Icon: List        },
+  { id: 'sessions',    labelPt: 'Sessões',      labelEn: 'Sessions',    Icon: List        },
+  { id: 'highlights', labelPt: 'Recordes',    labelEn: 'Highlights',  Icon: Trophy      },
 ]
 
 const DATE_OPTIONS = [
@@ -377,6 +378,158 @@ function MiniSessionsTable({ sessions, c, lang, currency, brlRate }: {
   )
 }
 
+function MiniHighlightsSection({ sessions, c, lang }: {
+  sessions: SessionMeta[]; c: Colors; lang: Lang
+}) {
+  const pt = lang === 'pt'
+  if (sessions.length === 0) return null
+
+  function fmtDuration(minutes: number): string {
+    const h = Math.floor(minutes / 60)
+    const m = Math.round(minutes % 60)
+    if (h > 0) return `${h}h ${m}m`
+    return `${m}m`
+  }
+
+  function avg(arr: number[]): number {
+    if (arr.length === 0) return 0
+    return arr.reduce((a, b) => a + b, 0) / arr.length
+  }
+
+  function multiplier(value: number, mean: number): string | null {
+    if (mean === 0 || value === 0) return null
+    const x = value / mean
+    if (x < 1.5) return null
+    return `${x.toFixed(1)}× avg`
+  }
+
+  const longestSession = sessions.reduce((b, s) =>
+    (s.duration_minutes ?? 0) > (b.duration_minutes ?? 0) ? s : b, sessions[0])
+  const mostInputTokens = sessions.reduce((b, s) =>
+    (s.input_tokens ?? 0) > (b.input_tokens ?? 0) ? s : b, sessions[0])
+  const mostOutputTokens = sessions.reduce((b, s) =>
+    (s.output_tokens ?? 0) > (b.output_tokens ?? 0) ? s : b, sessions[0])
+  const mostMessages = sessions.reduce((b, s) => {
+    const v = (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
+    const bv = (b.user_message_count ?? 0) + (b.assistant_message_count ?? 0)
+    return v > bv ? s : b
+  }, sessions[0])
+  const mostToolCalls = sessions.reduce((b, s) => {
+    const v = Object.values(s.tool_counts ?? {}).reduce((a, x) => a + x, 0)
+    const bv = Object.values(b.tool_counts ?? {}).reduce((a, x) => a + x, 0)
+    return v > bv ? s : b
+  }, sessions[0])
+
+  const projectSessionCounts: Record<string, number> = {}
+  for (const s of sessions) {
+    if (s.project_path) projectSessionCounts[s.project_path] = (projectSessionCounts[s.project_path] ?? 0) + 1
+  }
+  const topProjectEntry = Object.entries(projectSessionCounts).sort((a, b) => b[1] - a[1])[0]
+
+  const avgDuration = avg(sessions.map(s => s.duration_minutes ?? 0).filter(v => v > 0))
+  const avgInput    = avg(sessions.map(s => s.input_tokens ?? 0).filter(v => v > 0))
+  const avgOutput   = avg(sessions.map(s => s.output_tokens ?? 0).filter(v => v > 0))
+  const avgMessages = avg(sessions.map(s => (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)).filter(v => v > 0))
+  const avgTools    = avg(sessions.map(s => Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)).filter(v => v > 0))
+
+  function truncate(str: string | undefined, len: number) {
+    if (!str) return pt ? 'Sem título' : 'Untitled'
+    return str.length > len ? str.slice(0, len) + '…' : str
+  }
+
+  const records = [
+    {
+      label: pt ? 'Sessão mais longa' : 'Longest session',
+      value: fmtDuration(longestSession.duration_minutes ?? 0),
+      badge: multiplier(longestSession.duration_minutes ?? 0, avgDuration),
+      prompt: truncate(longestSession.first_prompt, 80),
+      project: formatProjectName(longestSession.project_path ?? ''),
+      accent: '#a855f7',
+    },
+    {
+      label: pt ? 'Mais tokens de entrada' : 'Most input tokens',
+      value: fmtN(mostInputTokens.input_tokens ?? 0),
+      badge: multiplier(mostInputTokens.input_tokens ?? 0, avgInput),
+      prompt: truncate(mostInputTokens.first_prompt, 80),
+      project: formatProjectName(mostInputTokens.project_path ?? ''),
+      accent: '#3b82f6',
+    },
+    {
+      label: pt ? 'Mais tokens de saída' : 'Most output tokens',
+      value: fmtN(mostOutputTokens.output_tokens ?? 0),
+      badge: multiplier(mostOutputTokens.output_tokens ?? 0, avgOutput),
+      prompt: truncate(mostOutputTokens.first_prompt, 80),
+      project: formatProjectName(mostOutputTokens.project_path ?? ''),
+      accent: '#8b5cf6',
+    },
+    {
+      label: pt ? 'Mais mensagens' : 'Most messages',
+      value: fmtN((mostMessages.user_message_count ?? 0) + (mostMessages.assistant_message_count ?? 0)),
+      badge: multiplier((mostMessages.user_message_count ?? 0) + (mostMessages.assistant_message_count ?? 0), avgMessages),
+      prompt: truncate(mostMessages.first_prompt, 80),
+      project: formatProjectName(mostMessages.project_path ?? ''),
+      accent: '#e8690b',
+    },
+    {
+      label: pt ? 'Mais chamadas de ferramentas' : 'Most tool calls',
+      value: fmtN(Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0)),
+      badge: multiplier(Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0), avgTools),
+      prompt: truncate(mostToolCalls.first_prompt, 80),
+      project: formatProjectName(mostToolCalls.project_path ?? ''),
+      accent: '#10b981',
+    },
+    ...(topProjectEntry ? [{
+      label: pt ? 'Projeto mais ativo' : 'Most active project',
+      value: `${topProjectEntry[1]} ${pt ? 'sessões' : 'sessions'}`,
+      badge: `${Math.round((topProjectEntry[1] / sessions.length) * 100)}% ${pt ? 'do período' : 'of period'}`,
+      prompt: formatProjectName(topProjectEntry[0]),
+      project: topProjectEntry[0],
+      accent: '#06b6d4',
+    }] : []),
+  ]
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+      {records.map((r, i) => (
+        <div key={i} style={{
+          background: c.bgCard,
+          border: `1px solid ${c.border}`,
+          borderRadius: 8,
+          padding: '12px 14px',
+          borderLeft: `3px solid ${r.accent}`,
+          position: 'relative',
+          overflow: 'hidden',
+        }}>
+          <div style={{ fontSize: 8, fontWeight: 700, color: c.textTer, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
+            {r.label}
+          </div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: r.accent, lineHeight: 1, letterSpacing: '-0.02em', marginBottom: 4 }}>
+            {r.value}
+          </div>
+          {r.badge && (
+            <div style={{
+              display: 'inline-flex', alignItems: 'center',
+              fontSize: 8, fontWeight: 600, color: r.accent,
+              background: `${r.accent}18`, border: `1px solid ${r.accent}30`,
+              borderRadius: 20, padding: '2px 6px', marginBottom: 8,
+            }}>
+              {r.badge}
+            </div>
+          )}
+          {!r.badge && <div style={{ marginBottom: 8 }} />}
+          <div style={{ height: 1, background: c.border, marginBottom: 8 }} />
+          <div style={{ fontSize: 9, color: c.textSec, fontStyle: 'italic', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' } as React.CSSProperties}>
+            "{r.prompt}"
+          </div>
+          <div style={{ fontSize: 9, color: c.textTer, marginTop: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {r.project}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ── PDF Content (the exportable A4 page, 794px wide) ─────────────────────────
 
 interface PDFContentProps {
@@ -446,8 +599,8 @@ function PDFContent({ pdfTheme, enabledSections, derived, pdfFilters, lang, curr
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
             <KPICard label={pt ? 'Sequência' : 'Streak'} value={`${derived.streak}d`} sub={pt ? 'dias consec.' : 'consecutive'} accent={c.red} c={c} />
             <KPICard label={pt ? 'Sessão mais longa' : 'Longest session'} value={derived.longestSession?.duration_minutes ? fmtDur(derived.longestSession.duration_minutes) : '—'} sub="" accent={c.purple} c={c} />
-            <KPICard label="Commits" value={derived.metaCoverageFrom ? String(derived.gitCommits) : '—'} sub={`${derived.gitPushes} pushes`} accent={c.cyan} c={c} />
-            <KPICard label={pt ? 'Arquivos' : 'Files'} value={derived.metaCoverageFrom ? String(derived.filesModified) : '—'} sub={`+${fmtN(derived.linesAdded)} / -${fmtN(derived.linesRemoved)}`} accent={c.green} c={c} />
+            <KPICard label="Commits" value={String(derived.gitCommits)} sub={derived.gitPushes > 0 ? `${derived.gitPushes} pushes` : pt ? 'via Claude' : 'via Claude'} accent={c.cyan} c={c} />
+            <KPICard label={pt ? 'Arquivos' : 'Files'} value={String(derived.filesModified)} sub={`+${fmtN(derived.linesAdded)} / -${fmtN(derived.linesRemoved)}`} accent={c.green} c={c} />
           </div>
         </div>
       )}
@@ -510,6 +663,13 @@ function PDFContent({ pdfTheme, enabledSections, derived, pdfFilters, lang, curr
             sessions={[...derived.filteredSessions].sort((a, b) => (b.start_time ?? '').localeCompare(a.start_time ?? '')).slice(0, 12)}
             c={c} lang={lang} currency={currency} brlRate={brlRate}
           />
+        </div>
+      )}
+
+      {enabledSections.has('highlights') && (
+        <div style={{ marginBottom: 28 }}>
+          <SectionTitle title={pt ? 'Recordes do período' : 'Period highlights'} c={c} />
+          <MiniHighlightsSection sessions={derived.filteredSessions} c={c} lang={lang} />
         </div>
       )}
 
@@ -715,7 +875,7 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
                 {DATE_OPTIONS.map(opt => {
                   const sel = pdfFilters.dateRange === opt.value
                   return (
-                    <button key={opt.value} onClick={() => setPdfFilters(f => ({ ...f, dateRange: opt.value as Filters['dateRange'] }))} style={{
+                    <button key={opt.value} onClick={() => setPdfFilters(f => ({ ...f, dateRange: opt.value as Filters['dateRange'], customStart: '', customEnd: '' }))} style={{
                       padding: '6px 4px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
                       fontSize: 11, fontWeight: sel ? 700 : 500, textAlign: 'center',
                       background: sel ? 'var(--anthropic-orange-dim)' : 'transparent',
