@@ -35,3 +35,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Playwright / MCP artifacts
 .playwright-mcp/
+
+# npm lockfile (project uses bun)
+package-lock.json

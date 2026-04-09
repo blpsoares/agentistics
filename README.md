@@ -32,6 +32,7 @@
 - [Arquitetura e Tech Stack](#arquitetura-e-tech-stack)
 - [Estrutura de Componentes](#estrutura-de-componentes)
 - [Configuração Avançada](#configuração-avançada)
+- [OpenTelemetry + Watcher / Daemon Mode](#opentelemetry--watcher--daemon-mode)
 
 ---
 
@@ -441,9 +442,11 @@ claude-stats/
 │   │   └── StatCard.tsx
 │   └── lib/
 │       ├── types.ts         # Tipos TypeScript + MODEL_PRICING
+│       ├── otel.ts          # Definições de métricas OpenTelemetry
 │       ├── i18n.ts          # Traduções PT/EN
 │       └── hooks/           # Hooks customizados (se houver)
 ├── server.ts                # API Bun: parsing JSONL, git stats, cache
+├── watcher.ts               # Daemon/watcher: fs.watch + OTLP export
 ├── package.json
 ├── tsconfig.json
 └── vite.config.ts
@@ -469,6 +472,9 @@ claude-stats/
 | Bun | Runtime do servidor HTTP |
 | Node.js fs/path | Leitura de arquivos locais |
 | child_process (execAsync) | Execução de comandos git |
+| @opentelemetry/api | API de métricas OpenTelemetry |
+| @opentelemetry/sdk-metrics | SDK de métricas (MeterProvider) |
+| @opentelemetry/exporter-metrics-otlp-http | Exportador OTLP/HTTP |
 
 ### Persistência no Browser
 
@@ -530,6 +536,16 @@ Caminhos derivados:
 ~/.claude/stats-cache.json          → STATS_CACHE_FILE
 ```
 
+### Variáveis de Ambiente (watcher / OpenTelemetry)
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT   # Endpoint do coletor OTLP (ex: http://localhost:4318)
+OTEL_EXPORTER_OTLP_HEADERS    # Headers extras (ex: "Authorization=Bearer token")
+OTEL_SERVICE_NAME              # Nome do serviço (padrão: "claude-stats")
+CLAUDE_STATS_WATCH_INTERVAL   # Intervalo de polling em segundos (padrão: 30)
+CLAUDE_STATS_OTEL_ONLY        # "true" para rodar sem servidor HTTP
+```
+
 ### Porta da API
 
 Por padrão a API roda na porta `3001`. O Vite proxy redireciona `/api/*` automaticamente no desenvolvimento.
@@ -547,6 +563,109 @@ O sistema detecta automaticamente problemas como:
 - Dados de sessão incompletos
 
 Alertas têm 3 níveis de severidade: **erro** (vermelho) · **aviso** (amarelo) · **info** (azul). Cada aviso pode ser dispensado individualmente e o estado é persistido.
+
+---
+
+## OpenTelemetry + Watcher / Daemon Mode
+
+Claude Stats can export usage metrics via the [OpenTelemetry](https://opentelemetry.io/) protocol (OTLP/HTTP), enabling integration with observability backends like **Grafana**, **Datadog**, **New Relic**, **Honeycomb**, and any OTLP-compatible collector.
+
+### Quick Start
+
+```bash
+# Watch mode: watches ~/.claude/ for changes + exports metrics via OTLP
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 bun run watch
+
+# Daemon mode: OTLP export only (no HTTP server)
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 bun run daemon
+```
+
+### How It Works
+
+The watcher (`watcher.ts`) runs as a background process that:
+
+1. **Watches** `~/.claude/usage-data/session-meta/` and `~/.claude/projects/` for file changes using `fs.watch` (recursive)
+2. **Rebuilds** a metrics snapshot from `stats-cache.json` and session-meta files on each change (debounced)
+3. **Polls** every N seconds as a fallback (configurable via `CLAUDE_STATS_WATCH_INTERVAL`)
+4. **Exports** all metrics to an OTLP collector when `OTEL_EXPORTER_OTLP_ENDPOINT` is set
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | *(none)* | OTLP collector endpoint (e.g. `http://localhost:4318`). Required to enable export. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | *(none)* | Extra headers for the OTLP exporter (e.g. `Authorization=Bearer token`) |
+| `OTEL_SERVICE_NAME` | `claude-stats` | Service name reported in metrics |
+| `CLAUDE_STATS_WATCH_INTERVAL` | `30` | Polling interval in seconds |
+| `CLAUDE_STATS_OTEL_ONLY` | `false` | When `true`, runs only the OTLP exporter without the HTTP API server |
+
+### Exported Metrics
+
+All metrics use the `claude_stats` namespace:
+
+| Metric | Type | Unit | Description |
+|--------|------|------|-------------|
+| `claude_stats.messages.total` | Gauge | messages | Total messages (user + assistant) |
+| `claude_stats.sessions.total` | Gauge | sessions | Total sessions |
+| `claude_stats.tool_calls.total` | Gauge | calls | Total tool calls |
+| `claude_stats.tokens.input` | Gauge | tokens | Total input tokens |
+| `claude_stats.tokens.output` | Gauge | tokens | Total output tokens |
+| `claude_stats.cost.usd` | Gauge | USD | Estimated total cost |
+| `claude_stats.git.commits` | Gauge | commits | Git commits via Claude |
+| `claude_stats.git.pushes` | Gauge | pushes | Git pushes via Claude |
+| `claude_stats.git.lines_added` | Gauge | lines | Lines added |
+| `claude_stats.git.lines_removed` | Gauge | lines | Lines removed |
+| `claude_stats.git.files_modified` | Gauge | files | Files modified |
+| `claude_stats.streak` | Gauge | days | Current streak (consecutive active days) |
+| `claude_stats.longest_session` | Gauge | min | Longest session duration |
+| `claude_stats.active_projects` | Gauge | projects | Number of active projects |
+| `claude_stats.tokens.by_model.input` | Gauge | tokens | Input tokens per model (`model` attribute) |
+| `claude_stats.tokens.by_model.output` | Gauge | tokens | Output tokens per model (`model` attribute) |
+| `claude_stats.tool_calls.by_tool` | Gauge | calls | Tool calls per tool (`tool` attribute) |
+
+### Example: Grafana + OpenTelemetry Collector
+
+```yaml
+# docker-compose.yml
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    ports:
+      - "4318:4318"   # OTLP HTTP
+    volumes:
+      - ./otel-config.yaml:/etc/otelcol-contrib/config.yaml
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+```
+
+```yaml
+# otel-config.yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]
+```
+
+Then run:
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 bun run watch
+```
 
 ---
 
