@@ -568,9 +568,11 @@ function PDFContent({ pdfTheme, enabledSections, derived, pdfFilters, lang, curr
       {/* Header */}
       <div style={{ marginBottom: 28, paddingBottom: 20, borderBottom: `2px solid ${c.orange}` }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
-          <div style={{ width: 36, height: 36, borderRadius: 10, background: `linear-gradient(135deg, ${c.orange}, #f59e0b)`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <span style={{ fontSize: 18, fontWeight: 800, color: '#000', lineHeight: 1 }}>✦</span>
-          </div>
+          <img
+            src={pdfTheme === 'dark' ? '/logoDarkMode.png' : '/logoLightMode.png'}
+            alt="Claude Stats"
+            style={{ width: 36, height: 36, borderRadius: 10, flexShrink: 0, objectFit: 'contain' }}
+          />
           <div>
             <div style={{ fontSize: 20, fontWeight: 700, color: c.text, lineHeight: 1 }}>Claude Stats</div>
             <div style={{ fontSize: 11, color: c.textSec, marginTop: 3 }}>
@@ -750,32 +752,73 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
       const html2canvas = (await import('html2canvas')).default
       const { jsPDF } = await import('jspdf')
 
-      const canvas = await html2canvas(contentRef.current, {
+      const el = contentRef.current
+      // Clone into an isolated off-screen container at the top of <body> so
+      // html2canvas captures the full element with no scroll-offset or
+      // overflow-clipping from the modal's scroll containers.
+      const offscreen = document.createElement('div')
+      // Background ensures any sub-pixel overflow rows captured by html2canvas
+      // match the theme — the body background would be white otherwise.
+      offscreen.style.cssText = `position:fixed;left:-9999px;top:0;width:794px;background:${COLORS[pdfTheme].bg};pointer-events:none;z-index:-1;`
+      const clone = el.cloneNode(true) as HTMLElement
+      offscreen.appendChild(clone)
+      document.body.appendChild(offscreen)
+
+      const canvas = await html2canvas(clone, {
         scale: 2, useCORS: true, logging: false,
-        backgroundColor: COLORS[pdfTheme].bg, windowWidth: 794,
+        backgroundColor: COLORS[pdfTheme].bg,
+        windowWidth: 794,
       })
 
-      const imgData = canvas.toDataURL('image/png')
-      const A4_W = 210, A4_H = 297 // mm
-      const imgH = (canvas.height / canvas.width) * A4_W
+      document.body.removeChild(offscreen)
 
-      if (imgH <= A4_H) {
-        // Content fits in one page — trim height to content, no blank space
-        const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [A4_W, imgH] })
-        pdf.addImage(imgData, 'PNG', 0, 0, A4_W, imgH)
+      const A4_W = 210, A4_H = 297 // mm
+      // pxPerMm uses the canvas width as truth — canvas is always 794*scale px wide
+      const pxPerMm = canvas.width / A4_W
+      const totalH_mm = canvas.height / pxPerMm
+
+      if (totalH_mm <= A4_H) {
+        // Single page — trim to exact content height, no whitespace
+        const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [A4_W, totalH_mm] })
+        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, A4_W, totalH_mm)
         pdf.save(`claude-stats-${format(new Date(), 'yyyy-MM-dd')}.pdf`)
       } else {
-        // Multi-page: full A4 for intermediate pages, exact height for the last
+        // Multi-page: slice the canvas per page — no negative-offset hack, no float drift
+        const pageH_px = Math.round(A4_H * pxPerMm)
+        const totalPages = Math.ceil(canvas.height / pageH_px)
         const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-        let remaining = imgH, yPos = 0, pageNum = 0
-        while (remaining > 0) {
-          if (pageNum > 0) {
-            remaining < A4_H ? pdf.addPage([A4_W, remaining]) : pdf.addPage()
+
+        for (let page = 0; page < totalPages; page++) {
+          const startY = page * pageH_px
+          const sliceH_px = Math.min(pageH_px, canvas.height - startY)
+          const sliceH_mm = sliceH_px / pxPerMm
+
+          // Slice the canvas for this page
+          const slice = document.createElement('canvas')
+          slice.width = canvas.width
+          slice.height = sliceH_px
+          const ctx = slice.getContext('2d')!
+          // Fill background so partial last slice has no transparent/white area
+          ctx.fillStyle = COLORS[pdfTheme].bg
+          ctx.fillRect(0, 0, slice.width, slice.height)
+          ctx.drawImage(canvas, 0, startY, canvas.width, sliceH_px, 0, 0, canvas.width, sliceH_px)
+
+          if (page > 0) pdf.addPage()
+
+          if (sliceH_mm < A4_H) {
+            // Pad last page to full A4 with theme background so viewers
+            // don't show a white gap below a short custom-height page.
+            const padded = document.createElement('canvas')
+            padded.width = canvas.width
+            padded.height = pageH_px
+            const pCtx = padded.getContext('2d')!
+            pCtx.fillStyle = COLORS[pdfTheme].bg
+            pCtx.fillRect(0, 0, padded.width, padded.height)
+            pCtx.drawImage(slice, 0, 0)
+            pdf.addImage(padded.toDataURL('image/png'), 'PNG', 0, 0, A4_W, A4_H)
+          } else {
+            pdf.addImage(slice.toDataURL('image/png'), 'PNG', 0, 0, A4_W, sliceH_mm)
           }
-          pdf.addImage(imgData, 'PNG', 0, -yPos, A4_W, imgH)
-          yPos += A4_H
-          remaining -= A4_H
-          pageNum++
         }
         pdf.save(`claude-stats-${format(new Date(), 'yyyy-MM-dd')}.pdf`)
       }
@@ -1105,7 +1148,7 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
 
             {/* Preview content */}
             <div style={{ padding: '24px', display: 'flex', justifyContent: 'center' }}>
-              <div ref={contentRef} style={{ boxShadow: '0 4px 32px rgba(0,0,0,0.3)', borderRadius: 4, overflow: 'hidden', flexShrink: 0 }}>
+              <div ref={contentRef} style={{ boxShadow: '0 4px 32px rgba(0,0,0,0.3)', borderRadius: 4, overflow: 'hidden', flexShrink: 0, alignSelf: 'flex-start', background: COLORS[pdfTheme].bg }}>
                 <PDFContent
                   pdfTheme={pdfTheme}
                   enabledSections={enabledSections}
