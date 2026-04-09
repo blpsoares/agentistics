@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import type { Filters, DateRange, Project, Lang } from '../lib/types'
 import { formatModel } from '../lib/types'
-import { Layers, Cpu, RotateCcw, ChevronDown, X } from 'lucide-react'
+import { Layers, Cpu, RotateCcw, ChevronDown, X, CalendarDays } from 'lucide-react'
 import { ProjectsModal } from './ProjectsModal'
 import { DatePicker } from './DatePicker'
 import { format } from 'date-fns'
@@ -96,12 +96,22 @@ export function FiltersBar({ filters, onChange, projects, models, lang }: Props)
           border: hasCustomDates ? '1px solid rgba(217,119,6,0.55)' : '1px solid var(--border)',
           borderRadius: 7,
           height: 30,
-          paddingLeft: 10,
+          paddingLeft: 8,
+          gap: 1,
         }}>
+          <CalendarDays
+            size={12}
+            style={{
+              color: hasCustomDates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+              flexShrink: 0,
+              marginRight: 1,
+              opacity: hasCustomDates ? 0.85 : 0.5,
+            }}
+          />
           <DatePicker
             value={filters.customStart}
             onChange={v => onChange({ ...filters, dateRange: 'all', customStart: v })}
-            label={lang === 'pt' ? 'DE' : 'FROM'}
+            label={lang === 'pt' ? 'De' : 'From'}
             placeholder="DD/MM/YY"
             max={today}
             rangeStart={filters.customStart}
@@ -109,11 +119,16 @@ export function FiltersBar({ filters, onChange, projects, models, lang }: Props)
             stuck={true}
             lang={lang}
           />
-          <div style={{ color: 'var(--text-tertiary)', fontSize: 11, padding: '0 4px', opacity: 0.5 }}>→</div>
+          <div style={{
+            width: 14, height: 1,
+            background: hasCustomDates ? 'rgba(217,119,6,0.4)' : 'var(--border)',
+            flexShrink: 0,
+            marginTop: 1,
+          }} />
           <DatePicker
             value={filters.customEnd}
             onChange={v => onChange({ ...filters, dateRange: 'all', customEnd: v })}
-            label={lang === 'pt' ? 'ATÉ' : 'TO'}
+            label={lang === 'pt' ? 'Até' : 'To'}
             placeholder="DD/MM/YY"
             max={today}
             min={filters.customStart || undefined}
@@ -131,6 +146,7 @@ export function FiltersBar({ filters, onChange, projects, models, lang }: Props)
                 background: 'transparent', border: 'none', cursor: 'pointer',
                 color: 'var(--anthropic-orange)', padding: '0 8px 0 2px',
                 display: 'flex', alignItems: 'center', flexShrink: 0,
+                opacity: 0.7,
               }}
             >
               <X size={11} />

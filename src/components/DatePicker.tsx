@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react'
 import {
   format, parseISO, startOfMonth, addDays, getDay, getDaysInMonth,
   isBefore, isAfter, isSameDay, addMonths, subMonths,
@@ -26,6 +26,7 @@ export function DatePicker({
   rangeStart, rangeEnd, stuck, lang, align = 'left',
 }: DatePickerProps) {
   const [open, setOpen] = useState(false)
+  const [triggerHovered, setTriggerHovered] = useState(false)
   const [viewDate, setViewDate] = useState<Date>(() => {
     if (value) return parseISO(value)
     return new Date()
@@ -100,22 +101,35 @@ export function DatePicker({
     <div ref={ref} style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
       <div
         onClick={() => setOpen(o => !o)}
-        style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}
+        onMouseEnter={() => setTriggerHovered(true)}
+        onMouseLeave={() => setTriggerHovered(false)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+          padding: stuck ? '4px 7px' : '6px 9px',
+          borderRadius: 6,
+          background: open
+            ? 'rgba(217,119,6,0.1)'
+            : triggerHovered
+            ? 'rgba(255,255,255,0.05)'
+            : 'transparent',
+          transition: 'background 0.12s ease',
+        }}
       >
         <span style={{
-          fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', flexShrink: 0,
+          fontSize: 9, fontWeight: 700, letterSpacing: '0.07em', flexShrink: 0,
+          textTransform: 'uppercase',
           color: hasValue ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+          opacity: hasValue ? 1 : 0.7,
         }}>
           {label}
         </span>
         <span style={{
           fontSize: 12, fontFamily: 'inherit',
           fontWeight: hasValue ? 600 : 400,
-          color: hasValue ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-          minWidth: 72,
-          padding: stuck ? '5px 0' : '7px 0',
+          color: hasValue ? 'var(--text-primary)' : 'var(--text-tertiary)',
+          minWidth: 68,
         }}>
-          {displayValue || <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>{placeholder}</span>}
+          {displayValue || placeholder}
         </span>
       </div>
 

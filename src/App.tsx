@@ -803,23 +803,14 @@ export default function App() {
           justifyContent: 'space-between',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{
-              width: 32, height: 32,
-              background: 'linear-gradient(135deg, var(--anthropic-orange), #f59e0b)',
-              borderRadius: 9,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 2px 8px var(--anthropic-orange-dim)',
-            }}>
-              <span style={{ fontSize: 14, fontWeight: 800, color: '#000' }}>✦</span>
-            </div>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>Claude Stats</div>
-              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: -1 }}>
-                {lang === 'pt' ? 'Atualizado em' : 'Updated'}{' '}
-                {statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : lang === 'pt' ? 'hoje' : 'today'}
-              </div>
+            <img
+              src={theme === 'dark' ? '/logoDarkMode.png' : '/logoLightMode.png'}
+              alt="Claude Stats"
+              style={{ height: 32, width: 'auto' }}
+            />
+            <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
+              {lang === 'pt' ? 'Atualizado em' : 'Updated'}{' '}
+              {statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : lang === 'pt' ? 'hoje' : 'today'}
             </div>
           </div>
 
