@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import type { Filters, DateRange, Project, Lang } from '../lib/types'
 import { formatModel } from '../lib/types'
 import { Calendar, Layers, Cpu, RotateCcw, ChevronDown, X } from 'lucide-react'
@@ -74,6 +74,15 @@ function Select({ label, icon, value, onChange, options, stuck = false }: {
 
 export function FiltersBar({ filters, onChange, projects, models, lang, stuck = false }: Props) {
   const [showProjectsModal, setShowProjectsModal] = useState(false)
+  const [playShimmer, setPlayShimmer] = useState(false)
+  const prevStuckRef = useRef(false)
+
+  useEffect(() => {
+    if (stuck && !prevStuckRef.current) {
+      setPlayShimmer(true)
+    }
+    prevStuckRef.current = stuck
+  }, [stuck])
   const today = format(new Date(), 'yyyy-MM-dd')
   const hasCustomDates = !!(filters.customStart || filters.customEnd)
 
@@ -122,33 +131,24 @@ export function FiltersBar({ filters, onChange, projects, models, lang, stuck = 
         ].join(', '),
         position: 'relative',
       }}>
-        {/* Fusion line — animates in when stuck, connects to header bottom */}
-        <div style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          height: 1,
-          opacity: stuck ? 1 : 0,
-          transition: 'opacity 0.35s ease 0.05s',
-          pointerEvents: 'none',
-          overflow: 'hidden',
-        }}>
-          {/* Static glow base */}
-          <div style={{
-            position: 'absolute', inset: 0,
-            background: 'linear-gradient(90deg, transparent 0%, var(--anthropic-orange) 40%, rgba(217,119,6,0.35) 70%, transparent 100%)',
-          }} />
-          {/* Animated scan shimmer */}
-          {stuck && (
+        {/* Shimmer scan — plays once on entering stuck mode */}
+        {playShimmer && (
+          <div
+            onAnimationEnd={() => setPlayShimmer(false)}
+            style={{
+              position: 'absolute', inset: 0, top: 0, left: 0, right: 0, bottom: 0,
+              pointerEvents: 'none', overflow: 'hidden',
+              borderRadius: 'inherit',
+            }}
+          >
             <div style={{
               position: 'absolute', inset: 0,
-              background: 'linear-gradient(90deg, transparent 20%, rgba(255,255,255,0.6) 50%, transparent 80%)',
+              background: 'linear-gradient(90deg, transparent 20%, rgba(255,255,255,0.08) 50%, transparent 80%)',
               backgroundSize: '200% 100%',
               animation: 'filters-shimmer-scan 1.6s ease-out 1',
             }} />
-          )}
-        </div>
+          </div>
+        )}
         {/* Date range presets */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: stuck ? 0 : 6, transition: 'gap 0.3s ease' }}>
           <div style={{ display: 'grid', gridTemplateRows: stuck ? '0fr' : '1fr', transition: 'grid-template-rows 0.3s ease' }}>

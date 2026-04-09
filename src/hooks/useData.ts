@@ -234,11 +234,27 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     }
 
     // ── Git / Files ──
-    const gitCommits = filteredSessions.reduce((s, sess) => s + (sess.git_commits ?? 0), 0)
-    const gitPushes = filteredSessions.reduce((s, sess) => s + (sess.git_pushes ?? 0), 0)
-    const linesAdded = filteredSessions.reduce((s, sess) => s + (sess.lines_added ?? 0), 0)
-    const linesRemoved = filteredSessions.reduce((s, sess) => s + (sess.lines_removed ?? 0), 0)
-    const filesModified = filteredSessions.reduce((s, sess) => s + (sess.files_modified ?? 0), 0)
+    // When exactly one project is selected, use project-level git stats from the git repo
+    // (more accurate than session-based — captures commits made from other cwds)
+    const singleProjectGitStats = projects.length === 1
+      ? data.projects.find(p => p.path === projects[0])?.git_stats
+      : undefined
+
+    const gitCommits = singleProjectGitStats
+      ? singleProjectGitStats.commits
+      : filteredSessions.reduce((s, sess) => s + (sess.git_commits ?? 0), 0)
+    const gitPushes = singleProjectGitStats
+      ? 0  // not tracked at project level
+      : filteredSessions.reduce((s, sess) => s + (sess.git_pushes ?? 0), 0)
+    const linesAdded = singleProjectGitStats
+      ? singleProjectGitStats.lines_added
+      : filteredSessions.reduce((s, sess) => s + (sess.lines_added ?? 0), 0)
+    const linesRemoved = singleProjectGitStats
+      ? singleProjectGitStats.lines_removed
+      : filteredSessions.reduce((s, sess) => s + (sess.lines_removed ?? 0), 0)
+    const filesModified = singleProjectGitStats
+      ? singleProjectGitStats.files_modified
+      : filteredSessions.reduce((s, sess) => s + (sess.files_modified ?? 0), 0)
 
     // ── Tokens from sessions ──
     const inputTokens = filteredSessions.reduce((s, sess) => s + (sess.input_tokens ?? 0), 0)

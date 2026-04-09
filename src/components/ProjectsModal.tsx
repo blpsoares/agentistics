@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Search, X, Check } from 'lucide-react'
 
 interface Props {
@@ -184,7 +185,7 @@ export function ProjectsModal({ projects, selected, onApply, onClose, lang }: Pr
     opacity: disabled ? 0.5 : 1,
   })
 
-  return (
+  return createPortal(
     <div style={overlayStyle} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div style={modalStyle}>
 
@@ -511,6 +512,7 @@ export function ProjectsModal({ projects, selected, onApply, onClose, lang }: Pr
         </div>
 
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

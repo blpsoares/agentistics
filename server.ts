@@ -1,5 +1,9 @@
 import { readdir, readFile, stat } from 'fs/promises'
 import { join } from 'path'
+import { exec } from 'child_process'
+import { promisify } from 'util'
+
+const execAsync = promisify(exec)
 
 const CLAUDE_DIR = join(process.env.HOME || '/home/mithrandir', '.claude')
 const PROJECTS_DIR = join(CLAUDE_DIR, 'projects')
@@ -15,10 +19,19 @@ interface StatsCache {
   [key: string]: unknown
 }
 
+interface ProjectGitStats {
+  commits: number
+  lines_added: number
+  lines_removed: number
+  files_modified: number
+  since: string   // earliest commit date found
+}
+
 interface Project {
   path: string
   name: string
   sessions: { sessionId: string; created: string }[]
+  git_stats?: ProjectGitStats
 }
 
 interface SessionMeta {
@@ -173,6 +186,7 @@ async function parseSessionJsonl(
 
   let cwd = '', startTime = '', lastTime = '', firstPrompt = ''
   let userMsgs = 0, assistantMsgs = 0, inputTokens = 0, outputTokens = 0
+  let gitCommits = 0, gitPushes = 0
   const toolCounts: Record<string, number> = {}
   const messageHours: number[] = []
 
@@ -209,6 +223,18 @@ async function parseSessionJsonl(
         for (const p of msg!.content as Record<string,unknown>[]) {
           if (p.type === 'tool_use' && typeof p.name === 'string') {
             toolCounts[p.name] = (toolCounts[p.name] ?? 0) + 1
+            // Count git commits and pushes from Bash tool calls.
+            // Split on shell operators so we only match actual shell commands,
+            // not git commands embedded inside python -c "..." strings.
+            if (p.name === 'Bash') {
+              const cmd = (p.input as Record<string, string> | undefined)?.command ?? ''
+              const segments = cmd.split(/&&|\|\||;|\n/)
+              for (const seg of segments) {
+                const trimmed = seg.trim()
+                if (/^(cd\s+\S+\s+&&\s+)?git\s+commit\b/.test(trimmed)) gitCommits++
+                if (/^(cd\s+\S+\s+&&\s+)?git\s+push\b/.test(trimmed)) gitPushes++
+              }
+            }
           }
         }
       }
@@ -219,17 +245,22 @@ async function parseSessionJsonl(
     ? Math.max(0, Math.round((new Date(lastTime).getTime() - new Date(startTime).getTime()) / 60000))
     : 0
 
+  const projectPath = cwd || fallbackPath
+  const gitFileStats = gitCommits > 0
+    ? await getGitFileStats(projectPath, startTime, lastTime)
+    : { linesAdded: 0, linesRemoved: 0, filesModified: 0 }
+
   return {
     session_id: sessionId,
-    project_path: cwd || fallbackPath,
+    project_path: projectPath,
     start_time: startTime,
     duration_minutes: durationMinutes,
     user_message_count: userMsgs,
     assistant_message_count: assistantMsgs,
     tool_counts: toolCounts,
     languages: [],
-    git_commits: 0,
-    git_pushes: 0,
+    git_commits: gitCommits,
+    git_pushes: gitPushes,
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     first_prompt: firstPrompt,
@@ -241,12 +272,79 @@ async function parseSessionJsonl(
     uses_mcp: false,
     uses_web_search: false,
     uses_web_fetch: false,
-    lines_added: 0,
-    lines_removed: 0,
-    files_modified: 0,
+    lines_added: gitFileStats.linesAdded,
+    lines_removed: gitFileStats.linesRemoved,
+    files_modified: gitFileStats.filesModified,
     message_hours: messageHours,
     user_message_timestamps: [],
     _source: source,
+  }
+}
+
+async function getGitFileStats(
+  projectPath: string,
+  afterIso: string,
+  beforeIso: string
+): Promise<{ linesAdded: number; linesRemoved: number; filesModified: number }> {
+  const empty = { linesAdded: 0, linesRemoved: 0, filesModified: 0 }
+  if (!projectPath || !afterIso || !beforeIso) return empty
+  try {
+    // add 1 minute buffer on each side so the commits made during the session are included
+    const after = new Date(new Date(afterIso).getTime() - 60_000).toISOString()
+    const before = new Date(new Date(beforeIso).getTime() + 60_000).toISOString()
+    const { stdout } = await execAsync(
+      `git -C "${projectPath}" log --numstat --after="${after}" --before="${before}" --format=""`,
+      { timeout: 5000 }
+    )
+    let linesAdded = 0, linesRemoved = 0
+    const filesSeen = new Set<string>()
+    for (const line of stdout.split('\n')) {
+      const m = line.match(/^(\d+)\s+(\d+)\s+(.+)$/)
+      if (m) {
+        linesAdded += parseInt(m[1], 10)
+        linesRemoved += parseInt(m[2], 10)
+        filesSeen.add(m[3])
+      }
+    }
+    return { linesAdded, linesRemoved, filesModified: filesSeen.size }
+  } catch {
+    return empty
+  }
+}
+
+async function getProjectGitStats(projectPath: string): Promise<ProjectGitStats | undefined> {
+  try {
+    // Check if it's a git repo
+    await execAsync(`git -C "${projectPath}" rev-parse --git-dir`, { timeout: 3000 })
+  } catch {
+    return undefined
+  }
+  try {
+    const { stdout } = await execAsync(
+      `git -C "${projectPath}" log --numstat --format="COMMIT %H %ai" HEAD`,
+      { timeout: 10000 }
+    )
+    let commits = 0, linesAdded = 0, linesRemoved = 0
+    const filesSeen = new Set<string>()
+    let since = ''
+    for (const line of stdout.split('\n')) {
+      if (line.startsWith('COMMIT ')) {
+        commits++
+        const date = line.split(' ')[2]
+        if (date && (!since || date < since)) since = date
+      } else {
+        const m = line.match(/^(\d+)\s+(\d+)\s+(.+)$/)
+        if (m) {
+          linesAdded += parseInt(m[1], 10)
+          linesRemoved += parseInt(m[2], 10)
+          filesSeen.add(m[3])
+        }
+      }
+    }
+    if (commits === 0) return undefined
+    return { commits, lines_added: linesAdded, lines_removed: linesRemoved, files_modified: filesSeen.size, since }
+  } catch {
+    return undefined
   }
 }
 
@@ -444,11 +542,14 @@ async function scanProjectDir(
   // Normalize all extra sessions to the canonical project path
   for (const s of extraSessions) s.project_path = projectPath
 
+  const git_stats = await getProjectGitStats(projectPath)
+
   return {
     project: {
       path: projectPath,
       name: projectPath.split('/').filter(Boolean).pop() ?? projDir,
       sessions: projectSessions.sort((a, b) => b.created.localeCompare(a.created)),
+      git_stats,
     },
     extraSessions,
   }

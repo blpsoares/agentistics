@@ -83,10 +83,19 @@ export interface SessionIndex {
   isSidechain: boolean
 }
 
+export interface ProjectGitStats {
+  commits: number
+  lines_added: number
+  lines_removed: number
+  files_modified: number
+  since: string
+}
+
 export interface Project {
   path: string
   name: string
   sessions: SessionIndex[]
+  git_stats?: ProjectGitStats
 }
 
 export interface AppData {

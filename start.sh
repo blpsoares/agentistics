@@ -12,7 +12,7 @@ echo "🚀 Starting Claude Stats..."
 echo ""
 
 # Start API server
-bun run server.ts &
+bun --hot run server.ts &
 API_PID=$!
 
 # Start Vite

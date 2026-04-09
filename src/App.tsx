@@ -3,7 +3,7 @@ import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, RefreshCw, FileCode, TrendingUp, BarChart2,
   Sun, Moon, Globe, AlertTriangle, Download, Upload,
-  Maximize2, X, GripVertical,
+  Maximize2, X, GripVertical, Trophy,
 } from 'lucide-react'
 import { useData, useDerivedStats } from './hooks/useData'
 import type { Filters } from './lib/types'
@@ -17,6 +17,7 @@ import { ModelBreakdown } from './components/ModelBreakdown'
 import { ProjectsList } from './components/ProjectsList'
 import { FiltersBar } from './components/FiltersBar'
 import { RecentSessions } from './components/RecentSessions'
+import { HighlightsBoard } from './components/HighlightsBoard'
 import { InfoModal } from './components/InfoModal'
 import { PDFExportModal } from './components/PDFExportModal'
 import { format, parseISO, parse } from 'date-fns'
@@ -218,19 +219,31 @@ export default function App() {
   }, [theme])
 
   useEffect(() => {
-    const STICK_AT = 57   // stick when sentinel top < this
-    const UNSTICK_AT = 74 // unstick only when sentinel top > this (hysteresis buffer)
+    // Compare against window.scrollY (not getBoundingClientRect) so layout shifts
+    // from the sticky bar itself don't cause oscillation.
+    const STICKY_TOP = 56   // matches the sticky `top` value
+    const HYSTERESIS = 20   // extra scroll-up distance required to unstick
     let rafId: number | null = null
+    let stickThreshold: number | null = null
+
+    const computeThreshold = () => {
+      const sentinel = filtersSentinelRef.current
+      if (!sentinel) return null
+      return sentinel.getBoundingClientRect().top + window.scrollY - STICKY_TOP
+    }
+
     const check = () => {
       if (rafId !== null) return
       rafId = requestAnimationFrame(() => {
         rafId = null
-        const sentinel = filtersSentinelRef.current
-        if (!sentinel) return
-        const top = sentinel.getBoundingClientRect().top
+        if (stickThreshold === null) {
+          stickThreshold = computeThreshold()
+          if (stickThreshold === null) return
+        }
+        const scrollY = window.scrollY
         setFiltersStuck(prev => {
-          if (!prev && top < STICK_AT) return true
-          if (prev && top > UNSTICK_AT) return false
+          if (!prev && scrollY >= stickThreshold!) return true
+          if (prev && scrollY < stickThreshold! - HYSTERESIS) return false
           return prev
         })
       })
@@ -911,6 +924,11 @@ export default function App() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
           {cardOrder.map(id => renderCard(id))}
         </div>
+
+        {/* Highlights board */}
+        <Section title={<><Trophy size={14} /> {lang === 'pt' ? 'Recordes' : 'Highlights'}</>}>
+          <HighlightsBoard sessions={derived.filteredSessions} projects={data.projects} lang={lang} />
+        </Section>
 
         {/* Activity: chart (60%) + heatmap (40%) */}
         <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 16 }}>
