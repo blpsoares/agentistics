@@ -326,7 +326,7 @@ async function parseSessionJsonl(
               }
             }
 
-            // Detect agent files from Glob/Search tool calls
+            // Detect agent files from Glob/Search/Grep tool calls
             if (['Glob', 'Search', 'Grep'].includes(toolName)) {
               const inp = p.input as Record<string, string> | undefined
               const pattern = inp?.pattern ?? inp?.glob ?? inp?.query ?? ''
@@ -342,9 +342,11 @@ async function parseSessionJsonl(
       }
       // Attribute output tokens evenly among tools in this message
       if (toolsInMessage.length > 0 && msgOutputTokens > 0) {
-        const share = Math.round(msgOutputTokens / toolsInMessage.length)
-        for (const tn of toolsInMessage) {
-          toolOutputTokens[tn] = (toolOutputTokens[tn] ?? 0) + share
+        const share = Math.floor(msgOutputTokens / toolsInMessage.length)
+        const remainder = msgOutputTokens % toolsInMessage.length
+        for (let i = 0; i < toolsInMessage.length; i++) {
+          const tn = toolsInMessage[i]
+          toolOutputTokens[tn] = (toolOutputTokens[tn] ?? 0) + share + (i < remainder ? 1 : 0)
         }
       }
     }
@@ -463,22 +465,28 @@ async function getProjectGitStats(projectPath: string): Promise<ProjectGitStats 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // Agent-like instruction file patterns (basename matching)
-const AGENT_FILE_BASENAMES = new Set([
-  'claude.md', 'agents.md', 'claude_instructions.md',
-  '.cursorrules', '.cursorignore',
-  'conventions.md', 'instructions.md', 'rules.md',
-  'copilot-instructions.md', '.copilot-instructions.md',
-  '.windsurfrules',
+const AGENT_FILE_CATEGORY: Map<string, string> = new Map([
+  ['claude.md', 'CLAUDE.md'],
+  ['claude_instructions.md', 'CLAUDE.md'],
+  ['agents.md', 'AGENTS.md'],
+  ['.cursorrules', '.cursorrules'],
+  ['.cursorignore', '.cursorrules'],
+  ['conventions.md', 'CONVENTIONS.md'],
+  ['instructions.md', 'instructions'],
+  ['rules.md', 'instructions'],
+  ['copilot-instructions.md', 'copilot-instructions'],
+  ['.copilot-instructions.md', 'copilot-instructions'],
+  ['.windsurfrules', '.windsurfrules'],
 ])
 
 // Agent-like instruction file path patterns (directory-based matching)
-const AGENT_PATH_PATTERNS = [
-  /\/\.claude\//i,
-  /\/\.github\/copilot-instructions/i,
-  /\/\.cursor\//i,
-  /\/\.windsurf\//i,
-  /\/AGENTS\.md$/i,
-  /\/CLAUDE\.md$/i,
+const AGENT_PATH_PATTERNS: [RegExp, string][] = [
+  [/\/\.claude\//i, '.claude/*'],
+  [/\/\.github\/copilot-instructions/i, 'copilot-instructions'],
+  [/\/\.cursor\//i, '.cursorrules'],
+  [/\/\.windsurf\//i, '.windsurfrules'],
+  [/\/AGENTS\.md$/i, 'AGENTS.md'],
+  [/\/CLAUDE\.md$/i, 'CLAUDE.md'],
 ]
 
 /** Classify a file path as an agent instruction file category or null */
@@ -487,27 +495,11 @@ function classifyAgentFile(filePath: string): string | null {
   const normalized = filePath.replace(/\\/g, '/')
   const basename = normalized.split('/').pop()?.toLowerCase() ?? ''
 
-  if (AGENT_FILE_BASENAMES.has(basename)) {
-    if (basename === 'claude.md' || basename === 'claude_instructions.md') return 'CLAUDE.md'
-    if (basename === 'agents.md') return 'AGENTS.md'
-    if (basename === '.cursorrules' || basename === '.cursorignore') return '.cursorrules'
-    if (basename === 'conventions.md') return 'CONVENTIONS.md'
-    if (basename === 'instructions.md' || basename === 'rules.md') return 'instructions'
-    if (basename.includes('copilot')) return 'copilot-instructions'
-    if (basename === '.windsurfrules') return '.windsurfrules'
-    return basename
-  }
+  const category = AGENT_FILE_CATEGORY.get(basename)
+  if (category) return category
 
-  for (const pattern of AGENT_PATH_PATTERNS) {
-    if (pattern.test(normalized)) {
-      if (/\/\.claude\//i.test(normalized)) return '.claude/*'
-      if (/\/\.github\/copilot/i.test(normalized)) return 'copilot-instructions'
-      if (/\/\.cursor\//i.test(normalized)) return '.cursorrules'
-      if (/\/\.windsurf\//i.test(normalized)) return '.windsurfrules'
-      if (/\/AGENTS\.md$/i.test(normalized)) return 'AGENTS.md'
-      if (/\/CLAUDE\.md$/i.test(normalized)) return 'CLAUDE.md'
-      return 'agent-config'
-    }
+  for (const [pattern, cat] of AGENT_PATH_PATTERNS) {
+    if (pattern.test(normalized)) return cat
   }
 
   return null

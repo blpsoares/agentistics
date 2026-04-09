@@ -76,7 +76,7 @@ export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads,
           </button>
         )}
         <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 'auto' }}>
-          {pt ? `Total: ${fmt(total)}` : `Total: ${fmt(total)}`}
+          Total: {fmt(total)}
           {viewMode === 'tokens' ? ' tokens' : ` ${pt ? 'chamadas' : 'calls'}`}
         </span>
       </div>
