@@ -23,9 +23,35 @@ import type { ModelUsage, SessionMeta } from './src/lib/types'
 
 // ── Paths ──────────────────────────────────────────────────────────────────
 
-const HOME_DIR   = process.env.HOME ?? process.env.USERPROFILE ?? ''
-const CLAUDE_DIR = join(HOME_DIR, '.claude')
-const API_BASE   = 'http://localhost:3001'
+const HOME_DIR    = process.env.HOME ?? process.env.USERPROFILE ?? ''
+const CLAUDE_DIR  = join(HOME_DIR, '.claude')
+const API_BASE    = 'http://localhost:3001'
+const SESSION_START = Date.now()
+
+function showGoodbye(opts?: {
+  messages: number; streak: number; costUsd: number
+  projects: string[]
+}): void {
+  const secs = Math.floor((Date.now() - SESSION_START) / 1000)
+  const dur  = secs >= 60 ? `${Math.floor(secs/60)}m ${secs%60}s` : `${secs}s`
+  const fmtN = (n: number) => n >= 1000 ? (n/1000).toFixed(1)+'k' : String(n)
+  const lines: string[] = []
+  lines.push('')
+  lines.push(`  ${AM}${B}claude-stats${R}  ${D}·  watch mode${R}`)
+  lines.push('')
+  lines.push(`  ${D}sessão:   ${R}${WH}${dur}${R}`)
+  if (opts) {
+    const proj = opts.projects.length > 0 ? opts.projects.join(', ') : 'todos'
+    lines.push(`  ${D}projeto:  ${R}${WH}${proj}${R}`)
+    lines.push(`  ${D}streak:   ${R}${WH}${opts.streak}d${R}`)
+    lines.push(`  ${D}msgs:     ${R}${WH}${fmtN(opts.messages)}${R}`)
+    lines.push(`  ${D}custo:    ${R}${WH}$${opts.costUsd.toFixed(2)}${R}`)
+  }
+  lines.push('')
+  lines.push(`  ${D}até logo  ${AM}✦${R}`)
+  lines.push('')
+  process.stdout.write(lines.join('\n') + '\n')
+}
 
 // ── ANSI ───────────────────────────────────────────────────────────────────
 
@@ -277,12 +303,9 @@ async function reloadData(config: WatchConfig): Promise<{
 async function withLoader<T>(msg: string, fn: () => Promise<T>): Promise<T> {
   if (!process.stdout.isTTY) return fn()
 
-  const H     = 7
+  const H     = 8
   const W     = Math.min((process.stdout.columns || 80) - 2, 94)
   const BAR_W = W - 2
-
-  // Braille dots — cycling at ~12fps produces a perfectly smooth spin
-  const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 
   // Gradient wave: trough → peak → trough, repeated twice for seamless wrap
   const WAVE = '░░░▒▒▓▓███▓▓▒▒░░░░░▒▒▓▓███▓▓▒▒░░░'
@@ -290,17 +313,15 @@ async function withLoader<T>(msg: string, fn: () => Promise<T>): Promise<T> {
   let frame = 0
 
   const draw = () => {
-    const spin = SPIN[frame % SPIN.length]!
-
     // Scroll wave left — offset grows each frame
     const off  = (frame * 1) % WAVE.length
     const raw  = (WAVE + WAVE + WAVE).slice(off, off + BAR_W)
 
     // Apply color gradient: bright at peaks, dim at troughs
     const bar = raw.split('').map(c =>
-      c === '█' ? `${B}${BC}█${R}`
-      : c === '▓' ? `${CY}▓${R}`
-      : c === '▒' ? `${D}${CY}▒${R}`
+      c === '█' ? `${B}${AM}█${R}`
+      : c === '▓' ? `${AM}▓${R}`
+      : c === '▒' ? `${D}${AM}▒${R}`
       : `${D}░${R}`
     ).join('')
 
@@ -309,11 +330,12 @@ async function withLoader<T>(msg: string, fn: () => Promise<T>): Promise<T> {
     out(`\x1b[${H}A`)
     out(`\n`)
     out(`  ${sep}\n`)
-    out(`  ${BC}${B}${spin}${R}  ${B}claude-stats${R}  ${D}·  session pipeline${R}\n`)
+    out(`  ${B}claude-stats${R}  ${D}·  session pipeline${R}\n`)
+    out(`\n`)
     out(`  ${bar}\n`)
+    out(`\n`)
     out(`  ${D}▸${R}  ${D}${msg}${R}\n`)
     out(`  ${sep}\n`)
-    out(`\n`)
   }
 
   out('\n'.repeat(H))
@@ -366,9 +388,9 @@ function renderAnim(frame: number): string[] {
     const w = wPos + off
     const nodes = Array.from({ length: ANIM_N }, (_, i) => {
       if (i > w)       return `${D}·${R}`               // not reached
-      if (i === w)     return `${B}${AM}◉${R}`          // active front (violet)
-      if (i === w - 1) return `${CY}◌${R}`              // trailing edge (cyan)
-      return `${EM}○${R}`                               // processed (emerald)
+      if (i === w)     return `${B}${AM}◉${R}`          // active front (orange)
+      if (i === w - 1) return `${VI}◌${R}`              // trailing edge (violet)
+      return `${D}○${R}`                                // processed (dim)
     }).join(' ')
     return fp(`  ${nodes}`)
   })
@@ -408,7 +430,7 @@ const tRow = (s: CliSnapshot, name?: string) => {
     fmtC(s.costUsd), `${s.streak}d`, fmtN(s.gitCommits),
     `+${fmtN(s.linesAdded)}`, `-${fmtN(s.linesRemoved)}`,
   ]
-  const c = v.map((x, i) => padStr(x, COLS[i]!.w))
+  const c = v.map((x, i) => padStr(`${AM}${x}${R}`, COLS[i]!.w))
   if (name !== undefined) {
     const n = name.length > PW-1 ? name.slice(0, PW-2)+'…' : name
     return padStr(`${AM}${n}${R}`, PW, 'l')+'  '+c.join('  ')
@@ -444,22 +466,25 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
   } else {
     lines.push(`  ${D}Projetos:${R}   ${AM}${cfg.selectedProjects.map(p=>p.name).join(', ')}${R}`)
   }
-  if (cfg.selectedProjects.length > 1) lines.push(`  ${D}Modo:${R}       ${EM}${mode}${R}`)
+  if (cfg.selectedProjects.length > 1) lines.push(`  ${D}Modo:${R}       ${WH}${mode}${R}`)
   lines.push(`  ${D}Interval:${R}   ${WH}${cfg.intervalSec}s${R}`)
-  lines.push(`  ${D}OTLP:${R}       ${cfg.otlpEndpoint ? `${EM}${cfg.otlpEndpoint}${R}` : `${D}(disabled)${R}`}`)
+  lines.push(`  ${D}OTLP:${R}       ${cfg.otlpEndpoint ? `${WH}${cfg.otlpEndpoint}${R}` : `${D}(disabled)${R}`}`)
   lines.push('')
 
   // Tabela
   const solo = cfg.selectedProjects.length <= 1
   const all  = st.snapshots.get('')
-  const ldg  = `  ${D}(carregando...)${R}`
+  // Enquanto não há dados: exibe zeros em cada coluna + mensagem discreta
+  const zeroSnap = { messages:0, sessions:0, inputTokens:0, outputTokens:0,
+    costUsd:0, streak:0, gitCommits:0, linesAdded:0, linesRemoved:0 }
+  const ldg = `${tRow(zeroSnap)}  ${D}obtendo dados...${R}`
 
   if (solo || cfg.viewMode === 'junto') {
     lines.push(sepLine(W))
     if (!solo) lines.push(`  ${B}${AM}UNIFICADO${R}`)
     lines.push('')
     lines.push('  ' + tHdr(false))
-    lines.push(`  ${EM}${B}${all ? tRow(all) : ldg}${R}`)
+    lines.push(`  ${WH}${all ? tRow(all) : ldg}${R}`)
     lines.push(sepLine(W))
   } else if (cfg.viewMode === 'separado') {
     lines.push(sepLine(W))
@@ -476,7 +501,7 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
     lines.push(`  ${B}${AM}UNIFICADO${R}`)
     lines.push('')
     lines.push('  ' + tHdr(false))
-    lines.push(`  ${EM}${B}${all ? tRow(all) : ldg}${R}`)
+    lines.push(`  ${WH}${all ? tRow(all) : ldg}${R}`)
     lines.push('')
     lines.push(`  ${B}${AM}POR PROJETO${R}`)
     lines.push('')
@@ -501,10 +526,22 @@ async function watchLoop(cfg: WatchConfig): Promise<void> {
     animFrame: 0, showAnim: cfg.showAnim, isLoading: true, dataSource: 'api' as DataSrc,
   }
 
-  const cleanup = () => { out(SHOW + ALT_OFF); if (spawnedServer) { spawnedServer.kill(); spawnedServer = null } process.exit(0) }
+  const cleanup = () => {
+    out(SHOW + ALT_OFF + CLR)
+    const snap = st.snapshots.get('')
+    showGoodbye(snap ? {
+      messages: snap.messages, streak: snap.streak, costUsd: snap.costUsd,
+      projects: cfg.selectedProjects.map(p => p.name),
+    } : undefined)
+    if (spawnedServer) { spawnedServer.kill(); spawnedServer = null }
+    process.exit(0)
+  }
   out(ALT_ON + HIDE)
 
   const render = () => { out(CLR + buildPanel(cfg, st)) }
+
+  // Render imediato — mostra painel de loading antes de qualquer fetch
+  render()
 
   let reloading = false
   const refresh = async () => {
@@ -604,10 +641,10 @@ const checkboxSearch = createPrompt<string[], {
     items: filtered as CbChoice[], active, pageSize: config.pageSize ?? 14, loop: false,
     renderItem: ({ item, isActive }) => {
       const sel = cs.has(item.value)
-      const bullet = sel ? `${EM}${B}●${R}` : `${D}○${R}`
+      const bullet = sel ? `${AM}${B}●${R}` : `${D}○${R}`
       const arrow  = isActive ? `${AM}▸${R}` : ` `
       const label  = sel
-        ? `${EM}${B}${item.name}${R}`
+        ? `${AM}${B}${item.name}${R}`
         : isActive
           ? `${B}${item.name}${R}`
           : `${D}${item.name}${R}`
@@ -619,7 +656,7 @@ const checkboxSearch = createPrompt<string[], {
   const selCount = checked.length
   const selNames = checked.map(v => config.choices.find(c => c.value === v)?.name ?? v).join(', ')
   const selLine  = selCount > 0
-    ? `\n  ${EM}${B}${selCount}${R}${EM} selecionado${selCount > 1 ? 's' : ''}${R}  ${D}${selNames}${R}`
+    ? `\n  ${AM}${B}${selCount}${R}${AM} selecionado${selCount > 1 ? 's' : ''}${R}  ${D}${selNames}${R}`
     : `\n  ${D}nenhum selecionado = todos os projetos${R}`
 
   return [
@@ -707,7 +744,7 @@ async function ensureApiRunning(): Promise<void> {
     console.error(`\n${RD}Nao foi possivel iniciar o servidor API (porta 3001).${R}`)
     process.exit(1)
   }
-  console.log(`${GR}Servidor iniciado (pid ${spawnedServer?.pid}).${R}`)
+  console.log(`${AM}Servidor iniciado (pid ${spawnedServer?.pid}).${R}`)
 }
 
 function registerServerCleanup() {
@@ -722,7 +759,7 @@ function registerServerCleanup() {
 // ── Entry point ────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log(`\n${B}${BC}Claude Stats - Watch CLI${R}\n`)
+  console.log(`\n${B}${AM}Claude Stats${R}${D} · ${R}${B}Watch CLI${R}\n`)
 
   registerServerCleanup()
   await ensureApiRunning()
@@ -742,13 +779,18 @@ async function main() {
     console.error('Nenhum projeto encontrado.')
     process.exit(1)
   }
-  console.log(`${GR}${allProjects.length} projetos encontrados.${R}\n`)
+  console.log(`${AM}${allProjects.length} projetos encontrados.${R}\n`)
 
   const cfg = await askConfig(allProjects)
   await watchLoop(cfg)
 }
 
 main().catch(err => {
+  // ExitPromptError = Ctrl+C during an inquirer prompt (expected exit)
+  if (err?.name === 'ExitPromptError' || err?.code === 'ERR_USE_AFTER_CLOSE') {
+    showGoodbye()
+    process.exit(0)
+  }
   out(SHOW + ALT_OFF)
   console.error('Erro fatal:', err)
   process.exit(1)
