@@ -1069,7 +1069,8 @@ function maybeSpawnWatcher() {
   })
 
   child.on('exit', (code, signal) => {
-    if (code !== 0 || (signal !== null && signal !== 'SIGTERM' && signal !== 'SIGINT')) {
+    const expectedSignal = signal === 'SIGTERM' || signal === 'SIGINT'
+    if (code !== 0 || (signal !== null && !expectedSignal)) {
       console.warn(`[watcher] OTel watcher daemon exited unexpectedly (code=${code} signal=${signal}). OTel metrics export has stopped.`)
     }
   })
