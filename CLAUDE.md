@@ -1,111 +1,115 @@
 # Claude Stats — CLAUDE.md
 
-Painel local de analytics para Claude Code. Visualiza tokens, custos, atividade e projetos com base nos dados em `~/.claude/`.
+Local analytics dashboard for Claude Code. Visualizes tokens, costs, activity, and projects based on data from `~/.claude/`.
 
-## Arquitetura
+## Language convention
 
-Dois serviços independentes:
+**Everything in this project is in English**: code, comments, commit messages, PR titles and descriptions, documentation, and this file.
 
-```
-server.ts (Bun, porta 3001)
-  ├── Lê ~/.claude/usage-data/session-meta/ → sessões enriquecidas (fonte preferida)
-  ├── Fallback: parseia JSONL de ~/.claude/projects/*/**/*.jsonl
-  ├── Serve /api/data, /api/events (SSE), /api/rates
-  └── Monitorado por chokidar para atualizações em tempo real
+## Architecture
 
-src/ (React + Vite, porta 5173)
-  ├── useData.ts → fetch de /api/data + subscrição SSE
-  ├── useDerivedStats() → toda lógica de filtro e agregação
-  └── components/ → UI (gráficos, cards, heatmap, exportação PDF)
-```
-
-## Funções de cálculo — fonte única de verdade
-
-**Todas as camadas** usam as mesmas funções de `src/lib/types.ts`. Nunca recalcule preços inline.
-
-### `MODEL_PRICING` — tabela de preços (USD por 1M tokens)
+Two independent services:
 
 ```
-src/lib/types.ts — linhas 133-146
+server.ts (Bun, port 3001)
+  ├── Reads ~/.claude/usage-data/session-meta/ → enriched sessions (preferred source)
+  ├── Fallback: parses JSONL from ~/.claude/projects/*/**/*.jsonl
+  ├── Serves /api/data, /api/events (SSE), /api/rates
+  └── Watched by chokidar for real-time updates
+
+src/ (React + Vite, port 5173)
+  ├── useData.ts → fetches /api/data + SSE subscription
+  ├── useDerivedStats() → all filter and aggregation logic
+  └── components/ → UI (charts, cards, heatmap, PDF export)
 ```
 
-Atualizar aqui quando a Anthropic alterar preços ou lançar novos modelos. O fallback (Sonnet 4.6: $3/$15) está na linha 153.
+## Calculation functions — single source of truth
 
-### `getModelPrice(modelId)` — resolve preço por ID
+**All layers** use the same functions from `src/lib/types.ts`. Never inline pricing calculations.
 
-```
-src/lib/types.ts — linha 148
-```
-
-Faz match exato, depois match parcial por `startsWith` em ambas as direções. Retorna fallback Sonnet se nenhum match.
-
-### `calcCost(usage, modelId)` — custo total de um uso
+### `MODEL_PRICING` — pricing table (USD per 1M tokens)
 
 ```
-src/lib/types.ts — linha 156
+src/lib/types.ts — lines 133–146
 ```
 
-Recebe um `ModelUsage` (input, output, cacheRead, cacheWrite em tokens) e retorna custo em USD.
+Update here when Anthropic changes prices or releases new models. Fallback (Sonnet 4.6: $3/$15) is on line 153.
 
-### `blendedCostPerToken(modelUsage)` — taxa combinada ponderada
+### `getModelPrice(modelId)` — resolves price by model ID
 
 ```
-src/hooks/useData.ts — após linha 62
+src/lib/types.ts — line 148
 ```
 
-Usada quando não há modelo por sessão (filtro de projeto ativo ou custo por sessão no PDF). Pondera a taxa de cada modelo pelo seu volume de tokens no uso global.
+Tries exact match, then partial match via `startsWith` in both directions. Returns Sonnet fallback if no match.
+
+### `calcCost(usage, modelId)` — total cost from a usage record
+
+```
+src/lib/types.ts — line 156
+```
+
+Takes a `ModelUsage` object (input, output, cacheRead, cacheWrite in tokens) and returns cost in USD.
+
+### `blendedCostPerToken(modelUsage)` — weighted average rate across models
+
+```
+src/hooks/useData.ts
+```
+
+Used when there is no per-session model ID (project filter active, or per-session cost in PDF export). Weights each model's rate by its token volume in global usage.
 
 ---
 
-## Onde cada camada calcula custo
+## Where each layer calculates cost
 
-| Camada | O que calcula | Como |
-|--------|--------------|------|
-| `useData.ts / useDerivedStats` | `totalCostUSD` filtrado | `calcCost()` por modelo; `blendedCostPerToken()` quando filtro de projeto ativo |
-| `ModelBreakdown.tsx` | Custo por modelo na UI | `calcCost()` |
-| `PDFExportModal.tsx` | Custo por modelo no PDF | `calcCost()` |
-| `PDFExportModal.tsx` | Custo por sessão no PDF | `blendedCostPerToken(data.statsCache.modelUsage)` — sessões não têm modelo individual |
-| `watcher.ts` | Custo total exportado via OTel | `calcCost()` importado de `src/lib/types.ts` |
-| `watch-cli.ts` | Custo no terminal | `calcCost()` |
-| `server.ts` | — | Não calcula custo; apenas busca/cacheia tabela de preços externa (`/api/rates`) |
+| Layer | What it calculates | How |
+|-------|--------------------|-----|
+| `useData.ts / useDerivedStats` | Filtered `totalCostUSD` | `calcCost()` per model; `blendedCostPerToken()` when project filter is active |
+| `ModelBreakdown.tsx` | Per-model cost in the UI | `calcCost()` |
+| `PDFExportModal.tsx` | Per-model cost in PDF | `calcCost()` |
+| `PDFExportModal.tsx` | Per-session cost in PDF | `blendedCostPerToken(statsCache.modelUsage)` — sessions have no individual model field |
+| `watcher.ts` | Total cost exported via OTel | `calcCost()` imported from `src/lib/types.ts` |
+| `watch-cli.ts` | Cost in terminal output | `calcCost()` |
+| `server.ts` | — | Does not calculate cost; only fetches/caches the external pricing table (`/api/rates`) |
 
 ---
 
-## Fluxo de dados
+## Data flow
 
 ```
 ~/.claude/
-  ├── stats-cache.json          → dados agregados (tokens/dia, modelo, atividade)
-  ├── usage-data/session-meta/  → sessões enriquecidas (fonte preferida)
-  └── projects/**/*.jsonl       → arquivos brutos (fallback quando meta não existe)
+  ├── stats-cache.json          → aggregated data (tokens/day, model, activity)
+  ├── usage-data/session-meta/  → enriched sessions (preferred source)
+  └── projects/**/*.jsonl       → raw files (fallback when meta is unavailable)
          ↓
-    server.ts (agrega e serve)
+    server.ts (aggregates and serves)
          ↓
-    /api/data → useData() → useDerivedStats() → componentes React
+    /api/data → useData() → useDerivedStats() → React components
 ```
 
-## Regras importantes
+## Important rules
 
-- **`stats-cache.json`** não tem granularidade por projeto — filtros de projeto recalculam somando sessões individuais
-- **Tokens por modelo/data**: `dailyModelTokens` só tem total; o split input/output usa proporções globais do statsCache como aproximação
-- **Sessões não têm modelo individual** — use `blendedCostPerToken` para estimativa de custo por sessão
-- **Streak**: conta de hoje para trás; se hoje não tiver atividade, começa de ontem — comportamento intencional para não penalizar quem ainda não trabalhou hoje
-- **Custos em BRL**: conversão via `/api/rates` (busca câmbio externo); fallback para taxa fixa se a API falhar
-- **Fonte das sessões**: `_source: 'meta'` são as mais completas; `'jsonl'` e `'subdir'` são fallbacks com dados parciais (sem git lines, sem cache tokens)
+- **`stats-cache.json`** has no project-level granularity — project filters are computed by summing individual sessions
+- **Tokens per model/day**: `dailyModelTokens` only stores totals; input/output split uses global statsCache proportions as an approximation when filtering by date
+- **Sessions have no individual model field** — use `blendedCostPerToken` for per-session cost estimates
+- **Streak**: counts backwards from today; if today has no activity, starts from yesterday — intentional behavior so users are not penalized for not having worked yet today
+- **BRL costs**: conversion via `/api/rates` (fetches live exchange rate); falls back to a fixed rate if the API fails
+- **Session sources**: `_source: 'meta'` sessions are the most complete; `'jsonl'` and `'subdir'` are fallbacks with partial data (no git line counts, no cache tokens)
 
-## Desenvolvimento
+## Development
 
 ```bash
-bun run dev      # API (3001) + UI (5173) em paralelo
-bun run watch    # Daemon OpenTelemetry (opcional)
-bun test         # Testes unitários das funções puras
+bun run dev      # API (3001) + UI (5173) in parallel
+bun run watch    # OpenTelemetry daemon (optional)
+bun test         # Unit tests for pure functions
 ```
 
-## Testes
+## Tests
 
-Testes unitários cobrem as funções puras críticas:
+Unit tests cover the critical pure functions:
 
 - `src/lib/types.test.ts` → `calcCost()`, `getModelPrice()`
 - `src/hooks/useData.test.ts` → `calcStreak()`, `getDateRangeFilter()`
 
-Não mockar filesystem — as funções testadas são puras e não têm efeitos colaterais.
+Do not mock the filesystem — the tested functions are pure and have no side effects.

@@ -80,6 +80,12 @@ bun run build    # Generates dist/
 bun run preview  # Serves the build locally
 ```
 
+To run unit tests:
+
+```bash
+bun test
+```
+
 ---
 
 ## Data Sources
@@ -174,14 +180,14 @@ Total Cost = Σ per model [
 
 ### Blended Rate
 
-When a **project** filter is active, session-meta data does not contain the per-model breakdown. In this case, a weighted average rate is applied:
+Individual sessions do not store which model was used — that data is only available in aggregate via `statsCache.modelUsage`. When a per-session cost estimate is needed (project filter active, or per-session cost column in PDF export), a weighted average rate is applied:
 
 ```
 avg_input_rate  = Σ(model_input_tokens  × model_price) / Σ input_tokens
 avg_output_rate = Σ(model_output_tokens × model_price) / Σ output_tokens
 ... (same for cache)
 
-Filtered Cost = filtered_sessions × avg_rate
+Estimated Session Cost = session_tokens × avg_rate
 ```
 
 ### Token Types
@@ -195,14 +201,16 @@ Filtered Cost = filtered_sessions × avg_rate
 
 ### Streak (Consecutive Days)
 
-The streak is calculated globally (ignoring date/project filters):
+The streak is calculated globally (ignoring date/project filters). If today has no activity yet, the count starts from yesterday — so users are not penalized for not having worked yet today:
 
 ```
 streak = 0
-current_date = today
-while current_date has activity in stats-cache:
-    streak++
-    current_date = current_date - 1 day
+for i = 0 to 365:
+    date = today - i days
+    if date has activity:
+        streak++
+    else if i > 0:   // today without activity does not break the streak
+        break
 ```
 
 ### Session Duration
