@@ -1271,6 +1271,13 @@ Bun.serve({
       })
     }
 
+    if (url.pathname === '/api/health' && req.method === 'GET') {
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (url.pathname === '/api/rates' && req.method === 'GET') {
       try {
         const rates = await getRates()
