@@ -1,6 +1,7 @@
 import { readdir, readFile, stat, unlink } from 'fs/promises'
+import { watch as fsWatch } from 'fs'
 import { join } from 'path'
-import { exec } from 'child_process'
+import { exec, spawn } from 'child_process'
 import { promisify } from 'util'
 
 const execAsync = promisify(exec)
@@ -1005,6 +1006,91 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
 }
 
+// ---------------------------------------------------------------------------
+// SSE — real-time file-change notifications for the dashboard
+// ---------------------------------------------------------------------------
+
+type SseController = ReadableStreamDefaultController<Uint8Array>
+
+const sseClients = new Set<SseController>()
+const sseEncoder = new TextEncoder()
+
+function notifySseClients() {
+  const payload = sseEncoder.encode('event: change\ndata: {}\n\n')
+  for (const ctrl of [...sseClients]) {
+    try {
+      ctrl.enqueue(payload)
+    } catch {
+      sseClients.delete(ctrl)
+    }
+  }
+}
+
+let sseDebounce: ReturnType<typeof setTimeout> | null = null
+
+function triggerSseNotification() {
+  if (sseDebounce) clearTimeout(sseDebounce)
+  sseDebounce = setTimeout(notifySseClients, 2000)
+}
+
+function setupFileWatcher() {
+  const watch = (dir: string) => {
+    try {
+      fsWatch(dir, { recursive: true }, triggerSseNotification)
+      console.log(`[watcher] Watching ${dir}`)
+    } catch (err) {
+      console.warn(`[watcher] Could not watch ${dir}:`, String(err))
+    }
+  }
+  watch(SESSION_META_DIR)
+  watch(PROJECTS_DIR)
+}
+
+// ---------------------------------------------------------------------------
+// Optional: spawn watcher.ts as a child process when OTel env vars are set
+// ---------------------------------------------------------------------------
+
+function maybeSpawnWatcher() {
+  if (!process.env.OTEL_EXPORTER_OTLP_ENDPOINT) return
+
+  const watcherPath = join(import.meta.dir, 'watcher.ts')
+  console.log('[server] OTEL_EXPORTER_OTLP_ENDPOINT is set — spawning watcher daemon...')
+
+  const child = spawn('bun', ['run', watcherPath], {
+    stdio: 'inherit',
+    env: process.env,
+  })
+
+  child.on('error', (err) => {
+    console.error('[watcher] Failed to spawn:', err.message)
+  })
+
+  child.on('exit', (code, signal) => {
+    if (code !== 0) console.warn(`[watcher] Exited (code=${code} signal=${signal})`)
+  })
+
+  const killChild = () => {
+    process.removeListener('exit', killChild)
+    process.removeListener('SIGINT', killChild)
+    process.removeListener('SIGTERM', killChild)
+    if (!child.killed) child.kill()
+  }
+  process.once('exit', killChild)
+  process.once('SIGINT', killChild)
+  process.once('SIGTERM', killChild)
+
+  // If the child exits naturally, clean up the process-level handlers too
+  child.on('exit', () => {
+    process.removeListener('exit', killChild)
+    process.removeListener('SIGINT', killChild)
+    process.removeListener('SIGTERM', killChild)
+  })
+}
+
+// Start file watching and optionally spawn the OTel watcher daemon
+setupFileWatcher()
+maybeSpawnWatcher()
+
 Bun.serve({
   port: PORT,
   async fetch(req) {
@@ -1012,6 +1098,31 @@ Bun.serve({
 
     if (req.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS_HEADERS })
+    }
+
+    if (url.pathname === '/api/events' && req.method === 'GET') {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          sseClients.add(controller)
+          controller.enqueue(sseEncoder.encode('event: connected\ndata: {}\n\n'))
+
+          req.signal.addEventListener('abort', () => {
+            sseClients.delete(controller)
+            try { controller.close() } catch { /* already closed */ }
+          })
+        },
+      })
+
+      return new Response(stream, {
+        status: 200,
+        headers: {
+          ...CORS_HEADERS,
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no',
+        },
+      })
     }
 
     if (url.pathname === '/api/rates' && req.method === 'GET') {

@@ -27,6 +27,18 @@ export function useData() {
     fetchData()
   }, [fetchData])
 
+  // Subscribe to server-sent change events so the dashboard updates automatically
+  // when Claude writes new session data to ~/.claude/.
+  // fetchData is stable (useCallback with no deps), so this effect runs once per mount.
+  useEffect(() => {
+    const es = new EventSource('/api/events')
+    es.addEventListener('change', () => { fetchData() })
+    es.onerror = () => {
+      // EventSource reconnects automatically; no action needed
+    }
+    return () => { es.close() }
+  }, [fetchData])
+
   return { data, loading, error, refetch: fetchData }
 }
 

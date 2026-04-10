@@ -567,23 +567,31 @@ Alerts have 3 severity levels: **error** (red) · **warning** (yellow) · **info
 
 ## OpenTelemetry + Watcher / Daemon Mode
 
-> **This feature is entirely optional.** The main dashboard (`bun run dev`) works without the watcher. Run `bun run watch` only when you want to export metrics to an observability backend.
-
 Claude Stats can export usage metrics via the [OpenTelemetry](https://opentelemetry.io/) protocol (OTLP/HTTP), enabling integration with observability backends like **Grafana**, **Datadog**, **New Relic**, **Honeycomb**, and any OTLP-compatible collector.
 
-### Quick Start
+### Real-time Dashboard Updates
+
+The API server (`bun run dev:api`) watches `~/.claude/` for file changes using `fs.watch` and notifies all connected dashboard tabs via **Server-Sent Events** (`/api/events`). When Claude writes a new session, the dashboard refreshes automatically — no manual reload needed.
+
+### Auto-spawning the OTel Daemon
+
+When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, **`bun run dev:api` (or `bun run dev`) automatically spawns `watcher.ts`** as a child process. You do not need to run the watcher manually in a separate terminal.
 
 ```bash
-# Watch mode: watches ~/.claude/ for changes + exports metrics via OTLP
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 bun run watch
+# Dashboard + watcher daemon (auto-spawned) + real-time SSE updates
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 bun run dev
+```
 
-# Without OTLP endpoint, the watcher still runs (useful for debugging snapshots)
-bun run watch
+You can also run the watcher standalone (e.g. as a system daemon without the dashboard):
+
+```bash
+# Standalone watcher — exports metrics only, no HTTP server
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 bun run watch
 ```
 
 ### How It Works
 
-The watcher (`watcher.ts`) is a **standalone process** separate from the dashboard server. It:
+The watcher (`watcher.ts`):
 
 1. **Watches** `~/.claude/usage-data/session-meta/` and `~/.claude/projects/` for file changes using `fs.watch` (recursive)
 2. **Rebuilds** a metrics snapshot from `stats-cache.json` and session-meta files on each change (debounced, serialized)
@@ -594,7 +602,7 @@ The watcher (`watcher.ts`) is a **standalone process** separate from the dashboa
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | *(none)* | OTLP collector endpoint (e.g. `http://localhost:4318`). Required to enable export. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | *(none)* | OTLP collector endpoint (e.g. `http://localhost:4318`). Required to enable export and auto-spawn. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | *(none)* | Extra headers for the OTLP exporter (e.g. `Authorization=Bearer token`) |
 | `OTEL_SERVICE_NAME` | `claude-stats` | Service name reported in metrics (set as `service.name` resource attribute) |
 | `CLAUDE_STATS_WATCH_INTERVAL` | `30` | Polling interval in seconds (minimum: 5) |
