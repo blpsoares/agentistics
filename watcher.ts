@@ -495,7 +495,7 @@ async function rebuildSnapshot(): Promise<void> {
     // If another trigger came in while we were building, run again
     if (snapshotPending) {
       snapshotPending = false
-      rebuildSnapshot()
+      void rebuildSnapshot()
     }
   }
 }
