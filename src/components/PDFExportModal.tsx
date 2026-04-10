@@ -6,7 +6,7 @@ import {
 import { format, parseISO, subDays } from 'date-fns'
 import type { AppData, Filters, Lang, ModelUsage, SessionMeta } from '../lib/types'
 import { formatModel, formatProjectName, calcCost } from '../lib/types'
-import { useDerivedStats } from '../hooks/useData'
+import { useDerivedStats, blendedCostPerToken } from '../hooks/useData'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -348,8 +348,9 @@ function MiniProjectsList({ projectStats, c, lang }: {
   )
 }
 
-function MiniSessionsTable({ sessions, c, lang, currency, brlRate }: {
+function MiniSessionsTable({ sessions, c, lang, currency, brlRate, blendedRates }: {
   sessions: SessionMeta[]; c: Colors; lang: Lang; currency: 'USD' | 'BRL'; brlRate: number
+  blendedRates: { input: number; output: number }
 }) {
   const cols = '90px 1fr 48px 40px 40px 62px'
   const headers = [lang === 'pt' ? 'Data' : 'Date', lang === 'pt' ? 'Projeto' : 'Project',
@@ -362,7 +363,7 @@ function MiniSessionsTable({ sessions, c, lang, currency, brlRate }: {
       {sessions.slice(0, 12).map((s, i) => {
         const msgs = (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
         const tools = Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
-        const costUSD = ((s.input_tokens ?? 0) / 1_000_000) * 3 + ((s.output_tokens ?? 0) / 1_000_000) * 15
+        const costUSD = ((s.input_tokens ?? 0) / 1_000_000) * blendedRates.input + ((s.output_tokens ?? 0) / 1_000_000) * blendedRates.output
         return (
           <div key={i} style={{ display: 'grid', gridTemplateColumns: cols, gap: 6, padding: '4px 0', borderBottom: `1px solid ${c.border}40`, alignItems: 'center' }}>
             <div style={{ color: c.textSec }}>{s.start_time ? format(parseISO(s.start_time), 'MM/dd HH:mm') : '—'}</div>
@@ -534,15 +535,16 @@ function MiniHighlightsSection({ sessions, c, lang }: {
 
 interface PDFContentProps {
   pdfTheme: PDFTheme
-  enabledSections: Set<SectionId>
+  sectionOrder: SectionId[]
   derived: ReturnType<typeof useDerivedStats>
   pdfFilters: Filters
   lang: Lang
   currency: 'USD' | 'BRL'
   brlRate: number
+  blendedRates: { input: number; output: number }
 }
 
-function PDFContent({ pdfTheme, enabledSections, derived, pdfFilters, lang, currency, brlRate }: PDFContentProps) {
+function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currency, brlRate, blendedRates }: PDFContentProps) {
   if (!derived) return null
   const c = COLORS[pdfTheme]
   const pt = lang === 'pt'
@@ -588,92 +590,89 @@ function PDFContent({ pdfTheme, enabledSections, derived, pdfFilters, lang, curr
         </div>
       </div>
 
-      {/* Summary */}
-      {enabledSections.has('summary') && (
-        <div style={{ marginBottom: 28 }}>
-          <SectionTitle title={pt ? 'Resumo' : 'Summary'} c={c} />
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 10 }}>
-            <KPICard label={pt ? 'Mensagens' : 'Messages'} value={fmtN(derived.totalMessages)} sub={pt ? 'no período' : 'in period'} accent={c.orange} c={c} />
-            <KPICard label={pt ? 'Sessões' : 'Sessions'} value={fmtN(derived.totalSessions)} sub={`avg ${derived.totalSessions > 0 ? Math.round(derived.totalMessages / derived.totalSessions) : 0} msgs`} accent={c.blue} c={c} />
-            <KPICard label="Tool calls" value={fmtN(derived.totalToolCalls)} sub={pt ? 'execuções' : 'executions'} accent={c.green} c={c} />
-            <KPICard label={pt ? 'Custo est.' : 'Est. cost'} value={fmtCostStr(derived.totalCostUSD, currency, brlRate)} sub="Anthropic pricing" accent={c.orange} c={c} />
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
-            <KPICard label={pt ? 'Sequência' : 'Streak'} value={`${derived.streak}d`} sub={pt ? 'dias consec.' : 'consecutive'} accent={c.red} c={c} />
-            <KPICard label={pt ? 'Sessão mais longa' : 'Longest session'} value={derived.longestSession?.duration_minutes ? fmtDur(derived.longestSession.duration_minutes) : '—'} sub="" accent={c.purple} c={c} />
-            <KPICard label="Commits" value={String(derived.gitCommits)} sub={derived.gitPushes > 0 ? `${derived.gitPushes} pushes` : pt ? 'via Claude' : 'via Claude'} accent={c.cyan} c={c} />
-            <KPICard label={pt ? 'Arquivos' : 'Files'} value={String(derived.filesModified)} sub={`+${fmtN(derived.linesAdded)} / -${fmtN(derived.linesRemoved)}`} accent={c.green} c={c} />
-          </div>
-        </div>
-      )}
-
-      {enabledSections.has('activity') && (
-        <div style={{ marginBottom: 28 }}>
-          <SectionTitle title={pt ? 'Atividade ao longo do tempo' : 'Activity over time'} c={c} />
-          <MiniLineChart data={derived.heatmapData} c={c} />
-        </div>
-      )}
-
-      {enabledSections.has('heatmap') && (
-        <div style={{ marginBottom: 28 }}>
-          <SectionTitle title={pt ? 'Mapa de calor (26 semanas)' : 'Activity heatmap (26 weeks)'} c={c} />
-          <MiniHeatmap data={derived.heatmapData} c={c} />
-        </div>
-      )}
-
-      {enabledSections.has('hours') && (
-        <div style={{ marginBottom: 28 }}>
-          <SectionTitle title={pt ? 'Uso por hora do dia' : 'Usage by hour of day'} c={c} />
-          <MiniBarChart hourCounts={derived.hourCounts} c={c} />
-        </div>
-      )}
-
-      {enabledSections.has('models') && (
-        <div style={{ marginBottom: 28 }}>
-          <SectionTitle title={pt ? 'Uso por modelo' : 'Model usage & cost'} c={c} />
-          <MiniModelBars modelUsage={derived.modelUsage} c={c} currency={currency} brlRate={brlRate} />
-        </div>
-      )}
-
-      {enabledSections.has('projects') && (
-        <div style={{ marginBottom: 28 }}>
-          <SectionTitle title={pt ? 'Principais projetos' : 'Top projects'} c={c} />
-          <MiniProjectsList projectStats={derived.projectStats} c={c} lang={lang} />
-        </div>
-      )}
-
-      {enabledSections.has('tools') && (
-        <div style={{ marginBottom: 28 }}>
-          <SectionTitle title={pt ? 'Ferramentas e linguagens' : 'Tools & languages'} c={c} />
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-            <div>
-              <div style={{ fontSize: 10, fontWeight: 600, color: c.textSec, marginBottom: 8 }}>{pt ? 'Ferramentas mais usadas' : 'Most used tools'}</div>
-              <MiniTagCloud data={derived.toolCounts} color={c.green} c={c} />
+      {sectionOrder.map(id => {
+        switch (id) {
+          case 'summary': return (
+            <div key="summary" style={{ marginBottom: 28 }}>
+              <SectionTitle title={pt ? 'Resumo' : 'Summary'} c={c} />
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 10 }}>
+                <KPICard label={pt ? 'Mensagens' : 'Messages'} value={fmtN(derived.totalMessages)} sub={pt ? 'no período' : 'in period'} accent={c.orange} c={c} />
+                <KPICard label={pt ? 'Sessões' : 'Sessions'} value={fmtN(derived.totalSessions)} sub={`avg ${derived.totalSessions > 0 ? Math.round(derived.totalMessages / derived.totalSessions) : 0} msgs`} accent={c.blue} c={c} />
+                <KPICard label="Tool calls" value={fmtN(derived.totalToolCalls)} sub={pt ? 'execuções' : 'executions'} accent={c.green} c={c} />
+                <KPICard label={pt ? 'Custo est.' : 'Est. cost'} value={fmtCostStr(derived.totalCostUSD, currency, brlRate)} sub="Anthropic pricing" accent={c.orange} c={c} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+                <KPICard label={pt ? 'Sequência' : 'Streak'} value={`${derived.streak}d`} sub={pt ? 'dias consec.' : 'consecutive'} accent={c.red} c={c} />
+                <KPICard label={pt ? 'Sessão mais longa' : 'Longest session'} value={derived.longestSession?.duration_minutes ? fmtDur(derived.longestSession.duration_minutes) : '—'} sub="" accent={c.purple} c={c} />
+                <KPICard label="Commits" value={String(derived.gitCommits)} sub={derived.gitPushes > 0 ? `${derived.gitPushes} pushes` : pt ? 'via Claude' : 'via Claude'} accent={c.cyan} c={c} />
+                <KPICard label={pt ? 'Arquivos' : 'Files'} value={String(derived.filesModified)} sub={`+${fmtN(derived.linesAdded)} / -${fmtN(derived.linesRemoved)}`} accent={c.green} c={c} />
+              </div>
             </div>
-            <div>
-              <div style={{ fontSize: 10, fontWeight: 600, color: c.textSec, marginBottom: 8 }}>{pt ? 'Linguagens' : 'Languages'}</div>
-              <MiniTagCloud data={derived.langCounts} color={c.blue} c={c} />
+          )
+          case 'activity': return (
+            <div key="activity" style={{ marginBottom: 28 }}>
+              <SectionTitle title={pt ? 'Atividade ao longo do tempo' : 'Activity over time'} c={c} />
+              <MiniLineChart data={derived.heatmapData} c={c} />
             </div>
-          </div>
-        </div>
-      )}
-
-      {enabledSections.has('sessions') && (
-        <div style={{ marginBottom: 28 }}>
-          <SectionTitle title={pt ? 'Sessões recentes (top 12)' : 'Recent sessions (top 12)'} c={c} />
-          <MiniSessionsTable
-            sessions={[...derived.filteredSessions].sort((a, b) => (b.start_time ?? '').localeCompare(a.start_time ?? '')).slice(0, 12)}
-            c={c} lang={lang} currency={currency} brlRate={brlRate}
-          />
-        </div>
-      )}
-
-      {enabledSections.has('highlights') && (
-        <div style={{ marginBottom: 28 }}>
-          <SectionTitle title={pt ? 'Recordes do período' : 'Period highlights'} c={c} />
-          <MiniHighlightsSection sessions={derived.filteredSessions} c={c} lang={lang} />
-        </div>
-      )}
+          )
+          case 'heatmap': return (
+            <div key="heatmap" style={{ marginBottom: 28 }}>
+              <SectionTitle title={pt ? 'Mapa de calor (26 semanas)' : 'Activity heatmap (26 weeks)'} c={c} />
+              <MiniHeatmap data={derived.heatmapData} c={c} />
+            </div>
+          )
+          case 'hours': return (
+            <div key="hours" style={{ marginBottom: 28 }}>
+              <SectionTitle title={pt ? 'Uso por hora do dia' : 'Usage by hour of day'} c={c} />
+              <MiniBarChart hourCounts={derived.hourCounts} c={c} />
+            </div>
+          )
+          case 'models': return (
+            <div key="models" style={{ marginBottom: 28 }}>
+              <SectionTitle title={pt ? 'Uso por modelo' : 'Model usage & cost'} c={c} />
+              <MiniModelBars modelUsage={derived.modelUsage} c={c} currency={currency} brlRate={brlRate} />
+            </div>
+          )
+          case 'projects': return (
+            <div key="projects" style={{ marginBottom: 28 }}>
+              <SectionTitle title={pt ? 'Principais projetos' : 'Top projects'} c={c} />
+              <MiniProjectsList projectStats={derived.projectStats} c={c} lang={lang} />
+            </div>
+          )
+          case 'tools': return (
+            <div key="tools" style={{ marginBottom: 28 }}>
+              <SectionTitle title={pt ? 'Ferramentas e linguagens' : 'Tools & languages'} c={c} />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: c.textSec, marginBottom: 8 }}>{pt ? 'Ferramentas mais usadas' : 'Most used tools'}</div>
+                  <MiniTagCloud data={derived.toolCounts} color={c.green} c={c} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: c.textSec, marginBottom: 8 }}>{pt ? 'Linguagens' : 'Languages'}</div>
+                  <MiniTagCloud data={derived.langCounts} color={c.blue} c={c} />
+                </div>
+              </div>
+            </div>
+          )
+          case 'sessions': return (
+            <div key="sessions" style={{ marginBottom: 28 }}>
+              <SectionTitle title={pt ? 'Sessões recentes (top 12)' : 'Recent sessions (top 12)'} c={c} />
+              <MiniSessionsTable
+                sessions={[...derived.filteredSessions].sort((a, b) => (b.start_time ?? '').localeCompare(a.start_time ?? '')).slice(0, 12)}
+                c={c} lang={lang} currency={currency} brlRate={brlRate}
+                blendedRates={blendedRates}
+              />
+            </div>
+          )
+          case 'highlights': return (
+            <div key="highlights" style={{ marginBottom: 28 }}>
+              <SectionTitle title={pt ? 'Recordes do período' : 'Period highlights'} c={c} />
+              <MiniHighlightsSection sessions={derived.filteredSessions} c={c} lang={lang} />
+            </div>
+          )
+          default: return null
+        }
+      })}
 
       <div style={{ marginTop: 24, paddingTop: 14, borderTop: `1px solid ${c.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ fontSize: 8, color: c.textTer }}>Claude Stats · Gerado automaticamente</div>
@@ -702,8 +701,8 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
   const [pdfTheme, setPdfTheme] = useState<PDFTheme>(
     () => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   )
-  const [enabledSections, setEnabledSections] = useState<Set<SectionId>>(
-    new Set<SectionId>(['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools'])
+  const [sectionOrder, setSectionOrder] = useState<SectionId[]>(
+    ['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools']
   )
   const [exporting, setExporting] = useState(false)
   const [exportSuccess, setExportSuccess] = useState(false)
@@ -731,19 +730,21 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
   }
 
   const toggleSection = (id: SectionId) => {
-    setEnabledSections(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+    setSectionOrder(prev =>
+      prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]
+    )
   }
 
-  const allSelected = enabledSections.size === SECTIONS.length
+  const allSelected = sectionOrder.length === SECTIONS.length
   const toggleAll = () => {
-    if (allSelected) setEnabledSections(new Set())
-    else setEnabledSections(new Set(SECTION_IDS))
+    if (allSelected) setSectionOrder([])
+    else setSectionOrder([...SECTION_IDS])
   }
+
+  const blendedRates = useMemo(
+    () => blendedCostPerToken(data.statsCache.modelUsage ?? {}),
+    [data.statsCache.modelUsage]
+  )
 
   const handleExport = async () => {
     if (!contentRef.current || exporting) return
@@ -1070,7 +1071,7 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
                 {SECTIONS.map(({ id, labelPt, labelEn, Icon }) => {
-                  const on = enabledSections.has(id)
+                  const on = sectionOrder.includes(id)
                   return (
                     <button key={id} onClick={() => toggleSection(id)} style={{
                       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
@@ -1104,13 +1105,13 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
             {/* Export button */}
             <button
               onClick={handleExport}
-              disabled={exporting || enabledSections.size === 0}
+              disabled={exporting || sectionOrder.length === 0}
               style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                 padding: '11px 16px', borderRadius: 10, border: 'none',
-                cursor: enabledSections.size === 0 ? 'not-allowed' : 'pointer',
-                background: exportSuccess ? '#10b981' : enabledSections.size === 0 ? 'var(--bg-elevated)' : 'var(--anthropic-orange)',
-                color: exportSuccess || enabledSections.size > 0 ? '#fff' : 'var(--text-tertiary)',
+                cursor: sectionOrder.length === 0 ? 'not-allowed' : 'pointer',
+                background: exportSuccess ? '#10b981' : sectionOrder.length === 0 ? 'var(--bg-elevated)' : 'var(--anthropic-orange)',
+                color: exportSuccess || sectionOrder.length > 0 ? '#fff' : 'var(--text-tertiary)',
                 fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
                 transition: 'all 0.2s', opacity: exporting ? 0.8 : 1,
               }}
@@ -1126,7 +1127,7 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
                 <><Download size={14} /> {pt ? 'Exportar PDF' : 'Export PDF'}</>
               )}
             </button>
-            {enabledSections.size === 0 && (
+            {sectionOrder.length === 0 && (
               <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textAlign: 'center', marginTop: -12 }}>
                 {pt ? 'Selecione pelo menos uma seção' : 'Select at least one section'}
               </div>
@@ -1142,7 +1143,7 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
                 {pt ? 'Prévia em tempo real' : 'Live preview'} · 794px (A4)
               </div>
               <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 'auto' }}>
-                {enabledSections.size} {pt ? 'seção(ões)' : 'section(s)'}
+                {sectionOrder.length} {pt ? 'seção(ões)' : 'section(s)'}
               </div>
             </div>
 
@@ -1151,12 +1152,13 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
               <div ref={contentRef} style={{ boxShadow: '0 4px 32px rgba(0,0,0,0.3)', borderRadius: 4, overflow: 'hidden', flexShrink: 0, alignSelf: 'flex-start', background: COLORS[pdfTheme].bg }}>
                 <PDFContent
                   pdfTheme={pdfTheme}
-                  enabledSections={enabledSections}
+                  sectionOrder={sectionOrder}
                   derived={derived}
                   pdfFilters={pdfFilters}
                   lang={lang}
                   currency={currency}
                   brlRate={brlRate}
+                  blendedRates={blendedRates}
                 />
               </div>
             </div>
