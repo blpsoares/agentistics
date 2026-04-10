@@ -6,7 +6,7 @@ import {
 import { format, parseISO, subDays } from 'date-fns'
 import type { AppData, Filters, Lang, ModelUsage, SessionMeta } from '../lib/types'
 import { formatModel, formatProjectName, calcCost } from '../lib/types'
-import { useDerivedStats } from '../hooks/useData'
+import { useDerivedStats, blendedCostPerToken } from '../hooks/useData'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -348,8 +348,9 @@ function MiniProjectsList({ projectStats, c, lang }: {
   )
 }
 
-function MiniSessionsTable({ sessions, c, lang, currency, brlRate }: {
+function MiniSessionsTable({ sessions, c, lang, currency, brlRate, blendedRates }: {
   sessions: SessionMeta[]; c: Colors; lang: Lang; currency: 'USD' | 'BRL'; brlRate: number
+  blendedRates: { input: number; output: number }
 }) {
   const cols = '90px 1fr 48px 40px 40px 62px'
   const headers = [lang === 'pt' ? 'Data' : 'Date', lang === 'pt' ? 'Projeto' : 'Project',
@@ -362,7 +363,7 @@ function MiniSessionsTable({ sessions, c, lang, currency, brlRate }: {
       {sessions.slice(0, 12).map((s, i) => {
         const msgs = (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
         const tools = Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
-        const costUSD = ((s.input_tokens ?? 0) / 1_000_000) * 3 + ((s.output_tokens ?? 0) / 1_000_000) * 15
+        const costUSD = ((s.input_tokens ?? 0) / 1_000_000) * blendedRates.input + ((s.output_tokens ?? 0) / 1_000_000) * blendedRates.output
         return (
           <div key={i} style={{ display: 'grid', gridTemplateColumns: cols, gap: 6, padding: '4px 0', borderBottom: `1px solid ${c.border}40`, alignItems: 'center' }}>
             <div style={{ color: c.textSec }}>{s.start_time ? format(parseISO(s.start_time), 'MM/dd HH:mm') : '—'}</div>
@@ -664,6 +665,7 @@ function PDFContent({ pdfTheme, enabledSections, derived, pdfFilters, lang, curr
           <MiniSessionsTable
             sessions={[...derived.filteredSessions].sort((a, b) => (b.start_time ?? '').localeCompare(a.start_time ?? '')).slice(0, 12)}
             c={c} lang={lang} currency={currency} brlRate={brlRate}
+            blendedRates={blendedCostPerToken(data.statsCache.modelUsage ?? {})}
           />
         </div>
       )}

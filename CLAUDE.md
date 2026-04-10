@@ -19,17 +19,57 @@ src/ (React + Vite, porta 5173)
   └── components/ → UI (gráficos, cards, heatmap, exportação PDF)
 ```
 
-## Lógica de negócio crítica
+## Funções de cálculo — fonte única de verdade
 
-| Função | Arquivo | O que faz |
-|--------|---------|-----------|
-| `calcCost()` | `src/lib/types.ts` | Custo USD por uso de modelo (preço por 1M tokens) |
-| `getModelPrice()` | `src/lib/types.ts` | Resolve preço para modelo por ID (com fallback para Sonnet) |
-| `MODEL_PRICING` | `src/lib/types.ts` | Tabela de preços — atualizar quando Anthropic alterar preços |
-| `calcStreak()` | `src/hooks/useData.ts` | Streak de dias consecutivos (hoje sem atividade não quebra) |
-| `getDateRangeFilter()` | `src/hooks/useData.ts` | Converte filtro de data em intervalo `{start, end}` |
-| `parseSessionJsonl()` | `server.ts` | Parser de sessão JSONL → `SessionMeta` completo |
-| `blendedCostPerToken()` | `src/hooks/useData.ts` | Custo combinado por token quando filtro de projeto está ativo |
+**Todas as camadas** usam as mesmas funções de `src/lib/types.ts`. Nunca recalcule preços inline.
+
+### `MODEL_PRICING` — tabela de preços (USD por 1M tokens)
+
+```
+src/lib/types.ts — linhas 133-146
+```
+
+Atualizar aqui quando a Anthropic alterar preços ou lançar novos modelos. O fallback (Sonnet 4.6: $3/$15) está na linha 153.
+
+### `getModelPrice(modelId)` — resolve preço por ID
+
+```
+src/lib/types.ts — linha 148
+```
+
+Faz match exato, depois match parcial por `startsWith` em ambas as direções. Retorna fallback Sonnet se nenhum match.
+
+### `calcCost(usage, modelId)` — custo total de um uso
+
+```
+src/lib/types.ts — linha 156
+```
+
+Recebe um `ModelUsage` (input, output, cacheRead, cacheWrite em tokens) e retorna custo em USD.
+
+### `blendedCostPerToken(modelUsage)` — taxa combinada ponderada
+
+```
+src/hooks/useData.ts — após linha 62
+```
+
+Usada quando não há modelo por sessão (filtro de projeto ativo ou custo por sessão no PDF). Pondera a taxa de cada modelo pelo seu volume de tokens no uso global.
+
+---
+
+## Onde cada camada calcula custo
+
+| Camada | O que calcula | Como |
+|--------|--------------|------|
+| `useData.ts / useDerivedStats` | `totalCostUSD` filtrado | `calcCost()` por modelo; `blendedCostPerToken()` quando filtro de projeto ativo |
+| `ModelBreakdown.tsx` | Custo por modelo na UI | `calcCost()` |
+| `PDFExportModal.tsx` | Custo por modelo no PDF | `calcCost()` |
+| `PDFExportModal.tsx` | Custo por sessão no PDF | `blendedCostPerToken(data.statsCache.modelUsage)` — sessões não têm modelo individual |
+| `watcher.ts` | Custo total exportado via OTel | `calcCost()` importado de `src/lib/types.ts` |
+| `watch-cli.ts` | Custo no terminal | `calcCost()` |
+| `server.ts` | — | Não calcula custo; apenas busca/cacheia tabela de preços externa (`/api/rates`) |
+
+---
 
 ## Fluxo de dados
 
@@ -48,6 +88,7 @@ src/ (React + Vite, porta 5173)
 
 - **`stats-cache.json`** não tem granularidade por projeto — filtros de projeto recalculam somando sessões individuais
 - **Tokens por modelo/data**: `dailyModelTokens` só tem total; o split input/output usa proporções globais do statsCache como aproximação
+- **Sessões não têm modelo individual** — use `blendedCostPerToken` para estimativa de custo por sessão
 - **Streak**: conta de hoje para trás; se hoje não tiver atividade, começa de ontem — comportamento intencional para não penalizar quem ainda não trabalhou hoje
 - **Custos em BRL**: conversão via `/api/rates` (busca câmbio externo); fallback para taxa fixa se a API falhar
 - **Fonte das sessões**: `_source: 'meta'` são as mais completas; `'jsonl'` e `'subdir'` são fallbacks com dados parciais (sem git lines, sem cache tokens)

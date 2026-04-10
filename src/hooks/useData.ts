@@ -74,7 +74,7 @@ export function calcStreak(activeDates: Set<string>, today: Date = new Date()): 
 }
 
 /** Blended cost per token using global model usage proportions */
-function blendedCostPerToken(modelUsage: Record<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }>) {
+export function blendedCostPerToken(modelUsage: Record<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }>) {
   let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheWrite = 0
   let weightedInput = 0, weightedOutput = 0, weightedCacheRead = 0, weightedCacheWrite = 0
 
