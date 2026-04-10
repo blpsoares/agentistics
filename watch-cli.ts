@@ -10,7 +10,6 @@
  *   Ctrl+C  — sair
  */
 
-import { readFile, readdir } from 'fs/promises'
 import { join } from 'path'
 import chokidar from 'chokidar'
 import {
@@ -24,13 +23,9 @@ import type { ModelUsage, SessionMeta } from './src/lib/types'
 
 // ── Paths ──────────────────────────────────────────────────────────────────
 
-const HOME_DIR         = process.env.HOME ?? process.env.USERPROFILE ?? ''
-const CLAUDE_DIR       = join(HOME_DIR, '.claude')
-const PROJECTS_DIR     = join(CLAUDE_DIR, 'projects')
-const SESSION_META_DIR = join(CLAUDE_DIR, 'usage-data', 'session-meta')
-const STATS_CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json')
-const API_BASE         = 'http://localhost:3001'
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const HOME_DIR   = process.env.HOME ?? process.env.USERPROFILE ?? ''
+const CLAUDE_DIR = join(HOME_DIR, '.claude')
+const API_BASE   = 'http://localhost:3001'
 
 // ── ANSI ───────────────────────────────────────────────────────────────────
 
@@ -96,16 +91,7 @@ interface AppState {
   dataSource:  DataSrc
 }
 
-// ── I/O helpers ────────────────────────────────────────────────────────────
-
-async function safeJson<T>(p: string): Promise<T | null> {
-  try { return JSON.parse(await readFile(p, 'utf-8')) as T } catch { return null }
-}
-async function safeDir(d: string): Promise<string[]> {
-  try { return await readdir(d) } catch { return [] }
-}
-
-// ── Fonte 1: API (dados idênticos ao frontend) ─────────────────────────────
+// ── API ────────────────────────────────────────────────────────────────────
 
 interface ApiProject { path: string; name: string }
 interface ApiResponse {
@@ -127,124 +113,20 @@ async function fetchApi(timeout = 3000): Promise<ApiResponse | null> {
   }
 }
 
-/** Probe leve — apenas verifica se o servidor está aceitando conexões. */
+/** Probe leve — verifica se o servidor está aceitando conexões.
+ *  Aceita qualquer resposta HTTP (incluindo 404 de versões antigas sem /api/health). */
 async function probeApi(timeout = 1000): Promise<boolean> {
   try {
     const ac  = new AbortController()
     const tid = setTimeout(() => ac.abort(), timeout)
     const res = await fetch(`${API_BASE}/api/health`, { signal: ac.signal })
     clearTimeout(tid)
-    return res.ok
+    return res.status < 500 // 200 (novo) ou 404 (versao sem endpoint) = servidor on
   } catch {
     return false
   }
 }
 
-// ── Fonte 2: Leitura direta de arquivos (fallback) ─────────────────────────
-
-/** Lê primeiras linhas de um JSONL até encontrar campo `cwd`. */
-async function readJsonlCwd(filePath: string): Promise<string | null> {
-  try {
-    const text  = await readFile(filePath, 'utf-8')
-    const lines = text.split('\n').filter(Boolean).slice(0, 30)
-    for (const line of lines) {
-      try {
-        const obj = JSON.parse(line)
-        if (typeof obj?.cwd === 'string' && obj.cwd) return obj.cwd
-      } catch { /* skip */ }
-    }
-  } catch { /* skip */ }
-  return null
-}
-
-function decodeDir(name: string): string {
-  return name.startsWith('-') ? name.replace(/-/g, '/') : '/' + name.replace(/-/g, '/')
-}
-
-/**
- * Descobre projetos da mesma forma que server.ts/scanProjects:
- * - Carrega metaMap (sessionId → project_path)
- * - Para cada project dir, vota no project_path usando sessões com meta
- * - Se sem votos, lê CWD do primeiro arquivo JSONL disponível
- * - Fallback final: path decodificado do nome do dir
- */
-async function discoverProjectsFromFiles(): Promise<{ projects: ProjectInfo[]; metaMap: Map<string, string> }> {
-  // 1. session-meta → metaMap
-  const metaFiles = (await safeDir(SESSION_META_DIR)).filter(f => f.endsWith('.json'))
-  const metaMap   = new Map<string, string>()
-  const BATCH     = 40
-
-  for (let i = 0; i < metaFiles.length; i += BATCH) {
-    const res = await Promise.all(
-      metaFiles.slice(i, i + BATCH).map(f =>
-        safeJson<{ session_id?: string; project_path?: string }>(join(SESSION_META_DIR, f))
-      )
-    )
-    for (const s of res) if (s?.session_id && s.project_path) metaMap.set(s.session_id, s.project_path)
-  }
-
-  // 2. Varrer project dirs
-  const dirs  = await safeDir(PROJECTS_DIR)
-  const seen  = new Map<string, ProjectInfo>()
-
-  await Promise.all(dirs.map(async dir => {
-    if (dir.startsWith('.')) return
-    const fallback = decodeDir(dir)
-    const entries  = await safeDir(join(PROJECTS_DIR, dir))
-
-    const votes: Record<string, number> = {}
-    let firstJsonl: string | null = null
-
-    for (const entry of entries) {
-      const sid = entry.endsWith('.jsonl') ? entry.slice(0, -6)
-        : UUID_RE.test(entry) ? entry : null
-      if (!sid) continue
-
-      const p = metaMap.get(sid)
-      if (p) {
-        votes[p] = (votes[p] ?? 0) + 1
-      } else if (!firstJsonl && entry.endsWith('.jsonl')) {
-        firstJsonl = join(PROJECTS_DIR, dir, entry)
-      }
-    }
-
-    // Canonical path: majority-vote → JSONL cwd → fallback decoded
-    let canonical: string
-    if (Object.keys(votes).length > 0) {
-      canonical = Object.entries(votes).sort((a, b) => b[1] - a[1])[0][0]
-    } else if (firstJsonl) {
-      canonical = (await readJsonlCwd(firstJsonl)) ?? fallback
-    } else {
-      canonical = fallback
-    }
-
-    if (!seen.has(canonical)) {
-      seen.set(canonical, {
-        path: canonical,
-        name: canonical.split('/').filter(Boolean).pop() ?? dir,
-      })
-    }
-  }))
-
-  return {
-    projects: Array.from(seen.values()).sort((a, b) => a.path.localeCompare(b.path)),
-    metaMap,
-  }
-}
-
-async function loadSessionsFromFiles(metaMap: Map<string, string>): Promise<SessionMeta[]> {
-  const files = (await safeDir(SESSION_META_DIR)).filter(f => f.endsWith('.json'))
-  const out: SessionMeta[] = []
-  const BATCH = 40
-
-  for (let i = 0; i < files.length; i += BATCH) {
-    const res = await Promise.all(
-      files.slice(i, i + BATCH).map(f => safeJson<SessionMeta>(join(SESSION_META_DIR, f)))
-    )
-    for (const s of res) if (s?.session_id) out.push(s)
-  }
-  return out
-}
 
 // ── Cálculo de snapshot — espelha useDerivedStats ─────────────────────────
 
@@ -308,40 +190,74 @@ function computeSnapshot(
     costUsd: cost, streak, gitCommits: gC, linesAdded: lA, linesRemoved: lR }
 }
 
-// ── Reload de dados ────────────────────────────────────────────────────────
+// ── Reload de dados (apenas via API) ──────────────────────────────────────
 
 async function reloadData(config: WatchConfig): Promise<{
   snapshots: Map<string, CliSnapshot>
   dataSource: DataSrc
-  allProjects?: ProjectInfo[]
 }> {
-  const paths   = config.selectedProjects.length > 0 ? config.selectedProjects.map(p => p.path) : undefined
+  const paths     = config.selectedProjects.length > 0 ? config.selectedProjects.map(p => p.path) : undefined
   const snapshots = new Map<string, CliSnapshot>()
 
-  // Tenta API primeiro (dados idênticos ao frontend)
-  const apiData = await fetchApi()
+  const apiData = await fetchApi(30_000)
+  if (!apiData) throw new Error('API indisponivel')
 
-  if (apiData) {
-    const { sessions, statsCache } = apiData
-    snapshots.set('', computeSnapshot(sessions, statsCache, paths))
-    for (const p of config.selectedProjects) {
-      snapshots.set(p.path, computeSnapshot(sessions, statsCache, [p.path]))
-    }
-    return { snapshots, dataSource: 'api' }
-  }
-
-  // Fallback: leitura direta
-  const { metaMap } = await discoverProjectsFromFiles()
-  const [sessions, statsCache] = await Promise.all([
-    loadSessionsFromFiles(metaMap),
-    safeJson<StatsCache>(STATS_CACHE_FILE).then(v => v ?? {}),
-  ])
-
+  const { sessions, statsCache } = apiData
   snapshots.set('', computeSnapshot(sessions, statsCache, paths))
   for (const p of config.selectedProjects) {
     snapshots.set(p.path, computeSnapshot(sessions, statsCache, [p.path]))
   }
-  return { snapshots, dataSource: 'files' }
+  return { snapshots, dataSource: 'api' }
+}
+
+// ── Loader: Claude caçando tokens ─────────────────────────────────────────
+
+async function withLoader<T>(msg: string, fn: () => Promise<T>): Promise<T> {
+  const H   = 5
+  const W   = Math.min(process.stdout.columns || 80, 100)
+  const fld = W - 4
+  // Tokens fogem para a esquerda (offset cresce = conteudo desliza para esquerda)
+  const PAT = '  $   $$  $    $$$   $  $$    $   $  $$$  '
+  // Frames de corrida: [cabeca, torso, pernas]
+  const RF: [string, string, string][] = [
+    ['\\o/', ' |  ', '/ \\ '],
+    [' o/', '/|\\ ', '/ \\ '],
+    [' o ', ' |/ ', '\\ / '],
+    ['\\o ', ' |  ', '\\ / '],
+  ]
+  const cp = Math.floor(fld * 0.35)
+
+  let frame = 0
+
+  const draw = () => {
+    const off   = (frame * 2) % PAT.length
+    const river = (PAT + PAT + PAT).slice(off, off + fld)
+    // apaga zona do Claude para nao sobrepor tokens
+    const rArr = river.split('')
+    for (let i = Math.max(0, cp - 1); i < Math.min(rArr.length, cp + 5); i++) rArr[i] = ' '
+    const rLine = rArr.join('')
+    const rf = RF[frame % RF.length]!
+
+    out(`\x1b[${H}A`)
+    out(`  ${YL}${rLine}${R}\n`)
+    out(`  ${' '.repeat(cp)}${YL}${rf[0]}${R}${GR}~~>${R}\n`)
+    out(`  ${' '.repeat(cp)}${D}${rf[1]}${R}\n`)
+    out(`  ${' '.repeat(cp)}${YL}${rf[2]}${R}\n`)
+    out(`  ${D}${msg}${R}\n`)
+  }
+
+  out('\n'.repeat(H))
+  draw()
+  const timer = setInterval(() => { frame++; draw() }, 120)
+
+  try {
+    return await fn()
+  } finally {
+    clearInterval(timer)
+    out(`\x1b[${H}A`)
+    for (let i = 0; i < H; i++) out('\x1b[2K\n')
+    out(`\x1b[${H}A`)
+  }
 }
 
 // ── Animação: Claude resolve um incidente de produção ────────────────────
@@ -404,7 +320,7 @@ const FRAMES: Array<[string, string, string, string]> = [
 ]
 
 function renderBattle(frame: number): string[] {
-  const f = FRAMES[frame % FRAMES.length]
+  const f = FRAMES[frame % FRAMES.length]!
   const sep = sepLine(FW + 4)
   return [
     sep,
@@ -442,7 +358,7 @@ const tRow = (s: CliSnapshot, name?: string) => {
     fmtC(s.costUsd), `${s.streak}d`, fmtN(s.gitCommits),
     `+${fmtN(s.linesAdded)}`, `-${fmtN(s.linesRemoved)}`,
   ]
-  const c = v.map((x, i) => padStr(x, COLS[i].w))
+  const c = v.map((x, i) => padStr(x, COLS[i]!.w))
   if (name !== undefined) {
     const n = name.length > PW-1 ? name.slice(0, PW-2)+'…' : name
     return padStr(`${CY}${n}${R}`, PW, 'l')+'  '+c.join('  ')
@@ -532,7 +448,7 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
 async function watchLoop(cfg: WatchConfig): Promise<void> {
   const st: AppState = {
     snapshots: new Map(), lastUpdated: new Date(),
-    animFrame: 0, showBattle: cfg.showBattle, isLoading: true, dataSource: 'files',
+    animFrame: 0, showBattle: cfg.showBattle, isLoading: true, dataSource: 'api' as DataSrc,
   }
 
   const cleanup = () => { out(SHOW + ALT_OFF); if (spawnedServer) { spawnedServer.kill(); spawnedServer = null } process.exit(0) }
@@ -573,8 +489,10 @@ async function watchLoop(cfg: WatchConfig): Promise<void> {
 
   // Chokidar para atualizações imediatas
   let dbt: ReturnType<typeof setTimeout> | null = null
+  const sessionMetaDir = join(HOME_DIR, '.claude', 'usage-data', 'session-meta')
+  const statsCacheFile = join(HOME_DIR, '.claude', 'stats-cache.json')
   chokidar
-    .watch([SESSION_META_DIR, STATS_CACHE_FILE], { persistent: true, ignoreInitial: true })
+    .watch([sessionMetaDir, statsCacheFile], { persistent: true, ignoreInitial: true })
     .on('all', () => { if (dbt) clearTimeout(dbt); dbt = setTimeout(refresh, 1500) })
 }
 
@@ -680,9 +598,9 @@ async function askConfig(all: ProjectInfo[]): Promise<WatchConfig> {
 
 let spawnedServer: ReturnType<typeof Bun.spawn> | null = null
 
-async function ensureApiRunning(): Promise<boolean> {
+async function ensureApiRunning(): Promise<void> {
   // Já está rodando?
-  if (await probeApi(2000)) return false // já estava rodando, não precisamos subir
+  if (await probeApi(2000)) return
 
   // Sobe server.ts em background
   const serverPath = join(import.meta.dir, 'server.ts')
@@ -694,20 +612,20 @@ async function ensureApiRunning(): Promise<boolean> {
     env: { ...process.env },
   })
 
-  // Aguarda até 10s (polling a cada 300ms) usando probe leve
-  for (let i = 0; i < 33; i++) {
-    await new Promise(r => setTimeout(r, 300))
-    const ok = await probeApi(1000)
-    if (ok) {
-      console.log(`${GR}Servidor iniciado (pid ${spawnedServer.pid}).${R}`)
-      return true
+  const ok = await withLoader('Aguardando servidor API iniciar...', async () => {
+    for (let i = 0; i < 40; i++) {
+      await new Promise(r => setTimeout(r, 300))
+      if (await probeApi(800)) return true
     }
-  }
+    return false
+  })
 
-  console.log(`${RD}Nao foi possivel iniciar o servidor. Usando leitura direta de arquivos.${R}`)
-  spawnedServer?.kill()
-  spawnedServer = null
-  return false
+  if (!ok) {
+    if (spawnedServer) { spawnedServer.kill(); spawnedServer = null }
+    console.error(`\n${RD}Nao foi possivel iniciar o servidor API (porta 3001).${R}`)
+    process.exit(1)
+  }
+  console.log(`${GR}Servidor iniciado (pid ${spawnedServer?.pid}).${R}`)
 }
 
 function registerServerCleanup() {
@@ -725,22 +643,18 @@ async function main() {
   console.log(`\n${B}${BC}Claude Stats - Watch CLI${R}\n`)
 
   registerServerCleanup()
-
   await ensureApiRunning()
 
-  // Agora tenta a API (pode estar recém-subida ou já existente)
-  const apiData = await fetchApi(2000)
-  let allProjects: ProjectInfo[]
+  const apiData = await withLoader('Carregando dados da API...', () => fetchApi(60_000))
 
-  if (apiData) {
-    console.log(`${GR}Usando dados da API em ${API_BASE}${R}\n`)
-    allProjects = apiData.projects.map(p => ({ name: p.name, path: p.path }))
-      .sort((a, b) => a.path.localeCompare(b.path))
-  } else {
-    console.log(`${YL}Usando leitura direta de arquivos (fallback).${R}\n`)
-    const { projects } = await discoverProjectsFromFiles()
-    allProjects = projects
+  if (!apiData) {
+    console.error(`\n${RD}Falha ao carregar dados da API. O servidor respondeu mas retornou erro.${R}`)
+    process.exit(1)
   }
+
+  const allProjects = apiData.projects
+    .map(p => ({ name: p.name, path: p.path }))
+    .sort((a, b) => a.path.localeCompare(b.path))
 
   if (allProjects.length === 0) {
     console.error('Nenhum projeto encontrado.')
