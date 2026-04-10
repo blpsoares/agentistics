@@ -263,6 +263,18 @@ export default function App() {
     return Object.keys(data.statsCache.modelUsage ?? {})
   }, [data])
 
+  // Session count per project from enriched sessions (have valid start_time).
+  // Used in the Projects modal so its count matches the card when "All" is selected.
+  const sessionCountByProject = useMemo(() => {
+    if (!data) return {}
+    const counts: Record<string, number> = {}
+    for (const s of data.sessions) {
+      if (!s.start_time || !s.project_path) continue
+      counts[s.project_path] = (counts[s.project_path] ?? 0) + 1
+    }
+    return counts
+  }, [data])
+
   // ── Info items for all 8 stat cards ──────────────────────────────────────────
   const infoItems = useMemo(() => {
     const projectFiltered = filters.projects.length > 0
@@ -820,7 +832,7 @@ export default function App() {
               <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'right' }}>
                 <div>{lang === 'pt' ? 'Desde' : 'Since'} {format(parseISO(statsCache.firstSessionDate), 'MMM d, yyyy')}</div>
                 <div style={{ color: 'var(--text-secondary)' }}>
-                  {statsCache.totalSessions?.toLocaleString()} {lang === 'pt' ? 'sessões' : 'sessions'}
+                  {derived.allTimeTotalSessions.toLocaleString()} {lang === 'pt' ? 'sessões' : 'sessions'}
                 </div>
               </div>
             )}
@@ -1042,6 +1054,7 @@ export default function App() {
               filters={filters}
               onChange={setFilters}
               projects={data.projects}
+              sessionCountByProject={sessionCountByProject}
               models={models}
               lang={lang}
             />

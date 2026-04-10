@@ -5,6 +5,7 @@ import { formatProjectName } from '../lib/types'
 
 interface Props {
   projects: { path: string; sessions: { sessionId: string; created: string }[] }[]
+  sessionCountByProject: Record<string, number>
   selected: string[]
   onApply: (paths: string[]) => void
   onClose: () => void
@@ -43,7 +44,7 @@ const T = {
 
 const PER_PAGE_OPTIONS = [15, 25, 50]
 
-export function ProjectsModal({ projects, selected, onApply, onClose, lang }: Props) {
+export function ProjectsModal({ projects, sessionCountByProject, selected, onApply, onClose, lang }: Props) {
   const t = T[lang]
   const searchRef = useRef<HTMLInputElement>(null)
 
@@ -379,7 +380,7 @@ export function ProjectsModal({ projects, selected, onApply, onClose, lang }: Pr
                     color: 'var(--text-secondary)',
                     whiteSpace: 'nowrap',
                   }}>
-                    {project.sessions.length} {t.sessions}
+                    {sessionCountByProject[project.path] ?? project.sessions.length} {t.sessions}
                   </div>
                 </div>
               )
