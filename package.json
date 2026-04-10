@@ -8,8 +8,7 @@
     "dev": "bun run --bun concurrently \"bun run dev:api\" \"bun run dev:ui\"",
     "build": "vite build",
     "preview": "vite preview",
-    "watch": "bun run watcher.ts",
-    "daemon": "CLAUDE_STATS_OTEL_ONLY=true bun run watcher.ts"
+    "watch": "bun run watcher.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

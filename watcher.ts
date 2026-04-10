@@ -5,15 +5,17 @@
  * metrics. When OTEL_EXPORTER_OTLP_ENDPOINT is set, it exports metrics via
  * the OpenTelemetry OTLP/HTTP protocol.
  *
+ * The watcher is fully optional — the main dashboard (`bun run dev`) works
+ * without it. Run `bun run watch` only when you want OTLP metrics export.
+ *
  * Usage:
- *   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 bun run watcher.ts
+ *   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 bun run watch
  *
  * Environment variables:
  *   OTEL_EXPORTER_OTLP_ENDPOINT  — OTLP collector endpoint (required for export)
  *   OTEL_EXPORTER_OTLP_HEADERS   — Extra headers (e.g. "Authorization=Bearer tok")
  *   OTEL_SERVICE_NAME             — Service name (default: "claude-stats")
- *   CLAUDE_STATS_WATCH_INTERVAL   — Polling interval in seconds (default: 30)
- *   CLAUDE_STATS_OTEL_ONLY        — When "true", only exports OTLP (no HTTP server)
+ *   CLAUDE_STATS_WATCH_INTERVAL   — Polling interval in seconds (default: 30, min: 5)
  */
 
 import { readdir, readFile, stat } from 'fs/promises'
@@ -25,7 +27,13 @@ import { join } from 'path'
 import { metrics, ValueType } from '@opentelemetry/api'
 import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics'
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http'
+import { Resource } from '@opentelemetry/resources'
+import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions'
 
+// ── Shared imports from the main codebase ──────────────────────────────────
+
+import { getModelPrice, calcCost } from './src/lib/types'
+import type { ModelUsage } from './src/lib/types'
 import type { OtelSnapshot } from './src/lib/otel'
 
 // ── Configuration ──────────────────────────────────────────────────────────
@@ -36,8 +44,17 @@ const PROJECTS_DIR = join(CLAUDE_DIR, 'projects')
 const SESSION_META_DIR = join(CLAUDE_DIR, 'usage-data', 'session-meta')
 const STATS_CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json')
 
-const WATCH_INTERVAL_SEC = parseInt(process.env.CLAUDE_STATS_WATCH_INTERVAL ?? '30', 10)
-const OTEL_ONLY = process.env.CLAUDE_STATS_OTEL_ONLY === 'true'
+const MIN_INTERVAL_SEC = 5
+const rawInterval = parseInt(process.env.CLAUDE_STATS_WATCH_INTERVAL ?? '30', 10)
+const WATCH_INTERVAL_SEC = (!Number.isFinite(rawInterval) || rawInterval < MIN_INTERVAL_SEC)
+  ? (() => {
+      if (process.env.CLAUDE_STATS_WATCH_INTERVAL) {
+        console.warn(`[config] Invalid CLAUDE_STATS_WATCH_INTERVAL="${process.env.CLAUDE_STATS_WATCH_INTERVAL}", using default 30s`)
+      }
+      return 30
+    })()
+  : rawInterval
+
 const SERVICE_NAME = process.env.OTEL_SERVICE_NAME ?? 'claude-stats'
 const OTLP_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? ''
 const OTLP_HEADERS = process.env.OTEL_EXPORTER_OTLP_HEADERS ?? ''
@@ -69,49 +86,50 @@ async function safeStat(filePath: string) {
   }
 }
 
-// ── Model pricing (same as server.ts) ─────────────────────────────────────
+// ── Concurrency limiter (same pattern as server.ts) ───────────────────────
 
-const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  'claude-opus-4-6':            { input: 5,    output: 25   },
-  'claude-sonnet-4-6':          { input: 3,    output: 15   },
-  'claude-haiku-4-5-20251001':  { input: 1,    output: 5    },
-  'claude-opus-4-5-20251101':   { input: 5,    output: 25   },
-  'claude-opus-4-1-20250805':   { input: 15,   output: 75   },
-  'claude-opus-4-20250514':     { input: 15,   output: 75   },
-  'claude-sonnet-4-5-20250929': { input: 3,    output: 15   },
-  'claude-sonnet-4-20250514':   { input: 3,    output: 15   },
-  'claude-haiku-3-5-20241022':  { input: 0.80, output: 4    },
-  'claude-3-haiku-20240307':    { input: 0.25, output: 1.25 },
-}
+function createLimiter(concurrency: number) {
+  let running = 0
+  const queue: Array<() => void> = []
 
-function getModelPrice(modelId: string) {
-  if (MODEL_PRICING[modelId]) return MODEL_PRICING[modelId]
-  for (const [key, price] of Object.entries(MODEL_PRICING)) {
-    if (modelId.startsWith(key) || key.startsWith(modelId)) return price
+  return function limit<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const run = () => {
+        running++
+        fn()
+          .then(resolve, reject)
+          .finally(() => {
+            running--
+            if (queue.length > 0) {
+              const next = queue.shift()!
+              next()
+            }
+          })
+      }
+
+      if (running < concurrency) {
+        run()
+      } else {
+        queue.push(run)
+      }
+    })
   }
-  return { input: 3, output: 15 }
 }
 
 // ── Snapshot builder ──────────────────────────────────────────────────────
 
 interface StatsCache {
   dailyActivity?: Array<{ date: string; messageCount: number; sessionCount: number; toolCallCount: number }>
-  modelUsage?: Record<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }>
+  modelUsage?: Record<string, ModelUsage>
   longestSession?: { duration: number }
 }
 
-interface SessionMeta {
+interface SessionMetaLight {
   session_id: string
   project_path: string
-  start_time: string
-  duration_minutes: number
-  user_message_count: number
-  assistant_message_count: number
   tool_counts: Record<string, number>
   git_commits: number
   git_pushes: number
-  input_tokens: number
-  output_tokens: number
   lines_added: number
   lines_removed: number
   files_modified: number
@@ -120,13 +138,19 @@ interface SessionMeta {
 async function buildSnapshot(): Promise<OtelSnapshot> {
   const statsCache = await safeReadJson<StatsCache>(STATS_CACHE_FILE) ?? {}
 
-  // Load session-meta files
+  // Load session-meta files in parallel with concurrency limit
   const metaFiles = (await safeReadDir(SESSION_META_DIR)).filter(f => f.endsWith('.json'))
-  const sessions: SessionMeta[] = []
-  for (const f of metaFiles) {
-    const data = await safeReadJson<SessionMeta>(join(SESSION_META_DIR, f))
-    if (data) sessions.push(data)
-  }
+  const limit = createLimiter(20)
+  const sessions: SessionMetaLight[] = []
+
+  await Promise.all(
+    metaFiles.map(f =>
+      limit(async () => {
+        const data = await safeReadJson<SessionMetaLight>(join(SESSION_META_DIR, f))
+        if (data) sessions.push(data)
+      })
+    )
+  )
 
   // Aggregate from stats-cache (preferred for totals)
   const dailyActivity = statsCache.dailyActivity ?? []
@@ -146,7 +170,7 @@ async function buildSnapshot(): Promise<OtelSnapshot> {
     else if (i > 0) break
   }
 
-  // Model tokens
+  // Model tokens — use shared calcCost from types.ts
   const modelUsage = statsCache.modelUsage ?? {}
   const modelTokens: Record<string, { input: number; output: number }> = {}
   let totalCostUsd = 0
@@ -159,11 +183,7 @@ async function buildSnapshot(): Promise<OtelSnapshot> {
     modelTokens[modelId] = { input: inp, output: out }
     totalInputTokens += inp
     totalOutputTokens += out
-    const price = getModelPrice(modelId)
-    totalCostUsd += (u.inputTokens / 1_000_000) * price.input
-                  + (u.outputTokens / 1_000_000) * price.output
-                  + ((u.cacheReadInputTokens ?? 0) / 1_000_000) * (price.input * 0.1)
-                  + ((u.cacheCreationInputTokens ?? 0) / 1_000_000) * (price.input * 1.25)
+    totalCostUsd += calcCost(u, modelId)
   }
 
   // From sessions
@@ -222,6 +242,13 @@ function parseOtlpHeaders(raw: string): Record<string, string> {
   return headers
 }
 
+function buildOtlpUrl(endpoint: string): string {
+  const base = endpoint.replace(/\/$/, '')
+  // Don't append /v1/metrics if the user already included it
+  if (base.endsWith('/v1/metrics')) return base
+  return base + '/v1/metrics'
+}
+
 let latestSnapshot: OtelSnapshot | null = null
 
 function setupOtel(): { shutdown: () => Promise<void> } | null {
@@ -231,7 +258,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
   }
 
   const exporter = new OTLPMetricExporter({
-    url: OTLP_ENDPOINT.replace(/\/$/, '') + '/v1/metrics',
+    url: buildOtlpUrl(OTLP_ENDPOINT),
     headers: parseOtlpHeaders(OTLP_HEADERS),
   })
 
@@ -240,15 +267,20 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     exportIntervalMillis: WATCH_INTERVAL_SEC * 1000,
   })
 
+  const resource = new Resource({
+    [ATTR_SERVICE_NAME]: SERVICE_NAME,
+  })
+
   const meterProvider = new MeterProvider({
+    resource,
     readers: [reader],
   })
 
   metrics.setGlobalMeterProvider(meterProvider)
 
-  const meter = metrics.getMeter(SERVICE_NAME, '1.0.0')
+  const meter = metrics.getMeter('claude-stats', '1.0.0')
 
-  // ── Define instruments ──
+  // ── Define instruments (all observable gauges — point-in-time snapshots) ──
 
   const messagesTotal = meter.createObservableGauge('claude_stats.messages.total', {
     description: 'Total messages (user + assistant)',
@@ -414,7 +446,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     }
   })
 
-  console.log(`[otel] Exporting metrics to ${OTLP_ENDPOINT} every ${WATCH_INTERVAL_SEC}s`)
+  console.log(`[otel] Exporting metrics to ${OTLP_ENDPOINT} every ${WATCH_INTERVAL_SEC}s (service.name="${SERVICE_NAME}")`)
 
   return {
     shutdown: () => meterProvider.shutdown(),
@@ -440,6 +472,34 @@ async function watchDirectory(dir: string, onChange: () => void): Promise<void> 
   }
 }
 
+// ── Snapshot rebuild serialization ────────────────────────────────────────
+
+let snapshotInFlight = false
+let snapshotPending = false
+
+async function rebuildSnapshot(): Promise<void> {
+  if (snapshotInFlight) {
+    // Another rebuild is running — schedule a follow-up after it finishes
+    snapshotPending = true
+    return
+  }
+
+  snapshotInFlight = true
+  try {
+    latestSnapshot = await buildSnapshot()
+    console.log(`[snapshot] Messages=${latestSnapshot.totalMessages} Sessions=${latestSnapshot.totalSessions} Cost=$${latestSnapshot.totalCostUsd.toFixed(2)} Streak=${latestSnapshot.streak}d Projects=${latestSnapshot.activeProjects}`)
+  } catch (err) {
+    console.error('[snapshot] Error:', String(err))
+  } finally {
+    snapshotInFlight = false
+    // If another trigger came in while we were building, run again
+    if (snapshotPending) {
+      snapshotPending = false
+      rebuildSnapshot()
+    }
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -454,8 +514,7 @@ async function main() {
   console.log()
 
   // Initial snapshot
-  latestSnapshot = await buildSnapshot()
-  console.log(`[snapshot] Messages=${latestSnapshot.totalMessages} Sessions=${latestSnapshot.totalSessions} Cost=$${latestSnapshot.totalCostUsd.toFixed(2)} Streak=${latestSnapshot.streak}d Projects=${latestSnapshot.activeProjects}`)
+  await rebuildSnapshot()
 
   // Setup OpenTelemetry export
   const otel = setupOtel()
@@ -466,14 +525,7 @@ async function main() {
 
   const triggerUpdate = () => {
     if (debounceTimer) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(async () => {
-      try {
-        latestSnapshot = await buildSnapshot()
-        console.log(`[snapshot] Messages=${latestSnapshot.totalMessages} Sessions=${latestSnapshot.totalSessions} Cost=$${latestSnapshot.totalCostUsd.toFixed(2)} Streak=${latestSnapshot.streak}d Projects=${latestSnapshot.activeProjects}`)
-      } catch (err) {
-        console.error('[snapshot] Error:', String(err))
-      }
-    }, DEBOUNCE_MS)
+    debounceTimer = setTimeout(() => rebuildSnapshot(), DEBOUNCE_MS)
   }
 
   // Watch directories for changes
@@ -483,22 +535,9 @@ async function main() {
   ])
 
   // Also do periodic polling as a fallback (fs.watch can miss events)
-  setInterval(async () => {
-    try {
-      latestSnapshot = await buildSnapshot()
-    } catch (err) {
-      console.error('[poll] Error:', String(err))
-    }
-  }, WATCH_INTERVAL_SEC * 1000)
+  setInterval(() => rebuildSnapshot(), WATCH_INTERVAL_SEC * 1000)
 
-  // Hint: to also run the API server, use `bun run dev` alongside `bun run watch`
-  if (!OTEL_ONLY) {
-    console.log('[watcher] Running in watch mode (metrics export + file watching)')
-    console.log('[watcher] Tip: use `bun run dev` in a separate terminal to also start the API + UI')
-    console.log('[watcher] Tip: set CLAUDE_STATS_OTEL_ONLY=true to silence this message')
-  } else {
-    console.log('[watcher] Running in daemon mode (OTLP export only)')
-  }
+  console.log('[watcher] Running — use `bun run dev` in a separate terminal for the dashboard UI')
 
   // Graceful shutdown
   const shutdown = async () => {

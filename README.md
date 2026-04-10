@@ -542,8 +542,7 @@ Caminhos derivados:
 OTEL_EXPORTER_OTLP_ENDPOINT   # Endpoint do coletor OTLP (ex: http://localhost:4318)
 OTEL_EXPORTER_OTLP_HEADERS    # Headers extras (ex: "Authorization=Bearer token")
 OTEL_SERVICE_NAME              # Nome do serviço (padrão: "claude-stats")
-CLAUDE_STATS_WATCH_INTERVAL   # Intervalo de polling em segundos (padrão: 30)
-CLAUDE_STATS_OTEL_ONLY        # "true" para rodar sem servidor HTTP
+CLAUDE_STATS_WATCH_INTERVAL   # Intervalo de polling em segundos (padrão: 30, mín: 5)
 ```
 
 ### Porta da API
@@ -568,6 +567,8 @@ Alertas têm 3 níveis de severidade: **erro** (vermelho) · **aviso** (amarelo)
 
 ## OpenTelemetry + Watcher / Daemon Mode
 
+> **This feature is entirely optional.** The main dashboard (`bun run dev`) works without the watcher. Run `bun run watch` only when you want to export metrics to an observability backend.
+
 Claude Stats can export usage metrics via the [OpenTelemetry](https://opentelemetry.io/) protocol (OTLP/HTTP), enabling integration with observability backends like **Grafana**, **Datadog**, **New Relic**, **Honeycomb**, and any OTLP-compatible collector.
 
 ### Quick Start
@@ -576,17 +577,17 @@ Claude Stats can export usage metrics via the [OpenTelemetry](https://openteleme
 # Watch mode: watches ~/.claude/ for changes + exports metrics via OTLP
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 bun run watch
 
-# Daemon mode: OTLP export only (no HTTP server)
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 bun run daemon
+# Without OTLP endpoint, the watcher still runs (useful for debugging snapshots)
+bun run watch
 ```
 
 ### How It Works
 
-The watcher (`watcher.ts`) runs as a background process that:
+The watcher (`watcher.ts`) is a **standalone process** separate from the dashboard server. It:
 
 1. **Watches** `~/.claude/usage-data/session-meta/` and `~/.claude/projects/` for file changes using `fs.watch` (recursive)
-2. **Rebuilds** a metrics snapshot from `stats-cache.json` and session-meta files on each change (debounced)
-3. **Polls** every N seconds as a fallback (configurable via `CLAUDE_STATS_WATCH_INTERVAL`)
+2. **Rebuilds** a metrics snapshot from `stats-cache.json` and session-meta files on each change (debounced, serialized)
+3. **Polls** every N seconds as a fallback (configurable via `CLAUDE_STATS_WATCH_INTERVAL`, minimum 5s)
 4. **Exports** all metrics to an OTLP collector when `OTEL_EXPORTER_OTLP_ENDPOINT` is set
 
 ### Environment Variables
@@ -595,9 +596,8 @@ The watcher (`watcher.ts`) runs as a background process that:
 |----------|---------|-------------|
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | *(none)* | OTLP collector endpoint (e.g. `http://localhost:4318`). Required to enable export. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | *(none)* | Extra headers for the OTLP exporter (e.g. `Authorization=Bearer token`) |
-| `OTEL_SERVICE_NAME` | `claude-stats` | Service name reported in metrics |
-| `CLAUDE_STATS_WATCH_INTERVAL` | `30` | Polling interval in seconds |
-| `CLAUDE_STATS_OTEL_ONLY` | `false` | When `true`, runs only the OTLP exporter without the HTTP API server |
+| `OTEL_SERVICE_NAME` | `claude-stats` | Service name reported in metrics (set as `service.name` resource attribute) |
+| `CLAUDE_STATS_WATCH_INTERVAL` | `30` | Polling interval in seconds (minimum: 5) |
 
 ### Exported Metrics
 
