@@ -398,7 +398,7 @@ Cada leitura de arquivo de instrução adiciona tokens ao contexto do modelo. Qu
 
 Integração com o sistema de alertas existente:
 
-- **Tool token villain** (info) — disparado quando uma ferramenta consome >60% dos tokens totais de saída
+- **Tool token villain** (info) — disparado quando uma ferramenta consome >60% dos tokens totais de saída (requer mínimo de 10K tokens totais para evitar alertas em dados pequenos)
 - **Agent file reads high** (info) — disparado quando arquivos de instrução são lidos mais de 50 vezes no total
 
 ---

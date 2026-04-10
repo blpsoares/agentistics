@@ -480,13 +480,14 @@ const AGENT_FILE_CATEGORY: Map<string, string> = new Map([
 ])
 
 // Agent-like instruction file path patterns (directory-based matching)
+// Use (^|\/) to match both absolute and relative paths
 const AGENT_PATH_PATTERNS: [RegExp, string][] = [
-  [/\/\.claude\//i, '.claude/*'],
-  [/\/\.github\/copilot-instructions/i, 'copilot-instructions'],
-  [/\/\.cursor\//i, '.cursorrules'],
-  [/\/\.windsurf\//i, '.windsurfrules'],
-  [/\/AGENTS\.md$/i, 'AGENTS.md'],
-  [/\/CLAUDE\.md$/i, 'CLAUDE.md'],
+  [/(^|\/)\.claude\//i, '.claude/*'],
+  [/(^|\/)\.github\/copilot-instructions/i, 'copilot-instructions'],
+  [/(^|\/)\.cursor\//i, '.cursorrules'],
+  [/(^|\/)\.windsurf\//i, '.windsurfrules'],
+  [/(^|\/)AGENTS\.md$/i, 'AGENTS.md'],
+  [/(^|\/)CLAUDE\.md$/i, 'CLAUDE.md'],
 ]
 
 /** Classify a file path as an agent instruction file category or null */
@@ -957,6 +958,7 @@ function analyzeToolHealthIssues(sessions: SessionMeta[], issues: HealthIssue[])
   }
 
   // Alert: single tool consuming >60% of total output tokens
+  // Require a minimum of 10K tokens to avoid noisy alerts on small data sets
   if (totalToolOutputTokens > 10000) {
     const sorted = Object.entries(toolTokens).sort((a, b) => b[1] - a[1])
     const top = sorted[0]

@@ -22,12 +22,12 @@ export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads,
   const pt = lang === 'pt'
 
   const data = viewMode === 'calls' ? toolCounts : toolOutputTokens
+  const total = Object.values(data).reduce((s, v) => s + v, 0)
   const entries = Object.entries(data)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 15)
 
   const max = Math.max(...entries.map(([, v]) => v), 1)
-  const total = entries.reduce((s, [, v]) => s + v, 0)
 
   const agentEntries = Object.entries(agentFileReads)
     .sort((a, b) => b[1] - a[1])
