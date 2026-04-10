@@ -210,45 +210,55 @@ async function reloadData(config: WatchConfig): Promise<{
   return { snapshots, dataSource: 'api' }
 }
 
-// ── Loader: Claude caçando tokens ─────────────────────────────────────────
+// ── Loader ─────────────────────────────────────────────────────────────────
+// Braille spinner + gradient wave bar scrolling.
+// 7 linhas fixas, reescritas via cursor-up a cada 80ms.
 
 async function withLoader<T>(msg: string, fn: () => Promise<T>): Promise<T> {
-  const H   = 5
-  const W   = Math.min(process.stdout.columns || 80, 100)
-  const fld = W - 4
-  // Tokens fogem para a esquerda (offset cresce = conteudo desliza para esquerda)
-  const PAT = '  $   $$  $    $$$   $  $$    $   $  $$$  '
-  // Frames de corrida: [cabeca, torso, pernas]
-  const RF: [string, string, string][] = [
-    ['\\o/', ' |  ', '/ \\ '],
-    [' o/', '/|\\ ', '/ \\ '],
-    [' o ', ' |/ ', '\\ / '],
-    ['\\o ', ' |  ', '\\ / '],
-  ]
-  const cp = Math.floor(fld * 0.35)
+  if (!process.stdout.isTTY) return fn()
+
+  const H     = 7
+  const W     = Math.min((process.stdout.columns || 80) - 2, 94)
+  const BAR_W = W - 2
+
+  // Braille dots — cycling at ~12fps produces a perfectly smooth spin
+  const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+
+  // Gradient wave: trough → peak → trough, repeated twice for seamless wrap
+  const WAVE = '░░░▒▒▓▓███▓▓▒▒░░░░░▒▒▓▓███▓▓▒▒░░░'
 
   let frame = 0
 
   const draw = () => {
-    const off   = (frame * 2) % PAT.length
-    const river = (PAT + PAT + PAT).slice(off, off + fld)
-    // apaga zona do Claude para nao sobrepor tokens
-    const rArr = river.split('')
-    for (let i = Math.max(0, cp - 1); i < Math.min(rArr.length, cp + 5); i++) rArr[i] = ' '
-    const rLine = rArr.join('')
-    const rf = RF[frame % RF.length]!
+    const spin = SPIN[frame % SPIN.length]!
+
+    // Scroll wave left — offset grows each frame
+    const off  = (frame * 1) % WAVE.length
+    const raw  = (WAVE + WAVE + WAVE).slice(off, off + BAR_W)
+
+    // Apply color gradient: bright at peaks, dim at troughs
+    const bar = raw.split('').map(c =>
+      c === '█' ? `${B}${BC}█${R}`
+      : c === '▓' ? `${CY}▓${R}`
+      : c === '▒' ? `${D}${CY}▒${R}`
+      : `${D}░${R}`
+    ).join('')
+
+    const sep = `${D}${'─'.repeat(BAR_W)}${R}`
 
     out(`\x1b[${H}A`)
-    out(`  ${YL}${rLine}${R}\n`)
-    out(`  ${' '.repeat(cp)}${YL}${rf[0]}${R}${GR}~~>${R}\n`)
-    out(`  ${' '.repeat(cp)}${D}${rf[1]}${R}\n`)
-    out(`  ${' '.repeat(cp)}${YL}${rf[2]}${R}\n`)
-    out(`  ${D}${msg}${R}\n`)
+    out(`\n`)
+    out(`  ${sep}\n`)
+    out(`  ${BC}${B}${spin}${R}  ${B}claude-stats${R}  ${D}·  session pipeline${R}\n`)
+    out(`  ${bar}\n`)
+    out(`  ${D}▸${R}  ${D}${msg}${R}\n`)
+    out(`  ${sep}\n`)
+    out(`\n`)
   }
 
   out('\n'.repeat(H))
   draw()
-  const timer = setInterval(() => { frame++; draw() }, 120)
+  const timer = setInterval(() => { frame++; draw() }, 80)
 
   try {
     return await fn()
