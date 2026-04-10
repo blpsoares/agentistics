@@ -101,23 +101,17 @@ export function HealthWarnings({ issues, lang }: { issues: HealthIssue[]; lang: 
           width: 32, height: 32,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           borderRadius: 8,
-          border: `1px solid ${open ? dotColor + '60' : 'var(--border)'}`,
-          background: open ? dotColor + '14' : 'transparent',
+          border: `1px solid ${dotColor}60`,
+          background: dotColor + '18',
           color: dotColor,
           cursor: 'pointer',
           transition: 'all 0.15s',
         }}
         onMouseEnter={e => {
-          if (!open) {
-            ;(e.currentTarget as HTMLButtonElement).style.borderColor = dotColor + '60'
-            ;(e.currentTarget as HTMLButtonElement).style.background = dotColor + '14'
-          }
+          ;(e.currentTarget as HTMLButtonElement).style.background = dotColor + '30'
         }}
         onMouseLeave={e => {
-          if (!open) {
-            ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
-            ;(e.currentTarget as HTMLButtonElement).style.background = 'transparent'
-          }
+          ;(e.currentTarget as HTMLButtonElement).style.background = dotColor + '18'
         }}
       >
         <AlertTriangle size={14} />

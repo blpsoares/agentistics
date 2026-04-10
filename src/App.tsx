@@ -3,9 +3,9 @@ import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, RefreshCw, FileCode, TrendingUp, BarChart2,
   Sun, Moon, Globe, AlertTriangle, Download, Upload,
-  Maximize2, X, GripVertical, Trophy,
+  Maximize2, X, GripVertical, Trophy, Activity,
 } from 'lucide-react'
-import { useData, useDerivedStats } from './hooks/useData'
+import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS } from './hooks/useData'
 import type { Filters } from './lib/types'
 import type { Lang, Theme } from './lib/types'
 import { formatProjectName, setHomeDir, MODEL_PRICING } from './lib/types'
@@ -175,7 +175,7 @@ function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string
 }
 
 export default function App() {
-  const { data, loading, error, refetch } = useData()
+  const { data, loading, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [lang, setLang] = useState<Lang>('en')
   const [theme, setTheme] = useState<Theme>('dark')
   const [currency, setCurrency] = useState<'USD' | 'BRL'>('USD')
@@ -922,6 +922,81 @@ export default function App() {
             {data?.healthIssues && data.healthIssues.length > 0 && (
               <HealthWarnings issues={data.healthIssues} lang={lang} />
             )}
+
+            {/* Live updates toggle */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '0 10px',
+              height: 32,
+              borderRadius: 8,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-secondary)',
+            }}>
+              {/* Activity icon */}
+              <Activity size={12} style={{ color: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', flexShrink: 0, transition: 'color 0.2s' }} />
+
+              {/* Label */}
+              <span style={{ fontSize: 11, fontWeight: 500, color: liveUpdates ? 'var(--text-primary)' : 'var(--text-tertiary)', whiteSpace: 'nowrap', transition: 'color 0.2s', userSelect: 'none' }}>
+                {lang === 'pt' ? 'Live' : 'Live'}
+              </span>
+
+              {/* iPhone-style toggle */}
+              <button
+                onClick={() => setLiveUpdates(v => !v)}
+                title={liveUpdates
+                  ? (lang === 'pt' ? 'Pausar atualizações em tempo real' : 'Pause live updates')
+                  : (lang === 'pt' ? 'Ativar atualizações em tempo real' : 'Enable live updates')}
+                style={{
+                  position: 'relative',
+                  width: 28, height: 16,
+                  borderRadius: 8,
+                  border: 'none',
+                  background: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                  cursor: 'pointer',
+                  padding: 0,
+                  transition: 'background 0.2s',
+                  flexShrink: 0,
+                }}
+              >
+                <span style={{
+                  position: 'absolute',
+                  top: 2, left: liveUpdates ? 14 : 2,
+                  width: 12, height: 12,
+                  borderRadius: '50%',
+                  background: '#fff',
+                  transition: 'left 0.2s',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                }} />
+              </button>
+
+              {/* Interval selector — only shown when live is on */}
+              {liveUpdates && (
+                <select
+                  value={updateInterval}
+                  onChange={e => setUpdateInterval(Number(e.target.value))}
+                  title={lang === 'pt' ? 'Intervalo de atualização' : 'Update interval'}
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 600,
+                    color: 'var(--anthropic-orange)',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    outline: 'none',
+                    fontFamily: 'inherit',
+                    appearance: 'none',
+                    WebkitAppearance: 'none',
+                    padding: '0 2px',
+                  }}
+                >
+                  {LIVE_INTERVAL_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value} style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
 
             {/* Refresh */}
             <button
