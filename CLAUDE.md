@@ -1,6 +1,6 @@
-# Claude Stats — CLAUDE.md
+# agentistics — CLAUDE.md
 
-Local analytics dashboard for Claude Code. Visualizes tokens, costs, activity, and projects based on data from `~/.claude/`.
+Local analytics dashboard for AI coding assistants. Visualizes tokens, costs, activity, and projects based on data from `~/.claude/`.
 
 ## Language convention
 
@@ -8,19 +8,27 @@ Local analytics dashboard for Claude Code. Visualizes tokens, costs, activity, a
 
 ## Architecture
 
-Two independent services:
-
 ```
+cli.ts  (binary entry point — agentop)
+  ├── agentop server  → server.ts + watcher.ts (always together)
+  ├── agentop tui     → watch-cli.ts (standalone)
+  └── agentop watch   → watcher.ts (daemon only)
+
 server.ts (Bun, port 3001)
   ├── Reads ~/.claude/usage-data/session-meta/ → enriched sessions (preferred source)
   ├── Fallback: parses JSONL from ~/.claude/projects/*/**/*.jsonl
   ├── Serves /api/data, /api/events (SSE), /api/rates
+  ├── Serves embedded static assets when SERVE_STATIC=1 (binary mode)
   └── Watched by chokidar for real-time updates
 
-src/ (React + Vite, port 5173)
+src/ (React + Vite, port 5173 in dev)
   ├── useData.ts → fetches /api/data + SSE subscription
   ├── useDerivedStats() → all filter and aggregation logic
   └── components/ → UI (charts, cards, heatmap, PDF export)
+
+scripts/embed-dist.ts
+  └── Reads dist/ after vite build and generates src/embedded-dist.generated.ts
+      (assets embedded as strings/base64 for the compiled binary)
 ```
 
 ## Calculation functions — single source of truth
@@ -59,6 +67,14 @@ src/hooks/useData.ts
 
 Used when there is no per-session model ID (project filter active, or per-session cost in PDF export). Weights each model's rate by its token volume in global usage.
 
+### `serveStatic(pathname)` — serves embedded frontend assets
+
+```
+server.ts
+```
+
+Only active when `SERVE_STATIC=1` (set by `cli.ts` for the `server` subcommand). Reads from `embeddedDist` (generated at compile time). Returns `null` in dev mode.
+
 ---
 
 ## Where each layer calculates cost
@@ -96,13 +112,21 @@ Used when there is no per-session model ID (project filter active, or per-sessio
 - **Streak**: counts backwards from today; if today has no activity, starts from yesterday — intentional behavior so users are not penalized for not having worked yet today
 - **BRL costs**: conversion via `/api/rates` (fetches live exchange rate); falls back to a fixed rate if the API fails
 - **Session sources**: `_source: 'meta'` sessions are the most complete; `'jsonl'` and `'subdir'` are fallbacks with partial data (no git line counts, no cache tokens)
+- **Binary mode**: `agentop server` sets `SERVE_STATIC=1`; server.ts serves the embedded frontend on the same port as the API
+- **`src/embedded-dist.generated.ts`** is in `.gitignore` — auto-generated, never commit it
 
 ## Development
 
 ```bash
-bun run dev      # API (3001) + UI (5173) in parallel
-bun run watch    # OpenTelemetry daemon (optional)
-bun test         # Unit tests for pure functions
+bun run dev            # API (3001) + UI (5173) in parallel
+bun run watch          # OpenTelemetry daemon (optional)
+bun run watch:cli      # Terminal TUI
+bun test               # Unit tests for pure functions
+
+# Build the binary
+bun run build          # Generates dist/ (Vite)
+bun run build:assets   # Generates src/embedded-dist.generated.ts
+bun run build:binary   # Full pipeline → release/agentop
 ```
 
 ## Tests

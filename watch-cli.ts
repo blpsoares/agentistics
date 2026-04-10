@@ -37,7 +37,7 @@ function showGoodbye(opts?: {
   const fmtN = (n: number) => n >= 1000 ? (n/1000).toFixed(1)+'k' : String(n)
   const lines: string[] = []
   lines.push('')
-  lines.push(`  ${AM}${B}claude-stats${R}  ${D}·  watch mode${R}`)
+  lines.push(`  ${AM}${B}agentop${R}  ${D}·  watch mode${R}`)
   lines.push('')
   lines.push(`  ${D}sessão:   ${R}${WH}${dur}${R}`)
   if (opts) {
@@ -330,7 +330,7 @@ async function withLoader<T>(msg: string, fn: () => Promise<T>): Promise<T> {
     out(`\x1b[${H}A`)
     out(`\n`)
     out(`  ${sep}\n`)
-    out(`  ${B}claude-stats${R}  ${D}·  session pipeline${R}\n`)
+    out(`  ${B}agentop${R}  ${D}·  session pipeline${R}\n`)
     out(`\n`)
     out(`  ${bar}\n`)
     out(`\n`)

@@ -3,6 +3,7 @@ import { join } from 'path'
 import { exec, spawn } from 'child_process'
 import chokidar from 'chokidar'
 import { promisify } from 'util'
+import { embeddedDist } from './src/embedded-dist.generated.ts'
 
 const execAsync = promisify(exec)
 
@@ -11,7 +12,7 @@ const CLAUDE_DIR = join(HOME_DIR, '.claude')
 const PROJECTS_DIR = join(CLAUDE_DIR, 'projects')
 const SESSION_META_DIR = join(CLAUDE_DIR, 'usage-data', 'session-meta')
 const STATS_CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json')
-const PORT = 3001
+const PORT = parseInt(process.env.PORT ?? '3001', 10)
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1104,7 +1105,7 @@ function parseAnthropicPricing(html: string): Record<string, PriceEntry> | null 
 async function fetchAnthropicPricing(): Promise<{ pricing: Record<string, PriceEntry>; source: 'live' | 'fallback' }> {
   try {
     const res = await fetch('https://platform.claude.com/docs/en/about-claude/pricing', {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; claude-stats/1.0; +https://github.com)' },
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; agentistics/1.0; +https://github.com)' },
       signal: AbortSignal.timeout(8000),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -1232,6 +1233,28 @@ function maybeSpawnWatcher() {
   })
 }
 
+// ---------------------------------------------------------------------------
+// Static file serving (binary / embedded mode)
+// Activated when SERVE_STATIC=1 (set by cli.ts for the `web` subcommand).
+// Assets are embedded at compile-time via src/embedded-dist.generated.ts.
+// ---------------------------------------------------------------------------
+
+const SERVE_STATIC = process.env.SERVE_STATIC === '1'
+
+function serveStatic(pathname: string): Response | null {
+  if (!SERVE_STATIC) return null
+  const asset = embeddedDist[pathname]
+  if (!asset) return null
+  const body =
+    asset.encoding === 'base64'
+      ? Buffer.from(asset.content, 'base64')
+      : asset.content
+  return new Response(body, {
+    status: 200,
+    headers: { 'Content-Type': asset.contentType, 'Cache-Control': 'public, max-age=31536000' },
+  })
+}
+
 // Start file watching and optionally spawn the OTel watcher daemon
 setupFileWatcher()
 maybeSpawnWatcher()
@@ -1314,6 +1337,15 @@ Bun.serve({
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
+    }
+
+    // Serve embedded frontend assets (binary mode only)
+    if (!url.pathname.startsWith('/api')) {
+      const asset = serveStatic(url.pathname)
+      if (asset) return asset
+      // SPA fallback — any unknown path gets index.html
+      const fallback = serveStatic('/index.html')
+      if (fallback) return fallback
     }
 
     return new Response(JSON.stringify({ error: 'Not Found' }), {
