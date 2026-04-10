@@ -208,6 +208,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
         tools: d.toolCallCount,
       }))
     }
+    heatmapData.sort((a, b) => a.date.localeCompare(b.date))
 
     // ── Model usage — respects date + model filters ──
     const globalModelUsage = data.statsCache.modelUsage ?? {}
