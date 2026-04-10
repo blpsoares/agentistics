@@ -13,18 +13,22 @@ interface Props {
     tools: number
   }[]
   height?: number
+  theme?: 'dark' | 'light'
 }
 
 type Metric = 'value' | 'sessions' | 'tools' | 'overlay'
 
-const METRICS: { key: Metric; label: string; color: string }[] = [
-  { key: 'value', label: 'Messages', color: '#D97706' },
-  { key: 'sessions', label: 'Sessions', color: '#6366f1' },
-  { key: 'tools', label: 'Tool Calls', color: '#10b981' },
-  { key: 'overlay', label: 'Overlay', color: '#8b5cf6' },
-]
+function getMetrics(theme?: 'dark' | 'light'): { key: Metric; label: string; color: string }[] {
+  const messagesColor = theme === 'light' ? '#f97316' : '#D97706'
+  return [
+    { key: 'value', label: 'Messages', color: messagesColor },
+    { key: 'sessions', label: 'Sessions', color: '#6366f1' },
+    { key: 'tools', label: 'Tool Calls', color: '#10b981' },
+    { key: 'overlay', label: 'Overlay', color: '#8b5cf6' },
+  ]
+}
 
-const DATA_METRICS = METRICS.filter(m => m.key !== 'overlay') as { key: 'value'|'sessions'|'tools'; label: string; color: string }[]
+// DATA_METRICS computed per render inside the component
 
 const CustomTooltip = ({ active, payload, label, isOverlay, rawData }: any) => {
   if (!active || !payload?.length) return null
@@ -79,11 +83,13 @@ function ToggleBtn({ active, onClick, children }: { active: boolean; onClick: ()
   )
 }
 
-export function ActivityChart({ data, height = 180 }: Props) {
+export function ActivityChart({ data, height = 180, theme }: Props) {
   const [metric, setMetric] = useState<Metric>('value')
   const [showAxes, setShowAxes] = useState(true)
   const [showLegend, setShowLegend] = useState(true)
   const isOverlay = metric === 'overlay'
+  const METRICS = getMetrics(theme)
+  const DATA_METRICS = METRICS.filter(m => m.key !== 'overlay') as { key: 'value'|'sessions'|'tools'; label: string; color: string }[]
 
   const maxValues = {
     value: Math.max(...data.map(d => d.value), 1),
@@ -165,7 +171,7 @@ export function ActivityChart({ data, height = 180 }: Props) {
                 </linearGradient>
               ))}
             </defs>
-            <CartesianGrid stroke="rgba(255,255,255,0.04)" strokeDasharray="0" vertical={false} />
+            <CartesianGrid stroke="var(--border)" strokeDasharray="0" vertical={false} />
             {showAxes ? (
               <XAxis
                 dataKey="displayDate"

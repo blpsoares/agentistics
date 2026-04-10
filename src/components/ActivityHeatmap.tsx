@@ -150,8 +150,8 @@ export function ActivityHeatmap({ data, weeks = 26 }: Props) {
                 width={cellSize}
                 height={cellSize}
                 rx={2}
-                fill={intensity === 0 ? 'var(--heatmap-empty)' : `rgba(217, 119, 6, ${intensity})`}
                 style={{
+                  fill: intensity === 0 ? 'var(--heatmap-empty)' : `rgba(var(--heatmap-active-color), ${intensity})`,
                   cursor: d ? 'pointer' : 'default',
                   transformOrigin: `${x + cellSize / 2}px ${y + cellSize / 2}px`,
                   animation: `heatmap-fade-in 0.3s ease ${delay}s both`,
@@ -174,7 +174,7 @@ export function ActivityHeatmap({ data, weeks = 26 }: Props) {
         {[0, 0.15, 0.35, 0.6, 1].map(v => (
           <div key={v} style={{
             width: 10, height: 10, borderRadius: 2,
-            background: v === 0 ? 'var(--heatmap-empty)' : `rgba(217, 119, 6, ${v})`,
+            background: v === 0 ? 'var(--heatmap-empty)' : `rgba(var(--heatmap-active-color), ${v})`,
           }} />
         ))}
         <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>More</span>

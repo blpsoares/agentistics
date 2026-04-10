@@ -440,7 +440,7 @@ export function ProjectsModal({ projects, selected, onApply, onClose, lang }: Pr
               }}
             >
               {PER_PAGE_OPTIONS.map(n => (
-                <option key={n} value={n} style={{ background: '#1e1e2e' }}>{n}</option>
+                <option key={n} value={n} style={{ background: 'var(--bg-elevated)' }}>{n}</option>
               ))}
             </select>
             <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{t.perPage}</span>

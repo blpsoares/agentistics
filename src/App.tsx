@@ -805,7 +805,7 @@ export default function App() {
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <img
-              src={theme === 'dark' ? '/logoDarkMode.png' : '/logoLightMode.png'}
+              src='/logoDarkMode.png'
               alt="Claude Stats"
               style={{ height: 32, width: 'auto' }}
             />
@@ -905,12 +905,14 @@ export default function App() {
                 transition: 'all 0.15s',
               }}
               onMouseEnter={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--anthropic-orange)'
-                ;(e.currentTarget as HTMLButtonElement).style.color = '#000'
+                ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--anthropic-orange-dim)'
+                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--anthropic-orange)'
+                ;(e.currentTarget as HTMLButtonElement).style.opacity = '0.85'
               }}
               onMouseLeave={e => {
                 ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--anthropic-orange-dim)'
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--anthropic-orange)'
+                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--anthropic-orange)50'
+                ;(e.currentTarget as HTMLButtonElement).style.opacity = '1'
               }}
               title={lang === 'pt' ? 'Exportar relatório PDF' : 'Export PDF report'}
             >
@@ -1070,7 +1072,7 @@ export default function App() {
             title={<><BarChart2 size={14} /> {lang === 'pt' ? 'Atividade ao longo do tempo' : 'Activity over time'}</>}
             onExpand={() => setExpandedChart('activity')}
           >
-            <ActivityChart data={derived.heatmapData} />
+            <ActivityChart data={derived.heatmapData} theme={theme} />
           </Section>
 
           <Section
@@ -1179,7 +1181,7 @@ export default function App() {
           title={<><BarChart2 size={14} /> {lang === 'pt' ? 'Atividade ao longo do tempo' : 'Activity over time'}</>}
           onClose={() => setExpandedChart(null)}
         >
-          <ActivityChart data={derived.heatmapData} height={480} />
+          <ActivityChart data={derived.heatmapData} height={480} theme={theme} />
         </ChartModal>
       )}
       {expandedChart === 'heatmap' && (
