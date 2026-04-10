@@ -1,15 +1,15 @@
 import { describe, test, expect } from 'bun:test'
 import { calcStreak, getDateRangeFilter } from './useData'
+import { format, subDays } from 'date-fns'
 
 // ── calcStreak ────────────────────────────────────────────────────────────────
 
 describe('calcStreak', () => {
-  // Data de referência fixa para evitar flakiness
+  // Fixed reference date at noon UTC — safe for all timezones (no day boundary ambiguity)
   const TODAY = new Date('2026-04-10T12:00:00.000Z')
 
-  // Datas no formato UTC (slice do toISOString)
-  const d = (offset: number) =>
-    new Date(TODAY.getTime() - offset * 86_400_000).toISOString().slice(0, 10)
+  // Dates using format() to match the implementation (local time, not UTC slice)
+  const d = (offset: number) => format(subDays(TODAY, offset), 'yyyy-MM-dd')
 
   test('set vazio → streak 0', () => {
     expect(calcStreak(new Set(), TODAY)).toBe(0)

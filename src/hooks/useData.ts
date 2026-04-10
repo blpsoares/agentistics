@@ -66,7 +66,7 @@ function inRange(date: Date, start: Date, end: Date) {
 export function calcStreak(activeDates: Set<string>, today: Date = new Date()): number {
   let streak = 0
   for (let i = 0; i <= 365; i++) {
-    const dateStr = subDays(today, i).toISOString().slice(0, 10)
+    const dateStr = format(subDays(today, i), 'yyyy-MM-dd')
     if (activeDates.has(dateStr)) streak++
     else if (i > 0) break
   }
@@ -138,7 +138,13 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       : filteredDailyActivity.reduce((s, d) => s + d.toolCallCount, 0)
 
     // ── Streak (always global) ──
-    const activeDates = new Set((data.statsCache.dailyActivity ?? []).map(d => d.date))
+    // Supplement stats-cache dates with session start dates so that sessions
+    // loaded from session-meta (which are fresher than stats-cache) are counted.
+    // Session start_times are ISO UTC strings — format() normalises to local date.
+    const activeDates = new Set([
+      ...(data.statsCache.dailyActivity ?? []).map(d => d.date),
+      ...(data.sessions ?? []).filter(s => s.start_time).map(s => format(parseISO(s.start_time), 'yyyy-MM-dd')),
+    ])
     const streak = calcStreak(activeDates)
 
     // ── Heatmap data ──
