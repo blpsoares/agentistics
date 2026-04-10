@@ -593,10 +593,12 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 bun run watch
 
 The watcher (`watcher.ts`):
 
-1. **Watches** `~/.claude/usage-data/session-meta/` and `~/.claude/projects/` for file changes using `fs.watch` (recursive)
+1. **Watches** `~/.claude/usage-data/session-meta/` and `~/.claude/projects/` for file changes using `fs.watch` (non-recursive; works cross-platform including Linux)
 2. **Rebuilds** a metrics snapshot from `stats-cache.json` and session-meta files on each change (debounced, serialized)
-3. **Polls** every N seconds as a fallback (configurable via `CLAUDE_STATS_WATCH_INTERVAL`, minimum 5s)
+3. **Polls** every N seconds as a fallback — ensures no changes are missed even when `fs.watch` doesn't catch subdirectory events on Linux (configurable via `CLAUDE_STATS_WATCH_INTERVAL`, minimum 5s)
 4. **Exports** all metrics to an OTLP collector when `OTEL_EXPORTER_OTLP_ENDPOINT` is set
+
+> **Note:** When using `bun run dev` with `OTEL_EXPORTER_OTLP_ENDPOINT` set, both `server.ts` and the auto-spawned `watcher.ts` independently watch the same directories with their own 2-second debounce. This means each file change triggers two snapshot rebuilds: one for the SSE dashboard notification (server) and one for the OTel export (watcher). This is intentional — the two processes serve different purposes — and has no user-visible impact.
 
 ### Environment Variables
 
@@ -613,23 +615,23 @@ All metrics use the `claude_stats` namespace:
 
 | Metric | Type | Unit | Description |
 |--------|------|------|-------------|
-| `claude_stats.messages.total` | Gauge | messages | Total messages (user + assistant) |
-| `claude_stats.sessions.total` | Gauge | sessions | Total sessions |
-| `claude_stats.tool_calls.total` | Gauge | calls | Total tool calls |
-| `claude_stats.tokens.input` | Gauge | tokens | Total input tokens |
-| `claude_stats.tokens.output` | Gauge | tokens | Total output tokens |
-| `claude_stats.cost.usd` | Gauge | USD | Estimated total cost |
-| `claude_stats.git.commits` | Gauge | commits | Git commits via Claude |
-| `claude_stats.git.pushes` | Gauge | pushes | Git pushes via Claude |
-| `claude_stats.git.lines_added` | Gauge | lines | Lines added |
-| `claude_stats.git.lines_removed` | Gauge | lines | Lines removed |
-| `claude_stats.git.files_modified` | Gauge | files | Files modified |
+| `claude_stats.messages.total` | Counter | messages | Total messages (user + assistant) |
+| `claude_stats.sessions.total` | Counter | sessions | Total sessions |
+| `claude_stats.tool_calls.total` | Counter | calls | Total tool calls |
+| `claude_stats.tokens.input` | Counter | tokens | Total input tokens |
+| `claude_stats.tokens.output` | Counter | tokens | Total output tokens |
+| `claude_stats.cost.usd` | Counter | USD | Estimated total cost |
+| `claude_stats.git.commits` | Counter | commits | Git commits via Claude |
+| `claude_stats.git.pushes` | Counter | pushes | Git pushes via Claude |
+| `claude_stats.git.lines_added` | Counter | lines | Lines added |
+| `claude_stats.git.lines_removed` | Counter | lines | Lines removed |
+| `claude_stats.git.files_modified` | Counter | files | Files modified |
+| `claude_stats.tokens.by_model.input` | Counter | tokens | Input tokens per model (`model` attribute) |
+| `claude_stats.tokens.by_model.output` | Counter | tokens | Output tokens per model (`model` attribute) |
+| `claude_stats.tool_calls.by_tool` | Counter | calls | Tool calls per tool (`tool` attribute) |
 | `claude_stats.streak` | Gauge | days | Current streak (consecutive active days) |
-| `claude_stats.longest_session` | Gauge | min | Longest session duration |
+| `claude_stats.longest_session` | Gauge | min | Longest session duration in minutes |
 | `claude_stats.active_projects` | Gauge | projects | Number of active projects |
-| `claude_stats.tokens.by_model.input` | Gauge | tokens | Input tokens per model (`model` attribute) |
-| `claude_stats.tokens.by_model.output` | Gauge | tokens | Output tokens per model (`model` attribute) |
-| `claude_stats.tool_calls.by_tool` | Gauge | calls | Tool calls per tool (`tool` attribute) |
 
 ### Example: Grafana + OpenTelemetry Collector
 
