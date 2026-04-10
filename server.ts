@@ -3,7 +3,12 @@ import { join } from 'path'
 import { exec, spawn } from 'child_process'
 import chokidar from 'chokidar'
 import { promisify } from 'util'
-import { embeddedDist } from './src/embedded-dist.generated.ts'
+// embeddedDist is only available after `bun run build:assets` (binary mode).
+// In dev mode (SERVE_STATIC is never set), this import is skipped entirely.
+const embeddedDist: Record<string, { content: string; encoding: string; contentType: string }> =
+  process.env.SERVE_STATIC === '1'
+    ? (await import('./src/embedded-dist.generated.ts')).embeddedDist
+    : {}
 
 const execAsync = promisify(exec)
 
