@@ -466,7 +466,6 @@ async function watchDirectory(dir: string, onChange: () => void): Promise<void> 
   const watcher = chokidar.watch(dir, {
     persistent: true,
     ignoreInitial: true,
-    depth: 1,
   })
   watcher.on('all', onChange)
   watcher.on('error', (err: unknown) => {

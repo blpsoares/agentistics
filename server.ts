@@ -1038,7 +1038,6 @@ function setupFileWatcher() {
     const watcher = chokidar.watch(dir, {
       persistent: true,
       ignoreInitial: true,
-      depth: 1,
     })
     watcher.on('all', triggerSseNotification)
     watcher.on('error', (err: unknown) => {
@@ -1070,7 +1069,7 @@ function maybeSpawnWatcher() {
   })
 
   child.on('exit', (code, signal) => {
-    if (code !== 0 || signal) {
+    if (code !== 0 || (signal !== null && signal !== 'SIGTERM' && signal !== 'SIGINT')) {
       console.warn(`[watcher] OTel watcher daemon exited unexpectedly (code=${code} signal=${signal}). OTel metrics export has stopped.`)
     }
   })
