@@ -298,9 +298,9 @@ async function withLoader<T>(msg: string, fn: () => Promise<T>): Promise<T> {
 
     // Apply color gradient: bright at peaks, dim at troughs
     const bar = raw.split('').map(c =>
-      c === '█' ? `${B}${BC}█${R}`
-      : c === '▓' ? `${CY}▓${R}`
-      : c === '▒' ? `${D}${CY}▒${R}`
+      c === '█' ? `${B}${AM}█${R}`
+      : c === '▓' ? `${AM}▓${R}`
+      : c === '▒' ? `${D}${AM}▒${R}`
       : `${D}░${R}`
     ).join('')
 
@@ -408,7 +408,7 @@ const tRow = (s: CliSnapshot, name?: string) => {
     fmtC(s.costUsd), `${s.streak}d`, fmtN(s.gitCommits),
     `+${fmtN(s.linesAdded)}`, `-${fmtN(s.linesRemoved)}`,
   ]
-  const c = v.map((x, i) => padStr(x, COLS[i]!.w))
+  const c = v.map((x, i) => padStr(`${AM}${x}${R}`, COLS[i]!.w))
   if (name !== undefined) {
     const n = name.length > PW-1 ? name.slice(0, PW-2)+'…' : name
     return padStr(`${AM}${n}${R}`, PW, 'l')+'  '+c.join('  ')
@@ -449,10 +449,17 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
   lines.push(`  ${D}OTLP:${R}       ${cfg.otlpEndpoint ? `${WH}${cfg.otlpEndpoint}${R}` : `${D}(disabled)${R}`}`)
   lines.push('')
 
+  // Binary spinner — 90% zeros, 1 (orange) moves like a cursor
+  const SPIN_W = 48
+  const spinPos = st.animFrame % SPIN_W
+  const spinLine = Array.from({ length: SPIN_W }, (_, i) =>
+    i === spinPos ? `${AM}${B}1${R}` : `${D}0${R}`
+  ).join('')
+
   // Tabela
   const solo = cfg.selectedProjects.length <= 1
   const all  = st.snapshots.get('')
-  const ldg  = `  ${D}(carregando...)${R}`
+  const ldg  = `  ${spinLine}`
 
   if (solo || cfg.viewMode === 'junto') {
     lines.push(sepLine(W))
@@ -501,10 +508,13 @@ async function watchLoop(cfg: WatchConfig): Promise<void> {
     animFrame: 0, showAnim: cfg.showAnim, isLoading: true, dataSource: 'api' as DataSrc,
   }
 
-  const cleanup = () => { out(SHOW + ALT_OFF); if (spawnedServer) { spawnedServer.kill(); spawnedServer = null } process.exit(0) }
+  const cleanup = () => { out(SHOW + ALT_OFF + CLR); if (spawnedServer) { spawnedServer.kill(); spawnedServer = null } process.exit(0) }
   out(ALT_ON + HIDE)
 
   const render = () => { out(CLR + buildPanel(cfg, st)) }
+
+  // Render imediato — mostra painel de loading antes de qualquer fetch
+  render()
 
   let reloading = false
   const refresh = async () => {
