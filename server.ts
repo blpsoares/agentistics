@@ -1034,14 +1034,9 @@ function triggerSseNotification() {
 }
 
 function setupFileWatcher() {
-  // NOTE: `{ recursive: true }` is not supported on Linux (silently ignored).
-  // SESSION_META_DIR files are written directly in the directory — a
-  // non-recursive watch is sufficient. PROJECTS_DIR is watched for top-level
-  // directory creation; the periodic poll in watcher.ts covers subdirectory
-  // changes on Linux.
   const watch = (dir: string) => {
     try {
-      fsWatch(dir, triggerSseNotification)
+      fsWatch(dir, { recursive: true }, triggerSseNotification)
       console.log(`[watcher] Watching ${dir}`)
     } catch (err) {
       console.warn(`[watcher] Could not watch ${dir}:`, String(err))
@@ -1071,9 +1066,7 @@ function maybeSpawnWatcher() {
   })
 
   child.on('exit', (code, signal) => {
-    if (code !== 0 || signal) {
-      console.warn(`[watcher] OTel watcher daemon exited unexpectedly (code=${code} signal=${signal}). OTel metrics export has stopped.`)
-    }
+    if (code !== 0) console.warn(`[watcher] Exited (code=${code} signal=${signal})`)
   })
 
   const killChild = () => {
