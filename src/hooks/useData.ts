@@ -59,6 +59,20 @@ function inRange(date: Date, start: Date, end: Date) {
   return !isBefore(date, start) && !isAfter(date, end)
 }
 
+/**
+ * Calcula streak de dias consecutivos de atividade.
+ * Se hoje não tiver atividade, conta a partir de ontem (não penaliza quem ainda não trabalhou hoje).
+ */
+export function calcStreak(activeDates: Set<string>, today: Date = new Date()): number {
+  let streak = 0
+  for (let i = 0; i <= 365; i++) {
+    const dateStr = subDays(today, i).toISOString().slice(0, 10)
+    if (activeDates.has(dateStr)) streak++
+    else if (i > 0) break
+  }
+  return streak
+}
+
 /** Blended cost per token using global model usage proportions */
 function blendedCostPerToken(modelUsage: Record<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }>) {
   let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheWrite = 0
@@ -125,13 +139,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
 
     // ── Streak (always global) ──
     const activeDates = new Set((data.statsCache.dailyActivity ?? []).map(d => d.date))
-    const today = new Date()
-    let streak = 0
-    for (let i = 0; i <= 365; i++) {
-      const dateStr = subDays(today, i).toISOString().slice(0, 10)
-      if (activeDates.has(dateStr)) streak++
-      else if (i > 0) break
-    }
+    const streak = calcStreak(activeDates)
 
     // ── Heatmap data ──
     let heatmapData: { date: string; value: number; sessions: number; tools: number }[]
