@@ -1,5 +1,5 @@
 {
-  "name": "claude-stats",
+  "name": "agentistics",
   "type": "module",
   "private": true,
   "scripts": {
@@ -7,6 +7,8 @@
     "dev:ui": "vite",
     "dev": "bun run --bun concurrently \"bun run dev:api\" \"bun run dev:ui\"",
     "build": "vite build",
+    "build:assets": "bun run scripts/embed-dist.ts",
+    "build:binary": "vite build && bun run scripts/embed-dist.ts && bun build --compile cli.ts --outfile ./release/agentop",
     "preview": "vite preview",
     "watch": "bun run watcher.ts",
     "watch:cli": "bun run watch-cli.ts",

@@ -14,7 +14,7 @@
  * Environment variables:
  *   OTEL_EXPORTER_OTLP_ENDPOINT  — OTLP collector endpoint (required for export)
  *   OTEL_EXPORTER_OTLP_HEADERS   — Extra headers (e.g. "Authorization=Bearer tok")
- *   OTEL_SERVICE_NAME             — Service name (default: "claude-stats")
+ *   OTEL_SERVICE_NAME             — Service name (default: "agentistics")
  *   CLAUDE_STATS_WATCH_INTERVAL   — Polling interval in seconds (default: 30, min: 5)
  */
 
@@ -55,7 +55,7 @@ const WATCH_INTERVAL_SEC = (!Number.isFinite(rawInterval) || rawInterval < MIN_I
     })()
   : rawInterval
 
-const SERVICE_NAME = process.env.OTEL_SERVICE_NAME ?? 'claude-stats'
+const SERVICE_NAME = process.env.OTEL_SERVICE_NAME ?? 'agentistics'
 const OTLP_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? ''
 const OTLP_HEADERS = process.env.OTEL_EXPORTER_OTLP_HEADERS ?? ''
 
@@ -278,7 +278,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
 
   metrics.setGlobalMeterProvider(meterProvider)
 
-  const meter = metrics.getMeter('claude-stats', '1.0.0')
+  const meter = metrics.getMeter('agentistics', '1.0.0')
 
   // ── Define instruments ────────────────────────────────────────────────────
   // Cumulative totals use ObservableCounter; point-in-time values use ObservableGauge.

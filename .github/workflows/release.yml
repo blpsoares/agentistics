@@ -1,0 +1,61 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build binary (Linux x64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build frontend (Vite)
+        run: bun run build
+
+      - name: Embed frontend assets
+        run: bun run build:assets
+
+      - name: Compile binary
+        run: |
+          mkdir -p release
+          bun build --compile cli.ts --outfile ./release/agentop
+
+      - name: Smoke test
+        run: ./release/agentop --help
+
+      - name: Publish release (rolling "latest")
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Remove previous rolling release so we can recreate it
+          gh release delete latest --yes 2>/dev/null || true
+          git push origin :refs/tags/latest 2>/dev/null || true
+
+          gh release create latest \
+            --title "Latest build ($(date -u +'%Y-%m-%d %H:%M UTC'))" \
+            --notes "$(cat <<'EOF'
+          ## Install
+
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
+          ```
+
+          Built from commit [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }}).
+          EOF
+          )" \
+            ./release/agentop
