@@ -326,17 +326,6 @@ async function parseSessionJsonl(
               }
             }
 
-            // Detect agent files from Glob/Search/Grep tool calls
-            if (['Glob', 'Search', 'Grep'].includes(toolName)) {
-              const inp = p.input as Record<string, string> | undefined
-              const pattern = inp?.pattern ?? inp?.glob ?? inp?.query ?? ''
-              if (pattern) {
-                const agentCategory = classifyAgentFile(pattern)
-                if (agentCategory) {
-                  agentFileReads[agentCategory] = (agentFileReads[agentCategory] ?? 0) + 1
-                }
-              }
-            }
           }
         }
       }
@@ -469,11 +458,10 @@ const AGENT_FILE_CATEGORY: Map<string, string> = new Map([
   ['claude.md', 'CLAUDE.md'],
   ['claude_instructions.md', 'CLAUDE.md'],
   ['agents.md', 'AGENTS.md'],
+  ['codex.md', 'CODEX.md'],
   ['.cursorrules', '.cursorrules'],
   ['.cursorignore', '.cursorrules'],
   ['conventions.md', 'CONVENTIONS.md'],
-  ['instructions.md', 'instructions'],
-  ['rules.md', 'instructions'],
   ['copilot-instructions.md', 'copilot-instructions'],
   ['.copilot-instructions.md', 'copilot-instructions'],
   ['.windsurfrules', '.windsurfrules'],

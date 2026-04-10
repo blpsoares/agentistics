@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { FileText, ArrowDownWideNarrow } from 'lucide-react'
 import type { Lang } from '../lib/types'
+import { t } from '../lib/i18n'
 
 interface Props {
   toolCounts: Record<string, number>
@@ -19,7 +20,6 @@ function fmt(n: number): string {
 
 export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads, lang }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('calls')
-  const pt = lang === 'pt'
 
   const data = viewMode === 'calls' ? toolCounts : toolOutputTokens
   const total = Object.values(data).reduce((s, v) => s + v, 0)
@@ -54,7 +54,7 @@ export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads,
             transition: 'all 0.15s',
           }}
         >
-          {pt ? 'Por chamadas' : 'By calls'}
+          {t('tools.by_calls', lang)}
         </button>
         {hasTokenData && (
           <button
@@ -72,19 +72,19 @@ export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads,
               transition: 'all 0.15s',
             }}
           >
-            {pt ? 'Por tokens gastos' : 'By token spend'}
+            {t('tools.by_tokens', lang)}
           </button>
         )}
         <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 'auto' }}>
-          Total: {fmt(total)}
-          {viewMode === 'tokens' ? ' tokens' : ` ${pt ? 'chamadas' : 'calls'}`}
+          {t('tools.total', lang)}: {fmt(total)}
+          {viewMode === 'tokens' ? ' tokens' : ` ${t('tools.calls', lang)}`}
         </span>
       </div>
 
       {/* Ranked bar chart */}
       {entries.length === 0 ? (
         <div style={{ color: 'var(--text-tertiary)', fontSize: 13, textAlign: 'center', padding: 16 }}>
-          {pt ? 'Sem dados' : 'No data'}
+          {t('tools.no_data', lang)}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -167,7 +167,7 @@ export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads,
             color: 'var(--text-primary)',
           }}>
             <FileText size={12} style={{ color: '#6366f1' }} />
-            {pt ? 'Leituras de arquivos de instrução' : 'Agent instruction file reads'}
+            {t('tools.agent_file_reads', lang)}
             <span style={{
               fontSize: 10,
               color: '#6366f1',
@@ -209,9 +209,7 @@ export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads,
               lineHeight: 1.5,
             }}>
               <ArrowDownWideNarrow size={10} style={{ verticalAlign: 'middle', marginRight: 3 }} />
-              {pt
-                ? 'Dica: Cada leitura de arquivo de instrução adiciona tokens ao contexto. Consolide arquivos quando possível.'
-                : 'Tip: Each instruction file read adds tokens to context. Consolidate files when possible.'}
+              {t('tools.agent_file_tip', lang)}
             </div>
           )}
         </div>

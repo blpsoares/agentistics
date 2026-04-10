@@ -59,6 +59,9 @@ export const translations: Record<Lang, Record<string, string>> = {
     // Tool metrics
     'tools.by_calls': 'Por chamadas',
     'tools.by_tokens': 'Por tokens gastos',
+    'tools.calls': 'chamadas',
+    'tools.no_data': 'Sem dados',
+    'tools.total': 'Total',
     'tools.agent_file_reads': 'Leituras de arquivos de instrução',
     'tools.agent_file_tip': 'Dica: Cada leitura de arquivo de instrução adiciona tokens ao contexto. Consolide arquivos quando possível.',
 
@@ -200,6 +203,9 @@ export const translations: Record<Lang, Record<string, string>> = {
     // Tool metrics
     'tools.by_calls': 'By calls',
     'tools.by_tokens': 'By token spend',
+    'tools.calls': 'calls',
+    'tools.no_data': 'No data',
+    'tools.total': 'Total',
     'tools.agent_file_reads': 'Agent instruction file reads',
     'tools.agent_file_tip': 'Tip: Each instruction file read adds tokens to context. Consolidate files when possible.',
 
