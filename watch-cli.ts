@@ -2,14 +2,11 @@
 /**
  * Claude Stats — Watch CLI
  *
- * TUI interativa que monitora métricas Claude em tempo real, atualizando o painel
- * no lugar (como `watch` do Linux) sem duplicar a saída.
- *
- * Usage:
- *   bun run watch:cli
+ * TUI interativa que monitora métricas Claude em tempo real.
+ * Usa alternate screen buffer (como vim/less) — sai limpo ao encerrar.
  *
  * Controles durante o watch:
- *   Ctrl+O  — ocultar/mostrar animação de batalha
+ *   Ctrl+O  — ocultar/mostrar batalha
  *   Ctrl+C  — sair
  */
 
@@ -29,47 +26,59 @@ import {
   isBackspaceKey,
   type KeypressEvent,
 } from '@inquirer/core'
-import { select, input } from '@inquirer/prompts'
+import { select, input, confirm } from '@inquirer/prompts'
 import { calcCost, getModelPrice } from './src/lib/types'
 import type { ModelUsage } from './src/lib/types'
 
-// ── Configuração ───────────────────────────────────────────────────────────
+// ── Constantes ─────────────────────────────────────────────────────────────
 
-const HOME_DIR   = process.env.HOME ?? process.env.USERPROFILE ?? ''
-const CLAUDE_DIR = join(HOME_DIR, '.claude')
-const PROJECTS_DIR       = join(CLAUDE_DIR, 'projects')
-const SESSION_META_DIR   = join(CLAUDE_DIR, 'usage-data', 'session-meta')
-const STATS_CACHE_FILE   = join(CLAUDE_DIR, 'stats-cache.json')
+const HOME_DIR         = process.env.HOME ?? process.env.USERPROFILE ?? ''
+const CLAUDE_DIR       = join(HOME_DIR, '.claude')
+const PROJECTS_DIR     = join(CLAUDE_DIR, 'projects')
+const SESSION_META_DIR = join(CLAUDE_DIR, 'usage-data', 'session-meta')
+const STATS_CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json')
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // ── ANSI ───────────────────────────────────────────────────────────────────
 
-const ESC   = '\x1b'
-const RESET = `${ESC}[0m`
-const BOLD  = `${ESC}[1m`
-const DIM   = `${ESC}[2m`
-const CYAN  = `${ESC}[36m`
-const GREEN = `${ESC}[32m`
-const YELLOW = `${ESC}[33m`
-const RED   = `${ESC}[31m`
-const WHITE = `${ESC}[37m`
-const BRIGHT_CYAN = `${ESC}[96m`
+const E     = '\x1b'
+const R     = `${E}[0m`      // reset
+const B     = `${E}[1m`      // bold
+const D     = `${E}[2m`      // dim
+const CY    = `${E}[36m`     // cyan
+const GR    = `${E}[32m`     // green
+const YL    = `${E}[33m`     // yellow
+const RD    = `${E}[31m`     // red
+const WH    = `${E}[37m`     // white
+const BCY   = `${E}[96m`     // bright cyan
 
-function clearScreen()  { process.stdout.write(`${ESC}[2J${ESC}[H`) }
-function hideCursor()   { process.stdout.write(`${ESC}[?25l`) }
-function showCursor()   { process.stdout.write(`${ESC}[?25h`) }
-function visLen(s: string) { return s.replace(/\x1b\[[0-9;]*m/g, '').length }
-function col(s: string, w: number, align: 'l' | 'r' = 'r') {
+// Terminal control
+const ALT_ON    = `${E}[?1049h`   // entra no alternate screen buffer
+const ALT_OFF   = `${E}[?1049l`   // sai do alternate screen buffer
+const CLEAR_SCR = `${E}[2J${E}[H` // limpa e vai pro topo
+const HIDE_CUR  = `${E}[?25l`
+const SHOW_CUR  = `${E}[?25h`
+
+const write = (s: string) => process.stdout.write(s)
+const visLen = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '').length
+const pad = (s: string, w: number, align: 'l' | 'r' = 'r') => {
   const p = ' '.repeat(Math.max(0, w - visLen(s)))
   return align === 'l' ? s + p : p + s
 }
-function hr(w: number, ch = '─') { return `${DIM}${ch.repeat(w)}${RESET}` }
+const hr = (w: number, ch = '─') => `${D}${ch.repeat(w)}${R}`
 
 // ── Tipos ──────────────────────────────────────────────────────────────────
 
 type ViewMode = 'separado' | 'junto' | 'ambos'
-
 interface ProjectInfo { name: string; path: string }
-
+interface WatchConfig {
+  selectedProjects: ProjectInfo[]
+  allProjects: ProjectInfo[]
+  viewMode: ViewMode
+  intervalSec: number
+  otlpEndpoint: string
+  showBattle: boolean
+}
 interface CliSnapshot {
   messages: number; sessions: number
   inputTokens: number; outputTokens: number
@@ -77,34 +86,23 @@ interface CliSnapshot {
   gitCommits: number; gitPushes: number
   linesAdded: number; linesRemoved: number
 }
-
 interface StatsCache {
   dailyActivity?: Array<{ date: string; messageCount: number; sessionCount: number }>
   modelUsage?: Record<string, ModelUsage>
 }
-
-interface SessionMeta {
+interface SessionMetaMin {
   session_id: string; project_path: string; start_time: string
   user_message_count: number; assistant_message_count: number
   git_commits: number; git_pushes: number
   input_tokens: number; output_tokens: number
   lines_added: number; lines_removed: number
 }
-
-interface WatchConfig {
-  selectedProjects: ProjectInfo[]
-  allProjects: ProjectInfo[]
-  viewMode: ViewMode
-  intervalSec: number
-  otlpEndpoint: string
-}
-
 interface AppState {
-  snapshots: Map<string, CliSnapshot>   // chave '' = all, ou project_path
+  snapshots: Map<string, CliSnapshot>
   lastUpdated: Date
   animFrame: number
-  showAnimation: boolean
-  isLoadingData: boolean
+  showBattle: boolean
+  isLoading: boolean
 }
 
 // ── I/O helpers ────────────────────────────────────────────────────────────
@@ -116,470 +114,457 @@ async function safeReadDir(d: string): Promise<string[]> {
   try { return await readdir(d) } catch { return [] }
 }
 
-// ── Descoberta de projetos (mesma lógica do server.ts) ─────────────────────
+// ── Descoberta de projetos — mesma lógica do server.ts ─────────────────────
+// 1. Carrega session-meta → Map<sessionId, project_path>
+// 2. Para cada dir em ~/.claude/projects/, lista entries e vota no project_path
+//    canônico via majority-vote (igual ao scanProjects/scanProjectDir do server.ts)
+// 3. Sem votos → usa fallback decodificado do nome do dir
 
-function decodeProjectDir(dirName: string): string {
-  if (dirName.startsWith('-')) return dirName.replace(/-/g, '/')
-  return '/' + dirName.replace(/-/g, '/')
+function decodeProjectDir(name: string): string {
+  // Claude codifica paths substituindo '/' por '-'; leading '-' = leading '/'
+  return name.startsWith('-') ? name.replace(/-/g, '/') : '/' + name.replace(/-/g, '/')
 }
 
 async function discoverProjects(): Promise<ProjectInfo[]> {
-  // 1. Caminhos canônicos dos session-meta
+  // Passo 1: mapa sessionId → project_path
   const metaFiles = (await safeReadDir(SESSION_META_DIR)).filter(f => f.endsWith('.json'))
-  const metaPaths = new Set<string>()
-  const BATCH = 30
+  const metaMap   = new Map<string, string>()
+
+  const BATCH = 40
   for (let i = 0; i < metaFiles.length; i += BATCH) {
     const res = await Promise.all(
       metaFiles.slice(i, i + BATCH).map(f =>
-        safeReadJson<{ project_path?: string }>(join(SESSION_META_DIR, f))
+        safeReadJson<{ session_id?: string; project_path?: string }>(join(SESSION_META_DIR, f))
       )
     )
-    for (const s of res) if (s?.project_path) metaPaths.add(s.project_path)
+    for (const s of res) if (s?.session_id && s.project_path) metaMap.set(s.session_id, s.project_path)
   }
 
-  // 2. Dirs em ~/.claude/projects/ como fallback (projetos sem session-meta)
-  for (const dir of await safeReadDir(PROJECTS_DIR)) {
-    if (!dir.startsWith('.')) {
-      const decoded = decodeProjectDir(dir)
-      if (!metaPaths.has(decoded)) metaPaths.add(decoded)
+  // Passo 2: varre dirs de projeto
+  const projectDirs = await safeReadDir(PROJECTS_DIR)
+  const seen        = new Map<string, ProjectInfo>()
+
+  await Promise.all(projectDirs.map(async dir => {
+    if (dir.startsWith('.')) return
+    const fallback = decodeProjectDir(dir)
+    const entries  = await safeReadDir(join(PROJECTS_DIR, dir))
+
+    const votes: Record<string, number> = {}
+
+    for (const entry of entries) {
+      // Formato A: <uuid>.jsonl
+      const sessionId = entry.endsWith('.jsonl') ? entry.slice(0, -6)
+        : UUID_RE.test(entry) ? entry       // Formato B: <uuid>/ subdir
+        : null
+      if (!sessionId) continue
+
+      const path = metaMap.get(sessionId)
+      if (path) votes[path] = (votes[path] ?? 0) + 1
     }
-  }
 
-  return Array.from(metaPaths).sort().map(path => ({
-    path,
-    name: path.split('/').filter(Boolean).pop() ?? path,
+    // Canonical path = mais votado; fallback se sem votos
+    const canonical = Object.keys(votes).length > 0
+      ? Object.entries(votes).sort((a, b) => b[1] - a[1])[0][0]
+      : fallback
+
+    if (!seen.has(canonical)) {
+      seen.set(canonical, {
+        path: canonical,
+        name: canonical.split('/').filter(Boolean).pop() ?? dir,
+      })
+    }
   }))
+
+  return Array.from(seen.values()).sort((a, b) => a.path.localeCompare(b.path))
 }
 
-// ── Cálculo de snapshot (espelha useDerivedStats) ──────────────────────────
+// ── Cálculo de snapshot — espelha useDerivedStats ─────────────────────────
 
-function blendedCostPerToken(modelUsage: Record<string, ModelUsage>) {
+function blendedCostPerToken(mu: Record<string, ModelUsage>) {
   let tIn = 0, tOut = 0, tCR = 0, tCW = 0
   let wIn = 0, wOut = 0, wCR = 0, wCW = 0
-  for (const [id, u] of Object.entries(modelUsage)) {
+  for (const [id, u] of Object.entries(mu)) {
     const p = getModelPrice(id)
-    tIn += u.inputTokens; tOut += u.outputTokens
+    tIn += u.inputTokens;  tOut += u.outputTokens
     tCR += u.cacheReadInputTokens; tCW += u.cacheCreationInputTokens
-    wIn += u.inputTokens * p.input; wOut += u.outputTokens * p.output
+    wIn += u.inputTokens * p.input;         wOut += u.outputTokens * p.output
     wCR += u.cacheReadInputTokens * p.cacheRead; wCW += u.cacheCreationInputTokens * p.cacheWrite
   }
   return {
-    input:      tIn  > 0 ? wIn  / tIn  : 3,
-    output:     tOut > 0 ? wOut / tOut : 15,
-    cacheRead:  tCR  > 0 ? wCR  / tCR  : 0.3,
-    cacheWrite: tCW  > 0 ? wCW  / tCW  : 3.75,
+    input:  tIn  > 0 ? wIn  / tIn  : 3,
+    output: tOut > 0 ? wOut / tOut : 15,
   }
 }
 
-async function loadSessions(): Promise<SessionMeta[]> {
+async function loadSessions(): Promise<SessionMetaMin[]> {
   const files = (await safeReadDir(SESSION_META_DIR)).filter(f => f.endsWith('.json'))
-  const result: SessionMeta[] = []
-  const BATCH = 30
+  const out: SessionMetaMin[] = []
+  const BATCH = 40
   for (let i = 0; i < files.length; i += BATCH) {
     const res = await Promise.all(
-      files.slice(i, i + BATCH).map(f => safeReadJson<SessionMeta>(join(SESSION_META_DIR, f)))
+      files.slice(i, i + BATCH).map(f => safeReadJson<SessionMetaMin>(join(SESSION_META_DIR, f)))
     )
-    for (const s of res) if (s?.session_id) result.push(s)
+    for (const s of res) if (s?.session_id) out.push(s)
   }
-  return result
+  return out
 }
 
 function computeSnapshot(
-  allSessions: SessionMeta[],
-  statsCache: StatsCache,
-  projectFilter?: string[]
+  sessions: SessionMetaMin[],
+  cache: StatsCache,
+  filter?: string[]
 ): CliSnapshot {
-  const isFiltered = projectFilter !== undefined && projectFilter.length > 0
-  const filtered   = isFiltered
-    ? allSessions.filter(s => projectFilter!.includes(s.project_path))
-    : allSessions
+  const filtered = filter?.length ? sessions.filter(s => filter.includes(s.project_path)) : sessions
+  const isF      = !!(filter?.length)
 
-  const messages = isFiltered
+  const messages = isF
     ? filtered.reduce((s, x) => s + (x.user_message_count ?? 0) + (x.assistant_message_count ?? 0), 0)
-    : (statsCache.dailyActivity ?? []).reduce((s, d) => s + d.messageCount, 0)
+    : (cache.dailyActivity ?? []).reduce((s, d) => s + d.messageCount, 0)
 
-  const sessions = isFiltered
+  const sessions_ = isF
     ? filtered.length
-    : (statsCache.dailyActivity ?? []).reduce((s, d) => s + d.sessionCount, 0)
+    : (cache.dailyActivity ?? []).reduce((s, d) => s + d.sessionCount, 0)
 
-  const inputTokens  = filtered.reduce((s, x) => s + (x.input_tokens  ?? 0), 0)
-  const outputTokens = filtered.reduce((s, x) => s + (x.output_tokens ?? 0), 0)
-  const gitCommits   = filtered.reduce((s, x) => s + (x.git_commits   ?? 0), 0)
-  const gitPushes    = filtered.reduce((s, x) => s + (x.git_pushes    ?? 0), 0)
-  const linesAdded   = filtered.reduce((s, x) => s + (x.lines_added   ?? 0), 0)
-  const linesRemoved = filtered.reduce((s, x) => s + (x.lines_removed ?? 0), 0)
+  const inTok  = filtered.reduce((s, x) => s + (x.input_tokens  ?? 0), 0)
+  const outTok = filtered.reduce((s, x) => s + (x.output_tokens ?? 0), 0)
+  const gC     = filtered.reduce((s, x) => s + (x.git_commits   ?? 0), 0)
+  const gP     = filtered.reduce((s, x) => s + (x.git_pushes    ?? 0), 0)
+  const lA     = filtered.reduce((s, x) => s + (x.lines_added   ?? 0), 0)
+  const lR     = filtered.reduce((s, x) => s + (x.lines_removed ?? 0), 0)
 
-  const modelUsage = statsCache.modelUsage ?? {}
-  let costUsd = 0
-  if (!isFiltered) {
-    costUsd = Object.entries(modelUsage).reduce((s, [id, u]) => s + calcCost(u, id), 0)
+  const mu = cache.modelUsage ?? {}
+  let cost = 0
+  if (!isF) {
+    cost = Object.entries(mu).reduce((s, [id, u]) => s + calcCost(u, id), 0)
   } else {
-    const b = blendedCostPerToken(modelUsage)
-    costUsd = (inputTokens / 1_000_000) * b.input + (outputTokens / 1_000_000) * b.output
+    const b = blendedCostPerToken(mu)
+    cost = (inTok / 1_000_000) * b.input + (outTok / 1_000_000) * b.output
   }
 
-  const activeDates = new Set((statsCache.dailyActivity ?? []).map(d => d.date))
+  const acts = new Set((cache.dailyActivity ?? []).map(d => d.date))
   let streak = 0
   for (let i = 0; i <= 365; i++) {
     const d = new Date(); d.setDate(d.getDate() - i)
-    const ds = d.toISOString().slice(0, 10)
-    if (activeDates.has(ds)) streak++
+    if (acts.has(d.toISOString().slice(0, 10))) streak++
     else if (i > 0) break
   }
 
-  return { messages, sessions, inputTokens, outputTokens, costUsd, streak, gitCommits, gitPushes, linesAdded, linesRemoved }
+  return { messages, sessions: sessions_, inputTokens: inTok, outputTokens: outTok,
+    costUsd: cost, streak, gitCommits: gC, gitPushes: gP, linesAdded: lA, linesRemoved: lR }
 }
 
-async function reloadAllSnapshots(config: WatchConfig): Promise<{
-  snapshots: Map<string, CliSnapshot>
-  lastUpdated: Date
-}> {
-  const [allSessions, statsCache] = await Promise.all([
+async function reloadSnapshots(config: WatchConfig): Promise<Map<string, CliSnapshot>> {
+  const [sessions, cache] = await Promise.all([
     loadSessions(),
     safeReadJson<StatsCache>(STATS_CACHE_FILE).then(v => v ?? {}),
   ])
+  const map = new Map<string, CliSnapshot>()
+  const paths = config.selectedProjects.length > 0
+    ? config.selectedProjects.map(p => p.path)
+    : undefined
 
-  const snapshots = new Map<string, CliSnapshot>()
-
-  if (config.selectedProjects.length === 0) {
-    // Todos os projetos
-    snapshots.set('', computeSnapshot(allSessions, statsCache))
-  } else {
-    // Snapshot unificado dos selecionados
-    snapshots.set('', computeSnapshot(allSessions, statsCache,
-      config.selectedProjects.map(p => p.path)))
-    // Snapshot individual por projeto
-    for (const proj of config.selectedProjects) {
-      snapshots.set(proj.path, computeSnapshot(allSessions, statsCache, [proj.path]))
-    }
+  map.set('', computeSnapshot(sessions, cache, paths))
+  for (const p of config.selectedProjects) {
+    map.set(p.path, computeSnapshot(sessions, cache, [p.path]))
   }
-
-  return { snapshots, lastUpdated: new Date() }
+  return map
 }
 
 // ── Animação de batalha: Claude vs Cursor ──────────────────────────────────
+// Cada frame = 4 linhas de conteúdo com largura visível fixa (FW caracteres).
+// Padded com espaços para garantir que não varia de tamanho entre frames.
 
-const BATTLE_FRAMES: string[][] = [
-  // 0 — idle (ambos de pé)
-  [
-    `   ${YELLOW}o${RESET}                     ${RED}o${RESET}   `,
-    `  ${YELLOW}/|\\${RESET}   ${DIM}~ vs ~${RESET}     ${RED}/|\\${RESET}  `,
-    `  ${YELLOW}/ \\${RESET}                   ${RED}/ \\${RESET}  `,
-  ],
-  // 1 — Claude carrega golpe
-  [
-    `  ${YELLOW}\\o/${RESET}                    ${RED}o${RESET}   `,
-    `   ${YELLOW}|${RESET}    ${DIM}~ vs ~${RESET}      ${RED}/|\\${RESET}  `,
-    `  ${YELLOW}/ \\${RESET}                   ${RED}/ \\${RESET}  `,
-  ],
-  // 2 — Claude lança golpe →
-  [
-    `   ${YELLOW}o${RESET}${BOLD}─────────────→${RESET}  ${RED}o${RESET}   `,
-    `  ${YELLOW}─|─${RESET}                   ${RED}|${RESET}   `,
-    `  ${YELLOW}/ \\${RESET}                  ${RED}/\\${RESET}   `,
-  ],
-  // 3 — Impacto! Cursor apanha
-  [
-    `   ${YELLOW}o${RESET}            ${GREEN}✦${RESET}  ${RED}*${RESET}    `,
-    `  ${YELLOW}/|\\${RESET}               ${RED}\\${RESET}    `,
-    `  ${YELLOW}/ \\${RESET}               ${RED}/${RESET}    `,
-  ],
+const FW = 46 // largura visível do frame
+
+function fp(line: string): string {
+  // Preenche linha até FW caracteres visíveis
+  return line + ' '.repeat(Math.max(0, FW - visLen(line)))
+}
+
+// Cada frame: [linha1, linha2, linha3, linha4, statusLabel]
+// Linha 1-3: figuras; linha 4: nomes fixos
+const FRAMES: [string, string, string, string][] = [
+  // 0 — idle
+  [ fp(`  ${YL}o${R}                         ${RD}o${R}`),
+    fp(`  ${YL}/|\\${R}      ${D}~ VS ~${R}       ${RD}/|\\${R}`),
+    fp(`  ${YL}/ \\${R}                       ${RD}/ \\${R}`),
+    fp(`  ${YL}CLAUDE${R}               ${RD}CURSOR${R}`) ],
+
+  // 1 — Claude carrega
+  [ fp(`  ${YL}\\o/${R}                        ${RD}o${R}`),
+    fp(`   ${YL}|${R}       ${D}~ VS ~${R}       ${RD}/|\\${R}`),
+    fp(`  ${YL}/ \\${R}                       ${RD}/ \\${R}`),
+    fp(`  ${YL}CLAUDE${R} ${D}carrega...${R}    ${RD}CURSOR${R}`) ],
+
+  // 2 — Claude ataca →
+  [ fp(`  ${YL}o${R}${B}─────────────────────→${R}  ${RD}o${R}`),
+    fp(` ${YL}─|─${R}                        ${RD}|${R}`),
+    fp(`  ${YL}/ \\${R}                      ${RD}/\\${R}`),
+    fp(`  ${YL}CLAUDE${R} ${GR}ATAQUE!${R}         ${RD}CURSOR${R}`) ],
+
+  // 3 — Impacto!
+  [ fp(`  ${YL}o${R}               ${GR}✦${R}  ${B}${RD}*${R}`),
+    fp(`  ${YL}/|\\${R}                    ${RD}\\${R}`),
+    fp(`  ${YL}/ \\${R}                    ${RD}/\\${R}`),
+    fp(`  ${YL}CLAUDE${R} ${GR}CRÍTICO!${R}        ${RD}CURSOR${R}`) ],
+
   // 4 — Cursor se recupera
-  [
-    `   ${YELLOW}o${RESET}                    ${RED}o${RESET}   `,
-    `  ${YELLOW}/|\\${RESET}   ${DIM}~ vs ~${RESET}    ${RED}\\|/${RESET}   `,
-    `  ${YELLOW}/ \\${RESET}                  ${RED}/\\${RESET}   `,
-  ],
-  // 5 — Cursor carrega contra-ataque
-  [
-    `   ${YELLOW}o${RESET}                   ${RED}\\o/${RESET}  `,
-    `  ${YELLOW}/|\\${RESET}   ${DIM}~ vs ~${RESET}    ${RED}|${RESET}    `,
-    `  ${YELLOW}/ \\${RESET}                  ${RED}/ \\${RESET}  `,
-  ],
-  // 6 — Cursor lança golpe ←
-  [
-    `   ${YELLOW}o${RESET}  ${RED}←─────────────${RESET}${RED}─|─${RESET}  `,
-    `   ${YELLOW}|${RESET}                    ${RED}|${RESET}    `,
-    `  ${YELLOW}/\\${RESET}                   ${RED}/ \\${RESET}  `,
-  ],
-  // 7 — Claude apanha
-  [
-    `  ${GREEN}✦${RESET} ${YELLOW}*${RESET}                   ${RED}o${RESET}    `,
-    `    ${YELLOW}\\${RESET}                   ${RED}/|\\${RESET}  `,
-    `    ${YELLOW}/                   ${RED}/ \\${RESET}  `,
-  ],
-]
+  [ fp(`  ${YL}o${R}                         ${RD}o${R}`),
+    fp(`  ${YL}/|\\${R}      ${D}~ VS ~${R}      ${RD}\\|/${R}`),
+    fp(`  ${YL}/ \\${R}                      ${RD}/\\${R}`),
+    fp(`  ${YL}CLAUDE${R}               ${RD}CURSOR${R}`) ],
 
-const BATTLE_LABELS = [
-  `${YELLOW}CLAUDE${RESET}              ${RED}CURSOR${RESET}`,
-  `${YELLOW}CLAUDE${RESET}  ${DIM}se prepara...${RESET}  ${RED}CURSOR${RESET}`,
-  `${YELLOW}CLAUDE${RESET}  ${GREEN}ATAQUE!${RESET}        ${RED}CURSOR${RESET}`,
-  `${YELLOW}CLAUDE${RESET}  ${GREEN}CRÍTICO!${RESET}       ${RED}CURSOR${RESET}`,
-  `${YELLOW}CLAUDE${RESET}              ${RED}CURSOR${RESET}`,
-  `${YELLOW}CLAUDE${RESET}          ${DIM}se prepara...${RESET} ${RED}CURSOR${RESET}`,
-  `${YELLOW}CLAUDE${RESET}       ${RED}CONTRA-ATAQUE!${RESET} ${RED}CURSOR${RESET}`,
-  `${YELLOW}CLAUDE${RESET}  ${RED}LEVOU!${RESET}           ${RED}CURSOR${RESET}`,
+  // 5 — Cursor carrega
+  [ fp(`  ${YL}o${R}                        ${RD}\\o/${R}`),
+    fp(`  ${YL}/|\\${R}      ${D}~ VS ~${R}         ${RD}|${R}`),
+    fp(`  ${YL}/ \\${R}                       ${RD}/ \\${R}`),
+    fp(`  ${YL}CLAUDE${R}      ${RD}CURSOR ${D}carrega...${R}`) ],
+
+  // 6 — Cursor ataca ←
+  [ fp(`  ${YL}o${R}${B}←─────────────────────${R}${RD}─|─${R}`),
+    fp(`   ${YL}|${R}                           ${RD}|${R}`),
+    fp(`  ${YL}/\\${R}                          ${RD}/ \\${R}`),
+    fp(`  ${YL}CLAUDE${R}       ${RD}CURSOR CONTRA-ATACA!${R}`) ],
+
+  // 7 — Claude apanha
+  [ fp(`  ${B}${YL}*${R}  ${GR}✦${R}                     ${RD}o${R}`),
+    fp(`   ${YL}\\${R}                          ${RD}/|\\${R}`),
+    fp(`   ${YL}/                          ${RD}/ \\${R}`),
+    fp(`  ${YL}CLAUDE${R} ${D}levou!${R}          ${RD}CURSOR${R}`) ],
 ]
 
 function renderBattle(frame: number): string[] {
-  const f = frame % BATTLE_FRAMES.length
-  const lines = [
-    `  ${DIM}┌───────────────────────────────────────────┐${RESET}`,
-    `  ${DIM}│${RESET}${BATTLE_LABELS[f].padEnd(43)}${DIM}│${RESET}`,
-    ...BATTLE_FRAMES[f].map(l => `  ${DIM}│${RESET}  ${l}${DIM}│${RESET}`),
-    `  ${DIM}│${RESET}  ${DIM}[Ctrl+O para ocultar]${RESET}               ${DIM}│${RESET}`,
-    `  ${DIM}└───────────────────────────────────────────┘${RESET}`,
+  const f = FRAMES[frame % FRAMES.length]
+  return [
+    `  ${D}${'─'.repeat(FW + 6)}${R}`,
+    `  ${D}│${R}  ${f[0]}  ${D}│${R}`,
+    `  ${D}│${R}  ${f[1]}  ${D}│${R}`,
+    `  ${D}│${R}  ${f[2]}  ${D}│${R}`,
+    `  ${D}│${R}  ${f[3]}  ${D}│${R}`,
+    `  ${D}│${R}  ${D}Ctrl+O para ocultar${' '.repeat(FW - 19)}${R}  ${D}│${R}`,
+    `  ${D}${'─'.repeat(FW + 6)}${R}`,
   ]
-  return lines
 }
 
 // ── Formatação de métricas ─────────────────────────────────────────────────
 
-function fmtNum(n: number): string {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
-  if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'k'
-  return n.toString()
-}
-function fmtCost(usd: number): string {
-  if (usd >= 1000) return `$${(usd / 1000).toFixed(1)}k`
-  if (usd >= 1)    return `$${usd.toFixed(2)}`
-  return `$${usd.toFixed(3)}`
-}
+const fmtN = (n: number) =>
+  n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + 'M'
+  : n >= 1_000   ? (n / 1_000).toFixed(1) + 'k'
+  : n.toString()
 
-const METRIC_COLS = [
-  { label: 'Msgs',     w: 8  },
-  { label: 'Sessões',  w: 8  },
-  { label: 'Tok↑',    w: 9  },
-  { label: 'Tok↓',    w: 9  },
-  { label: 'Custo',   w: 10 },
-  { label: 'Streak',  w: 7  },
-  { label: 'Commits', w: 8  },
-  { label: '+Linhas', w: 9  },
-  { label: '-Linhas', w: 9  },
+const fmtC = (u: number) =>
+  u >= 1000 ? `$${(u / 1000).toFixed(1)}k`
+  : u >= 1  ? `$${u.toFixed(2)}`
+  : `$${u.toFixed(3)}`
+
+const COLS = [
+  { h: 'Msgs',     w: 8  }, { h: 'Sessões',  w: 8  },
+  { h: 'Tok↑',    w: 9  }, { h: 'Tok↓',    w: 9  },
+  { h: 'Custo',   w: 10 }, { h: 'Streak',  w: 7  },
+  { h: 'Commits', w: 8  }, { h: '+Linhas', w: 9  }, { h: '-Linhas', w: 9  },
 ]
-const PROJECT_COL_W = 24
+const PW = 24
 
-function tableHeader(withProject: boolean): string {
-  const cells = METRIC_COLS.map(c => col(`${DIM}${c.label}${RESET}`, c.w))
-  if (withProject) return col(`${DIM}Projeto${RESET}`, PROJECT_COL_W, 'l') + '  ' + cells.join('  ')
-  return cells.join('  ')
+const tblHdr = (proj: boolean) => {
+  const cells = COLS.map(c => pad(`${D}${c.h}${R}`, c.w))
+  return (proj ? pad(`${D}Projeto${R}`, PW, 'l') + '  ' : '') + cells.join('  ')
 }
-function tableRow(snap: CliSnapshot, projectName?: string): string {
+const tblRow = (s: CliSnapshot, name?: string) => {
   const vals = [
-    fmtNum(snap.messages), fmtNum(snap.sessions),
-    fmtNum(snap.inputTokens), fmtNum(snap.outputTokens),
-    fmtCost(snap.costUsd), `${snap.streak}d`,
-    fmtNum(snap.gitCommits),
-    `+${fmtNum(snap.linesAdded)}`, `-${fmtNum(snap.linesRemoved)}`,
+    fmtN(s.messages), fmtN(s.sessions), fmtN(s.inputTokens), fmtN(s.outputTokens),
+    fmtC(s.costUsd), `${s.streak}d`, fmtN(s.gitCommits),
+    `+${fmtN(s.linesAdded)}`, `-${fmtN(s.linesRemoved)}`,
   ]
-  const cells = vals.map((v, i) => col(v, METRIC_COLS[i].w))
-  if (projectName !== undefined) {
-    const name = projectName.length > PROJECT_COL_W - 1
-      ? projectName.slice(0, PROJECT_COL_W - 2) + '…'
-      : projectName
-    return col(`${CYAN}${name}${RESET}`, PROJECT_COL_W, 'l') + '  ' + cells.join('  ')
+  const cells = vals.map((v, i) => pad(v, COLS[i].w))
+  if (name !== undefined) {
+    const n = name.length > PW - 1 ? name.slice(0, PW - 2) + '…' : name
+    return pad(`${CY}${n}${R}`, PW, 'l') + '  ' + cells.join('  ')
   }
   return cells.join('  ')
 }
 
-// ── Renderização do painel ─────────────────────────────────────────────────
+// ── Construção do painel ───────────────────────────────────────────────────
 
-function buildPanel(config: WatchConfig, state: AppState): string {
-  const w = process.stdout.columns || 100
+function buildPanel(cfg: WatchConfig, st: AppState): string {
+  const W = process.stdout.columns || 100
   const lines: string[] = []
 
-  // Título
-  const now    = state.lastUpdated.toLocaleTimeString('pt-BR')
-  const loader = state.isLoadingData ? `${DIM} ⟳${RESET}` : ''
-  const left   = `${BOLD}${BRIGHT_CYAN}Claude Stats — Watch Mode${RESET}`
-  const right  = `${DIM}${now}  ⟳ ${config.intervalSec}s${loader}${RESET}`
-  const gap    = Math.max(1, w - visLen(left.replace(/\x1b\[[0-9;]*m/g, '')) - visLen(right.replace(/\x1b\[[0-9;]*m/g, '')))
+  // Cabeçalho
+  const now   = st.lastUpdated.toLocaleTimeString('pt-BR')
+  const right = `${D}${now}  ⟳ ${cfg.intervalSec}s${st.isLoading ? ' …' : ''}${R}`
+  const left  = `${B}${BCY}Claude Stats — Watch Mode${R}`
+  const gap   = Math.max(1, W - visLen(left.replace(/\x1b\[[0-9;]*m/g,'')) - visLen(right.replace(/\x1b\[[0-9;]*m/g,'')))
   lines.push(left + ' '.repeat(gap) + right)
-  lines.push(hr(w))
+  lines.push(hr(W))
   lines.push('')
 
-  // Animação (se visível)
-  if (state.showAnimation) {
-    lines.push(...renderBattle(state.animFrame))
+  // Batalha
+  if (st.showBattle) {
+    lines.push(...renderBattle(st.animFrame))
     lines.push('')
   }
 
   // Bloco de info
-  const modeDesc = config.viewMode === 'junto' ? 'unificado'
-    : config.viewMode === 'separado' ? 'separado' : 'ambos'
+  const mode = cfg.viewMode === 'junto' ? 'unificado'
+    : cfg.viewMode === 'separado' ? 'separado' : 'ambos'
 
-  lines.push(`  ${DIM}Home:${RESET}       ${WHITE}${HOME_DIR}${RESET}`)
-  lines.push(`  ${DIM}Claude dir:${RESET} ${WHITE}${CLAUDE_DIR}${RESET}`)
+  lines.push(`  ${D}Home:${R}       ${WH}${HOME_DIR}${R}`)
+  lines.push(`  ${D}Claude dir:${R} ${WH}${CLAUDE_DIR}${R}`)
 
-  if (config.selectedProjects.length === 0) {
-    lines.push(`  ${DIM}Projetos:${RESET}   ${YELLOW}todos (${config.allProjects.length})${RESET}`)
+  if (cfg.selectedProjects.length === 0) {
+    lines.push(`  ${D}Projetos:${R}   ${YL}todos (${cfg.allProjects.length})${R}`)
   } else {
-    const names = config.selectedProjects.map(p => p.name).join(', ')
-    lines.push(`  ${DIM}Projetos:${RESET}   ${CYAN}${names}${RESET}`)
+    lines.push(`  ${D}Projetos:${R}   ${CY}${cfg.selectedProjects.map(p => p.name).join(', ')}${R}`)
   }
-
-  if (config.selectedProjects.length > 1) {
-    lines.push(`  ${DIM}Modo:${RESET}       ${GREEN}${modeDesc}${RESET}`)
-  }
-
-  lines.push(`  ${DIM}Interval:${RESET}   ${WHITE}${config.intervalSec}s${RESET}`)
-  lines.push(`  ${DIM}OTLP:${RESET}       ${config.otlpEndpoint ? `${GREEN}${config.otlpEndpoint}${RESET}` : `${DIM}(disabled)${RESET}`}`)
+  if (cfg.selectedProjects.length > 1) lines.push(`  ${D}Modo:${R}       ${GR}${mode}${R}`)
+  lines.push(`  ${D}Interval:${R}   ${WH}${cfg.intervalSec}s${R}`)
+  lines.push(`  ${D}OTLP:${R}       ${cfg.otlpEndpoint ? `${GR}${cfg.otlpEndpoint}${R}` : `${D}(disabled)${R}`}`)
   lines.push('')
 
-  // Tabela de métricas
-  const singleView = config.selectedProjects.length <= 1
-  const allSnap    = state.snapshots.get('')
+  // Tabela
+  const solo = cfg.selectedProjects.length <= 1
+  const all  = st.snapshots.get('')
+  const loading = `  ${D}(carregando...)${R}`
 
-  if (singleView || config.viewMode === 'junto') {
-    lines.push(hr(w))
-    if (!singleView) lines.push(`  ${BOLD}${CYAN}UNIFICADO${RESET}`)
+  if (solo || cfg.viewMode === 'junto') {
+    lines.push(hr(W))
+    if (!solo) lines.push(`  ${B}${CY}UNIFICADO${R}`)
     lines.push('')
-    lines.push('  ' + tableHeader(false))
-    lines.push(`  ${GREEN}${BOLD}${allSnap ? tableRow(allSnap) : '  (carregando...)'}${RESET}`)
-    lines.push(hr(w))
-  } else if (config.viewMode === 'separado') {
-    lines.push(hr(w))
-    lines.push(`  ${BOLD}${CYAN}POR PROJETO${RESET}`)
+    lines.push('  ' + tblHdr(false))
+    lines.push(`  ${GR}${B}${all ? tblRow(all) : loading}${R}`)
+    lines.push(hr(W))
+
+  } else if (cfg.viewMode === 'separado') {
+    lines.push(hr(W))
+    lines.push(`  ${B}${CY}POR PROJETO${R}`)
     lines.push('')
-    lines.push('  ' + tableHeader(true))
-    for (const proj of config.selectedProjects) {
-      const snap = state.snapshots.get(proj.path)
-      lines.push('  ' + (snap ? tableRow(snap, proj.name) : `  ${DIM}${proj.name}  (carregando...)${RESET}`))
+    lines.push('  ' + tblHdr(true))
+    for (const p of cfg.selectedProjects) {
+      const s = st.snapshots.get(p.path)
+      lines.push('  ' + (s ? tblRow(s, p.name) : `  ${D}${p.name} (carregando...)${R}`))
     }
-    lines.push(hr(w))
+    lines.push(hr(W))
+
   } else {
-    // ambos
-    lines.push(hr(w))
-    lines.push(`  ${BOLD}${CYAN}UNIFICADO${RESET}`)
+    lines.push(hr(W))
+    lines.push(`  ${B}${CY}UNIFICADO${R}`)
     lines.push('')
-    lines.push('  ' + tableHeader(false))
-    lines.push(`  ${GREEN}${BOLD}${allSnap ? tableRow(allSnap) : '  (carregando...)'}${RESET}`)
+    lines.push('  ' + tblHdr(false))
+    lines.push(`  ${GR}${B}${all ? tblRow(all) : loading}${R}`)
     lines.push('')
-    lines.push(`  ${BOLD}${CYAN}POR PROJETO${RESET}`)
+    lines.push(`  ${B}${CY}POR PROJETO${R}`)
     lines.push('')
-    lines.push('  ' + tableHeader(true))
-    for (const proj of config.selectedProjects) {
-      const snap = state.snapshots.get(proj.path)
-      lines.push('  ' + (snap ? tableRow(snap, proj.name) : `  ${DIM}${proj.name}  (carregando...)${RESET}`))
+    lines.push('  ' + tblHdr(true))
+    for (const p of cfg.selectedProjects) {
+      const s = st.snapshots.get(p.path)
+      lines.push('  ' + (s ? tblRow(s, p.name) : `  ${D}${p.name} (carregando...)${R}`))
     }
-    lines.push(hr(w))
+    lines.push(hr(W))
   }
 
   lines.push('')
-  lines.push(`  ${DIM}Ctrl+C sair  |  Ctrl+O ${state.showAnimation ? 'ocultar' : 'mostrar'} batalha${RESET}`)
-
+  lines.push(`  ${D}Ctrl+C sair  │  Ctrl+O ${st.showBattle ? 'ocultar' : 'mostrar'} batalha${R}`)
   return lines.join('\n') + '\n'
 }
 
 // ── Watch loop ─────────────────────────────────────────────────────────────
 
-async function watchLoop(config: WatchConfig): Promise<void> {
-  hideCursor()
-
-  const state: AppState = {
+async function watchLoop(cfg: WatchConfig): Promise<void> {
+  const st: AppState = {
     snapshots: new Map(),
     lastUpdated: new Date(),
     animFrame: 0,
-    showAnimation: true,
-    isLoadingData: true,
+    showBattle: cfg.showBattle,
+    isLoading: true,
   }
 
-  // Limpa + redesenha no lugar (sem append)
+  // Cleanup centralizado
+  const cleanup = () => {
+    write(SHOW_CUR + ALT_OFF)
+    process.exit(0)
+  }
+
+  // Alternate screen: entra limpo, sai limpo
+  write(ALT_ON + HIDE_CUR)
+
   const render = () => {
-    clearScreen()
-    process.stdout.write(buildPanel(config, state))
+    write(CLEAR_SCR + buildPanel(cfg, st))
   }
 
-  // Reload pesado de dados do disco
+  // Reload pesado de disco
   let reloading = false
   const reloadData = async () => {
     if (reloading) return
     reloading = true
-    state.isLoadingData = true
+    st.isLoading = true
     try {
-      const { snapshots, lastUpdated } = await reloadAllSnapshots(config)
-      state.snapshots   = snapshots
-      state.lastUpdated = lastUpdated
-    } catch { /* mantém snapshot anterior */ }
-    finally {
-      state.isLoadingData = false
-      reloading = false
-    }
+      st.snapshots   = await reloadSnapshots(cfg)
+      st.lastUpdated = new Date()
+    } catch { /* mantém anterior */ }
+    finally { st.isLoading = false; reloading = false }
     render()
   }
 
-  // Carregamento inicial
+  // Carga inicial
   await reloadData()
 
-  // Teclado: Ctrl+O toggle animação, Ctrl+C sair
+  // Teclado: Ctrl+C e Ctrl+O
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true)
     process.stdin.resume()
     process.stdin.on('data', (buf: Buffer) => {
-      const ch = buf[0]
-      if (ch === 3) {                      // Ctrl+C
-        showCursor()
-        clearScreen()
-        process.exit(0)
-      } else if (ch === 15) {              // Ctrl+O
-        state.showAnimation = !state.showAnimation
+      if (buf[0] === 3)  { cleanup() }           // Ctrl+C
+      if (buf[0] === 15) {                        // Ctrl+O
+        st.showBattle = !st.showBattle
         render()
       }
     })
   } else {
-    process.on('SIGINT',  () => { showCursor(); clearScreen(); process.exit(0) })
-    process.on('SIGTERM', () => { showCursor(); clearScreen(); process.exit(0) })
+    process.on('SIGINT',  cleanup)
+    process.on('SIGTERM', cleanup)
   }
 
-  // Timer de animação (200ms) — só redesenha, não relê disco
-  const ANIM_INTERVAL = 200
-  setInterval(() => {
-    state.animFrame++
-    render()
-  }, ANIM_INTERVAL)
+  // Timer de animação — só re-renderiza com cache, sem I/O
+  setInterval(() => { st.animFrame++; render() }, 200)
 
-  // Timer de dados (configurable)
-  setInterval(reloadData, config.intervalSec * 1000)
+  // Timer de dados
+  setInterval(reloadData, cfg.intervalSec * 1000)
 
-  // Chokidar: reload imediato em mudanças de arquivo (debounce 1.5s)
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null
+  // Chokidar
+  let dbt: ReturnType<typeof setTimeout> | null = null
   chokidar
     .watch([SESSION_META_DIR, STATS_CACHE_FILE], { persistent: true, ignoreInitial: true })
-    .on('all', () => {
-      if (debounceTimer) clearTimeout(debounceTimer)
-      debounceTimer = setTimeout(reloadData, 1500)
-    })
+    .on('all', () => { if (dbt) clearTimeout(dbt); dbt = setTimeout(reloadData, 1500) })
 }
 
 // ── Custom prompt: checkbox com busca reativa ──────────────────────────────
 
-interface CheckboxChoice { name: string; value: string; path: string }
+type RlKey = KeypressEvent & { meta?: boolean; sequence?: string }
 
-/** KeypressEvent estendido com os campos extras do readline de Node.js */
-type RlKeypress = KeypressEvent & { meta?: boolean; sequence?: string }
+interface CbChoice { name: string; value: string; path: string }
 
-const checkboxWithSearch = createPrompt<string[], {
+const checkboxSearch = createPrompt<string[], {
   message: string
-  choices: ReadonlyArray<CheckboxChoice>
+  choices: ReadonlyArray<CbChoice>
   pageSize?: number
 }>((config, done) => {
-  const [searchTerm, setSearchTerm] = useState('')
-  const [active, setActive]         = useState(0)
-  const [checked, setChecked]       = useState<ReadonlyArray<string>>([])
+  const [term,    setTerm]    = useState('')
+  const [active,  setActive]  = useState(0)
+  const [checked, setChecked] = useState<ReadonlyArray<string>>([])
 
   const filtered = useMemo(
     () => {
-      const t = searchTerm.toLowerCase()
-      if (!t) return config.choices
-      return config.choices.filter(c =>
+      const t = term.toLowerCase()
+      return t ? config.choices.filter(c =>
         c.name.toLowerCase().includes(t) || c.path.toLowerCase().includes(t)
-      )
+      ) : config.choices
     },
-    [searchTerm]
+    [term]
   )
 
   useKeypress((key) => {
-    const k = key as RlKeypress
+    const k = key as RlKey
     if (isEnterKey(k)) { done([...checked]); return }
 
     const len = filtered.length
@@ -591,119 +576,113 @@ const checkboxWithSearch = createPrompt<string[], {
       const item = filtered[active]
       if (!item) return
       const s = new Set(checked)
-      if (s.has(item.value)) s.delete(item.value)
-      else s.add(item.value)
+      s.has(item.value) ? s.delete(item.value) : s.add(item.value)
       setChecked(Array.from(s))
     } else if (isBackspaceKey(k)) {
-      setSearchTerm(searchTerm.slice(0, -1))
-      setActive(0)
+      setTerm(term.slice(0, -1)); setActive(0)
     } else if (!k.ctrl && !k.meta && k.sequence?.length === 1 && k.sequence.charCodeAt(0) >= 32) {
-      setSearchTerm(searchTerm + k.sequence)
-      setActive(0)
+      setTerm(term + k.sequence); setActive(0)
     }
   })
 
-  const checkedSet = new Set(checked)
+  const cs = new Set(checked)
 
-  const pageView = usePagination({
-    items:    filtered as CheckboxChoice[],
+  const page = usePagination({
+    items:    filtered as CbChoice[],
     active,
     pageSize: config.pageSize ?? 16,
     loop:     false,
     renderItem: ({ item, isActive }) => {
-      const cursor  = isActive ? `${CYAN}❯${RESET}` : ' '
-      const box     = checkedSet.has(item.value) ? `${GREEN}◉${RESET}` : `${DIM}◯${RESET}`
-      const nameStr = checkedSet.has(item.value) ? `${GREEN}${item.name}${RESET}` : item.name
-      return ` ${cursor} ${box}  ${nameStr}  ${DIM}${item.path}${RESET}`
+      const cur  = isActive ? `${CY}❯${R}` : ' '
+      const box  = cs.has(item.value) ? `${GR}◉${R}` : `${D}◯${R}`
+      const name = cs.has(item.value) ? `${GR}${item.name}${R}` : item.name
+      return ` ${cur} ${box}  ${name}  ${D}${item.path}${R}`
     },
   })
 
-  const cursorBlock   = `${ESC}[7m ${RESET}`
-  const searchDisplay = `${DIM}[Buscar]${RESET} ${BOLD}${searchTerm}${RESET}${cursorBlock}`
+  const cursor   = `\x1b[7m \x1b[0m`
+  const search   = `${D}[Buscar]${R} ${B}${term}${R}${cursor}`
+  const selNames = checked.map(v => config.choices.find(c => c.value === v)?.name ?? v).join(', ')
+  const selLine  = checked.length > 0
+    ? `\n  ${D}Selecionados: ${R}${GR}${selNames}${R}`
+    : `\n  ${D}(nenhum = todos os projetos)${R}`
 
-  const checkedNames = checked
-    .map(v => config.choices.find(c => c.value === v)?.name ?? v)
-    .join(', ')
-
-  const selectedLine = checked.length > 0
-    ? `\n  ${DIM}Selecionados: ${RESET}${GREEN}${checkedNames}${RESET}`
-    : `\n  ${DIM}(nenhum = todos os projetos)${RESET}`
-
-  return (
-    `${BOLD}${config.message}${RESET}\n  ${searchDisplay}\n\n` +
-    pageView +
-    selectedLine +
-    `\n  ${DIM}↑↓ navegar  ⎵ selecionar  ⏎ confirmar  Backspace apaga busca${RESET}`
-  )
+  return `${B}${config.message}${R}\n  ${search}\n\n${page}${selLine}\n  ${D}↑↓ navegar  ⎵ selecionar  ⏎ confirmar  Backspace apaga busca${R}`
 })
 
-// ── Configuração inicial via prompts ───────────────────────────────────────
+// ── Configuração via prompts ───────────────────────────────────────────────
 
-async function askConfig(allProjects: ProjectInfo[]): Promise<WatchConfig> {
-  // 1. Intervalo
-  const intervalStr = await input({
-    message: `Intervalo de atualização (segundos):`,
+async function askConfig(all: ProjectInfo[]): Promise<WatchConfig> {
+  // Intervalo
+  const intStr = await input({
+    message: 'Intervalo de atualização (segundos):',
     default: '30',
-    validate: (v) => {
-      const n = parseInt(v, 10)
-      if (!Number.isFinite(n) || n < 5) return 'Mínimo 5 segundos'
-      return true
-    },
+    validate: v => { const n = parseInt(v, 10); return Number.isFinite(n) && n >= 5 ? true : 'Mínimo 5s' },
   })
-  const intervalSec = parseInt(intervalStr, 10)
 
-  // 2. OTLP endpoint
-  const otlpEndpoint = await input({
-    message: 'OTLP endpoint (vazio para desativar):',
+  // OTLP
+  const otlp = await input({
+    message: 'OTLP endpoint (vazio = desativado):',
     default: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? '',
   })
 
-  // 3. Seleção de projetos com busca
-  const selectedPaths = await checkboxWithSearch({
-    message: 'Selecione os projetos para monitorar:',
-    choices: allProjects.map(p => ({ name: p.name, value: p.path, path: p.path })),
-    pageSize: Math.min(20, allProjects.length),
+  // Animação
+  const showBattle = await confirm({
+    message: 'Mostrar batalha Claude vs Cursor no painel?',
+    default: true,
   })
 
-  const selectedProjects = selectedPaths.length === 0
-    ? []
-    : allProjects.filter(p => selectedPaths.includes(p.path))
+  // Projetos
+  const paths = await checkboxSearch({
+    message: 'Selecione os projetos para monitorar:',
+    choices: all.map(p => ({ name: p.name, value: p.path, path: p.path })),
+    pageSize: Math.min(20, all.length),
+  })
 
-  // 4. Modo de visualização (só se múltiplos selecionados)
+  const selected = paths.length === 0 ? [] : all.filter(p => paths.includes(p.path))
+
+  // Modo
   let viewMode: ViewMode = 'junto'
-  if (selectedProjects.length > 1) {
+  if (selected.length > 1) {
     viewMode = await select<ViewMode>({
       message: 'Como deseja visualizar os dados?',
       choices: [
-        { name: `${BOLD}Separado${RESET}  — uma linha por projeto`,             value: 'separado', short: 'separado'  },
-        { name: `${BOLD}Unificado${RESET} — total dos projetos selecionados`,   value: 'junto',    short: 'unificado' },
-        { name: `${BOLD}Ambos${RESET}     — total no topo + uma linha/projeto`, value: 'ambos',    short: 'ambos'     },
+        { name: `${B}Separado${R}  — uma linha por projeto`,             value: 'separado', short: 'separado'  },
+        { name: `${B}Unificado${R} — total dos projetos selecionados`,   value: 'junto',    short: 'unificado' },
+        { name: `${B}Ambos${R}     — total no topo + uma linha/projeto`, value: 'ambos',    short: 'ambos'     },
       ],
     })
   }
 
-  return { selectedProjects, allProjects, viewMode, intervalSec, otlpEndpoint }
+  return {
+    selectedProjects: selected,
+    allProjects: all,
+    viewMode,
+    intervalSec: parseInt(intStr, 10),
+    otlpEndpoint: otlp,
+    showBattle,
+  }
 }
 
 // ── Entry point ────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log(`\n${BOLD}${BRIGHT_CYAN}Claude Stats — Watch CLI${RESET}\n`)
-  console.log(`${DIM}Descobrindo projetos...${RESET}`)
+  console.log(`\n${B}${BCY}Claude Stats — Watch CLI${R}\n`)
+  console.log(`${D}Descobrindo projetos...${R}`)
 
-  const allProjects = await discoverProjects()
-  if (allProjects.length === 0) {
+  const all = await discoverProjects()
+  if (all.length === 0) {
     console.error(`\nNenhum projeto encontrado em:\n  ${SESSION_META_DIR}\n  ${PROJECTS_DIR}`)
     process.exit(1)
   }
-  console.log(`${GREEN}${allProjects.length} projetos encontrados.${RESET}\n`)
+  console.log(`${GR}${all.length} projetos encontrados.${R}\n`)
 
-  const config = await askConfig(allProjects)
-  await watchLoop(config)
+  const cfg = await askConfig(all)
+  await watchLoop(cfg)
 }
 
 main().catch(err => {
-  showCursor()
+  write(SHOW_CUR + ALT_OFF)
   console.error('Erro fatal:', err)
   process.exit(1)
 })
