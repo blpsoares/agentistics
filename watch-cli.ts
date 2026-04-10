@@ -28,18 +28,24 @@ const CLAUDE_DIR  = join(HOME_DIR, '.claude')
 const API_BASE    = 'http://localhost:3001'
 const SESSION_START = Date.now()
 
-function showGoodbye(lastSnap?: { messages: number; streak: number; costUsd: number }): void {
-  const secs    = Math.floor((Date.now() - SESSION_START) / 1000)
-  const dur     = secs >= 60 ? `${Math.floor(secs/60)}m ${secs%60}s` : `${secs}s`
+function showGoodbye(opts?: {
+  messages: number; streak: number; costUsd: number
+  projects: string[]
+}): void {
+  const secs = Math.floor((Date.now() - SESSION_START) / 1000)
+  const dur  = secs >= 60 ? `${Math.floor(secs/60)}m ${secs%60}s` : `${secs}s`
+  const fmtN = (n: number) => n >= 1000 ? (n/1000).toFixed(1)+'k' : String(n)
   const lines: string[] = []
   lines.push('')
   lines.push(`  ${AM}${B}claude-stats${R}  ${D}·  watch mode${R}`)
   lines.push('')
-  lines.push(`  ${D}sessão:  ${R}${WH}${dur}${R}`)
-  if (lastSnap) {
-    lines.push(`  ${D}streak:  ${R}${WH}${lastSnap.streak}d${R}`)
-    lines.push(`  ${D}msgs:    ${R}${WH}${lastSnap.messages >= 1000 ? (lastSnap.messages/1000).toFixed(1)+'k' : lastSnap.messages}${R}`)
-    lines.push(`  ${D}custo:   ${R}${WH}$${lastSnap.costUsd.toFixed(2)}${R}`)
+  lines.push(`  ${D}sessão:   ${R}${WH}${dur}${R}`)
+  if (opts) {
+    const proj = opts.projects.length > 0 ? opts.projects.join(', ') : 'todos'
+    lines.push(`  ${D}projeto:  ${R}${WH}${proj}${R}`)
+    lines.push(`  ${D}streak:   ${R}${WH}${opts.streak}d${R}`)
+    lines.push(`  ${D}msgs:     ${R}${WH}${fmtN(opts.messages)}${R}`)
+    lines.push(`  ${D}custo:    ${R}${WH}$${opts.costUsd.toFixed(2)}${R}`)
   }
   lines.push('')
   lines.push(`  ${D}até logo  ${AM}✦${R}`)
@@ -297,12 +303,9 @@ async function reloadData(config: WatchConfig): Promise<{
 async function withLoader<T>(msg: string, fn: () => Promise<T>): Promise<T> {
   if (!process.stdout.isTTY) return fn()
 
-  const H     = 7
+  const H     = 8
   const W     = Math.min((process.stdout.columns || 80) - 2, 94)
   const BAR_W = W - 2
-
-  // Braille dots — cycling at ~12fps produces a perfectly smooth spin
-  const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 
   // Gradient wave: trough → peak → trough, repeated twice for seamless wrap
   const WAVE = '░░░▒▒▓▓███▓▓▒▒░░░░░▒▒▓▓███▓▓▒▒░░░'
@@ -310,8 +313,6 @@ async function withLoader<T>(msg: string, fn: () => Promise<T>): Promise<T> {
   let frame = 0
 
   const draw = () => {
-    const spin = SPIN[frame % SPIN.length]!
-
     // Scroll wave left — offset grows each frame
     const off  = (frame * 1) % WAVE.length
     const raw  = (WAVE + WAVE + WAVE).slice(off, off + BAR_W)
@@ -329,11 +330,12 @@ async function withLoader<T>(msg: string, fn: () => Promise<T>): Promise<T> {
     out(`\x1b[${H}A`)
     out(`\n`)
     out(`  ${sep}\n`)
-    out(`  ${AM}${B}${spin}${R}  ${B}claude-stats${R}  ${D}·  session pipeline${R}\n`)
+    out(`  ${B}claude-stats${R}  ${D}·  session pipeline${R}\n`)
+    out(`\n`)
     out(`  ${bar}\n`)
+    out(`\n`)
     out(`  ${D}▸${R}  ${D}${msg}${R}\n`)
     out(`  ${sep}\n`)
-    out(`\n`)
   }
 
   out('\n'.repeat(H))
@@ -469,24 +471,13 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
   lines.push(`  ${D}OTLP:${R}       ${cfg.otlpEndpoint ? `${WH}${cfg.otlpEndpoint}${R}` : `${D}(disabled)${R}`}`)
   lines.push('')
 
-  // Loading spinner — wave bar (same gradient as loader) + braille spinner
-  const WAVE_STR = '░░░▒▒▓▓███▓▓▒▒░░░░░▒▒▓▓███▓▓▒▒░░░'
-  const WAVE_W   = 36
-  const wOff  = st.animFrame % WAVE_STR.length
-  const wRaw  = (WAVE_STR + WAVE_STR + WAVE_STR).slice(wOff, wOff + WAVE_W)
-  const wBar  = wRaw.split('').map(c =>
-    c === '█' ? `${B}${AM}█${R}`
-    : c === '▓' ? `${AM}▓${R}`
-    : c === '▒' ? `${D}${AM}▒${R}`
-    : `${D}░${R}`
-  ).join('')
-  const MINI_SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-  const mSpin = MINI_SPIN[st.animFrame % MINI_SPIN.length]!
-
   // Tabela
   const solo = cfg.selectedProjects.length <= 1
   const all  = st.snapshots.get('')
-  const ldg  = `  ${AM}${mSpin}${R}  ${wBar}`
+  // Enquanto não há dados: exibe zeros em cada coluna + mensagem discreta
+  const zeroSnap = { messages:0, sessions:0, inputTokens:0, outputTokens:0,
+    costUsd:0, streak:0, gitCommits:0, linesAdded:0, linesRemoved:0 }
+  const ldg = `${tRow(zeroSnap)}  ${D}obtendo dados...${R}`
 
   if (solo || cfg.viewMode === 'junto') {
     lines.push(sepLine(W))
@@ -538,7 +529,10 @@ async function watchLoop(cfg: WatchConfig): Promise<void> {
   const cleanup = () => {
     out(SHOW + ALT_OFF + CLR)
     const snap = st.snapshots.get('')
-    showGoodbye(snap ? { messages: snap.messages, streak: snap.streak, costUsd: snap.costUsd } : undefined)
+    showGoodbye(snap ? {
+      messages: snap.messages, streak: snap.streak, costUsd: snap.costUsd,
+      projects: cfg.selectedProjects.map(p => p.name),
+    } : undefined)
     if (spawnedServer) { spawnedServer.kill(); spawnedServer = null }
     process.exit(0)
   }
