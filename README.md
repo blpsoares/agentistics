@@ -32,6 +32,7 @@
 - [Architecture and Tech Stack](#architecture-and-tech-stack)
 - [Component Structure](#component-structure)
 - [Advanced Configuration](#advanced-configuration)
+- [OpenTelemetry + Watcher / Daemon Mode](#opentelemetry--watcher--daemon-mode)
 
 ---
 
@@ -441,9 +442,11 @@ claude-stats/
 │   │   └── StatCard.tsx
 │   └── lib/
 │       ├── types.ts         # TypeScript types + MODEL_PRICING
+│       ├── otel.ts          # OpenTelemetry metric definitions
 │       ├── i18n.ts          # PT/EN translations
 │       └── hooks/           # Custom hooks (if any)
 ├── server.ts                # Bun API: JSONL parsing, git stats, cache
+├── watcher.ts               # Daemon/watcher: chokidar + OTLP export
 ├── package.json
 ├── tsconfig.json
 └── vite.config.ts
@@ -469,6 +472,9 @@ claude-stats/
 | Bun | HTTP server runtime |
 | Node.js fs/path | Local file reading |
 | child_process (execAsync) | Executing git commands |
+| @opentelemetry/api | OpenTelemetry metrics API |
+| @opentelemetry/sdk-metrics | Metrics SDK (MeterProvider) |
+| @opentelemetry/exporter-metrics-otlp-http | OTLP/HTTP exporter |
 
 ### Browser Persistence
 
@@ -530,6 +536,15 @@ Derived paths:
 ~/.claude/stats-cache.json          → STATS_CACHE_FILE
 ```
 
+### Environment Variables (watcher / OpenTelemetry)
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT   # OTLP collector endpoint (e.g. http://localhost:4318)
+OTEL_EXPORTER_OTLP_HEADERS    # Extra headers (e.g. "Authorization=Bearer token")
+OTEL_SERVICE_NAME              # Service name (default: "claude-stats")
+CLAUDE_STATS_WATCH_INTERVAL   # Polling interval in seconds (default: 30, min: 5)
+```
+
 ### API Port
 
 By default the API runs on port `3001`. The Vite proxy automatically redirects `/api/*` during development.
@@ -547,6 +562,120 @@ The system automatically detects issues such as:
 - Incomplete session data
 
 Alerts have 3 severity levels: **error** (red) · **warning** (yellow) · **info** (blue). Each warning can be dismissed individually and the state is persisted.
+
+---
+
+## OpenTelemetry + Watcher / Daemon Mode
+
+Claude Stats can export usage metrics via the [OpenTelemetry](https://opentelemetry.io/) protocol (OTLP/HTTP), enabling integration with observability backends like **Grafana**, **Datadog**, **New Relic**, **Honeycomb**, and any OTLP-compatible collector.
+
+### Real-time Dashboard Updates
+
+The API server (`bun run dev:api`) watches `~/.claude/` for file changes using **chokidar** and notifies all connected dashboard tabs via **Server-Sent Events** (`/api/events`). When Claude writes a new session, the dashboard refreshes automatically — no manual reload needed.
+
+### Auto-spawning the OTel Daemon
+
+When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, **`bun run dev:api` (or `bun run dev`) automatically spawns `watcher.ts`** as a child process. You do not need to run the watcher manually in a separate terminal.
+
+```bash
+# Dashboard + watcher daemon (auto-spawned) + real-time SSE updates
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 bun run dev
+```
+
+You can also run the watcher standalone (e.g. as a system daemon without the dashboard):
+
+```bash
+# Standalone watcher — exports metrics only, no HTTP server
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 bun run watch
+```
+
+### How It Works
+
+The watcher (`watcher.ts`):
+
+1. **Watches** `~/.claude/usage-data/session-meta/` and `~/.claude/projects/` for file changes using **chokidar** (cross-platform, works on Linux, macOS, and Windows)
+2. **Rebuilds** a metrics snapshot from `stats-cache.json` and session-meta files on each change (debounced, serialized)
+3. **Polls** every N seconds as a fallback (configurable via `CLAUDE_STATS_WATCH_INTERVAL`, minimum 5s)
+4. **Exports** all metrics to an OTLP collector when `OTEL_EXPORTER_OTLP_ENDPOINT` is set
+
+> **Note:** When both the API server (`bun run dev:api`) and the watcher (`watcher.ts`) are running together (i.e., auto-spawned via `bun run dev`), they independently watch the same directories with their own 2-second debounces. Each file change therefore triggers two snapshot rebuilds — one for SSE dashboard updates and one for OTel metric export. This is expected behavior.
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | *(none)* | OTLP collector endpoint (e.g. `http://localhost:4318`). Required to enable export and auto-spawn. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | *(none)* | Extra headers for the OTLP exporter (e.g. `Authorization=Bearer token`) |
+| `OTEL_SERVICE_NAME` | `claude-stats` | Service name reported in metrics (set as `service.name` resource attribute) |
+| `CLAUDE_STATS_WATCH_INTERVAL` | `30` | Polling interval in seconds (minimum: 5) |
+
+### Exported Metrics
+
+All metrics use the `claude_stats` namespace:
+
+| Metric | Type | Unit | Description |
+|--------|------|------|-------------|
+| `claude_stats.messages.total` | Counter | messages | Total messages (user + assistant) |
+| `claude_stats.sessions.total` | Counter | sessions | Total sessions |
+| `claude_stats.tool_calls.total` | Counter | calls | Total tool calls |
+| `claude_stats.tokens.input` | Counter | tokens | Total input tokens |
+| `claude_stats.tokens.output` | Counter | tokens | Total output tokens |
+| `claude_stats.cost.usd` | Counter | USD | Estimated total cost |
+| `claude_stats.git.commits` | Counter | commits | Git commits via Claude |
+| `claude_stats.git.pushes` | Counter | pushes | Git pushes via Claude |
+| `claude_stats.git.lines_added` | Counter | lines | Lines added |
+| `claude_stats.git.lines_removed` | Counter | lines | Lines removed |
+| `claude_stats.git.files_modified` | Counter | files | Files modified |
+| `claude_stats.streak` | Gauge | days | Current streak (consecutive active days) |
+| `claude_stats.longest_session` | Gauge | min | Longest session duration (in minutes) |
+| `claude_stats.active_projects` | Gauge | projects | Number of active projects |
+| `claude_stats.tokens.by_model.input` | Counter | tokens | Input tokens per model (`model` attribute) |
+| `claude_stats.tokens.by_model.output` | Counter | tokens | Output tokens per model (`model` attribute) |
+| `claude_stats.tool_calls.by_tool` | Counter | calls | Tool calls per tool (`tool` attribute) |
+
+### Example: Grafana + OpenTelemetry Collector
+
+```yaml
+# docker-compose.yml
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    ports:
+      - "4318:4318"   # OTLP HTTP
+    volumes:
+      - ./otel-config.yaml:/etc/otelcol-contrib/config.yaml
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+```
+
+```yaml
+# otel-config.yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]
+```
+
+Then run:
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 bun run watch
+```
 
 ---
 
