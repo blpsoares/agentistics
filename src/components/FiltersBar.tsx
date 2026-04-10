@@ -10,6 +10,7 @@ interface Props {
   filters: Filters
   onChange: (f: Filters) => void
   projects: Project[]
+  sessionCountByProject: Record<string, number>
   models: string[]
   lang: Lang
 }
@@ -36,7 +37,7 @@ const CTL: React.CSSProperties = {
   alignItems: 'center',
 }
 
-export function FiltersBar({ filters, onChange, projects, models, lang }: Props) {
+export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, lang }: Props) {
   const [showProjectsModal, setShowProjectsModal] = useState(false)
   const today = format(new Date(), 'yyyy-MM-dd')
   const hasCustomDates = !!(filters.customStart || filters.customEnd)
@@ -222,6 +223,7 @@ export function FiltersBar({ filters, onChange, projects, models, lang }: Props)
       {showProjectsModal && (
         <ProjectsModal
           projects={projects}
+          sessionCountByProject={sessionCountByProject}
           selected={filters.projects}
           onApply={paths => {
             onChange({ ...filters, projects: paths })

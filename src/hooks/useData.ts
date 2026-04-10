@@ -161,6 +161,19 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       ...Object.entries(supplementByDay).map(([date, v]) => ({ date, ...v })),
     ]
 
+    // ── All-time total sessions (no date/project filter) — used by the header ──
+    // Mirrors extendedDailyActivity logic but without any date restriction.
+    const allDailyDates = new Set((data.statsCache.dailyActivity ?? []).map(d => d.date))
+    const allTimeSupplementByDay: Record<string, number> = {}
+    for (const s of data.sessions) {
+      if (!s.start_time) continue
+      const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
+      if (!allDailyDates.has(day)) allTimeSupplementByDay[day] = (allTimeSupplementByDay[day] ?? 0) + 1
+    }
+    const allTimeTotalSessions =
+      (data.statsCache.dailyActivity ?? []).reduce((s, d) => s + d.sessionCount, 0)
+      + Object.values(allTimeSupplementByDay).reduce((s, c) => s + c, 0)
+
     // ── Aggregate stats ──
     // When project filter active, rebuild from sessions (no per-project data in statsCache)
     const totalMessages = projectFiltered
@@ -383,6 +396,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     return {
       totalMessages,
       totalSessions,
+      allTimeTotalSessions,
       totalToolCalls,
       totalCostUSD,
       streak,
