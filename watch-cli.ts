@@ -23,9 +23,29 @@ import type { ModelUsage, SessionMeta } from './src/lib/types'
 
 // ── Paths ──────────────────────────────────────────────────────────────────
 
-const HOME_DIR   = process.env.HOME ?? process.env.USERPROFILE ?? ''
-const CLAUDE_DIR = join(HOME_DIR, '.claude')
-const API_BASE   = 'http://localhost:3001'
+const HOME_DIR    = process.env.HOME ?? process.env.USERPROFILE ?? ''
+const CLAUDE_DIR  = join(HOME_DIR, '.claude')
+const API_BASE    = 'http://localhost:3001'
+const SESSION_START = Date.now()
+
+function showGoodbye(lastSnap?: { messages: number; streak: number; costUsd: number }): void {
+  const secs    = Math.floor((Date.now() - SESSION_START) / 1000)
+  const dur     = secs >= 60 ? `${Math.floor(secs/60)}m ${secs%60}s` : `${secs}s`
+  const lines: string[] = []
+  lines.push('')
+  lines.push(`  ${AM}${B}claude-stats${R}  ${D}·  watch mode${R}`)
+  lines.push('')
+  lines.push(`  ${D}sessão:  ${R}${WH}${dur}${R}`)
+  if (lastSnap) {
+    lines.push(`  ${D}streak:  ${R}${WH}${lastSnap.streak}d${R}`)
+    lines.push(`  ${D}msgs:    ${R}${WH}${lastSnap.messages >= 1000 ? (lastSnap.messages/1000).toFixed(1)+'k' : lastSnap.messages}${R}`)
+    lines.push(`  ${D}custo:   ${R}${WH}$${lastSnap.costUsd.toFixed(2)}${R}`)
+  }
+  lines.push('')
+  lines.push(`  ${D}até logo  ${AM}✦${R}`)
+  lines.push('')
+  process.stdout.write(lines.join('\n') + '\n')
+}
 
 // ── ANSI ───────────────────────────────────────────────────────────────────
 
@@ -449,17 +469,24 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
   lines.push(`  ${D}OTLP:${R}       ${cfg.otlpEndpoint ? `${WH}${cfg.otlpEndpoint}${R}` : `${D}(disabled)${R}`}`)
   lines.push('')
 
-  // Binary spinner — 90% zeros, 1 (orange) moves like a cursor
-  const SPIN_W = 48
-  const spinPos = st.animFrame % SPIN_W
-  const spinLine = Array.from({ length: SPIN_W }, (_, i) =>
-    i === spinPos ? `${AM}${B}1${R}` : `${D}0${R}`
+  // Loading spinner — wave bar (same gradient as loader) + braille spinner
+  const WAVE_STR = '░░░▒▒▓▓███▓▓▒▒░░░░░▒▒▓▓███▓▓▒▒░░░'
+  const WAVE_W   = 36
+  const wOff  = st.animFrame % WAVE_STR.length
+  const wRaw  = (WAVE_STR + WAVE_STR + WAVE_STR).slice(wOff, wOff + WAVE_W)
+  const wBar  = wRaw.split('').map(c =>
+    c === '█' ? `${B}${AM}█${R}`
+    : c === '▓' ? `${AM}▓${R}`
+    : c === '▒' ? `${D}${AM}▒${R}`
+    : `${D}░${R}`
   ).join('')
+  const MINI_SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+  const mSpin = MINI_SPIN[st.animFrame % MINI_SPIN.length]!
 
   // Tabela
   const solo = cfg.selectedProjects.length <= 1
   const all  = st.snapshots.get('')
-  const ldg  = `  ${spinLine}`
+  const ldg  = `  ${AM}${mSpin}${R}  ${wBar}`
 
   if (solo || cfg.viewMode === 'junto') {
     lines.push(sepLine(W))
@@ -508,7 +535,13 @@ async function watchLoop(cfg: WatchConfig): Promise<void> {
     animFrame: 0, showAnim: cfg.showAnim, isLoading: true, dataSource: 'api' as DataSrc,
   }
 
-  const cleanup = () => { out(SHOW + ALT_OFF + CLR); if (spawnedServer) { spawnedServer.kill(); spawnedServer = null } process.exit(0) }
+  const cleanup = () => {
+    out(SHOW + ALT_OFF + CLR)
+    const snap = st.snapshots.get('')
+    showGoodbye(snap ? { messages: snap.messages, streak: snap.streak, costUsd: snap.costUsd } : undefined)
+    if (spawnedServer) { spawnedServer.kill(); spawnedServer = null }
+    process.exit(0)
+  }
   out(ALT_ON + HIDE)
 
   const render = () => { out(CLR + buildPanel(cfg, st)) }
@@ -759,6 +792,11 @@ async function main() {
 }
 
 main().catch(err => {
+  // ExitPromptError = Ctrl+C during an inquirer prompt (expected exit)
+  if (err?.name === 'ExitPromptError' || err?.code === 'ERR_USE_AFTER_CLOSE') {
+    showGoodbye()
+    process.exit(0)
+  }
   out(SHOW + ALT_OFF)
   console.error('Erro fatal:', err)
   process.exit(1)
