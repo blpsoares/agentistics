@@ -2,76 +2,80 @@
 /**
  * Claude Stats — Watch CLI
  *
- * TUI interativa para monitorar métricas Claude em tempo real.
- * Selecione projetos e visualize dados agregados no terminal.
+ * TUI interativa que monitora métricas Claude em tempo real, atualizando o painel
+ * no lugar (como `watch` do Linux) sem duplicar a saída.
  *
  * Usage:
  *   bun run watch:cli
  *
- * Variáveis de ambiente:
- *   CLAUDE_STATS_WATCH_INTERVAL  — Intervalo de polling em segundos (padrão: 30, mín: 5)
+ * Controles durante o watch:
+ *   Ctrl+O  — ocultar/mostrar animação de batalha
+ *   Ctrl+C  — sair
  */
 
 import { readdir, readFile } from 'fs/promises'
 import { join } from 'path'
 import chokidar from 'chokidar'
-import { checkbox, select } from '@inquirer/prompts'
-import { calcCost } from './src/lib/types'
+import {
+  createPrompt,
+  useState,
+  useMemo,
+  useKeypress,
+  usePagination,
+  isUpKey,
+  isDownKey,
+  isEnterKey,
+  isSpaceKey,
+  isBackspaceKey,
+  type KeypressEvent,
+} from '@inquirer/core'
+import { select, input } from '@inquirer/prompts'
+import { calcCost, getModelPrice } from './src/lib/types'
 import type { ModelUsage } from './src/lib/types'
 
 // ── Configuração ───────────────────────────────────────────────────────────
 
-const HOME_DIR = process.env.HOME ?? process.env.USERPROFILE ?? ''
+const HOME_DIR   = process.env.HOME ?? process.env.USERPROFILE ?? ''
 const CLAUDE_DIR = join(HOME_DIR, '.claude')
-const SESSION_META_DIR = join(CLAUDE_DIR, 'usage-data', 'session-meta')
-const STATS_CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json')
+const PROJECTS_DIR       = join(CLAUDE_DIR, 'projects')
+const SESSION_META_DIR   = join(CLAUDE_DIR, 'usage-data', 'session-meta')
+const STATS_CACHE_FILE   = join(CLAUDE_DIR, 'stats-cache.json')
 
-const MIN_INTERVAL_SEC = 5
-const rawInterval = parseInt(process.env.CLAUDE_STATS_WATCH_INTERVAL ?? '30', 10)
-const WATCH_INTERVAL_SEC = !Number.isFinite(rawInterval) || rawInterval < MIN_INTERVAL_SEC ? 30 : rawInterval
+// ── ANSI ───────────────────────────────────────────────────────────────────
 
-// ── ANSI helpers ───────────────────────────────────────────────────────────
-
-const ESC = '\x1b'
+const ESC   = '\x1b'
 const RESET = `${ESC}[0m`
-const BOLD = `${ESC}[1m`
-const DIM = `${ESC}[2m`
-const CYAN = `${ESC}[36m`
+const BOLD  = `${ESC}[1m`
+const DIM   = `${ESC}[2m`
+const CYAN  = `${ESC}[36m`
 const GREEN = `${ESC}[32m`
 const YELLOW = `${ESC}[33m`
+const RED   = `${ESC}[31m`
 const WHITE = `${ESC}[37m`
 const BRIGHT_CYAN = `${ESC}[96m`
 
-function clearScreen() {
-  process.stdout.write(`${ESC}[2J${ESC}[H`)
+function clearScreen()  { process.stdout.write(`${ESC}[2J${ESC}[H`) }
+function hideCursor()   { process.stdout.write(`${ESC}[?25l`) }
+function showCursor()   { process.stdout.write(`${ESC}[?25h`) }
+function visLen(s: string) { return s.replace(/\x1b\[[0-9;]*m/g, '').length }
+function col(s: string, w: number, align: 'l' | 'r' = 'r') {
+  const p = ' '.repeat(Math.max(0, w - visLen(s)))
+  return align === 'l' ? s + p : p + s
 }
-function hideCursor() {
-  process.stdout.write(`${ESC}[?25l`)
-}
-function showCursor() {
-  process.stdout.write(`${ESC}[?25h`)
-}
+function hr(w: number, ch = '─') { return `${DIM}${ch.repeat(w)}${RESET}` }
 
 // ── Tipos ──────────────────────────────────────────────────────────────────
 
 type ViewMode = 'separado' | 'junto' | 'ambos'
 
-interface ProjectInfo {
-  name: string
-  path: string
-}
+interface ProjectInfo { name: string; path: string }
 
 interface CliSnapshot {
-  messages: number
-  sessions: number
-  inputTokens: number
-  outputTokens: number
-  costUsd: number
-  streak: number
-  gitCommits: number
-  gitPushes: number
-  linesAdded: number
-  linesRemoved: number
+  messages: number; sessions: number
+  inputTokens: number; outputTokens: number
+  costUsd: number; streak: number
+  gitCommits: number; gitPushes: number
+  linesAdded: number; linesRemoved: number
 }
 
 interface StatsCache {
@@ -79,266 +83,330 @@ interface StatsCache {
   modelUsage?: Record<string, ModelUsage>
 }
 
-interface SessionMetaLight {
-  session_id: string
-  project_path: string
-  input_tokens: number
-  output_tokens: number
-  user_message_count: number
-  assistant_message_count: number
-  git_commits: number
-  git_pushes: number
-  lines_added: number
-  lines_removed: number
-  start_time: string
+interface SessionMeta {
+  session_id: string; project_path: string; start_time: string
+  user_message_count: number; assistant_message_count: number
+  git_commits: number; git_pushes: number
+  input_tokens: number; output_tokens: number
+  lines_added: number; lines_removed: number
 }
 
 interface WatchConfig {
-  selectedProjects: ProjectInfo[]  // empty = todos
+  selectedProjects: ProjectInfo[]
   allProjects: ProjectInfo[]
   viewMode: ViewMode
   intervalSec: number
+  otlpEndpoint: string
+}
+
+interface AppState {
+  snapshots: Map<string, CliSnapshot>   // chave '' = all, ou project_path
+  lastUpdated: Date
+  animFrame: number
+  showAnimation: boolean
+  isLoadingData: boolean
 }
 
 // ── I/O helpers ────────────────────────────────────────────────────────────
 
-async function safeReadJson<T>(filePath: string): Promise<T | null> {
-  try {
-    return JSON.parse(await readFile(filePath, 'utf-8')) as T
-  } catch {
-    return null
-  }
+async function safeReadJson<T>(f: string): Promise<T | null> {
+  try { return JSON.parse(await readFile(f, 'utf-8')) as T } catch { return null }
+}
+async function safeReadDir(d: string): Promise<string[]> {
+  try { return await readdir(d) } catch { return [] }
 }
 
-async function safeReadDir(dirPath: string): Promise<string[]> {
-  try {
-    return await readdir(dirPath)
-  } catch {
-    return []
-  }
-}
+// ── Descoberta de projetos (mesma lógica do server.ts) ─────────────────────
 
-// ── Descoberta de projetos ─────────────────────────────────────────────────
-// Lê os project_path únicos dos arquivos session-meta (caminhos canônicos reais).
+function decodeProjectDir(dirName: string): string {
+  if (dirName.startsWith('-')) return dirName.replace(/-/g, '/')
+  return '/' + dirName.replace(/-/g, '/')
+}
 
 async function discoverProjects(): Promise<ProjectInfo[]> {
+  // 1. Caminhos canônicos dos session-meta
   const metaFiles = (await safeReadDir(SESSION_META_DIR)).filter(f => f.endsWith('.json'))
-
-  const projectPaths = new Set<string>()
-
-  // Lê em lotes para não abrir muitos file descriptors de uma vez
+  const metaPaths = new Set<string>()
   const BATCH = 30
   for (let i = 0; i < metaFiles.length; i += BATCH) {
-    const batch = metaFiles.slice(i, i + BATCH)
-    const results = await Promise.all(
-      batch.map(f => safeReadJson<{ project_path?: string }>(join(SESSION_META_DIR, f)))
+    const res = await Promise.all(
+      metaFiles.slice(i, i + BATCH).map(f =>
+        safeReadJson<{ project_path?: string }>(join(SESSION_META_DIR, f))
+      )
     )
-    for (const s of results) {
-      if (s?.project_path) projectPaths.add(s.project_path)
+    for (const s of res) if (s?.project_path) metaPaths.add(s.project_path)
+  }
+
+  // 2. Dirs em ~/.claude/projects/ como fallback (projetos sem session-meta)
+  for (const dir of await safeReadDir(PROJECTS_DIR)) {
+    if (!dir.startsWith('.')) {
+      const decoded = decodeProjectDir(dir)
+      if (!metaPaths.has(decoded)) metaPaths.add(decoded)
     }
   }
 
-  return Array.from(projectPaths)
-    .sort()
-    .map(path => ({
-      path,
-      name: path.split('/').filter(Boolean).pop() ?? path,
-    }))
+  return Array.from(metaPaths).sort().map(path => ({
+    path,
+    name: path.split('/').filter(Boolean).pop() ?? path,
+  }))
 }
 
-// ── Cálculo de snapshot ────────────────────────────────────────────────────
+// ── Cálculo de snapshot (espelha useDerivedStats) ──────────────────────────
 
-async function buildCliSnapshot(projectPaths?: string[]): Promise<CliSnapshot> {
-  const isFiltered = projectPaths !== undefined && projectPaths.length > 0
-  const metaFiles = (await safeReadDir(SESSION_META_DIR)).filter(f => f.endsWith('.json'))
-  const sessions: SessionMetaLight[] = []
+function blendedCostPerToken(modelUsage: Record<string, ModelUsage>) {
+  let tIn = 0, tOut = 0, tCR = 0, tCW = 0
+  let wIn = 0, wOut = 0, wCR = 0, wCW = 0
+  for (const [id, u] of Object.entries(modelUsage)) {
+    const p = getModelPrice(id)
+    tIn += u.inputTokens; tOut += u.outputTokens
+    tCR += u.cacheReadInputTokens; tCW += u.cacheCreationInputTokens
+    wIn += u.inputTokens * p.input; wOut += u.outputTokens * p.output
+    wCR += u.cacheReadInputTokens * p.cacheRead; wCW += u.cacheCreationInputTokens * p.cacheWrite
+  }
+  return {
+    input:      tIn  > 0 ? wIn  / tIn  : 3,
+    output:     tOut > 0 ? wOut / tOut : 15,
+    cacheRead:  tCR  > 0 ? wCR  / tCR  : 0.3,
+    cacheWrite: tCW  > 0 ? wCW  / tCW  : 3.75,
+  }
+}
 
+async function loadSessions(): Promise<SessionMeta[]> {
+  const files = (await safeReadDir(SESSION_META_DIR)).filter(f => f.endsWith('.json'))
+  const result: SessionMeta[] = []
   const BATCH = 30
-  for (let i = 0; i < metaFiles.length; i += BATCH) {
-    const batch = metaFiles.slice(i, i + BATCH)
-    const results = await Promise.all(
-      batch.map(f => safeReadJson<SessionMetaLight>(join(SESSION_META_DIR, f)))
+  for (let i = 0; i < files.length; i += BATCH) {
+    const res = await Promise.all(
+      files.slice(i, i + BATCH).map(f => safeReadJson<SessionMeta>(join(SESSION_META_DIR, f)))
     )
-    for (const s of results) {
-      if (s) sessions.push(s)
-    }
+    for (const s of res) if (s?.session_id) result.push(s)
   }
+  return result
+}
 
-  const filtered = isFiltered
-    ? sessions.filter(s => projectPaths!.includes(s.project_path))
-    : sessions
+function computeSnapshot(
+  allSessions: SessionMeta[],
+  statsCache: StatsCache,
+  projectFilter?: string[]
+): CliSnapshot {
+  const isFiltered = projectFilter !== undefined && projectFilter.length > 0
+  const filtered   = isFiltered
+    ? allSessions.filter(s => projectFilter!.includes(s.project_path))
+    : allSessions
 
-  let inputTokens = 0
-  let outputTokens = 0
-  let gitCommits = 0
-  let gitPushes = 0
-  let linesAdded = 0
-  let linesRemoved = 0
-  let messages = 0
-  const activeDates = new Set<string>()
-  const sessionIds = new Set<string>()
+  const messages = isFiltered
+    ? filtered.reduce((s, x) => s + (x.user_message_count ?? 0) + (x.assistant_message_count ?? 0), 0)
+    : (statsCache.dailyActivity ?? []).reduce((s, d) => s + d.messageCount, 0)
 
-  for (const s of filtered) {
-    inputTokens += s.input_tokens ?? 0
-    outputTokens += s.output_tokens ?? 0
-    gitCommits += s.git_commits ?? 0
-    gitPushes += s.git_pushes ?? 0
-    linesAdded += s.lines_added ?? 0
-    linesRemoved += s.lines_removed ?? 0
-    messages += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
-    if (s.session_id) sessionIds.add(s.session_id)
-    if (s.start_time) activeDates.add(s.start_time.slice(0, 10))
-  }
+  const sessions = isFiltered
+    ? filtered.length
+    : (statsCache.dailyActivity ?? []).reduce((s, d) => s + d.sessionCount, 0)
 
-  // Custo: usa stats-cache para global (preciso); aproximação proporcional para filtros
+  const inputTokens  = filtered.reduce((s, x) => s + (x.input_tokens  ?? 0), 0)
+  const outputTokens = filtered.reduce((s, x) => s + (x.output_tokens ?? 0), 0)
+  const gitCommits   = filtered.reduce((s, x) => s + (x.git_commits   ?? 0), 0)
+  const gitPushes    = filtered.reduce((s, x) => s + (x.git_pushes    ?? 0), 0)
+  const linesAdded   = filtered.reduce((s, x) => s + (x.lines_added   ?? 0), 0)
+  const linesRemoved = filtered.reduce((s, x) => s + (x.lines_removed ?? 0), 0)
+
+  const modelUsage = statsCache.modelUsage ?? {}
   let costUsd = 0
-  const cache = await safeReadJson<StatsCache>(STATS_CACHE_FILE)
-
   if (!isFiltered) {
-    if (cache?.modelUsage) {
-      for (const [modelId, u] of Object.entries(cache.modelUsage)) {
-        costUsd += calcCost(u, modelId)
-      }
-    }
+    costUsd = Object.entries(modelUsage).reduce((s, [id, u]) => s + calcCost(u, id), 0)
   } else {
-    // Taxa combinada global → aplica ao volume de tokens do subconjunto
-    let globalInput = 0
-    let globalOutput = 0
-    let globalCost = 0
-    if (cache?.modelUsage) {
-      for (const [modelId, u] of Object.entries(cache.modelUsage)) {
-        globalInput += u.inputTokens + (u.cacheReadInputTokens ?? 0) + (u.cacheCreationInputTokens ?? 0)
-        globalOutput += u.outputTokens
-        globalCost += calcCost(u, modelId)
-      }
-    }
-    const totalTokens = globalInput + globalOutput
-    if (totalTokens > 0) {
-      costUsd = ((inputTokens + outputTokens) / totalTokens) * globalCost
-    }
+    const b = blendedCostPerToken(modelUsage)
+    costUsd = (inputTokens / 1_000_000) * b.input + (outputTokens / 1_000_000) * b.output
   }
 
-  // Streak: conta dias consecutivos para trás a partir de hoje
+  const activeDates = new Set((statsCache.dailyActivity ?? []).map(d => d.date))
   let streak = 0
   for (let i = 0; i <= 365; i++) {
-    const d = new Date()
-    d.setDate(d.getDate() - i)
-    const dateStr = d.toISOString().slice(0, 10)
-    if (activeDates.has(dateStr)) {
-      streak++
-    } else if (i > 0) {
-      break
+    const d = new Date(); d.setDate(d.getDate() - i)
+    const ds = d.toISOString().slice(0, 10)
+    if (activeDates.has(ds)) streak++
+    else if (i > 0) break
+  }
+
+  return { messages, sessions, inputTokens, outputTokens, costUsd, streak, gitCommits, gitPushes, linesAdded, linesRemoved }
+}
+
+async function reloadAllSnapshots(config: WatchConfig): Promise<{
+  snapshots: Map<string, CliSnapshot>
+  lastUpdated: Date
+}> {
+  const [allSessions, statsCache] = await Promise.all([
+    loadSessions(),
+    safeReadJson<StatsCache>(STATS_CACHE_FILE).then(v => v ?? {}),
+  ])
+
+  const snapshots = new Map<string, CliSnapshot>()
+
+  if (config.selectedProjects.length === 0) {
+    // Todos os projetos
+    snapshots.set('', computeSnapshot(allSessions, statsCache))
+  } else {
+    // Snapshot unificado dos selecionados
+    snapshots.set('', computeSnapshot(allSessions, statsCache,
+      config.selectedProjects.map(p => p.path)))
+    // Snapshot individual por projeto
+    for (const proj of config.selectedProjects) {
+      snapshots.set(proj.path, computeSnapshot(allSessions, statsCache, [proj.path]))
     }
   }
 
-  return {
-    messages,
-    sessions: sessionIds.size,
-    inputTokens,
-    outputTokens,
-    costUsd,
-    streak,
-    gitCommits,
-    gitPushes,
-    linesAdded,
-    linesRemoved,
-  }
+  return { snapshots, lastUpdated: new Date() }
 }
 
-// ── Formatação ─────────────────────────────────────────────────────────────
+// ── Animação de batalha: Claude vs Cursor ──────────────────────────────────
+
+const BATTLE_FRAMES: string[][] = [
+  // 0 — idle (ambos de pé)
+  [
+    `   ${YELLOW}o${RESET}                     ${RED}o${RESET}   `,
+    `  ${YELLOW}/|\\${RESET}   ${DIM}~ vs ~${RESET}     ${RED}/|\\${RESET}  `,
+    `  ${YELLOW}/ \\${RESET}                   ${RED}/ \\${RESET}  `,
+  ],
+  // 1 — Claude carrega golpe
+  [
+    `  ${YELLOW}\\o/${RESET}                    ${RED}o${RESET}   `,
+    `   ${YELLOW}|${RESET}    ${DIM}~ vs ~${RESET}      ${RED}/|\\${RESET}  `,
+    `  ${YELLOW}/ \\${RESET}                   ${RED}/ \\${RESET}  `,
+  ],
+  // 2 — Claude lança golpe →
+  [
+    `   ${YELLOW}o${RESET}${BOLD}─────────────→${RESET}  ${RED}o${RESET}   `,
+    `  ${YELLOW}─|─${RESET}                   ${RED}|${RESET}   `,
+    `  ${YELLOW}/ \\${RESET}                  ${RED}/\\${RESET}   `,
+  ],
+  // 3 — Impacto! Cursor apanha
+  [
+    `   ${YELLOW}o${RESET}            ${GREEN}✦${RESET}  ${RED}*${RESET}    `,
+    `  ${YELLOW}/|\\${RESET}               ${RED}\\${RESET}    `,
+    `  ${YELLOW}/ \\${RESET}               ${RED}/${RESET}    `,
+  ],
+  // 4 — Cursor se recupera
+  [
+    `   ${YELLOW}o${RESET}                    ${RED}o${RESET}   `,
+    `  ${YELLOW}/|\\${RESET}   ${DIM}~ vs ~${RESET}    ${RED}\\|/${RESET}   `,
+    `  ${YELLOW}/ \\${RESET}                  ${RED}/\\${RESET}   `,
+  ],
+  // 5 — Cursor carrega contra-ataque
+  [
+    `   ${YELLOW}o${RESET}                   ${RED}\\o/${RESET}  `,
+    `  ${YELLOW}/|\\${RESET}   ${DIM}~ vs ~${RESET}    ${RED}|${RESET}    `,
+    `  ${YELLOW}/ \\${RESET}                  ${RED}/ \\${RESET}  `,
+  ],
+  // 6 — Cursor lança golpe ←
+  [
+    `   ${YELLOW}o${RESET}  ${RED}←─────────────${RESET}${RED}─|─${RESET}  `,
+    `   ${YELLOW}|${RESET}                    ${RED}|${RESET}    `,
+    `  ${YELLOW}/\\${RESET}                   ${RED}/ \\${RESET}  `,
+  ],
+  // 7 — Claude apanha
+  [
+    `  ${GREEN}✦${RESET} ${YELLOW}*${RESET}                   ${RED}o${RESET}    `,
+    `    ${YELLOW}\\${RESET}                   ${RED}/|\\${RESET}  `,
+    `    ${YELLOW}/                   ${RED}/ \\${RESET}  `,
+  ],
+]
+
+const BATTLE_LABELS = [
+  `${YELLOW}CLAUDE${RESET}              ${RED}CURSOR${RESET}`,
+  `${YELLOW}CLAUDE${RESET}  ${DIM}se prepara...${RESET}  ${RED}CURSOR${RESET}`,
+  `${YELLOW}CLAUDE${RESET}  ${GREEN}ATAQUE!${RESET}        ${RED}CURSOR${RESET}`,
+  `${YELLOW}CLAUDE${RESET}  ${GREEN}CRÍTICO!${RESET}       ${RED}CURSOR${RESET}`,
+  `${YELLOW}CLAUDE${RESET}              ${RED}CURSOR${RESET}`,
+  `${YELLOW}CLAUDE${RESET}          ${DIM}se prepara...${RESET} ${RED}CURSOR${RESET}`,
+  `${YELLOW}CLAUDE${RESET}       ${RED}CONTRA-ATAQUE!${RESET} ${RED}CURSOR${RESET}`,
+  `${YELLOW}CLAUDE${RESET}  ${RED}LEVOU!${RESET}           ${RED}CURSOR${RESET}`,
+]
+
+function renderBattle(frame: number): string[] {
+  const f = frame % BATTLE_FRAMES.length
+  const lines = [
+    `  ${DIM}┌───────────────────────────────────────────┐${RESET}`,
+    `  ${DIM}│${RESET}${BATTLE_LABELS[f].padEnd(43)}${DIM}│${RESET}`,
+    ...BATTLE_FRAMES[f].map(l => `  ${DIM}│${RESET}  ${l}${DIM}│${RESET}`),
+    `  ${DIM}│${RESET}  ${DIM}[Ctrl+O para ocultar]${RESET}               ${DIM}│${RESET}`,
+    `  ${DIM}└───────────────────────────────────────────┘${RESET}`,
+  ]
+  return lines
+}
+
+// ── Formatação de métricas ─────────────────────────────────────────────────
 
 function fmtNum(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k'
+  if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'k'
   return n.toString()
 }
-
 function fmtCost(usd: number): string {
   if (usd >= 1000) return `$${(usd / 1000).toFixed(1)}k`
-  if (usd >= 1) return `$${usd.toFixed(2)}`
+  if (usd >= 1)    return `$${usd.toFixed(2)}`
   return `$${usd.toFixed(3)}`
 }
 
-/** Alinha string considerando que ela pode ter escape codes ANSI. */
-function col(s: string, width: number, align: 'l' | 'r' = 'r'): string {
-  const visLen = s.replace(/\x1b\[[0-9;]*m/g, '').length
-  const pad = ' '.repeat(Math.max(0, width - visLen))
-  return align === 'l' ? s + pad : pad + s
-}
-
-function hr(width: number, char = '─'): string {
-  return `${DIM}${char.repeat(width)}${RESET}`
-}
-
-// Colunas da tabela de métricas (label, largura, alinhamento)
-const METRIC_COLS: Array<{ label: string; width: number }> = [
-  { label: 'Msgs',    width: 8  },
-  { label: 'Sessões', width: 8  },
-  { label: 'Tok↑',   width: 9  },
-  { label: 'Tok↓',   width: 9  },
-  { label: 'Custo',  width: 10 },
-  { label: 'Streak', width: 7  },
-  { label: 'Commits',width: 8  },
-  { label: '+Linhas',width: 9  },
-  { label: '-Linhas',width: 9  },
+const METRIC_COLS = [
+  { label: 'Msgs',     w: 8  },
+  { label: 'Sessões',  w: 8  },
+  { label: 'Tok↑',    w: 9  },
+  { label: 'Tok↓',    w: 9  },
+  { label: 'Custo',   w: 10 },
+  { label: 'Streak',  w: 7  },
+  { label: 'Commits', w: 8  },
+  { label: '+Linhas', w: 9  },
+  { label: '-Linhas', w: 9  },
 ]
+const PROJECT_COL_W = 24
 
-const PROJECT_COL_WIDTH = 24
-
-function renderTableHeader(includeProjectCol: boolean): string {
-  const cells = METRIC_COLS.map(c => col(`${DIM}${c.label}${RESET}`, c.width))
-  if (includeProjectCol) {
-    return col(`${DIM}Projeto${RESET}`, PROJECT_COL_WIDTH, 'l') + '  ' + cells.join('  ')
-  }
+function tableHeader(withProject: boolean): string {
+  const cells = METRIC_COLS.map(c => col(`${DIM}${c.label}${RESET}`, c.w))
+  if (withProject) return col(`${DIM}Projeto${RESET}`, PROJECT_COL_W, 'l') + '  ' + cells.join('  ')
   return cells.join('  ')
 }
-
-function renderSnapshotRow(snap: CliSnapshot, projectName?: string): string {
-  const values = [
-    fmtNum(snap.messages),
-    fmtNum(snap.sessions),
-    fmtNum(snap.inputTokens),
-    fmtNum(snap.outputTokens),
-    fmtCost(snap.costUsd),
-    `${snap.streak}d`,
+function tableRow(snap: CliSnapshot, projectName?: string): string {
+  const vals = [
+    fmtNum(snap.messages), fmtNum(snap.sessions),
+    fmtNum(snap.inputTokens), fmtNum(snap.outputTokens),
+    fmtCost(snap.costUsd), `${snap.streak}d`,
     fmtNum(snap.gitCommits),
-    `+${fmtNum(snap.linesAdded)}`,
-    `-${fmtNum(snap.linesRemoved)}`,
+    `+${fmtNum(snap.linesAdded)}`, `-${fmtNum(snap.linesRemoved)}`,
   ]
-  const cells = values.map((v, i) => col(v, METRIC_COLS[i].width))
-
+  const cells = vals.map((v, i) => col(v, METRIC_COLS[i].w))
   if (projectName !== undefined) {
-    const name = projectName.length > PROJECT_COL_WIDTH - 1
-      ? projectName.slice(0, PROJECT_COL_WIDTH - 2) + '…'
+    const name = projectName.length > PROJECT_COL_W - 1
+      ? projectName.slice(0, PROJECT_COL_W - 2) + '…'
       : projectName
-    return col(`${CYAN}${name}${RESET}`, PROJECT_COL_WIDTH, 'l') + '  ' + cells.join('  ')
+    return col(`${CYAN}${name}${RESET}`, PROJECT_COL_W, 'l') + '  ' + cells.join('  ')
   }
   return cells.join('  ')
 }
 
 // ── Renderização do painel ─────────────────────────────────────────────────
 
-function buildHeaderLines(config: WatchConfig, updatedAt: Date): string[] {
-  const width = process.stdout.columns || 100
-  const now = updatedAt.toLocaleTimeString('pt-BR')
-  const refresh = `⟳ ${config.intervalSec}s`
-  const rightSide = `${DIM}${now}  ${refresh}${RESET}`
-  const leftSide = `${BOLD}${BRIGHT_CYAN}Claude Stats — Watch Mode${RESET}`
-
-  const visLeft = 'Claude Stats — Watch Mode'
-  const visRight = `${now}  ${refresh}`
-  const gap = Math.max(1, width - visLeft.length - visRight.length)
-
+function buildPanel(config: WatchConfig, state: AppState): string {
+  const w = process.stdout.columns || 100
   const lines: string[] = []
-  lines.push(leftSide + ' '.repeat(gap) + rightSide)
-  lines.push(hr(width))
+
+  // Título
+  const now    = state.lastUpdated.toLocaleTimeString('pt-BR')
+  const loader = state.isLoadingData ? `${DIM} ⟳${RESET}` : ''
+  const left   = `${BOLD}${BRIGHT_CYAN}Claude Stats — Watch Mode${RESET}`
+  const right  = `${DIM}${now}  ⟳ ${config.intervalSec}s${loader}${RESET}`
+  const gap    = Math.max(1, w - visLen(left.replace(/\x1b\[[0-9;]*m/g, '')) - visLen(right.replace(/\x1b\[[0-9;]*m/g, '')))
+  lines.push(left + ' '.repeat(gap) + right)
+  lines.push(hr(w))
   lines.push('')
 
-  // Info block
-  const modeDesc =
-    config.viewMode === 'junto'    ? 'unificado'
-    : config.viewMode === 'separado' ? 'separado'
-    : 'ambos'
+  // Animação (se visível)
+  if (state.showAnimation) {
+    lines.push(...renderBattle(state.animFrame))
+    lines.push('')
+  }
+
+  // Bloco de info
+  const modeDesc = config.viewMode === 'junto' ? 'unificado'
+    : config.viewMode === 'separado' ? 'separado' : 'ambos'
 
   lines.push(`  ${DIM}Home:${RESET}       ${WHITE}${HOME_DIR}${RESET}`)
   lines.push(`  ${DIM}Claude dir:${RESET} ${WHITE}${CLAUDE_DIR}${RESET}`)
@@ -355,221 +423,282 @@ function buildHeaderLines(config: WatchConfig, updatedAt: Date): string[] {
   }
 
   lines.push(`  ${DIM}Interval:${RESET}   ${WHITE}${config.intervalSec}s${RESET}`)
-  lines.push(`  ${DIM}OTLP:${RESET}       ${DIM}(disabled)${RESET}`)
+  lines.push(`  ${DIM}OTLP:${RESET}       ${config.otlpEndpoint ? `${GREEN}${config.otlpEndpoint}${RESET}` : `${DIM}(disabled)${RESET}`}`)
   lines.push('')
 
-  return lines
-}
-
-async function renderPanel(config: WatchConfig): Promise<void> {
-  const updatedAt = new Date()
-  const width = process.stdout.columns || 100
-  const lines: string[] = []
-
-  lines.push(...buildHeaderLines(config, updatedAt))
-
-  const selectedPaths =
-    config.selectedProjects.length > 0
-      ? config.selectedProjects.map(p => p.path)
-      : undefined
-
-  // Modo 'todos' ou único projeto selecionado → sem perguntar view mode
+  // Tabela de métricas
   const singleView = config.selectedProjects.length <= 1
+  const allSnap    = state.snapshots.get('')
 
   if (singleView || config.viewMode === 'junto') {
-    // ── Linha unificada ───────────────────────────────────────────────────
-    const snap = await buildCliSnapshot(selectedPaths)
-    lines.push(hr(width))
-    lines.push(`  ${BOLD}${CYAN}UNIFICADO${RESET}`)
+    lines.push(hr(w))
+    if (!singleView) lines.push(`  ${BOLD}${CYAN}UNIFICADO${RESET}`)
     lines.push('')
-    lines.push('  ' + renderTableHeader(false))
-    lines.push(`  ${GREEN}${BOLD}${renderSnapshotRow(snap)}${RESET}`)
-    lines.push(hr(width))
+    lines.push('  ' + tableHeader(false))
+    lines.push(`  ${GREEN}${BOLD}${allSnap ? tableRow(allSnap) : '  (carregando...)'}${RESET}`)
+    lines.push(hr(w))
   } else if (config.viewMode === 'separado') {
-    // ── Uma linha por projeto ─────────────────────────────────────────────
-    lines.push(hr(width))
+    lines.push(hr(w))
     lines.push(`  ${BOLD}${CYAN}POR PROJETO${RESET}`)
     lines.push('')
-    lines.push('  ' + renderTableHeader(true))
-
+    lines.push('  ' + tableHeader(true))
     for (const proj of config.selectedProjects) {
-      const snap = await buildCliSnapshot([proj.path])
-      lines.push('  ' + renderSnapshotRow(snap, proj.name))
+      const snap = state.snapshots.get(proj.path)
+      lines.push('  ' + (snap ? tableRow(snap, proj.name) : `  ${DIM}${proj.name}  (carregando...)${RESET}`))
     }
-    lines.push(hr(width))
+    lines.push(hr(w))
   } else {
-    // ── Ambos: total no topo + um por projeto ──────────────────────────────
-    const allSnap = await buildCliSnapshot(selectedPaths)
-    lines.push(hr(width))
+    // ambos
+    lines.push(hr(w))
     lines.push(`  ${BOLD}${CYAN}UNIFICADO${RESET}`)
     lines.push('')
-    lines.push('  ' + renderTableHeader(false))
-    lines.push(`  ${GREEN}${BOLD}${renderSnapshotRow(allSnap)}${RESET}`)
+    lines.push('  ' + tableHeader(false))
+    lines.push(`  ${GREEN}${BOLD}${allSnap ? tableRow(allSnap) : '  (carregando...)'}${RESET}`)
     lines.push('')
     lines.push(`  ${BOLD}${CYAN}POR PROJETO${RESET}`)
     lines.push('')
-    lines.push('  ' + renderTableHeader(true))
-
+    lines.push('  ' + tableHeader(true))
     for (const proj of config.selectedProjects) {
-      const snap = await buildCliSnapshot([proj.path])
-      lines.push('  ' + renderSnapshotRow(snap, proj.name))
+      const snap = state.snapshots.get(proj.path)
+      lines.push('  ' + (snap ? tableRow(snap, proj.name) : `  ${DIM}${proj.name}  (carregando...)${RESET}`))
     }
-    lines.push(hr(width))
+    lines.push(hr(w))
   }
 
   lines.push('')
-  lines.push(`  ${DIM}Pressione Ctrl+C para sair${RESET}`)
+  lines.push(`  ${DIM}Ctrl+C sair  |  Ctrl+O ${state.showAnimation ? 'ocultar' : 'mostrar'} batalha${RESET}`)
 
-  clearScreen()
-  process.stdout.write(lines.join('\n') + '\n')
+  return lines.join('\n') + '\n'
 }
 
-// ── Seleção interativa ─────────────────────────────────────────────────────
-
-async function promptProjects(projects: ProjectInfo[]): Promise<ProjectInfo[]> {
-  const ALL_VALUE = '__all__'
-
-  const choices = [
-    {
-      name: `${BOLD}(todos os projetos)${RESET}`,
-      value: ALL_VALUE,
-      short: 'todos',
-    },
-    ...projects.map(p => ({
-      name: `${p.name}  ${DIM}${p.path}${RESET}`,
-      value: p.path,
-      short: p.name,
-    })),
-  ]
-
-  const selected = await checkbox({
-    message: 'Selecione os projetos para monitorar (⎵ seleciona, ↑↓ navega, Enter confirma):',
-    choices,
-    pageSize: Math.min(20, projects.length + 3),
-    loop: false,
-  })
-
-  if (selected.length === 0 || selected.includes(ALL_VALUE)) {
-    return []
-  }
-
-  return projects.filter(p => selected.includes(p.path))
-}
-
-async function promptViewMode(): Promise<ViewMode> {
-  return select<ViewMode>({
-    message: 'Como deseja visualizar os dados?',
-    choices: [
-      {
-        name: `${BOLD}Separado${RESET}  — uma linha por projeto`,
-        value: 'separado',
-        short: 'separado',
-      },
-      {
-        name: `${BOLD}Unificado${RESET} — total dos projetos selecionados`,
-        value: 'junto',
-        short: 'unificado',
-      },
-      {
-        name: `${BOLD}Ambos${RESET}     — total no topo + uma linha por projeto`,
-        value: 'ambos',
-        short: 'ambos',
-      },
-    ],
-  })
-}
-
-// ── Loop principal ─────────────────────────────────────────────────────────
+// ── Watch loop ─────────────────────────────────────────────────────────────
 
 async function watchLoop(config: WatchConfig): Promise<void> {
   hideCursor()
 
-  process.on('SIGINT', () => {
-    showCursor()
-    clearScreen()
-    process.exit(0)
-  })
-  process.on('SIGTERM', () => {
-    showCursor()
-    clearScreen()
-    process.exit(0)
-  })
+  const state: AppState = {
+    snapshots: new Map(),
+    lastUpdated: new Date(),
+    animFrame: 0,
+    showAnimation: true,
+    isLoadingData: true,
+  }
 
-  let isRendering = false
-  let pendingRender = false
+  // Limpa + redesenha no lugar (sem append)
+  const render = () => {
+    clearScreen()
+    process.stdout.write(buildPanel(config, state))
+  }
 
-  const render = async () => {
-    if (isRendering) {
-      pendingRender = true
-      return
-    }
-    isRendering = true
+  // Reload pesado de dados do disco
+  let reloading = false
+  const reloadData = async () => {
+    if (reloading) return
+    reloading = true
+    state.isLoadingData = true
     try {
-      await renderPanel(config)
-    } catch (err) {
-      // Não falha silenciosamente em erros de renderização
-      clearScreen()
-      console.error(`${RESET}Erro ao renderizar painel:`, err)
-    } finally {
-      isRendering = false
-      if (pendingRender) {
-        pendingRender = false
+      const { snapshots, lastUpdated } = await reloadAllSnapshots(config)
+      state.snapshots   = snapshots
+      state.lastUpdated = lastUpdated
+    } catch { /* mantém snapshot anterior */ }
+    finally {
+      state.isLoadingData = false
+      reloading = false
+    }
+    render()
+  }
+
+  // Carregamento inicial
+  await reloadData()
+
+  // Teclado: Ctrl+O toggle animação, Ctrl+C sair
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true)
+    process.stdin.resume()
+    process.stdin.on('data', (buf: Buffer) => {
+      const ch = buf[0]
+      if (ch === 3) {                      // Ctrl+C
+        showCursor()
+        clearScreen()
+        process.exit(0)
+      } else if (ch === 15) {              // Ctrl+O
+        state.showAnimation = !state.showAnimation
         render()
       }
-    }
-  }
-
-  // Renderização inicial
-  await render()
-
-  // Debounce para eventos de filesystem
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null
-  const debouncedRender = () => {
-    if (debounceTimer) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(render, 1500)
-  }
-
-  chokidar
-    .watch([SESSION_META_DIR, STATS_CACHE_FILE], {
-      persistent: true,
-      ignoreInitial: true,
     })
-    .on('all', debouncedRender)
+  } else {
+    process.on('SIGINT',  () => { showCursor(); clearScreen(); process.exit(0) })
+    process.on('SIGTERM', () => { showCursor(); clearScreen(); process.exit(0) })
+  }
 
-  // Poll periódico como fallback
-  setInterval(render, WATCH_INTERVAL_SEC * 1000)
+  // Timer de animação (200ms) — só redesenha, não relê disco
+  const ANIM_INTERVAL = 200
+  setInterval(() => {
+    state.animFrame++
+    render()
+  }, ANIM_INTERVAL)
+
+  // Timer de dados (configurable)
+  setInterval(reloadData, config.intervalSec * 1000)
+
+  // Chokidar: reload imediato em mudanças de arquivo (debounce 1.5s)
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null
+  chokidar
+    .watch([SESSION_META_DIR, STATS_CACHE_FILE], { persistent: true, ignoreInitial: true })
+    .on('all', () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(reloadData, 1500)
+    })
+}
+
+// ── Custom prompt: checkbox com busca reativa ──────────────────────────────
+
+interface CheckboxChoice { name: string; value: string; path: string }
+
+/** KeypressEvent estendido com os campos extras do readline de Node.js */
+type RlKeypress = KeypressEvent & { meta?: boolean; sequence?: string }
+
+const checkboxWithSearch = createPrompt<string[], {
+  message: string
+  choices: ReadonlyArray<CheckboxChoice>
+  pageSize?: number
+}>((config, done) => {
+  const [searchTerm, setSearchTerm] = useState('')
+  const [active, setActive]         = useState(0)
+  const [checked, setChecked]       = useState<ReadonlyArray<string>>([])
+
+  const filtered = useMemo(
+    () => {
+      const t = searchTerm.toLowerCase()
+      if (!t) return config.choices
+      return config.choices.filter(c =>
+        c.name.toLowerCase().includes(t) || c.path.toLowerCase().includes(t)
+      )
+    },
+    [searchTerm]
+  )
+
+  useKeypress((key) => {
+    const k = key as RlKeypress
+    if (isEnterKey(k)) { done([...checked]); return }
+
+    const len = filtered.length
+    if (isUpKey(k)) {
+      setActive(active === 0 ? Math.max(0, len - 1) : active - 1)
+    } else if (isDownKey(k)) {
+      setActive(active >= len - 1 ? 0 : active + 1)
+    } else if (isSpaceKey(k)) {
+      const item = filtered[active]
+      if (!item) return
+      const s = new Set(checked)
+      if (s.has(item.value)) s.delete(item.value)
+      else s.add(item.value)
+      setChecked(Array.from(s))
+    } else if (isBackspaceKey(k)) {
+      setSearchTerm(searchTerm.slice(0, -1))
+      setActive(0)
+    } else if (!k.ctrl && !k.meta && k.sequence?.length === 1 && k.sequence.charCodeAt(0) >= 32) {
+      setSearchTerm(searchTerm + k.sequence)
+      setActive(0)
+    }
+  })
+
+  const checkedSet = new Set(checked)
+
+  const pageView = usePagination({
+    items:    filtered as CheckboxChoice[],
+    active,
+    pageSize: config.pageSize ?? 16,
+    loop:     false,
+    renderItem: ({ item, isActive }) => {
+      const cursor  = isActive ? `${CYAN}❯${RESET}` : ' '
+      const box     = checkedSet.has(item.value) ? `${GREEN}◉${RESET}` : `${DIM}◯${RESET}`
+      const nameStr = checkedSet.has(item.value) ? `${GREEN}${item.name}${RESET}` : item.name
+      return ` ${cursor} ${box}  ${nameStr}  ${DIM}${item.path}${RESET}`
+    },
+  })
+
+  const cursorBlock   = `${ESC}[7m ${RESET}`
+  const searchDisplay = `${DIM}[Buscar]${RESET} ${BOLD}${searchTerm}${RESET}${cursorBlock}`
+
+  const checkedNames = checked
+    .map(v => config.choices.find(c => c.value === v)?.name ?? v)
+    .join(', ')
+
+  const selectedLine = checked.length > 0
+    ? `\n  ${DIM}Selecionados: ${RESET}${GREEN}${checkedNames}${RESET}`
+    : `\n  ${DIM}(nenhum = todos os projetos)${RESET}`
+
+  return (
+    `${BOLD}${config.message}${RESET}\n  ${searchDisplay}\n\n` +
+    pageView +
+    selectedLine +
+    `\n  ${DIM}↑↓ navegar  ⎵ selecionar  ⏎ confirmar  Backspace apaga busca${RESET}`
+  )
+})
+
+// ── Configuração inicial via prompts ───────────────────────────────────────
+
+async function askConfig(allProjects: ProjectInfo[]): Promise<WatchConfig> {
+  // 1. Intervalo
+  const intervalStr = await input({
+    message: `Intervalo de atualização (segundos):`,
+    default: '30',
+    validate: (v) => {
+      const n = parseInt(v, 10)
+      if (!Number.isFinite(n) || n < 5) return 'Mínimo 5 segundos'
+      return true
+    },
+  })
+  const intervalSec = parseInt(intervalStr, 10)
+
+  // 2. OTLP endpoint
+  const otlpEndpoint = await input({
+    message: 'OTLP endpoint (vazio para desativar):',
+    default: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? '',
+  })
+
+  // 3. Seleção de projetos com busca
+  const selectedPaths = await checkboxWithSearch({
+    message: 'Selecione os projetos para monitorar:',
+    choices: allProjects.map(p => ({ name: p.name, value: p.path, path: p.path })),
+    pageSize: Math.min(20, allProjects.length),
+  })
+
+  const selectedProjects = selectedPaths.length === 0
+    ? []
+    : allProjects.filter(p => selectedPaths.includes(p.path))
+
+  // 4. Modo de visualização (só se múltiplos selecionados)
+  let viewMode: ViewMode = 'junto'
+  if (selectedProjects.length > 1) {
+    viewMode = await select<ViewMode>({
+      message: 'Como deseja visualizar os dados?',
+      choices: [
+        { name: `${BOLD}Separado${RESET}  — uma linha por projeto`,             value: 'separado', short: 'separado'  },
+        { name: `${BOLD}Unificado${RESET} — total dos projetos selecionados`,   value: 'junto',    short: 'unificado' },
+        { name: `${BOLD}Ambos${RESET}     — total no topo + uma linha/projeto`, value: 'ambos',    short: 'ambos'     },
+      ],
+    })
+  }
+
+  return { selectedProjects, allProjects, viewMode, intervalSec, otlpEndpoint }
 }
 
 // ── Entry point ────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log(`${CYAN}${BOLD}Claude Stats — Watch CLI${RESET}\n`)
-  console.log(`${DIM}Descobrindo projetos em ${SESSION_META_DIR}...${RESET}`)
+  console.log(`\n${BOLD}${BRIGHT_CYAN}Claude Stats — Watch CLI${RESET}\n`)
+  console.log(`${DIM}Descobrindo projetos...${RESET}`)
 
-  const projects = await discoverProjects()
-
-  if (projects.length === 0) {
-    console.error(`\nNenhum projeto encontrado. Verifique se o diretório existe:\n  ${SESSION_META_DIR}`)
+  const allProjects = await discoverProjects()
+  if (allProjects.length === 0) {
+    console.error(`\nNenhum projeto encontrado em:\n  ${SESSION_META_DIR}\n  ${PROJECTS_DIR}`)
     process.exit(1)
   }
+  console.log(`${GREEN}${allProjects.length} projetos encontrados.${RESET}\n`)
 
-  console.log(`${GREEN}${projects.length} projetos encontrados.${RESET}\n`)
-
-  // Seleção interativa
-  const selectedProjects = await promptProjects(projects)
-
-  let viewMode: ViewMode = 'junto'
-  if (selectedProjects.length > 1) {
-    viewMode = await promptViewMode()
-  }
-
-  const config: WatchConfig = {
-    selectedProjects,
-    allProjects: projects,
-    viewMode,
-    intervalSec: WATCH_INTERVAL_SEC,
-  }
-
+  const config = await askConfig(allProjects)
   await watchLoop(config)
 }
 
