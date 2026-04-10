@@ -19,8 +19,8 @@
  */
 
 import { readdir, readFile, stat } from 'fs/promises'
-import { watch as fsWatch } from 'fs'
 import { join } from 'path'
+import chokidar from 'chokidar'
 
 // ── OpenTelemetry imports ──────────────────────────────────────────────────
 
@@ -221,7 +221,7 @@ async function buildSnapshot(): Promise<OtelSnapshot> {
     totalLinesRemoved,
     totalFilesModified,
     streak,
-    longestSessionMinutes: statsCache.longestSession?.duration ?? 0,
+    longestSessionMinutes: statsCache.longestSession?.duration ?? 0, // duration is in minutes (mirrors SessionMeta.duration_minutes)
     activeProjects: projectPaths.size,
     modelTokens,
     toolCounts,
@@ -280,9 +280,10 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
 
   const meter = metrics.getMeter('claude-stats', '1.0.0')
 
-  // ── Define instruments (all observable gauges — point-in-time snapshots) ──
+  // ── Define instruments ────────────────────────────────────────────────────
+  // Cumulative totals use ObservableCounter; point-in-time values use ObservableGauge.
 
-  const messagesTotal = meter.createObservableGauge('claude_stats.messages.total', {
+  const messagesTotal = meter.createObservableCounter('claude_stats.messages.total', {
     description: 'Total messages (user + assistant)',
     unit: '{messages}',
     valueType: ValueType.INT,
@@ -291,7 +292,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     if (latestSnapshot) obs.observe(latestSnapshot.totalMessages)
   })
 
-  const sessionsTotal = meter.createObservableGauge('claude_stats.sessions.total', {
+  const sessionsTotal = meter.createObservableCounter('claude_stats.sessions.total', {
     description: 'Total sessions',
     unit: '{sessions}',
     valueType: ValueType.INT,
@@ -300,7 +301,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     if (latestSnapshot) obs.observe(latestSnapshot.totalSessions)
   })
 
-  const toolCallsTotal = meter.createObservableGauge('claude_stats.tool_calls.total', {
+  const toolCallsTotal = meter.createObservableCounter('claude_stats.tool_calls.total', {
     description: 'Total tool calls',
     unit: '{calls}',
     valueType: ValueType.INT,
@@ -309,7 +310,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     if (latestSnapshot) obs.observe(latestSnapshot.totalToolCalls)
   })
 
-  const inputTokens = meter.createObservableGauge('claude_stats.tokens.input', {
+  const inputTokens = meter.createObservableCounter('claude_stats.tokens.input', {
     description: 'Total input tokens',
     unit: '{tokens}',
     valueType: ValueType.INT,
@@ -318,7 +319,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     if (latestSnapshot) obs.observe(latestSnapshot.totalInputTokens)
   })
 
-  const outputTokens = meter.createObservableGauge('claude_stats.tokens.output', {
+  const outputTokens = meter.createObservableCounter('claude_stats.tokens.output', {
     description: 'Total output tokens',
     unit: '{tokens}',
     valueType: ValueType.INT,
@@ -327,7 +328,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     if (latestSnapshot) obs.observe(latestSnapshot.totalOutputTokens)
   })
 
-  const costUsd = meter.createObservableGauge('claude_stats.cost.usd', {
+  const costUsd = meter.createObservableCounter('claude_stats.cost.usd', {
     description: 'Estimated total cost in USD',
     unit: 'USD',
     valueType: ValueType.DOUBLE,
@@ -336,7 +337,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     if (latestSnapshot) obs.observe(latestSnapshot.totalCostUsd)
   })
 
-  const gitCommits = meter.createObservableGauge('claude_stats.git.commits', {
+  const gitCommits = meter.createObservableCounter('claude_stats.git.commits', {
     description: 'Total git commits via Claude',
     unit: '{commits}',
     valueType: ValueType.INT,
@@ -345,7 +346,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     if (latestSnapshot) obs.observe(latestSnapshot.totalGitCommits)
   })
 
-  const gitPushes = meter.createObservableGauge('claude_stats.git.pushes', {
+  const gitPushes = meter.createObservableCounter('claude_stats.git.pushes', {
     description: 'Total git pushes via Claude',
     unit: '{pushes}',
     valueType: ValueType.INT,
@@ -354,7 +355,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     if (latestSnapshot) obs.observe(latestSnapshot.totalGitPushes)
   })
 
-  const linesAdded = meter.createObservableGauge('claude_stats.git.lines_added', {
+  const linesAdded = meter.createObservableCounter('claude_stats.git.lines_added', {
     description: 'Total lines added',
     unit: '{lines}',
     valueType: ValueType.INT,
@@ -363,7 +364,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     if (latestSnapshot) obs.observe(latestSnapshot.totalLinesAdded)
   })
 
-  const linesRemoved = meter.createObservableGauge('claude_stats.git.lines_removed', {
+  const linesRemoved = meter.createObservableCounter('claude_stats.git.lines_removed', {
     description: 'Total lines removed',
     unit: '{lines}',
     valueType: ValueType.INT,
@@ -372,7 +373,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     if (latestSnapshot) obs.observe(latestSnapshot.totalLinesRemoved)
   })
 
-  const filesModified = meter.createObservableGauge('claude_stats.git.files_modified', {
+  const filesModified = meter.createObservableCounter('claude_stats.git.files_modified', {
     description: 'Total files modified',
     unit: '{files}',
     valueType: ValueType.INT,
@@ -408,8 +409,8 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     if (latestSnapshot) obs.observe(latestSnapshot.activeProjects)
   })
 
-  // Per-model token gauges
-  const modelInputTokens = meter.createObservableGauge('claude_stats.tokens.by_model.input', {
+  // Per-model token counters
+  const modelInputTokens = meter.createObservableCounter('claude_stats.tokens.by_model.input', {
     description: 'Input tokens by model',
     unit: '{tokens}',
     valueType: ValueType.INT,
@@ -421,7 +422,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     }
   })
 
-  const modelOutputTokens = meter.createObservableGauge('claude_stats.tokens.by_model.output', {
+  const modelOutputTokens = meter.createObservableCounter('claude_stats.tokens.by_model.output', {
     description: 'Output tokens by model',
     unit: '{tokens}',
     valueType: ValueType.INT,
@@ -433,8 +434,8 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     }
   })
 
-  // Per-tool call gauge
-  const toolCallsByTool = meter.createObservableGauge('claude_stats.tool_calls.by_tool', {
+  // Per-tool call counter
+  const toolCallsByTool = meter.createObservableCounter('claude_stats.tool_calls.by_tool', {
     description: 'Tool calls by tool name',
     unit: '{calls}',
     valueType: ValueType.INT,
@@ -462,14 +463,16 @@ async function watchDirectory(dir: string, onChange: () => void): Promise<void> 
     return
   }
 
-  try {
-    fsWatch(dir, { recursive: true }, () => {
-      onChange()
-    })
-    console.log(`[watcher] Watching ${dir}`)
-  } catch (err) {
-    console.warn(`[watcher] Failed to watch ${dir}:`, String(err))
-  }
+  const watcher = chokidar.watch(dir, {
+    persistent: true,
+    ignoreInitial: true,
+    depth: 1,
+  })
+  watcher.on('all', onChange)
+  watcher.on('error', (err: unknown) => {
+    console.warn(`[watcher] Watch error on ${dir}:`, String(err))
+  })
+  console.log(`[watcher] Watching ${dir}`)
 }
 
 // ── Snapshot rebuild serialization ────────────────────────────────────────
@@ -534,7 +537,7 @@ async function main() {
     watchDirectory(PROJECTS_DIR, triggerUpdate),
   ])
 
-  // Also do periodic polling as a fallback (fs.watch can miss events)
+  // Also do periodic polling as a fallback (chokidar can miss events in some edge cases)
   setInterval(() => rebuildSnapshot(), WATCH_INTERVAL_SEC * 1000)
 
   console.log('[watcher] Running — use `bun run dev` in a separate terminal for the dashboard UI')

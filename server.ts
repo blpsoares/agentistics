@@ -1,7 +1,7 @@
 import { readdir, readFile, stat, unlink } from 'fs/promises'
-import { watch as fsWatch } from 'fs'
 import { join } from 'path'
 import { exec, spawn } from 'child_process'
+import chokidar from 'chokidar'
 import { promisify } from 'util'
 
 const execAsync = promisify(exec)
@@ -1035,12 +1035,16 @@ function triggerSseNotification() {
 
 function setupFileWatcher() {
   const watch = (dir: string) => {
-    try {
-      fsWatch(dir, { recursive: true }, triggerSseNotification)
-      console.log(`[watcher] Watching ${dir}`)
-    } catch (err) {
+    const watcher = chokidar.watch(dir, {
+      persistent: true,
+      ignoreInitial: true,
+      depth: 1,
+    })
+    watcher.on('all', triggerSseNotification)
+    watcher.on('error', (err: unknown) => {
       console.warn(`[watcher] Could not watch ${dir}:`, String(err))
-    }
+    })
+    console.log(`[watcher] Watching ${dir}`)
   }
   watch(SESSION_META_DIR)
   watch(PROJECTS_DIR)
@@ -1066,7 +1070,9 @@ function maybeSpawnWatcher() {
   })
 
   child.on('exit', (code, signal) => {
-    if (code !== 0) console.warn(`[watcher] Exited (code=${code} signal=${signal})`)
+    if (code !== 0 || signal) {
+      console.warn(`[watcher] OTel watcher daemon exited unexpectedly (code=${code} signal=${signal}). OTel metrics export has stopped.`)
+    }
   })
 
   const killChild = () => {
