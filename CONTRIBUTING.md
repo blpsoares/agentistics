@@ -1,0 +1,83 @@
+# Contributing to agentistics
+
+Thanks for your interest in contributing. This guide covers everything you need to get started.
+
+## Development setup
+
+**Prerequisites:** [Bun](https://bun.sh) v1.0+, Node.js is not required.
+
+```bash
+git clone https://github.com/blpsoares/agentistics.git
+cd agentistics
+bun install
+bun dev          # API on :3001, UI on :5173
+```
+
+The UI proxies `/api` requests to the API server automatically (via Vite config).
+
+> **Data source:** The dashboard reads `~/.claude/` from your home directory. You need Claude Code installed and some usage history for data to appear.
+
+## Project structure
+
+```
+cli.ts              — agentop binary entry point
+server.ts           — Bun API server (port 3001)
+watcher.ts          — OTel metrics daemon
+watch-cli.ts        — Terminal UI
+
+src/
+  hooks/useData.ts  — data fetching + all aggregation logic
+  lib/types.ts      — shared types + pricing calculations (single source of truth)
+  components/       — React UI components
+  App.tsx           — root component, layout, filters
+
+scripts/
+  embed-dist.ts     — embeds Vite output into a TS file for the binary build
+```
+
+## Running tests
+
+```bash
+bun test
+```
+
+Tests cover the critical pure functions (`calcCost`, `getModelPrice`, `calcStreak`, `getDateRangeFilter`). They are pure — no filesystem mocking needed.
+
+## Building the binary
+
+```bash
+bun run build:binary   # → release/agentop
+```
+
+This runs three steps: `vite build` → `scripts/embed-dist.ts` → `bun build --compile`. The file `src/embedded-dist.generated.ts` is generated and gitignored — never commit it.
+
+## Commit convention
+
+This project follows [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+feat: add per-project token breakdown
+fix: sort heatmapData to prevent chart axis disorder
+chore: update dependencies
+docs: improve install instructions
+```
+
+Commit messages are in **English**.
+
+## Submitting a PR
+
+1. Fork the repo and create a branch from `main`
+2. Make your changes — keep the scope focused
+3. Run `bun test` to verify nothing broke
+4. Open a PR against `main` and fill in the template
+
+## Reporting bugs
+
+Use the [bug report template](https://github.com/blpsoares/agentistics/issues/new?template=bug_report.yml). Include your install method, version, and steps to reproduce.
+
+## Architecture notes
+
+- **Pricing calculations** live exclusively in `src/lib/types.ts` (`MODEL_PRICING`, `getModelPrice`, `calcCost`). Never inline cost math elsewhere.
+- **`stats-cache.json`** has no project-level granularity — project filters are computed by summing individual sessions.
+- **`allTimeTotalSessions`** and **`sessionCountByProject`** are derived live from session metadata, not from the stale statsCache.
+- **Binary mode** is activated by `SERVE_STATIC=1` (set by `cli.ts`); in dev mode the embedded assets are never loaded.
