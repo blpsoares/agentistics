@@ -344,8 +344,7 @@ async function reloadData(config: WatchConfig): Promise<{
   return { snapshots, dataSource: 'files' }
 }
 
-// ── Animação de batalha ────────────────────────────────────────────────────
-// Apenas ASCII básico (a-z, /, \, -, |, >, <, *, =, o) + ANSI cores.
+// ── Animação: Claude resolve um incidente de produção ────────────────────
 // Cada frame = 4 linhas com largura visível exatamente igual a FW.
 
 const FW = 44
@@ -354,53 +353,53 @@ const fp = (s: string) => s + ' '.repeat(Math.max(0, FW - visLen(s)))
 
 // Cada elemento: [linha1, linha2, linha3, label]
 const FRAMES: Array<[string, string, string, string]> = [
-  [ // 0 — idle
-    fp(`  ${YL}o${R}                        ${RD}o${R}`),
-    fp(`  ${YL}|${R}         - vs -         ${RD}|${R}`),
-    fp(` ${YL}/ \\${R}                      ${RD}/ \\${R}`),
-    fp(`  ${YL}CLAUDE${R}               ${RD}CURSOR${R}`),
+  [ // 0 — tudo ok
+    fp(`  ${GR}.-----------.${R}  status: ${GR}[OK]${R}`),
+    fp(`  ${GR}| PROD SYS  |${R}  uptime: 99.9%`),
+    fp(`  ${GR}'-----------'${R}  errors:  ${GR}0${R}`),
+    fp(`  ${D}all systems normal${R}`),
   ],
-  [ // 1 — Claude carrega
-    fp(` ${YL}\\o/${R}                       ${RD}o${R}`),
-    fp(`  ${YL}|${R}         - vs -         ${RD}|${R}`),
-    fp(` ${YL}/ \\${R}                      ${RD}/ \\${R}`),
-    fp(`  ${YL}CLAUDE${R} ${D}carrega...${R}  ${RD}CURSOR${R}`),
+  [ // 1 — alerta dispara
+    fp(`  ${RD}.-----------.${R}  ${B}${RD}[!]${R} Error spike!`),
+    fp(`  ${RD}|  ALERT!!  |${R}  ${B}${RD}[!]${R} P0 incident`),
+    fp(`  ${RD}'-----------'${R}  errors: 500/min`),
+    fp(`  ${YL}waking up claude...${R}`),
   ],
-  [ // 2 — Claude ataca →
-    fp(`  ${YL}o${R} ${B}=======${R}${GR}>${R}           ${RD}o${R}`),
-    fp(`  ${YL}|${R}                         ${RD}|${R}`),
-    fp(` ${YL}/ \\${R}                      ${RD}/ \\${R}`),
-    fp(`  ${YL}CLAUDE${R} ${GR}ATAQUE!${R}      ${RD}CURSOR${R}`),
+  [ // 2 — claude lendo logs
+    fp(`   ${YL}o${R}   ${D}$ tail -f /var/log/app.log${R}`),
+    fp(`  ${YL}/|\\${R}  ${RD}> ERROR line 42: null ref${R}`),
+    fp(`  ${YL}/ \\${R}  ${RD}> ERROR line 42: null ref${R}`),
+    fp(`  ${D}investigating...${R}`),
   ],
-  [ // 3 — impacto no Cursor
-    fp(`  ${YL}o${R}         ${GR}*${R}      ${B}${RD}(o)${R}`),
-    fp(`  ${YL}|${R}                      ${RD}\\${R}`),
-    fp(` ${YL}/ \\${R}                     ${RD}/\\${R}`),
-    fp(`  ${YL}CLAUDE${R} ${GR}CRITICO!${R}    ${RD}CURSOR${R}`),
+  [ // 3 — achou o bug
+    fp(`   ${YL}o${R}   ${B}${GR}AHA!${R} found it - ${RD}line 42${R}`),
+    fp(`  ${YL}/|\\${R}  ${RD}> if (obj.get() == null)${R}`),
+    fp(`  ${YL}/ \\${R}  ${GR}> fix: obj?.get() ?? ''${R}`),
+    fp(`  ${GR}got the bug!${R}`),
   ],
-  [ // 4 — Cursor se recupera
-    fp(`  ${YL}o${R}                        ${RD}o${R}`),
-    fp(`  ${YL}|${R}         - vs -        ${RD}\\|/${R}`),
-    fp(` ${YL}/ \\${R}                      ${RD}/\\${R}`),
-    fp(`  ${YL}CLAUDE${R}               ${RD}CURSOR${R}`),
+  [ // 4 — digitando a correcao
+    fp(`   ${YL}o${R}   ${D}$ vim src/handler.ts:42${R}`),
+    fp(`  ${YL}\\|/${R}  ${RD}[-]${R} ${D}if (obj.get() == null)${R}`),
+    fp(`   ${YL}|${R}   ${GR}[+]${R} ${GR}if (obj?.get() == null)${R}`),
+    fp(`  ${D}patching...${R}`),
   ],
-  [ // 5 — Cursor carrega
-    fp(`  ${YL}o${R}                       ${RD}\\o/${R}`),
-    fp(`  ${YL}|${R}         - vs -         ${RD}|${R}`),
-    fp(` ${YL}/ \\${R}                      ${RD}/ \\${R}`),
-    fp(`  ${YL}CLAUDE${R}   ${RD}CURSOR ${D}carrega...${R}`),
+  [ // 5 — commit
+    fp(`   ${YL}o${R}   ${D}$ git commit -m "fix: ..."${R}`),
+    fp(`  ${YL}/|\\${R}  ${GR}[main a1b2c3] fix: null ref${R}`),
+    fp(`  ${YL}/ \\${R}  ${D}1 file changed, +1 -1${R}`),
+    fp(`  ${GR}committed!${R}`),
   ],
-  [ // 6 — Cursor ataca ←
-    fp(`  ${YL}o${R}           ${GR}<${R}${B}=======${R}  ${RD}o${R}`),
-    fp(`  ${YL}|${R}                         ${RD}|${R}`),
-    fp(` ${YL}/ \\${R}                      ${RD}/ \\${R}`),
-    fp(`  ${YL}CLAUDE${R}    ${RD}CURSOR ATAQUE!${R}`),
+  [ // 6 — deploy
+    fp(`   ${YL}o${R}   ${D}$ git push && ./deploy.sh${R}`),
+    fp(`  ${YL}/|\\${R}  ${YL}Deploying... ${GR}[========]${R}`),
+    fp(`  ${YL}/ \\${R}  ${GR}Build: OK    Tests: PASS${R}`),
+    fp(`  ${YL}deploying fix...${R}`),
   ],
-  [ // 7 — Claude leva
-    fp(`${GR}*${R} ${B}${YL}(o)${R}                       ${RD}o${R}`),
-    fp(`   ${YL}/\\${R}                        ${RD}|${R}`),
-    fp(`  ${YL}/  \\${R}                     ${RD}/ \\${R}`),
-    fp(`  ${YL}CLAUDE${R} ${D}levou!${R}       ${RD}CURSOR${R}`),
+  [ // 7 — resolvido, heroi
+    fp(`  ${GR}.-----------.${R}  status: ${GR}[OK]${R}`),
+    fp(`  ${GR}| INCIDENT  |${R}  errors: ${GR}0${R}`),
+    fp(`  ${GR}| RESOLVED  |${R}  fixed in ${B}4m32s${R}`),
+    fp(`  ${BC}${B}hero mode: activated${R}`),
   ],
 ]
 
@@ -524,7 +523,7 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
   }
 
   lines.push('')
-  lines.push(`  ${D}Ctrl+C sair  |  Ctrl+O ${st.showBattle ? 'ocultar' : 'mostrar'} batalha${R}`)
+  lines.push(`  ${D}Ctrl+C sair  |  Ctrl+O ${st.showBattle ? 'ocultar' : 'mostrar'} animacao${R}`)
   return lines.join('\n') + '\n'
 }
 
@@ -649,7 +648,7 @@ async function askConfig(all: ProjectInfo[]): Promise<WatchConfig> {
   })
 
   const showBattle = await confirm({
-    message: 'Mostrar batalha Claude vs Cursor no painel?',
+    message: 'Mostrar animacao "Claude resolve incidente" no painel?',
     default: true,
   })
 
