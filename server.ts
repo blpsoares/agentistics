@@ -1236,6 +1236,7 @@ function maybeSpawnWatcher() {
 setupFileWatcher()
 maybeSpawnWatcher()
 
+try {
 Bun.serve({
   port: PORT,
   async fetch(req) {
@@ -1267,6 +1268,13 @@ Bun.serve({
           'Connection': 'keep-alive',
           'X-Accel-Buffering': 'no',
         },
+      })
+    }
+
+    if (url.pathname === '/api/health' && req.method === 'GET') {
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
     }
 
@@ -1314,5 +1322,12 @@ Bun.serve({
     })
   },
 })
-
 console.log(`Claude Stats API running at http://localhost:${PORT}`)
+} catch (err: unknown) {
+  const msg = err instanceof Error ? err.message : String(err)
+  if (msg.includes('EADDRINUSE') || msg.includes('already in use')) {
+    console.log(`[server] Port ${PORT} already in use — reusing existing instance.`)
+    process.exit(0)
+  }
+  throw err
+}
