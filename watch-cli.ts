@@ -127,6 +127,19 @@ async function fetchApi(timeout = 3000): Promise<ApiResponse | null> {
   }
 }
 
+/** Probe leve — apenas verifica se o servidor está aceitando conexões. */
+async function probeApi(timeout = 1000): Promise<boolean> {
+  try {
+    const ac  = new AbortController()
+    const tid = setTimeout(() => ac.abort(), timeout)
+    const res = await fetch(`${API_BASE}/api/health`, { signal: ac.signal })
+    clearTimeout(tid)
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
 // ── Fonte 2: Leitura direta de arquivos (fallback) ─────────────────────────
 
 /** Lê primeiras linhas de um JSONL até encontrar campo `cwd`. */
@@ -670,8 +683,7 @@ let spawnedServer: ReturnType<typeof Bun.spawn> | null = null
 
 async function ensureApiRunning(): Promise<boolean> {
   // Já está rodando?
-  const probe = await fetchApi(2000)
-  if (probe) return false // já estava rodando, não precisamos subir
+  if (await probeApi(2000)) return false // já estava rodando, não precisamos subir
 
   // Sobe server.ts em background
   const serverPath = join(import.meta.dir, 'server.ts')
@@ -683,10 +695,10 @@ async function ensureApiRunning(): Promise<boolean> {
     env: { ...process.env },
   })
 
-  // Aguarda até 10s (polling a cada 300ms)
+  // Aguarda até 10s (polling a cada 300ms) usando probe leve
   for (let i = 0; i < 33; i++) {
     await new Promise(r => setTimeout(r, 300))
-    const ok = await fetchApi(1000)
+    const ok = await probeApi(1000)
     if (ok) {
       console.log(`${GR}Servidor iniciado (pid ${spawnedServer.pid}).${R}`)
       return true
