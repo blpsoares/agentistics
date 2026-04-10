@@ -33,12 +33,17 @@ const E = '\x1b'
 const R  = `${E}[0m`
 const B  = `${E}[1m`
 const D  = `${E}[2m`
-const CY = `${E}[36m`
-const GR = `${E}[32m`
-const YL = `${E}[33m`
-const RD = `${E}[31m`
-const WH = `${E}[37m`
-const BC = `${E}[96m`
+// Web dark-mode palette mapped to terminal
+const AM = `${E}[38;5;208m`  // orange/amber   — PRIMARY accent (#f59e0b / Anthropic brand)
+const VI = `${E}[38;5;135m`  // violet/indigo  — secondary accent (#6366f1)
+const EM = `${E}[92m`        // emerald green  — success/active (#10b981)
+const RS = `${E}[38;5;204m`  // rose           — error (#f43f5e)
+const CY = `${E}[36m`        // cyan            — tertiary accent
+const GR = `${E}[32m`        // green           — kept for compat
+const YL = `${E}[33m`        // yellow          — kept for compat
+const RD = `${E}[31m`        // red             — kept for compat
+const WH = `${E}[97m`        // bright white    — primary text
+const BC = `${E}[96m`        // bright cyan     — highlights
 
 const ALT_ON  = `${E}[?1049h`
 const ALT_OFF = `${E}[?1049l`
@@ -67,7 +72,7 @@ interface WatchConfig {
   viewMode: ViewMode
   intervalSec: number
   otlpEndpoint: string
-  showBattle: boolean
+  showAnim: boolean
 }
 
 interface CliSnapshot {
@@ -86,14 +91,24 @@ interface AppState {
   snapshots:   Map<string, CliSnapshot>
   lastUpdated: Date
   animFrame:   number
-  showBattle:  boolean
+  showAnim:    boolean
   isLoading:   boolean
   dataSource:  DataSrc
 }
 
 // ── API ────────────────────────────────────────────────────────────────────
 
-interface ApiProject { path: string; name: string }
+interface ApiProject {
+  path: string
+  name: string
+  git_stats?: {
+    commits: number
+    lines_added: number
+    lines_removed: number
+    files_modified: number
+    since: string
+  }
+}
 interface ApiResponse {
   statsCache: StatsCache
   projects:   ApiProject[]
@@ -131,44 +146,67 @@ async function probeApi(timeout = 1000): Promise<boolean> {
 // ── Cálculo de snapshot — espelha useDerivedStats ─────────────────────────
 
 function blendedCost(mu: Record<string, ModelUsage>) {
-  let tIn = 0, tOut = 0, wIn = 0, wOut = 0
+  let tIn = 0, tOut = 0, tCR = 0, tCW = 0
+  let wIn = 0, wOut = 0, wCR = 0, wCW = 0
   for (const [id, u] of Object.entries(mu)) {
     const p = getModelPrice(id)
-    tIn  += u.inputTokens;   tOut += u.outputTokens
-    wIn  += u.inputTokens * p.input; wOut += u.outputTokens * p.output
+    tIn  += u.inputTokens;               tOut += u.outputTokens
+    tCR  += u.cacheReadInputTokens;      tCW  += u.cacheCreationInputTokens
+    wIn  += u.inputTokens * p.input;     wOut += u.outputTokens * p.output
+    wCR  += u.cacheReadInputTokens * p.cacheRead
+    wCW  += u.cacheCreationInputTokens  * p.cacheWrite
   }
-  return { input: tIn > 0 ? wIn / tIn : 3, output: tOut > 0 ? wOut / tOut : 15 }
+  return {
+    input:      tIn  > 0 ? wIn  / tIn  : 3,
+    output:     tOut > 0 ? wOut / tOut : 15,
+    cacheRead:  tCR  > 0 ? wCR  / tCR  : 0.3,
+    cacheWrite: tCW  > 0 ? wCW  / tCW  : 3.75,
+  }
 }
 
 function computeSnapshot(
-  sessions:    SessionMeta[],
-  statsCache:  StatsCache,
-  filter?:     string[]
+  sessions:   SessionMeta[],
+  statsCache: StatsCache,
+  projects:   ApiProject[],
+  filter?:    string[]
 ): CliSnapshot {
-  const isF     = !!(filter?.length)
-  const filt    = isF ? sessions.filter(s => filter!.includes(s.project_path)) : sessions
-  const daily   = statsCache.dailyActivity ?? []
-  const mu      = statsCache.modelUsage ?? {}
+  const isF  = !!(filter?.length)
+  const filt = isF ? sessions.filter(s => filter!.includes(s.project_path)) : sessions
+  const daily = statsCache.dailyActivity ?? []
+  const mu    = statsCache.modelUsage ?? {}
 
-  // Mensagens/sessões — idêntico ao useDerivedStats:
-  //   sem filtro → statsCache.dailyActivity (mais preciso, inclui sessões sem meta)
-  //   com filtro → soma das sessões filtradas
-  const messages = isF
-    ? filt.reduce((s, x) => s + (x.user_message_count ?? 0) + (x.assistant_message_count ?? 0), 0)
-    : daily.reduce((s, d) => s + d.messageCount, 0)
+  // ── Messages/sessions — mirrors useDerivedStats exactly ──
+  //   with filter    → sum filtered sessions
+  //   without filter → extendedDailyActivity (statsCache + sessions on days not yet cached)
+  let messages: number
+  let sessCnt:  number
+  if (isF) {
+    messages = filt.reduce((s, x) => s + (x.user_message_count ?? 0) + (x.assistant_message_count ?? 0), 0)
+    sessCnt  = filt.length
+  } else {
+    const dailyDates = new Set(daily.map(d => d.date))
+    const supplementByDay: Record<string, { messageCount: number; sessionCount: number }> = {}
+    for (const s of sessions) {
+      if (!s.start_time) continue
+      const day = s.start_time.slice(0, 10)
+      if (dailyDates.has(day)) continue
+      if (!supplementByDay[day]) supplementByDay[day] = { messageCount: 0, sessionCount: 0 }
+      supplementByDay[day].messageCount += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
+      supplementByDay[day].sessionCount += 1
+    }
+    const extended = [
+      ...daily,
+      ...Object.entries(supplementByDay).map(([date, v]) => ({ date, ...v })),
+    ]
+    messages = extended.reduce((s, d) => s + d.messageCount, 0)
+    sessCnt  = extended.reduce((s, d) => s + d.sessionCount, 0)
+  }
 
-  const sessCnt = isF
-    ? filt.length
-    : daily.reduce((s, d) => s + d.sessionCount, 0)
-
-  // Tokens sempre das sessões filtradas (como no frontend)
+  // ── Tokens — always from filtered sessions ──
   const inTok  = filt.reduce((s, x) => s + (x.input_tokens  ?? 0), 0)
   const outTok = filt.reduce((s, x) => s + (x.output_tokens ?? 0), 0)
-  const gC     = filt.reduce((s, x) => s + (x.git_commits   ?? 0), 0)
-  const lA     = filt.reduce((s, x) => s + (x.lines_added   ?? 0), 0)
-  const lR     = filt.reduce((s, x) => s + (x.lines_removed ?? 0), 0)
 
-  // Custo — idêntico ao useDerivedStats
+  // ── Cost — mirrors useDerivedStats ──
   let cost = 0
   if (!isF) {
     cost = Object.entries(mu).reduce((s, [id, u]) => s + calcCost(u, id), 0)
@@ -177,14 +215,36 @@ function computeSnapshot(
     cost = (inTok / 1_000_000) * b.input + (outTok / 1_000_000) * b.output
   }
 
-  // Streak — sempre global (dailyActivity), igual ao frontend
-  const acts = new Set(daily.map(d => d.date))
+  // ── Streak — mirrors useDerivedStats exactly ──
+  //   with filter    → active dates from filtered sessions only
+  //   without filter → union of dailyActivity dates + ALL session dates (covers stale statsCache)
+  const activeDates = isF
+    ? new Set(filt.filter(s => s.start_time).map(s => s.start_time.slice(0, 10)))
+    : new Set([
+        ...daily.map(d => d.date),
+        ...sessions.filter(s => s.start_time).map(s => s.start_time.slice(0, 10)),
+      ])
   let streak = 0
   for (let i = 0; i <= 365; i++) {
     const d = new Date(); d.setDate(d.getDate() - i)
-    if (acts.has(d.toISOString().slice(0, 10))) streak++
+    if (activeDates.has(d.toISOString().slice(0, 10))) streak++
     else if (i > 0) break
   }
+
+  // ── Git stats — mirrors useDerivedStats: use project git_stats when exactly 1 project ──
+  //   (project-level git counts are more accurate than summing session fields)
+  const singleProjectGitStats = isF && filter!.length === 1
+    ? projects.find(p => p.path === filter![0])?.git_stats
+    : undefined
+  const gC = singleProjectGitStats
+    ? singleProjectGitStats.commits
+    : filt.reduce((s, x) => s + (x.git_commits   ?? 0), 0)
+  const lA = singleProjectGitStats
+    ? singleProjectGitStats.lines_added
+    : filt.reduce((s, x) => s + (x.lines_added   ?? 0), 0)
+  const lR = singleProjectGitStats
+    ? singleProjectGitStats.lines_removed
+    : filt.reduce((s, x) => s + (x.lines_removed ?? 0), 0)
 
   return { messages, sessions: sessCnt, inputTokens: inTok, outputTokens: outTok,
     costUsd: cost, streak, gitCommits: gC, linesAdded: lA, linesRemoved: lR }
@@ -202,10 +262,10 @@ async function reloadData(config: WatchConfig): Promise<{
   const apiData = await fetchApi(30_000)
   if (!apiData) throw new Error('API indisponivel')
 
-  const { sessions, statsCache } = apiData
-  snapshots.set('', computeSnapshot(sessions, statsCache, paths))
+  const { sessions, statsCache, projects } = apiData
+  snapshots.set('', computeSnapshot(sessions, statsCache, projects, paths))
   for (const p of config.selectedProjects) {
-    snapshots.set(p.path, computeSnapshot(sessions, statsCache, [p.path]))
+    snapshots.set(p.path, computeSnapshot(sessions, statsCache, projects, [p.path]))
   }
   return { snapshots, dataSource: 'api' }
 }
@@ -270,75 +330,55 @@ async function withLoader<T>(msg: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
-// ── Animação: Claude resolve um incidente de produção ────────────────────
-// Cada frame = 4 linhas com largura visível exatamente igual a FW.
+// ── Animação: Neural Wave ─────────────────────────────────────────────────
+// Visualiza um forward-pass num transformer: onda de ativação atravessando
+// 3 "camadas de atenção" em paralelo, da esquerda (input) para a direita (output).
+// Dinâmica — calculada a partir de `frame` sem array estático.
 
 const FW = 44
 
 const fp = (s: string) => s + ' '.repeat(Math.max(0, FW - visLen(s)))
 
-// Cada elemento: [linha1, linha2, linha3, label]
-const FRAMES: Array<[string, string, string, string]> = [
-  [ // 0 — tudo ok
-    fp(`  ${GR}.-----------.${R}  status: ${GR}[OK]${R}`),
-    fp(`  ${GR}| PROD SYS  |${R}  uptime: 99.9%`),
-    fp(`  ${GR}'-----------'${R}  errors:  ${GR}0${R}`),
-    fp(`  ${D}all systems normal${R}`),
-  ],
-  [ // 1 — alerta dispara
-    fp(`  ${RD}.-----------.${R}  ${B}${RD}[!]${R} Error spike!`),
-    fp(`  ${RD}|  ALERT!!  |${R}  ${B}${RD}[!]${R} P0 incident`),
-    fp(`  ${RD}'-----------'${R}  errors: 500/min`),
-    fp(`  ${YL}waking up claude...${R}`),
-  ],
-  [ // 2 — claude lendo logs
-    fp(`   ${YL}o${R}   ${D}$ tail -f /var/log/app.log${R}`),
-    fp(`  ${YL}/|\\${R}  ${RD}> ERROR line 42: null ref${R}`),
-    fp(`  ${YL}/ \\${R}  ${RD}> ERROR line 42: null ref${R}`),
-    fp(`  ${D}investigating...${R}`),
-  ],
-  [ // 3 — achou o bug
-    fp(`   ${YL}o${R}   ${B}${GR}AHA!${R} found it - ${RD}line 42${R}`),
-    fp(`  ${YL}/|\\${R}  ${RD}> if (obj.get() == null)${R}`),
-    fp(`  ${YL}/ \\${R}  ${GR}> fix: obj?.get() ?? ''${R}`),
-    fp(`  ${GR}got the bug!${R}`),
-  ],
-  [ // 4 — digitando a correcao
-    fp(`   ${YL}o${R}   ${D}$ vim src/handler.ts:42${R}`),
-    fp(`  ${YL}\\|/${R}  ${RD}[-]${R} ${D}if (obj.get() == null)${R}`),
-    fp(`   ${YL}|${R}   ${GR}[+]${R} ${GR}if (obj?.get() == null)${R}`),
-    fp(`  ${D}patching...${R}`),
-  ],
-  [ // 5 — commit
-    fp(`   ${YL}o${R}   ${D}$ git commit -m "fix: ..."${R}`),
-    fp(`  ${YL}/|\\${R}  ${GR}[main a1b2c3] fix: null ref${R}`),
-    fp(`  ${YL}/ \\${R}  ${D}1 file changed, +1 -1${R}`),
-    fp(`  ${GR}committed!${R}`),
-  ],
-  [ // 6 — deploy
-    fp(`   ${YL}o${R}   ${D}$ git push && ./deploy.sh${R}`),
-    fp(`  ${YL}/|\\${R}  ${YL}Deploying... ${GR}[========]${R}`),
-    fp(`  ${YL}/ \\${R}  ${GR}Build: OK    Tests: PASS${R}`),
-    fp(`  ${YL}deploying fix...${R}`),
-  ],
-  [ // 7 — resolvido, heroi
-    fp(`  ${GR}.-----------.${R}  status: ${GR}[OK]${R}`),
-    fp(`  ${GR}| INCIDENT  |${R}  errors: ${GR}0${R}`),
-    fp(`  ${GR}| RESOLVED  |${R}  fixed in ${B}4m32s${R}`),
-    fp(`  ${BC}${B}hero mode: activated${R}`),
-  ],
-]
+const ANIM_N     = 12  // nós por linha
+const ANIM_CYCLE = ANIM_N + 4  // frames por ciclo (2 hold + N + 2 hold)
 
-function renderBattle(frame: number): string[] {
-  const f = FRAMES[frame % FRAMES.length]!
-  const sep = sepLine(FW + 4)
+// Offset de fase por linha — simula attention heads independentes
+const ROW_OFFSETS = [0, -1, 1]
+
+// Labels por posição da onda (t = posição no ciclo 0..ANIM_CYCLE-1)
+const ANIM_LABELS: Record<number, string> = {
+  0: 'awaiting input…',    1: 'awaiting input…',
+  2: 'encoding context…',  3: 'encoding context…',
+  4: 'computing attention…', 5: 'computing attention…',
+  6: 'generating tokens…', 7: 'generating tokens…',
+  8: 'decoding output…',   9: 'decoding output…',
+  10: 'response ready  ✦', 11: 'response ready  ✦',
+  12: 'response ready  ✦', 13: 'response ready  ✦',
+  14: 'response ready  ✦', 15: 'response ready  ✦',
+}
+
+function renderAnim(frame: number): string[] {
+  const sep   = sepLine(FW + 4)
+  const t     = frame % ANIM_CYCLE                      // 0 … ANIM_CYCLE-1
+  const wPos  = t - 2                                   // wave front: -2 … N+1
+
+  const rows = ROW_OFFSETS.map(off => {
+    const w = wPos + off
+    const nodes = Array.from({ length: ANIM_N }, (_, i) => {
+      if (i > w)       return `${D}·${R}`               // not reached
+      if (i === w)     return `${B}${AM}◉${R}`          // active front (violet)
+      if (i === w - 1) return `${CY}◌${R}`              // trailing edge (cyan)
+      return `${EM}○${R}`                               // processed (emerald)
+    }).join(' ')
+    return fp(`  ${nodes}`)
+  })
+
+  const label = ANIM_LABELS[t] ?? '…'
   return [
     sep,
-    `  ${f[0]}`,
-    `  ${f[1]}`,
-    `  ${f[2]}`,
-    `  ${f[3]}`,
-    `  ${D}[Ctrl+O para ocultar]${R}`,
+    ...rows,
+    fp(`  ${D}${label}${R}`),
+    `  ${D}[Ctrl+O ocultar]${R}`,
     sep,
   ]
 }
@@ -371,7 +411,7 @@ const tRow = (s: CliSnapshot, name?: string) => {
   const c = v.map((x, i) => padStr(x, COLS[i]!.w))
   if (name !== undefined) {
     const n = name.length > PW-1 ? name.slice(0, PW-2)+'…' : name
-    return padStr(`${CY}${n}${R}`, PW, 'l')+'  '+c.join('  ')
+    return padStr(`${AM}${n}${R}`, PW, 'l')+'  '+c.join('  ')
   }
   return c.join('  ')
 }
@@ -386,27 +426,27 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
   const ts     = st.lastUpdated.toLocaleTimeString('pt-BR')
   const src    = st.dataSource === 'api' ? `${D}api${R}` : `${YL}files${R}`
   const right  = `${D}${ts}  ${R}${src}${D}  refresh: ${cfg.intervalSec}s${R}`
-  const left   = `${B}${BC}Claude Stats - Watch Mode${R}`
+  const left   = `${B}${AM}Claude Stats${R}${D} · ${R}${B}Watch Mode${R}`
   const gap    = Math.max(1, W - visLen('Claude Stats - Watch Mode') - visLen(ts) - visLen('  api  refresh: XXs'))
   lines.push(left + ' '.repeat(gap) + right)
   lines.push(sepLine(W))
   lines.push('')
 
-  // Batalha (se ativa)
-  if (st.showBattle) { lines.push(...renderBattle(st.animFrame)); lines.push('') }
+  // Animação (se ativa)
+  if (st.showAnim) { lines.push(...renderAnim(st.animFrame)); lines.push('') }
 
   // Bloco info
   const mode = cfg.viewMode === 'junto' ? 'unificado' : cfg.viewMode === 'separado' ? 'separado' : 'ambos'
   lines.push(`  ${D}Home:${R}       ${WH}${HOME_DIR}${R}`)
   lines.push(`  ${D}Claude dir:${R} ${WH}${CLAUDE_DIR}${R}`)
   if (cfg.selectedProjects.length === 0) {
-    lines.push(`  ${D}Projetos:${R}   ${YL}todos (${cfg.allProjects.length})${R}`)
+    lines.push(`  ${D}Projetos:${R}   ${AM}todos (${cfg.allProjects.length})${R}`)
   } else {
-    lines.push(`  ${D}Projetos:${R}   ${CY}${cfg.selectedProjects.map(p=>p.name).join(', ')}${R}`)
+    lines.push(`  ${D}Projetos:${R}   ${AM}${cfg.selectedProjects.map(p=>p.name).join(', ')}${R}`)
   }
-  if (cfg.selectedProjects.length > 1) lines.push(`  ${D}Modo:${R}       ${GR}${mode}${R}`)
+  if (cfg.selectedProjects.length > 1) lines.push(`  ${D}Modo:${R}       ${EM}${mode}${R}`)
   lines.push(`  ${D}Interval:${R}   ${WH}${cfg.intervalSec}s${R}`)
-  lines.push(`  ${D}OTLP:${R}       ${cfg.otlpEndpoint ? `${GR}${cfg.otlpEndpoint}${R}` : `${D}(disabled)${R}`}`)
+  lines.push(`  ${D}OTLP:${R}       ${cfg.otlpEndpoint ? `${EM}${cfg.otlpEndpoint}${R}` : `${D}(disabled)${R}`}`)
   lines.push('')
 
   // Tabela
@@ -416,14 +456,14 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
 
   if (solo || cfg.viewMode === 'junto') {
     lines.push(sepLine(W))
-    if (!solo) lines.push(`  ${B}${CY}UNIFICADO${R}`)
+    if (!solo) lines.push(`  ${B}${AM}UNIFICADO${R}`)
     lines.push('')
     lines.push('  ' + tHdr(false))
-    lines.push(`  ${GR}${B}${all ? tRow(all) : ldg}${R}`)
+    lines.push(`  ${EM}${B}${all ? tRow(all) : ldg}${R}`)
     lines.push(sepLine(W))
   } else if (cfg.viewMode === 'separado') {
     lines.push(sepLine(W))
-    lines.push(`  ${B}${CY}POR PROJETO${R}`)
+    lines.push(`  ${B}${AM}POR PROJETO${R}`)
     lines.push('')
     lines.push('  ' + tHdr(true))
     for (const p of cfg.selectedProjects) {
@@ -433,12 +473,12 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
     lines.push(sepLine(W))
   } else {
     lines.push(sepLine(W))
-    lines.push(`  ${B}${CY}UNIFICADO${R}`)
+    lines.push(`  ${B}${AM}UNIFICADO${R}`)
     lines.push('')
     lines.push('  ' + tHdr(false))
-    lines.push(`  ${GR}${B}${all ? tRow(all) : ldg}${R}`)
+    lines.push(`  ${EM}${B}${all ? tRow(all) : ldg}${R}`)
     lines.push('')
-    lines.push(`  ${B}${CY}POR PROJETO${R}`)
+    lines.push(`  ${B}${AM}POR PROJETO${R}`)
     lines.push('')
     lines.push('  ' + tHdr(true))
     for (const p of cfg.selectedProjects) {
@@ -449,7 +489,7 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
   }
 
   lines.push('')
-  lines.push(`  ${D}Ctrl+C sair  |  Ctrl+O ${st.showBattle ? 'ocultar' : 'mostrar'} animacao${R}`)
+  lines.push(`  ${D}Ctrl+C sair  |  Ctrl+O ${st.showAnim ? 'ocultar' : 'mostrar'} animação${R}`)
   return lines.join('\n') + '\n'
 }
 
@@ -458,7 +498,7 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
 async function watchLoop(cfg: WatchConfig): Promise<void> {
   const st: AppState = {
     snapshots: new Map(), lastUpdated: new Date(),
-    animFrame: 0, showBattle: cfg.showBattle, isLoading: true, dataSource: 'api' as DataSrc,
+    animFrame: 0, showAnim: cfg.showAnim, isLoading: true, dataSource: 'api' as DataSrc,
   }
 
   const cleanup = () => { out(SHOW + ALT_OFF); if (spawnedServer) { spawnedServer.kill(); spawnedServer = null } process.exit(0) }
@@ -485,7 +525,7 @@ async function watchLoop(cfg: WatchConfig): Promise<void> {
     process.stdin.setRawMode(true); process.stdin.resume()
     process.stdin.on('data', (buf: Buffer) => {
       if (buf[0] === 3)  cleanup()
-      if (buf[0] === 15) { st.showBattle = !st.showBattle; render() }
+      if (buf[0] === 15) { st.showAnim = !st.showAnim; render() }
     })
   } else {
     process.on('SIGINT', cleanup); process.on('SIGTERM', cleanup)
@@ -548,17 +588,49 @@ const checkboxSearch = createPrompt<string[], {
   })
 
   const cs = new Set(checked)
+
+  // Search bar — styled like an input box
+  const COL = process.stdout.columns || 80
+  const BOX = Math.min(56, COL - 6)
+  const cur = `${E}[7m ${R}`  // blinking-cursor block
+  const termPad = ' '.repeat(Math.max(0, BOX - 4 - visLen(term)))
+  const searchBar = [
+    `  ${D}┌${'─'.repeat(BOX)}┐${R}`,
+    `  ${D}│${R}  ${AM}${B}❯${R}  ${B}${term}${R}${cur}${termPad}${D}│${R}`,
+    `  ${D}└${'─'.repeat(BOX)}┘${R}`,
+  ].join('\n')
+
   const page = usePagination({
-    items: filtered as CbChoice[], active, pageSize: config.pageSize ?? 16, loop: false,
-    renderItem: ({ item, isActive }) =>
-      ` ${isActive ? `${CY}>` : ' '}${R} ${cs.has(item.value) ? `${GR}[x]` : `${D}[ ]`}${R}  ${cs.has(item.value) ? GR : ''}${item.name}${R}  ${D}${item.path}${R}`,
+    items: filtered as CbChoice[], active, pageSize: config.pageSize ?? 14, loop: false,
+    renderItem: ({ item, isActive }) => {
+      const sel = cs.has(item.value)
+      const bullet = sel ? `${EM}${B}●${R}` : `${D}○${R}`
+      const arrow  = isActive ? `${AM}▸${R}` : ` `
+      const label  = sel
+        ? `${EM}${B}${item.name}${R}`
+        : isActive
+          ? `${B}${item.name}${R}`
+          : `${D}${item.name}${R}`
+      const path   = `${D}${item.path}${R}`
+      return `  ${arrow} ${bullet}  ${label}  ${path}`
+    },
   })
 
-  const cur      = `${E}[7m ${R}`
-  const selNames = checked.map(v => config.choices.find(c => c.value===v)?.name ?? v).join(', ')
-  const selLine  = checked.length > 0 ? `\n  ${D}Sel: ${R}${GR}${selNames}${R}` : `\n  ${D}(nenhum = todos)${R}`
+  const selCount = checked.length
+  const selNames = checked.map(v => config.choices.find(c => c.value === v)?.name ?? v).join(', ')
+  const selLine  = selCount > 0
+    ? `\n  ${EM}${B}${selCount}${R}${EM} selecionado${selCount > 1 ? 's' : ''}${R}  ${D}${selNames}${R}`
+    : `\n  ${D}nenhum selecionado = todos os projetos${R}`
 
-  return `${B}${config.message}${R}\n  ${D}[Buscar]${R} ${B}${term}${R}${cur}\n\n${page}${selLine}\n  ${D}↑↓ navegar  Espaco selecionar  Enter confirmar  Backspace apagar busca${R}`
+  return [
+    `\n  ${AM}${B}${config.message}${R}`,
+    '',
+    searchBar,
+    '',
+    page,
+    selLine,
+    `\n  ${D}↑↓ navegar  ·  Espaço selecionar  ·  Enter confirmar  ·  Backspace apagar${R}`,
+  ].join('\n')
 })
 
 // ── Prompts de configuração ────────────────────────────────────────────────
@@ -575,8 +647,8 @@ async function askConfig(all: ProjectInfo[]): Promise<WatchConfig> {
     default: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? '',
   })
 
-  const showBattle = await confirm({
-    message: 'Mostrar animacao "Claude resolve incidente" no painel?',
+  const showAnim = await confirm({
+    message: 'Mostrar animação neural no painel?',
     default: true,
   })
 
@@ -601,7 +673,7 @@ async function askConfig(all: ProjectInfo[]): Promise<WatchConfig> {
   }
 
   return { selectedProjects: selected, allProjects: all, viewMode,
-    intervalSec: parseInt(intStr, 10), otlpEndpoint: otlp, showBattle }
+    intervalSec: parseInt(intStr, 10), otlpEndpoint: otlp, showAnim }
 }
 
 // ── Auto-start do servidor API ────────────────────────────────────────────
