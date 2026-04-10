@@ -309,7 +309,7 @@ async function withLoader<T>(msg: string, fn: () => Promise<T>): Promise<T> {
     out(`\x1b[${H}A`)
     out(`\n`)
     out(`  ${sep}\n`)
-    out(`  ${BC}${B}${spin}${R}  ${B}claude-stats${R}  ${D}·  session pipeline${R}\n`)
+    out(`  ${AM}${B}${spin}${R}  ${B}claude-stats${R}  ${D}·  session pipeline${R}\n`)
     out(`  ${bar}\n`)
     out(`  ${D}▸${R}  ${D}${msg}${R}\n`)
     out(`  ${sep}\n`)
@@ -366,9 +366,9 @@ function renderAnim(frame: number): string[] {
     const w = wPos + off
     const nodes = Array.from({ length: ANIM_N }, (_, i) => {
       if (i > w)       return `${D}·${R}`               // not reached
-      if (i === w)     return `${B}${AM}◉${R}`          // active front (violet)
-      if (i === w - 1) return `${CY}◌${R}`              // trailing edge (cyan)
-      return `${EM}○${R}`                               // processed (emerald)
+      if (i === w)     return `${B}${AM}◉${R}`          // active front (orange)
+      if (i === w - 1) return `${VI}◌${R}`              // trailing edge (violet)
+      return `${D}○${R}`                                // processed (dim)
     }).join(' ')
     return fp(`  ${nodes}`)
   })
@@ -444,9 +444,9 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
   } else {
     lines.push(`  ${D}Projetos:${R}   ${AM}${cfg.selectedProjects.map(p=>p.name).join(', ')}${R}`)
   }
-  if (cfg.selectedProjects.length > 1) lines.push(`  ${D}Modo:${R}       ${EM}${mode}${R}`)
+  if (cfg.selectedProjects.length > 1) lines.push(`  ${D}Modo:${R}       ${WH}${mode}${R}`)
   lines.push(`  ${D}Interval:${R}   ${WH}${cfg.intervalSec}s${R}`)
-  lines.push(`  ${D}OTLP:${R}       ${cfg.otlpEndpoint ? `${EM}${cfg.otlpEndpoint}${R}` : `${D}(disabled)${R}`}`)
+  lines.push(`  ${D}OTLP:${R}       ${cfg.otlpEndpoint ? `${WH}${cfg.otlpEndpoint}${R}` : `${D}(disabled)${R}`}`)
   lines.push('')
 
   // Tabela
@@ -459,7 +459,7 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
     if (!solo) lines.push(`  ${B}${AM}UNIFICADO${R}`)
     lines.push('')
     lines.push('  ' + tHdr(false))
-    lines.push(`  ${EM}${B}${all ? tRow(all) : ldg}${R}`)
+    lines.push(`  ${WH}${all ? tRow(all) : ldg}${R}`)
     lines.push(sepLine(W))
   } else if (cfg.viewMode === 'separado') {
     lines.push(sepLine(W))
@@ -476,7 +476,7 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
     lines.push(`  ${B}${AM}UNIFICADO${R}`)
     lines.push('')
     lines.push('  ' + tHdr(false))
-    lines.push(`  ${EM}${B}${all ? tRow(all) : ldg}${R}`)
+    lines.push(`  ${WH}${all ? tRow(all) : ldg}${R}`)
     lines.push('')
     lines.push(`  ${B}${AM}POR PROJETO${R}`)
     lines.push('')
@@ -604,10 +604,10 @@ const checkboxSearch = createPrompt<string[], {
     items: filtered as CbChoice[], active, pageSize: config.pageSize ?? 14, loop: false,
     renderItem: ({ item, isActive }) => {
       const sel = cs.has(item.value)
-      const bullet = sel ? `${EM}${B}●${R}` : `${D}○${R}`
+      const bullet = sel ? `${AM}${B}●${R}` : `${D}○${R}`
       const arrow  = isActive ? `${AM}▸${R}` : ` `
       const label  = sel
-        ? `${EM}${B}${item.name}${R}`
+        ? `${AM}${B}${item.name}${R}`
         : isActive
           ? `${B}${item.name}${R}`
           : `${D}${item.name}${R}`
@@ -619,7 +619,7 @@ const checkboxSearch = createPrompt<string[], {
   const selCount = checked.length
   const selNames = checked.map(v => config.choices.find(c => c.value === v)?.name ?? v).join(', ')
   const selLine  = selCount > 0
-    ? `\n  ${EM}${B}${selCount}${R}${EM} selecionado${selCount > 1 ? 's' : ''}${R}  ${D}${selNames}${R}`
+    ? `\n  ${AM}${B}${selCount}${R}${AM} selecionado${selCount > 1 ? 's' : ''}${R}  ${D}${selNames}${R}`
     : `\n  ${D}nenhum selecionado = todos os projetos${R}`
 
   return [
@@ -707,7 +707,7 @@ async function ensureApiRunning(): Promise<void> {
     console.error(`\n${RD}Nao foi possivel iniciar o servidor API (porta 3001).${R}`)
     process.exit(1)
   }
-  console.log(`${GR}Servidor iniciado (pid ${spawnedServer?.pid}).${R}`)
+  console.log(`${AM}Servidor iniciado (pid ${spawnedServer?.pid}).${R}`)
 }
 
 function registerServerCleanup() {
@@ -722,7 +722,7 @@ function registerServerCleanup() {
 // ── Entry point ────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log(`\n${B}${BC}Claude Stats - Watch CLI${R}\n`)
+  console.log(`\n${B}${AM}Claude Stats${R}${D} · ${R}${B}Watch CLI${R}\n`)
 
   registerServerCleanup()
   await ensureApiRunning()
@@ -742,7 +742,7 @@ async function main() {
     console.error('Nenhum projeto encontrado.')
     process.exit(1)
   }
-  console.log(`${GR}${allProjects.length} projetos encontrados.${R}\n`)
+  console.log(`${AM}${allProjects.length} projetos encontrados.${R}\n`)
 
   const cfg = await askConfig(allProjects)
   await watchLoop(cfg)
