@@ -44,6 +44,8 @@ interface SessionMeta {
   user_message_count: number
   assistant_message_count: number
   tool_counts: Record<string, number>
+  tool_output_tokens: Record<string, number>
+  agent_file_reads: Record<string, number>
   languages: string[]
   git_commits: number
   git_pushes: number
@@ -160,6 +162,8 @@ function makeEmptySession(
     user_message_count: 0,
     assistant_message_count: 0,
     tool_counts: {},
+    tool_output_tokens: {},
+    agent_file_reads: {},
     languages: [],
     git_commits: 0,
     git_pushes: 0,
@@ -203,6 +207,8 @@ async function parseSessionJsonl(
   let toolErrors = 0, userInterruptions = 0
   let hasMcp = false
   const toolCounts: Record<string, number> = {}
+  const toolOutputTokens: Record<string, number> = {}
+  const agentFileReads: Record<string, number> = {}
   const toolErrorCategories: Record<string, number> = {}
   const messageHours: number[] = []
   const userMessageTimestamps: string[] = []
@@ -272,16 +278,20 @@ async function parseSessionJsonl(
       assistantMsgs++
       if (ts) lastAssistantTs = ts
       const msg = e.message as Record<string, unknown> | undefined
+      const msgOutputTokens = (msg?.usage as Record<string, number> | undefined)?.output_tokens ?? 0
       if (msg?.usage) {
         const u = msg.usage as Record<string, number>
         inputTokens  += u.input_tokens ?? 0
         outputTokens += u.output_tokens ?? 0
       }
+      // Collect tool names in this message for token attribution
+      const toolsInMessage: string[] = []
       if (Array.isArray(msg?.content)) {
         for (const p of msg!.content as Record<string, unknown>[]) {
           if (p.type === 'tool_use' && typeof p.name === 'string') {
             const toolName = p.name as string
             toolCounts[toolName] = (toolCounts[toolName] ?? 0) + 1
+            toolsInMessage.push(toolName)
 
             // Track id→name for error attribution
             if (typeof p.id === 'string') toolUseIdToName.set(p.id, toolName)
@@ -298,7 +308,7 @@ async function parseSessionJsonl(
               }
             }
 
-            // Detect language from file-based tool calls
+            // Detect language and agent files from file-based tool calls
             if (['Read', 'Edit', 'Write', 'MultiEdit'].includes(toolName)) {
               const inp = p.input as Record<string, string> | undefined
               const fp = inp?.file_path ?? inp?.path ?? ''
@@ -306,9 +316,29 @@ async function parseSessionJsonl(
                 const ext = fp.split('.').pop()?.toLowerCase() ?? ''
                 const lang = EXT_TO_LANG[ext]
                 if (lang) languageSet.add(lang)
+
+                // Detect agent instruction file reads (Read tool only — Glob/Grep/Search
+                // operate on patterns/queries rather than file paths, so they are excluded
+                // to avoid false positives)
+                if (toolName === 'Read') {
+                  const agentCategory = classifyAgentFile(fp)
+                  if (agentCategory) {
+                    agentFileReads[agentCategory] = (agentFileReads[agentCategory] ?? 0) + 1
+                  }
+                }
               }
             }
+
           }
+        }
+      }
+      // Attribute output tokens evenly among tools in this message
+      if (toolsInMessage.length > 0 && msgOutputTokens > 0) {
+        const share = Math.floor(msgOutputTokens / toolsInMessage.length)
+        const remainder = msgOutputTokens % toolsInMessage.length
+        for (let i = 0; i < toolsInMessage.length; i++) {
+          const tn = toolsInMessage[i]
+          toolOutputTokens[tn] = (toolOutputTokens[tn] ?? 0) + share + (i < remainder ? 1 : 0)
         }
       }
     }
@@ -331,6 +361,8 @@ async function parseSessionJsonl(
     user_message_count: userMsgs,
     assistant_message_count: assistantMsgs,
     tool_counts: toolCounts,
+    tool_output_tokens: toolOutputTokens,
+    agent_file_reads: agentFileReads,
     languages: Array.from(languageSet),
     git_commits: gitCommits,
     git_pushes: gitPushes,
@@ -424,6 +456,47 @@ async function getProjectGitStats(projectPath: string): Promise<ProjectGitStats 
 // UUID regex: 8-4-4-4-12 hex groups
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+// Agent-like instruction file patterns (basename matching)
+const AGENT_FILE_CATEGORY: Map<string, string> = new Map([
+  ['claude.md', 'CLAUDE.md'],
+  ['claude_instructions.md', 'CLAUDE.md'],
+  ['agents.md', 'AGENTS.md'],
+  ['codex.md', 'CODEX.md'],
+  ['.cursorrules', '.cursorrules'],
+  ['.cursorignore', 'cursor-config'],
+  ['conventions.md', 'CONVENTIONS.md'],
+  ['copilot-instructions.md', 'copilot-instructions'],
+  ['.copilot-instructions.md', 'copilot-instructions'],
+  ['.windsurfrules', '.windsurfrules'],
+])
+
+// Agent-like instruction file path patterns (directory-based matching)
+// Use (^|\/) to match both absolute and relative paths
+const AGENT_PATH_PATTERNS: [RegExp, string][] = [
+  [/(^|\/)\.claude\//i, '.claude/*'],
+  [/(^|\/)\.github\/copilot-instructions/i, 'copilot-instructions'],
+  [/(^|\/)\.cursor\//i, '.cursorrules'],
+  [/(^|\/)\.windsurf\//i, '.windsurfrules'],
+  [/(^|\/)AGENTS\.md$/i, 'AGENTS.md'],
+  [/(^|\/)CLAUDE\.md$/i, 'CLAUDE.md'],
+]
+
+/** Classify a file path as an agent instruction file category or null */
+function classifyAgentFile(filePath: string): string | null {
+  if (!filePath) return null
+  const normalized = filePath.replace(/\\/g, '/')
+  const basename = normalized.split('/').pop()?.toLowerCase() ?? ''
+
+  const category = AGENT_FILE_CATEGORY.get(basename)
+  if (category) return category
+
+  for (const [pattern, cat] of AGENT_PATH_PATTERNS) {
+    if (pattern.test(normalized)) return cat
+  }
+
+  return null
+}
+
 // File extension → language name (used when session-meta is absent)
 const EXT_TO_LANG: Record<string, string> = {
   ts: 'TypeScript', tsx: 'TypeScript', js: 'JavaScript', jsx: 'JavaScript',
@@ -476,6 +549,8 @@ async function loadSessionMetas(): Promise<Map<string, SessionMeta>> {
             user_message_count: (data.user_message_count as number) ?? 0,
             assistant_message_count: (data.assistant_message_count as number) ?? 0,
             tool_counts: (data.tool_counts as Record<string, number>) ?? {},
+            tool_output_tokens: (data.tool_output_tokens as Record<string, number>) ?? {},
+            agent_file_reads: (data.agent_file_reads as Record<string, number>) ?? {},
             languages,
             git_commits: (data.git_commits as number) ?? 0,
             git_pushes: (data.git_pushes as number) ?? 0,
@@ -840,6 +915,9 @@ async function buildApiResponse(): Promise<ApiResponse> {
     // Sort sessions by start_time descending (most recent first)
     sessions.sort((a, b) => b.start_time.localeCompare(a.start_time))
 
+    // Post-processing health checks based on session data (tool metrics)
+    analyzeToolHealthIssues(sessions, healthIssues)
+
     return { statsCache, projects, allSessions: [] as [], sessions, healthIssues, homeDir: HOME_DIR }
   }
 
@@ -849,6 +927,67 @@ async function buildApiResponse(): Promise<ApiResponse> {
       setTimeout(() => reject(new Error('Request timed out after 9.5s')), timeoutMs)
     ),
   ])
+}
+
+/** Analyze tool metrics from sessions and add health alerts for outliers */
+function analyzeToolHealthIssues(sessions: SessionMeta[], issues: HealthIssue[]): void {
+  if (sessions.length === 0) return
+
+  // Aggregate tool output tokens across all sessions
+  const toolTokens: Record<string, number> = {}
+  const agentReads: Record<string, number> = {}
+  let totalToolOutputTokens = 0
+
+  for (const s of sessions) {
+    for (const [tool, tokens] of Object.entries(s.tool_output_tokens ?? {})) {
+      toolTokens[tool] = (toolTokens[tool] ?? 0) + tokens
+      totalToolOutputTokens += tokens
+    }
+    for (const [file, count] of Object.entries(s.agent_file_reads ?? {})) {
+      agentReads[file] = (agentReads[file] ?? 0) + count
+    }
+  }
+
+  // Alert: single tool consuming >60% of total output tokens
+  // Require a minimum of 10K tokens to avoid noisy alerts on small data sets
+  if (totalToolOutputTokens > 10000) {
+    const sorted = Object.entries(toolTokens).sort((a, b) => b[1] - a[1])
+    const top = sorted[0]
+    if (top && top[1] / totalToolOutputTokens > 0.6) {
+      const pct = Math.round(top[1] / totalToolOutputTokens * 100)
+      issues.push({
+        id: 'tool-token-villain',
+        severity: 'info',
+        title: `Tool "${top[0]}" dominates token spend (${pct}%)`,
+        description: `The "${top[0]}" tool accounts for ${pct}% of all tool-related output tokens. Consider if this tool is being used efficiently.`,
+        guide: [
+          `Top tools by output tokens:`,
+          ...sorted.slice(0, 5).map(([name, tokens]) =>
+            `  ${name}: ${(tokens / 1000).toFixed(1)}K tokens (${Math.round(tokens / totalToolOutputTokens * 100)}%)`
+          ),
+        ].join('\n'),
+      })
+    }
+  }
+
+  // Alert: high agent file read frequency
+  const totalAgentReads = Object.values(agentReads).reduce((a, b) => a + b, 0)
+  if (totalAgentReads > 50) {
+    const sorted = Object.entries(agentReads).sort((a, b) => b[1] - a[1])
+    issues.push({
+      id: 'agent-file-reads-high',
+      severity: 'info',
+      title: `Agent instruction files read ${totalAgentReads} times`,
+      description: `Agent-like files (CLAUDE.md, AGENTS.md, etc.) have been read ${totalAgentReads} times across sessions. Each read adds to context and token consumption.`,
+      guide: [
+        `Reads by file type:`,
+        ...sorted.map(([name, count]) => `  ${name}: ${count} reads`),
+        '',
+        'Tip: Keep instruction files concise to reduce token overhead.',
+        'Consider consolidating multiple instruction files into one.',
+      ].join('\n'),
+    })
+  }
 }
 
 // ---------------------------------------------------------------------------

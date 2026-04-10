@@ -232,10 +232,18 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
 
     // ── Tools + Languages ──
     const toolCounts: Record<string, number> = {}
+    const toolOutputTokens: Record<string, number> = {}
+    const agentFileReads: Record<string, number> = {}
     const langCounts: Record<string, number> = {}
     for (const s of filteredSessions) {
       for (const [tool, count] of Object.entries(s.tool_counts ?? {})) {
         toolCounts[tool] = (toolCounts[tool] ?? 0) + count
+      }
+      for (const [tool, tokens] of Object.entries(s.tool_output_tokens ?? {})) {
+        toolOutputTokens[tool] = (toolOutputTokens[tool] ?? 0) + tokens
+      }
+      for (const [file, count] of Object.entries(s.agent_file_reads ?? {})) {
+        agentFileReads[file] = (agentFileReads[file] ?? 0) + count
       }
       for (const lang of s.languages ?? []) {
         langCounts[lang] = (langCounts[lang] ?? 0) + 1
@@ -327,6 +335,8 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       modelUsage: filteredModelUsage,
       modelTokensByDate,
       toolCounts,
+      toolOutputTokens,
+      agentFileReads,
       langCounts,
       gitCommits,
       gitPushes,

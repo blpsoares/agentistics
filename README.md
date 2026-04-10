@@ -103,6 +103,8 @@ When session-meta is not available, each `.jsonl` file is parsed line by line:
   ├── Counts user messages (excluding tool_result)
   ├── Counts assistant messages (type: 'assistant')
   ├── Maps tool_use → tool_counts { Bash: N, Read: N, Edit: N, ... }
+  ├── Attributes output tokens per tool (tool_output_tokens)
+  ├── Detects agent instruction file reads (CLAUDE.md, AGENTS.md, etc.)
   ├── Extracts tokens from usage field (input, output, cacheRead, cacheWrite)
   ├── Detects commits: regex /^git commit\b/ in Bash inputs
   ├── Detects pushes: regex /^git push\b/ in Bash inputs
@@ -124,6 +126,8 @@ interface SessionMeta {
   user_message_count: number      // Actual user messages
   assistant_message_count: number // Model responses
   tool_counts: Record<string, number>  // e.g.: { Bash: 12, Read: 8 }
+  tool_output_tokens: Record<string, number>  // Output tokens per tool
+  agent_file_reads: Record<string, number>    // Agent instruction file reads
   languages: string[]             // Detected languages
   git_commits: number             // Commits via Claude
   git_pushes: number              // Pushes via Claude
@@ -355,6 +359,51 @@ All cards are **drag-and-drop** and the order is saved in `localStorage`. Each o
 
 ---
 
+## Deep Tool Metrics
+
+The **Tool Metrics** panel provides a detailed analysis of each tool's usage by Claude:
+
+### Ranking by Calls or Tokens
+
+Two views available via toggle:
+
+- **By calls** — ranks tools by number of invocations
+- **By token spend** — ranks tools by total output tokens attributed to each tool
+
+Token attribution works as follows:
+```
+For each assistant message with N tool_use blocks:
+  tokens_per_tool = output_tokens ÷ N
+  Accumulates in tool_output_tokens[tool] += tokens_per_tool
+```
+
+Tools consuming more than 40% of the total are highlighted in red as token "villains".
+
+### Agent Instruction File Reads
+
+Detects and counts reads of agent instruction/configuration files:
+
+| Detected Pattern | Category |
+|-------------------|-----------|
+| `CLAUDE.md` | CLAUDE.md |
+| `AGENTS.md` | AGENTS.md |
+| `.cursorrules`, `.cursorignore` | .cursorrules |
+| `.claude/*` (any file) | .claude/* |
+| `copilot-instructions.md` | copilot-instructions |
+| `CONVENTIONS.md` | CONVENTIONS.md |
+| `.windsurfrules` | .windsurfrules |
+
+Each agent instruction file read adds tokens to the model context. When total reads are high, the panel displays a tip suggesting consolidation.
+
+### Health Alerts
+
+Integration with the existing alert system:
+
+- **Tool token villain** (info) — fires when a single tool consumes >60% of total output tokens (requires minimum 10K total tokens to avoid alerts on small data)
+- **Agent file reads high** (info) — fires when instruction files are read more than 50 times total
+
+---
+
 ## PDF Export
 
 The export modal allows configuring a complete report:
@@ -439,7 +488,8 @@ claude-stats/
 │   │   ├── ProjectsList.tsx
 │   │   ├── ProjectsModal.tsx
 │   │   ├── RecentSessions.tsx
-│   │   └── StatCard.tsx
+│   │   ├── StatCard.tsx
+│   │   └── ToolMetricsPanel.tsx
 │   └── lib/
 │       ├── types.ts         # TypeScript types + MODEL_PRICING
 │       ├── otel.ts          # OpenTelemetry metric definitions
@@ -510,6 +560,7 @@ App.tsx
 ├── HourChart
 ├── ModelBreakdown
 ├── ProjectsList
+├── ToolMetricsPanel         # Ranking de ferramentas + arquivos de instrução
 ├── RecentSessions
 └── HighlightsBoard
 ```
