@@ -10,10 +10,21 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/blpsoares/agentistics/releases/latest">
+    <img src="https://img.shields.io/github/v/release/blpsoares/agentistics?label=release&color=f97316" alt="Latest release" />
+  </a>
+  <a href="https://github.com/blpsoares/agentistics/actions/workflows/release.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/blpsoares/agentistics/release.yml?label=build" alt="Build status" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/github/license/blpsoares/agentistics?color=green" alt="MIT License" />
+  </a>
+  <img src="https://img.shields.io/badge/platform-Linux%20x86__64-lightgrey" alt="Platform: Linux x86_64" />
   <img src="https://img.shields.io/badge/Bun-runtime-f9f1e1?logo=bun" alt="Bun" />
-  <img src="https://img.shields.io/badge/React-19-61dafb?logo=react" alt="React" />
-  <img src="https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript" alt="TypeScript" />
-  <img src="https://img.shields.io/badge/Vite-8-646cff?logo=vite" alt="Vite" />
+</p>
+
+<p align="center">
+  <a href="#install"><strong>Install in one line →</strong></a>
 </p>
 
 ---
@@ -38,21 +49,28 @@
 
 ## Install
 
-One-line install (Linux x86_64):
+> [!TIP]
+> Requires **Linux x86_64**. macOS and Windows support is planned.
+
+**One-line install** — downloads the latest binary to `~/.local/bin`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/blpsoares/agentistics/main/install.sh | bash
 ```
 
-With `sudo` for a system-wide install (`/usr/local/bin`):
+System-wide install (`/usr/local/bin`):
 
 ```bash
 sudo curl -fsSL https://raw.githubusercontent.com/blpsoares/agentistics/main/install.sh | bash
 ```
 
-The script downloads the latest pre-built binary from [GitHub Releases](https://github.com/blpsoares/agentistics/releases/latest) and places it in `~/.local/bin` (or `/usr/local/bin` when run as root).
+Then start the dashboard:
 
-> **PATH note:** If `~/.local/bin` is not in your `$PATH`, the installer will print the command to add it.
+```bash
+agentop server   # opens http://localhost:3001
+```
+
+> **PATH note:** If `~/.local/bin` is not in your `$PATH`, the installer will print the command to add it. Pre-built binaries are available on the [Releases page](https://github.com/blpsoares/agentistics/releases/latest).
 
 ---
 
