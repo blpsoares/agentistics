@@ -3,13 +3,22 @@ import type { AppData, Filters, DateRange } from '../lib/types'
 import { calcCost, getModelPrice, MODEL_PRICING } from '../lib/types'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format } from 'date-fns'
 
+export const LIVE_INTERVAL_OPTIONS = [
+  { label: '10s', value: 10 },
+  { label: '30s', value: 30 },
+  { label: '1m', value: 60 },
+  { label: '5m', value: 300 },
+]
+
 export function useData() {
   const [data, setData] = useState<AppData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [liveUpdates, setLiveUpdates] = useState(true)
+  const [updateInterval, setUpdateInterval] = useState(30)
 
-  const fetchData = useCallback(async () => {
-    setLoading(true)
+  const fetchData = useCallback(async (showLoading = false) => {
+    if (showLoading) setLoading(true)
     setError(null)
     try {
       const res = await fetch('/api/data')
@@ -19,27 +28,37 @@ export function useData() {
     } catch (err) {
       setError(String(err))
     } finally {
-      setLoading(false)
+      if (showLoading) setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    fetchData()
+    fetchData(true)
   }, [fetchData])
 
   // Subscribe to server-sent change events so the dashboard updates automatically
   // when Claude writes new session data to ~/.claude/.
-  // fetchData is stable (useCallback with no deps), so this effect runs once per mount.
+  // Only active when liveUpdates is true.
   useEffect(() => {
+    if (!liveUpdates) return
     const es = new EventSource('/api/events')
     es.addEventListener('change', () => { fetchData() })
     es.onerror = () => {
       // EventSource reconnects automatically; no action needed
     }
     return () => { es.close() }
-  }, [fetchData])
+  }, [liveUpdates, fetchData])
 
-  return { data, loading, error, refetch: fetchData }
+  // Fallback polling at the selected interval when live updates are enabled.
+  useEffect(() => {
+    if (!liveUpdates) return
+    const id = setInterval(() => { fetchData() }, updateInterval * 1000)
+    return () => { clearInterval(id) }
+  }, [liveUpdates, updateInterval, fetchData])
+
+  const refetch = useCallback(() => fetchData(true), [fetchData])
+
+  return { data, loading, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval }
 }
 
 export function getDateRangeFilter(dateRange: DateRange, customStart?: string, customEnd?: string) {
@@ -123,28 +142,49 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       return true
     })
 
+    // ── Extend dailyActivity with sessions on days not yet in statsCache ──
+    // statsCache can be stale (lastComputedDate < today); sessions from JSONL cover the gap.
+    // Only applies when NOT project-filtered (project filter already uses filteredSessions directly).
+    const dailyActivityDates = new Set(filteredDailyActivity.map(d => d.date))
+    const supplementByDay: Record<string, { messageCount: number; sessionCount: number; toolCallCount: number }> = {}
+    for (const s of filteredSessions) {
+      if (!s.start_time) continue
+      const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
+      if (dailyActivityDates.has(day)) continue // already covered by statsCache
+      if (!supplementByDay[day]) supplementByDay[day] = { messageCount: 0, sessionCount: 0, toolCallCount: 0 }
+      supplementByDay[day].messageCount += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
+      supplementByDay[day].sessionCount += 1
+      supplementByDay[day].toolCallCount += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
+    }
+    const extendedDailyActivity = [
+      ...filteredDailyActivity,
+      ...Object.entries(supplementByDay).map(([date, v]) => ({ date, ...v })),
+    ]
+
     // ── Aggregate stats ──
     // When project filter active, rebuild from sessions (no per-project data in statsCache)
     const totalMessages = projectFiltered
       ? filteredSessions.reduce((s, sess) => s + (sess.user_message_count ?? 0) + (sess.assistant_message_count ?? 0), 0)
-      : filteredDailyActivity.reduce((s, d) => s + d.messageCount, 0)
+      : extendedDailyActivity.reduce((s, d) => s + d.messageCount, 0)
 
     const totalSessions = projectFiltered
       ? filteredSessions.length
-      : filteredDailyActivity.reduce((s, d) => s + d.sessionCount, 0)
+      : extendedDailyActivity.reduce((s, d) => s + d.sessionCount, 0)
 
     const totalToolCalls = projectFiltered
       ? filteredSessions.reduce((s, sess) => s + Object.values(sess.tool_counts ?? {}).reduce((a, b) => a + b, 0), 0)
-      : filteredDailyActivity.reduce((s, d) => s + d.toolCallCount, 0)
+      : extendedDailyActivity.reduce((s, d) => s + d.toolCallCount, 0)
 
-    // ── Streak (always global) ──
-    // Supplement stats-cache dates with session start dates so that sessions
-    // loaded from session-meta (which are fresher than stats-cache) are counted.
+    // ── Streak ──
+    // When project filter is active, derive active dates from filteredSessions only.
+    // Otherwise, supplement stats-cache dates with all session start dates (fresher than stats-cache).
     // Session start_times are ISO UTC strings — format() normalises to local date.
-    const activeDates = new Set([
-      ...(data.statsCache.dailyActivity ?? []).map(d => d.date),
-      ...(data.sessions ?? []).filter(s => s.start_time).map(s => format(parseISO(s.start_time), 'yyyy-MM-dd')),
-    ])
+    const activeDates = projectFiltered
+      ? new Set(filteredSessions.filter(s => s.start_time).map(s => format(parseISO(s.start_time), 'yyyy-MM-dd')))
+      : new Set([
+          ...(data.statsCache.dailyActivity ?? []).map(d => d.date),
+          ...(data.sessions ?? []).filter(s => s.start_time).map(s => format(parseISO(s.start_time), 'yyyy-MM-dd')),
+        ])
     const streak = calcStreak(activeDates)
 
     // ── Heatmap data ──
@@ -161,7 +201,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       }
       heatmapData = Object.entries(byDay).map(([date, v]) => ({ date, ...v }))
     } else {
-      heatmapData = filteredDailyActivity.map(d => ({
+      heatmapData = extendedDailyActivity.map(d => ({
         date: d.date,
         value: d.messageCount,
         sessions: d.sessionCount,
