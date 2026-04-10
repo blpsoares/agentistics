@@ -91,10 +91,14 @@ export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads,
           {entries.map(([name, value]) => {
             const pct = value / max
             const shareOfTotal = total > 0 ? value / total : 0
-            const isVillain = shareOfTotal > 0.4 && entries.length > 2
-            const accentColor = viewMode === 'tokens'
-              ? (isVillain ? '#ef4444' : 'var(--anthropic-orange)')
-              : 'var(--accent-green)'
+            // Villain classification only applies in token spend mode
+            const isVillain = viewMode === 'tokens' && shareOfTotal > 0.4 && entries.length > 2
+
+            const barBackground = isVillain
+              ? 'linear-gradient(90deg, #ef4444, #f97316)'
+              : viewMode === 'tokens'
+                ? 'rgba(217, 119, 6, 0.25)'
+                : 'rgba(74, 222, 128, 0.25)'
 
             return (
               <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -122,9 +126,7 @@ export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads,
                   <div style={{
                     width: `${pct * 100}%`,
                     height: '100%',
-                    background: isVillain
-                      ? 'linear-gradient(90deg, #ef4444, #f97316)'
-                      : `${accentColor}40`,
+                    background: barBackground,
                     borderRadius: 4,
                     transition: 'width 0.3s ease',
                   }} />

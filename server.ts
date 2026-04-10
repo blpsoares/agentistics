@@ -316,7 +316,9 @@ async function parseSessionJsonl(
                 const lang = EXT_TO_LANG[ext]
                 if (lang) languageSet.add(lang)
 
-                // Detect agent instruction file reads
+                // Detect agent instruction file reads (Read tool only — Glob/Grep/Search
+                // operate on patterns/queries rather than file paths, so they are excluded
+                // to avoid false positives)
                 if (toolName === 'Read') {
                   const agentCategory = classifyAgentFile(fp)
                   if (agentCategory) {
@@ -460,7 +462,7 @@ const AGENT_FILE_CATEGORY: Map<string, string> = new Map([
   ['agents.md', 'AGENTS.md'],
   ['codex.md', 'CODEX.md'],
   ['.cursorrules', '.cursorrules'],
-  ['.cursorignore', '.cursorrules'],
+  ['.cursorignore', 'cursor-config'],
   ['conventions.md', 'CONVENTIONS.md'],
   ['copilot-instructions.md', 'copilot-instructions'],
   ['.copilot-instructions.md', 'copilot-instructions'],
