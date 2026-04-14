@@ -46,26 +46,28 @@ export function HighlightsBoard({ sessions, projects, lang }: HighlightsBoardPro
   }
 
   // ── Record finders ──────────────────────────────────────────────────────────
+  // sessions[0] is guaranteed defined because of the sessions.length === 0 guard above
+  const firstSession = sessions[0]!
   const longestSession = sessions.reduce((b, s) =>
-    (s.duration_minutes ?? 0) > (b.duration_minutes ?? 0) ? s : b, sessions[0])
+    (s.duration_minutes ?? 0) > (b.duration_minutes ?? 0) ? s : b, firstSession)
 
   const mostInputTokens = sessions.reduce((b, s) =>
-    (s.input_tokens ?? 0) > (b.input_tokens ?? 0) ? s : b, sessions[0])
+    (s.input_tokens ?? 0) > (b.input_tokens ?? 0) ? s : b, firstSession)
 
   const mostOutputTokens = sessions.reduce((b, s) =>
-    (s.output_tokens ?? 0) > (b.output_tokens ?? 0) ? s : b, sessions[0])
+    (s.output_tokens ?? 0) > (b.output_tokens ?? 0) ? s : b, firstSession)
 
   const mostMessages = sessions.reduce((b, s) => {
     const v = (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
     const bv = (b.user_message_count ?? 0) + (b.assistant_message_count ?? 0)
     return v > bv ? s : b
-  }, sessions[0])
+  }, firstSession)
 
   const mostToolCalls = sessions.reduce((b, s) => {
     const v = Object.values(s.tool_counts ?? {}).reduce((a, x) => a + x, 0)
     const bv = Object.values(b.tool_counts ?? {}).reduce((a, x) => a + x, 0)
     return v > bv ? s : b
-  }, sessions[0])
+  }, firstSession)
 
   const projectSessionCounts: Record<string, number> = {}
   for (const s of sessions) {

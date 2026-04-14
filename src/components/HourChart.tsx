@@ -85,7 +85,7 @@ export function HourChart({ hourCounts, hourMeta, height = 336 }: Props) {
     value: hourCounts[i] ?? 0,
   }))
 
-  const peakHour = chartData.reduce((a, b) => b.value > a.value ? b : a, chartData[0])
+  const peakHour = chartData.reduce((a, b) => b.value > a.value ? b : a, chartData[0]!)
 
   return (
     <div>

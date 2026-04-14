@@ -344,6 +344,7 @@ async function parseSessionJsonl(
         const remainder = msgOutputTokens % toolsInMessage.length
         for (let i = 0; i < toolsInMessage.length; i++) {
           const tn = toolsInMessage[i]
+          if (tn === undefined) continue
           toolOutputTokens[tn] = (toolOutputTokens[tn] ?? 0) + share + (i < remainder ? 1 : 0)
         }
       }
@@ -412,9 +413,9 @@ async function getGitFileStats(
     for (const line of stdout.split('\n')) {
       const m = line.match(/^(\d+)\s+(\d+)\s+(.+)$/)
       if (m) {
-        linesAdded += parseInt(m[1], 10)
-        linesRemoved += parseInt(m[2], 10)
-        filesSeen.add(m[3])
+        linesAdded += parseInt(m[1]!, 10)
+        linesRemoved += parseInt(m[2]!, 10)
+        filesSeen.add(m[3]!)
       }
     }
     return { linesAdded, linesRemoved, filesModified: filesSeen.size }
@@ -446,9 +447,9 @@ async function getProjectGitStats(projectPath: string): Promise<ProjectGitStats 
       } else {
         const m = line.match(/^(\d+)\s+(\d+)\s+(.+)$/)
         if (m) {
-          linesAdded += parseInt(m[1], 10)
-          linesRemoved += parseInt(m[2], 10)
-          filesSeen.add(m[3])
+          linesAdded += parseInt(m[1]!, 10)
+          linesRemoved += parseInt(m[2]!, 10)
+          filesSeen.add(m[3]!)
         }
       }
     }
@@ -687,7 +688,7 @@ async function scanProjectDir(
       .sort()
 
     if (agentFiles.length > 0) {
-      const agentFilePath = join(subagentsDir, agentFiles[0])
+      const agentFilePath = join(subagentsDir, agentFiles[0]!)
       if (!knownIds.has(sessionId)) {
         const session = await fileLimit(() => parseSessionJsonl(agentFilePath, sessionId, fallbackPath, 'subdir'))
         created = session.start_time
@@ -912,7 +913,7 @@ async function buildApiResponse(): Promise<ApiResponse> {
     const sessionMap = new Map<string, SessionMeta>()
     for (const s of allSessionsRaw) {
       const existing = sessionMap.get(s.session_id)
-      if (!existing || sourceRank[s._source] < sourceRank[existing._source]) {
+      if (!existing || (sourceRank[s._source] ?? Infinity) < (sourceRank[existing._source] ?? Infinity)) {
         sessionMap.set(s.session_id, s)
       }
     }
@@ -1064,16 +1065,16 @@ function parseAnthropicPricing(html: string): Record<string, PriceEntry> | null 
   let rowMatch: RegExpExecArray | null
 
   while ((rowMatch = rowRe.exec(html)) !== null) {
-    const row = rowMatch[1]
+    const row = rowMatch[1]!
     const cells: string[] = []
     const cellRe = /<td[^>]*>([\s\S]*?)<\/td>/gi
     let cellMatch: RegExpExecArray | null
     while ((cellMatch = cellRe.exec(row)) !== null) {
-      cells.push(cellMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim())
+      cells.push(cellMatch[1]!.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim())
     }
     if (cells.length < 5) continue
 
-    const nameCell = cells[0].toLowerCase()
+    const nameCell = cells[0]!.toLowerCase()
     if (!nameCell.includes('claude')) continue
 
     let modelId: string | null = null
@@ -1081,17 +1082,17 @@ function parseAnthropicPricing(html: string): Record<string, PriceEntry> | null 
     const keys = Object.keys(PRICING_PAGE_MODEL_MAP).sort((a, b) => b.length - a.length)
     for (const key of keys) {
       if (nameCell.includes(key)) {
-        modelId = PRICING_PAGE_MODEL_MAP[key]
+        modelId = PRICING_PAGE_MODEL_MAP[key] ?? null
         break
       }
     }
     if (!modelId) continue
 
     const price = (s: string) => parseFloat(s.replace(/[^0-9.]/g, ''))
-    const input      = price(cells[1]) // Base Input
-    const cacheWrite = price(cells[2]) // 5m Cache Write
+    const input      = price(cells[1]!) // Base Input
+    const cacheWrite = price(cells[2]!) // 5m Cache Write
     // cells[3] = 1h Cache Write (skip)
-    const cacheRead  = price(cells[4]) // Cache Read
+    const cacheRead  = price(cells[4]!) // Cache Read
     const output     = price(cells[5] ?? '') // Output (may be cells[4] if table only has 5 cols)
 
     if (!isNaN(input) && input > 0) {
@@ -1359,7 +1360,31 @@ Bun.serve({
     })
   },
 })
-console.log(`Claude Stats API running at http://localhost:${PORT}`)
+const _ESC = '\x1b'
+const _R   = `${_ESC}[0m`
+const _B   = `${_ESC}[1m`
+const _D   = `${_ESC}[2m`
+const _AM  = `${_ESC}[38;5;208m`
+const _EM  = `${_ESC}[92m`
+const _CY  = `${_ESC}[96m`
+const _WH  = `${_ESC}[97m`
+
+const _SEP = `${_D}${'─'.repeat(44)}${_R}`
+const _DOT = `${_EM}●${_R}`
+const _URL = (u: string) => `${_CY}${_B}${u}${_R}`
+
+const _UI_PORT = process.env.VITE_PORT ?? '5173'
+const _UI_URL  = SERVE_STATIC ? `http://localhost:${PORT}` : `http://localhost:${_UI_PORT}`
+const _UI_TAG  = SERVE_STATIC ? ` ${_D}embedded${_R}` : ''
+
+process.stdout.write(
+  `\n${_SEP}\n` +
+  `  ${_B}${_AM}agentistics${_R}\n` +
+  `${_SEP}\n` +
+  `  ${_WH}api${_R}  ${_DOT}  ${_URL(`http://localhost:${PORT}`)}\n` +
+  `  ${_WH} ui${_R}  ${_DOT}  ${_URL(_UI_URL)}${_UI_TAG}\n` +
+  `${_SEP}\n\n`
+)
 } catch (err: unknown) {
   const msg = err instanceof Error ? err.message : String(err)
   if (msg.includes('EADDRINUSE') || msg.includes('already in use')) {

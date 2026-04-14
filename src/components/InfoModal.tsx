@@ -18,6 +18,7 @@ interface Props {
 
 export function InfoModal({ items, currentIndex, onClose, onNavigate, lang }: Props) {
   const item = items[currentIndex]
+  if (!item) return null
   const total = items.length
 
   const goLeft = useCallback(() => {

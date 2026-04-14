@@ -30,7 +30,7 @@ export function ActivityHeatmap({ data, weeks = 26 }: Props) {
   useEffect(() => {
     if (!containerRef.current) return
     const ro = new ResizeObserver(entries => {
-      setContainerW(entries[0].contentRect.width)
+      if (entries[0]) setContainerW(entries[0].contentRect.width)
     })
     ro.observe(containerRef.current)
     return () => ro.disconnect()
@@ -67,7 +67,7 @@ export function ActivityHeatmap({ data, weeks = 26 }: Props) {
     const firstDay = c.find(d => d !== null)
     if (firstDay) {
       const m = firstDay.getMonth()
-      if (m !== lastMonth) { monthLabels.push({ col: ci, label: MONTHS[m] }); lastMonth = m }
+      if (m !== lastMonth) { monthLabels.push({ col: ci, label: MONTHS[m]! }); lastMonth = m }
     }
   })
 

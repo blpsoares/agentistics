@@ -204,6 +204,7 @@ export function ActivityChart({ data, height = 180, theme }: Props) {
                 ))
               : (() => {
                   const m = DATA_METRICS.find(x => x.key === metric) ?? DATA_METRICS[0]
+                  if (!m) return null
                   return (
                     <Area
                       type="monotone"
