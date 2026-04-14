@@ -1,6 +1,7 @@
 import { readFile } from 'fs/promises'
 import type { SessionMeta } from '../src/lib/types'
 import { getGitFileStats } from './git'
+import { extractAgentMetrics } from './agent-metrics'
 
 // File extension → language name (used when session-meta is absent)
 export const EXT_TO_LANG: Record<string, string> = {
@@ -113,7 +114,7 @@ export async function parseSessionJsonl(
     return makeEmptySession(sessionId, fallbackPath, '', '', source)
   }
 
-  let cwd = '', startTime = '', lastTime = '', firstPrompt = ''
+  let cwd = '', startTime = '', lastTime = '', firstPrompt = '', modelId = ''
   let userMsgs = 0, assistantMsgs = 0, inputTokens = 0, outputTokens = 0
   let gitCommits = 0, gitPushes = 0
   let toolErrors = 0, userInterruptions = 0
@@ -190,6 +191,7 @@ export async function parseSessionJsonl(
       assistantMsgs++
       if (ts) lastAssistantTs = ts
       const msg = e.message as Record<string, unknown> | undefined
+      if (!modelId && typeof msg?.model === 'string') modelId = msg.model
       const msgOutputTokens = (msg?.usage as Record<string, number> | undefined)?.output_tokens ?? 0
       if (msg?.usage) {
         const u = msg.usage as Record<string, number>
@@ -266,6 +268,11 @@ export async function parseSessionJsonl(
     ? await getGitFileStats(projectPath, startTime, lastTime)
     : { linesAdded: 0, linesRemoved: 0, filesModified: 0 }
 
+  // Extract agent metrics if this session used the Agent tool
+  const agentMetrics = toolCounts['Agent']
+    ? extractAgentMetrics(content.split('\n'), modelId)
+    : undefined
+
   return {
     session_id: sessionId,
     project_path: projectPath,
@@ -296,5 +303,6 @@ export async function parseSessionJsonl(
     message_hours: messageHours,
     user_message_timestamps: userMessageTimestamps,
     _source: source,
+    agentMetrics,
   }
 }

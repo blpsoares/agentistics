@@ -1,7 +1,7 @@
 import React, { useRef, useState, useMemo } from 'react'
 import {
   X, Download, Sun, Moon, Check, Calendar, Cpu, Search,
-  BarChart2, TrendingUp, Clock, Wrench, FolderOpen, List, LayoutGrid, Trophy,
+  BarChart2, TrendingUp, Clock, Wrench, FolderOpen, List, LayoutGrid, Trophy, Bot,
 } from 'lucide-react'
 import { format, parseISO, subDays } from 'date-fns'
 import type { AppData, Filters, Lang, ModelUsage, SessionMeta } from '../lib/types'
@@ -12,7 +12,7 @@ import { useDerivedStats, blendedCostPerToken } from '../hooks/useData'
 
 type PDFTheme = 'light' | 'dark'
 
-const SECTION_IDS = ['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools', 'sessions', 'highlights'] as const
+const SECTION_IDS = ['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools', 'sessions', 'highlights', 'agents'] as const
 type SectionId = typeof SECTION_IDS[number]
 
 interface Colors {
@@ -54,15 +54,16 @@ const UI_THEME_BTNS: Record<PDFTheme, { bg: string; text: string; icon: string }
 }
 
 const SECTIONS: { id: SectionId; labelPt: string; labelEn: string; Icon: React.ElementType }[] = [
-  { id: 'summary',  labelPt: 'Resumo',       labelEn: 'Summary',    Icon: BarChart2   },
-  { id: 'activity', labelPt: 'Atividade',    labelEn: 'Activity',   Icon: TrendingUp  },
-  { id: 'heatmap',  labelPt: 'Mapa calor',   labelEn: 'Heatmap',    Icon: LayoutGrid  },
-  { id: 'hours',    labelPt: 'Por hora',     labelEn: 'By hour',    Icon: Clock       },
-  { id: 'models',   labelPt: 'Modelos',      labelEn: 'Models',     Icon: Cpu         },
-  { id: 'projects', labelPt: 'Projetos',     labelEn: 'Projects',   Icon: FolderOpen  },
-  { id: 'tools',    labelPt: 'Ferramentas',  labelEn: 'Tools',      Icon: Wrench      },
-  { id: 'sessions',    labelPt: 'Sessões',      labelEn: 'Sessions',    Icon: List        },
-  { id: 'highlights', labelPt: 'Recordes',    labelEn: 'Highlights',  Icon: Trophy      },
+  { id: 'summary',    labelPt: 'Resumo',       labelEn: 'Summary',    Icon: BarChart2   },
+  { id: 'activity',   labelPt: 'Atividade',    labelEn: 'Activity',   Icon: TrendingUp  },
+  { id: 'heatmap',    labelPt: 'Mapa calor',   labelEn: 'Heatmap',    Icon: LayoutGrid  },
+  { id: 'hours',      labelPt: 'Por hora',     labelEn: 'By hour',    Icon: Clock       },
+  { id: 'models',     labelPt: 'Modelos',      labelEn: 'Models',     Icon: Cpu         },
+  { id: 'projects',   labelPt: 'Projetos',     labelEn: 'Projects',   Icon: FolderOpen  },
+  { id: 'tools',      labelPt: 'Ferramentas',  labelEn: 'Tools',      Icon: Wrench      },
+  { id: 'sessions',   labelPt: 'Sessões',      labelEn: 'Sessions',   Icon: List        },
+  { id: 'highlights', labelPt: 'Recordes',     labelEn: 'Highlights', Icon: Trophy      },
+  { id: 'agents',     labelPt: 'Agentes',      labelEn: 'Agents',     Icon: Bot         },
 ]
 
 const DATE_OPTIONS = [
@@ -132,20 +133,83 @@ const METRIC_META: Record<ChartMetric, { label: string; getVal: (d: HeatmapDay) 
   tools:    { label: 'Tool calls', getVal: d => d.tools,  colorKey: 'green'  },
 }
 
-function MiniLineChart({ data, c, metric = 'messages', overlay = null }: {
-  data: HeatmapDay[]; c: Colors; metric?: ChartMetric; overlay?: ChartMetric | null
+function MiniLineChart({ data, c, metric = 'messages', overlay = null, overlayAll = false }: {
+  data: HeatmapDay[]; c: Colors; metric?: ChartMetric; overlay?: ChartMetric | null; overlayAll?: boolean
 }) {
   const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date)).slice(-60)
   if (sorted.length < 2) {
     return <div style={{ height: 128, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.textTer, fontSize: 11 }}>No data</div>
   }
 
-  const meta = METRIC_META[metric]
-  const overlayMeta = overlay ? METRIC_META[overlay] : null
-
   const LEGEND_H = 18
   const W = 698, H = 110 + LEGEND_H, padL = 36, padR = 8, padT = LEGEND_H + 8, padB = 24
   const innerW = W - padL - padR, innerH = H - padT - padB
+
+  const step = Math.max(1, Math.floor(sorted.length / 6))
+  const xLabels = sorted.map((d, i) => ({ d, i })).filter(({ i }) => i % step === 0 || i === sorted.length - 1)
+
+  if (overlayAll) {
+    // Show all 3 lines normalized to 0-100% (own scale each)
+    const allMetrics = Object.values(METRIC_META) as (typeof METRIC_META)[keyof typeof METRIC_META][]
+    const allKeys = (Object.keys(METRIC_META) as ChartMetric[])
+    const maxes = allKeys.map(k => Math.max(...sorted.map(d => METRIC_META[k].getVal(d)), 1))
+
+    return (
+      <svg width={W} height={H} style={{ display: 'block', overflow: 'visible' }}>
+        {/* Legend */}
+        {allKeys.map((k, ki) => {
+          const color = c[METRIC_META[k].colorKey] as string
+          return (
+            <g key={k}>
+              <circle cx={padL + ki * 110} cy={LEGEND_H / 2} r={3} fill={color} />
+              <line x1={padL + ki * 110 + 6} y1={LEGEND_H / 2} x2={padL + ki * 110 + 18} y2={LEGEND_H / 2} stroke={color} strokeWidth={1.5} strokeDasharray={ki > 0 ? '4,2' : ''} />
+              <text x={padL + ki * 110 + 22} y={LEGEND_H / 2 + 3.5} fontSize={8} fill={c.textSec} fontWeight="600">{METRIC_META[k].label}</text>
+            </g>
+          )
+        })}
+        <text x={padL + 350} y={LEGEND_H / 2 + 3.5} fontSize={7} fill={c.textTer}>(normalized 0–100%)</text>
+
+        {/* Grid */}
+        {[0, 0.25, 0.5, 0.75, 1].map(pct => {
+          const y = padT + (1 - pct) * innerH
+          return (
+            <g key={pct}>
+              <line x1={padL} y1={y} x2={padL + innerW} y2={y} stroke={c.border} strokeWidth={0.5} strokeDasharray="2,2" />
+              <text x={padL - 4} y={y + 3.5} fontSize={8} fill={c.textTer} textAnchor="end">{Math.round(pct * 100)}%</text>
+            </g>
+          )
+        })}
+
+        {/* Lines */}
+        {allKeys.map((k, ki) => {
+          const color = c[METRIC_META[k].colorKey] as string
+          const mx = maxes[ki] ?? 1
+          const pts = sorted.map((d, i) => {
+            const x = padL + (i / (sorted.length - 1)) * innerW
+            const y = padT + (1 - METRIC_META[k].getVal(d) / mx) * innerH
+            return `${x.toFixed(1)},${y.toFixed(1)}`
+          }).join(' ')
+          return (
+            <polyline key={k} points={pts} fill="none" stroke={color} strokeWidth={1.5}
+              strokeLinejoin="round" strokeDasharray={ki > 0 ? '5,2' : ''} />
+          )
+        })}
+
+        {/* X labels */}
+        {xLabels.map(({ d, i }) => {
+          const x = padL + (i / (sorted.length - 1)) * innerW
+          return (
+            <text key={d.date} x={x} y={H - 4} fontSize={8} fill={c.textTer} textAnchor="middle">
+              {d.date.slice(5)}
+            </text>
+          )
+        })}
+      </svg>
+    )
+  }
+
+  const meta = METRIC_META[metric]
+  const overlayMeta = overlay ? METRIC_META[overlay] : null
 
   const primaryColor = c[meta.colorKey] as string
   const max = Math.max(...sorted.map(d => meta.getVal(d)), 1)
@@ -169,9 +233,6 @@ function MiniLineChart({ data, c, metric = 'messages', overlay = null }: {
       return `${x.toFixed(1)},${y.toFixed(1)}`
     }).join(' ')
   }
-
-  const step = Math.max(1, Math.floor(sorted.length / 6))
-  const xLabels = sorted.map((d, i) => ({ d, i })).filter(({ i }) => i % step === 0 || i === sorted.length - 1)
 
   return (
     <svg width={W} height={H} style={{ display: 'block', overflow: 'visible' }}>
@@ -599,9 +660,10 @@ interface PDFContentProps {
   blendedRates: { input: number; output: number }
   chartMetric: ChartMetric
   chartOverlay: ChartMetric | null
+  chartOverlayAll: boolean
 }
 
-function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currency, brlRate, blendedRates, chartMetric, chartOverlay }: PDFContentProps) {
+function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currency, brlRate, blendedRates, chartMetric, chartOverlay, chartOverlayAll }: PDFContentProps) {
   if (!derived) return null
   const c = COLORS[pdfTheme]
   const pt = lang === 'pt'
@@ -669,7 +731,7 @@ function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currenc
           case 'activity': return (
             <div key="activity" style={{ marginBottom: 28 }}>
               <SectionTitle title={pt ? 'Atividade ao longo do tempo' : 'Activity over time'} c={c} />
-              <MiniLineChart data={derived.heatmapData} c={c} metric={chartMetric} overlay={chartOverlay} />
+              <MiniLineChart data={derived.heatmapData} c={c} metric={chartMetric} overlay={chartOverlayAll ? null : chartOverlay} overlayAll={chartOverlayAll} />
             </div>
           )
           case 'heatmap': return (
@@ -727,6 +789,73 @@ function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currenc
               <MiniHighlightsSection sessions={derived.filteredSessions} c={c} lang={lang} />
             </div>
           )
+          case 'agents': return (
+            <div key="agents" style={{ marginBottom: 28 }}>
+              <SectionTitle title={pt ? 'Métricas de agentes' : 'Agent metrics'} c={c} />
+              {derived.totalAgentInvocations === 0 ? (
+                <div style={{ fontSize: 10, color: c.textTer, fontStyle: 'italic', padding: '12px 0' }}>
+                  {pt ? 'Nenhuma invocação de agente encontrada no período.' : 'No agent invocations found in this period.'}
+                </div>
+              ) : (
+                <>
+                  {/* Summary KPI row */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
+                    <KPICard label={pt ? 'Invocações' : 'Invocations'} value={String(derived.totalAgentInvocations)} sub={pt ? 'total de agentes' : 'total agent calls'} accent={c.purple} c={c} />
+                    <KPICard label={pt ? 'Tokens agentes' : 'Agent tokens'} value={(() => { const n = derived.totalAgentTokens; return n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1000 ? `${(n/1000).toFixed(1)}K` : String(n) })()} sub={`avg ${(() => { const a = Math.round(derived.totalAgentTokens / Math.max(1, derived.totalAgentInvocations)); return a >= 1000 ? `${(a/1000).toFixed(1)}K` : String(a) })()} / call`} accent={c.blue} c={c} />
+                    <KPICard label={pt ? 'Custo agentes' : 'Agent cost'} value={currency === 'BRL' ? `R$${(derived.totalAgentCostUSD * brlRate).toFixed(2).replace('.', ',')}` : `$${derived.totalAgentCostUSD.toFixed(3)}`} sub="Anthropic pricing" accent={c.orange} c={c} />
+                    <KPICard label={pt ? 'Dur. média' : 'Avg duration'} value={(() => { const ms = derived.totalAgentDurationMs / Math.max(1, derived.totalAgentInvocations); const s = Math.round(ms/1000); return s < 60 ? `${s}s` : `${Math.floor(s/60)}m ${s%60}s` })()} sub={pt ? 'por invocação' : 'per invocation'} accent={c.green} c={c} />
+                  </div>
+                  {/* Agent type breakdown */}
+                  {Object.keys(derived.agentTypeBreakdown).length > 0 && (
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 9, fontWeight: 700, color: c.textSec, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        {pt ? 'Por tipo de agente' : 'By agent type'}
+                      </div>
+                      {Object.entries(derived.agentTypeBreakdown)
+                        .sort((a, b) => b[1].count - a[1].count)
+                        .map(([type, stats]) => {
+                          const maxC = Math.max(...Object.values(derived.agentTypeBreakdown).map(s => s.count))
+                          return (
+                            <div key={type} style={{ display: 'grid', gridTemplateColumns: '160px 1fr 50px 80px 80px', gap: 8, alignItems: 'center', marginBottom: 5 }}>
+                              <div style={{ fontSize: 9, fontWeight: 600, color: c.purple, background: `${c.purple}20`, borderRadius: 8, padding: '2px 7px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {type}
+                              </div>
+                              <div style={{ position: 'relative', height: 5, background: c.bgElevated, borderRadius: 3, overflow: 'hidden' }}>
+                                <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${(stats.count / maxC) * 100}%`, background: c.purple, borderRadius: 3, opacity: 0.6 }} />
+                              </div>
+                              <span style={{ fontSize: 9, color: c.text, fontWeight: 700, textAlign: 'right' }}>{stats.count}×</span>
+                              <span style={{ fontSize: 9, color: c.textSec, textAlign: 'right' }}>{stats.tokens >= 1000 ? `${(stats.tokens/1000).toFixed(1)}K` : stats.tokens} tok</span>
+                              <span style={{ fontSize: 9, color: c.orange, textAlign: 'right' }}>{currency === 'BRL' ? `R$${(stats.costUSD * brlRate).toFixed(2).replace('.', ',')}` : `$${stats.costUSD.toFixed(3)}`}</span>
+                            </div>
+                          )
+                        })}
+                    </div>
+                  )}
+                  {/* Top 8 invocations */}
+                  <div style={{ fontSize: 9, fontWeight: 700, color: c.textSec, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {pt ? 'Invocações recentes (top 8)' : 'Recent invocations (top 8)'}
+                  </div>
+                  <div style={{ border: `1px solid ${c.border}`, borderRadius: 6, overflow: 'hidden' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr 55px 55px 70px', gap: 8, padding: '5px 10px', background: c.bgElevated, fontSize: 8, fontWeight: 700, color: c.textTer, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      <span>{pt ? 'Tipo' : 'Type'}</span><span>{pt ? 'Descrição' : 'Description'}</span>
+                      <span style={{ textAlign: 'right' }}>Tokens</span>
+                      <span style={{ textAlign: 'right' }}>{pt ? 'Dur.' : 'Dur.'}</span>
+                      <span style={{ textAlign: 'right' }}>{pt ? 'Custo' : 'Cost'}</span>
+                    </div>
+                    {derived.agentInvocations.slice(0, 8).map((inv, i) => (
+                      <div key={inv.toolUseId || i} style={{ display: 'grid', gridTemplateColumns: '130px 1fr 55px 55px 70px', gap: 8, padding: '5px 10px', borderTop: `1px solid ${c.border}`, background: i % 2 === 0 ? 'transparent' : c.bgCard }}>
+                        <span style={{ fontSize: 8, fontWeight: 600, color: c.purple, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inv.agentType}</span>
+                        <span style={{ fontSize: 8, color: c.textSec, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inv.description || '—'}</span>
+                        <span style={{ fontSize: 8, color: c.text, textAlign: 'right' }}>{inv.totalTokens >= 1000 ? `${(inv.totalTokens/1000).toFixed(1)}K` : inv.totalTokens}</span>
+                        <span style={{ fontSize: 8, color: c.textSec, textAlign: 'right' }}>{(() => { const s = Math.round(inv.totalDurationMs/1000); return s < 60 ? `${s}s` : `${Math.floor(s/60)}m` })()} </span>
+                        <span style={{ fontSize: 8, color: c.orange, textAlign: 'right' }}>{currency === 'BRL' ? `R$${(inv.costUSD * brlRate).toFixed(2).replace('.', ',')}` : `$${inv.costUSD.toFixed(3)}`}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )
           default: return null
         }
       })}
@@ -763,6 +892,7 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
   )
   const [chartMetric, setChartMetric] = useState<ChartMetric>('messages')
   const [chartOverlay, setChartOverlay] = useState<ChartMetric | null>(null)
+  const [chartOverlayAll, setChartOverlayAll] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [exportSuccess, setExportSuccess] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -1203,42 +1333,59 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
                   <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 5 }}>
                     {pt ? 'Overlay (opcional)' : 'Overlay (optional)'}
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5 }}>
-                    {([null, 'messages', 'sessions', 'tools'] as (ChartMetric | null)[])
-                      .filter(m => m !== chartMetric)
-                      .map(m => {
-                        const labels: Record<string, { en: string; pt: string }> = {
-                          messages: { en: 'Messages', pt: 'Msgs' },
-                          sessions: { en: 'Sessions', pt: 'Sessões' },
-                          tools:    { en: 'Tools', pt: 'Tools' },
-                        }
-                        const dotColors: Record<string, string> = {
-                          messages: 'var(--anthropic-orange)',
-                          sessions: '#60a5fa',
-                          tools:    '#34d399',
-                        }
-                        const sel = chartOverlay === m
-                        return (
-                          <button key={String(m)} onClick={() => setChartOverlay(m)} style={{
-                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
-                            padding: '6px 4px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-                            fontSize: 10, fontWeight: sel ? 700 : 400,
-                            background: sel ? (m ? 'color-mix(in srgb, var(--border) 60%, transparent)' : 'var(--bg-card)') : 'transparent',
-                            border: sel ? '1px solid var(--border)' : '1px solid var(--border)',
-                            color: sel ? 'var(--text-primary)' : 'var(--text-secondary)',
-                            opacity: m === null && !sel ? 0.6 : 1,
-                            transition: 'all 0.12s',
-                          }}>
-                            {m ? (
-                              <>
-                                <div style={{ width: 6, height: 6, borderRadius: '50%', background: dotColors[m]!, flexShrink: 0 }} />
-                                {pt ? labels[m]!.pt : labels[m]!.en}
-                              </>
-                            ) : (pt ? 'Nenhum' : 'None')}
-                          </button>
-                        )
-                      })}
-                  </div>
+                  {/* Overlay All toggle */}
+                  <button
+                    onClick={() => { setChartOverlayAll(v => !v); setChartOverlay(null) }}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                      padding: '6px 8px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+                      fontSize: 10, fontWeight: chartOverlayAll ? 700 : 400, width: '100%', marginBottom: 5,
+                      background: chartOverlayAll ? '#8b5cf620' : 'transparent',
+                      border: chartOverlayAll ? '1px solid #8b5cf660' : '1px solid var(--border)',
+                      color: chartOverlayAll ? '#a78bfa' : 'var(--text-secondary)',
+                      transition: 'all 0.12s',
+                    }}
+                  >
+                    {pt ? '⊞ Overlay todas as linhas' : '⊞ Overlay all lines'}
+                  </button>
+                  {!chartOverlayAll && (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5 }}>
+                      {([null, 'messages', 'sessions', 'tools'] as (ChartMetric | null)[])
+                        .filter(m => m !== chartMetric)
+                        .map(m => {
+                          const labels: Record<string, { en: string; pt: string }> = {
+                            messages: { en: 'Messages', pt: 'Msgs' },
+                            sessions: { en: 'Sessions', pt: 'Sessões' },
+                            tools:    { en: 'Tools', pt: 'Tools' },
+                          }
+                          const dotColors: Record<string, string> = {
+                            messages: 'var(--anthropic-orange)',
+                            sessions: '#60a5fa',
+                            tools:    '#34d399',
+                          }
+                          const sel = chartOverlay === m
+                          return (
+                            <button key={String(m)} onClick={() => setChartOverlay(m)} style={{
+                              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                              padding: '6px 4px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+                              fontSize: 10, fontWeight: sel ? 700 : 400,
+                              background: sel ? (m ? 'color-mix(in srgb, var(--border) 60%, transparent)' : 'var(--bg-card)') : 'transparent',
+                              border: sel ? '1px solid var(--border)' : '1px solid var(--border)',
+                              color: sel ? 'var(--text-primary)' : 'var(--text-secondary)',
+                              opacity: m === null && !sel ? 0.6 : 1,
+                              transition: 'all 0.12s',
+                            }}>
+                              {m ? (
+                                <>
+                                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: dotColors[m]!, flexShrink: 0 }} />
+                                  {pt ? labels[m]!.pt : labels[m]!.en}
+                                </>
+                              ) : (pt ? 'Nenhum' : 'None')}
+                            </button>
+                          )
+                        })}
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -1305,6 +1452,7 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
                   blendedRates={blendedRates}
                   chartMetric={chartMetric}
                   chartOverlay={chartOverlay}
+                  chartOverlayAll={chartOverlayAll}
                 />
               </div>
             </div>

@@ -1,3 +1,4 @@
+import { readFile } from 'fs/promises'
 import { calcCost } from '../src/lib/types'
 import type { AgentInvocation, SessionAgentMetrics } from '../src/lib/types'
 
@@ -158,4 +159,36 @@ export function extractAgentMetrics(lines: string[], modelId: string): SessionAg
     totalDurationMs,
     totalCostUSD,
   }
+}
+
+/**
+ * Read a JSONL file and extract agent metrics from it.
+ * Used for meta-sourced sessions that have agent tool usage.
+ */
+export async function extractAgentMetricsFromFile(filePath: string): Promise<SessionAgentMetrics> {
+  const empty: SessionAgentMetrics = { invocations: [], totalInvocations: 0, totalTokens: 0, totalDurationMs: 0, totalCostUSD: 0 }
+  let content: string
+  try {
+    content = await readFile(filePath, 'utf-8')
+  } catch {
+    return empty
+  }
+
+  const lines = content.split('\n')
+
+  // Extract model ID from first assistant message
+  let modelId = ''
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line) continue
+    try {
+      const e = JSON.parse(line) as Record<string, unknown>
+      if (e.type === 'assistant') {
+        const msg = e.message as Record<string, unknown> | undefined
+        if (typeof msg?.model === 'string') { modelId = msg.model; break }
+      }
+    } catch { continue }
+  }
+
+  return extractAgentMetrics(lines, modelId)
 }
