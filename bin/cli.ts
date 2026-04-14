@@ -40,13 +40,13 @@ if (command === 'server') {
   process.env.SERVE_STATIC = '1'
   // Server and daemon always start together
   await Promise.all([
-    import('./server.ts'),
-    import('./watcher.ts'),
+    import('../server/index.ts'),
+    import('../server/otel-watcher.ts'),
   ])
 } else if (command === 'tui') {
-  await import('./watch-cli.ts')
+  await import('../src/tui/index.ts')
 } else if (command === 'watch') {
-  await import('./watcher.ts')
+  await import('../server/otel-watcher.ts')
 } else {
   console.error(`Unknown command: ${command}\n`)
   console.log(HELP)

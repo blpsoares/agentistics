@@ -41,7 +41,7 @@ jobs:
       - name: Compile binary
         run: |
           mkdir -p release
-          bun build --compile cli.ts --outfile ./release/agentop
+          bun build --compile bin/cli.ts --outfile ./release/agentop
 
       - name: Smoke test
         run: ./release/agentop --help

@@ -31,11 +31,11 @@ import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions'
 
 // ── Shared imports from the main codebase ──────────────────────────────────
 
-import { calcCost } from './src/lib/types'
-import type { ModelUsage } from './src/lib/types'
-import type { OtelSnapshot } from './src/lib/otel'
-import { HOME_DIR, CLAUDE_DIR, PROJECTS_DIR, SESSION_META_DIR, STATS_CACHE_FILE } from './server/config'
-import { createLimiter, safeReadJson, safeReadDir, safeStat } from './server/utils'
+import { calcCost } from '../src/lib/types'
+import type { ModelUsage } from '../src/lib/types'
+import type { OtelSnapshot } from '../src/lib/otel'
+import { HOME_DIR, CLAUDE_DIR, PROJECTS_DIR, SESSION_META_DIR, STATS_CACHE_FILE } from './config'
+import { createLimiter, safeReadJson, safeReadDir, safeStat } from './utils'
 
 // ── Configuration ──────────────────────────────────────────────────────────
 

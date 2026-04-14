@@ -18,8 +18,8 @@ import {
   type KeypressEvent,
 } from '@inquirer/core'
 import { select, input, confirm } from '@inquirer/prompts'
-import { calcCost, getModelPrice } from './src/lib/types'
-import type { ModelUsage, SessionMeta } from './src/lib/types'
+import { calcCost, getModelPrice } from '../lib/types'
+import type { ModelUsage, SessionMeta } from '../lib/types'
 
 // ── Paths ──────────────────────────────────────────────────────────────────
 

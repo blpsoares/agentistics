@@ -1,8 +1,8 @@
 // embeddedDist is loaded inside server/sse.ts (conditional on SERVE_STATIC=1)
 
-import { PORT } from './server/config'
-import { getRates } from './server/rates'
-import { buildApiResponse } from './server/data'
+import { PORT } from './config'
+import { getRates } from './rates'
+import { buildApiResponse } from './data'
 import {
   sseClients,
   sseEncoder,
@@ -10,7 +10,7 @@ import {
   maybeSpawnWatcher,
   serveStatic,
   SERVE_STATIC,
-} from './server/sse'
+} from './sse'
 
 // ---------------------------------------------------------------------------
 // Start file watching and optionally spawn the OTel watcher daemon
