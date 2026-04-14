@@ -20,6 +20,7 @@
     "preview": "vite preview",
     "watch": "bun run server/otel-watcher.ts",
     "watch:cli": "bun run src/tui/index.ts",
+    "stub": "bun run scripts/ensure-type-stub.ts",
     "test": "bun test",
     "prepare": "husky"
   },
