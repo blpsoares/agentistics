@@ -132,7 +132,7 @@ bun test
 
 ## Data Sources
 
-The server (`server.ts`) reads the following paths:
+The server (`server/index.ts`) reads the following paths:
 
 | Source | Path | Description |
 |--------|------|-------------|
@@ -500,13 +500,25 @@ Support for **Portuguese (pt-BR)** and **English**:
 
 ```
 agentistics/
-├── cli.ts                       # Binary entry point: server | tui | watch
-├── server.ts                    # Bun API: JSONL parsing, git stats, static serving
-├── watcher.ts                   # Daemon: chokidar + OTLP metrics export
-├── watch-cli.ts                 # Terminal TUI: live stats in the terminal
+├── bin/
+│   └── cli.ts                   # Binary entry point: server | tui | watch
+├── server/
+│   ├── index.ts                 # Bun HTTP server — thin entry, delegates to modules
+│   ├── otel-watcher.ts          # Daemon: chokidar + OTLP metrics export
+│   ├── config.ts                # Path constants + PORT
+│   ├── utils.ts                 # Shared FS helpers
+│   ├── git.ts                   # Git stats
+│   ├── jsonl.ts                 # JSONL session parser
+│   ├── health.ts                # Health checks
+│   ├── rates.ts                 # Pricing scraper + BRL rate cache
+│   ├── sse.ts                   # SSE + file watcher + static serving
+│   ├── data.ts                  # Main data orchestrator (buildApiResponse)
+│   └── agent-metrics.ts         # Agent tool_use metrics parser
 ├── scripts/
 │   └── embed-dist.ts            # Bundles dist/ assets into src/embedded-dist.generated.ts
 ├── src/
+│   ├── tui/
+│   │   └── index.ts             # Terminal TUI: live stats in the terminal
 │   ├── embedded-dist.generated.ts  # Auto-generated (gitignored) — frontend assets for binary
 │   ├── App.tsx
 │   ├── components/

@@ -11,7 +11,7 @@ Local metrics stack for agentistics. Exports Claude usage metrics (tokens, cost,
 
 | Service | Port | Role |
 |---|---|---|
-| OTel Collector | 4318 | Receives OTLP/HTTP from `watcher.ts`, exposes metrics for Prometheus |
+| OTel Collector | 4318 | Receives OTLP/HTTP from `server/otel-watcher.ts`, exposes metrics for Prometheus |
 | Prometheus | 9090 | Scrapes the collector every 15s |
 | Grafana | 3000 | Visualizes metrics; pre-configured with Prometheus datasource and dashboard |
 
