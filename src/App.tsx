@@ -168,10 +168,10 @@ function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string
     const brl = usd * rate
     if (brl < 0.05) return '<R$0,05'
     const [intPart, decPart] = brl.toFixed(2).split('.')
-    return `R$${intPart.replace(/\B(?=(\d{3})+$)/g, '.')},${decPart}`
+    return `R$${(intPart ?? '0').replace(/\B(?=(\d{3})+$)/g, '.')},${decPart}`
   }
-  if (usd < 0.01) return '<U$0.01'
-  return `U$${usd.toFixed(2)}`
+  if (usd < 0.01) return '<USD 0.01'
+  return `USD ${usd.toFixed(2)}`
 }
 
 export default function App() {
@@ -568,6 +568,8 @@ export default function App() {
 
   if (!data || !derived) return null
 
+  // Capture non-null derived for use in nested functions (TypeScript can't narrow closures)
+  const d = derived
   const { statsCache } = data
 
   // Tokens: use model usage totals when available (non-project-filtered), fallback to session-level
@@ -620,7 +622,7 @@ export default function App() {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Mensagens' : 'Messages'}
-          value={fmt(derived.totalMessages)}
+          value={fmt(d.totalMessages)}
           sub={lang === 'pt' ? 'no período selecionado' : 'in selected period'}
           icon={<MessageSquare size={15} />}
           accent="var(--anthropic-orange)"
@@ -632,8 +634,8 @@ export default function App() {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Sessões' : 'Sessions'}
-          value={fmt(derived.totalSessions)}
-          sub={`avg ${derived.totalSessions > 0 ? Math.round(derived.totalMessages / derived.totalSessions) : 0} msgs/sessão`}
+          value={fmt(d.totalSessions)}
+          sub={`avg ${d.totalSessions > 0 ? Math.round(d.totalMessages / d.totalSessions) : 0} msgs/sessão`}
           icon={<Zap size={15} />}
           accent="var(--accent-blue)"
           info={infoItems[1]}
@@ -644,7 +646,7 @@ export default function App() {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Tool calls' : 'Tool calls'}
-          value={fmt(derived.totalToolCalls)}
+          value={fmt(d.totalToolCalls)}
           sub={lang === 'pt' ? 'execuções totais' : 'total executions'}
           icon={<Wrench size={15} />}
           accent="var(--accent-green)"
@@ -680,7 +682,7 @@ export default function App() {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Custo estimado' : 'Est. cost'}
-          value={fmtCost(derived.totalCostUSD, currency, brlRate)}
+          value={fmtCost(d.totalCostUSD, currency, brlRate)}
           sub={lang === 'pt' ? 'preços da API Anthropic · não é assinatura' : 'Anthropic API pricing · not subscription'}
           icon={<TrendingUp size={15} />}
           accent="var(--anthropic-orange)"
@@ -698,7 +700,7 @@ export default function App() {
                 cursor: 'pointer', fontFamily: 'inherit',
                 transition: 'all 0.15s', letterSpacing: '0.03em',
               }}
-              title={currency === 'USD' ? 'Switch to BRL (R$)' : 'Switch to USD (U$)'}
+              title={currency === 'USD' ? 'Switch to BRL (R$)' : 'Switch to USD'}
             >
               {currency}
             </button>
@@ -709,7 +711,7 @@ export default function App() {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Sequência' : 'Streak'}
-          value={`${derived.streak}d`}
+          value={`${d.streak}d`}
           sub={lang === 'pt' ? 'dias consecutivos' : 'consecutive days'}
           icon={<Flame size={15} />}
           accent="#ef4444"
@@ -721,13 +723,13 @@ export default function App() {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Sessão mais longa' : 'Longest session'}
-          value={derived.longestSession?.duration_minutes ? fmtDuration(derived.longestSession.duration_minutes * 60_000) : '—'}
-          sub={derived.longestSession
+          value={d.longestSession?.duration_minutes ? fmtDuration(d.longestSession.duration_minutes * 60_000) : '—'}
+          sub={d.longestSession
             ? (() => {
-                const msgs = (derived.longestSession!.user_message_count ?? 0) + (derived.longestSession!.assistant_message_count ?? 0)
+                const msgs = (d.longestSession!.user_message_count ?? 0) + (d.longestSession!.assistant_message_count ?? 0)
                 const msgStr = `${msgs} ${lang === 'pt' ? 'mensagens' : 'messages'}`
-                if (filters.projects.length === 0 && derived.longestSession!.project_path)
-                  return `${msgStr} · ${formatProjectName(derived.longestSession!.project_path)}`
+                if (filters.projects.length === 0 && d.longestSession!.project_path)
+                  return `${msgStr} · ${formatProjectName(d.longestSession!.project_path)}`
                 return msgStr
               })()
             : ''}
@@ -741,9 +743,9 @@ export default function App() {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Commits' : 'Commits'}
-          value={derived.gitCommits}
-          sub={derived.gitPushes > 0
-            ? `${derived.gitPushes} ${lang === 'pt' ? 'pushes via Claude' : 'pushes via Claude'}`
+          value={d.gitCommits}
+          sub={d.gitPushes > 0
+            ? `${d.gitPushes} ${lang === 'pt' ? 'pushes via Claude' : 'pushes via Claude'}`
             : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls'}
           icon={<GitCommit size={15} />}
           accent="var(--accent-cyan)"
@@ -755,9 +757,9 @@ export default function App() {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Arquivos' : 'Files'}
-          value={derived.filesModified}
-          sub={derived.linesAdded + derived.linesRemoved > 0
-            ? `+${fmt(derived.linesAdded)} / -${fmt(derived.linesRemoved)} linhas`
+          value={d.filesModified}
+          sub={d.linesAdded + d.linesRemoved > 0
+            ? `+${fmt(d.linesAdded)} / -${fmt(d.linesRemoved)} linhas`
             : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls'}
           icon={<FileCode size={15} />}
           accent="var(--accent-green)"

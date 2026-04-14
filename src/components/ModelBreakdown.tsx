@@ -20,10 +20,10 @@ function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string
     const brl = usd * rate
     if (brl < 0.05) return '<R$0,05'
     const [intPart, decPart] = brl.toFixed(2).split('.')
-    return `R$${intPart.replace(/\B(?=(\d{3})+$)/g, '.')},${decPart}`
+    return `R$${(intPart ?? '0').replace(/\B(?=(\d{3})+$)/g, '.')},${decPart}`
   }
-  if (usd < 0.01) return '<U$0.01'
-  return `U$${usd.toFixed(2)}`
+  if (usd < 0.01) return '<USD 0.01'
+  return `USD ${usd.toFixed(2)}`
 }
 
 export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1 }: Props) {

@@ -86,8 +86,8 @@ function fmtCostStr(usd: number, currency: 'USD' | 'BRL', rate: number): string 
     if (brl < 0.05) return '<R$0,05'
     return `R$${brl.toFixed(2).replace('.', ',')}`
   }
-  if (usd < 0.01) return '<U$0.01'
-  return `U$${usd.toFixed(2)}`
+  if (usd < 0.01) return '<USD 0.01'
+  return `USD ${usd.toFixed(2)}`
 }
 
 function fmtDur(min: number): string {
@@ -124,26 +124,70 @@ function KPICard({ label, value, sub, accent, c }: {
   )
 }
 
-function MiniLineChart({ data, c }: { data: HeatmapDay[]; c: Colors }) {
+type ChartMetric = 'messages' | 'sessions' | 'tools'
+
+const METRIC_META: Record<ChartMetric, { label: string; getVal: (d: HeatmapDay) => number; colorKey: keyof Colors }> = {
+  messages: { label: 'Messages', getVal: d => d.value,    colorKey: 'orange' },
+  sessions: { label: 'Sessions', getVal: d => d.sessions, colorKey: 'blue'   },
+  tools:    { label: 'Tool calls', getVal: d => d.tools,  colorKey: 'green'  },
+}
+
+function MiniLineChart({ data, c, metric = 'messages', overlay = null }: {
+  data: HeatmapDay[]; c: Colors; metric?: ChartMetric; overlay?: ChartMetric | null
+}) {
   const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date)).slice(-60)
   if (sorted.length < 2) {
-    return <div style={{ height: 110, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.textTer, fontSize: 11 }}>No data</div>
+    return <div style={{ height: 128, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.textTer, fontSize: 11 }}>No data</div>
   }
-  const W = 698, H = 110, padL = 36, padR = 8, padT = 8, padB = 24
+
+  const meta = METRIC_META[metric]
+  const overlayMeta = overlay ? METRIC_META[overlay] : null
+
+  const LEGEND_H = 18
+  const W = 698, H = 110 + LEGEND_H, padL = 36, padR = 8, padT = LEGEND_H + 8, padB = 24
   const innerW = W - padL - padR, innerH = H - padT - padB
-  const max = Math.max(...sorted.map(d => d.value), 1)
+
+  const primaryColor = c[meta.colorKey] as string
+  const max = Math.max(...sorted.map(d => meta.getVal(d)), 1)
+
   const pts = sorted.map((d, i) => {
     const x = padL + (i / (sorted.length - 1)) * innerW
-    const y = padT + (1 - d.value / max) * innerH
+    const y = padT + (1 - meta.getVal(d) / max) * innerH
     return [x, y] as [number, number]
   })
   const lineStr = pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
   const areaStr = `${padL},${padT + innerH} ${lineStr} ${padL + innerW},${padT + innerH}`
+
+  let overlayStr = ''
+  let overlayColor = ''
+  if (overlayMeta) {
+    overlayColor = c[overlayMeta.colorKey] as string
+    const overlayMax = Math.max(...sorted.map(d => overlayMeta.getVal(d)), 1)
+    overlayStr = sorted.map((d, i) => {
+      const x = padL + (i / (sorted.length - 1)) * innerW
+      const y = padT + (1 - overlayMeta.getVal(d) / overlayMax) * innerH
+      return `${x.toFixed(1)},${y.toFixed(1)}`
+    }).join(' ')
+  }
+
   const step = Math.max(1, Math.floor(sorted.length / 6))
   const xLabels = sorted.map((d, i) => ({ d, i })).filter(({ i }) => i % step === 0 || i === sorted.length - 1)
 
   return (
     <svg width={W} height={H} style={{ display: 'block', overflow: 'visible' }}>
+      {/* Legend */}
+      <circle cx={padL} cy={LEGEND_H / 2} r={4} fill={primaryColor} />
+      <text x={padL + 9} y={LEGEND_H / 2 + 3.5} fontSize={8} fill={c.textSec} fontWeight="600">{meta.label}</text>
+      {overlayMeta && (
+        <>
+          <circle cx={padL + 90} cy={LEGEND_H / 2} r={3} fill={overlayColor} />
+          <line x1={padL + 96} y1={LEGEND_H / 2} x2={padL + 108} y2={LEGEND_H / 2} stroke={overlayColor} strokeWidth={1.5} strokeDasharray="3,2" />
+          <text x={padL + 112} y={LEGEND_H / 2 + 3.5} fontSize={8} fill={c.textSec} fontWeight="600">{overlayMeta.label}</text>
+          <text x={padL + 112 + 55} y={LEGEND_H / 2 + 3.5} fontSize={7} fill={c.textTer}>(scaled)</text>
+        </>
+      )}
+
+      {/* Grid */}
       {[0, 0.25, 0.5, 0.75, 1].map(pct => {
         const y = padT + (1 - pct) * innerH
         return (
@@ -153,8 +197,17 @@ function MiniLineChart({ data, c }: { data: HeatmapDay[]; c: Colors }) {
           </g>
         )
       })}
-      <polygon points={areaStr} fill={`${c.orange}25`} />
-      <polyline points={lineStr} fill="none" stroke={c.orange} strokeWidth={1.5} strokeLinejoin="round" />
+
+      {/* Area + primary line */}
+      <polygon points={areaStr} fill={`${primaryColor}25`} />
+      <polyline points={lineStr} fill="none" stroke={primaryColor} strokeWidth={1.5} strokeLinejoin="round" />
+
+      {/* Overlay line (dashed, own scale) */}
+      {overlayStr && (
+        <polyline points={overlayStr} fill="none" stroke={overlayColor} strokeWidth={1.5} strokeLinejoin="round" strokeDasharray="4,2" />
+      )}
+
+      {/* X labels */}
       {xLabels.map(({ d, i }) => {
         const x = padL + (i / (sorted.length - 1)) * innerW
         return (
@@ -404,22 +457,24 @@ function MiniHighlightsSection({ sessions, c, lang }: {
     return `${x.toFixed(1)}× avg`
   }
 
+  // sessions[0] is guaranteed defined because of the sessions.length === 0 guard above
+  const firstSession = sessions[0]!
   const longestSession = sessions.reduce((b, s) =>
-    (s.duration_minutes ?? 0) > (b.duration_minutes ?? 0) ? s : b, sessions[0])
+    (s.duration_minutes ?? 0) > (b.duration_minutes ?? 0) ? s : b, firstSession)
   const mostInputTokens = sessions.reduce((b, s) =>
-    (s.input_tokens ?? 0) > (b.input_tokens ?? 0) ? s : b, sessions[0])
+    (s.input_tokens ?? 0) > (b.input_tokens ?? 0) ? s : b, firstSession)
   const mostOutputTokens = sessions.reduce((b, s) =>
-    (s.output_tokens ?? 0) > (b.output_tokens ?? 0) ? s : b, sessions[0])
+    (s.output_tokens ?? 0) > (b.output_tokens ?? 0) ? s : b, firstSession)
   const mostMessages = sessions.reduce((b, s) => {
     const v = (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
     const bv = (b.user_message_count ?? 0) + (b.assistant_message_count ?? 0)
     return v > bv ? s : b
-  }, sessions[0])
+  }, firstSession)
   const mostToolCalls = sessions.reduce((b, s) => {
     const v = Object.values(s.tool_counts ?? {}).reduce((a, x) => a + x, 0)
     const bv = Object.values(b.tool_counts ?? {}).reduce((a, x) => a + x, 0)
     return v > bv ? s : b
-  }, sessions[0])
+  }, firstSession)
 
   const projectSessionCounts: Record<string, number> = {}
   for (const s of sessions) {
@@ -542,9 +597,11 @@ interface PDFContentProps {
   currency: 'USD' | 'BRL'
   brlRate: number
   blendedRates: { input: number; output: number }
+  chartMetric: ChartMetric
+  chartOverlay: ChartMetric | null
 }
 
-function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currency, brlRate, blendedRates }: PDFContentProps) {
+function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currency, brlRate, blendedRates, chartMetric, chartOverlay }: PDFContentProps) {
   if (!derived) return null
   const c = COLORS[pdfTheme]
   const pt = lang === 'pt'
@@ -612,7 +669,7 @@ function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currenc
           case 'activity': return (
             <div key="activity" style={{ marginBottom: 28 }}>
               <SectionTitle title={pt ? 'Atividade ao longo do tempo' : 'Activity over time'} c={c} />
-              <MiniLineChart data={derived.heatmapData} c={c} />
+              <MiniLineChart data={derived.heatmapData} c={c} metric={chartMetric} overlay={chartOverlay} />
             </div>
           )
           case 'heatmap': return (
@@ -704,6 +761,8 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
   const [sectionOrder, setSectionOrder] = useState<SectionId[]>(
     ['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools']
   )
+  const [chartMetric, setChartMetric] = useState<ChartMetric>('messages')
+  const [chartOverlay, setChartOverlay] = useState<ChartMetric | null>(null)
   const [exporting, setExporting] = useState(false)
   const [exportSuccess, setExportSuccess] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -1099,6 +1158,91 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
               </div>
             </div>
 
+            {/* Activity chart options — only relevant when 'activity' section is active */}
+            {sectionOrder.includes('activity') && (
+              <>
+                <div style={{ height: 1, background: 'var(--border)' }} />
+                <div>
+                  {configSectionLabel(pt ? 'Gráfico de atividade' : 'Activity chart')}
+
+                  {/* Primary metric */}
+                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 5 }}>
+                    {pt ? 'Linha principal' : 'Primary line'}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5, marginBottom: 12 }}>
+                    {(['messages', 'sessions', 'tools'] as ChartMetric[]).map(m => {
+                      const labels: Record<ChartMetric, { en: string; pt: string }> = {
+                        messages: { en: 'Messages', pt: 'Msgs' },
+                        sessions: { en: 'Sessions', pt: 'Sessões' },
+                        tools:    { en: 'Tools', pt: 'Tools' },
+                      }
+                      const dotColors: Record<ChartMetric, string> = {
+                        messages: 'var(--anthropic-orange)',
+                        sessions: '#60a5fa',
+                        tools:    '#34d399',
+                      }
+                      const sel = chartMetric === m
+                      return (
+                        <button key={m} onClick={() => { setChartMetric(m); if (chartOverlay === m) setChartOverlay(null) }} style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                          padding: '6px 4px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+                          fontSize: 10, fontWeight: sel ? 700 : 400,
+                          background: sel ? 'var(--anthropic-orange-dim)' : 'transparent',
+                          border: sel ? '1px solid var(--anthropic-orange)50' : '1px solid var(--border)',
+                          color: sel ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+                          transition: 'all 0.12s',
+                        }}>
+                          <div style={{ width: 6, height: 6, borderRadius: '50%', background: dotColors[m], flexShrink: 0 }} />
+                          {pt ? labels[m].pt : labels[m].en}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* Overlay */}
+                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 5 }}>
+                    {pt ? 'Overlay (opcional)' : 'Overlay (optional)'}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5 }}>
+                    {([null, 'messages', 'sessions', 'tools'] as (ChartMetric | null)[])
+                      .filter(m => m !== chartMetric)
+                      .map(m => {
+                        const labels: Record<string, { en: string; pt: string }> = {
+                          messages: { en: 'Messages', pt: 'Msgs' },
+                          sessions: { en: 'Sessions', pt: 'Sessões' },
+                          tools:    { en: 'Tools', pt: 'Tools' },
+                        }
+                        const dotColors: Record<string, string> = {
+                          messages: 'var(--anthropic-orange)',
+                          sessions: '#60a5fa',
+                          tools:    '#34d399',
+                        }
+                        const sel = chartOverlay === m
+                        return (
+                          <button key={String(m)} onClick={() => setChartOverlay(m)} style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                            padding: '6px 4px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+                            fontSize: 10, fontWeight: sel ? 700 : 400,
+                            background: sel ? (m ? 'color-mix(in srgb, var(--border) 60%, transparent)' : 'var(--bg-card)') : 'transparent',
+                            border: sel ? '1px solid var(--border)' : '1px solid var(--border)',
+                            color: sel ? 'var(--text-primary)' : 'var(--text-secondary)',
+                            opacity: m === null && !sel ? 0.6 : 1,
+                            transition: 'all 0.12s',
+                          }}>
+                            {m ? (
+                              <>
+                                <div style={{ width: 6, height: 6, borderRadius: '50%', background: dotColors[m]!, flexShrink: 0 }} />
+                                {pt ? labels[m]!.pt : labels[m]!.en}
+                              </>
+                            ) : (pt ? 'Nenhum' : 'None')}
+                          </button>
+                        )
+                      })}
+                  </div>
+                </div>
+              </>
+            )}
+
             {/* Spacer */}
             <div style={{ flex: 1 }} />
 
@@ -1159,6 +1303,8 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
                   currency={currency}
                   brlRate={brlRate}
                   blendedRates={blendedRates}
+                  chartMetric={chartMetric}
+                  chartOverlay={chartOverlay}
                 />
               </div>
             </div>
