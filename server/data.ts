@@ -5,6 +5,7 @@ import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
 import { UUID_RE, decodeProjectDir, getProjectGitStats } from './git'
 import { parseSessionJsonl } from './jsonl'
 import { runHealthChecks, analyzeToolHealthIssues } from './health'
+import { extractAgentMetricsFromFile } from './agent-metrics'
 
 /** Server-side project shape — sessions carry only the subset the API needs */
 export interface ServerProject {
@@ -140,6 +141,12 @@ async function scanProjectDir(
         const session = await fileLimit(() => parseSessionJsonl(filePath, sessionId, fallbackPath, 'jsonl'))
         cwdCounts[session.project_path] = (cwdCounts[session.project_path] ?? 0) + 1
         extraSessions.push(session)
+      } else if (metaEntry?.uses_task_agent && !metaEntry.agentMetrics) {
+        // Meta session with agent usage — extract agent metrics from the JSONL file
+        await fileLimit(async () => {
+          const metrics = await extractAgentMetricsFromFile(filePath)
+          if (metrics.totalInvocations > 0) metaEntry.agentMetrics = metrics
+        })
       }
       return
     }

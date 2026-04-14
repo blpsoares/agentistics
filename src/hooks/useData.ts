@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import type { AppData, Filters, DateRange } from '../lib/types'
+import type { AppData, Filters, DateRange, AgentInvocation } from '../lib/types'
 import { calcCost, getModelPrice, MODEL_PRICING } from '../lib/types'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format } from 'date-fns'
 
@@ -379,6 +379,28 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       projectStats[p].tools += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
     }
 
+    // ── Agent metrics ──
+    const agentInvocations: AgentInvocation[] = []
+    const agentTypeBreakdown: Record<string, { count: number; tokens: number; costUSD: number; durationMs: number }> = {}
+
+    for (const s of filteredSessions) {
+      if (!s.agentMetrics?.invocations) continue
+      for (const inv of s.agentMetrics.invocations) {
+        agentInvocations.push(inv)
+        const type = inv.agentType || 'unknown'
+        if (!agentTypeBreakdown[type]) agentTypeBreakdown[type] = { count: 0, tokens: 0, costUSD: 0, durationMs: 0 }
+        agentTypeBreakdown[type].count++
+        agentTypeBreakdown[type].tokens += inv.totalTokens
+        agentTypeBreakdown[type].costUSD += inv.costUSD
+        agentTypeBreakdown[type].durationMs += inv.totalDurationMs
+      }
+    }
+
+    const totalAgentInvocations = agentInvocations.length
+    const totalAgentTokens = agentInvocations.reduce((s, i) => s + i.totalTokens, 0)
+    const totalAgentCostUSD = agentInvocations.reduce((s, i) => s + i.costUSD, 0)
+    const totalAgentDurationMs = agentInvocations.reduce((s, i) => s + i.totalDurationMs, 0)
+
     // ── Sessão mais longa (respeita filtros) ──
     const longestSession = filteredSessions.reduce<typeof filteredSessions[0] | null>((best, s) => {
       if (!best || (s.duration_minutes ?? 0) > (best.duration_minutes ?? 0)) return s
@@ -422,6 +444,12 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       longestSession,
       metaCoverageFrom,
       metaCoverageTo,
+      agentInvocations,
+      agentTypeBreakdown,
+      totalAgentInvocations,
+      totalAgentTokens,
+      totalAgentCostUSD,
+      totalAgentDurationMs,
     }
   }, [data, filters])
 }

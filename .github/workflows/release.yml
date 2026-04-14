@@ -26,6 +26,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Ensure type stub
+        run: bun run stub
+
       - name: Type check
         run: bun tsc --noEmit
 

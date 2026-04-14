@@ -16,7 +16,7 @@ interface Props {
   theme?: 'dark' | 'light'
 }
 
-type Metric = 'value' | 'sessions' | 'tools' | 'overlay'
+type Metric = 'value' | 'sessions' | 'tools'
 
 function getMetrics(theme?: 'dark' | 'light'): { key: Metric; label: string; color: string }[] {
   const messagesColor = theme === 'light' ? '#f97316' : '#D97706'
@@ -24,7 +24,6 @@ function getMetrics(theme?: 'dark' | 'light'): { key: Metric; label: string; col
     { key: 'value', label: 'Messages', color: messagesColor },
     { key: 'sessions', label: 'Sessions', color: '#6366f1' },
     { key: 'tools', label: 'Tool Calls', color: '#10b981' },
-    { key: 'overlay', label: 'Overlay', color: '#8b5cf6' },
   ]
 }
 
@@ -85,11 +84,12 @@ function ToggleBtn({ active, onClick, children }: { active: boolean; onClick: ()
 
 export function ActivityChart({ data, height = 180, theme }: Props) {
   const [metric, setMetric] = useState<Metric>('value')
+  const [overlayAll, setOverlayAll] = useState(false)
   const [showAxes, setShowAxes] = useState(true)
   const [showLegend, setShowLegend] = useState(true)
-  const isOverlay = metric === 'overlay'
+  const isOverlay = overlayAll
   const METRICS = getMetrics(theme)
-  const DATA_METRICS = METRICS.filter(m => m.key !== 'overlay') as { key: 'value'|'sessions'|'tools'; label: string; color: string }[]
+  const DATA_METRICS = METRICS as { key: 'value'|'sessions'|'tools'; label: string; color: string }[]
 
   const maxValues = {
     value: Math.max(...data.map(d => d.value), 1),
@@ -107,7 +107,7 @@ export function ActivityChart({ data, height = 180, theme }: Props) {
 
   const activeLegendItems = isOverlay
     ? DATA_METRICS
-    : DATA_METRICS.filter(m => m.key === metric)
+    : DATA_METRICS.filter(m => m.key === metric as string)
 
   return (
     <div>
@@ -116,23 +116,42 @@ export function ActivityChart({ data, height = 180, theme }: Props) {
         {METRICS.map(m => (
           <button
             key={m.key}
-            onClick={() => setMetric(m.key)}
+            onClick={() => { setMetric(m.key); setOverlayAll(false) }}
             style={{
               padding: '5px 12px',
               borderRadius: 20,
-              border: metric === m.key ? `1px solid ${m.color}60` : '1px solid var(--border)',
-              background: metric === m.key ? `${m.color}18` : 'transparent',
-              color: metric === m.key ? m.color : 'var(--text-secondary)',
+              border: !overlayAll && metric === m.key ? `1px solid ${m.color}60` : '1px solid var(--border)',
+              background: !overlayAll && metric === m.key ? `${m.color}18` : 'transparent',
+              color: !overlayAll && metric === m.key ? m.color : 'var(--text-secondary)',
               fontSize: 11,
               fontWeight: 600,
               cursor: 'pointer',
               transition: 'all 0.15s',
               fontFamily: 'inherit',
+              opacity: overlayAll ? 0.5 : 1,
             }}
           >
             {m.label}
           </button>
         ))}
+        {/* Overlay All toggle */}
+        <button
+          onClick={() => setOverlayAll(v => !v)}
+          style={{
+            padding: '5px 12px',
+            borderRadius: 20,
+            border: overlayAll ? '1px solid #8b5cf660' : '1px solid var(--border)',
+            background: overlayAll ? '#8b5cf618' : 'transparent',
+            color: overlayAll ? '#a78bfa' : 'var(--text-secondary)',
+            fontSize: 11,
+            fontWeight: 600,
+            cursor: 'pointer',
+            transition: 'all 0.15s',
+            fontFamily: 'inherit',
+          }}
+        >
+          Overlay All
+        </button>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' }}>
           <ToggleBtn active={showAxes} onClick={() => setShowAxes(v => !v)}>Axes</ToggleBtn>
           <ToggleBtn active={showLegend} onClick={() => setShowLegend(v => !v)}>Legend</ToggleBtn>
@@ -203,7 +222,7 @@ export function ActivityChart({ data, height = 180, theme }: Props) {
                   />
                 ))
               : (() => {
-                  const m = DATA_METRICS.find(x => x.key === metric) ?? DATA_METRICS[0]
+                  const m = DATA_METRICS.find(x => x.key === (metric as string)) ?? DATA_METRICS[0]
                   if (!m) return null
                   return (
                     <Area

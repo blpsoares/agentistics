@@ -3,7 +3,7 @@ import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, RefreshCw, FileCode, TrendingUp, BarChart2,
   Sun, Moon, Globe, AlertTriangle, Download, Upload,
-  Maximize2, X, GripVertical, Trophy, Activity,
+  Maximize2, X, GripVertical, Trophy, Activity, Bot,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS } from './hooks/useData'
 import type { Filters } from './lib/types'
@@ -22,6 +22,7 @@ import { InfoModal } from './components/InfoModal'
 import { PDFExportModal } from './components/PDFExportModal'
 import { HealthWarnings } from './components/HealthWarnings'
 import { ToolMetricsPanel } from './components/ToolMetricsPanel'
+import { AgentMetricsPanel } from './components/AgentMetricsPanel'
 import { format, parseISO, parse } from 'date-fns'
 
 function Section({ title, children, action, onExpand }: {
@@ -1172,6 +1173,21 @@ export default function App() {
             </Section>
           </div>
         </div>
+
+        {/* Agent metrics */}
+        <Section title={<><Bot size={14} /> {lang === 'pt' ? 'Métricas de agentes' : 'Agent metrics'}</>}>
+          <AgentMetricsPanel
+            invocations={derived.agentInvocations}
+            agentTypeBreakdown={derived.agentTypeBreakdown}
+            totalInvocations={derived.totalAgentInvocations}
+            totalTokens={derived.totalAgentTokens}
+            totalCostUSD={derived.totalAgentCostUSD}
+            totalDurationMs={derived.totalAgentDurationMs}
+            currency={currency}
+            brlRate={brlRate}
+            lang={lang}
+          />
+        </Section>
 
         {/* Recent sessions */}
         <Section title={<><Clock size={14} /> {lang === 'pt' ? 'Sessões recentes' : 'Recent sessions'}</>}>
