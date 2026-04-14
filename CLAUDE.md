@@ -1,6 +1,6 @@
 # agentistics — CLAUDE.md
 
-Local analytics dashboard for AI coding assistants. Visualizes tokens, costs, activity, and projects based on data from `~/.claude/`.
+Local analytics dashboard for AI coding assistants. Visualizes tokens, costs, activity, projects, and agent metrics based on data from `~/.claude/`.
 
 ## Language convention
 
@@ -14,17 +14,27 @@ cli.ts  (binary entry point — agentop)
   ├── agentop tui     → watch-cli.ts (standalone)
   └── agentop watch   → watcher.ts (daemon only)
 
-server.ts (Bun, port 3001)
-  ├── Reads ~/.claude/usage-data/session-meta/ → enriched sessions (preferred source)
-  ├── Fallback: parses JSONL from ~/.claude/projects/*/**/*.jsonl
-  ├── Serves /api/data, /api/events (SSE), /api/rates
-  ├── Serves embedded static assets when SERVE_STATIC=1 (binary mode)
-  └── Watched by chokidar for real-time updates
+server.ts (Bun, port 3001) — thin entry point, ~150 lines
+  └── delegates to server/ modules (see below)
+
+server/                    — server-side modules (never bundled by Vite)
+  ├── config.ts            → path constants + PORT env var
+  ├── utils.ts             → createLimiter, safeReadJson, safeReadDir, safeStat
+  ├── git.ts               → decodeProjectDir, getGitFileStats, getProjectGitStats
+  ├── jsonl.ts             → parseSessionJsonl, makeEmptySession, classifyAgentFile, EXT_TO_LANG
+  ├── health.ts            → runHealthChecks, analyzeToolHealthIssues
+  ├── rates.ts             → pricing scraper + BRL rate cache
+  ├── sse.ts               → SSE clients, chokidar watcher, serveStatic, maybeSpawnWatcher
+  ├── data.ts              → loadSessionMetas, scanProjects, buildApiResponse (main orchestrator)
+  └── agent-metrics.ts     → extractAgentMetrics (parses Agent tool_use from JSONL)
 
 src/ (React + Vite, port 5173 in dev)
-  ├── useData.ts → fetches /api/data + SSE subscription
-  ├── useDerivedStats() → all filter and aggregation logic
-  └── components/ → UI (charts, cards, heatmap, PDF export)
+  ├── lib/
+  │   ├── types.ts         → all shared types + pricing functions (single source of truth)
+  │   └── otel.ts          → OpenTelemetry helpers
+  ├── hooks/
+  │   └── useData.ts       → fetches /api/data + SSE subscription + useDerivedStats()
+  └── components/          → UI (charts, cards, heatmap, PDF export)
 
 scripts/embed-dist.ts
   └── Reads dist/ after vite build and generates src/embedded-dist.generated.ts
@@ -70,7 +80,7 @@ Used when there is no per-session model ID (project filter active, or per-sessio
 ### `serveStatic(pathname)` — serves embedded frontend assets
 
 ```
-server.ts
+server/sse.ts
 ```
 
 Only active when `SERVE_STATIC=1` (set by `cli.ts` for the `server` subcommand). Reads from `embeddedDist` (generated at compile time). Returns `null` in dev mode.
@@ -87,7 +97,33 @@ Only active when `SERVE_STATIC=1` (set by `cli.ts` for the `server` subcommand).
 | `PDFExportModal.tsx` | Per-session cost in PDF | `blendedCostPerToken(statsCache.modelUsage)` — sessions have no individual model field |
 | `watcher.ts` | Total cost exported via OTel | `calcCost()` imported from `src/lib/types.ts` |
 | `watch-cli.ts` | Cost in terminal output | `calcCost()` |
-| `server.ts` | — | Does not calculate cost; only fetches/caches the external pricing table (`/api/rates`) |
+| `server/agent-metrics.ts` | Per-agent-invocation cost | `calcCost()` with per-invocation token breakdown |
+| `server/rates.ts` | — | Does not calculate cost; only fetches/caches the external pricing table (`/api/rates`) |
+
+---
+
+## Agent metrics
+
+Agent metrics are extracted from raw JSONL files by `server/agent-metrics.ts`. They are available in the `agentMetrics` field of each `SessionMeta`.
+
+### Data available per Agent invocation
+
+| Field | Source |
+|---|---|
+| `agentType` | `toolUseResult.agentType` in the JSONL message envelope |
+| `description` | `tool_use.input.description` |
+| `totalTokens` | `toolUseResult.totalTokens` |
+| `totalDurationMs` | `toolUseResult.totalDurationMs` |
+| `totalToolUseCount` | `toolUseResult.totalToolUseCount` |
+| `inputTokens / outputTokens / cacheReadTokens / cacheWriteTokens` | `toolUseResult.usage.*` |
+| `toolStats` (reads, searches, bash, edits, lines changed) | `toolUseResult.toolStats` |
+| `costUSD` | Calculated via `calcCost()` |
+| `status` | `toolUseResult.status` (`completed` / `failed`) |
+
+### What is NOT available for Skills and Tasks
+
+- **Skills** (`/commit`, `/review-pr`, etc.) are not recorded as individual tool_use events in the JSONL — only a `skill_listing` attachment appears. Skill invocations can only be inferred indirectly from subsequent tool calls.
+- **Tasks** (`TaskCreate`/`TaskUpdate`) have subject/description/status but no token or duration data.
 
 ---
 
@@ -97,9 +133,10 @@ Only active when `SERVE_STATIC=1` (set by `cli.ts` for the `server` subcommand).
 ~/.claude/
   ├── stats-cache.json          → aggregated data (tokens/day, model, activity)
   ├── usage-data/session-meta/  → enriched sessions (preferred source)
-  └── projects/**/*.jsonl       → raw files (fallback when meta is unavailable)
+  └── projects/**/*.jsonl       → raw files (fallback + agent metrics source)
          ↓
-    server.ts (aggregates and serves)
+    server/data.ts (buildApiResponse — main orchestrator)
+    server/agent-metrics.ts (extractAgentMetrics — parses Agent tool_use from JSONL)
          ↓
     /api/data → useData() → useDerivedStats() → React components
 ```
@@ -109,11 +146,13 @@ Only active when `SERVE_STATIC=1` (set by `cli.ts` for the `server` subcommand).
 - **`stats-cache.json`** has no project-level granularity — project filters are computed by summing individual sessions
 - **Tokens per model/day**: `dailyModelTokens` only stores totals; input/output split uses global statsCache proportions as an approximation when filtering by date
 - **Sessions have no individual model field** — use `blendedCostPerToken` for per-session cost estimates
+- **Agent metrics** are only available for sessions whose JSONL files are accessible; `_source: 'meta'`-only sessions won't have them
 - **Streak**: counts backwards from today; if today has no activity, starts from yesterday — intentional behavior so users are not penalized for not having worked yet today
 - **BRL costs**: conversion via `/api/rates` (fetches live exchange rate); falls back to a fixed rate if the API fails
 - **Session sources**: `_source: 'meta'` sessions are the most complete; `'jsonl'` and `'subdir'` are fallbacks with partial data (no git line counts, no cache tokens)
 - **Binary mode**: `agentop server` sets `SERVE_STATIC=1`; server.ts serves the embedded frontend on the same port as the API
 - **`src/embedded-dist.generated.ts`** is in `.gitignore` — auto-generated, never commit it
+- **`server/` modules** are server-only — never import them from `src/` (Vite would try to bundle them and fail on Node/Bun APIs)
 
 ## Development
 
@@ -137,3 +176,8 @@ Unit tests cover the critical pure functions:
 - `src/hooks/useData.test.ts` → `calcStreak()`, `getDateRangeFilter()`
 
 Do not mock the filesystem — the tested functions are pure and have no side effects.
+
+## Git hooks (husky)
+
+- **pre-commit**: `bun tsc --noEmit` + `bun test`
+- **commit-msg**: commitlint enforces Conventional Commits (`feat:`, `fix:`, `chore:`, etc.)
