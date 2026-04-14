@@ -12,7 +12,7 @@
   "type": "module",
   "scripts": {
     "dev:api": "bun run server.ts",
-    "dev:ui": "vite",
+    "dev:ui": "vite --logLevel warn",
     "dev": "bun run --bun concurrently \"bun run dev:api\" \"bun run dev:ui\"",
     "build": "vite build",
     "build:assets": "bun run scripts/embed-dist.ts",
@@ -20,15 +20,19 @@
     "preview": "vite preview",
     "watch": "bun run watcher.ts",
     "watch:cli": "bun run watch-cli.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "prepare": "husky"
   },
   "devDependencies": {
+    "@commitlint/cli": "^20.5.0",
+    "@commitlint/config-conventional": "^20.5.0",
     "@types/bun": "latest",
     "@types/html2canvas": "^1.0.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
     "concurrently": "^9.2.1",
+    "husky": "^9.1.7",
     "vite": "^8.0.7"
   },
   "peerDependencies": {
