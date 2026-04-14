@@ -18,7 +18,6 @@
  *   CLAUDE_STATS_WATCH_INTERVAL   — Polling interval in seconds (default: 30, min: 5)
  */
 
-import { readdir, readFile, stat } from 'fs/promises'
 import { join } from 'path'
 import chokidar from 'chokidar'
 
@@ -32,17 +31,13 @@ import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions'
 
 // ── Shared imports from the main codebase ──────────────────────────────────
 
-import { getModelPrice, calcCost } from './src/lib/types'
+import { calcCost } from './src/lib/types'
 import type { ModelUsage } from './src/lib/types'
 import type { OtelSnapshot } from './src/lib/otel'
+import { HOME_DIR, CLAUDE_DIR, PROJECTS_DIR, SESSION_META_DIR, STATS_CACHE_FILE } from './server/config'
+import { createLimiter, safeReadJson, safeReadDir, safeStat } from './server/utils'
 
 // ── Configuration ──────────────────────────────────────────────────────────
-
-const HOME_DIR = process.env.HOME ?? process.env.USERPROFILE ?? ''
-const CLAUDE_DIR = join(HOME_DIR, '.claude')
-const PROJECTS_DIR = join(CLAUDE_DIR, 'projects')
-const SESSION_META_DIR = join(CLAUDE_DIR, 'usage-data', 'session-meta')
-const STATS_CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json')
 
 const MIN_INTERVAL_SEC = 5
 const rawInterval = parseInt(process.env.CLAUDE_STATS_WATCH_INTERVAL ?? '30', 10)
@@ -58,63 +53,6 @@ const WATCH_INTERVAL_SEC = (!Number.isFinite(rawInterval) || rawInterval < MIN_I
 const SERVICE_NAME = process.env.OTEL_SERVICE_NAME ?? 'agentistics'
 const OTLP_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? ''
 const OTLP_HEADERS = process.env.OTEL_EXPORTER_OTLP_HEADERS ?? ''
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-async function safeReadJson<T>(filePath: string): Promise<T | null> {
-  try {
-    const content = await readFile(filePath, 'utf-8')
-    return JSON.parse(content) as T
-  } catch {
-    return null
-  }
-}
-
-async function safeReadDir(dirPath: string): Promise<string[]> {
-  try {
-    return await readdir(dirPath)
-  } catch {
-    return []
-  }
-}
-
-async function safeStat(filePath: string) {
-  try {
-    return await stat(filePath)
-  } catch {
-    return null
-  }
-}
-
-// ── Concurrency limiter (same pattern as server.ts) ───────────────────────
-
-function createLimiter(concurrency: number) {
-  let running = 0
-  const queue: Array<() => void> = []
-
-  return function limit<T>(fn: () => Promise<T>): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      const run = () => {
-        running++
-        fn()
-          .then(resolve, reject)
-          .finally(() => {
-            running--
-            if (queue.length > 0) {
-              const next = queue.shift()!
-              next()
-            }
-          })
-      }
-
-      if (running < concurrency) {
-        run()
-      } else {
-        queue.push(run)
-      }
-    })
-  }
-}
 
 // ── Snapshot builder ──────────────────────────────────────────────────────
 

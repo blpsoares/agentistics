@@ -70,6 +70,53 @@ export interface SessionMeta {
   message_hours: number[]
   user_message_timestamps: string[]
   _source?: 'meta' | 'jsonl' | 'subdir'
+  agentMetrics?: SessionAgentMetrics
+}
+
+export interface AgentInvocation {
+  toolUseId: string
+  agentType: string
+  description: string
+  status: 'completed' | 'failed'
+  totalTokens: number
+  totalDurationMs: number
+  totalToolUseCount: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  toolStats: {
+    readCount: number
+    searchCount: number
+    bashCount: number
+    editFileCount: number
+    linesAdded: number
+    linesRemoved: number
+    otherToolCount: number
+  }
+  costUSD: number
+}
+
+export interface SessionAgentMetrics {
+  invocations: AgentInvocation[]
+  totalInvocations: number
+  totalTokens: number
+  totalDurationMs: number
+  totalCostUSD: number
+}
+
+export interface PriceEntry {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+export interface RatesCache {
+  fetchedAt: number
+  brlRate: number
+  pricing: Record<string, PriceEntry>
+  pricingSource: 'live' | 'fallback'
 }
 
 export interface SessionIndex {
