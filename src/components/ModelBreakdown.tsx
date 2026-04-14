@@ -7,6 +7,9 @@ interface Props {
   note?: string
   currency?: 'USD' | 'BRL'
   brlRate?: number
+  fallbackInputTokens?: number
+  fallbackOutputTokens?: number
+  fallbackCostUSD?: number
 }
 
 function fmt(n: number): string {
@@ -26,13 +29,50 @@ function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string
   return `USD ${usd.toFixed(2)}`
 }
 
-export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1 }: Props) {
+export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1, fallbackInputTokens, fallbackOutputTokens, fallbackCostUSD }: Props) {
   const entries = Object.entries(modelUsage).filter(([, u]) => u && (u.inputTokens + u.outputTokens) > 0)
 
   if (entries.length === 0) {
+    const hasFallback = fallbackCostUSD !== undefined && (fallbackInputTokens ?? 0) + (fallbackOutputTokens ?? 0) > 0
     return (
-      <div style={{ color: 'var(--text-tertiary)', fontSize: 13, textAlign: 'center', padding: 24 }}>
-        {note ?? 'No model data available'}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {hasFallback && (
+          <div style={{
+            background: 'var(--bg-elevated)',
+            borderRadius: 'var(--radius-md)',
+            padding: '14px 16px',
+            border: '1px solid var(--border-subtle)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                All models (blended)
+              </span>
+              <span style={{
+                fontSize: 13, fontWeight: 700,
+                color: 'var(--anthropic-orange)',
+                background: 'var(--anthropic-orange-dim)',
+                padding: '2px 8px',
+                borderRadius: 6,
+              }}>
+                {fmtCost(fallbackCostUSD!, currency, brlRate)}
+              </span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              {[
+                { label: 'Input', value: fmt(fallbackInputTokens ?? 0), color: 'var(--accent-blue)' },
+                { label: 'Output', value: fmt(fallbackOutputTokens ?? 0), color: 'var(--accent-green)' },
+              ].map(({ label, value, color: c }) => (
+                <div key={label} style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: c }}>{value}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 1 }}>{label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic', textAlign: 'center', padding: hasFallback ? '0 0 8px' : 24 }}>
+          {note ?? 'No model data available'}
+        </div>
       </div>
     )
   }
