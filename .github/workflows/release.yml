@@ -98,6 +98,7 @@ jobs:
         run: |
           gh release delete latest --yes 2>/dev/null || true
           git push origin :refs/tags/latest 2>/dev/null || true
+          git tag -d latest 2>/dev/null || true
 
           gh release create latest \
             --title "Latest build ($(date -u +'%Y-%m-%d %H:%M UTC'))" \
