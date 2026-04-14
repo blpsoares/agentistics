@@ -20,19 +20,31 @@ The UI proxies `/api` requests to the API server automatically (via Vite config)
 ## Project structure
 
 ```
-cli.ts              — agentop binary entry point
-server.ts           — Bun API server (port 3001)
-watcher.ts          — OTel metrics daemon
-watch-cli.ts        — Terminal UI
+bin/
+  cli.ts              — agentop binary entry point
+
+server/
+  index.ts            — Bun HTTP server (port 3001) — thin entry, delegates to modules below
+  otel-watcher.ts     — OTel metrics daemon (chokidar + OTLP export)
+  config.ts           — path constants + PORT
+  utils.ts            — shared FS helpers (safeReadJson, createLimiter, …)
+  git.ts              — git stats helpers
+  jsonl.ts            — JSONL session parser
+  health.ts           — health checks
+  rates.ts            — pricing scraper + BRL rate cache
+  sse.ts              — SSE clients, file watcher, static asset serving
+  data.ts             — main data orchestrator (buildApiResponse)
+  agent-metrics.ts    — Agent tool_use parser (tokens, duration, cost per invocation)
 
 src/
-  hooks/useData.ts  — data fetching + all aggregation logic
-  lib/types.ts      — shared types + pricing calculations (single source of truth)
-  components/       — React UI components
-  App.tsx           — root component, layout, filters
+  tui/index.ts        — Terminal UI: live stats in the terminal
+  hooks/useData.ts    — data fetching + all aggregation logic
+  lib/types.ts        — shared types + pricing calculations (single source of truth)
+  components/         — React UI components
+  App.tsx             — root component, layout, filters
 
 scripts/
-  embed-dist.ts     — embeds Vite output into a TS file for the binary build
+  embed-dist.ts       — embeds Vite output into a TS file for the binary build
 ```
 
 ## Running tests
@@ -80,4 +92,4 @@ Use the [bug report template](https://github.com/blpsoares/agentistics/issues/ne
 - **Pricing calculations** live exclusively in `src/lib/types.ts` (`MODEL_PRICING`, `getModelPrice`, `calcCost`). Never inline cost math elsewhere.
 - **`stats-cache.json`** has no project-level granularity — project filters are computed by summing individual sessions.
 - **`allTimeTotalSessions`** and **`sessionCountByProject`** are derived live from session metadata, not from the stale statsCache.
-- **Binary mode** is activated by `SERVE_STATIC=1` (set by `cli.ts`); in dev mode the embedded assets are never loaded.
+- **Binary mode** is activated by `SERVE_STATIC=1` (set by `bin/cli.ts`); in dev mode the embedded assets are never loaded.
