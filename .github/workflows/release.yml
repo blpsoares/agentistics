@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history required for conventional-changelog
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -23,6 +25,12 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Type check
+        run: bun tsc --noEmit
+
+      - name: Run tests
+        run: bun test
 
       - name: Build frontend (Vite)
         run: bun run build
@@ -38,24 +46,57 @@ jobs:
       - name: Smoke test
         run: ./release/agentop --help
 
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Collect conventional commits since last tag
+          LAST_TAG=$(git tag --sort=-creatordate | head -1)
+          if [ -z "$LAST_TAG" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="${LAST_TAG}..HEAD"
+          fi
+
+          {
+            echo "## What's changed"
+            echo ""
+
+            git log $RANGE --pretty=format:"%s|%H" | while IFS='|' read -r subject sha; do
+              short="${sha:0:7}"
+              url="https://github.com/${{ github.repository }}/commit/${sha}"
+              case "$subject" in
+                feat:*)     echo "- ✨ ${subject#feat: } ([\`$short\`]($url))" ;;
+                fix:*)      echo "- 🐛 ${subject#fix: } ([\`$short\`]($url))" ;;
+                perf:*)     echo "- ⚡ ${subject#perf: } ([\`$short\`]($url))" ;;
+                refactor:*) echo "- ♻️  ${subject#refactor: } ([\`$short\`]($url))" ;;
+                chore:*)    echo "- 🔧 ${subject#chore: } ([\`$short\`]($url))" ;;
+                docs:*)     echo "- 📚 ${subject#docs: } ([\`$short\`]($url))" ;;
+                test:*)     echo "- 🧪 ${subject#test: } ([\`$short\`]($url))" ;;
+                ci:*)       echo "- 👷 ${subject#ci: } ([\`$short\`]($url))" ;;
+                *)          echo "- ${subject} ([\`$short\`]($url))" ;;
+              esac
+            done
+
+            echo ""
+            echo "## Install"
+            echo ""
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash"
+            echo '```'
+            echo ""
+            echo "Built from commit [\`${GITHUB_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})."
+          } > /tmp/release-notes.md
+
+          cat /tmp/release-notes.md
+
       - name: Publish release (rolling "latest")
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Remove previous rolling release so we can recreate it
           gh release delete latest --yes 2>/dev/null || true
           git push origin :refs/tags/latest 2>/dev/null || true
 
           gh release create latest \
             --title "Latest build ($(date -u +'%Y-%m-%d %H:%M UTC'))" \
-            --notes "$(cat <<'EOF'
-          ## Install
-
-          ```bash
-          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
-          ```
-
-          Built from commit [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }}).
-          EOF
-          )" \
+            --notes-file /tmp/release-notes.md \
             ./release/agentop
