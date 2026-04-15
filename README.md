@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <video src="https://github.com/blpsoares/agentistics/releases/download/v1.1.0/presentation.mp4" width="100%" controls></video>
+  <video src="https://github.com/user-attachments/assets/e3f5cf44-f745-4540-9f5d-99192c755263" width="100%" controls></video>
 </p>
 
 ---
