@@ -47,3 +47,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # npm lockfile (project uses bun)
 package-lock.json
+
+# large media files (served via GitHub Releases)
+public/*.mp4
+public/*.mov
+public/*.webm
