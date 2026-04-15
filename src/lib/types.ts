@@ -69,6 +69,7 @@ export interface SessionMeta {
   files_modified: number
   message_hours: number[]
   user_message_timestamps: string[]
+  model?: string
   _source?: 'meta' | 'jsonl' | 'subdir'
   agentMetrics?: SessionAgentMetrics
 }
@@ -173,7 +174,7 @@ export interface Filters {
   customStart: string
   customEnd: string
   projects: string[]   // empty = all projects
-  model: string
+  models: string[]     // empty = all models
 }
 
 export type Lang = 'pt' | 'en'

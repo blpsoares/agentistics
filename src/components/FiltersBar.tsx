@@ -1,7 +1,7 @@
-import React, { useState } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import type { Filters, DateRange, Project, Lang } from '../lib/types'
 import { formatModel } from '../lib/types'
-import { Layers, Cpu, RotateCcw, ChevronDown, X, CalendarDays } from 'lucide-react'
+import { Layers, Cpu, RotateCcw, ChevronDown, X, CalendarDays, Check } from 'lucide-react'
 import { ProjectsModal } from './ProjectsModal'
 import { DatePicker } from './DatePicker'
 import { format } from 'date-fns'
@@ -12,6 +12,7 @@ interface Props {
   projects: Project[]
   sessionCountByProject: Record<string, number>
   models: string[]
+  modelsInProject?: Set<string> | null
   lang: Lang
 }
 
@@ -37,23 +38,52 @@ const CTL: React.CSSProperties = {
   alignItems: 'center',
 }
 
-export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, lang }: Props) {
+export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelsInProject, lang }: Props) {
   const [showProjectsModal, setShowProjectsModal] = useState(false)
+  const [showModelDropdown, setShowModelDropdown] = useState(false)
+  const modelDropdownRef = useRef<HTMLDivElement>(null)
   const today = format(new Date(), 'yyyy-MM-dd')
   const hasCustomDates = !!(filters.customStart || filters.customEnd)
 
+  const selectedModels = filters.models ?? []
+  const hasModelFilter = selectedModels.length > 0
+
   const isDefault = filters.dateRange === 'all'
     && !filters.customStart && !filters.customEnd
-    && filters.projects.length === 0 && filters.model === 'all'
+    && filters.projects.length === 0 && !hasModelFilter
 
   const reset = () => onChange({
-    dateRange: 'all', customStart: '', customEnd: '', projects: [], model: 'all',
+    dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [],
   })
 
   const hasProjects = filters.projects.length > 0
   const projectLabel = lang === 'pt'
     ? hasProjects ? `${filters.projects.length} projeto${filters.projects.length > 1 ? 's' : ''}` : 'Projetos'
     : hasProjects ? `${filters.projects.length} project${filters.projects.length > 1 ? 's' : ''}` : 'Projects'
+
+  const modelLabel = hasModelFilter
+    ? selectedModels.length === 1
+      ? formatModel(selectedModels[0]!)
+      : `${selectedModels.length} ${lang === 'pt' ? 'modelos' : 'models'}`
+    : lang === 'pt' ? 'Modelos' : 'Models'
+
+  const toggleModel = (m: string) => {
+    const next = selectedModels.includes(m)
+      ? selectedModels.filter(x => x !== m)
+      : [...selectedModels, m]
+    onChange({ ...filters, models: next })
+  }
+
+  useEffect(() => {
+    if (!showModelDropdown) return
+    function handleClickOutside(e: MouseEvent) {
+      if (modelDropdownRef.current && !modelDropdownRef.current.contains(e.target as Node)) {
+        setShowModelDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showModelDropdown])
 
   return (
     <>
@@ -179,38 +209,112 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
           <ChevronDown size={11} style={{ flexShrink: 0, opacity: 0.5 }} />
         </button>
 
-        {/* Model */}
-        <div
-          style={{ position: 'relative', display: 'flex', alignItems: 'center' }}
-          title={hasProjects
-            ? (lang === 'pt'
-              ? 'Filtro de modelo indisponível com filtro de projeto ativo — sessões não têm campo de modelo'
-              : 'Model filter unavailable when project filter is active — sessions have no model field')
-            : undefined}
-        >
-          <Cpu size={11} style={{ position: 'absolute', left: 8, color: hasProjects ? 'var(--text-tertiary)' : 'var(--text-tertiary)', pointerEvents: 'none', opacity: hasProjects ? 0.35 : 1 }} />
-          <select
-            value={filters.model}
-            onChange={e => onChange({ ...filters, model: e.target.value })}
-            disabled={hasProjects}
+        {/* Model multi-select */}
+        <div ref={modelDropdownRef} style={{ position: 'relative' }}>
+          <button
+            onClick={() => setShowModelDropdown(v => !v)}
             title={lang === 'pt' ? 'Filtrar por modelo' : 'Filter by model'}
             style={{
               ...CTL,
-              paddingLeft: 24,
+              gap: 5,
+              border: hasModelFilter ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
+              background: hasModelFilter ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+              color: hasModelFilter ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
               minWidth: 130,
-              appearance: 'none',
-              WebkitAppearance: 'none',
-              opacity: hasProjects ? 0.4 : 1,
-              cursor: hasProjects ? 'not-allowed' : 'pointer',
-            } as React.CSSProperties}
+              justifyContent: 'space-between',
+            }}
           >
-            <option value="all">{lang === 'pt' ? 'Modelos' : 'Models'}</option>
-            {models.map(m => (
-              <option key={m} value={m} style={{ background: 'var(--bg-elevated)' }}>
-                {formatModel(m)}
-              </option>
-            ))}
-          </select>
+            <Cpu size={11} style={{ flexShrink: 0 }} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
+              {modelLabel}
+            </span>
+            <ChevronDown size={11} style={{ flexShrink: 0, opacity: 0.5, transform: showModelDropdown ? 'rotate(180deg)' : undefined, transition: 'transform 0.15s' }} />
+          </button>
+
+          {showModelDropdown && (
+            <div style={{
+              position: 'absolute',
+              top: 'calc(100% + 4px)',
+              left: 0,
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+              zIndex: 1000,
+              minWidth: 190,
+              padding: '4px 0',
+            }}>
+              {models.map(m => {
+                const disabled = modelsInProject ? !modelsInProject.has(m) : false
+                const selected = selectedModels.includes(m)
+                return (
+                  <button
+                    key={m}
+                    disabled={disabled}
+                    onClick={() => toggleModel(m)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      width: '100%',
+                      padding: '7px 12px',
+                      background: selected ? 'var(--anthropic-orange-dim)' : 'transparent',
+                      border: 'none',
+                      cursor: disabled ? 'not-allowed' : 'pointer',
+                      color: disabled ? 'var(--text-tertiary)' : selected ? 'var(--anthropic-orange)' : 'var(--text-primary)',
+                      fontSize: 12,
+                      fontFamily: 'inherit',
+                      textAlign: 'left',
+                      opacity: disabled ? 0.45 : 1,
+                      transition: 'background 0.1s',
+                    }}
+                  >
+                    <div style={{
+                      width: 14,
+                      height: 14,
+                      borderRadius: 3,
+                      border: selected
+                        ? '1.5px solid var(--anthropic-orange)'
+                        : disabled
+                          ? '1.5px solid var(--border)'
+                          : '1.5px solid var(--text-tertiary)',
+                      background: selected ? 'var(--anthropic-orange)' : 'transparent',
+                      flexShrink: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}>
+                      {selected && <Check size={9} color="white" strokeWidth={3} />}
+                    </div>
+                    <span style={{ flex: 1 }}>{formatModel(m)}</span>
+                    {disabled && (
+                      <span style={{ fontSize: 10, opacity: 0.7 }}>
+                        {lang === 'pt' ? 'sem uso' : 'unused'}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+              {hasModelFilter && (
+                <>
+                  <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+                  <button
+                    onClick={() => { onChange({ ...filters, models: [] }); setShowModelDropdown(false) }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      width: '100%', padding: '7px 12px',
+                      background: 'transparent', border: 'none',
+                      cursor: 'pointer', color: 'var(--text-secondary)',
+                      fontSize: 12, fontFamily: 'inherit', textAlign: 'left',
+                    }}
+                  >
+                    <X size={11} />
+                    {lang === 'pt' ? 'Limpar modelos' : 'Clear models'}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Reset */}
@@ -236,8 +340,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
           sessionCountByProject={sessionCountByProject}
           selected={filters.projects}
           onApply={paths => {
-            // Reset model filter when project filter is applied — no per-session model data
-            onChange({ ...filters, projects: paths, model: 'all' })
+            onChange({ ...filters, projects: paths, models: [] })
             setShowProjectsModal(false)
           }}
           onClose={() => setShowProjectsModal(false)}

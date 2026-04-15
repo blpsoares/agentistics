@@ -302,6 +302,7 @@ export async function parseSessionJsonl(
     files_modified: gitFileStats.filesModified,
     message_hours: messageHours,
     user_message_timestamps: userMessageTimestamps,
+    model: modelId || undefined,
     _source: source,
     agentMetrics,
   }

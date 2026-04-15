@@ -10,6 +10,12 @@ export const LIVE_INTERVAL_OPTIONS = [
   { label: '5m', value: 300 },
 ]
 
+export const LIVE_INTERVAL_OPTIONS_RISKY = [
+  { label: '1s', value: 1 },
+  { label: '2s', value: 2 },
+  { label: '5s', value: 5 },
+]
+
 export function useData() {
   const [data, setData] = useState<AppData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -125,6 +131,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const projects = filters.projects ?? []
     const projectFiltered = projects.length > 0
     const projectSet = new Set(projects)
+    const modelSet = filters.models && filters.models.length > 0 ? new Set(filters.models) : null
 
     // ── Filter daily activity (date-range only — no project granularity in statsCache) ──
     const filteredDailyActivity = (data.statsCache.dailyActivity ?? []).filter(d =>
@@ -134,11 +141,12 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       inRange(parseISO(d.date), start, end)
     )
 
-    // ── Filter sessions (date + projects) ──
+    // ── Filter sessions (date + projects + model) ──
     const filteredSessions = data.sessions.filter(s => {
       if (!s.start_time) return false
       if (!inRange(parseISO(s.start_time), start, end)) return false
       if (projectFiltered && !projectSet.has(s.project_path)) return false
+      if (modelSet && s.model && !modelSet.has(s.model)) return false
       return true
     })
 
@@ -175,16 +183,18 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       + Object.values(allTimeSupplementByDay).reduce((s, c) => s + c, 0)
 
     // ── Aggregate stats ──
-    // When project filter active, rebuild from sessions (no per-project data in statsCache)
-    const totalMessages = projectFiltered
+    // Use filteredSessions when project or model filter is active (statsCache has no per-project/model granularity)
+    const sessionFiltered = projectFiltered || modelSet !== null
+
+    const totalMessages = sessionFiltered
       ? filteredSessions.reduce((s, sess) => s + (sess.user_message_count ?? 0) + (sess.assistant_message_count ?? 0), 0)
       : extendedDailyActivity.reduce((s, d) => s + d.messageCount, 0)
 
-    const totalSessions = projectFiltered
+    const totalSessions = sessionFiltered
       ? filteredSessions.length
       : extendedDailyActivity.reduce((s, d) => s + d.sessionCount, 0)
 
-    const totalToolCalls = projectFiltered
+    const totalToolCalls = sessionFiltered
       ? filteredSessions.reduce((s, sess) => s + Object.values(sess.tool_counts ?? {}).reduce((a, b) => a + b, 0), 0)
       : extendedDailyActivity.reduce((s, d) => s + d.toolCallCount, 0)
 
@@ -192,7 +202,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // When project filter is active, derive active dates from filteredSessions only.
     // Otherwise, supplement stats-cache dates with all session start dates (fresher than stats-cache).
     // Session start_times are ISO UTC strings — format() normalises to local date.
-    const activeDates = projectFiltered
+    const activeDates = sessionFiltered
       ? new Set(filteredSessions.filter(s => s.start_time).map(s => format(parseISO(s.start_time), 'yyyy-MM-dd')))
       : new Set([
           ...(data.statsCache.dailyActivity ?? []).map(d => d.date),
@@ -202,7 +212,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
 
     // ── Heatmap data ──
     let heatmapData: { date: string; value: number; sessions: number; tools: number }[]
-    if (projectFiltered) {
+    if (sessionFiltered) {
       const byDay: Record<string, { value: number; sessions: number; tools: number }> = {}
       for (const s of filteredSessions) {
         if (!s.start_time) continue
@@ -226,7 +236,6 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // ── Model usage — respects date + model filters ──
     const globalModelUsage = data.statsCache.modelUsage ?? {}
     const dateFiltered = filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd
-    const modelFilter = filters.model && filters.model !== 'all' ? filters.model : null
 
     let filteredModelUsage: Record<string, import('../lib/types').ModelUsage>
 
@@ -240,7 +249,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       filteredModelUsage = {}
       for (const day of filteredDailyModelTokens) {
         for (const [model, totalTok] of Object.entries(day.tokensByModel)) {
-          if (modelFilter && model !== modelFilter) continue
+          if (modelSet && !modelSet.has(model)) continue
           const g = globalModelUsage[model]
           const gTotal = g
             ? g.inputTokens + g.outputTokens + g.cacheReadInputTokens + g.cacheCreationInputTokens
@@ -267,10 +276,11 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       }
     } else {
       // No date filter, no project filter — use global statsCache
-      if (modelFilter) {
-        filteredModelUsage = globalModelUsage[modelFilter]
-          ? { [modelFilter]: globalModelUsage[modelFilter] }
-          : {}
+      if (modelSet) {
+        filteredModelUsage = {}
+        for (const m of modelSet) {
+          if (globalModelUsage[m]) filteredModelUsage[m] = globalModelUsage[m]
+        }
       } else {
         filteredModelUsage = globalModelUsage
       }
@@ -293,7 +303,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const modelTokensByDate: Record<string, number> = {}
     for (const day of filteredDailyModelTokens) {
       for (const [model, tokens] of Object.entries(day.tokensByModel)) {
-        if (filters.model && filters.model !== 'all' && model !== filters.model) continue
+        if (modelSet && !modelSet.has(model)) continue
         modelTokensByDate[model] = (modelTokensByDate[model] ?? 0) + tokens
       }
     }
@@ -342,15 +352,8 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       : filteredSessions.reduce((s, sess) => s + (sess.files_modified ?? 0), 0)
 
     // ── Tokens from sessions ──
-    // When a model filter is active (and no project filter), filteredModelUsage has accurate
-    // per-model token data — use it instead of session sums which have no model field.
-    // When project filter is active, filteredModelUsage is {} so fall back to sessions.
-    const inputTokens = (modelFilter && !projectFiltered)
-      ? Object.values(filteredModelUsage).reduce((s, u) => s + u.inputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens, 0)
-      : filteredSessions.reduce((s, sess) => s + (sess.input_tokens ?? 0), 0)
-    const outputTokens = (modelFilter && !projectFiltered)
-      ? Object.values(filteredModelUsage).reduce((s, u) => s + u.outputTokens, 0)
-      : filteredSessions.reduce((s, sess) => s + (sess.output_tokens ?? 0), 0)
+    const inputTokens = filteredSessions.reduce((s, sess) => s + (sess.input_tokens ?? 0), 0)
+    const outputTokens = filteredSessions.reduce((s, sess) => s + (sess.output_tokens ?? 0), 0)
 
     // ── Hour distribution ──
     const hourCounts: Record<number, number> = {}
@@ -427,7 +430,6 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       totalSessions,
       allTimeTotalSessions,
       totalToolCalls,
-      modelFilterActive: !!modelFilter,
       totalCostUSD,
       streak,
       heatmapData,

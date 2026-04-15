@@ -1,4 +1,5 @@
 import { join } from 'path'
+import { readFile } from 'fs/promises'
 import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue } from '../src/lib/types'
 import { PROJECTS_DIR, SESSION_META_DIR, STATS_CACHE_FILE, HOME_DIR } from './config'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
@@ -6,6 +7,24 @@ import { UUID_RE, decodeProjectDir, getProjectGitStats } from './git'
 import { parseSessionJsonl } from './jsonl'
 import { runHealthChecks, analyzeToolHealthIssues } from './health'
 import { extractAgentMetricsFromFile } from './agent-metrics'
+
+/** Extract the model ID from a JSONL file by reading only the first assistant message. */
+async function extractModelFromJsonl(filePath: string): Promise<string | undefined> {
+  try {
+    const content = await readFile(filePath, 'utf-8')
+    for (const raw of content.split('\n').slice(0, 80)) {
+      const line = raw.trim()
+      if (!line) continue
+      try {
+        const e = JSON.parse(line)
+        if (e.type === 'assistant' && typeof e.message?.model === 'string' && e.message.model) {
+          return e.message.model as string
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* skip */ }
+  return undefined
+}
 
 /** Server-side project shape — sessions carry only the subset the API needs */
 export interface ServerProject {
@@ -141,11 +160,35 @@ async function scanProjectDir(
         const session = await fileLimit(() => parseSessionJsonl(filePath, sessionId, fallbackPath, 'jsonl'))
         cwdCounts[session.project_path] = (cwdCounts[session.project_path] ?? 0) + 1
         extraSessions.push(session)
-      } else if (metaEntry?.uses_task_agent && !metaEntry.agentMetrics) {
-        // Meta session with agent usage — extract agent metrics from the JSONL file
+      } else if (metaEntry && (!metaEntry.model || (metaEntry.uses_task_agent && !metaEntry.agentMetrics))) {
+        // Meta session — extract model and/or agent metrics from the JSONL (single read)
         await fileLimit(async () => {
-          const metrics = await extractAgentMetricsFromFile(filePath)
-          if (metrics.totalInvocations > 0) metaEntry.agentMetrics = metrics
+          const needsModel = !metaEntry.model
+          const needsAgentMetrics = metaEntry.uses_task_agent && !metaEntry.agentMetrics
+          if (!needsModel && !needsAgentMetrics) return
+
+          const content = await readFile(filePath, 'utf-8').catch(() => '')
+          if (!content) return
+
+          if (needsModel) {
+            for (const raw of content.split('\n').slice(0, 80)) {
+              const line = raw.trim()
+              if (!line) continue
+              try {
+                const e = JSON.parse(line)
+                if (e.type === 'assistant' && typeof e.message?.model === 'string' && e.message.model) {
+                  metaEntry.model = e.message.model as string
+                  break
+                }
+              } catch { /* skip */ }
+            }
+          }
+
+          if (needsAgentMetrics) {
+            const { extractAgentMetrics } = await import('./agent-metrics')
+            const metrics = extractAgentMetrics(content.split('\n'), metaEntry.model ?? '')
+            if (metrics.totalInvocations > 0) metaEntry.agentMetrics = metrics
+          }
         })
       }
       return

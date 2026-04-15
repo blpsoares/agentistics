@@ -1,4 +1,4 @@
-import React, { useRef, useState, useMemo } from 'react'
+import React, { useRef, useState, useMemo, useEffect } from 'react'
 import {
   X, Download, Sun, Moon, Check, Calendar, Cpu, Search,
   BarChart2, TrendingUp, Clock, Wrench, FolderOpen, List, LayoutGrid, Trophy, Bot,
@@ -661,9 +661,10 @@ interface PDFContentProps {
   chartMetric: ChartMetric
   chartOverlay: ChartMetric | null
   chartOverlayAll: boolean
+  logoDataUri: string
 }
 
-function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currency, brlRate, blendedRates, chartMetric, chartOverlay, chartOverlayAll }: PDFContentProps) {
+function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currency, brlRate, blendedRates, chartMetric, chartOverlay, chartOverlayAll, logoDataUri }: PDFContentProps) {
   if (!derived) return null
   const c = COLORS[pdfTheme]
   const pt = lang === 'pt'
@@ -676,8 +677,8 @@ function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currenc
     return `${pdfFilters.customStart} → ${pdfFilters.customEnd}`
   })()
 
-  const modelLabel = pdfFilters.model && pdfFilters.model !== 'all'
-    ? formatModel(pdfFilters.model)
+  const modelLabel = pdfFilters.models && pdfFilters.models.length > 0
+    ? pdfFilters.models.length === 1 ? formatModel(pdfFilters.models[0]!) : `${pdfFilters.models.length} models`
     : null
 
   return (
@@ -690,8 +691,8 @@ function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currenc
       <div style={{ marginBottom: 28, paddingBottom: 20, borderBottom: `2px solid ${c.orange}` }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
           <img
-            src={pdfTheme === 'dark' ? '/logoDarkMode.png' : '/logoLightMode.png'}
-            alt="Claude Stats"
+            src={logoDataUri}
+            alt="agentistics"
             style={{ width: 36, height: 36, borderRadius: 10, flexShrink: 0, objectFit: 'contain' }}
           />
           <div>
@@ -881,7 +882,7 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
     customStart: filters.customStart,
     customEnd: filters.customEnd,
     projects: filters.projects,
-    model: filters.model,
+    models: filters.models,
   })
 
   const [pdfTheme, setPdfTheme] = useState<PDFTheme>(
@@ -895,7 +896,21 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
   const [chartOverlayAll, setChartOverlayAll] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [exportSuccess, setExportSuccess] = useState(false)
+  const [logoDataUri, setLogoDataUri] = useState<string>('/logo.png')
   const contentRef = useRef<HTMLDivElement>(null)
+
+  // Pre-fetch logo as base64 data URI so html2canvas can render it in the off-screen clone
+  useEffect(() => {
+    fetch('/logo.png')
+      .then(r => r.blob())
+      .then(blob => new Promise<string>(resolve => {
+        const reader = new FileReader()
+        reader.onloadend = () => resolve(reader.result as string)
+        reader.readAsDataURL(blob)
+      }))
+      .then(dataUri => setLogoDataUri(dataUri))
+      .catch(() => { /* keep the relative path as fallback */ })
+  }, [])
 
   // Derive stats using the LOCAL PDF filters (not the app's filters)
   const derived = useDerivedStats(data, pdfFilters)
@@ -1136,10 +1151,13 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
                   {configSectionLabel(pt ? 'Modelo' : 'Model')}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  {['all', ...availableModels].map(m => {
-                    const sel = pdfFilters.model === m || (m === 'all' && (!pdfFilters.model || pdfFilters.model === 'all'))
+                  {availableModels.map(m => {
+                    const sel = (pdfFilters.models ?? []).includes(m)
                     return (
-                      <button key={m} onClick={() => setPdfFilters(f => ({ ...f, model: m }))} style={{
+                      <button key={m} onClick={() => setPdfFilters(f => {
+                        const cur = f.models ?? []
+                        return { ...f, models: cur.includes(m) ? cur.filter(x => x !== m) : [...cur, m] }
+                      })} style={{
                         display: 'flex', alignItems: 'center', gap: 8,
                         padding: '6px 10px', borderRadius: 6, cursor: 'pointer',
                         fontFamily: 'inherit', fontSize: 11, textAlign: 'left',
@@ -1150,7 +1168,7 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
                         transition: 'all 0.12s',
                       }}>
                         <div style={{ width: 8, height: 8, borderRadius: '50%', background: sel ? 'var(--anthropic-orange)' : 'var(--border)', flexShrink: 0 }} />
-                        {m === 'all' ? (pt ? 'Todos os modelos' : 'All models') : formatModel(m)}
+                        {formatModel(m)}
                       </button>
                     )
                   })}
@@ -1453,6 +1471,7 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
                   chartMetric={chartMetric}
                   chartOverlay={chartOverlay}
                   chartOverlayAll={chartOverlayAll}
+                  logoDataUri={logoDataUri}
                 />
               </div>
             </div>

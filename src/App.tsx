@@ -1,12 +1,12 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react'
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { version } from '../package.json'
 import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, RefreshCw, FileCode, TrendingUp, BarChart2,
   Sun, Moon, Globe, AlertTriangle, Download, Upload,
-  Maximize2, X, GripVertical, Trophy, Activity, Bot,
+  Maximize2, X, GripVertical, Trophy, Activity, Bot, Sparkles,
 } from 'lucide-react'
-import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS } from './hooks/useData'
+import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { Filters } from './lib/types'
 import type { Lang, Theme } from './lib/types'
 import { formatProjectName, setHomeDir, MODEL_PRICING } from './lib/types'
@@ -178,6 +178,7 @@ function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string
 
 export default function App() {
   const { data, loading, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
+  const [riskyMode, setRiskyMode] = useState(false)
   const [lang, setLang] = useState<Lang>('en')
   const [theme, setTheme] = useState<Theme>('dark')
   const [currency, setCurrency] = useState<'USD' | 'BRL'>('USD')
@@ -187,7 +188,7 @@ export default function App() {
     customStart: '',
     customEnd: '',
     projects: [],
-    model: 'all',
+    models: [],
   })
   const [infoModalIndex, setInfoModalIndex] = useState<number | null>(null)
   const [showExportModal, setShowExportModal] = useState(false)
@@ -216,6 +217,11 @@ export default function App() {
   const dragCardRef = useRef<CardId | null>(null)
   const [dragOverCard, setDragOverCard] = useState<CardId | null>(null)
   const [scrolled, setScrolled] = useState(false)
+  const [highlightUpdates, setHighlightUpdates] = useState(true)
+  const highlightUpdatesRef = useRef(true)
+  const flashTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const prevDerivedFingerprintRef = useRef<Record<string, string>>({})
+  const liveFlashFirstRunRef = useRef(true)
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -258,12 +264,79 @@ export default function App() {
       .catch(() => { /* silently use defaults */ })
   }, [])
 
+  const triggerFlash = useCallback((ids: string[]) => {
+    if (!highlightUpdatesRef.current) return
+    for (const id of ids) {
+      const el = document.querySelector(`[data-flash-id="${id}"]`) as HTMLElement | null
+      if (!el) continue
+      if (flashTimersRef.current[id]) {
+        clearTimeout(flashTimersRef.current[id])
+        delete flashTimersRef.current[id]
+      }
+      el.classList.remove('live-flash')
+      void el.offsetWidth
+      el.classList.add('live-flash')
+      flashTimersRef.current[id] = setTimeout(() => {
+        el.classList.remove('live-flash')
+        delete flashTimersRef.current[id]
+      }, 1400)
+    }
+  }, [])
+
   const derived = useDerivedStats(data, filters)
 
   const models = useMemo(() => {
     if (!data) return []
     return Object.keys(data.statsCache.modelUsage ?? {})
   }, [data])
+
+  // When a project filter is active, compute which models are actually used in those projects
+  const modelsInProject = useMemo(() => {
+    if (!data || filters.projects.length === 0) return null
+    const projectSet = new Set(filters.projects)
+    const used = new Set<string>()
+    for (const s of data.sessions) {
+      if (s.model && projectSet.has(s.project_path)) used.add(s.model)
+    }
+    return used
+  }, [data, filters.projects])
+
+  // Live update highlight detection
+  useEffect(() => {
+    if (!liveUpdates || !derived) return
+    const fp = prevDerivedFingerprintRef.current
+    const toFlash: string[] = []
+
+    const chk = (key: string, val: unknown, ids: string[]) => {
+      const s = String(val ?? '')
+      if (!liveFlashFirstRunRef.current && fp[key] !== s) toFlash.push(...ids)
+      fp[key] = s
+    }
+
+    chk('totalMessages', derived.totalMessages, ['messages'])
+    chk('totalSessions', derived.totalSessions, ['sessions'])
+    chk('totalToolCalls', derived.totalToolCalls, ['tool-calls'])
+    chk('totalCostUSD', derived.totalCostUSD?.toFixed(4), ['cost'])
+    chk('streak', derived.streak, ['streak'])
+    chk('longestSession', derived.longestSession?.session_id, ['longest-session'])
+    chk('gitCommits', derived.gitCommits, ['commits'])
+    chk('filesModified', derived.filesModified, ['files'])
+    chk('inputTokens', derived.inputTokens, ['input-tokens'])
+    chk('outputTokens', derived.outputTokens, ['output-tokens'])
+    const lastHeat = derived.heatmapData?.[derived.heatmapData.length - 1]
+    const heatSig = `${derived.heatmapData?.length}:${lastHeat?.sessions}`
+    chk('heatmap', heatSig, ['activity', 'heatmap'])
+    chk('hourCounts', JSON.stringify(derived.hourCounts), ['hours'])
+    chk('modelUsage', JSON.stringify(Object.keys(derived.modelUsage ?? {})), ['models'])
+    chk('projectStats', derived.projectStats?.length, ['projects'])
+    chk('toolCounts', JSON.stringify(derived.toolCounts), ['tools'])
+    chk('agentCount', derived.agentInvocations?.length, ['agents'])
+    const sessSig = `${derived.filteredSessions?.length}:${derived.filteredSessions?.[0]?.session_id}`
+    chk('sessions', sessSig, ['sessions-list', 'highlights'])
+
+    liveFlashFirstRunRef.current = false
+    if (toFlash.length > 0) triggerFlash([...new Set(toFlash)])
+  }, [derived, liveUpdates, triggerFlash])
 
   // Session count per project from enriched sessions (have valid start_time).
   // Used in the Projects modal so its count matches the card when "All" is selected.
@@ -620,15 +693,11 @@ export default function App() {
     }
 
     let card: React.ReactNode = null
-    // When model filter is active, messages/sessions/tools can't be filtered
-    // (sessions have no model field) — prefix value with ~ to signal approximation
-    const modelApprox = d.modelFilterActive ? '~' : ''
-
     if (id === 'messages') {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Mensagens' : 'Messages'}
-          value={`${modelApprox}${fmt(d.totalMessages)}`}
+          value={fmt(d.totalMessages)}
           sub={lang === 'pt' ? 'no período selecionado' : 'in selected period'}
           icon={<MessageSquare size={15} />}
           accent="var(--anthropic-orange)"
@@ -640,7 +709,7 @@ export default function App() {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Sessões' : 'Sessions'}
-          value={`${modelApprox}${fmt(d.totalSessions)}`}
+          value={fmt(d.totalSessions)}
           sub={`avg ${d.totalSessions > 0 ? Math.round(d.totalMessages / d.totalSessions) : 0} msgs/sessão`}
           icon={<Zap size={15} />}
           accent="var(--accent-blue)"
@@ -652,7 +721,7 @@ export default function App() {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Tool calls' : 'Tool calls'}
-          value={`${modelApprox}${fmt(d.totalToolCalls)}`}
+          value={fmt(d.totalToolCalls)}
           sub={lang === 'pt' ? 'execuções totais' : 'total executions'}
           icon={<Wrench size={15} />}
           accent="var(--accent-green)"
@@ -779,6 +848,7 @@ export default function App() {
       <div
         key={id}
         data-drag-card={id}
+        data-flash-id={id}
         draggable
         onDragStart={() => handleDragStart(id)}
         onDragOver={e => handleDragOver(e, id)}
@@ -993,30 +1063,92 @@ export default function App() {
 
               {/* Interval selector — only shown when live is on */}
               {liveUpdates && (
-                <select
-                  value={updateInterval}
-                  onChange={e => setUpdateInterval(Number(e.target.value))}
-                  title={lang === 'pt' ? 'Intervalo de atualização' : 'Update interval'}
-                  style={{
-                    fontSize: 10,
-                    fontWeight: 600,
-                    color: 'var(--anthropic-orange)',
-                    background: 'transparent',
-                    border: 'none',
-                    cursor: 'pointer',
-                    outline: 'none',
-                    fontFamily: 'inherit',
-                    appearance: 'none',
-                    WebkitAppearance: 'none',
-                    padding: '0 2px',
-                  }}
-                >
-                  {LIVE_INTERVAL_OPTIONS.map(opt => (
-                    <option key={opt.value} value={opt.value} style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
+                <>
+                  <select
+                    value={updateInterval}
+                    onChange={e => setUpdateInterval(Number(e.target.value))}
+                    title={lang === 'pt' ? 'Intervalo de atualização' : 'Update interval'}
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 600,
+                      color: riskyMode && updateInterval < 10 ? '#ef4444' : 'var(--anthropic-orange)',
+                      background: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      outline: 'none',
+                      fontFamily: 'inherit',
+                      appearance: 'none',
+                      WebkitAppearance: 'none',
+                      padding: '0 2px',
+                    }}
+                  >
+                    {riskyMode && LIVE_INTERVAL_OPTIONS_RISKY.map(opt => (
+                      <option key={opt.value} value={opt.value} style={{ background: 'var(--bg-card)', color: '#ef4444' }}>
+                        ⚡ {opt.label}
+                      </option>
+                    ))}
+                    {LIVE_INTERVAL_OPTIONS.map(opt => (
+                      <option key={opt.value} value={opt.value} style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Risky mode toggle */}
+                  <button
+                    onClick={() => {
+                      const next = !riskyMode
+                      setRiskyMode(next)
+                      if (!next && updateInterval < 10) setUpdateInterval(10)
+                    }}
+                    title={riskyMode
+                      ? (lang === 'pt' ? 'Desativar modo arriscado' : 'Disable risky mode')
+                      : (lang === 'pt' ? 'Modo arriscado: intervalos abaixo de 10s (pode aumentar CPU/IO)' : 'Risky mode: intervals below 10s (may increase CPU/IO load)')}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '2px 2px 0',
+                      display: 'flex',
+                      alignItems: 'center',
+                      opacity: riskyMode ? 1 : 0.3,
+                      transition: 'opacity 0.15s',
+                    }}
+                  >
+                    <Zap
+                      size={11}
+                      style={{ color: riskyMode ? '#ef4444' : 'var(--text-tertiary)', transition: 'color 0.15s' }}
+                      fill={riskyMode ? '#ef4444' : 'none'}
+                    />
+                  </button>
+
+                  {/* Highlight updates toggle */}
+                  <button
+                    onClick={() => {
+                      const next = !highlightUpdates
+                      setHighlightUpdates(next)
+                      highlightUpdatesRef.current = next
+                    }}
+                    title={highlightUpdates
+                      ? (lang === 'pt' ? 'Desativar destaques de atualização' : 'Disable update highlights')
+                      : (lang === 'pt' ? 'Ativar destaques de atualização' : 'Enable update highlights')}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '2px 2px 0',
+                      display: 'flex',
+                      alignItems: 'center',
+                      opacity: highlightUpdates ? 1 : 0.3,
+                      transition: 'opacity 0.15s',
+                    }}
+                  >
+                    <Sparkles
+                      size={11}
+                      style={{ color: highlightUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', transition: 'color 0.15s' }}
+                    />
+                  </button>
+                </>
               )}
             </div>
 
@@ -1064,6 +1196,7 @@ export default function App() {
               projects={data.projects}
               sessionCountByProject={sessionCountByProject}
               models={models}
+              modelsInProject={modelsInProject}
               lang={lang}
             />
           </div>
@@ -1077,42 +1210,57 @@ export default function App() {
         <style>{`
           [data-drag-card]:hover .drag-handle { opacity: 1 !important; }
           [data-drag-card] { user-select: none; }
+          @keyframes liveFlash {
+            0%   { box-shadow: 0 0 0 2px rgba(217,119,6,0.55), 0 0 14px rgba(217,119,6,0.12); }
+            60%  { box-shadow: 0 0 0 2px rgba(217,119,6,0.18), 0 0 6px rgba(217,119,6,0.04); }
+            100% { box-shadow: 0 0 0 0px rgba(217,119,6,0); }
+          }
+          .live-flash { animation: liveFlash 1.2s ease-out forwards; border-radius: var(--radius-lg); }
         `}</style>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
           {cardOrder.map(id => renderCard(id))}
         </div>
 
         {/* Highlights board */}
-        <Section title={<><Trophy size={14} /> {lang === 'pt' ? 'Recordes' : 'Highlights'}</>}>
-          <HighlightsBoard sessions={derived.filteredSessions} projects={data.projects} lang={lang} />
-        </Section>
-
-        {/* Activity: chart (60%) + heatmap (40%) */}
-        <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 16 }}>
-          <Section
-            title={<><BarChart2 size={14} /> {lang === 'pt' ? 'Atividade ao longo do tempo' : 'Activity over time'}</>}
-            onExpand={() => setExpandedChart('activity')}
-          >
-            <ActivityChart data={derived.heatmapData} theme={theme} />
-          </Section>
-
-          <Section
-            title={lang === 'pt' ? 'Heatmap de atividade' : 'Activity heatmap'}
-            onExpand={() => setExpandedChart('heatmap')}
-          >
-            <ActivityHeatmap data={derived.heatmapData} />
+        <div data-flash-id="highlights">
+          <Section title={<><Trophy size={14} /> {lang === 'pt' ? 'Recordes' : 'Highlights'}</>}>
+            <HighlightsBoard sessions={derived.filteredSessions} projects={data.projects} lang={lang} />
           </Section>
         </div>
 
+        {/* Activity: chart (60%) + heatmap (40%) */}
+        <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 16 }}>
+          <div data-flash-id="activity">
+            <Section
+              title={<><BarChart2 size={14} /> {lang === 'pt' ? 'Atividade ao longo do tempo' : 'Activity over time'}</>}
+              onExpand={() => setExpandedChart('activity')}
+            >
+              <ActivityChart data={derived.heatmapData} theme={theme} />
+            </Section>
+          </div>
+
+          <div data-flash-id="heatmap">
+            <Section
+              title={lang === 'pt' ? 'Heatmap de atividade' : 'Activity heatmap'}
+              onExpand={() => setExpandedChart('heatmap')}
+            >
+              <ActivityHeatmap data={derived.heatmapData} />
+            </Section>
+          </div>
+        </div>
+
         {/* Hour distribution */}
-        <Section
-          title={lang === 'pt' ? 'Uso por hora do dia' : 'Usage by hour'}
-          onExpand={() => setExpandedChart('hours')}
-        >
-          <HourChart hourCounts={derived.hourCounts} hourMeta={derived.hourMeta} />
-        </Section>
+        <div data-flash-id="hours">
+          <Section
+            title={lang === 'pt' ? 'Uso por hora do dia' : 'Usage by hour'}
+            onExpand={() => setExpandedChart('hours')}
+          >
+            <HourChart hourCounts={derived.hourCounts} hourMeta={derived.hourMeta} />
+          </Section>
+        </div>
 
         {/* Model usage full-width */}
+        <div data-flash-id="models">
         <Section
           title={<><TrendingUp size={14} /> {lang === 'pt' ? 'Uso por modelo' : 'Model usage & cost'}</>}
           onExpand={() => setExpandedChart('models')}
@@ -1137,44 +1285,49 @@ export default function App() {
             }
           />
         </Section>
+        </div>
 
         {/* Projects (left, 2-col grid) + Tools/Languages stacked (right) */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-          <Section
-            title={<><FileCode size={14} /> {lang === 'pt' ? 'Principais projetos' : 'Top projects'}</>}
-            action={
-              filters.projects.length > 0 ? (
-                <button
-                  onClick={() => setFilters(f => ({ ...f, projects: [] }))}
-                  style={{
-                    fontSize: 11,
-                    color: 'var(--text-tertiary)',
-                    background: 'transparent',
-                    border: 'none',
-                    cursor: 'pointer',
-                    fontFamily: 'inherit',
-                  }}
-                >
-                  {lang === 'pt' ? 'Limpar' : 'Clear'}
-                </button>
-              ) : null
-            }
-          >
-            <ProjectsList
-              projectStats={derived.projectStats}
-              onFilter={path => setFilters(f => ({ ...f, projects: [path] }))}
-            />
-          </Section>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Section title={<><Wrench size={14} /> {lang === 'pt' ? 'Métricas de ferramentas' : 'Tool metrics'}</>}>
-              <ToolMetricsPanel
-                toolCounts={derived.toolCounts}
-                toolOutputTokens={derived.toolOutputTokens}
-                agentFileReads={derived.agentFileReads}
-                lang={lang}
+          <div data-flash-id="projects">
+            <Section
+              title={<><FileCode size={14} /> {lang === 'pt' ? 'Principais projetos' : 'Top projects'}</>}
+              action={
+                filters.projects.length > 0 ? (
+                  <button
+                    onClick={() => setFilters(f => ({ ...f, projects: [] }))}
+                    style={{
+                      fontSize: 11,
+                      color: 'var(--text-tertiary)',
+                      background: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    {lang === 'pt' ? 'Limpar' : 'Clear'}
+                  </button>
+                ) : null
+              }
+            >
+              <ProjectsList
+                projectStats={derived.projectStats}
+                onFilter={path => setFilters(f => ({ ...f, projects: [path] }))}
               />
             </Section>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div data-flash-id="tools">
+              <Section title={<><Wrench size={14} /> {lang === 'pt' ? 'Métricas de ferramentas' : 'Tool metrics'}</>}>
+                <ToolMetricsPanel
+                  toolCounts={derived.toolCounts}
+                  toolOutputTokens={derived.toolOutputTokens}
+                  agentFileReads={derived.agentFileReads}
+                  lang={lang}
+                />
+              </Section>
+            </div>
 
             <Section title={<><FileCode size={14} /> {lang === 'pt' ? 'Linguagens' : 'Languages'}</>}>
               <TagCloud data={derived.langCounts} color="var(--accent-blue)" />
@@ -1183,24 +1336,28 @@ export default function App() {
         </div>
 
         {/* Agent metrics */}
-        <Section title={<><Bot size={14} /> {lang === 'pt' ? 'Métricas de agentes' : 'Agent metrics'}</>}>
-          <AgentMetricsPanel
-            invocations={derived.agentInvocations}
-            agentTypeBreakdown={derived.agentTypeBreakdown}
-            totalInvocations={derived.totalAgentInvocations}
-            totalTokens={derived.totalAgentTokens}
-            totalCostUSD={derived.totalAgentCostUSD}
-            totalDurationMs={derived.totalAgentDurationMs}
-            currency={currency}
-            brlRate={brlRate}
-            lang={lang}
-          />
-        </Section>
+        <div data-flash-id="agents">
+          <Section title={<><Bot size={14} /> {lang === 'pt' ? 'Métricas de agentes' : 'Agent metrics'}</>}>
+            <AgentMetricsPanel
+              invocations={derived.agentInvocations}
+              agentTypeBreakdown={derived.agentTypeBreakdown}
+              totalInvocations={derived.totalAgentInvocations}
+              totalTokens={derived.totalAgentTokens}
+              totalCostUSD={derived.totalAgentCostUSD}
+              totalDurationMs={derived.totalAgentDurationMs}
+              currency={currency}
+              brlRate={brlRate}
+              lang={lang}
+            />
+          </Section>
+        </div>
 
         {/* Recent sessions */}
-        <Section title={<><Clock size={14} /> {lang === 'pt' ? 'Sessões recentes' : 'Recent sessions'}</>}>
-          <RecentSessions sessions={derived.filteredSessions} lang={lang} />
-        </Section>
+        <div data-flash-id="sessions-list">
+          <Section title={<><Clock size={14} /> {lang === 'pt' ? 'Sessões recentes' : 'Recent sessions'}</>}>
+            <RecentSessions sessions={derived.filteredSessions} lang={lang} />
+          </Section>
+        </div>
       </main>
 
       {/* Info Modal */}
