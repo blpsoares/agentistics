@@ -4,7 +4,7 @@ import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, RefreshCw, FileCode, TrendingUp, BarChart2,
   Sun, Moon, Globe, AlertTriangle, Download, Upload,
-  Maximize2, X, GripVertical, Trophy, Activity, Bot, Sparkles,
+  Maximize2, X, GripVertical, Trophy, Activity, Bot, Sparkles, Settings,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { Filters } from './lib/types'
@@ -26,19 +26,26 @@ import { ToolMetricsPanel } from './components/ToolMetricsPanel'
 import { AgentMetricsPanel } from './components/AgentMetricsPanel'
 import { format, parseISO, parse } from 'date-fns'
 
-function Section({ title, children, action, onExpand }: {
+function Section({ title, children, action, onExpand, flashId, style: extraStyle }: {
   title: React.ReactNode
   children: React.ReactNode
   action?: React.ReactNode
   onExpand?: () => void
+  flashId?: string
+  style?: React.CSSProperties
 }) {
   return (
-    <div style={{
-      background: 'var(--bg-card)',
-      border: '1px solid var(--border)',
-      borderRadius: 'var(--radius-lg)',
-      padding: '20px 22px',
-    }}>
+    <div
+      data-flash-id={flashId}
+      style={{
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius-lg)',
+        padding: '20px 22px',
+        boxSizing: 'border-box',
+        ...extraStyle,
+      }}
+    >
       <div style={{
         display: 'flex',
         alignItems: 'center',
@@ -165,6 +172,193 @@ function fmtDuration(ms: number): string {
   return `${m}m`
 }
 
+function LiveSettingsModal({
+  lang, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval,
+  riskyMode, setRiskyMode, highlightUpdates, setHighlightUpdates, onClose,
+}: {
+  lang: Lang
+  liveUpdates: boolean
+  setLiveUpdates: (v: boolean) => void
+  updateInterval: number
+  setUpdateInterval: (v: number) => void
+  riskyMode: boolean
+  setRiskyMode: (v: boolean) => void
+  highlightUpdates: boolean
+  setHighlightUpdates: (v: boolean) => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  const ToggleSwitch = ({ on, onToggle }: { on: boolean; onToggle: () => void }) => (
+    <button
+      onClick={onToggle}
+      style={{
+        position: 'relative', width: 32, height: 18, borderRadius: 9,
+        border: 'none', background: on ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+        cursor: 'pointer', padding: 0, transition: 'background 0.2s', flexShrink: 0,
+      }}
+    >
+      <span style={{
+        position: 'absolute', top: 3, left: on ? 17 : 3,
+        width: 12, height: 12, borderRadius: '50%', background: '#fff',
+        transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+      }} />
+    </button>
+  )
+
+  const allIntervals = [
+    ...(riskyMode ? LIVE_INTERVAL_OPTIONS_RISKY : []),
+    ...LIVE_INTERVAL_OPTIONS,
+  ]
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 400,
+        background: 'rgba(0,0,0,0.5)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        backdropFilter: 'blur(4px)',
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border)',
+          borderRadius: 14,
+          padding: '24px',
+          width: 360,
+          boxShadow: '0 8px 40px rgba(0,0,0,0.4)',
+        }}
+      >
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 22 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Settings size={14} style={{ color: 'var(--text-secondary)' }} />
+            <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
+              {lang === 'pt' ? 'Configurações de live' : 'Live update settings'}
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'transparent', border: '1px solid var(--border)', borderRadius: 7,
+              color: 'var(--text-tertiary)', cursor: 'pointer',
+            }}
+          >
+            <X size={13} />
+          </button>
+        </div>
+
+        {/* Live on/off */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 2 }}>
+              {lang === 'pt' ? 'Atualização em tempo real' : 'Live updates'}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+              {lang === 'pt' ? 'Monitora mudanças automaticamente' : 'Automatically polls for changes'}
+            </div>
+          </div>
+          <ToggleSwitch on={liveUpdates} onToggle={() => setLiveUpdates(!liveUpdates)} />
+        </div>
+
+        <div style={{ height: 1, background: 'var(--border)', marginBottom: 20 }} />
+
+        {/* Update interval */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            {lang === 'pt' ? 'Intervalo de atualização' : 'Update interval'}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {allIntervals.map(opt => {
+              const isRisky = opt.value < 10
+              const active = updateInterval === opt.value
+              return (
+                <button
+                  key={opt.value}
+                  onClick={() => { setUpdateInterval(opt.value); if (!liveUpdates) setLiveUpdates(true) }}
+                  style={{
+                    padding: '5px 12px',
+                    borderRadius: 6,
+                    border: active
+                      ? `1px solid ${isRisky ? '#ef4444' : 'var(--anthropic-orange)'}80`
+                      : '1px solid var(--border)',
+                    background: active
+                      ? isRisky ? 'rgba(239,68,68,0.12)' : 'var(--anthropic-orange-dim)'
+                      : 'var(--bg-elevated)',
+                    color: active
+                      ? isRisky ? '#ef4444' : 'var(--anthropic-orange)'
+                      : 'var(--text-secondary)',
+                    fontSize: 12, fontWeight: active ? 700 : 500,
+                    cursor: 'pointer', fontFamily: 'inherit',
+                    transition: 'all 0.1s',
+                  }}
+                >
+                  {isRisky ? `⚡ ${opt.label}` : opt.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <div style={{ height: 1, background: 'var(--border)', marginBottom: 20 }} />
+
+        {/* Risky mode */}
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 20 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+              <Zap size={12} style={{ color: riskyMode ? '#ef4444' : 'var(--text-tertiary)' }} fill={riskyMode ? '#ef4444' : 'none'} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+                {lang === 'pt' ? 'Modo arriscado' : 'Risky mode'}
+              </span>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+              {lang === 'pt'
+                ? 'Desbloqueia intervalos abaixo de 10s (até 1s). Pode aumentar o uso de CPU e I/O.'
+                : 'Unlocks sub-10s intervals (down to 1s). May increase CPU and I/O load.'}
+            </div>
+          </div>
+          <ToggleSwitch
+            on={riskyMode}
+            onToggle={() => {
+              const next = !riskyMode
+              setRiskyMode(next)
+              if (!next && updateInterval < 10) setUpdateInterval(10)
+            }}
+          />
+        </div>
+
+        <div style={{ height: 1, background: 'var(--border)', marginBottom: 20 }} />
+
+        {/* Update highlights */}
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+              <Sparkles size={12} style={{ color: highlightUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)' }} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+                {lang === 'pt' ? 'Destaques de atualização' : 'Update highlights'}
+              </span>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+              {lang === 'pt'
+                ? 'Destaca visualmente as seções que mudaram na última atualização.'
+                : 'Briefly glows sections that changed on the last data update.'}
+            </div>
+          </div>
+          <ToggleSwitch on={highlightUpdates} onToggle={() => setHighlightUpdates(!highlightUpdates)} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string {
   if (currency === 'BRL') {
     const brl = usd * rate
@@ -179,6 +373,7 @@ function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string
 export default function App() {
   const { data, loading, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
+  const [showLiveSettings, setShowLiveSettings] = useState(false)
   const [lang, setLang] = useState<Lang>('en')
   const [theme, setTheme] = useState<Theme>('dark')
   const [currency, setCurrency] = useState<'USD' | 'BRL'>('USD')
@@ -1015,141 +1210,71 @@ export default function App() {
               <HealthWarnings issues={data.healthIssues} lang={lang} />
             )}
 
-            {/* Live updates toggle */}
+            {/* Live updates pill */}
             <div style={{
               display: 'flex', alignItems: 'center', gap: 6,
-              padding: '0 10px',
+              padding: '0 4px 0 10px',
               height: 32,
               borderRadius: 8,
               border: '1px solid var(--border)',
               background: 'var(--bg-secondary)',
             }}>
-              {/* Activity icon */}
               <Activity size={12} style={{ color: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', flexShrink: 0, transition: 'color 0.2s' }} />
-
-              {/* Label */}
               <span style={{ fontSize: 11, fontWeight: 500, color: liveUpdates ? 'var(--text-primary)' : 'var(--text-tertiary)', whiteSpace: 'nowrap', transition: 'color 0.2s', userSelect: 'none' }}>
-                {lang === 'pt' ? 'Live' : 'Live'}
+                Live
               </span>
 
               {/* iPhone-style toggle */}
               <button
                 onClick={() => setLiveUpdates(v => !v)}
-                title={liveUpdates
-                  ? (lang === 'pt' ? 'Pausar atualizações em tempo real' : 'Pause live updates')
-                  : (lang === 'pt' ? 'Ativar atualizações em tempo real' : 'Enable live updates')}
+                title={liveUpdates ? 'Pause live updates' : 'Enable live updates'}
                 style={{
-                  position: 'relative',
-                  width: 28, height: 16,
-                  borderRadius: 8,
-                  border: 'none',
-                  background: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-                  cursor: 'pointer',
-                  padding: 0,
-                  transition: 'background 0.2s',
-                  flexShrink: 0,
+                  position: 'relative', width: 28, height: 16, borderRadius: 8,
+                  border: 'none', background: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                  cursor: 'pointer', padding: 0, transition: 'background 0.2s', flexShrink: 0,
                 }}
               >
                 <span style={{
-                  position: 'absolute',
-                  top: 2, left: liveUpdates ? 14 : 2,
-                  width: 12, height: 12,
-                  borderRadius: '50%',
-                  background: '#fff',
-                  transition: 'left 0.2s',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                  position: 'absolute', top: 2, left: liveUpdates ? 14 : 2,
+                  width: 12, height: 12, borderRadius: '50%', background: '#fff',
+                  transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
                 }} />
               </button>
 
-              {/* Interval selector — only shown when live is on */}
+              {/* Interval badge — visible when live is on */}
               {liveUpdates && (
-                <>
-                  <select
-                    value={updateInterval}
-                    onChange={e => setUpdateInterval(Number(e.target.value))}
-                    title={lang === 'pt' ? 'Intervalo de atualização' : 'Update interval'}
-                    style={{
-                      fontSize: 10,
-                      fontWeight: 600,
-                      color: riskyMode && updateInterval < 10 ? '#ef4444' : 'var(--anthropic-orange)',
-                      background: 'transparent',
-                      border: 'none',
-                      cursor: 'pointer',
-                      outline: 'none',
-                      fontFamily: 'inherit',
-                      appearance: 'none',
-                      WebkitAppearance: 'none',
-                      padding: '0 2px',
-                    }}
-                  >
-                    {riskyMode && LIVE_INTERVAL_OPTIONS_RISKY.map(opt => (
-                      <option key={opt.value} value={opt.value} style={{ background: 'var(--bg-card)', color: '#ef4444' }}>
-                        ⚡ {opt.label}
-                      </option>
-                    ))}
-                    {LIVE_INTERVAL_OPTIONS.map(opt => (
-                      <option key={opt.value} value={opt.value} style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-
-                  {/* Risky mode toggle */}
-                  <button
-                    onClick={() => {
-                      const next = !riskyMode
-                      setRiskyMode(next)
-                      if (!next && updateInterval < 10) setUpdateInterval(10)
-                    }}
-                    title={riskyMode
-                      ? (lang === 'pt' ? 'Desativar modo arriscado' : 'Disable risky mode')
-                      : (lang === 'pt' ? 'Modo arriscado: intervalos abaixo de 10s (pode aumentar CPU/IO)' : 'Risky mode: intervals below 10s (may increase CPU/IO load)')}
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      cursor: 'pointer',
-                      padding: '2px 2px 0',
-                      display: 'flex',
-                      alignItems: 'center',
-                      opacity: riskyMode ? 1 : 0.3,
-                      transition: 'opacity 0.15s',
-                    }}
-                  >
-                    <Zap
-                      size={11}
-                      style={{ color: riskyMode ? '#ef4444' : 'var(--text-tertiary)', transition: 'color 0.15s' }}
-                      fill={riskyMode ? '#ef4444' : 'none'}
-                    />
-                  </button>
-
-                  {/* Highlight updates toggle */}
-                  <button
-                    onClick={() => {
-                      const next = !highlightUpdates
-                      setHighlightUpdates(next)
-                      highlightUpdatesRef.current = next
-                    }}
-                    title={highlightUpdates
-                      ? (lang === 'pt' ? 'Desativar destaques de atualização' : 'Disable update highlights')
-                      : (lang === 'pt' ? 'Ativar destaques de atualização' : 'Enable update highlights')}
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      cursor: 'pointer',
-                      padding: '2px 2px 0',
-                      display: 'flex',
-                      alignItems: 'center',
-                      opacity: highlightUpdates ? 1 : 0.3,
-                      transition: 'opacity 0.15s',
-                    }}
-                  >
-                    <Sparkles
-                      size={11}
-                      style={{ color: highlightUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', transition: 'color 0.15s' }}
-                    />
-                  </button>
-                </>
+                <span style={{
+                  fontSize: 10, fontWeight: 700,
+                  color: riskyMode && updateInterval < 10 ? '#ef4444' : 'var(--anthropic-orange)',
+                  userSelect: 'none',
+                }}>
+                  {riskyMode && updateInterval < 10 ? `⚡ ${updateInterval}s` : `${updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`}`}
+                </span>
               )}
+
+              {/* Settings gear */}
+              <button
+                onClick={() => setShowLiveSettings(true)}
+                title="Live update settings"
+                style={{
+                  width: 26, height: 26,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: 'transparent', border: 'none', cursor: 'pointer',
+                  color: 'var(--text-tertiary)', borderRadius: 6,
+                  transition: 'color 0.15s, background 0.15s',
+                  flexShrink: 0,
+                }}
+                onMouseEnter={e => {
+                  ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
+                  ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-elevated)'
+                }}
+                onMouseLeave={e => {
+                  ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'
+                  ;(e.currentTarget as HTMLButtonElement).style.background = 'transparent'
+                }}
+              >
+                <Settings size={12} />
+              </button>
             </div>
 
             {/* Refresh */}
@@ -1222,46 +1347,43 @@ export default function App() {
         </div>
 
         {/* Highlights board */}
-        <div data-flash-id="highlights">
-          <Section title={<><Trophy size={14} /> {lang === 'pt' ? 'Recordes' : 'Highlights'}</>}>
-            <HighlightsBoard sessions={derived.filteredSessions} projects={data.projects} lang={lang} />
-          </Section>
-        </div>
+        <Section flashId="highlights" title={<><Trophy size={14} /> {lang === 'pt' ? 'Recordes' : 'Highlights'}</>}>
+          <HighlightsBoard sessions={derived.filteredSessions} projects={data.projects} lang={lang} />
+        </Section>
 
         {/* Activity: chart (60%) + heatmap (40%) */}
-        <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 16 }}>
-          <div data-flash-id="activity">
-            <Section
-              title={<><BarChart2 size={14} /> {lang === 'pt' ? 'Atividade ao longo do tempo' : 'Activity over time'}</>}
-              onExpand={() => setExpandedChart('activity')}
-            >
-              <ActivityChart data={derived.heatmapData} theme={theme} />
-            </Section>
-          </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 16, alignItems: 'stretch' }}>
+          <Section
+            flashId="activity"
+            style={{ height: '100%' }}
+            title={<><BarChart2 size={14} /> {lang === 'pt' ? 'Atividade ao longo do tempo' : 'Activity over time'}</>}
+            onExpand={() => setExpandedChart('activity')}
+          >
+            <ActivityChart data={derived.heatmapData} theme={theme} />
+          </Section>
 
-          <div data-flash-id="heatmap">
-            <Section
-              title={lang === 'pt' ? 'Heatmap de atividade' : 'Activity heatmap'}
-              onExpand={() => setExpandedChart('heatmap')}
-            >
-              <ActivityHeatmap data={derived.heatmapData} />
-            </Section>
-          </div>
+          <Section
+            flashId="heatmap"
+            style={{ height: '100%' }}
+            title={lang === 'pt' ? 'Heatmap de atividade' : 'Activity heatmap'}
+            onExpand={() => setExpandedChart('heatmap')}
+          >
+            <ActivityHeatmap data={derived.heatmapData} />
+          </Section>
         </div>
 
         {/* Hour distribution */}
-        <div data-flash-id="hours">
-          <Section
-            title={lang === 'pt' ? 'Uso por hora do dia' : 'Usage by hour'}
-            onExpand={() => setExpandedChart('hours')}
-          >
-            <HourChart hourCounts={derived.hourCounts} hourMeta={derived.hourMeta} />
-          </Section>
-        </div>
+        <Section
+          flashId="hours"
+          title={lang === 'pt' ? 'Uso por hora do dia' : 'Usage by hour'}
+          onExpand={() => setExpandedChart('hours')}
+        >
+          <HourChart hourCounts={derived.hourCounts} hourMeta={derived.hourMeta} />
+        </Section>
 
         {/* Model usage full-width */}
-        <div data-flash-id="models">
         <Section
+          flashId="models"
           title={<><TrendingUp size={14} /> {lang === 'pt' ? 'Uso por modelo' : 'Model usage & cost'}</>}
           onExpand={() => setExpandedChart('models')}
         >
@@ -1285,49 +1407,43 @@ export default function App() {
             }
           />
         </Section>
-        </div>
 
         {/* Projects (left, 2-col grid) + Tools/Languages stacked (right) */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-          <div data-flash-id="projects">
-            <Section
-              title={<><FileCode size={14} /> {lang === 'pt' ? 'Principais projetos' : 'Top projects'}</>}
-              action={
-                filters.projects.length > 0 ? (
-                  <button
-                    onClick={() => setFilters(f => ({ ...f, projects: [] }))}
-                    style={{
-                      fontSize: 11,
-                      color: 'var(--text-tertiary)',
-                      background: 'transparent',
-                      border: 'none',
-                      cursor: 'pointer',
-                      fontFamily: 'inherit',
-                    }}
-                  >
-                    {lang === 'pt' ? 'Limpar' : 'Clear'}
-                  </button>
-                ) : null
-              }
-            >
-              <ProjectsList
-                projectStats={derived.projectStats}
-                onFilter={path => setFilters(f => ({ ...f, projects: [path] }))}
-              />
-            </Section>
-          </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'stretch' }}>
+          <Section
+            flashId="projects"
+            style={{ height: '100%' }}
+            title={<><FileCode size={14} /> {lang === 'pt' ? 'Principais projetos' : 'Top projects'}</>}
+            action={
+              filters.projects.length > 0 ? (
+                <button
+                  onClick={() => setFilters(f => ({ ...f, projects: [] }))}
+                  style={{
+                    fontSize: 11, color: 'var(--text-tertiary)',
+                    background: 'transparent', border: 'none',
+                    cursor: 'pointer', fontFamily: 'inherit',
+                  }}
+                >
+                  {lang === 'pt' ? 'Limpar' : 'Clear'}
+                </button>
+              ) : null
+            }
+          >
+            <ProjectsList
+              projectStats={derived.projectStats}
+              onFilter={path => setFilters(f => ({ ...f, projects: [path] }))}
+            />
+          </Section>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div data-flash-id="tools">
-              <Section title={<><Wrench size={14} /> {lang === 'pt' ? 'Métricas de ferramentas' : 'Tool metrics'}</>}>
-                <ToolMetricsPanel
-                  toolCounts={derived.toolCounts}
-                  toolOutputTokens={derived.toolOutputTokens}
-                  agentFileReads={derived.agentFileReads}
-                  lang={lang}
-                />
-              </Section>
-            </div>
+            <Section flashId="tools" title={<><Wrench size={14} /> {lang === 'pt' ? 'Métricas de ferramentas' : 'Tool metrics'}</>}>
+              <ToolMetricsPanel
+                toolCounts={derived.toolCounts}
+                toolOutputTokens={derived.toolOutputTokens}
+                agentFileReads={derived.agentFileReads}
+                lang={lang}
+              />
+            </Section>
 
             <Section title={<><FileCode size={14} /> {lang === 'pt' ? 'Linguagens' : 'Languages'}</>}>
               <TagCloud data={derived.langCounts} color="var(--accent-blue)" />
@@ -1336,29 +1452,41 @@ export default function App() {
         </div>
 
         {/* Agent metrics */}
-        <div data-flash-id="agents">
-          <Section title={<><Bot size={14} /> {lang === 'pt' ? 'Métricas de agentes' : 'Agent metrics'}</>}>
-            <AgentMetricsPanel
-              invocations={derived.agentInvocations}
-              agentTypeBreakdown={derived.agentTypeBreakdown}
-              totalInvocations={derived.totalAgentInvocations}
-              totalTokens={derived.totalAgentTokens}
-              totalCostUSD={derived.totalAgentCostUSD}
-              totalDurationMs={derived.totalAgentDurationMs}
-              currency={currency}
-              brlRate={brlRate}
-              lang={lang}
-            />
-          </Section>
-        </div>
+        <Section flashId="agents" title={<><Bot size={14} /> {lang === 'pt' ? 'Métricas de agentes' : 'Agent metrics'}</>}>
+          <AgentMetricsPanel
+            invocations={derived.agentInvocations}
+            agentTypeBreakdown={derived.agentTypeBreakdown}
+            totalInvocations={derived.totalAgentInvocations}
+            totalTokens={derived.totalAgentTokens}
+            totalCostUSD={derived.totalAgentCostUSD}
+            totalDurationMs={derived.totalAgentDurationMs}
+            currency={currency}
+            brlRate={brlRate}
+            lang={lang}
+          />
+        </Section>
 
         {/* Recent sessions */}
-        <div data-flash-id="sessions-list">
-          <Section title={<><Clock size={14} /> {lang === 'pt' ? 'Sessões recentes' : 'Recent sessions'}</>}>
-            <RecentSessions sessions={derived.filteredSessions} lang={lang} />
-          </Section>
-        </div>
+        <Section flashId="sessions-list" title={<><Clock size={14} /> {lang === 'pt' ? 'Sessões recentes' : 'Recent sessions'}</>}>
+          <RecentSessions sessions={derived.filteredSessions} lang={lang} />
+        </Section>
       </main>
+
+      {/* Live settings modal */}
+      {showLiveSettings && (
+        <LiveSettingsModal
+          lang={lang}
+          liveUpdates={liveUpdates}
+          setLiveUpdates={setLiveUpdates}
+          updateInterval={updateInterval}
+          setUpdateInterval={setUpdateInterval}
+          riskyMode={riskyMode}
+          setRiskyMode={setRiskyMode}
+          highlightUpdates={highlightUpdates}
+          setHighlightUpdates={v => { setHighlightUpdates(v); highlightUpdatesRef.current = v }}
+          onClose={() => setShowLiveSettings(false)}
+        />
+      )}
 
       {/* Info Modal */}
       {infoModalIndex !== null && (
