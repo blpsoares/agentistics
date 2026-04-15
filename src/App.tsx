@@ -620,11 +620,15 @@ export default function App() {
     }
 
     let card: React.ReactNode = null
+    // When model filter is active, messages/sessions/tools can't be filtered
+    // (sessions have no model field) — prefix value with ~ to signal approximation
+    const modelApprox = d.modelFilterActive ? '~' : ''
+
     if (id === 'messages') {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Mensagens' : 'Messages'}
-          value={fmt(d.totalMessages)}
+          value={`${modelApprox}${fmt(d.totalMessages)}`}
           sub={lang === 'pt' ? 'no período selecionado' : 'in selected period'}
           icon={<MessageSquare size={15} />}
           accent="var(--anthropic-orange)"
@@ -636,7 +640,7 @@ export default function App() {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Sessões' : 'Sessions'}
-          value={fmt(d.totalSessions)}
+          value={`${modelApprox}${fmt(d.totalSessions)}`}
           sub={`avg ${d.totalSessions > 0 ? Math.round(d.totalMessages / d.totalSessions) : 0} msgs/sessão`}
           icon={<Zap size={15} />}
           accent="var(--accent-blue)"
@@ -648,7 +652,7 @@ export default function App() {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Tool calls' : 'Tool calls'}
-          value={fmt(d.totalToolCalls)}
+          value={`${modelApprox}${fmt(d.totalToolCalls)}`}
           sub={lang === 'pt' ? 'execuções totais' : 'total executions'}
           icon={<Wrench size={15} />}
           accent="var(--accent-green)"

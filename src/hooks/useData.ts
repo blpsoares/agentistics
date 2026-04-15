@@ -342,8 +342,15 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       : filteredSessions.reduce((s, sess) => s + (sess.files_modified ?? 0), 0)
 
     // ── Tokens from sessions ──
-    const inputTokens = filteredSessions.reduce((s, sess) => s + (sess.input_tokens ?? 0), 0)
-    const outputTokens = filteredSessions.reduce((s, sess) => s + (sess.output_tokens ?? 0), 0)
+    // When a model filter is active (and no project filter), filteredModelUsage has accurate
+    // per-model token data — use it instead of session sums which have no model field.
+    // When project filter is active, filteredModelUsage is {} so fall back to sessions.
+    const inputTokens = (modelFilter && !projectFiltered)
+      ? Object.values(filteredModelUsage).reduce((s, u) => s + u.inputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens, 0)
+      : filteredSessions.reduce((s, sess) => s + (sess.input_tokens ?? 0), 0)
+    const outputTokens = (modelFilter && !projectFiltered)
+      ? Object.values(filteredModelUsage).reduce((s, u) => s + u.outputTokens, 0)
+      : filteredSessions.reduce((s, sess) => s + (sess.output_tokens ?? 0), 0)
 
     // ── Hour distribution ──
     const hourCounts: Record<number, number> = {}
@@ -420,6 +427,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       totalSessions,
       allTimeTotalSessions,
       totalToolCalls,
+      modelFilterActive: !!modelFilter,
       totalCostUSD,
       streak,
       heatmapData,

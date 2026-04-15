@@ -180,11 +180,19 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         </button>
 
         {/* Model */}
-        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-          <Cpu size={11} style={{ position: 'absolute', left: 8, color: 'var(--text-tertiary)', pointerEvents: 'none' }} />
+        <div
+          style={{ position: 'relative', display: 'flex', alignItems: 'center' }}
+          title={hasProjects
+            ? (lang === 'pt'
+              ? 'Filtro de modelo indisponível com filtro de projeto ativo — sessões não têm campo de modelo'
+              : 'Model filter unavailable when project filter is active — sessions have no model field')
+            : undefined}
+        >
+          <Cpu size={11} style={{ position: 'absolute', left: 8, color: hasProjects ? 'var(--text-tertiary)' : 'var(--text-tertiary)', pointerEvents: 'none', opacity: hasProjects ? 0.35 : 1 }} />
           <select
             value={filters.model}
             onChange={e => onChange({ ...filters, model: e.target.value })}
+            disabled={hasProjects}
             title={lang === 'pt' ? 'Filtrar por modelo' : 'Filter by model'}
             style={{
               ...CTL,
@@ -192,6 +200,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               minWidth: 130,
               appearance: 'none',
               WebkitAppearance: 'none',
+              opacity: hasProjects ? 0.4 : 1,
+              cursor: hasProjects ? 'not-allowed' : 'pointer',
             } as React.CSSProperties}
           >
             <option value="all">{lang === 'pt' ? 'Modelos' : 'Models'}</option>
@@ -226,7 +236,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
           sessionCountByProject={sessionCountByProject}
           selected={filters.projects}
           onApply={paths => {
-            onChange({ ...filters, projects: paths })
+            // Reset model filter when project filter is applied — no per-session model data
+            onChange({ ...filters, projects: paths, model: 'all' })
             setShowProjectsModal(false)
           }}
           onClose={() => setShowProjectsModal(false)}
