@@ -31,9 +31,9 @@
 
 ## Table of Contents
 
-- [Install](#install)
-- [CLI Reference](#cli-reference)
-- [Run from source](#run-from-source)
+- [Getting Started](#getting-started)
+  - [Option 1 — Pre-built binary (Linux x86_64)](#option-1--pre-built-binary-linux-x86_64)
+  - [Option 2 — From source (macOS, Linux, Windows)](#option-2--from-source-macos-linux-windows)
 - [Data Sources](#data-sources)
 - [Calculations and Metrics](#calculations-and-metrics)
 - [Available Filters](#available-filters)
@@ -47,10 +47,13 @@
 
 ---
 
-## Install
+## Getting Started
 
-> [!TIP]
-> Requires **Linux x86_64**. macOS and Windows support is planned.
+There are two ways to run agentistics: **pre-built binary** (Linux x86_64 only) or **from source** (any OS with [Bun](https://bun.sh) installed). Both give you the exact same features.
+
+---
+
+## Option 1 — Pre-built binary (Linux x86_64)
 
 **One-line install** — downloads the latest binary to `~/.local/bin`:
 
@@ -64,37 +67,29 @@ System-wide install (`/usr/local/bin`):
 sudo curl -fsSL https://raw.githubusercontent.com/blpsoares/agentistics/main/install.sh | bash
 ```
 
-Then start the dashboard:
+> **PATH note:** If `~/.local/bin` is not in your `$PATH`, the installer will print the command to add it. Pre-built binaries are also available on the [Releases page](https://github.com/blpsoares/agentistics/releases/latest).
+
+### CLI commands
 
 ```bash
-agentop server   # opens http://localhost:3001
-```
-
-> **PATH note:** If `~/.local/bin` is not in your `$PATH`, the installer will print the command to add it. Pre-built binaries are available on the [Releases page](https://github.com/blpsoares/agentistics/releases/latest).
-
----
-
-## CLI Reference
-
-```bash
-agentop server          # Web dashboard (API + frontend) + background daemon
-agentop server --port 4000   # Custom port (default: 3001)
-agentop tui             # Live terminal dashboard (standalone)
-agentop watch           # Background OTel metrics daemon only
+agentop server                # Web dashboard + API + background watcher daemon
+agentop server --port 4000    # Custom port (default: 3001)
+agentop tui                   # Live terminal dashboard (standalone, no browser needed)
+agentop watch                 # Background OTel metrics daemon only (headless)
 agentop --help
 ```
 
-| Command | What starts |
-|---------|------------|
-| `agentop server` | API server + embedded frontend + watcher daemon (always together) |
-| `agentop tui` | Terminal UI — can run independently |
+| Command | What it starts |
+|---------|---------------|
+| `agentop server` | API server + embedded frontend + watcher daemon (all together) |
+| `agentop tui` | Terminal UI — runs independently, no web server required |
 | `agentop watch` | OTel daemon only — for headless/background metric export |
 
 After `agentop server`, open **http://localhost:3001** in your browser.
 
 ---
 
-## Run from source
+## Option 2 — From source (macOS, Linux, Windows)
 
 **Prerequisite:** [Bun](https://bun.sh) installed.
 
@@ -102,31 +97,28 @@ After `agentop server`, open **http://localhost:3001** in your browser.
 git clone https://github.com/blpsoares/agentistics.git
 cd agentistics
 bun install
-bun run dev        # API (port 3001) + UI dev server (port 5173) in parallel
 ```
 
-| Service | Address |
-|---------|---------|
-| API (Bun) | `http://localhost:3001` |
-| UI (Vite) | `http://localhost:5173` |
+### Dev scripts
 
-Other scripts:
+| Script | What it does |
+|--------|-------------|
+| `bun run dev` | Starts API (port 3001) + UI dev server (port 5173) in parallel — main entry point for development |
+| `bun run dev:api` | Starts only the API server (port 3001) |
+| `bun run dev:ui` | Starts only the Vite UI dev server (port 5173) |
+| `bun run watch` | Starts the OpenTelemetry daemon (standalone, no web server) |
+| `bun run watch:cli` | Starts the terminal TUI (standalone, no browser needed) |
+| `bun test` | Runs unit tests |
 
-```bash
-bun run watch          # OTel daemon (standalone)
-bun run watch:cli      # Terminal TUI (standalone)
-bun test               # Unit tests
+When running from source, open **http://localhost:5173** for the UI (hot reload) or **http://localhost:3001** for the API directly.
 
-# Build the binary
-bun run build:binary   # vite build → embed assets → compile → release/agentop
-bun run build:assets   # Embed dist/ assets only (requires bun run build first)
-```
+### Build scripts
 
-To run unit tests:
-
-```bash
-bun test
-```
+| Script | What it does |
+|--------|-------------|
+| `bun run build` | Builds the frontend with Vite → `dist/` |
+| `bun run build:assets` | Embeds `dist/` assets into a TS module (requires `build` first) |
+| `bun run build:binary` | Full pipeline: `build` → `build:assets` → compiles binary → `release/agentop` |
 
 ---
 
