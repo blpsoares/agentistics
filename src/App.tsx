@@ -1116,11 +1116,14 @@ export default function App() {
             modelUsage={derived.modelUsage}
             currency={currency}
             brlRate={brlRate}
+            fallbackInputTokens={filters.projects.length > 0 ? derived.inputTokens : undefined}
+            fallbackOutputTokens={filters.projects.length > 0 ? derived.outputTokens : undefined}
+            fallbackCostUSD={filters.projects.length > 0 ? derived.totalCostUSD : undefined}
             note={
               filters.projects.length > 0
                 ? (lang === 'pt'
-                  ? 'Breakdown por modelo indisponível com filtro de projeto ativo — sessões não registram o modelo utilizado.'
-                  : 'Per-model breakdown unavailable when project filter is active — sessions do not record the model used.')
+                  ? '* Custo e tokens estimados via taxa ponderada — sessões não registram o modelo utilizado individualmente.'
+                  : '* Cost and tokens estimated via blended rate — sessions do not record the model used individually.')
                 : (filters.dateRange !== 'all' || filters.customStart || filters.customEnd
                   ? (lang === 'pt'
                     ? '* Valores aproximados: tokens rateados pelo total diário. Proporção input/output baseada no histórico global.'

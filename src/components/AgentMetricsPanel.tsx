@@ -27,9 +27,9 @@ function fmtCost(usd: number, currency: 'USD' | 'BRL', rate: number): string {
     if (brl < 0.005) return '<R$0,01'
     return `R$${brl.toFixed(2).replace('.', ',')}`
   }
-  if (usd < 0.001) return '<$0.001'
-  if (usd < 0.01) return `$${usd.toFixed(3)}`
-  return `$${usd.toFixed(2)}`
+  if (usd < 0.001) return '<USD 0.001'
+  if (usd < 0.01) return `USD ${usd.toFixed(3)}`
+  return `USD ${usd.toFixed(2)}`
 }
 
 function fmtDuration(ms: number): string {
