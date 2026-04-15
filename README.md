@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/logoDoc.png" alt="agentistics" width="180" />
+  <img src="public/logo.png" alt="agentistics" width="180" />
 </p>
 
 <h1 align="center">agentistics</h1>

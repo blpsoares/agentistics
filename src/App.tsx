@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
+import { version } from '../package.json'
 import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, RefreshCw, FileCode, TrendingUp, BarChart2,
@@ -820,9 +821,9 @@ export default function App() {
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <img
-              src='/logoDarkMode.png'
-              alt="Claude Stats"
-              style={{ height: 32, width: 'auto' }}
+              src='/minimalistLogo.png'
+              alt="agentistics"
+              style={{ height: 64, width: 'auto' }}
             />
             <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
               {lang === 'pt' ? 'Atualizado em' : 'Updated'}{' '}
@@ -1270,132 +1271,125 @@ export default function App() {
       <footer style={{
         marginTop: 64,
         borderTop: '1px solid var(--border)',
-        background: 'linear-gradient(to bottom, transparent, var(--bg-surface))',
+        background: 'var(--bg-surface)',
       }}>
-        <div style={{
-          maxWidth: 1400,
-          margin: '0 auto',
-          padding: '40px 24px 32px',
-        }}>
-          {/* Top row */}
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'flex-start',
-            flexWrap: 'wrap',
-            gap: 32,
-            marginBottom: 32,
-          }}>
-            {/* Brand block */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 320 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: 10,
-                  background: 'var(--anthropic-orange-dim)',
-                  border: '1px solid rgba(217,119,6,0.35)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 0 12px rgba(217,119,6,0.1)',
-                }}>
-                  <Zap size={15} style={{ color: 'var(--anthropic-orange-light)' }} />
-                </div>
-                <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.3px' }}>
-                  Claude Stats
-                </span>
-              </div>
-              <p style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.6, margin: 0 }}>
+        <div style={{ maxWidth: 1400, margin: '0 auto', padding: '56px 32px 36px' }}>
+
+          {/* Main row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 80, flexWrap: 'wrap', marginBottom: 48 }}>
+
+            {/* Logo only — no text */}
+            <div style={{ flexShrink: 0 }}>
+              <img
+                src='/logo.png'
+                alt="agentistics"
+                style={{ height: 180, width: 'auto', display: 'block' }}
+              />
+            </div>
+
+            {/* Description + stats + version — middle */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: '1 1 200px' }}>
+              <p style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.7, margin: 0 }}>
                 {lang === 'pt'
                   ? 'Dashboard local de uso do Claude Code. Seus dados ficam no seu computador — sem servidores, sem rastreamento.'
                   : 'Local Claude Code usage dashboard. Your data stays on your machine — no servers, no tracking.'}
               </p>
-              {/* Live stats pill */}
-              <div style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '5px 12px',
-                borderRadius: 20,
-                background: 'var(--bg-card)',
-                border: '1px solid var(--border)',
-                width: 'fit-content',
-              }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                {/* Live stats pill */}
                 <div style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: 'var(--accent-green)',
-                  boxShadow: '0 0 8px var(--accent-green)',
-                }} />
-                <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                  {derived.totalSessions.toLocaleString()} {lang === 'pt' ? 'sessões' : 'sessions'}
-                  {' · '}
-                  {derived.totalMessages.toLocaleString()} {lang === 'pt' ? 'mensagens' : 'messages'}
-                </span>
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '4px 12px', borderRadius: 20,
+                  background: 'var(--bg-card)', border: '1px solid var(--border)',
+                }}>
+                  <div style={{
+                    width: 6, height: 6, borderRadius: '50%',
+                    background: 'var(--accent-green)', boxShadow: '0 0 8px var(--accent-green)',
+                  }} />
+                  <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                    {derived.totalSessions.toLocaleString()} {lang === 'pt' ? 'sessões' : 'sessions'}
+                    {' · '}
+                    {derived.totalMessages.toLocaleString()} {lang === 'pt' ? 'mensagens' : 'messages'}
+                  </span>
+                </div>
+                {/* Version badge */}
+                <a
+                  href="https://github.com/blpsoares/agentistics/releases/latest"
+                  target="_blank" rel="noreferrer"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    padding: '4px 10px', borderRadius: 20,
+                    background: 'var(--anthropic-orange-dim)',
+                    border: '1px solid var(--anthropic-orange-dim)',
+                    fontSize: 11, color: 'var(--anthropic-orange-light)',
+                    textDecoration: 'none', fontWeight: 600,
+                    transition: 'opacity 0.15s',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.opacity = '0.75')}
+                  onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
+                >
+                  <Zap size={11} />
+                  v{version}
+                </a>
               </div>
             </div>
 
-            {/* Links columns */}
-            <div style={{ display: 'flex', gap: 48, flexWrap: 'wrap' }}>
-              {/* Project */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                  {lang === 'pt' ? 'Projeto' : 'Project'}
-                </span>
-                {[
-                  { href: 'https://github.com/blpsoares/claude-stats', label: lang === 'pt' ? 'Repositório' : 'Repository', icon: <GitCommit size={13} /> },
-                  { href: 'https://github.com/blpsoares/claude-stats/issues', label: 'Issues', icon: <AlertTriangle size={13} /> },
-                  { href: 'https://github.com/blpsoares/claude-stats/releases', label: 'Releases', icon: <Zap size={13} /> },
-                ].map(({ href, label, icon }) => (
-                  <a key={href} href={href} target="_blank" rel="noreferrer" style={{
-                    display: 'flex', alignItems: 'center', gap: 7,
-                    fontSize: 13, color: 'var(--text-secondary)', textDecoration: 'none',
-                    transition: 'color 0.15s',
-                  }}
-                    onMouseEnter={e => (e.currentTarget.style.color = 'var(--text-primary)')}
-                    onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-secondary)')}
-                  >
-                    <span style={{ opacity: 0.5 }}>{icon}</span>
-                    {label}
-                  </a>
-                ))}
-              </div>
-
-              {/* Author */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                  {lang === 'pt' ? 'Autor' : 'Author'}
-                </span>
-                {[
-                  { href: 'https://github.com/blpsoares', label: 'blpsoares', icon: <GitCommit size={13} /> },
-                  { href: 'https://linkedin.com/in/blpsoares', label: 'LinkedIn', icon: <Globe size={13} /> },
-                ].map(({ href, label, icon }) => (
-                  <a key={href} href={href} target="_blank" rel="noreferrer" style={{
-                    display: 'flex', alignItems: 'center', gap: 7,
-                    fontSize: 13, color: 'var(--text-secondary)', textDecoration: 'none',
-                    transition: 'color 0.15s',
-                  }}
-                    onMouseEnter={e => (e.currentTarget.style.color = 'var(--text-primary)')}
-                    onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-secondary)')}
-                  >
-                    <span style={{ opacity: 0.5 }}>{icon}</span>
-                    {label}
-                  </a>
-                ))}
-              </div>
+            {/* Link columns — right */}
+            <div style={{ display: 'flex', gap: 56, flexShrink: 0, flexWrap: 'wrap' }}>
+              {([
+                {
+                  title: lang === 'pt' ? 'Projeto' : 'Project',
+                  links: [
+                    { href: 'https://github.com/blpsoares/agentistics', label: lang === 'pt' ? 'Repositório' : 'Repository' },
+                    { href: 'https://github.com/blpsoares/agentistics/releases', label: 'Releases' },
+                    { href: 'https://github.com/blpsoares/agentistics/issues', label: 'Issues' },
+                    { href: 'https://github.com/blpsoares/agentistics/pulls', label: 'Pull Requests' },
+                    { href: 'https://github.com/blpsoares/agentistics#readme', label: 'README' },
+                  ],
+                },
+                {
+                  title: 'Stack',
+                  links: [
+                    { href: 'https://bun.sh', label: 'Bun' },
+                    { href: 'https://react.dev', label: 'React 19' },
+                    { href: 'https://www.typescriptlang.org', label: 'TypeScript' },
+                    { href: 'https://vitejs.dev', label: 'Vite' },
+                    { href: 'https://recharts.org', label: 'Recharts' },
+                  ],
+                },
+                {
+                  title: lang === 'pt' ? 'Comunidade' : 'Community',
+                  links: [
+                    { href: 'https://github.com/blpsoares/agentistics', label: lang === 'pt' ? 'Star no GitHub' : 'Star on GitHub' },
+                    { href: 'https://github.com/blpsoares/agentistics/fork', label: 'Fork' },
+                    { href: 'https://github.com/blpsoares/agentistics/issues/new', label: lang === 'pt' ? 'Contribuir' : 'Contribute' },
+                    { href: 'https://github.com/blpsoares', label: '@blpsoares' },
+                  ],
+                },
+              ] as { title: string; links: { href: string; label: string }[] }[]).map(({ title, links }) => (
+                <div key={title} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                    {title}
+                  </span>
+                  {links.map(({ href, label }) => (
+                    <a key={href} href={href} target="_blank" rel="noreferrer" style={{
+                      fontSize: 13, color: 'var(--text-tertiary)', textDecoration: 'none',
+                      transition: 'color 0.15s',
+                    }}
+                      onMouseEnter={e => (e.currentTarget.style.color = 'var(--text-primary)')}
+                      onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-tertiary)')}
+                    >
+                      {label}
+                    </a>
+                  ))}
+                </div>
+              ))}
             </div>
           </div>
 
           {/* Bottom bar */}
           <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
-            gap: 12,
-            paddingTop: 20,
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            flexWrap: 'wrap', gap: 12, paddingTop: 24,
             borderTop: '1px solid var(--border-subtle)',
           }}>
             <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
@@ -1403,8 +1397,7 @@ export default function App() {
               <span style={{ color: 'var(--anthropic-orange)', fontWeight: 700 }}>♥</span>
               {' '}{lang === 'pt' ? 'por' : 'by'}{' '}
               <a href="https://github.com/blpsoares" target="_blank" rel="noreferrer" style={{
-                color: 'var(--text-secondary)', textDecoration: 'none', fontWeight: 500,
-                transition: 'color 0.15s',
+                color: 'var(--text-secondary)', textDecoration: 'none', fontWeight: 500, transition: 'color 0.15s',
               }}
                 onMouseEnter={e => (e.currentTarget.style.color = 'var(--text-primary)')}
                 onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-secondary)')}

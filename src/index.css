@@ -85,7 +85,22 @@
   --bg-sticky-border: rgba(194, 65, 12, 0.2);
 }
 
-/* Header is always dark in both themes */
+/* Header and footer are always dark in both themes */
+[data-theme="light"] footer {
+  --bg-surface: #111118;
+  --bg-card: #16161f;
+  --bg-elevated: #1e1e2e;
+  --bg-secondary: rgba(255, 255, 255, 0.04);
+  --border: rgba(255, 255, 255, 0.06);
+  --border-subtle: rgba(255, 255, 255, 0.03);
+  --text-primary: rgba(255, 255, 255, 0.92);
+  --text-secondary: rgba(255, 255, 255, 0.5);
+  --text-tertiary: rgba(255, 255, 255, 0.28);
+  --anthropic-orange: #f59e0b;
+  --anthropic-orange-light: #fbbf24;
+  --anthropic-orange-dim: rgba(245, 158, 11, 0.15);
+}
+
 [data-theme="light"] header {
   --bg-surface: #111118;
   --bg-elevated: #1e1e2e;
