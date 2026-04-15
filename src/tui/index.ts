@@ -721,14 +721,19 @@ async function ensureApiRunning(): Promise<void> {
   // Já está rodando?
   if (await probeApi(2000)) return
 
-  // Sobe server.ts em background
-  const serverPath = join(import.meta.dir, 'server.ts')
+  // Sobe o servidor em background
+  // Se rodando como binário compilado, usa o próprio executável com o subcomando 'server'
+  // Se rodando em dev (bun run), usa bun + server.ts diretamente
+  const isBinary = !process.execPath.includes('bun')
+  const spawnArgs: string[] = isBinary
+    ? [process.execPath, 'server']
+    : ['bun', 'run', join(import.meta.dir, '../../server/index.ts')]
   console.log(`${YL}Servidor API nao detectado — iniciando automaticamente...${R}`)
 
-  spawnedServer = Bun.spawn(['bun', 'run', serverPath], {
+  spawnedServer = Bun.spawn(spawnArgs, {
     stdout: 'ignore',
     stderr: 'ignore',
-    env: { ...process.env },
+    env: { ...process.env, SERVE_STATIC: '1' },
   })
 
   const ok = await withLoader('Aguardando servidor API iniciar...', async () => {
