@@ -123,6 +123,14 @@ export function HighlightsBoard({ sessions, projects, lang }: HighlightsBoardPro
         }
       `}</style>
 
+      {/* Number of cards: 5 always + 1 conditional (topProjectEntry) */}
+      {(() => {
+        const cardCount = topProjectEntry ? 6 : 5
+        // last card's column span: fill leftover columns when not aligned to 3
+        const lastSpan = cardCount % 3 === 0 ? 1 : 3 - (cardCount % 3) + 1
+        const lastStyle = lastSpan > 1 ? { gridColumn: `span ${lastSpan}` } : {}
+
+      return (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
 
         <HighlightCard
@@ -179,6 +187,7 @@ export function HighlightsBoard({ sessions, projects, lang }: HighlightsBoardPro
           )}
           prompt={truncate(mostToolCalls.first_prompt, 90)}
           project={formatProjectName(mostToolCalls.project_path ?? '')}
+          style={topProjectEntry ? {} : lastStyle}
         />
 
         {topProjectEntry && (
@@ -193,16 +202,19 @@ export function HighlightsBoard({ sessions, projects, lang }: HighlightsBoardPro
               : null}
             prompt={formatProjectName(topProjectEntry[0])}
             project={`${topProjectEntry[0]}`}
+            style={lastStyle}
           />
         )}
 
       </div>
+      )
+      })()}
     </>
   )
 }
 
 function HighlightCard({
-  label, icon, accent, value, valueSub, comparison, prompt, project,
+  label, icon, accent, value, valueSub, comparison, prompt, project, style: extraStyle,
 }: {
   label: string
   icon: React.ReactNode
@@ -212,6 +224,7 @@ function HighlightCard({
   comparison?: string | null
   prompt?: string
   project?: string
+  style?: React.CSSProperties
 }) {
   const [hovered, setHovered] = useState(false)
 
@@ -220,7 +233,7 @@ function HighlightCard({
       className="hl-card"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      style={{ borderColor: hovered ? `${accent}50` : 'var(--border)' }}
+      style={{ borderColor: hovered ? `${accent}50` : 'var(--border)', ...extraStyle }}
     >
       {/* Ambient glow — top-left radial */}
       <div style={{

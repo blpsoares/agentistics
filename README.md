@@ -39,6 +39,7 @@
 - [Available Filters](#available-filters)
 - [Charts and Visualizations](#charts-and-visualizations)
 - [Statistics Cards](#statistics-cards)
+- [Live Updates](#live-updates)
 - [PDF Export](#pdf-export)
 - [Themes and Languages](#themes-and-languages)
 - [Architecture and Tech Stack](#architecture-and-tech-stack)
@@ -290,13 +291,16 @@ git -C <project_path> log --numstat --after="<start>" --before="<end>"
 
 ### Model
 
-- Dropdown with all models detected in history
-- Single selection: "All" or a specific model
+- Multi-select dropdown with checkboxes — select one or more models simultaneously
+- Metrics aggregate across all selected models
+- Models not used in the active project are shown as disabled (greyed out)
+- Selecting a project automatically clears the model selection
+- Badge shows the number of selected models when more than one is chosen
 
 ### Reset
 
 - Button appears automatically when any filter is active
-- Resets: period → All, dates → empty, projects → none, model → all
+- Resets: period → All, dates → empty, projects → none, models → all
 
 ---
 
@@ -437,6 +441,25 @@ Detects and counts reads of agent instruction/configuration files:
 
 ---
 
+## Live Updates
+
+The header contains a **Live** pill that keeps the dashboard in sync with your Claude activity in real time.
+
+| Control | Description |
+|---------|-------------|
+| **Live toggle** | iPhone-style switch — enables/disables real-time polling |
+| **Interval selector** | Update frequency: 10s · 30s · 1m · 5m · 30m |
+| **⚡ Risky mode** | Unlocks sub-10s intervals (1s · 2s · 5s). May increase CPU/IO load. Auto-resets to 10s when disabled. |
+| **✨ Highlight toggle** | When enabled, sections that changed in the last update briefly glow with an orange outline animation, making it easy to spot what updated |
+
+### Update highlights
+
+Every section and every stat card has a unique `data-flash-id`. When new data arrives and a value changes, the affected element flashes with a 1.2s ease-out orange glow (`liveFlash` CSS animation). The reflow trick (`void el.offsetWidth`) ensures the animation restarts correctly even if the same element updates twice in quick succession.
+
+Sections tracked individually: stat cards (each card independently), activity chart, heatmap, hourly usage, model breakdown, top projects, tool metrics, agent metrics, recent sessions, highlights board.
+
+---
+
 ## PDF Export
 
 The export modal allows configuring a complete report:
@@ -454,6 +477,7 @@ The export modal allows configuring a complete report:
 
 **Options:**
 - Period independent of active filters (7d / 30d / 90d / All)
+- Project and model filters (inherits the active dashboard filters)
 - PDF theme: Light or Dark
 - Live preview of selections
 
@@ -695,6 +719,20 @@ service:
 ## Changelog
 
 See [releases](https://github.com/blpsoares/agentistics/releases) for the full version history.
+
+---
+
+## Star History
+
+<p align="center">
+  <a href="https://star-history.com/#blpsoares/agentistics&Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=blpsoares/agentistics&type=Date&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=blpsoares/agentistics&type=Date" />
+      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=blpsoares/agentistics&type=Date" />
+    </picture>
+  </a>
+</p>
 
 ---
 

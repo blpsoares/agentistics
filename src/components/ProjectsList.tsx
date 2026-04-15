@@ -23,10 +23,13 @@ export function ProjectsList({ projectStats, onFilter }: Props) {
     )
   }
 
+  const isOdd = entries.length % 2 !== 0
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-      {entries.map(([path, stats]) => {
+      {entries.map(([path, stats], i) => {
         const pct = stats.sessions / maxSessions
+        const isLast = i === entries.length - 1
         return (
           <div
             key={path}
@@ -42,6 +45,7 @@ export function ProjectsList({ projectStats, onFilter }: Props) {
               cursor: onFilter ? 'pointer' : 'default',
               transition: 'border-color 0.15s, background 0.15s',
               minWidth: 0,
+              gridColumn: isOdd && isLast ? 'span 2' : undefined,
             }}
             onMouseEnter={e => {
               if (!onFilter) return
