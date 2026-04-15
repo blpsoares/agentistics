@@ -27,6 +27,10 @@
   <a href="#install"><strong>Install in one line →</strong></a>
 </p>
 
+<p align="center">
+  <video src="https://github.com/blpsoares/agentistics/releases/download/v1.1.0/presentation.mp4" width="100%" controls></video>
+</p>
+
 ---
 
 ## Table of Contents
