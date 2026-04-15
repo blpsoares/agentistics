@@ -199,8 +199,9 @@ All prices are per **1 million tokens (1M)**:
 | Claude Opus 4.6 / 4.5 | $5.00 | $25.00 | $0.50 | $6.25 |
 | Claude Opus 4.1 / 4.0 | $15.00 | $75.00 | $1.50 | $18.75 |
 | Claude Sonnet 4.6 / 4.5 / 4.0 | $3.00 | $15.00 | $0.30 | $3.75 |
-| Claude Haiku 4.5 | $0.80 | $4.00 | $0.08 | $1.00 |
-| Claude Haiku 3.5 / 3.0 | $0.25 | $1.25 | $0.03 | $0.30 |
+| Claude Haiku 4.5 | $1.00 | $5.00 | $0.10 | $1.25 |
+| Claude Haiku 3.5 | $0.80 | $4.00 | $0.08 | $1.00 |
+| Claude Haiku 3.0 | $0.25 | $1.25 | $0.03 | $0.30 |
 
 ### Cost Formula
 
@@ -300,7 +301,7 @@ git -C <project_path> log --numstat --after="<start>" --before="<end>"
 ### Reset
 
 - Button appears automatically when any filter is active
-- Resets: period → All, dates → empty, projects → none, models → all
+- Resets: period → All, dates → empty, projects → none, models → none (all)
 
 ---
 
@@ -394,7 +395,7 @@ All cards are **drag-and-drop** and the order is saved in `localStorage`. Each o
 |------|--------|-------|
 | **Messages** | Total user + assistant | Displays average per session |
 | **Sessions** | Session count | Displays average messages/session |
-| **Tools** | Total tool calls | Displays most used tool |
+| **Tools** | Total tool calls | Displays total executions |
 | **Input Tokens** | Tokens sent to the model | With cache breakdown |
 | **Output Tokens** | Tokens generated | |
 | **Estimated Cost** | USD/BRL (toggle) | Uses official Anthropic prices |
@@ -443,20 +444,30 @@ Detects and counts reads of agent instruction/configuration files:
 
 ## Live Updates
 
-The header contains a **Live** pill that keeps the dashboard in sync with your Claude activity in real time.
+The header contains a **Live** pill with three elements:
 
-| Control | Description |
+| Element | Description |
 |---------|-------------|
-| **Live toggle** | iPhone-style switch — enables/disables real-time polling |
-| **Interval selector** | Update frequency: 10s · 30s · 1m · 5m · 30m |
-| **⚡ Risky mode** | Unlocks sub-10s intervals (1s · 2s · 5s). May increase CPU/IO load. Auto-resets to 10s when disabled. |
-| **✨ Highlight toggle** | When enabled, sections that changed in the last update briefly glow with an orange outline animation, making it easy to spot what updated |
+| **Toggle switch** | iPhone-style switch — enables/disables real-time polling |
+| **Interval badge** | Shows the current update interval (e.g. `30s`). Red with `⚡` prefix when a risky interval is active. |
+| **⚙ Settings gear** | Opens the live settings modal |
+
+### Live settings modal
+
+Click the gear icon to open the settings panel:
+
+| Setting | Description |
+|---------|-------------|
+| **Live updates** | Master on/off toggle |
+| **Update interval** | Pill buttons: 10s · 30s · 1m · 5m. Selecting an interval also turns live on if it was off. |
+| **⚡ Risky mode** | Unlocks sub-10s intervals (1s · 2s · 5s). Risky options appear highlighted in red. Auto-resets interval to 10s when disabled. May increase CPU/IO load. |
+| **✨ Update highlights** | When enabled, sections that changed in the last update briefly glow with an orange outline animation, making it easy to spot what updated. |
 
 ### Update highlights
 
-Every section and every stat card has a unique `data-flash-id`. When new data arrives and a value changes, the affected element flashes with a 1.2s ease-out orange glow (`liveFlash` CSS animation). The reflow trick (`void el.offsetWidth`) ensures the animation restarts correctly even if the same element updates twice in quick succession.
+Every section and stat card has a unique `data-flash-id` attribute. When new data arrives and a value changes, the affected element receives a 1.2s ease-out orange glow (`liveFlash` CSS animation). The reflow trick (`void el.offsetWidth`) ensures the animation restarts correctly if the same element updates twice in a row.
 
-Sections tracked individually: stat cards (each card independently), activity chart, heatmap, hourly usage, model breakdown, top projects, tool metrics, agent metrics, recent sessions, highlights board.
+Sections tracked individually: each stat card, activity chart, heatmap, hourly usage, model breakdown, top projects, tool metrics, agent metrics, recent sessions, highlights board.
 
 ---
 
@@ -540,6 +551,7 @@ agentistics/
 │   ├── components/
 │   │   ├── ActivityChart.tsx
 │   │   ├── ActivityHeatmap.tsx
+│   │   ├── AgentMetricsPanel.tsx
 │   │   ├── DatePicker.tsx
 │   │   ├── FiltersBar.tsx
 │   │   ├── HealthWarnings.tsx

@@ -9,12 +9,12 @@ Local analytics dashboard for AI coding assistants. Visualizes tokens, costs, ac
 ## Architecture
 
 ```
-cli.ts  (binary entry point — agentop)
-  ├── agentop server  → server.ts + watcher.ts (always together)
-  ├── agentop tui     → watch-cli.ts (standalone)
-  └── agentop watch   → watcher.ts (daemon only)
+bin/cli.ts  (binary entry point — agentop)
+  ├── agentop server  → server/index.ts + server/otel-watcher.ts (always together)
+  ├── agentop tui     → src/tui/index.ts (standalone)
+  └── agentop watch   → server/otel-watcher.ts (daemon only)
 
-server.ts (Bun, port 3001) — thin entry point, ~150 lines
+server/index.ts (Bun, port 3001) — thin entry point, ~150 lines
   └── delegates to server/ modules (see below)
 
 server/                    — server-side modules (never bundled by Vite)
@@ -26,14 +26,18 @@ server/                    — server-side modules (never bundled by Vite)
   ├── rates.ts             → pricing scraper + BRL rate cache
   ├── sse.ts               → SSE clients, chokidar watcher, serveStatic, maybeSpawnWatcher
   ├── data.ts              → loadSessionMetas, scanProjects, buildApiResponse (main orchestrator)
-  └── agent-metrics.ts     → extractAgentMetrics (parses Agent tool_use from JSONL)
+  ├── agent-metrics.ts     → extractAgentMetrics (parses Agent tool_use from JSONL)
+  └── otel-watcher.ts      → chokidar file watcher + OTLP metrics export daemon
 
 src/ (React + Vite, port 5173 in dev)
   ├── lib/
   │   ├── types.ts         → all shared types + pricing functions (single source of truth)
+  │   ├── i18n.ts          → PT/EN translations
   │   └── otel.ts          → OpenTelemetry helpers
   ├── hooks/
   │   └── useData.ts       → fetches /api/data + SSE subscription + useDerivedStats()
+  ├── tui/
+  │   └── index.ts         → terminal TUI (live stats in the terminal, no browser needed)
   └── components/          → UI (charts, cards, heatmap, PDF export)
 
 scripts/embed-dist.ts
@@ -48,23 +52,23 @@ scripts/embed-dist.ts
 ### `MODEL_PRICING` — pricing table (USD per 1M tokens)
 
 ```
-src/lib/types.ts — lines 133–146
+src/lib/types.ts — line 183
 ```
 
-Update here when Anthropic changes prices or releases new models. Fallback (Sonnet 4.6: $3/$15) is on line 153.
+Update here when Anthropic changes prices or releases new models. Fallback (Sonnet 4.6: $3/$15) is the return value of `getModelPrice` when no match is found.
 
 ### `getModelPrice(modelId)` — resolves price by model ID
 
 ```
-src/lib/types.ts — line 148
+src/lib/types.ts — line 198
 ```
 
-Tries exact match, then partial match via `startsWith` in both directions. Returns Sonnet fallback if no match.
+Tries exact match, then partial match via `startsWith` in both directions. Returns Sonnet 4.6 fallback if no match.
 
 ### `calcCost(usage, modelId)` — total cost from a usage record
 
 ```
-src/lib/types.ts — line 156
+src/lib/types.ts — line 206
 ```
 
 Takes a `ModelUsage` object (input, output, cacheRead, cacheWrite in tokens) and returns cost in USD.
@@ -91,7 +95,7 @@ Only active when `SERVE_STATIC=1` (set by `cli.ts` for the `server` subcommand).
 
 | Layer | What it calculates | How |
 |-------|--------------------|-----|
-| `useData.ts / useDerivedStats` | Filtered `totalCostUSD` | `calcCost()` per model; `blendedCostPerToken()` when project filter is active |
+| `useData.ts / useDerivedStats` | Filtered `totalCostUSD` | `calcCost()` per model; `blendedCostPerToken()` when project or model filter is active and per-session breakdown is needed |
 | `ModelBreakdown.tsx` | Per-model cost in the UI | `calcCost()` |
 | `PDFExportModal.tsx` | Per-model cost in PDF | `calcCost()` |
 | `PDFExportModal.tsx` | Per-session cost in PDF | `blendedCostPerToken(statsCache.modelUsage)` — sessions have no individual model field |
@@ -145,7 +149,7 @@ Agent metrics are extracted from raw JSONL files by `server/agent-metrics.ts`. T
 
 - **`stats-cache.json`** has no project-level granularity — project filters are computed by summing individual sessions
 - **Tokens per model/day**: `dailyModelTokens` only stores totals; input/output split uses global statsCache proportions as an approximation when filtering by date
-- **Sessions have no individual model field** — use `blendedCostPerToken` for per-session cost estimates
+- **Sessions have an optional `model` field** — extracted from the JSONL file by `server/data.ts` when not already present in session-meta. Use `blendedCostPerToken` as fallback when `model` is unknown (e.g. per-session cost column in PDF export)
 - **Agent metrics** are only available for sessions whose JSONL files are accessible; `_source: 'meta'`-only sessions won't have them
 - **Streak**: counts backwards from today; if today has no activity, starts from yesterday — intentional behavior so users are not penalized for not having worked yet today
 - **BRL costs**: conversion via `/api/rates` (fetches live exchange rate); falls back to a fixed rate if the API fails
