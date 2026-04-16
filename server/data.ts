@@ -256,14 +256,26 @@ async function scanProjectDir(
   }
 }
 
-export async function scanProjects(knownIds: Set<string>, metaMap: Map<string, SessionMeta>): Promise<ScanResult> {
+export async function scanProjects(
+  knownIds: Set<string>,
+  metaMap: Map<string, SessionMeta>,
+  onProjectComplete?: (completed: number, total: number) => void,
+): Promise<ScanResult> {
   // Separate limiter just for file reads (not project dir traversal)
   const fileLimit = createLimiter(30)
   const projectDirs = await safeReadDir(PROJECTS_DIR)
+  let completed = 0
+  const total = projectDirs.length
 
   // Process project dirs in parallel (they mostly do readdirs + parallel file reads)
   const results = await Promise.all(
-    projectDirs.map(projDir => scanProjectDir(projDir, knownIds, metaMap, fileLimit))
+    projectDirs.map(projDir =>
+      scanProjectDir(projDir, knownIds, metaMap, fileLimit).then(r => {
+        completed++
+        onProjectComplete?.(completed, total)
+        return r
+      })
+    )
   )
 
   const projects: ServerProject[] = []
@@ -294,21 +306,83 @@ export function enrichProjectSessions(projects: ServerProject[], metaMap: Map<st
   }
 }
 
+// ---------------------------------------------------------------------------
+// In-memory cache — shared Promise so concurrent requests join the same
+// computation instead of spawning separate ones.
+//
+// State machine:
+//   'idle'      → no computation, next request starts one
+//   'computing' → in-flight; all requests (including invalidation) wait for it
+//   'done'      → resolved; served from cache until TTL expires or invalidated
+//
+// invalidateCache() transitions 'done' → 'idle' so the next request recomputes.
+// While 'computing', invalidations are no-ops — the current computation is used.
+// ---------------------------------------------------------------------------
+
+const CACHE_TTL_MS = 30_000
+
+type CacheStatus = 'idle' | 'computing' | 'done'
+
+let _status: CacheStatus = 'idle'
+let _promise: Promise<ApiResponse> | null = null
+let _resolvedAt = 0
+
+export function invalidateCache(): void {
+  if (_status === 'done') _status = 'idle'
+  // 'computing': no-op — let the in-flight computation finish
+}
+
 export async function buildApiResponse(): Promise<ApiResponse> {
-  const timeoutMs = 25000
+  if (_status === 'computing') return _promise!
+  if (_status === 'done' && Date.now() - _resolvedAt < CACHE_TTL_MS) return _promise!
+
+  _status = 'computing'
+  _promise = _buildApiResponse()
+    .then(result => {
+      _status = 'done'
+      _resolvedAt = Date.now()
+      return result
+    })
+    .catch(err => {
+      _status = 'idle'
+      _promise = null
+      throw err
+    })
+  return _promise
+}
+
+type ProgressFn = (stage: string, progress: number, detail?: string) => void
+
+async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiResponse> {
+  const timeoutMs = 300_000 // 5 minutes
 
   const buildPromise = async () => {
+    onProgress('statsCache', 0)
+    onProgress('sessions', 0)
+    onProgress('health', 0)
+
     const [statsCache, metaMap, healthIssues] = await Promise.all([
-      safeReadJson<StatsCache>(STATS_CACHE_FILE).then(v => v ?? ({} as StatsCache)),
-      loadSessionMetas(),
-      runHealthChecks(),
+      safeReadJson<StatsCache>(STATS_CACHE_FILE)
+        .then(v => { onProgress('statsCache', 1); return v ?? ({} as StatsCache) }),
+      loadSessionMetas()
+        .then(v => { onProgress('sessions', 1, String(v.size)); return v }),
+      runHealthChecks()
+        .then(v => { onProgress('health', 1); return v }),
     ])
 
+    onProgress('projects', 0)
     const knownIds = new Set(metaMap.keys())
-    const { projects, extraSessions } = await scanProjects(knownIds, metaMap)
+    const { projects, extraSessions } = await scanProjects(
+      knownIds,
+      metaMap,
+      (done, total) => onProgress('projects', total > 0 ? done / total : 1),
+    )
+    onProgress('projects', 1, String(projects.length))
 
     // Enrich project session created timestamps from meta where possible
     enrichProjectSessions(projects, metaMap)
+
+    onProgress('finalizing', 0)
 
     const metaSessions = Array.from(metaMap.values())
     const allSessionsRaw: SessionMeta[] = [...metaSessions, ...extraSessions]
@@ -331,13 +405,78 @@ export async function buildApiResponse(): Promise<ApiResponse> {
     // Post-processing health checks based on session data (tool metrics)
     analyzeToolHealthIssues(sessions, healthIssues)
 
+    const totalTokens = sessions.reduce((sum, s) => sum + (s.input_tokens ?? 0) + (s.output_tokens ?? 0), 0)
+    onProgress('finalizing', 1, String(totalTokens))
+
     return { statsCache, projects, allSessions: [] as [], sessions, healthIssues, homeDir: HOME_DIR }
   }
 
   return Promise.race([
     buildPromise(),
     new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Request timed out after 9.5s')), timeoutMs)
+      setTimeout(() => reject(new Error('Request timed out after 5 minutes')), timeoutMs)
     ),
   ])
 }
+
+async function _buildApiResponse(): Promise<ApiResponse> {
+  return _buildApiResponseCore(() => {})
+}
+
+// Pub/sub: multiple concurrent stream requests (e.g. React Strict Mode double-firing effects)
+// share one real computation instead of fake progress timers.
+const _progressListeners = new Set<ProgressFn>()
+const _progressSnapshot: Record<string, { progress: number; detail?: string }> = {}
+
+function _broadcastProgress(stage: string, progress: number, detail?: string) {
+  _progressSnapshot[stage] = { progress, detail }
+  for (const fn of _progressListeners) {
+    try { fn(stage, progress, detail) } catch { /* subscriber disconnected */ }
+  }
+}
+
+/** Streams a build with real per-stage progress. Concurrent callers share one computation. */
+export async function buildApiResponseStream(onProgress: ProgressFn): Promise<ApiResponse> {
+  const STAGES = ['statsCache', 'sessions', 'health', 'projects', 'finalizing'] as const
+
+  // Cache is fresh — all stages done instantly
+  if (_status === 'done' && Date.now() - _resolvedAt < CACHE_TTL_MS) {
+    for (const s of STAGES) onProgress(s, 1)
+    return _promise!
+  }
+
+  // Computation in flight — subscribe to real progress. Replay snapshot for already-done stages.
+  if (_status === 'computing' && _promise) {
+    for (const [stage, snap] of Object.entries(_progressSnapshot)) {
+      onProgress(stage, snap.progress, snap.detail)
+    }
+    _progressListeners.add(onProgress)
+    try {
+      return await _promise
+    } finally {
+      _progressListeners.delete(onProgress)
+    }
+  }
+
+  // Fresh computation — broadcast real progress to all subscribers
+  _progressListeners.clear()
+  for (const k of Object.keys(_progressSnapshot)) delete _progressSnapshot[k]
+  _progressListeners.add(onProgress)
+
+  _status = 'computing'
+  _promise = _buildApiResponseCore(_broadcastProgress)
+    .then(result => {
+      _status = 'done'
+      _resolvedAt = Date.now()
+      _progressListeners.clear()
+      return result
+    })
+    .catch(err => {
+      _status = 'idle'
+      _promise = null
+      _progressListeners.clear()
+      throw err
+    })
+  return _promise
+}
+

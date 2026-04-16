@@ -2,7 +2,7 @@
 
 import { PORT } from './config'
 import { getRates } from './rates'
-import { buildApiResponse } from './data'
+import { buildApiResponse, buildApiResponseStream } from './data'
 import {
   sseClients,
   sseEncoder,
@@ -18,6 +18,7 @@ import {
 
 setupFileWatcher()
 maybeSpawnWatcher()
+
 
 // ---------------------------------------------------------------------------
 // CORS headers
@@ -36,6 +37,7 @@ const CORS_HEADERS = {
 try {
 Bun.serve({
   port: PORT,
+  idleTimeout: 60,
   async fetch(req) {
     const url = new URL(req.url)
 
@@ -94,6 +96,39 @@ Bun.serve({
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
+    }
+
+    if (url.pathname === '/api/data-stream' && req.method === 'GET') {
+      const enc = new TextEncoder()
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const send = (eventName: string, data: unknown) => {
+            try {
+              controller.enqueue(enc.encode(`event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`))
+            } catch { /* client disconnected */ }
+          }
+          try {
+            await buildApiResponseStream((stage, progress, detail) => {
+              send('progress', { stage, progress, detail })
+            })
+            send('done', {})
+          } catch (err) {
+            send('error', { message: err instanceof Error ? err.message : String(err) })
+          } finally {
+            try { controller.close() } catch { /* already closed */ }
+          }
+        },
+      })
+      return new Response(stream, {
+        status: 200,
+        headers: {
+          ...CORS_HEADERS,
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no',
+        },
+      })
     }
 
     if (url.pathname === '/api/data' && req.method === 'GET') {

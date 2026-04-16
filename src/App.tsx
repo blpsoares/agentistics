@@ -5,8 +5,10 @@ import {
   Wrench, RefreshCw, FileCode, TrendingUp, BarChart2,
   Sun, Moon, Globe, AlertTriangle, Download, Upload,
   Maximize2, X, GripVertical, Trophy, Activity, Bot, Sparkles, Settings,
+  Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
+import type { LoadProgress } from './hooks/useData'
 import type { Filters } from './lib/types'
 import type { Lang, Theme } from './lib/types'
 import { formatProjectName, setHomeDir, MODEL_PRICING } from './lib/types'
@@ -25,6 +27,191 @@ import { HealthWarnings } from './components/HealthWarnings'
 import { ToolMetricsPanel } from './components/ToolMetricsPanel'
 import { AgentMetricsPanel } from './components/AgentMetricsPanel'
 import { format, parseISO, parse } from 'date-fns'
+
+// Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
+const LOAD_STAGES: { key: string; labelPt: string; labelEn: string; icon: React.ReactNode; phase: 1 | 2 | 3 }[] = [
+  { key: 'statsCache', labelPt: 'Cache de estatísticas', labelEn: 'Stats cache',   icon: <Database size={13} />, phase: 1 },
+  { key: 'sessions',   labelPt: 'Metadados de sessões',  labelEn: 'Session data',  icon: <FileText size={13} />, phase: 1 },
+  { key: 'health',     labelPt: 'Verificações de saúde', labelEn: 'Health checks', icon: <Shield size={13} />,   phase: 1 },
+  { key: 'projects',   labelPt: 'Escaneando projetos',   labelEn: 'Project scan',  icon: <FolderOpen size={13} />, phase: 2 },
+  { key: 'finalizing', labelPt: 'Totalizando tokens',    labelEn: 'Counting tokens', icon: <Zap size={13} />,    phase: 3 },
+]
+
+function formatStageDetail(key: string, detail: string, lang: string): string {
+  const n = Number(detail)
+  if (isNaN(n) || n === 0) return ''
+  if (key === 'sessions') return `${n.toLocaleString()} ${lang === 'pt' ? 'sessões' : 'sessions'}`
+  if (key === 'projects') return `${n.toLocaleString()} ${lang === 'pt' ? 'projetos' : 'projects'}`
+  if (key === 'finalizing') {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M tokens`
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K tokens`
+    return `${n.toLocaleString()} tokens`
+  }
+  return n.toLocaleString()
+}
+
+function LoadingScreen({ lang, loadProgress }: { lang: string; loadProgress: LoadProgress }) {
+  // Group phase 1 stages to show parallel badge
+  const phase1Done = ['statsCache', 'sessions', 'health'].filter(k => loadProgress[k]?.status === 'done').length
+
+  return (
+    <div style={{
+      minHeight: '100vh',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 28,
+      background: 'var(--bg-base)',
+    }}>
+      <style>{`
+        @keyframes loadShimmer {
+          0%{background-position:200% center}
+          100%{background-position:-200% center}
+        }
+        @keyframes loadIndeterminate {
+          0%{transform:translateX(-100%)}
+          100%{transform:translateX(400%)}
+        }
+        @keyframes loadFadeUp {
+          from{opacity:0;transform:translateY(10px)}
+          to{opacity:1;transform:translateY(0)}
+        }
+        @keyframes loadIconGlow {
+          0%,100%{box-shadow:0 0 0 0 rgba(217,119,6,0),0 0 10px 2px rgba(217,119,6,0.2)}
+          50%{box-shadow:0 0 0 6px rgba(217,119,6,0),0 0 20px 5px rgba(217,119,6,0.35)}
+        }
+      `}</style>
+
+      {/* Icon */}
+      <div style={{ animation: 'loadFadeUp 0.35s ease-out both' }}>
+        <div style={{
+          width: 48, height: 48,
+          background: 'var(--anthropic-orange-dim)',
+          borderRadius: 14,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          animation: 'loadIconGlow 2.2s ease-in-out infinite',
+        }}>
+          <BarChart2 size={22} color="var(--anthropic-orange)" />
+        </div>
+      </div>
+
+      {/* Title + subtitle */}
+      <div style={{ textAlign: 'center', animation: 'loadFadeUp 0.35s ease-out 0.08s both' }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 5, letterSpacing: '-0.01em' }}>
+          agentistics
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+          {lang === 'pt' ? 'Carregando seus dados...' : 'Loading your data...'}
+        </div>
+      </div>
+
+      {/* Stage progress bars */}
+      <div style={{
+        width: 340,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        animation: 'loadFadeUp 0.35s ease-out 0.16s both',
+      }}>
+        {/* Phase label */}
+        {phase1Done < 3 && (
+          <div style={{ fontSize: 10, color: 'var(--text-tertiary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 2 }}>
+            {lang === 'pt' ? '⇉ Paralelo' : '⇉ Parallel'}
+          </div>
+        )}
+
+        {LOAD_STAGES.map((stage, idx) => {
+          const sp = loadProgress[stage.key]
+          const progress = sp?.progress ?? 0
+          const status = sp?.status ?? 'pending'
+          const label = lang === 'pt' ? stage.labelPt : stage.labelEn
+          const pct = Math.round(progress * 100)
+          const detailStr = sp?.detail ? formatStageDetail(stage.key, sp.detail, lang) : ''
+          // For phase separator
+          const prevStage = LOAD_STAGES[idx - 1]
+          const showSeparator = prevStage && prevStage.phase !== stage.phase && phase1Done === 3
+
+          return (
+            <React.Fragment key={stage.key}>
+              {showSeparator && (
+                <div style={{ height: 1, background: 'var(--border)', opacity: 0.4, margin: '2px 0' }} />
+              )}
+              <div>
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: 6,
+                }}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 7,
+                    color: status === 'pending' ? 'var(--text-tertiary)' : 'var(--text-secondary)',
+                    transition: 'color 0.25s',
+                  }}>
+                    <span style={{ opacity: status === 'pending' ? 0.35 : 0.8, display: 'flex', transition: 'opacity 0.25s' }}>
+                      {stage.icon}
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 500 }}>
+                      {label}
+                      {detailStr && status === 'done' && (
+                        <span style={{ color: 'var(--text-tertiary)', fontWeight: 400, marginLeft: 7, fontSize: 11 }}>
+                          {detailStr}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <span style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: status === 'done' ? 'var(--anthropic-orange)' : status === 'active' ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+                    transition: 'color 0.25s',
+                    minWidth: 34,
+                    textAlign: 'right',
+                    fontVariantNumeric: 'tabular-nums',
+                  }}>
+                    {status === 'pending' ? '—' : status === 'done' ? '✓' : pct > 0 ? `${pct}%` : '…'}
+                  </span>
+                </div>
+                {/* Bar track */}
+                <div style={{ height: 4, background: 'var(--bg-elevated)', borderRadius: 2, overflow: 'hidden', position: 'relative' }}>
+                  {status === 'active' && pct === 0 ? (
+                    // Indeterminate — shows loading activity before real progress arrives
+                    <div style={{
+                      position: 'absolute',
+                      top: 0, bottom: 0,
+                      width: '35%',
+                      borderRadius: 2,
+                      background: 'linear-gradient(90deg, transparent, rgba(217,119,6,0.55), transparent)',
+                      animation: 'loadIndeterminate 1.6s ease-in-out infinite',
+                    }} />
+                  ) : (
+                    <div style={{
+                      height: '100%',
+                      width: status === 'done' ? '100%' : `${pct}%`,
+                      minWidth: status === 'active' && pct > 0 && pct < 100 ? 10 : undefined,
+                      borderRadius: 2,
+                      ...(status === 'active' ? {
+                        backgroundImage: 'linear-gradient(90deg, var(--anthropic-orange) 0%, rgba(217,119,6,0.5) 50%, var(--anthropic-orange) 100%)',
+                        backgroundSize: '200% 100%',
+                        animation: 'loadShimmer 1.8s linear infinite',
+                      } : {
+                        background: status === 'done' ? 'var(--anthropic-orange)' : 'transparent',
+                      }),
+                      transition: 'width 0.3s ease-out',
+                    }} />
+                  )}
+                </div>
+              </div>
+            </React.Fragment>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
 
 function Section({ title, children, action, onExpand, flashId, style: extraStyle }: {
   title: React.ReactNode
@@ -371,7 +558,7 @@ function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string
 }
 
 export default function App() {
-  const { data, loading, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
+  const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
   const [showLiveSettings, setShowLiveSettings] = useState(false)
   const [lang, setLang] = useState<Lang>('en')
@@ -672,128 +859,7 @@ export default function App() {
   }, [filters.projects.length, lang])
 
   if (loading) {
-    const bars = [
-      { anim: 'eq1', delay: '0s',    opacity: 0.45 },
-      { anim: 'eq2', delay: '0.12s', opacity: 0.65 },
-      { anim: 'eq3', delay: '0.22s', opacity: 0.85 },
-      { anim: 'eq4', delay: '0.08s', opacity: 1    },
-      { anim: 'eq5', delay: '0.18s', opacity: 0.85 },
-      { anim: 'eq6', delay: '0.28s', opacity: 0.65 },
-      { anim: 'eq7', delay: '0.38s', opacity: 0.45 },
-      { anim: 'eq8', delay: '0.05s', opacity: 0.30 },
-      { anim: 'eq9', delay: '0.32s', opacity: 0.25 },
-    ]
-    const ptTexts = ['Lendo conversas...', 'Contando tokens...', 'Construindo métricas...']
-    const enTexts = ['Reading conversations...', 'Counting tokens...', 'Building metrics...']
-    const texts = lang === 'pt' ? ptTexts : enTexts
-    return (
-      <div style={{
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 28,
-        background: 'var(--bg-base)',
-      }}>
-        <style>{`
-          @keyframes eq1 { 0%,100%{height:22%} 25%{height:88%} 60%{height:35%} }
-          @keyframes eq2 { 0%,100%{height:55%} 20%{height:30%} 65%{height:95%} }
-          @keyframes eq3 { 0%,100%{height:75%} 30%{height:55%} 70%{height:45%} }
-          @keyframes eq4 { 0%,100%{height:40%} 15%{height:100%} 55%{height:60%} }
-          @keyframes eq5 { 0%,100%{height:65%} 35%{height:40%} 75%{height:85%} }
-          @keyframes eq6 { 0%,100%{height:45%} 20%{height:78%} 60%{height:28%} }
-          @keyframes eq7 { 0%,100%{height:85%} 40%{height:22%} 70%{height:65%} }
-          @keyframes eq8 { 0%,100%{height:30%} 25%{height:70%} 55%{height:15%} }
-          @keyframes eq9 { 0%,100%{height:18%} 35%{height:55%} 65%{height:80%} }
-          @keyframes iconGlow {
-            0%,100%{box-shadow:0 0 0 0 rgba(217,119,6,0),0 0 12px 2px rgba(217,119,6,0.25)}
-            50%{box-shadow:0 0 0 8px rgba(217,119,6,0),0 0 24px 6px rgba(217,119,6,0.45)}
-          }
-          @keyframes ring1 { 0%,100%{transform:scale(1);opacity:0.5} 50%{transform:scale(1.18);opacity:0.1} }
-          @keyframes ring2 { 0%,100%{transform:scale(1);opacity:0.25} 50%{transform:scale(1.32);opacity:0.05} }
-          @keyframes scanBar {
-            0%{left:-100%} 100%{left:200%}
-          }
-          @keyframes txt1 { 0%,26%{opacity:1;transform:translateY(0)} 33%,100%{opacity:0;transform:translateY(-7px)} }
-          @keyframes txt2 { 0%,32%{opacity:0;transform:translateY(7px)} 39%,59%{opacity:1;transform:translateY(0)} 66%,100%{opacity:0;transform:translateY(-7px)} }
-          @keyframes txt3 { 0%,65%{opacity:0;transform:translateY(7px)} 72%,93%{opacity:1;transform:translateY(0)} 100%{opacity:0;transform:translateY(-7px)} }
-        `}</style>
-
-        {/* Icon with glow rings */}
-        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{
-            position: 'absolute',
-            width: 72, height: 72,
-            borderRadius: '50%',
-            border: '1px solid rgba(217,119,6,0.3)',
-            animation: 'ring1 2.4s ease-in-out infinite',
-          }}/>
-          <div style={{
-            position: 'absolute',
-            width: 96, height: 96,
-            borderRadius: '50%',
-            border: '1px solid rgba(217,119,6,0.15)',
-            animation: 'ring2 2.4s ease-in-out infinite 0.4s',
-          }}/>
-          <div style={{
-            width: 48, height: 48,
-            background: 'var(--anthropic-orange-dim)',
-            borderRadius: 14,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            animation: 'iconGlow 2.4s ease-in-out infinite',
-          }}>
-            <BarChart2 size={22} color="var(--anthropic-orange)" />
-          </div>
-        </div>
-
-        {/* Equalizer bars */}
-        <div style={{ position: 'relative', overflow: 'hidden', padding: '0 2px' }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'flex-end',
-            gap: 5,
-            height: 48,
-          }}>
-            {bars.map((bar, i) => (
-              <div key={i} style={{
-                width: 5,
-                height: '60%',
-                background: `rgba(217,119,6,${bar.opacity})`,
-                borderRadius: 3,
-                animation: `${bar.anim} 1.4s ease-in-out infinite`,
-                animationDelay: bar.delay,
-              }}/>
-            ))}
-          </div>
-          {/* scan shimmer */}
-          <div style={{
-            position: 'absolute',
-            top: 0, bottom: 0,
-            width: '35%',
-            background: 'linear-gradient(90deg,transparent,rgba(217,119,6,0.12),transparent)',
-            animation: 'scanBar 2s ease-in-out infinite',
-            pointerEvents: 'none',
-          }}/>
-        </div>
-
-        {/* Cycling text */}
-        <div style={{ position: 'relative', height: 18, width: 220, textAlign: 'center' }}>
-          {texts.map((txt, i) => (
-            <div key={i} style={{
-              position: 'absolute', inset: 0,
-              color: 'var(--text-secondary)',
-              fontSize: 13,
-              letterSpacing: '0.02em',
-              animation: `txt${i + 1} 6s ease-in-out infinite`,
-              opacity: 0,
-            }}>
-              {txt}
-            </div>
-          ))}
-        </div>
-      </div>
-    )
+    return <LoadingScreen lang={lang} loadProgress={loadProgress} />
   }
 
   if (error) {
@@ -1330,6 +1396,40 @@ export default function App() {
 
       {/* Main content */}
       <main style={{ maxWidth: 1400, margin: '0 auto', padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+        {/* Session date range — reactive to active filters */}
+        {derived.firstSessionDate && derived.lastSessionDate && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 12,
+            color: 'var(--text-tertiary)',
+            flexWrap: 'wrap',
+          }}>
+            <Calendar size={12} style={{ flexShrink: 0, opacity: 0.6 }} />
+            <span style={{ fontSize: 11, opacity: 0.7 }}>
+              {lang === 'pt' ? '1ª sessão' : 'first session'}
+            </span>
+            <span style={{ color: 'var(--text-secondary)', fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
+              {format(derived.firstSessionDate, 'MMM d, yyyy')}
+            </span>
+            <span style={{ opacity: 0.4 }}>→</span>
+            <span style={{ fontSize: 11, opacity: 0.7 }}>
+              {lang === 'pt' ? 'última sessão' : 'last session'}
+            </span>
+            <span style={{ color: 'var(--text-secondary)', fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
+              {format(derived.lastSessionDate, 'MMM d, yyyy')}
+            </span>
+            <span style={{ opacity: 0.3, margin: '0 2px' }}>·</span>
+            <span>
+              <strong style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
+                {derived.sessionSpanDays.toLocaleString()}
+              </strong>
+              {' '}{lang === 'pt' ? 'dias' : 'days'}
+            </span>
+          </div>
+        )}
 
         {/* KPI Cards — draggable 5×2 grid */}
         <style>{`

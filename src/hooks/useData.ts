@@ -1,7 +1,15 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { AppData, Filters, DateRange, AgentInvocation } from '../lib/types'
 import { calcCost, getModelPrice, MODEL_PRICING } from '../lib/types'
-import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format } from 'date-fns'
+import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays } from 'date-fns'
+
+export interface StageProgress {
+  progress: number
+  detail?: string
+  status: 'pending' | 'active' | 'done'
+}
+
+export type LoadProgress = Record<string, StageProgress>
 
 export const LIVE_INTERVAL_OPTIONS = [
   { label: '10s', value: 10 },
@@ -19,52 +27,90 @@ export const LIVE_INTERVAL_OPTIONS_RISKY = [
 export function useData() {
   const [data, setData] = useState<AppData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadProgress, setLoadProgress] = useState<LoadProgress>({})
   const [error, setError] = useState<string | null>(null)
   const [liveUpdates, setLiveUpdates] = useState(true)
   const [updateInterval, setUpdateInterval] = useState(30)
+  const streamRef = useRef<EventSource | null>(null)
 
-  const fetchData = useCallback(async (showLoading = false) => {
-    if (showLoading) setLoading(true)
-    setError(null)
+  // Silent background refresh — no loading screen, no progress bars
+  const fetchData = useCallback(async () => {
     try {
       const res = await fetch('/api/data')
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json = await res.json()
-      setData(json)
-    } catch (err) {
-      setError(String(err))
-    } finally {
-      if (showLoading) setLoading(false)
+      setData(await res.json())
+    } catch { /* ignore silent update errors */ }
+  }, [])
+
+  const startStreamLoad = useCallback(() => {
+    streamRef.current?.close()
+    streamRef.current = null
+
+    setLoading(true)
+    setError(null)
+    setLoadProgress({})
+
+    const es = new EventSource('/api/data-stream')
+    streamRef.current = es
+    let settled = false
+
+    const complete = async (isError?: string) => {
+      if (settled) return
+      settled = true
+      es.close()
+      streamRef.current = null
+      try {
+        const res = await fetch('/api/data')
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        setData(await res.json())
+        if (isError) setError(null)
+      } catch (err) {
+        setError(String(err))
+      } finally {
+        setLoading(false)
+      }
     }
+
+    es.addEventListener('progress', (e: Event) => {
+      const ev = JSON.parse((e as MessageEvent).data) as { stage: string; progress: number; detail?: string }
+      setLoadProgress(prev => ({
+        ...prev,
+        [ev.stage]: {
+          progress: ev.progress,
+          detail: ev.detail,
+          status: ev.progress >= 1 ? 'done' : 'active',
+        },
+      }))
+    })
+
+    es.addEventListener('done', () => { void complete() })
+    es.onerror = () => { void complete('stream error') }
   }, [])
 
   useEffect(() => {
-    fetchData(true)
-  }, [fetchData])
+    startStreamLoad()
+    return () => { streamRef.current?.close() }
+  }, [startStreamLoad])
 
   // Subscribe to server-sent change events so the dashboard updates automatically
   // when Claude writes new session data to ~/.claude/.
-  // Only active when liveUpdates is true.
   useEffect(() => {
     if (!liveUpdates) return
     const es = new EventSource('/api/events')
-    es.addEventListener('change', () => { fetchData() })
-    es.onerror = () => {
-      // EventSource reconnects automatically; no action needed
-    }
+    es.addEventListener('change', () => { void fetchData() })
     return () => { es.close() }
   }, [liveUpdates, fetchData])
 
   // Fallback polling at the selected interval when live updates are enabled.
   useEffect(() => {
     if (!liveUpdates) return
-    const id = setInterval(() => { fetchData() }, updateInterval * 1000)
+    const id = setInterval(() => { void fetchData() }, updateInterval * 1000)
     return () => { clearInterval(id) }
   }, [liveUpdates, updateInterval, fetchData])
 
-  const refetch = useCallback(() => fetchData(true), [fetchData])
+  const refetch = useCallback(() => startStreamLoad(), [startStreamLoad])
 
-  return { data, loading, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval }
+  return { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval }
 }
 
 export function getDateRangeFilter(dateRange: DateRange, customStart?: string, customEnd?: string) {
@@ -425,6 +471,17 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const metaCoverageFrom = allMetaDates[0] ?? null
     const metaCoverageTo = allMetaDates[allMetaDates.length - 1] ?? null
 
+    // ── Session date range (reactive to active filters) ──
+    const sortedStartTimes = filteredSessions
+      .filter(s => s.start_time)
+      .map(s => s.start_time)
+      .sort()
+    const firstSessionDate = sortedStartTimes.length > 0 ? parseISO(sortedStartTimes[0]!) : null
+    const lastSessionDate = sortedStartTimes.length > 0 ? parseISO(sortedStartTimes[sortedStartTimes.length - 1]!) : null
+    const sessionSpanDays = firstSessionDate && lastSessionDate
+      ? differenceInCalendarDays(lastSessionDate, firstSessionDate) + 1
+      : filteredSessions.length > 0 ? 1 : 0
+
     return {
       totalMessages,
       totalSessions,
@@ -460,6 +517,9 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       totalAgentTokens,
       totalAgentCostUSD,
       totalAgentDurationMs,
+      firstSessionDate,
+      lastSessionDate,
+      sessionSpanDays,
     }
   }, [data, filters])
 }

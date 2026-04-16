@@ -2,6 +2,7 @@ import { join } from 'path'
 import { spawn } from 'child_process'
 import chokidar from 'chokidar'
 import { SESSION_META_DIR, PROJECTS_DIR, PORT } from './config'
+import { invalidateCache } from './data'
 
 export type SseController = ReadableStreamDefaultController<Uint8Array>
 
@@ -22,6 +23,7 @@ export function notifySseClients() {
 let sseDebounce: ReturnType<typeof setTimeout> | null = null
 
 export function triggerSseNotification() {
+  invalidateCache()
   if (sseDebounce) clearTimeout(sseDebounce)
   sseDebounce = setTimeout(notifySseClients, 2000)
 }
