@@ -360,8 +360,9 @@ export default function CustomPage() {
   // gridWidth is computed synchronously — no ResizeObserver lag when aside toggles.
   const { width: totalWidth, containerRef: outerRowRef, mounted } = useContainerWidth()
   const MIN_GRID_WIDTH = 280  // below this, RGL column widths go negative
+  const asideVisible = sidebarOpen && !locked
   const rawGridWidth = totalWidth > 0
-    ? totalWidth - (sidebarOpen ? ASIDE_WIDTH + ASIDE_GAP : 0)
+    ? totalWidth - (asideVisible ? ASIDE_WIDTH + ASIDE_GAP : 0)
     : 0
   const gridWidth = rawGridWidth > 0 ? Math.max(rawGridWidth, MIN_GRID_WIDTH) : 0
 
@@ -694,18 +695,21 @@ export default function CustomPage() {
         flexWrap: 'wrap',
         minHeight: 34,
       }}>
-        {/* Palette toggle */}
-        <button
-          className="icon-btn"
-          onClick={() => setSidebarOpen(v => !v)}
-          title={sidebarOpen ? (pt ? 'Fechar paleta' : 'Close palette') : (pt ? 'Abrir paleta' : 'Open palette')}
-          style={{ width: 30, height: 30 }}
-        >
-          {sidebarOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
-        </button>
+        {/* Palette toggle — only in edit mode */}
+        {!locked && (
+          <>
+            <button
+              className="icon-btn"
+              onClick={() => setSidebarOpen(v => !v)}
+              title={sidebarOpen ? (pt ? 'Fechar paleta' : 'Close palette') : (pt ? 'Abrir paleta' : 'Open palette')}
+              style={{ width: 30, height: 30 }}
+            >
+              {sidebarOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
+            </button>
 
-        {/* Divider */}
-        <div style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
+            <div style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
+          </>
+        )}
 
         {/* Layout name/switcher */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -1001,7 +1005,7 @@ export default function CustomPage() {
       <div ref={outerRowRef} style={{ display: 'flex', gap: sidebarOpen ? ASIDE_GAP : 0, alignItems: 'flex-start', minHeight: 'calc(100vh - 300px)' }}>
 
         {/* ─── Aside / Palette ─── */}
-        {sidebarOpen && (
+        {sidebarOpen && !locked && (
         <aside
           className="custom-aside"
           style={{
