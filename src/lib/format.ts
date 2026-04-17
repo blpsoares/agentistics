@@ -23,7 +23,7 @@ export function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1):
 }
 
 export function fmtFull(n: number): string {
-  return n.toLocaleString('en-US')
+  return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
 }
 
 export function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string {

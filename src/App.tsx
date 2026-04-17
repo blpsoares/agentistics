@@ -553,7 +553,7 @@ function LiveSettingsModal({
 }
 
 function fmtFull(n: number): string {
-  return n.toLocaleString('en-US')
+  return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
 }
 
 function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string {
@@ -768,23 +768,54 @@ export default function AppLayout() {
       .catch(() => { /* silently use defaults */ })
   }, [])
 
+  // Maps home-page flash IDs → canvas catalog component IDs so both flash together
+  const CATALOG_FLASH_MAP: Record<string, string[]> = {
+    'messages':        ['kpi.messages'],
+    'sessions':        ['kpi.sessions'],
+    'tool-calls':      ['kpi.tool-calls'],
+    'cost':            ['kpi.cost', 'costs.budget', 'costs.cache'],
+    'streak':          ['kpi.streak'],
+    'longest-session': ['kpi.longest-session'],
+    'commits':         ['kpi.commits'],
+    'files':           ['kpi.files'],
+    'input-tokens':    ['kpi.input-tokens'],
+    'output-tokens':   ['kpi.output-tokens'],
+    'activity':        ['activity.chart', 'activity.chart-messages', 'activity.chart-sessions', 'activity.chart-tools'],
+    'heatmap':         ['activity.heatmap'],
+    'hours':           ['activity.hours', 'activity.hours-bar'],
+    'models':          ['costs.model-breakdown'],
+    'projects':        ['projects.list', 'projects.languages'],
+    'tools':           ['tools.metrics'],
+    'agents':          ['tools.agents'],
+    'sessions-list':   ['sessions.recent'],
+    'highlights':      ['sessions.highlights'],
+  }
+
   const triggerFlash = useCallback((ids: string[]) => {
     if (!highlightUpdatesRef.current) return
+    const expanded = [...ids]
     for (const id of ids) {
-      const el = document.querySelector(`[data-flash-id="${id}"]`) as HTMLElement | null
-      if (!el) continue
-      if (flashTimersRef.current[id]) {
-        clearTimeout(flashTimersRef.current[id])
-        delete flashTimersRef.current[id]
-      }
-      el.classList.remove('live-flash')
-      void el.offsetWidth
-      el.classList.add('live-flash')
-      flashTimersRef.current[id] = setTimeout(() => {
-        el.classList.remove('live-flash')
-        delete flashTimersRef.current[id]
-      }, 1400)
+      const extra = CATALOG_FLASH_MAP[id]
+      if (extra) expanded.push(...extra)
     }
+    for (const id of expanded) {
+      const els = Array.from(document.querySelectorAll(`[data-flash-id="${id}"]`))
+      for (const elRaw of els) {
+        const el = elRaw as HTMLElement
+        if (flashTimersRef.current[id]) {
+          clearTimeout(flashTimersRef.current[id])
+          delete flashTimersRef.current[id]
+        }
+        el.classList.remove('live-flash')
+        void el.offsetWidth
+        el.classList.add('live-flash')
+        flashTimersRef.current[id] = setTimeout(() => {
+          el.classList.remove('live-flash')
+          delete flashTimersRef.current[id]
+        }, 1400)
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const derived = useDerivedStats(data, filters)

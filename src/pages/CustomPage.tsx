@@ -536,6 +536,12 @@ export default function CustomPage() {
           overflow: hidden;
           flex-shrink: 0;
         }
+        @keyframes liveFlash {
+          0%   { box-shadow: 0 0 0 2px rgba(217,119,6,0.55), 0 0 14px rgba(217,119,6,0.12); }
+          60%  { box-shadow: 0 0 0 2px rgba(217,119,6,0.18), 0 0 6px rgba(217,119,6,0.04); }
+          100% { box-shadow: 0 0 0 0px rgba(217,119,6,0); }
+        }
+        .live-flash { animation: liveFlash 1.2s ease-out forwards; border-radius: var(--radius-lg); }
       `}</style>
 
       {/* ─── Toolbar ─── */}
@@ -982,7 +988,7 @@ export default function CustomPage() {
                   const catalog = getCatalogItem(item.componentId)
                   if (!catalog) return <div key={item.i} />
                   return (
-                    <div key={item.i} className="grid-item-wrap" style={{ overflow: 'hidden', borderRadius: 'var(--radius-lg)' }}>
+                    <div key={item.i} className="grid-item-wrap" data-flash-id={item.componentId} style={{ overflow: 'hidden', borderRadius: 'var(--radius-lg)' }}>
                       <div
                         className={`grid-drag-handle${locked ? ' drag-handle-locked' : ''}`}
                         title={locked ? (pt ? 'Bloqueado' : 'Locked') : (pt ? 'Arrastar' : 'Drag')}

@@ -62,19 +62,19 @@ export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-or
           {onTogglePrecision && (
             <button
               onClick={onTogglePrecision}
-              title={fullPrecision ? 'Show abbreviated' : 'Show exact number'}
+              title={fullPrecision ? 'Abreviar número' : 'Ver número completo'}
               style={{
                 fontSize: 10, fontWeight: 700,
                 padding: '2px 5px', borderRadius: 4,
-                border: `1px solid ${fullPrecision ? accent : 'var(--border)'}`,
-                background: fullPrecision ? `${accent}18` : 'transparent',
-                color: fullPrecision ? accent : 'var(--text-secondary)',
-                cursor: 'pointer', fontFamily: 'inherit',
-                transition: 'all 0.15s', letterSpacing: '0.03em',
+                border: `1px solid ${fullPrecision ? 'var(--border)' : `${accent}80`}`,
+                background: fullPrecision ? 'transparent' : `${accent}12`,
+                color: fullPrecision ? 'var(--text-secondary)' : accent,
+                cursor: 'pointer', fontFamily: 'monospace',
+                transition: 'all 0.15s', letterSpacing: '0.01em',
                 lineHeight: 1.4,
               }}
             >
-              {fullPrecision ? '1.234' : '~1K'}
+              {fullPrecision ? '1.2M' : '1.234'}
             </button>
           )}
           {info && (
