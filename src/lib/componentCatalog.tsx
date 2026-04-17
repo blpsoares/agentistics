@@ -1,0 +1,378 @@
+import React from 'react'
+import {
+  MessageSquare, Zap, Clock, Flame, GitCommit,
+  Wrench, FileCode, TrendingUp, BarChart2,
+  Download, Upload, Trophy, Bot, Target, FolderOpen, Layers,
+  Activity, CalendarDays, CalendarClock, Gauge,
+} from 'lucide-react'
+import type { AppContext } from './app-context'
+import { formatProjectName } from './types'
+import { fmt, fmtDuration, fmtCost } from './format'
+import { StatCard } from '../components/StatCard'
+import { HighlightsBoard } from '../components/HighlightsBoard'
+import { ActivityChart } from '../components/ActivityChart'
+import { ActivityHeatmap } from '../components/ActivityHeatmap'
+import { HourChart } from '../components/HourChart'
+import { ModelBreakdown } from '../components/ModelBreakdown'
+import { BudgetPanel } from '../components/BudgetPanel'
+import { CacheHitRatePanel } from '../components/CacheHitRatePanel'
+import { ProjectsList } from '../components/ProjectsList'
+import { TagCloud } from '../components/TagCloud'
+import { ToolMetricsPanel } from '../components/ToolMetricsPanel'
+import { AgentMetricsPanel } from '../components/AgentMetricsPanel'
+import { RecentSessions } from '../components/RecentSessions'
+import { Section } from '../components/Section'
+
+/**
+ * Category for palette grouping.
+ */
+export type CatalogCategory =
+  | 'kpi'          // KPI cards
+  | 'activity'     // charts, heatmaps
+  | 'costs'        // model breakdown, budget, cache
+  | 'projects'     // projects, languages
+  | 'tools'        // tool metrics, agents
+  | 'sessions'     // recent sessions, highlights
+
+export interface CatalogItem {
+  id: string
+  /** If set, this is a variant of a "parent" component (e.g. "Activity chart — sessions only"). */
+  parentId?: string
+  labelPt: string
+  labelEn: string
+  category: CatalogCategory
+  icon: React.ComponentType<{ size?: number }>
+  /** Default grid size in RGL units (12-col grid). */
+  defaultW: number
+  defaultH: number
+  minW: number
+  minH: number
+  /** Renders the component using current app context. */
+  render: (ctx: AppContext) => React.ReactNode
+}
+
+const kpiCard = (label: string, accent: string, icon: React.ReactNode, value: React.ReactNode, sub: React.ReactNode) => (
+  <StatCard label={label} value={value as any} sub={sub as any} icon={icon} accent={accent} />
+)
+
+export const CATALOG: CatalogItem[] = [
+  // ── KPI cards ──────────────────────────────────────────────────────────────
+  {
+    id: 'kpi.messages', labelPt: 'Mensagens', labelEn: 'Messages', category: 'kpi',
+    icon: MessageSquare, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    render: ({ derived, lang }) => kpiCard(
+      lang === 'pt' ? 'Mensagens' : 'Messages',
+      'var(--anthropic-orange)',
+      <MessageSquare size={15} />,
+      fmt(derived.totalMessages),
+      lang === 'pt' ? 'no período selecionado' : 'in selected period',
+    ),
+  },
+  {
+    id: 'kpi.sessions', labelPt: 'Sessões', labelEn: 'Sessions', category: 'kpi',
+    icon: Zap, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    render: ({ derived, lang }) => kpiCard(
+      lang === 'pt' ? 'Sessões' : 'Sessions',
+      'var(--accent-blue)',
+      <Zap size={15} />,
+      fmt(derived.totalSessions),
+      `avg ${derived.totalSessions > 0 ? Math.round(derived.totalMessages / derived.totalSessions) : 0} msgs/sessão`,
+    ),
+  },
+  {
+    id: 'kpi.tool-calls', labelPt: 'Tool calls', labelEn: 'Tool calls', category: 'kpi',
+    icon: Wrench, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    render: ({ derived, lang }) => kpiCard(
+      lang === 'pt' ? 'Tool calls' : 'Tool calls',
+      'var(--accent-green)',
+      <Wrench size={15} />,
+      fmt(derived.totalToolCalls),
+      lang === 'pt' ? 'execuções totais' : 'total executions',
+    ),
+  },
+  {
+    id: 'kpi.cost', labelPt: 'Custo estimado', labelEn: 'Estimated cost', category: 'kpi',
+    icon: TrendingUp, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    render: ({ derived, lang, currency, brlRate }) => kpiCard(
+      lang === 'pt' ? 'Custo estimado' : 'Est. cost',
+      'var(--anthropic-orange)',
+      <TrendingUp size={15} />,
+      fmtCost(derived.totalCostUSD, currency, brlRate),
+      lang === 'pt' ? 'preços da API Anthropic' : 'Anthropic API pricing',
+    ),
+  },
+  {
+    id: 'kpi.streak', labelPt: 'Sequência', labelEn: 'Streak', category: 'kpi',
+    icon: Flame, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    render: ({ derived, lang }) => kpiCard(
+      lang === 'pt' ? 'Sequência' : 'Streak',
+      '#ef4444',
+      <Flame size={15} />,
+      `${derived.streak}d`,
+      lang === 'pt' ? 'dias consecutivos' : 'consecutive days',
+    ),
+  },
+  {
+    id: 'kpi.longest-session', labelPt: 'Sessão mais longa', labelEn: 'Longest session', category: 'kpi',
+    icon: Clock, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    render: ({ derived, lang, filters }) => kpiCard(
+      lang === 'pt' ? 'Sessão mais longa' : 'Longest session',
+      'var(--accent-purple)',
+      <Clock size={15} />,
+      derived.longestSession?.duration_minutes ? fmtDuration(derived.longestSession.duration_minutes * 60_000) : '—',
+      derived.longestSession ? (() => {
+        const msgs = (derived.longestSession!.user_message_count ?? 0) + (derived.longestSession!.assistant_message_count ?? 0)
+        const msgStr = `${msgs} ${lang === 'pt' ? 'mensagens' : 'messages'}`
+        if (filters.projects.length === 0 && derived.longestSession!.project_path)
+          return `${msgStr} · ${formatProjectName(derived.longestSession!.project_path)}`
+        return msgStr
+      })() : '',
+    ),
+  },
+  {
+    id: 'kpi.commits', labelPt: 'Commits', labelEn: 'Commits', category: 'kpi',
+    icon: GitCommit, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    render: ({ derived, lang }) => kpiCard(
+      lang === 'pt' ? 'Commits' : 'Commits',
+      'var(--accent-cyan)',
+      <GitCommit size={15} />,
+      derived.gitCommits,
+      derived.gitPushes > 0
+        ? `${derived.gitPushes} ${lang === 'pt' ? 'pushes via Claude' : 'pushes via Claude'}`
+        : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls',
+    ),
+  },
+  {
+    id: 'kpi.files', labelPt: 'Arquivos modificados', labelEn: 'Files modified', category: 'kpi',
+    icon: FileCode, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    render: ({ derived, lang }) => kpiCard(
+      lang === 'pt' ? 'Arquivos' : 'Files',
+      'var(--accent-green)',
+      <FileCode size={15} />,
+      derived.filesModified,
+      derived.linesAdded + derived.linesRemoved > 0
+        ? `+${fmt(derived.linesAdded)} / -${fmt(derived.linesRemoved)} linhas`
+        : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls',
+    ),
+  },
+  {
+    id: 'kpi.input-tokens', labelPt: 'Tokens de entrada', labelEn: 'Input tokens', category: 'kpi',
+    icon: Download, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    render: ({ totalInputTokens, lang }) => kpiCard(
+      lang === 'pt' ? 'Tokens entrada' : 'Input tokens',
+      'var(--accent-blue)',
+      <Download size={15} />,
+      fmt(totalInputTokens),
+      lang === 'pt' ? 'tokens enviados ao modelo' : 'tokens sent to model',
+    ),
+  },
+  {
+    id: 'kpi.output-tokens', labelPt: 'Tokens de saída', labelEn: 'Output tokens', category: 'kpi',
+    icon: Upload, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    render: ({ totalOutputTokens, lang }) => kpiCard(
+      lang === 'pt' ? 'Tokens saída' : 'Output tokens',
+      'var(--accent-purple)',
+      <Upload size={15} />,
+      fmt(totalOutputTokens),
+      lang === 'pt' ? 'tokens gerados pelo modelo' : 'tokens generated by model',
+    ),
+  },
+
+  // ── Activity & charts ──────────────────────────────────────────────────────
+  {
+    id: 'activity.chart', labelPt: 'Gráfico de atividade (completo)', labelEn: 'Activity chart (full)', category: 'activity',
+    icon: BarChart2, defaultW: 8, defaultH: 5, minW: 4, minH: 4,
+    render: ({ derived, theme, lang }) => (
+      <Section title={<><BarChart2 size={14} /> {lang === 'pt' ? 'Atividade ao longo do tempo' : 'Activity over time'}</>}>
+        <ActivityChart data={derived.heatmapData} theme={theme} />
+      </Section>
+    ),
+  },
+  {
+    id: 'activity.chart.messages', parentId: 'activity.chart',
+    labelPt: 'Atividade — só Mensagens', labelEn: 'Activity — Messages only', category: 'activity',
+    icon: MessageSquare, defaultW: 6, defaultH: 4, minW: 3, minH: 3,
+    render: ({ derived, theme, lang }) => (
+      <Section title={<><MessageSquare size={14} /> {lang === 'pt' ? 'Mensagens / dia' : 'Messages / day'}</>}>
+        <ActivityChart data={derived.heatmapData} theme={theme} forcedMetric="value" hideControls />
+      </Section>
+    ),
+  },
+  {
+    id: 'activity.chart.sessions', parentId: 'activity.chart',
+    labelPt: 'Atividade — só Sessões', labelEn: 'Activity — Sessions only', category: 'activity',
+    icon: Zap, defaultW: 6, defaultH: 4, minW: 3, minH: 3,
+    render: ({ derived, theme, lang }) => (
+      <Section title={<><Zap size={14} /> {lang === 'pt' ? 'Sessões / dia' : 'Sessions / day'}</>}>
+        <ActivityChart data={derived.heatmapData} theme={theme} forcedMetric="sessions" hideControls />
+      </Section>
+    ),
+  },
+  {
+    id: 'activity.chart.tools', parentId: 'activity.chart',
+    labelPt: 'Atividade — só Tool calls', labelEn: 'Activity — Tool calls only', category: 'activity',
+    icon: Wrench, defaultW: 6, defaultH: 4, minW: 3, minH: 3,
+    render: ({ derived, theme, lang }) => (
+      <Section title={<><Wrench size={14} /> {lang === 'pt' ? 'Tool calls / dia' : 'Tool calls / day'}</>}>
+        <ActivityChart data={derived.heatmapData} theme={theme} forcedMetric="tools" hideControls />
+      </Section>
+    ),
+  },
+  {
+    id: 'activity.chart.overlay', parentId: 'activity.chart',
+    labelPt: 'Atividade — Overlay', labelEn: 'Activity — Overlay', category: 'activity',
+    icon: Layers, defaultW: 8, defaultH: 4, minW: 4, minH: 3,
+    render: ({ derived, theme, lang }) => (
+      <Section title={<><Layers size={14} /> {lang === 'pt' ? 'Atividade (overlay)' : 'Activity (overlay)'}</>}>
+        <ActivityChart data={derived.heatmapData} theme={theme} forcedOverlay hideControls />
+      </Section>
+    ),
+  },
+  {
+    id: 'activity.heatmap', labelPt: 'Heatmap de atividade', labelEn: 'Activity heatmap', category: 'activity',
+    icon: CalendarDays, defaultW: 6, defaultH: 4, minW: 3, minH: 3,
+    render: ({ derived, lang }) => (
+      <Section title={<><CalendarDays size={14} /> {lang === 'pt' ? 'Heatmap de atividade' : 'Activity heatmap'}</>}>
+        <ActivityHeatmap data={derived.heatmapData} />
+      </Section>
+    ),
+  },
+  {
+    id: 'activity.hours', labelPt: 'Uso por hora do dia', labelEn: 'Usage by hour', category: 'activity',
+    icon: CalendarClock, defaultW: 8, defaultH: 4, minW: 4, minH: 3,
+    render: ({ derived, lang }) => (
+      <Section title={<><CalendarClock size={14} /> {lang === 'pt' ? 'Uso por hora do dia' : 'Usage by hour'}</>}>
+        <HourChart hourCounts={derived.hourCounts} hourMeta={derived.hourMeta} />
+      </Section>
+    ),
+  },
+
+  // ── Costs ──────────────────────────────────────────────────────────────────
+  {
+    id: 'costs.models', labelPt: 'Uso por modelo', labelEn: 'Model usage', category: 'costs',
+    icon: TrendingUp, defaultW: 12, defaultH: 5, minW: 6, minH: 4,
+    render: ({ derived, filters, currency, brlRate, lang }) => (
+      <Section title={<><TrendingUp size={14} /> {lang === 'pt' ? 'Uso por modelo' : 'Model usage & cost'}</>}>
+        <ModelBreakdown
+          modelUsage={derived.modelUsage}
+          currency={currency}
+          brlRate={brlRate}
+          fallbackInputTokens={filters.projects.length > 0 ? derived.inputTokens : undefined}
+          fallbackOutputTokens={filters.projects.length > 0 ? derived.outputTokens : undefined}
+          fallbackCostUSD={filters.projects.length > 0 ? derived.totalCostUSD : undefined}
+        />
+      </Section>
+    ),
+  },
+  {
+    id: 'costs.budget', labelPt: 'Orçamento & projeção', labelEn: 'Budget & forecast', category: 'costs',
+    icon: Target, defaultW: 6, defaultH: 5, minW: 4, minH: 4,
+    render: ({ statsCache, monthlyBudgetUSD, updateBudget, currency, brlRate, lang }) => (
+      <Section title={<><Target size={14} /> {lang === 'pt' ? 'Orçamento & projeção' : 'Budget & forecast'}</>}>
+        <BudgetPanel statsCache={statsCache} budgetUSD={monthlyBudgetUSD} onBudgetChange={updateBudget} currency={currency} brlRate={brlRate} lang={lang} />
+      </Section>
+    ),
+  },
+  {
+    id: 'costs.cache', labelPt: 'Eficiência de cache', labelEn: 'Cache efficiency', category: 'costs',
+    icon: Gauge, defaultW: 6, defaultH: 5, minW: 4, minH: 4,
+    render: ({ derived, currency, brlRate, lang }) => (
+      <Section title={<><Gauge size={14} /> {lang === 'pt' ? 'Eficiência de cache' : 'Cache efficiency'}</>}>
+        <CacheHitRatePanel hitRate={derived.cacheHitRate} cacheTotals={derived.cacheTotals} grossSavedUSD={derived.cacheGrossSavedUSD} writeOverheadUSD={derived.cacheWriteOverheadUSD} netSavedUSD={derived.cacheNetSavedUSD} perModel={derived.cachePerModel} currency={currency} brlRate={brlRate} lang={lang} />
+      </Section>
+    ),
+  },
+
+  // ── Projects ───────────────────────────────────────────────────────────────
+  {
+    id: 'projects.top', labelPt: 'Principais projetos', labelEn: 'Top projects', category: 'projects',
+    icon: FolderOpen, defaultW: 7, defaultH: 5, minW: 4, minH: 4,
+    render: ({ derived, setFilters, lang }) => (
+      <Section title={<><FolderOpen size={14} /> {lang === 'pt' ? 'Principais projetos' : 'Top projects'}</>}>
+        <ProjectsList projectStats={derived.projectStats} onFilter={path => setFilters(f => ({ ...f, projects: [path] }))} />
+      </Section>
+    ),
+  },
+  {
+    id: 'projects.languages', labelPt: 'Linguagens', labelEn: 'Languages', category: 'projects',
+    icon: FileCode, defaultW: 5, defaultH: 5, minW: 3, minH: 3,
+    render: ({ derived, lang }) => (
+      <Section title={<><FileCode size={14} /> {lang === 'pt' ? 'Linguagens' : 'Languages'}</>}>
+        <TagCloud data={derived.langCounts} color="var(--accent-blue)" />
+      </Section>
+    ),
+  },
+
+  // ── Tools / Agents ─────────────────────────────────────────────────────────
+  {
+    id: 'tools.metrics', labelPt: 'Métricas de ferramentas (completo)', labelEn: 'Tool metrics (full)', category: 'tools',
+    icon: Wrench, defaultW: 12, defaultH: 6, minW: 6, minH: 4,
+    render: ({ derived, lang }) => (
+      <Section title={<><Wrench size={14} /> {lang === 'pt' ? 'Métricas de ferramentas' : 'Tool metrics'}</>}>
+        <ToolMetricsPanel toolCounts={derived.toolCounts} toolOutputTokens={derived.toolOutputTokens} agentFileReads={derived.agentFileReads} lang={lang} />
+      </Section>
+    ),
+  },
+  {
+    id: 'tools.metrics.calls', parentId: 'tools.metrics',
+    labelPt: 'Ferramentas — só Chamadas', labelEn: 'Tool metrics — calls only', category: 'tools',
+    icon: Activity, defaultW: 8, defaultH: 5, minW: 4, minH: 4,
+    render: ({ derived, lang }) => (
+      <Section title={<><Wrench size={14} /> {lang === 'pt' ? 'Ferramentas — chamadas' : 'Tools — calls'}</>}>
+        <ToolMetricsPanel toolCounts={derived.toolCounts} toolOutputTokens={derived.toolOutputTokens} agentFileReads={derived.agentFileReads} lang={lang} forcedMode="calls" hideAgentReads />
+      </Section>
+    ),
+  },
+  {
+    id: 'tools.metrics.tokens', parentId: 'tools.metrics',
+    labelPt: 'Ferramentas — só Tokens', labelEn: 'Tool metrics — tokens only', category: 'tools',
+    icon: TrendingUp, defaultW: 8, defaultH: 5, minW: 4, minH: 4,
+    render: ({ derived, lang }) => (
+      <Section title={<><Wrench size={14} /> {lang === 'pt' ? 'Ferramentas — tokens' : 'Tools — tokens'}</>}>
+        <ToolMetricsPanel toolCounts={derived.toolCounts} toolOutputTokens={derived.toolOutputTokens} agentFileReads={derived.agentFileReads} lang={lang} forcedMode="tokens" hideAgentReads />
+      </Section>
+    ),
+  },
+  {
+    id: 'tools.agents', labelPt: 'Métricas de agentes', labelEn: 'Agent metrics', category: 'tools',
+    icon: Bot, defaultW: 12, defaultH: 6, minW: 6, minH: 4,
+    render: ({ derived, currency, brlRate, lang }) => (
+      <Section title={<><Bot size={14} /> {lang === 'pt' ? 'Métricas de agentes' : 'Agent metrics'}</>}>
+        <AgentMetricsPanel invocations={derived.agentInvocations} agentTypeBreakdown={derived.agentTypeBreakdown} totalInvocations={derived.totalAgentInvocations} totalTokens={derived.totalAgentTokens} totalCostUSD={derived.totalAgentCostUSD} totalDurationMs={derived.totalAgentDurationMs} currency={currency} brlRate={brlRate} lang={lang} />
+      </Section>
+    ),
+  },
+
+  // ── Sessions / Highlights ──────────────────────────────────────────────────
+  {
+    id: 'sessions.highlights', labelPt: 'Recordes (Highlights)', labelEn: 'Highlights', category: 'sessions',
+    icon: Trophy, defaultW: 12, defaultH: 4, minW: 6, minH: 3,
+    render: ({ derived, data, lang }) => (
+      <Section title={<><Trophy size={14} /> {lang === 'pt' ? 'Recordes' : 'Highlights'}</>}>
+        <HighlightsBoard sessions={derived.filteredSessions} projects={data.projects as any} lang={lang} />
+      </Section>
+    ),
+  },
+  {
+    id: 'sessions.recent', labelPt: 'Sessões recentes', labelEn: 'Recent sessions', category: 'sessions',
+    icon: Clock, defaultW: 12, defaultH: 5, minW: 6, minH: 4,
+    render: ({ derived, setSelectedSession, lang }) => (
+      <Section title={<><Clock size={14} /> {lang === 'pt' ? 'Sessões recentes' : 'Recent sessions'}</>}>
+        <RecentSessions sessions={derived.filteredSessions} lang={lang} onSelect={setSelectedSession} />
+      </Section>
+    ),
+  },
+]
+
+export function getCatalogItem(id: string): CatalogItem | undefined {
+  return CATALOG.find(c => c.id === id)
+}
+
+export const CATEGORY_LABELS: Record<CatalogCategory, { pt: string; en: string }> = {
+  kpi: { pt: 'KPIs', en: 'KPIs' },
+  activity: { pt: 'Atividade', en: 'Activity' },
+  costs: { pt: 'Custos', en: 'Costs' },
+  projects: { pt: 'Projetos', en: 'Projects' },
+  tools: { pt: 'Ferramentas & Agentes', en: 'Tools & Agents' },
+  sessions: { pt: 'Sessões', en: 'Sessions' },
+}

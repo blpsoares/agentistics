@@ -2,7 +2,7 @@ import { readFile, unlink } from 'fs/promises'
 import { join } from 'path'
 import { exec } from 'child_process'
 import { promisify } from 'util'
-import type { HealthIssue, SessionMeta } from '../src/lib/types'
+import type { HealthIssue, SessionMeta, StatsCache } from '../src/lib/types'
 import { PROJECTS_DIR, STATS_CACHE_FILE } from './config'
 import { safeReadDir, safeStat, safeReadJson } from './utils'
 
@@ -118,6 +118,41 @@ export async function runHealthChecks(): Promise<HealthIssue[]> {
   }
 
   return issues
+}
+
+/** Warn when ~/.claude/stats-cache.json is outdated relative to the most recent JSONL session.
+ *  Claude Code normally refreshes this cache; when it lags, agentistics supplements from
+ *  JSONL (see `supplementStatsCache` in server/data.ts) but the user should still be informed. */
+export function analyzeCacheStaleness(
+  statsCache: StatsCache,
+  sessions: SessionMeta[],
+  issues: HealthIssue[],
+): void {
+  const lastComputed = statsCache.lastComputedDate
+  if (!lastComputed || sessions.length === 0) return
+
+  let mostRecentDay = ''
+  for (const s of sessions) {
+    if (!s.start_time) continue
+    const day = s.start_time.slice(0, 10)
+    if (day > mostRecentDay) mostRecentDay = day
+  }
+  if (!mostRecentDay || mostRecentDay <= lastComputed) return
+
+  const daysBehind = Math.max(1, Math.round(
+    (Date.parse(mostRecentDay + 'T00:00:00Z') - Date.parse(lastComputed + 'T00:00:00Z')) / 86_400_000,
+  ))
+  issues.push({
+    id: 'stats-cache-stale',
+    severity: 'warning',
+    title: `Stats cache outdated by ${daysBehind} day${daysBehind === 1 ? '' : 's'}`,
+    description: `~/.claude/stats-cache.json was last computed on ${lastComputed} but sessions exist through ${mostRecentDay}. Recent activity has been supplemented from JSONL files so charts remain accurate.`,
+    guide: [
+      'Claude Code normally refreshes this cache automatically.',
+      'If the warning persists across launches, delete the file to force a rebuild:',
+      '  rm ~/.claude/stats-cache.json',
+    ].join('\n'),
+  })
 }
 
 /** Analyze tool metrics from sessions and add health alerts for outliers */

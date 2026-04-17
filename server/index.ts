@@ -3,6 +3,7 @@
 import { PORT } from './config'
 import { getRates } from './rates'
 import { buildApiResponse, buildApiResponseStream } from './data'
+import { readPreferences, writePreferences, type Preferences } from './preferences'
 import {
   sseClients,
   sseEncoder,
@@ -26,7 +27,7 @@ maybeSpawnWatcher()
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, PUT, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 }
 
@@ -129,6 +130,40 @@ Bun.serve({
           'X-Accel-Buffering': 'no',
         },
       })
+    }
+
+    if (url.pathname === '/api/preferences' && req.method === 'GET') {
+      try {
+        const prefs = await readPreferences()
+        return new Response(JSON.stringify(prefs), {
+          status: 200,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return new Response(JSON.stringify({ error: message }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    if (url.pathname === '/api/preferences' && req.method === 'PUT') {
+      try {
+        const body = await req.json() as Preferences
+        await writePreferences(body)
+        const updated = await readPreferences()
+        return new Response(JSON.stringify(updated), {
+          status: 200,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return new Response(JSON.stringify({ error: message }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
     }
 
     if (url.pathname === '/api/data' && req.method === 'GET') {

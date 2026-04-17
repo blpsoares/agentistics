@@ -152,7 +152,7 @@ export function BudgetPanel({ statsCache, budgetUSD, onBudgetChange, currency, b
       </div>
 
       {/* Numbers */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
         <Stat
           label={pt ? 'Gasto no mês' : 'Month spend'}
           value={fmtCost(monthSpend, currency, brlRate)}

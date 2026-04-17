@@ -55,6 +55,9 @@ export interface SessionMeta {
   git_pushes: number
   input_tokens: number
   output_tokens: number
+  /** Only populated for `_source: 'jsonl' | 'subdir'` — parsed directly from JSONL usage. */
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
   first_prompt: string
   user_interruptions: number
   user_response_times: number[]
@@ -182,6 +185,7 @@ export type Theme = 'dark' | 'light'
 
 export const MODEL_PRICING: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
   // Current models
+  'claude-opus-4-7':            { input: 5,    output: 25,   cacheRead: 0.50, cacheWrite: 6.25  },
   'claude-opus-4-6':            { input: 5,    output: 25,   cacheRead: 0.50, cacheWrite: 6.25  },
   'claude-sonnet-4-6':          { input: 3,    output: 15,   cacheRead: 0.30, cacheWrite: 3.75  },
   'claude-haiku-4-5-20251001':  { input: 1,    output: 5,    cacheRead: 0.10, cacheWrite: 1.25  },
@@ -215,6 +219,7 @@ export function calcCost(usage: ModelUsage, modelId: string): number {
 
 export function formatModel(modelId: string): string {
   const map: Record<string, string> = {
+    'claude-opus-4-7': 'Opus 4.7',
     'claude-opus-4-6': 'Opus 4.6',
     'claude-opus-4-5-20251101': 'Opus 4.5',
     'claude-sonnet-4-6': 'Sonnet 4.6',

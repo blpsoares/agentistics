@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
+import { Outlet, NavLink, useLocation } from 'react-router-dom'
 import { version } from '../package.json'
 import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
@@ -6,7 +7,7 @@ import {
   Sun, Moon, Globe, AlertTriangle, Download, Upload,
   Maximize2, X, GripVertical, Trophy, Activity, Bot, Sparkles, Settings,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
-  Target,
+  Target, Home, DollarSign, Layers,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -561,7 +562,66 @@ function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string
   return `USD ${usd.toFixed(2)}`
 }
 
-export default function App() {
+function NavTabs({ lang }: { lang: Lang }) {
+  const location = useLocation()
+  const pt = lang === 'pt'
+
+  const tabs: { to: string; labelPt: string; labelEn: string; icon: React.ReactNode }[] = [
+    { to: '/',          labelPt: 'Home',         labelEn: 'Home',         icon: <Home size={12} /> },
+    { to: '/costs',     labelPt: 'Custos',       labelEn: 'Costs',        icon: <DollarSign size={12} /> },
+    { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={12} /> },
+    { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={12} /> },
+    { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={12} /> },
+  ]
+
+  return (
+    <nav style={{ display: 'flex', gap: 2, height: 42, alignItems: 'center', overflowX: 'auto' }}>
+      {tabs.map(tab => {
+        const active = tab.to === '/'
+          ? location.pathname === '/'
+          : location.pathname.startsWith(tab.to)
+        return (
+          <NavLink
+            key={tab.to}
+            to={tab.to}
+            end={tab.to === '/'}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '7px 12px',
+              borderRadius: 8,
+              textDecoration: 'none',
+              fontSize: 12,
+              fontWeight: active ? 700 : 500,
+              fontFamily: 'inherit',
+              color: active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+              background: active ? 'var(--anthropic-orange-dim)' : 'transparent',
+              border: active ? '1px solid var(--anthropic-orange)30' : '1px solid transparent',
+              transition: 'all 0.15s',
+              whiteSpace: 'nowrap',
+            }}
+            onMouseEnter={e => {
+              if (!active) {
+                ;(e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-primary)'
+                ;(e.currentTarget as HTMLAnchorElement).style.background = 'var(--bg-elevated)'
+              }
+            }}
+            onMouseLeave={e => {
+              if (!active) {
+                ;(e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-tertiary)'
+                ;(e.currentTarget as HTMLAnchorElement).style.background = 'transparent'
+              }
+            }}
+          >
+            {tab.icon}
+            {pt ? tab.labelPt : tab.labelEn}
+          </NavLink>
+        )
+      })}
+    </nav>
+  )
+}
+
+export default function AppLayout() {
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
   const [showLiveSettings, setShowLiveSettings] = useState(false)
@@ -689,7 +749,14 @@ export default function App() {
 
   const models = useMemo(() => {
     if (!data) return []
-    return Object.keys(data.statsCache.modelUsage ?? {})
+    const set = new Set<string>()
+    for (const id of Object.keys(data.statsCache.modelUsage ?? {})) {
+      if (id.startsWith('claude-')) set.add(id)
+    }
+    for (const s of data.sessions) {
+      if (s.model && s.model.startsWith('claude-')) set.add(s.model)
+    }
+    return Array.from(set)
   }, [data])
 
   // When a project filter is active, compute which models are actually used in those projects
@@ -1412,220 +1479,34 @@ export default function App() {
             />
           </div>
         )}
+
+        {/* Nav tabs — third row of sticky header */}
+        <div style={{
+          borderTop: '1px solid var(--border)',
+          maxWidth: 1400,
+          margin: '0 auto',
+          padding: '0 32px',
+          width: '100%',
+          boxSizing: 'border-box',
+        }}>
+          <NavTabs lang={lang} />
+        </div>
       </header>
 
-      {/* Main content */}
+      {/* Main content — routed pages render here via <Outlet /> */}
       <main style={{ maxWidth: 1400, margin: '0 auto', padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 20 }}>
-
-        {/* Session date range — reactive to active filters */}
-        {derived.firstSessionDate && derived.lastSessionDate && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: 12,
-            color: 'var(--text-tertiary)',
-            flexWrap: 'wrap',
-          }}>
-            <Calendar size={12} style={{ flexShrink: 0, opacity: 0.6 }} />
-            <span style={{ fontSize: 11, opacity: 0.7 }}>
-              {lang === 'pt' ? '1ª sessão' : 'first session'}
-            </span>
-            <span style={{ color: 'var(--text-secondary)', fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
-              {format(derived.firstSessionDate, 'MMM d, yyyy')}
-            </span>
-            <span style={{ opacity: 0.4 }}>→</span>
-            <span style={{ fontSize: 11, opacity: 0.7 }}>
-              {lang === 'pt' ? 'última sessão' : 'last session'}
-            </span>
-            <span style={{ color: 'var(--text-secondary)', fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
-              {format(derived.lastSessionDate, 'MMM d, yyyy')}
-            </span>
-            <span style={{ opacity: 0.3, margin: '0 2px' }}>·</span>
-            <span>
-              <strong style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
-                {derived.sessionSpanDays.toLocaleString()}
-              </strong>
-              {' '}{lang === 'pt' ? 'dias' : 'days'}
-            </span>
-          </div>
-        )}
-
-        {/* KPI Cards — draggable 5×2 grid */}
-        <style>{`
-          [data-drag-card]:hover .drag-handle { opacity: 1 !important; }
-          [data-drag-card] { user-select: none; }
-          @keyframes liveFlash {
-            0%   { box-shadow: 0 0 0 2px rgba(217,119,6,0.55), 0 0 14px rgba(217,119,6,0.12); }
-            60%  { box-shadow: 0 0 0 2px rgba(217,119,6,0.18), 0 0 6px rgba(217,119,6,0.04); }
-            100% { box-shadow: 0 0 0 0px rgba(217,119,6,0); }
-          }
-          .live-flash { animation: liveFlash 1.2s ease-out forwards; border-radius: var(--radius-lg); }
-        `}</style>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
-          {cardOrder.map(id => renderCard(id))}
-        </div>
-
-        {/* Highlights board */}
-        <Section flashId="highlights" title={<><Trophy size={14} /> {lang === 'pt' ? 'Recordes' : 'Highlights'}</>}>
-          <HighlightsBoard sessions={derived.filteredSessions} projects={data.projects} lang={lang} />
-        </Section>
-
-        {/* Activity: chart (60%) + heatmap (40%) */}
-        <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 16, alignItems: 'stretch' }}>
-          <Section
-            flashId="activity"
-            style={{ height: '100%' }}
-            title={<><BarChart2 size={14} /> {lang === 'pt' ? 'Atividade ao longo do tempo' : 'Activity over time'}</>}
-            onExpand={() => setExpandedChart('activity')}
-          >
-            <ActivityChart data={derived.heatmapData} theme={theme} />
-          </Section>
-
-          <Section
-            flashId="heatmap"
-            style={{ height: '100%' }}
-            title={lang === 'pt' ? 'Heatmap de atividade' : 'Activity heatmap'}
-            onExpand={() => setExpandedChart('heatmap')}
-          >
-            <ActivityHeatmap data={derived.heatmapData} />
-          </Section>
-        </div>
-
-        {/* Hour distribution */}
-        <Section
-          flashId="hours"
-          title={lang === 'pt' ? 'Uso por hora do dia' : 'Usage by hour'}
-          onExpand={() => setExpandedChart('hours')}
-        >
-          <HourChart hourCounts={derived.hourCounts} hourMeta={derived.hourMeta} />
-        </Section>
-
-        {/* Model usage full-width */}
-        <Section
-          flashId="models"
-          title={<><TrendingUp size={14} /> {lang === 'pt' ? 'Uso por modelo' : 'Model usage & cost'}</>}
-          onExpand={() => setExpandedChart('models')}
-        >
-          <ModelBreakdown
-            modelUsage={derived.modelUsage}
-            currency={currency}
-            brlRate={brlRate}
-            fallbackInputTokens={filters.projects.length > 0 ? derived.inputTokens : undefined}
-            fallbackOutputTokens={filters.projects.length > 0 ? derived.outputTokens : undefined}
-            fallbackCostUSD={filters.projects.length > 0 ? derived.totalCostUSD : undefined}
-            note={
-              filters.projects.length > 0
-                ? (lang === 'pt'
-                  ? '* Custo e tokens estimados via taxa ponderada — sessões não registram o modelo utilizado individualmente.'
-                  : '* Cost and tokens estimated via blended rate — sessions do not record the model used individually.')
-                : (filters.dateRange !== 'all' || filters.customStart || filters.customEnd
-                  ? (lang === 'pt'
-                    ? '* Valores aproximados: tokens rateados pelo total diário. Proporção input/output baseada no histórico global.'
-                    : '* Approximate values: tokens prorated from daily totals. Input/output split based on global historical ratio.')
-                  : undefined)
-            }
-          />
-        </Section>
-
-        {/* Budget + Cache efficiency */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'stretch' }}>
-          <Section
-            flashId="budget"
-            style={{ height: '100%' }}
-            title={<><Target size={14} /> {lang === 'pt' ? 'Orçamento & projeção' : 'Budget & forecast'}</>}
-          >
-            <BudgetPanel
-              statsCache={statsCache}
-              budgetUSD={monthlyBudgetUSD}
-              onBudgetChange={updateBudget}
-              currency={currency}
-              brlRate={brlRate}
-              lang={lang}
-            />
-          </Section>
-
-          <Section
-            flashId="cache"
-            style={{ height: '100%' }}
-            title={<><Zap size={14} /> {lang === 'pt' ? 'Eficiência de cache' : 'Cache efficiency'}</>}
-          >
-            <CacheHitRatePanel
-              hitRate={derived.cacheHitRate}
-              cacheTotals={derived.cacheTotals}
-              grossSavedUSD={derived.cacheGrossSavedUSD}
-              writeOverheadUSD={derived.cacheWriteOverheadUSD}
-              netSavedUSD={derived.cacheNetSavedUSD}
-              perModel={derived.cachePerModel}
-              currency={currency}
-              brlRate={brlRate}
-              lang={lang}
-            />
-          </Section>
-        </div>
-
-        {/* Projects (left, 2-col grid) + Tools/Languages stacked (right) */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'stretch' }}>
-          <Section
-            flashId="projects"
-            style={{ height: '100%' }}
-            title={<><FileCode size={14} /> {lang === 'pt' ? 'Principais projetos' : 'Top projects'}</>}
-            action={
-              filters.projects.length > 0 ? (
-                <button
-                  onClick={() => setFilters(f => ({ ...f, projects: [] }))}
-                  style={{
-                    fontSize: 11, color: 'var(--text-tertiary)',
-                    background: 'transparent', border: 'none',
-                    cursor: 'pointer', fontFamily: 'inherit',
-                  }}
-                >
-                  {lang === 'pt' ? 'Limpar' : 'Clear'}
-                </button>
-              ) : null
-            }
-          >
-            <ProjectsList
-              projectStats={derived.projectStats}
-              onFilter={path => setFilters(f => ({ ...f, projects: [path] }))}
-            />
-          </Section>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Section flashId="tools" title={<><Wrench size={14} /> {lang === 'pt' ? 'Métricas de ferramentas' : 'Tool metrics'}</>}>
-              <ToolMetricsPanel
-                toolCounts={derived.toolCounts}
-                toolOutputTokens={derived.toolOutputTokens}
-                agentFileReads={derived.agentFileReads}
-                lang={lang}
-              />
-            </Section>
-
-            <Section title={<><FileCode size={14} /> {lang === 'pt' ? 'Linguagens' : 'Languages'}</>}>
-              <TagCloud data={derived.langCounts} color="var(--accent-blue)" />
-            </Section>
-          </div>
-        </div>
-
-        {/* Agent metrics */}
-        <Section flashId="agents" title={<><Bot size={14} /> {lang === 'pt' ? 'Métricas de agentes' : 'Agent metrics'}</>}>
-          <AgentMetricsPanel
-            invocations={derived.agentInvocations}
-            agentTypeBreakdown={derived.agentTypeBreakdown}
-            totalInvocations={derived.totalAgentInvocations}
-            totalTokens={derived.totalAgentTokens}
-            totalCostUSD={derived.totalAgentCostUSD}
-            totalDurationMs={derived.totalAgentDurationMs}
-            currency={currency}
-            brlRate={brlRate}
-            lang={lang}
-          />
-        </Section>
-
-        {/* Recent sessions */}
-        <Section flashId="sessions-list" title={<><Clock size={14} /> {lang === 'pt' ? 'Sessões recentes' : 'Recent sessions'}</>}>
-          <RecentSessions sessions={derived.filteredSessions} lang={lang} onSelect={setSelectedSession} />
-        </Section>
+        <Outlet context={{
+          data,
+          derived,
+          statsCache,
+          filters, setFilters,
+          lang, theme, currency, setCurrency, brlRate,
+          monthlyBudgetUSD, updateBudget,
+          totalInputTokens, totalOutputTokens,
+          setExpandedChart, setSelectedSession, setInfoModalIndex,
+          infoItems,
+          cardOrder, setCardOrder, dragCardRef, dragOverCard, setDragOverCard,
+        }} />
       </main>
 
       {/* Live settings modal */}

@@ -8,6 +8,10 @@ interface Props {
   toolOutputTokens: Record<string, number>
   agentFileReads: Record<string, number>
   lang: Lang
+  /** Forces a specific view mode and hides the toggle (for catalog variants). */
+  forcedMode?: ViewMode
+  /** Hides the agent file reads panel. */
+  hideAgentReads?: boolean
 }
 
 type ViewMode = 'calls' | 'tokens'
@@ -18,10 +22,12 @@ function fmt(n: number): string {
   return String(n)
 }
 
-export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads, lang }: Props) {
-  const [viewMode, setViewMode] = useState<ViewMode>('calls')
+export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads, lang, forcedMode, hideAgentReads }: Props) {
+  const [viewMode, setViewMode] = useState<ViewMode>(forcedMode ?? 'calls')
+  const effectiveMode: ViewMode = forcedMode ?? viewMode
+  const showToggle = forcedMode === undefined
 
-  const data = viewMode === 'calls' ? toolCounts : toolOutputTokens
+  const data = effectiveMode === 'calls' ? toolCounts : toolOutputTokens
   const total = Object.values(data).reduce((s, v) => s + v, 0)
   const entries = Object.entries(data)
     .sort((a, b) => b[1] - a[1])
@@ -37,16 +43,17 @@ export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads,
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* View toggle */}
+      {/* View toggle — hidden when forcedMode is set */}
+      {showToggle && (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
         <button
           onClick={() => setViewMode('calls')}
           style={{
             padding: '4px 10px',
             borderRadius: 6,
-            border: `1px solid ${viewMode === 'calls' ? 'var(--accent-green)' : 'var(--border)'}`,
-            background: viewMode === 'calls' ? 'rgba(34,197,94,0.12)' : 'transparent',
-            color: viewMode === 'calls' ? 'var(--accent-green)' : 'var(--text-tertiary)',
+            border: `1px solid ${effectiveMode === 'calls' ? 'var(--accent-green)' : 'var(--border)'}`,
+            background: effectiveMode === 'calls' ? 'rgba(34,197,94,0.12)' : 'transparent',
+            color: effectiveMode === 'calls' ? 'var(--accent-green)' : 'var(--text-tertiary)',
             cursor: 'pointer',
             fontSize: 11,
             fontWeight: 600,
@@ -62,9 +69,9 @@ export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads,
             style={{
               padding: '4px 10px',
               borderRadius: 6,
-              border: `1px solid ${viewMode === 'tokens' ? 'var(--anthropic-orange)' : 'var(--border)'}`,
-              background: viewMode === 'tokens' ? 'rgba(217,119,6,0.12)' : 'transparent',
-              color: viewMode === 'tokens' ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+              border: `1px solid ${effectiveMode === 'tokens' ? 'var(--anthropic-orange)' : 'var(--border)'}`,
+              background: effectiveMode === 'tokens' ? 'rgba(217,119,6,0.12)' : 'transparent',
+              color: effectiveMode === 'tokens' ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
               cursor: 'pointer',
               fontSize: 11,
               fontWeight: 600,
@@ -77,26 +84,27 @@ export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads,
         )}
         <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 'auto' }}>
           {t('tools.total', lang)}: {fmt(total)}
-          {viewMode === 'tokens' ? ' tokens' : ` ${t('tools.calls', lang)}`}
+          {effectiveMode === 'tokens' ? ' tokens' : ` ${t('tools.calls', lang)}`}
         </span>
       </div>
+      )}
 
-      {/* Ranked bar chart */}
+      {/* Ranked bar chart — 2-column grid */}
       {entries.length === 0 ? (
         <div style={{ color: 'var(--text-tertiary)', fontSize: 13, textAlign: 'center', padding: 16 }}>
           {t('tools.no_data', lang)}
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '5px 20px' }}>
           {entries.map(([name, value]) => {
             const pct = value / max
             const shareOfTotal = total > 0 ? value / total : 0
             // Villain classification only applies in token spend mode
-            const isVillain = viewMode === 'tokens' && shareOfTotal > 0.4 && entries.length > 2
+            const isVillain = effectiveMode === 'tokens' && shareOfTotal > 0.4 && entries.length > 2
 
             const barBackground = isVillain
               ? 'linear-gradient(90deg, #ef4444, #f97316)'
-              : viewMode === 'tokens'
+              : effectiveMode === 'tokens'
                 ? 'rgba(217, 119, 6, 0.25)'
                 : 'rgba(74, 222, 128, 0.25)'
 
@@ -151,7 +159,7 @@ export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads,
       )}
 
       {/* Agent file reads section */}
-      {totalAgentReads > 0 && (
+      {!hideAgentReads && totalAgentReads > 0 && (
         <div style={{
           marginTop: 8,
           padding: '12px 14px',

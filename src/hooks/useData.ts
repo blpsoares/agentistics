@@ -192,7 +192,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       if (!s.start_time) return false
       if (!inRange(parseISO(s.start_time), start, end)) return false
       if (projectFiltered && !projectSet.has(s.project_path)) return false
-      if (modelSet && s.model && !modelSet.has(s.model)) return false
+      if (modelSet && (!s.model || !modelSet.has(s.model))) return false
       return true
     })
 
