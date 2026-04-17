@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import type { AppContext } from './app-context'
 import { formatProjectName } from './types'
-import { fmt, fmtDuration, fmtCost } from './format'
+import { fmt, fmtDuration, fmtCost, fmtFull, fmtCostFull } from './format'
 import { StatCard } from '../components/StatCard'
 import { HighlightsBoard } from '../components/HighlightsBoard'
 import { ActivityChart } from '../components/ActivityChart'
@@ -51,130 +51,172 @@ export interface CatalogItem {
   render: (ctx: AppContext) => React.ReactNode
 }
 
-const kpiCard = (label: string, accent: string, icon: React.ReactNode, value: React.ReactNode, sub: React.ReactNode) => (
-  <StatCard label={label} value={value as any} sub={sub as any} icon={icon} accent={accent} />
-)
+function kpiCard(
+  ctx: AppContext,
+  cardId: string,
+  label: string,
+  accent: string,
+  icon: React.ReactNode,
+  value: string | number,
+  valueFull: string | number,
+  sub: React.ReactNode,
+  action?: React.ReactNode,
+) {
+  const full = ctx.cardPrecision?.[cardId] ?? false
+  return (
+    <StatCard
+      label={label}
+      value={full ? valueFull : value}
+      sub={sub as any}
+      icon={icon}
+      accent={accent}
+      fullPrecision={full}
+      onTogglePrecision={() => ctx.setCardPrecision?.(cardId, !full)}
+      action={action}
+    />
+  )
+}
 
 export const CATALOG: CatalogItem[] = [
   // ── KPI cards ──────────────────────────────────────────────────────────────
   {
     id: 'kpi.messages', labelPt: 'Mensagens', labelEn: 'Messages', category: 'kpi',
     icon: MessageSquare, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
-    render: ({ derived, lang }) => kpiCard(
-      lang === 'pt' ? 'Mensagens' : 'Messages',
+    render: (ctx) => kpiCard(
+      ctx, 'kpi.messages',
+      ctx.lang === 'pt' ? 'Mensagens' : 'Messages',
       'var(--anthropic-orange)',
       <MessageSquare size={15} />,
-      fmt(derived.totalMessages),
-      lang === 'pt' ? 'no período selecionado' : 'in selected period',
+      fmt(ctx.derived.totalMessages),
+      fmtFull(ctx.derived.totalMessages),
+      ctx.lang === 'pt' ? 'no período selecionado' : 'in selected period',
     ),
   },
   {
     id: 'kpi.sessions', labelPt: 'Sessões', labelEn: 'Sessions', category: 'kpi',
     icon: Zap, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
-    render: ({ derived, lang }) => kpiCard(
-      lang === 'pt' ? 'Sessões' : 'Sessions',
+    render: (ctx) => kpiCard(
+      ctx, 'kpi.sessions',
+      ctx.lang === 'pt' ? 'Sessões' : 'Sessions',
       'var(--accent-blue)',
       <Zap size={15} />,
-      fmt(derived.totalSessions),
-      `avg ${derived.totalSessions > 0 ? Math.round(derived.totalMessages / derived.totalSessions) : 0} msgs/sessão`,
+      fmt(ctx.derived.totalSessions),
+      fmtFull(ctx.derived.totalSessions),
+      `avg ${ctx.derived.totalSessions > 0 ? Math.round(ctx.derived.totalMessages / ctx.derived.totalSessions) : 0} msgs/sessão`,
     ),
   },
   {
     id: 'kpi.tool-calls', labelPt: 'Tool calls', labelEn: 'Tool calls', category: 'kpi',
     icon: Wrench, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
-    render: ({ derived, lang }) => kpiCard(
-      lang === 'pt' ? 'Tool calls' : 'Tool calls',
+    render: (ctx) => kpiCard(
+      ctx, 'kpi.tool-calls',
+      ctx.lang === 'pt' ? 'Tool calls' : 'Tool calls',
       'var(--accent-green)',
       <Wrench size={15} />,
-      fmt(derived.totalToolCalls),
-      lang === 'pt' ? 'execuções totais' : 'total executions',
+      fmt(ctx.derived.totalToolCalls),
+      fmtFull(ctx.derived.totalToolCalls),
+      ctx.lang === 'pt' ? 'execuções totais' : 'total executions',
     ),
   },
   {
     id: 'kpi.cost', labelPt: 'Custo estimado', labelEn: 'Estimated cost', category: 'kpi',
     icon: TrendingUp, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
-    render: ({ derived, lang, currency, brlRate }) => kpiCard(
-      lang === 'pt' ? 'Custo estimado' : 'Est. cost',
+    render: (ctx) => kpiCard(
+      ctx, 'kpi.cost',
+      ctx.lang === 'pt' ? 'Custo estimado' : 'Est. cost',
       'var(--anthropic-orange)',
       <TrendingUp size={15} />,
-      fmtCost(derived.totalCostUSD, currency, brlRate),
-      lang === 'pt' ? 'preços da API Anthropic' : 'Anthropic API pricing',
+      fmtCost(ctx.derived.totalCostUSD, ctx.currency, ctx.brlRate),
+      fmtCostFull(ctx.derived.totalCostUSD, ctx.currency, ctx.brlRate),
+      ctx.lang === 'pt' ? 'preços da API Anthropic' : 'Anthropic API pricing',
     ),
   },
   {
     id: 'kpi.streak', labelPt: 'Sequência', labelEn: 'Streak', category: 'kpi',
     icon: Flame, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
-    render: ({ derived, lang }) => kpiCard(
-      lang === 'pt' ? 'Sequência' : 'Streak',
-      '#ef4444',
-      <Flame size={15} />,
-      `${derived.streak}d`,
-      lang === 'pt' ? 'dias consecutivos' : 'consecutive days',
+    render: ({ derived, lang }) => (
+      <StatCard
+        label={lang === 'pt' ? 'Sequência' : 'Streak'}
+        value={`${derived.streak}d`}
+        sub={lang === 'pt' ? 'dias consecutivos' : 'consecutive days'}
+        icon={<Flame size={15} />}
+        accent="#ef4444"
+      />
     ),
   },
   {
     id: 'kpi.longest-session', labelPt: 'Sessão mais longa', labelEn: 'Longest session', category: 'kpi',
     icon: Clock, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
-    render: ({ derived, lang, filters }) => kpiCard(
-      lang === 'pt' ? 'Sessão mais longa' : 'Longest session',
-      'var(--accent-purple)',
-      <Clock size={15} />,
-      derived.longestSession?.duration_minutes ? fmtDuration(derived.longestSession.duration_minutes * 60_000) : '—',
-      derived.longestSession ? (() => {
-        const msgs = (derived.longestSession!.user_message_count ?? 0) + (derived.longestSession!.assistant_message_count ?? 0)
-        const msgStr = `${msgs} ${lang === 'pt' ? 'mensagens' : 'messages'}`
-        if (filters.projects.length === 0 && derived.longestSession!.project_path)
-          return `${msgStr} · ${formatProjectName(derived.longestSession!.project_path)}`
-        return msgStr
-      })() : '',
+    render: ({ derived, lang, filters }) => (
+      <StatCard
+        label={lang === 'pt' ? 'Sessão mais longa' : 'Longest session'}
+        value={derived.longestSession?.duration_minutes ? fmtDuration(derived.longestSession.duration_minutes * 60_000) : '—'}
+        sub={derived.longestSession ? (() => {
+          const msgs = (derived.longestSession!.user_message_count ?? 0) + (derived.longestSession!.assistant_message_count ?? 0)
+          const msgStr = `${msgs} ${lang === 'pt' ? 'mensagens' : 'messages'}`
+          if (filters.projects.length === 0 && derived.longestSession!.project_path)
+            return `${msgStr} · ${formatProjectName(derived.longestSession!.project_path)}`
+          return msgStr
+        })() : ''}
+        icon={<Clock size={15} />}
+        accent="var(--accent-purple)"
+      />
     ),
   },
   {
     id: 'kpi.commits', labelPt: 'Commits', labelEn: 'Commits', category: 'kpi',
     icon: GitCommit, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
-    render: ({ derived, lang }) => kpiCard(
-      lang === 'pt' ? 'Commits' : 'Commits',
-      'var(--accent-cyan)',
-      <GitCommit size={15} />,
-      derived.gitCommits,
-      derived.gitPushes > 0
-        ? `${derived.gitPushes} ${lang === 'pt' ? 'pushes via Claude' : 'pushes via Claude'}`
-        : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls',
+    render: ({ derived, lang }) => (
+      <StatCard
+        label={lang === 'pt' ? 'Commits' : 'Commits'}
+        value={derived.gitCommits}
+        sub={derived.gitPushes > 0
+          ? `${derived.gitPushes} ${lang === 'pt' ? 'pushes via Claude' : 'pushes via Claude'}`
+          : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls'}
+        icon={<GitCommit size={15} />}
+        accent="var(--accent-cyan)"
+      />
     ),
   },
   {
     id: 'kpi.files', labelPt: 'Arquivos modificados', labelEn: 'Files modified', category: 'kpi',
     icon: FileCode, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
-    render: ({ derived, lang }) => kpiCard(
-      lang === 'pt' ? 'Arquivos' : 'Files',
-      'var(--accent-green)',
-      <FileCode size={15} />,
-      derived.filesModified,
-      derived.linesAdded + derived.linesRemoved > 0
-        ? `+${fmt(derived.linesAdded)} / -${fmt(derived.linesRemoved)} linhas`
-        : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls',
+    render: ({ derived, lang }) => (
+      <StatCard
+        label={lang === 'pt' ? 'Arquivos' : 'Files'}
+        value={derived.filesModified}
+        sub={derived.linesAdded + derived.linesRemoved > 0
+          ? `+${fmt(derived.linesAdded)} / -${fmt(derived.linesRemoved)} linhas`
+          : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls'}
+        icon={<FileCode size={15} />}
+        accent="var(--accent-green)"
+      />
     ),
   },
   {
     id: 'kpi.input-tokens', labelPt: 'Tokens de entrada', labelEn: 'Input tokens', category: 'kpi',
     icon: Download, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
-    render: ({ totalInputTokens, lang }) => kpiCard(
-      lang === 'pt' ? 'Tokens entrada' : 'Input tokens',
+    render: (ctx) => kpiCard(
+      ctx, 'kpi.input-tokens',
+      ctx.lang === 'pt' ? 'Tokens entrada' : 'Input tokens',
       'var(--accent-blue)',
       <Download size={15} />,
-      fmt(totalInputTokens),
-      lang === 'pt' ? 'tokens enviados ao modelo' : 'tokens sent to model',
+      fmt(ctx.totalInputTokens),
+      fmtFull(ctx.totalInputTokens),
+      ctx.lang === 'pt' ? 'tokens enviados ao modelo' : 'tokens sent to model',
     ),
   },
   {
     id: 'kpi.output-tokens', labelPt: 'Tokens de saída', labelEn: 'Output tokens', category: 'kpi',
     icon: Upload, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
-    render: ({ totalOutputTokens, lang }) => kpiCard(
-      lang === 'pt' ? 'Tokens saída' : 'Output tokens',
+    render: (ctx) => kpiCard(
+      ctx, 'kpi.output-tokens',
+      ctx.lang === 'pt' ? 'Tokens saída' : 'Output tokens',
       'var(--accent-purple)',
       <Upload size={15} />,
-      fmt(totalOutputTokens),
-      lang === 'pt' ? 'tokens gerados pelo modelo' : 'tokens generated by model',
+      fmt(ctx.totalOutputTokens),
+      fmtFull(ctx.totalOutputTokens),
+      ctx.lang === 'pt' ? 'tokens gerados pelo modelo' : 'tokens generated by model',
     ),
   },
 

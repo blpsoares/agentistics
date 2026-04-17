@@ -21,6 +21,7 @@ export interface Preferences {
   lang?: 'pt' | 'en'
   theme?: 'dark' | 'light'
   currency?: 'USD' | 'BRL'
+  cardPrecision?: Record<string, boolean>
 }
 
 const DEFAULT_PREFS: Preferences = {

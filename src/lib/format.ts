@@ -21,3 +21,18 @@ export function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1):
   if (usd < 0.01) return '<USD 0.01'
   return `USD ${usd.toFixed(2)}`
 }
+
+export function fmtFull(n: number): string {
+  return n.toLocaleString('en-US')
+}
+
+export function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string {
+  if (currency === 'BRL') {
+    const brl = usd * rate
+    if (brl < 0.00001) return '<R$0,00001'
+    const [intPart, decPart] = brl.toFixed(6).split('.')
+    return `R$${(intPart ?? '0').replace(/\B(?=(\d{3})+$)/g, '.')},${decPart}`
+  }
+  if (usd < 0.000001) return '<USD 0.000001'
+  return `USD ${usd.toFixed(6)}`
+}

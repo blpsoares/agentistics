@@ -1,5 +1,5 @@
 import React from 'react'
-import { Info } from 'lucide-react'
+import { Info, Maximize2, Minimize2 } from 'lucide-react'
 
 interface StatCardProps {
   label: string
@@ -14,9 +14,11 @@ interface StatCardProps {
   }
   onInfoClick?: () => void
   action?: React.ReactNode
+  fullPrecision?: boolean
+  onTogglePrecision?: () => void
 }
 
-export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-orange)', info, onInfoClick, action }: StatCardProps) {
+export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-orange)', info, onInfoClick, action, fullPrecision, onTogglePrecision }: StatCardProps) {
   return (
     <div style={{
       background: 'var(--bg-card)',
@@ -57,6 +59,25 @@ export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-or
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {action}
+          {onTogglePrecision && (
+            <button
+              onClick={onTogglePrecision}
+              title={fullPrecision ? 'Show abbreviated' : 'Show exact number'}
+              style={{
+                width: 18, height: 18,
+                borderRadius: '50%',
+                background: fullPrecision ? `${accent}20` : 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: fullPrecision ? accent : 'var(--text-tertiary)',
+                padding: 0,
+                transition: 'color 0.15s, background 0.15s',
+              }}
+            >
+              {fullPrecision ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
+            </button>
+          )}
           {info && (
             <button
               onClick={onInfoClick}

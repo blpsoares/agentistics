@@ -49,4 +49,8 @@ export interface AppContext {
   dragCardRef: React.MutableRefObject<string | null>
   dragOverCard: string | null
   setDragOverCard: (v: string | null) => void
+
+  // per-card full precision toggle
+  cardPrecision: Record<string, boolean>
+  setCardPrecision: (id: string, v: boolean) => void
 }

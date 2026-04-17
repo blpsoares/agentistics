@@ -551,6 +551,10 @@ function LiveSettingsModal({
   )
 }
 
+function fmtFull(n: number): string {
+  return n.toLocaleString('en-US')
+}
+
 function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string {
   if (currency === 'BRL') {
     const brl = usd * rate
@@ -560,6 +564,17 @@ function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string
   }
   if (usd < 0.01) return '<USD 0.01'
   return `USD ${usd.toFixed(2)}`
+}
+
+function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string {
+  if (currency === 'BRL') {
+    const brl = usd * rate
+    if (brl < 0.00001) return '<R$0,00001'
+    const [intPart, decPart] = brl.toFixed(6).split('.')
+    return `R$${(intPart ?? '0').replace(/\B(?=(\d{3})+$)/g, '.')},${decPart}`
+  }
+  if (usd < 0.000001) return '<USD 0.000001'
+  return `USD ${usd.toFixed(6)}`
 }
 
 function NavTabs({ lang }: { lang: Lang }) {
@@ -678,12 +693,38 @@ export default function AppLayout() {
   })
   const dragCardRef = useRef<CardId | null>(null)
   const [dragOverCard, setDragOverCard] = useState<CardId | null>(null)
+
+  const [cardPrecision, setCardPrecisionState] = useState<Record<string, boolean>>({})
+  const precisionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const setCardPrecision = useCallback((id: string, v: boolean) => {
+    setCardPrecisionState(prev => {
+      const next = { ...prev, [id]: v }
+      if (precisionSaveTimer.current) clearTimeout(precisionSaveTimer.current)
+      precisionSaveTimer.current = setTimeout(() => {
+        fetch('/api/preferences', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cardPrecision: next }),
+        }).catch(() => {})
+      }, 400)
+      return next
+    })
+  }, [])
   const [scrolled, setScrolled] = useState(false)
   const [highlightUpdates, setHighlightUpdates] = useState(true)
   const highlightUpdatesRef = useRef(true)
   const flashTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const prevDerivedFingerprintRef = useRef<Record<string, string>>({})
   const liveFlashFirstRunRef = useRef(true)
+
+  useEffect(() => {
+    fetch('/api/preferences')
+      .then(r => r.ok ? r.json() : null)
+      .then((prefs: { cardPrecision?: Record<string, boolean> } | null) => {
+        if (prefs?.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
+      })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -1041,76 +1082,91 @@ export default function AppLayout() {
     }
 
     let card: React.ReactNode = null
+    const fullKey = `kpi.${id}`
+    const full = cardPrecision[fullKey] ?? false
+    const toggleFull = () => setCardPrecision(fullKey, !full)
     if (id === 'messages') {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Mensagens' : 'Messages'}
-          value={fmt(d.totalMessages)}
+          value={full ? fmtFull(d.totalMessages) : fmt(d.totalMessages)}
           sub={lang === 'pt' ? 'no período selecionado' : 'in selected period'}
           icon={<MessageSquare size={15} />}
           accent="var(--anthropic-orange)"
           info={infoItems[0]}
           onInfoClick={() => setInfoModalIndex(0)}
+          fullPrecision={full}
+          onTogglePrecision={toggleFull}
         />
       )
     } else if (id === 'sessions') {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Sessões' : 'Sessions'}
-          value={fmt(d.totalSessions)}
+          value={full ? fmtFull(d.totalSessions) : fmt(d.totalSessions)}
           sub={`avg ${d.totalSessions > 0 ? Math.round(d.totalMessages / d.totalSessions) : 0} msgs/sessão`}
           icon={<Zap size={15} />}
           accent="var(--accent-blue)"
           info={infoItems[1]}
           onInfoClick={() => setInfoModalIndex(1)}
+          fullPrecision={full}
+          onTogglePrecision={toggleFull}
         />
       )
     } else if (id === 'tool-calls') {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Tool calls' : 'Tool calls'}
-          value={fmt(d.totalToolCalls)}
+          value={full ? fmtFull(d.totalToolCalls) : fmt(d.totalToolCalls)}
           sub={lang === 'pt' ? 'execuções totais' : 'total executions'}
           icon={<Wrench size={15} />}
           accent="var(--accent-green)"
           info={infoItems[2]}
           onInfoClick={() => setInfoModalIndex(2)}
+          fullPrecision={full}
+          onTogglePrecision={toggleFull}
         />
       )
     } else if (id === 'input-tokens') {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Tokens entrada' : 'Input tokens'}
-          value={fmt(totalInputTokens)}
+          value={full ? fmtFull(totalInputTokens) : fmt(totalInputTokens)}
           sub={lang === 'pt' ? 'tokens enviados ao modelo' : 'tokens sent to model'}
           icon={<Download size={15} />}
           accent="var(--accent-blue)"
           info={infoItems[8]}
           onInfoClick={() => setInfoModalIndex(8)}
+          fullPrecision={full}
+          onTogglePrecision={toggleFull}
         />
       )
     } else if (id === 'output-tokens') {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Tokens saída' : 'Output tokens'}
-          value={fmt(totalOutputTokens)}
+          value={full ? fmtFull(totalOutputTokens) : fmt(totalOutputTokens)}
           sub={lang === 'pt' ? 'tokens gerados pelo modelo' : 'tokens generated by model'}
           icon={<Upload size={15} />}
           accent="var(--accent-purple)"
           info={infoItems[9]}
           onInfoClick={() => setInfoModalIndex(9)}
+          fullPrecision={full}
+          onTogglePrecision={toggleFull}
         />
       )
     } else if (id === 'cost') {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Custo estimado' : 'Est. cost'}
-          value={fmtCost(d.totalCostUSD, currency, brlRate)}
+          value={full ? fmtCostFull(d.totalCostUSD, currency, brlRate) : fmtCost(d.totalCostUSD, currency, brlRate)}
           sub={lang === 'pt' ? 'preços da API Anthropic · não é assinatura' : 'Anthropic API pricing · not subscription'}
           icon={<TrendingUp size={15} />}
           accent="var(--anthropic-orange)"
           info={infoItems[5]}
           onInfoClick={() => setInfoModalIndex(5)}
+          fullPrecision={full}
+          onTogglePrecision={toggleFull}
           action={
             <button
               onClick={() => setCurrency(c => c === 'USD' ? 'BRL' : 'USD')}
@@ -1506,6 +1562,7 @@ export default function AppLayout() {
           setExpandedChart, setSelectedSession, setInfoModalIndex,
           infoItems,
           cardOrder, setCardOrder, dragCardRef, dragOverCard, setDragOverCard,
+          cardPrecision, setCardPrecision,
         }} />
       </main>
 
