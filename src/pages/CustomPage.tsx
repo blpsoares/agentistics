@@ -784,30 +784,10 @@ export default function CustomPage() {
           </>
         )}
 
-        <div style={{ width: 1, height: 16, background: 'var(--border)', flexShrink: 0, margin: '0 2px' }} />
-
-        {locked ? (
-          /* ── View mode: single Edit button ── */
-          <button
-            onClick={handleUnlock}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '5px 12px', height: 28,
-              background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-              borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-              fontSize: 12, fontWeight: 600, color: 'var(--text-primary)',
-              transition: 'all 0.15s',
-            }}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--anthropic-orange)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--anthropic-orange)' }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
-            title={pt ? 'Entrar no modo de edição' : 'Enter edit mode'}
-          >
-            <Pencil size={13} />
-            {pt ? 'Editar' : 'Edit'}
-          </button>
-        ) : (
-          /* ── Edit mode: palette | undo/redo | dice | save/cancel ── */
+        {/* Edit mode left-side tools */}
+        {!locked && (
           <>
+            <div style={{ width: 1, height: 16, background: 'var(--border)', flexShrink: 0, margin: '0 2px' }} />
             {/* Palette toggle */}
             <button
               className="icon-btn"
@@ -817,71 +797,26 @@ export default function CustomPage() {
             >
               {sidebarOpen ? <PanelLeftClose size={13} /> : <PanelLeftOpen size={13} />}
             </button>
-
             <div style={{ width: 1, height: 16, background: 'var(--border)', flexShrink: 0, margin: '0 2px' }} />
-
             {/* Undo / Redo */}
-            <button
-              className="icon-btn"
-              onClick={handleUndo}
-              disabled={undoStack.length === 0}
-              title={pt ? 'Desfazer (Ctrl+Z)' : 'Undo (Ctrl+Z)'}
-              style={{ width: 28, height: 28 }}
-            >
+            <button className="icon-btn" onClick={handleUndo} disabled={undoStack.length === 0} title={pt ? 'Desfazer (Ctrl+Z)' : 'Undo (Ctrl+Z)'} style={{ width: 28, height: 28 }}>
               <Undo2 size={13} />
             </button>
-            <button
-              className="icon-btn"
-              onClick={handleRedo}
-              disabled={redoStack.length === 0}
-              title={pt ? 'Refazer (Ctrl+Y)' : 'Redo (Ctrl+Y)'}
-              style={{ width: 28, height: 28 }}
-            >
+            <button className="icon-btn" onClick={handleRedo} disabled={redoStack.length === 0} title={pt ? 'Refazer (Ctrl+Y)' : 'Redo (Ctrl+Y)'} style={{ width: 28, height: 28 }}>
               <Redo2 size={13} />
             </button>
-
             <div style={{ width: 1, height: 16, background: 'var(--border)', flexShrink: 0, margin: '0 2px' }} />
-
             {/* Random layout */}
-            <button
-              className="icon-btn"
-              onClick={generateRandomLayout}
-              title={pt ? 'Gerar layout aleatório' : 'Random layout'}
-              style={{ width: 28, height: 28 }}
-            >
+            <button className="icon-btn" onClick={generateRandomLayout} title={pt ? 'Gerar layout aleatório' : 'Random layout'} style={{ width: 28, height: 28 }}>
               <Dice5 size={13} />
-            </button>
-
-            <div style={{ flex: 1 }} />
-
-            {/* Save / Cancel */}
-            <button
-              className="icon-btn"
-              onClick={handleCancelEdit}
-              title={pt ? 'Cancelar (reverter alterações)' : 'Cancel (revert changes)'}
-              style={{ width: 'auto', paddingLeft: 12, paddingRight: 12, height: 28, fontSize: 12, fontWeight: 500 }}
-            >
-              {pt ? 'Cancelar' : 'Cancel'}
-            </button>
-            <button
-              onClick={handleSave}
-              title={pt ? 'Salvar e sair do modo de edição' : 'Save & exit editing'}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '5px 14px', height: 28,
-                background: 'var(--anthropic-orange)', border: 'none',
-                borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-                fontSize: 12, fontWeight: 700, color: '#fff',
-                boxShadow: '0 1px 4px rgba(217,119,6,0.3)',
-              }}
-            >
-              <Save size={12} />
-              {pt ? 'Salvar' : 'Save'}
             </button>
           </>
         )}
 
-        <div style={{ width: 1, height: 16, background: 'var(--border)', flexShrink: 0, margin: '0 2px' }} />
+        {/* ── Spacer pushes everything right ── */}
+        <div style={{ flex: 1 }} />
+
+        {/* ── RIGHT GROUP: pin | download | upload | [clear] | [cancel | save] | [edit] ── */}
 
         {/* Pinned projects picker */}
         <div ref={projectPickerRef} style={{ position: 'relative' }}>
@@ -889,7 +824,7 @@ export default function CustomPage() {
             className={`icon-btn ${pinnedProjects.length > 0 ? 'active' : ''}`}
             onClick={() => setProjectPickerOpen(v => !v)}
             title={pt ? 'Projetos fixados neste layout' : 'Projects pinned to this layout'}
-            style={{ width: 'auto', paddingLeft: 8, paddingRight: 8, gap: 5, height: 30, fontSize: 11, fontWeight: 500 }}
+            style={{ width: 'auto', paddingLeft: 8, paddingRight: 8, gap: 5, height: 28, fontSize: 11, fontWeight: 500 }}
           >
             <FolderOpen size={13} />
             {pinnedProjects.length > 0
@@ -994,55 +929,82 @@ export default function CustomPage() {
           )}
         </div>
 
-        {/* Divider */}
-        <div style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
+        <div style={{ width: 1, height: 16, background: 'var(--border)', flexShrink: 0, margin: '0 2px' }} />
 
         {/* Export / Import */}
-        <button
-          className="icon-btn"
-          onClick={handleExport}
-          title={pt ? 'Exportar layout como JSON' : 'Export layout as JSON'}
-          style={{ width: 26, height: 26 }}
-        >
+        <button className="icon-btn" onClick={handleExport} title={pt ? 'Exportar layout como JSON' : 'Export layout as JSON'} style={{ width: 26, height: 26 }}>
           <Download size={12} />
         </button>
-        <button
-          className="icon-btn"
-          onClick={() => importFileRef.current?.click()}
-          title={pt ? 'Importar layout de JSON' : 'Import layout from JSON'}
-          style={{ width: 26, height: 26 }}
-        >
+        <button className="icon-btn" onClick={() => importFileRef.current?.click()} title={pt ? 'Importar layout de JSON' : 'Import layout from JSON'} style={{ width: 26, height: 26 }}>
           <Upload size={12} />
         </button>
-        <input
-          ref={importFileRef}
-          type="file"
-          accept=".json,application/json"
-          style={{ display: 'none' }}
-          onChange={handleImportFile}
-        />
+        <input ref={importFileRef} type="file" accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportFile} />
 
-        {/* Clear canvas — spacer on left */}
-        {items.length > 0 && !locked && (
+        {/* Clear — edit mode only, when canvas has items */}
+        {!locked && items.length > 0 && (
           <>
-            <div style={{ flex: 1 }} />
+            <div style={{ width: 1, height: 16, background: 'var(--border)', flexShrink: 0, margin: '0 2px' }} />
             <button
+              className="icon-btn danger"
               onClick={handleReset}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 5,
-                padding: '5px 10px', background: 'transparent',
-                border: '1px solid var(--border)', borderRadius: 6,
-                color: 'var(--text-tertiary)', cursor: 'pointer',
-                fontFamily: 'inherit', fontSize: 11, fontWeight: 500,
-                transition: 'all 0.15s', height: 30,
-              }}
-              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#ef4444'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#ef444460' }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}
+              title={pt ? 'Limpar canvas' : 'Clear canvas'}
+              style={{ width: 'auto', paddingLeft: 8, paddingRight: 8, gap: 5, height: 28, fontSize: 11, fontWeight: 500 }}
             >
               <RotateCcw size={11} />
               {pt ? 'Limpar' : 'Clear'}
             </button>
           </>
+        )}
+
+        {/* Cancel / Save — edit mode */}
+        {!locked && (
+          <>
+            <div style={{ width: 1, height: 16, background: 'var(--border)', flexShrink: 0, margin: '0 2px' }} />
+            <button
+              className="icon-btn"
+              onClick={handleCancelEdit}
+              title={pt ? 'Cancelar (reverter alterações)' : 'Cancel (revert changes)'}
+              style={{ width: 'auto', paddingLeft: 12, paddingRight: 12, height: 28, fontSize: 12, fontWeight: 500 }}
+            >
+              {pt ? 'Cancelar' : 'Cancel'}
+            </button>
+            <button
+              onClick={handleSave}
+              title={pt ? 'Salvar e sair do modo de edição' : 'Save & exit editing'}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '5px 14px', height: 28,
+                background: 'var(--anthropic-orange)', border: 'none',
+                borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+                fontSize: 12, fontWeight: 700, color: '#fff',
+                boxShadow: '0 1px 4px rgba(217,119,6,0.3)',
+              }}
+            >
+              <Save size={12} />
+              {pt ? 'Salvar' : 'Save'}
+            </button>
+          </>
+        )}
+
+        {/* Edit button — view mode only */}
+        {locked && (
+          <button
+            onClick={handleUnlock}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '5px 12px', height: 28,
+              background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+              borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+              fontSize: 12, fontWeight: 600, color: 'var(--text-primary)',
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--anthropic-orange)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--anthropic-orange)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+            title={pt ? 'Entrar no modo de edição' : 'Enter edit mode'}
+          >
+            <Pencil size={13} />
+            {pt ? 'Editar' : 'Edit'}
+          </button>
         )}
       </div>
 
