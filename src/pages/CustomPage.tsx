@@ -227,7 +227,7 @@ export default function CustomPage() {
   const nextIdRef = useRef(Date.now())
 
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [locked, setLocked] = useState(false)
+  const [locked, setLocked] = useState(true)
 
   // Undo / redo stacks — each entry is a frozen snapshot of items[]
   const [undoStack, setUndoStack] = useState<GridItem[][]>([])
@@ -767,23 +767,18 @@ export default function CustomPage() {
         {/* Divider */}
         <div style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
 
-        {/* Lock toggle */}
-        <button
-          className={`icon-btn ${locked ? 'active' : ''}`}
-          onClick={locked ? handleUnlock : handleSave}
-          title={locked
-            ? (pt ? 'Desbloquear (habilitar edição)' : 'Unlock (enable editing)')
-            : (pt ? 'Bloquear (salvar e desabilitar edição)' : 'Lock (save & disable editing)')}
-          style={{ width: 30, height: 30 }}
-        >
-          {locked ? <Lock size={14} /> : <Unlock size={14} />}
-        </button>
-
-        {/* Edit-mode actions: undo / redo / dice / cancel — only when unlocked */}
-        {!locked && (
+        {/* Edit / Save / Cancel */}
+        {locked ? (
+          <button
+            className="icon-btn"
+            onClick={handleUnlock}
+            title={pt ? 'Editar layout' : 'Edit layout'}
+            style={{ width: 30, height: 30 }}
+          >
+            <Pencil size={14} />
+          </button>
+        ) : (
           <>
-            <div style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
-
             <button
               className="icon-btn"
               onClick={handleUndo}
@@ -814,28 +809,25 @@ export default function CustomPage() {
               <Dice5 size={13} />
             </button>
 
-            {editBaseline !== null && (
-              <>
-                <div style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
-                <button
-                  className="icon-btn accent"
-                  onClick={handleSave}
-                  title={pt ? 'Salvar e bloquear' : 'Save & lock'}
-                  style={{ width: 'auto', paddingLeft: 8, paddingRight: 8, gap: 4, height: 28, fontSize: 11, fontWeight: 600 }}
-                >
-                  <Save size={12} />
-                  {pt ? 'Salvar' : 'Save'}
-                </button>
-                <button
-                  className="icon-btn"
-                  onClick={handleCancelEdit}
-                  title={pt ? 'Cancelar edição (reverter alterações)' : 'Cancel editing (revert changes)'}
-                  style={{ width: 'auto', paddingLeft: 8, paddingRight: 8, height: 28, fontSize: 11, fontWeight: 500 }}
-                >
-                  {pt ? 'Cancelar' : 'Cancel'}
-                </button>
-              </>
-            )}
+            <div style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
+
+            <button
+              className="icon-btn accent"
+              onClick={handleSave}
+              title={pt ? 'Salvar e sair do modo de edição' : 'Save & exit editing'}
+              style={{ width: 'auto', paddingLeft: 10, paddingRight: 10, gap: 5, height: 28, fontSize: 11, fontWeight: 600 }}
+            >
+              <Save size={12} />
+              {pt ? 'Salvar' : 'Save'}
+            </button>
+            <button
+              className="icon-btn"
+              onClick={handleCancelEdit}
+              title={pt ? 'Cancelar edição (reverter alterações)' : 'Cancel editing (revert changes)'}
+              style={{ width: 'auto', paddingLeft: 10, paddingRight: 10, height: 28, fontSize: 11, fontWeight: 500 }}
+            >
+              {pt ? 'Cancelar' : 'Cancel'}
+            </button>
           </>
         )}
 
