@@ -639,6 +639,8 @@ function NavTabs({ lang }: { lang: Lang }) {
 }
 
 export default function AppLayout() {
+  const location = useLocation()
+  const isCustomPage = location.pathname === '/custom'
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
   const [showLiveSettings, setShowLiveSettings] = useState(false)
@@ -1351,8 +1353,8 @@ export default function AppLayout() {
           </div>
         </div>
 
-        {/* Filters row — second row of sticky header */}
-        {data && (
+        {/* Filters row — second row of sticky header. Hidden on /custom (filter bar moves into the page). */}
+        {data && !isCustomPage && (
           <div style={{
             borderTop: '1px solid var(--border)',
             maxWidth: 1400,
@@ -1400,6 +1402,7 @@ export default function AppLayout() {
           infoItems,
           cardOrder, setCardOrder: setCardOrder as (o: string[]) => void,
           cardPrecision, setCardPrecision,
+          sessionCountByProject, models, modelsInProject,
         }} />
       </main>
 

@@ -14,6 +14,7 @@ import type { AppContext } from '../lib/app-context'
 import { CATALOG, CATEGORY_LABELS, getCatalogItem, type CatalogItem, type CatalogCategory } from '../lib/componentCatalog'
 import { useCustomLayout, type GridItem } from '../hooks/useCustomLayout'
 import { formatProjectName } from '../lib/types'
+import { FiltersBar } from '../components/FiltersBar'
 
 const GRID_COLS = 12
 const GRID_ROW_HEIGHT = 40
@@ -193,7 +194,7 @@ function ProjectSelect({ value, options, pt, onChange }: {
 
 export default function CustomPage() {
   const ctx = useOutletContext<AppContext>()
-  const { lang, setFilters, data } = ctx
+  const { lang, setFilters, data, filters } = ctx
   const {
     items, setItems, addItem, removeItem, reset, loaded,
     layoutNames, activeLayout,
@@ -207,17 +208,10 @@ export default function CustomPage() {
     [data.projects]
   )
 
-  const [projectSearch, setProjectSearch] = useState('')
   // Layout options menu (rename / duplicate / delete)
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false)
   const layoutMenuBtnRef = useRef<HTMLButtonElement>(null)
   const [layoutMenuPos, setLayoutMenuPos] = useState({ top: 0, left: 0 })
-
-  const filteredProjects = useMemo(() => {
-    const q = projectSearch.trim().toLowerCase()
-    if (!q) return allProjects
-    return allProjects.filter(p => formatProjectName(p).toLowerCase().includes(q) || p.toLowerCase().includes(q))
-  }, [allProjects, projectSearch])
 
   const [draggedCatalogItem, setDraggedCatalogItem] = useState<CatalogItem | null>(null)
   const draggedCatalogItemRef = useRef<CatalogItem | null>(null)
@@ -947,70 +941,20 @@ export default function CustomPage() {
             gap: 10,
           }}
         >
-          {/* ── Project filter ── */}
-          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '12px 14px 10px', flexShrink: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <FolderOpen size={13} style={{ color: pinnedProjects.length > 0 ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', flexShrink: 0 }} />
-              <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-tertiary)', flex: 1 }}>
-                {pt ? 'Projetos' : 'Projects'}
-              </div>
-              {pinnedProjects.length > 0 && (
-                <button
-                  onClick={() => { setPinnedProjects([]); setFilters(prev => ({ ...prev, projects: [] })) }}
-                  style={{ fontSize: 10, color: 'var(--text-tertiary)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '1px 4px', borderRadius: 4, fontFamily: 'inherit' }}
-                  onMouseEnter={e => (e.currentTarget.style.color = '#ef4444')}
-                  onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-tertiary)')}
-                  title={pt ? 'Limpar seleção' : 'Clear selection'}
-                >
-                  {pt ? 'Limpar' : 'Clear'}
-                </button>
-              )}
-            </div>
-            {allProjects.length > 0 && (
-              <div style={{ position: 'relative', marginBottom: 6 }}>
-                <Search size={11} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)', pointerEvents: 'none' }} />
-                <input
-                  type="text"
-                  placeholder={pt ? 'Buscar…' : 'Search…'}
-                  value={projectSearch}
-                  onChange={e => setProjectSearch(e.target.value)}
-                  style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px 6px 26px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, fontSize: 11, color: 'var(--text-primary)', fontFamily: 'inherit', outline: 'none' }}
-                  onFocus={e => e.currentTarget.style.borderColor = 'var(--anthropic-orange)40'}
-                  onBlur={e => e.currentTarget.style.borderColor = 'var(--border-subtle)'}
-                />
-              </div>
-            )}
-            {allProjects.length === 0 ? (
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', padding: '4px 2px' }}>{pt ? 'Nenhum projeto' : 'No projects'}</div>
-            ) : filteredProjects.length === 0 ? (
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', padding: '4px 2px' }}>{pt ? 'Nenhum resultado' : 'No results'}</div>
-            ) : (
-              <div style={{ maxHeight: 160, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {filteredProjects.map(path => {
-                  const pinned = pinnedProjects.includes(path)
-                  return (
-                    <label key={path} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '5px 4px', borderRadius: 6, cursor: 'pointer', background: pinned ? 'var(--anthropic-orange-dim)' : 'transparent' }}
-                      onMouseEnter={e => { if (!pinned) (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)' }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = pinned ? 'var(--anthropic-orange-dim)' : 'transparent' }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={pinned}
-                        onChange={() => {
-                          const next = pinned ? pinnedProjects.filter(p => p !== path) : [...pinnedProjects, path]
-                          setPinnedProjects(next)
-                          setFilters(prev => ({ ...prev, projects: next }))
-                        }}
-                        style={{ accentColor: 'var(--anthropic-orange)', flexShrink: 0 }}
-                      />
-                      <span style={{ fontSize: 11, color: pinned ? 'var(--anthropic-orange)' : 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: pinned ? 600 : 400 }}>
-                        {formatProjectName(path)}
-                      </span>
-                    </label>
-                  )
-                })}
-              </div>
-            )}
+          {/* ── Filters (date, projects, models) — replaces the global header filter bar ── */}
+          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', flexShrink: 0, overflow: 'hidden' }}>
+            <FiltersBar
+              filters={filters}
+              onChange={next => {
+                setFilters(next)
+                setPinnedProjects(next.projects)
+              }}
+              projects={data.projects}
+              sessionCountByProject={ctx.sessionCountByProject}
+              models={ctx.models}
+              modelsInProject={ctx.modelsInProject}
+              lang={lang}
+            />
           </div>
 
           {/* ── Palette search ── */}

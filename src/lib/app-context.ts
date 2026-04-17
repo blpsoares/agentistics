@@ -50,4 +50,9 @@ export interface AppContext {
   // per-card full precision toggle
   cardPrecision: Record<string, boolean>
   setCardPrecision: (id: string, v: boolean) => void
+
+  // filter bar data (needed to render FiltersBar outside the header, e.g. in CustomPage)
+  sessionCountByProject: Record<string, number>
+  models: string[]
+  modelsInProject: Set<string> | null
 }
