@@ -59,7 +59,7 @@ export const CATALOG: CatalogItem[] = [
   // ── KPI cards ──────────────────────────────────────────────────────────────
   {
     id: 'kpi.messages', labelPt: 'Mensagens', labelEn: 'Messages', category: 'kpi',
-    icon: MessageSquare, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    icon: MessageSquare, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
     render: ({ derived, lang }) => kpiCard(
       lang === 'pt' ? 'Mensagens' : 'Messages',
       'var(--anthropic-orange)',
@@ -70,7 +70,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'kpi.sessions', labelPt: 'Sessões', labelEn: 'Sessions', category: 'kpi',
-    icon: Zap, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    icon: Zap, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
     render: ({ derived, lang }) => kpiCard(
       lang === 'pt' ? 'Sessões' : 'Sessions',
       'var(--accent-blue)',
@@ -81,7 +81,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'kpi.tool-calls', labelPt: 'Tool calls', labelEn: 'Tool calls', category: 'kpi',
-    icon: Wrench, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    icon: Wrench, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
     render: ({ derived, lang }) => kpiCard(
       lang === 'pt' ? 'Tool calls' : 'Tool calls',
       'var(--accent-green)',
@@ -92,7 +92,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'kpi.cost', labelPt: 'Custo estimado', labelEn: 'Estimated cost', category: 'kpi',
-    icon: TrendingUp, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    icon: TrendingUp, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
     render: ({ derived, lang, currency, brlRate }) => kpiCard(
       lang === 'pt' ? 'Custo estimado' : 'Est. cost',
       'var(--anthropic-orange)',
@@ -103,7 +103,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'kpi.streak', labelPt: 'Sequência', labelEn: 'Streak', category: 'kpi',
-    icon: Flame, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    icon: Flame, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
     render: ({ derived, lang }) => kpiCard(
       lang === 'pt' ? 'Sequência' : 'Streak',
       '#ef4444',
@@ -114,7 +114,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'kpi.longest-session', labelPt: 'Sessão mais longa', labelEn: 'Longest session', category: 'kpi',
-    icon: Clock, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    icon: Clock, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
     render: ({ derived, lang, filters }) => kpiCard(
       lang === 'pt' ? 'Sessão mais longa' : 'Longest session',
       'var(--accent-purple)',
@@ -131,7 +131,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'kpi.commits', labelPt: 'Commits', labelEn: 'Commits', category: 'kpi',
-    icon: GitCommit, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    icon: GitCommit, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
     render: ({ derived, lang }) => kpiCard(
       lang === 'pt' ? 'Commits' : 'Commits',
       'var(--accent-cyan)',
@@ -144,7 +144,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'kpi.files', labelPt: 'Arquivos modificados', labelEn: 'Files modified', category: 'kpi',
-    icon: FileCode, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    icon: FileCode, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
     render: ({ derived, lang }) => kpiCard(
       lang === 'pt' ? 'Arquivos' : 'Files',
       'var(--accent-green)',
@@ -157,7 +157,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'kpi.input-tokens', labelPt: 'Tokens de entrada', labelEn: 'Input tokens', category: 'kpi',
-    icon: Download, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    icon: Download, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
     render: ({ totalInputTokens, lang }) => kpiCard(
       lang === 'pt' ? 'Tokens entrada' : 'Input tokens',
       'var(--accent-blue)',
@@ -168,7 +168,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'kpi.output-tokens', labelPt: 'Tokens de saída', labelEn: 'Output tokens', category: 'kpi',
-    icon: Upload, defaultW: 3, defaultH: 2, minW: 2, minH: 2,
+    icon: Upload, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
     render: ({ totalOutputTokens, lang }) => kpiCard(
       lang === 'pt' ? 'Tokens saída' : 'Output tokens',
       'var(--accent-purple)',
@@ -181,7 +181,7 @@ export const CATALOG: CatalogItem[] = [
   // ── Activity & charts ──────────────────────────────────────────────────────
   {
     id: 'activity.chart', labelPt: 'Gráfico de atividade (completo)', labelEn: 'Activity chart (full)', category: 'activity',
-    icon: BarChart2, defaultW: 8, defaultH: 5, minW: 4, minH: 4,
+    icon: BarChart2, defaultW: 8, defaultH: 7, minW: 4, minH: 4,
     render: ({ derived, theme, lang }) => (
       <Section title={<><BarChart2 size={14} /> {lang === 'pt' ? 'Atividade ao longo do tempo' : 'Activity over time'}</>}>
         <ActivityChart data={derived.heatmapData} theme={theme} />
@@ -191,7 +191,7 @@ export const CATALOG: CatalogItem[] = [
   {
     id: 'activity.chart.messages', parentId: 'activity.chart',
     labelPt: 'Atividade — só Mensagens', labelEn: 'Activity — Messages only', category: 'activity',
-    icon: MessageSquare, defaultW: 6, defaultH: 4, minW: 3, minH: 3,
+    icon: MessageSquare, defaultW: 6, defaultH: 6, minW: 3, minH: 3,
     render: ({ derived, theme, lang }) => (
       <Section title={<><MessageSquare size={14} /> {lang === 'pt' ? 'Mensagens / dia' : 'Messages / day'}</>}>
         <ActivityChart data={derived.heatmapData} theme={theme} forcedMetric="value" hideControls />
@@ -201,7 +201,7 @@ export const CATALOG: CatalogItem[] = [
   {
     id: 'activity.chart.sessions', parentId: 'activity.chart',
     labelPt: 'Atividade — só Sessões', labelEn: 'Activity — Sessions only', category: 'activity',
-    icon: Zap, defaultW: 6, defaultH: 4, minW: 3, minH: 3,
+    icon: Zap, defaultW: 6, defaultH: 6, minW: 3, minH: 3,
     render: ({ derived, theme, lang }) => (
       <Section title={<><Zap size={14} /> {lang === 'pt' ? 'Sessões / dia' : 'Sessions / day'}</>}>
         <ActivityChart data={derived.heatmapData} theme={theme} forcedMetric="sessions" hideControls />
@@ -211,7 +211,7 @@ export const CATALOG: CatalogItem[] = [
   {
     id: 'activity.chart.tools', parentId: 'activity.chart',
     labelPt: 'Atividade — só Tool calls', labelEn: 'Activity — Tool calls only', category: 'activity',
-    icon: Wrench, defaultW: 6, defaultH: 4, minW: 3, minH: 3,
+    icon: Wrench, defaultW: 6, defaultH: 6, minW: 3, minH: 3,
     render: ({ derived, theme, lang }) => (
       <Section title={<><Wrench size={14} /> {lang === 'pt' ? 'Tool calls / dia' : 'Tool calls / day'}</>}>
         <ActivityChart data={derived.heatmapData} theme={theme} forcedMetric="tools" hideControls />
@@ -221,7 +221,7 @@ export const CATALOG: CatalogItem[] = [
   {
     id: 'activity.chart.overlay', parentId: 'activity.chart',
     labelPt: 'Atividade — Overlay', labelEn: 'Activity — Overlay', category: 'activity',
-    icon: Layers, defaultW: 8, defaultH: 4, minW: 4, minH: 3,
+    icon: Layers, defaultW: 8, defaultH: 6, minW: 4, minH: 3,
     render: ({ derived, theme, lang }) => (
       <Section title={<><Layers size={14} /> {lang === 'pt' ? 'Atividade (overlay)' : 'Activity (overlay)'}</>}>
         <ActivityChart data={derived.heatmapData} theme={theme} forcedOverlay hideControls />
@@ -230,7 +230,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'activity.heatmap', labelPt: 'Heatmap de atividade', labelEn: 'Activity heatmap', category: 'activity',
-    icon: CalendarDays, defaultW: 6, defaultH: 4, minW: 3, minH: 3,
+    icon: CalendarDays, defaultW: 6, defaultH: 6, minW: 3, minH: 3,
     render: ({ derived, lang }) => (
       <Section title={<><CalendarDays size={14} /> {lang === 'pt' ? 'Heatmap de atividade' : 'Activity heatmap'}</>}>
         <ActivityHeatmap data={derived.heatmapData} />
@@ -239,7 +239,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'activity.hours', labelPt: 'Uso por hora do dia', labelEn: 'Usage by hour', category: 'activity',
-    icon: CalendarClock, defaultW: 8, defaultH: 4, minW: 4, minH: 3,
+    icon: CalendarClock, defaultW: 8, defaultH: 6, minW: 4, minH: 3,
     render: ({ derived, lang }) => (
       <Section title={<><CalendarClock size={14} /> {lang === 'pt' ? 'Uso por hora do dia' : 'Usage by hour'}</>}>
         <HourChart hourCounts={derived.hourCounts} hourMeta={derived.hourMeta} />
@@ -250,7 +250,7 @@ export const CATALOG: CatalogItem[] = [
   // ── Costs ──────────────────────────────────────────────────────────────────
   {
     id: 'costs.models', labelPt: 'Uso por modelo', labelEn: 'Model usage', category: 'costs',
-    icon: TrendingUp, defaultW: 12, defaultH: 5, minW: 6, minH: 4,
+    icon: TrendingUp, defaultW: 12, defaultH: 7, minW: 6, minH: 4,
     render: ({ derived, filters, currency, brlRate, lang }) => (
       <Section title={<><TrendingUp size={14} /> {lang === 'pt' ? 'Uso por modelo' : 'Model usage & cost'}</>}>
         <ModelBreakdown
@@ -266,7 +266,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'costs.budget', labelPt: 'Orçamento & projeção', labelEn: 'Budget & forecast', category: 'costs',
-    icon: Target, defaultW: 6, defaultH: 5, minW: 4, minH: 4,
+    icon: Target, defaultW: 6, defaultH: 7, minW: 4, minH: 4,
     render: ({ statsCache, monthlyBudgetUSD, updateBudget, currency, brlRate, lang }) => (
       <Section title={<><Target size={14} /> {lang === 'pt' ? 'Orçamento & projeção' : 'Budget & forecast'}</>}>
         <BudgetPanel statsCache={statsCache} budgetUSD={monthlyBudgetUSD} onBudgetChange={updateBudget} currency={currency} brlRate={brlRate} lang={lang} />
@@ -275,7 +275,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'costs.cache', labelPt: 'Eficiência de cache', labelEn: 'Cache efficiency', category: 'costs',
-    icon: Gauge, defaultW: 6, defaultH: 5, minW: 4, minH: 4,
+    icon: Gauge, defaultW: 6, defaultH: 7, minW: 4, minH: 4,
     render: ({ derived, currency, brlRate, lang }) => (
       <Section title={<><Gauge size={14} /> {lang === 'pt' ? 'Eficiência de cache' : 'Cache efficiency'}</>}>
         <CacheHitRatePanel hitRate={derived.cacheHitRate} cacheTotals={derived.cacheTotals} grossSavedUSD={derived.cacheGrossSavedUSD} writeOverheadUSD={derived.cacheWriteOverheadUSD} netSavedUSD={derived.cacheNetSavedUSD} perModel={derived.cachePerModel} currency={currency} brlRate={brlRate} lang={lang} />
@@ -286,7 +286,7 @@ export const CATALOG: CatalogItem[] = [
   // ── Projects ───────────────────────────────────────────────────────────────
   {
     id: 'projects.top', labelPt: 'Principais projetos', labelEn: 'Top projects', category: 'projects',
-    icon: FolderOpen, defaultW: 7, defaultH: 5, minW: 4, minH: 4,
+    icon: FolderOpen, defaultW: 7, defaultH: 7, minW: 4, minH: 4,
     render: ({ derived, setFilters, lang }) => (
       <Section title={<><FolderOpen size={14} /> {lang === 'pt' ? 'Principais projetos' : 'Top projects'}</>}>
         <ProjectsList projectStats={derived.projectStats} onFilter={path => setFilters(f => ({ ...f, projects: [path] }))} />
@@ -295,7 +295,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'projects.languages', labelPt: 'Linguagens', labelEn: 'Languages', category: 'projects',
-    icon: FileCode, defaultW: 5, defaultH: 5, minW: 3, minH: 3,
+    icon: FileCode, defaultW: 5, defaultH: 6, minW: 3, minH: 3,
     render: ({ derived, lang }) => (
       <Section title={<><FileCode size={14} /> {lang === 'pt' ? 'Linguagens' : 'Languages'}</>}>
         <TagCloud data={derived.langCounts} color="var(--accent-blue)" />
@@ -306,7 +306,7 @@ export const CATALOG: CatalogItem[] = [
   // ── Tools / Agents ─────────────────────────────────────────────────────────
   {
     id: 'tools.metrics', labelPt: 'Métricas de ferramentas (completo)', labelEn: 'Tool metrics (full)', category: 'tools',
-    icon: Wrench, defaultW: 12, defaultH: 6, minW: 6, minH: 4,
+    icon: Wrench, defaultW: 12, defaultH: 8, minW: 6, minH: 4,
     render: ({ derived, lang }) => (
       <Section title={<><Wrench size={14} /> {lang === 'pt' ? 'Métricas de ferramentas' : 'Tool metrics'}</>}>
         <ToolMetricsPanel toolCounts={derived.toolCounts} toolOutputTokens={derived.toolOutputTokens} agentFileReads={derived.agentFileReads} lang={lang} />
@@ -316,7 +316,7 @@ export const CATALOG: CatalogItem[] = [
   {
     id: 'tools.metrics.calls', parentId: 'tools.metrics',
     labelPt: 'Ferramentas — só Chamadas', labelEn: 'Tool metrics — calls only', category: 'tools',
-    icon: Activity, defaultW: 8, defaultH: 5, minW: 4, minH: 4,
+    icon: Activity, defaultW: 8, defaultH: 7, minW: 4, minH: 4,
     render: ({ derived, lang }) => (
       <Section title={<><Wrench size={14} /> {lang === 'pt' ? 'Ferramentas — chamadas' : 'Tools — calls'}</>}>
         <ToolMetricsPanel toolCounts={derived.toolCounts} toolOutputTokens={derived.toolOutputTokens} agentFileReads={derived.agentFileReads} lang={lang} forcedMode="calls" hideAgentReads />
@@ -326,7 +326,7 @@ export const CATALOG: CatalogItem[] = [
   {
     id: 'tools.metrics.tokens', parentId: 'tools.metrics',
     labelPt: 'Ferramentas — só Tokens', labelEn: 'Tool metrics — tokens only', category: 'tools',
-    icon: TrendingUp, defaultW: 8, defaultH: 5, minW: 4, minH: 4,
+    icon: TrendingUp, defaultW: 8, defaultH: 7, minW: 4, minH: 4,
     render: ({ derived, lang }) => (
       <Section title={<><Wrench size={14} /> {lang === 'pt' ? 'Ferramentas — tokens' : 'Tools — tokens'}</>}>
         <ToolMetricsPanel toolCounts={derived.toolCounts} toolOutputTokens={derived.toolOutputTokens} agentFileReads={derived.agentFileReads} lang={lang} forcedMode="tokens" hideAgentReads />
@@ -335,7 +335,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'tools.agents', labelPt: 'Métricas de agentes', labelEn: 'Agent metrics', category: 'tools',
-    icon: Bot, defaultW: 12, defaultH: 6, minW: 6, minH: 4,
+    icon: Bot, defaultW: 12, defaultH: 8, minW: 6, minH: 4,
     render: ({ derived, currency, brlRate, lang }) => (
       <Section title={<><Bot size={14} /> {lang === 'pt' ? 'Métricas de agentes' : 'Agent metrics'}</>}>
         <AgentMetricsPanel invocations={derived.agentInvocations} agentTypeBreakdown={derived.agentTypeBreakdown} totalInvocations={derived.totalAgentInvocations} totalTokens={derived.totalAgentTokens} totalCostUSD={derived.totalAgentCostUSD} totalDurationMs={derived.totalAgentDurationMs} currency={currency} brlRate={brlRate} lang={lang} />
@@ -346,7 +346,7 @@ export const CATALOG: CatalogItem[] = [
   // ── Sessions / Highlights ──────────────────────────────────────────────────
   {
     id: 'sessions.highlights', labelPt: 'Recordes (Highlights)', labelEn: 'Highlights', category: 'sessions',
-    icon: Trophy, defaultW: 12, defaultH: 4, minW: 6, minH: 3,
+    icon: Trophy, defaultW: 12, defaultH: 6, minW: 6, minH: 3,
     render: ({ derived, data, lang }) => (
       <Section title={<><Trophy size={14} /> {lang === 'pt' ? 'Recordes' : 'Highlights'}</>}>
         <HighlightsBoard sessions={derived.filteredSessions} projects={data.projects as any} lang={lang} />
@@ -355,7 +355,7 @@ export const CATALOG: CatalogItem[] = [
   },
   {
     id: 'sessions.recent', labelPt: 'Sessões recentes', labelEn: 'Recent sessions', category: 'sessions',
-    icon: Clock, defaultW: 12, defaultH: 5, minW: 6, minH: 4,
+    icon: Clock, defaultW: 12, defaultH: 7, minW: 6, minH: 4,
     render: ({ derived, setSelectedSession, lang }) => (
       <Section title={<><Clock size={14} /> {lang === 'pt' ? 'Sessões recentes' : 'Recent sessions'}</>}>
         <RecentSessions sessions={derived.filteredSessions} lang={lang} onSelect={setSelectedSession} />

@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useOutletContext } from 'react-router-dom'
 import { GridLayout, useContainerWidth, type Layout, type LayoutItem } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
@@ -6,23 +7,215 @@ import 'react-resizable/css/styles.css'
 import {
   Layers, X, RotateCcw, Search, ChevronDown, ChevronRight,
   PanelLeftClose, PanelLeftOpen, Plus, Trash2, Pencil, Check,
+  Lock, Unlock, FolderOpen, Download, Upload,
 } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import { CATALOG, CATEGORY_LABELS, getCatalogItem, type CatalogItem, type CatalogCategory } from '../lib/componentCatalog'
 import { useCustomLayout, type GridItem } from '../hooks/useCustomLayout'
+import { formatProjectName } from '../lib/types'
 
 const GRID_COLS = 12
 const GRID_ROW_HEIGHT = 40
 const ASIDE_WIDTH = 300
+const ASIDE_GAP = 16
+
+interface LayoutExport {
+  version: 1
+  layoutName: string
+  items: Array<{
+    componentId: string
+    x: number; y: number; w: number; h: number
+    minW?: number; minH?: number
+  }>
+  pinnedProjects: Array<{ path: string; displayName: string }>
+}
+
+interface ImportState {
+  layoutName: string
+  items: LayoutExport['items']
+  originalProjects: Array<{ path: string; displayName: string }>
+  mappings: Record<string, string>  // original path → local path (empty = skip)
+}
+
+function ProjectSelect({ value, options, pt, onChange }: {
+  value: string
+  options: string[]
+  pt: boolean
+  onChange: (val: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 0 })
+  const triggerRef = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return options
+    return options.filter(p =>
+      formatProjectName(p).toLowerCase().includes(q) || p.toLowerCase().includes(q)
+    )
+  }, [options, search])
+
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current) return
+    const r = triggerRef.current.getBoundingClientRect()
+    setDropPos({ top: r.bottom + 4, left: r.left, width: r.width })
+    setTimeout(() => searchRef.current?.focus(), 20)
+  }, [open])
+
+  useEffect(() => {
+    if (!open) { setSearch(''); return }
+    function onDown(e: MouseEvent) {
+      const drop = document.getElementById('project-select-drop')
+      if (
+        triggerRef.current && !triggerRef.current.contains(e.target as Node) &&
+        drop && !drop.contains(e.target as Node)
+      ) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  function select(val: string) { onChange(val); setOpen(false) }
+
+  return (
+    <div ref={triggerRef}>
+      <div
+        onClick={() => setOpen(v => !v)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px',
+          cursor: 'pointer', userSelect: 'none',
+          background: 'var(--bg-elevated)',
+          border: `1px solid ${open ? 'var(--anthropic-orange)' : value ? 'var(--anthropic-orange)60' : 'var(--border-subtle)'}`,
+          borderRadius: 8, fontSize: 13,
+          color: value ? 'var(--text-primary)' : 'var(--text-tertiary)',
+          transition: 'border-color 0.12s',
+          minHeight: 40,
+        }}
+      >
+        {value
+          ? (
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ display: 'block', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {formatProjectName(value)}
+              </span>
+              <span style={{ display: 'block', fontSize: 10, color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
+                {value}
+              </span>
+            </span>
+          )
+          : <span style={{ flex: 1 }}>{pt ? '— Ignorar este projeto —' : '— Skip this project —'}</span>
+        }
+        <ChevronDown size={13} style={{ flexShrink: 0, color: 'var(--text-tertiary)', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+      </div>
+
+      {open && createPortal(
+        <div
+          id="project-select-drop"
+          style={{
+            position: 'fixed', top: dropPos.top, left: dropPos.left, width: dropPos.width,
+            zIndex: 9999, background: 'var(--bg-card)',
+            border: '1px solid var(--anthropic-orange)80',
+            borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.4)',
+            overflow: 'hidden',
+          }}
+        >
+          {/* Search input */}
+          <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-subtle)', position: 'relative' }}>
+            <Search size={13} style={{ position: 'absolute', left: 20, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)', pointerEvents: 'none' }} />
+            <input
+              ref={searchRef}
+              type="text"
+              placeholder={pt ? 'Buscar projeto…' : 'Search project…'}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{
+                width: '100%', boxSizing: 'border-box', padding: '8px 10px 8px 32px',
+                background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                borderRadius: 7, fontSize: 13, color: 'var(--text-primary)',
+                fontFamily: 'inherit', outline: 'none',
+              }}
+              onFocus={e => e.currentTarget.style.borderColor = 'var(--anthropic-orange)60'}
+              onBlur={e => e.currentTarget.style.borderColor = 'var(--border-subtle)'}
+            />
+          </div>
+
+          {/* Results */}
+          <div style={{ maxHeight: 260, overflow: 'auto' }}>
+            {/* Skip option */}
+            <div
+              onClick={() => select('')}
+              style={{
+                padding: '10px 14px', fontSize: 13, cursor: 'pointer',
+                color: !value ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                background: !value ? 'var(--anthropic-orange-dim)' : 'transparent',
+                fontWeight: !value ? 600 : 400,
+                borderBottom: '1px solid var(--border-subtle)',
+              }}
+              onMouseEnter={e => { if (value) (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)' }}
+              onMouseLeave={e => { if (value) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+            >
+              {pt ? '— Ignorar este projeto —' : '— Skip this project —'}
+            </div>
+
+            {filtered.length === 0
+              ? <div style={{ padding: '12px 14px', fontSize: 13, color: 'var(--text-tertiary)' }}>{pt ? 'Nenhum resultado' : 'No results'}</div>
+              : filtered.map(p => (
+                <div
+                  key={p}
+                  onClick={() => select(p)}
+                  style={{
+                    padding: '10px 14px', cursor: 'pointer',
+                    background: p === value ? 'var(--anthropic-orange-dim)' : 'transparent',
+                    borderLeft: p === value ? '3px solid var(--anthropic-orange)' : '3px solid transparent',
+                  }}
+                  onMouseEnter={e => { if (p !== value) (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)' }}
+                  onMouseLeave={e => { if (p !== value) (e.currentTarget as HTMLElement).style.background = p === value ? 'var(--anthropic-orange-dim)' : 'transparent' }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: p === value ? 600 : 500, color: p === value ? 'var(--anthropic-orange)' : 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {formatProjectName(p)}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {p}
+                  </div>
+                </div>
+              ))
+            }
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  )
+}
 
 export default function CustomPage() {
   const ctx = useOutletContext<AppContext>()
-  const { lang } = ctx
+  const { lang, setFilters, data } = ctx
   const {
     items, setItems, addItem, removeItem, reset, loaded,
     layoutNames, activeLayout,
+    pinnedProjects, setPinnedProjects,
     switchLayout, createLayout, renameLayout, deleteLayout,
   } = useCustomLayout()
+
+  // All known project paths from data
+  const allProjects: string[] = useMemo(
+    () => data.projects.map(p => p.path).sort(),
+    [data.projects]
+  )
+
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false)
+  const [projectSearch, setProjectSearch] = useState('')
+  const projectPickerRef = useRef<HTMLDivElement>(null)
+  const projectSearchRef = useRef<HTMLInputElement>(null)
+
+  const filteredProjects = useMemo(() => {
+    const q = projectSearch.trim().toLowerCase()
+    if (!q) return allProjects
+    return allProjects.filter(p => formatProjectName(p).toLowerCase().includes(q) || p.toLowerCase().includes(q))
+  }, [allProjects, projectSearch])
 
   const [draggedCatalogItem, setDraggedCatalogItem] = useState<CatalogItem | null>(null)
   const draggedCatalogItemRef = useRef<CatalogItem | null>(null)
@@ -32,21 +225,56 @@ export default function CustomPage() {
   })
   const nextIdRef = useRef(Date.now())
 
-  // Aside open/close
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [locked, setLocked] = useState(false)
 
-  // Layout rename state
   const [renaming, setRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const renameInputRef = useRef<HTMLInputElement>(null)
 
-  // Sync rename input when active layout changes
   useEffect(() => { setRenameValue(activeLayout) }, [activeLayout])
 
-  const { width: gridWidth, containerRef, mounted } = useContainerWidth()
+  // Apply pinned projects whenever the active layout changes (after first load)
+  const firstLoad = useRef(true)
+  useEffect(() => {
+    if (!loaded) return
+    if (firstLoad.current) { firstLoad.current = false; return }
+    setFilters(prev => ({ ...prev, projects: pinnedProjects }))
+  }, [activeLayout]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Focus search when picker opens; clear on close
+  useEffect(() => {
+    if (projectPickerOpen) {
+      setTimeout(() => projectSearchRef.current?.focus(), 30)
+    } else {
+      setProjectSearch('')
+    }
+  }, [projectPickerOpen])
+
+  // Close project picker on outside click
+  useEffect(() => {
+    if (!projectPickerOpen) return
+    function handleClick(e: MouseEvent) {
+      if (projectPickerRef.current && !projectPickerRef.current.contains(e.target as Node)) {
+        setProjectPickerOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [projectPickerOpen])
+
+  // containerRef is on the outer flex row so totalWidth is stable.
+  // gridWidth is computed synchronously — no ResizeObserver lag when aside toggles.
+  const { width: totalWidth, containerRef: outerRowRef, mounted } = useContainerWidth()
+  const gridWidth = totalWidth > 0
+    ? totalWidth - (sidebarOpen ? ASIDE_WIDTH + ASIDE_GAP : 0)
+    : 0
+
+  const [importState, setImportState] = useState<ImportState | null>(null)
+  const importFileRef = useRef<HTMLInputElement>(null)
+
   const pt = lang === 'pt'
 
-  // Grouped catalog for the aside palette
   const groupedCatalog = useMemo(() => {
     const q = query.trim().toLowerCase()
     const groups: Record<CatalogCategory, CatalogItem[]> = {
@@ -60,20 +288,24 @@ export default function CustomPage() {
     return groups
   }, [pt, query])
 
-  // Convert items to RGL Layout format
   const layout: Layout = useMemo(
-    () => items.map(it => ({ i: it.i, x: it.x, y: it.y, w: it.w, h: it.h, minW: it.minW, minH: it.minH })),
+    () => items.map(it => ({
+      i: it.i, x: it.x, y: it.y, w: it.w, h: it.h,
+      minW: it.minW, minH: it.minH,
+      maxW: GRID_COLS - it.x,  // prevent resize past right edge
+    })),
     [items]
   )
 
-  // onLayoutChange: only updates positions, never removes items (guards against
-  // RGL firing with intermediate empty layouts during external drop)
   function onLayoutChange(next: Layout) {
     const merged: GridItem[] = next.map(l => {
       const existing = items.find(it => it.i === l.i)
+      const maxW = GRID_COLS - l.x
       return {
         i: l.i,
-        x: l.x, y: l.y, w: l.w, h: l.h,
+        x: l.x, y: l.y,
+        w: Math.min(l.w, maxW),  // clamp to available columns
+        h: l.h,
         minW: l.minW, minH: l.minH,
         componentId: existing?.componentId ?? '',
       }
@@ -113,13 +345,13 @@ export default function CustomPage() {
   }
 
   function handlePaletteDragEnd() {
-    draggedCatalogItemRef.current = null
+    // Only clear visual state; ref is cleared by onDrop on a successful drop.
+    // If the user dropped outside the canvas, ref stays until next dragstart — harmless.
     setDraggedCatalogItem(null)
   }
 
-  // Layout management helpers
   function handleNewLayout() {
-    const base = pt ? 'Layout' : 'Layout'
+    const base = 'Layout'
     let n = layoutNames.length + 1
     let name = `${base} ${n}`
     while (layoutNames.includes(name)) name = `${base} ${++n}`
@@ -146,6 +378,79 @@ export default function CustomPage() {
     if (confirm(msg)) deleteLayout(activeLayout)
   }
 
+  function handleExport() {
+    const exported: LayoutExport = {
+      version: 1,
+      layoutName: activeLayout,
+      items: items.map(({ componentId, x, y, w, h, minW, minH }) => ({ componentId, x, y, w, h, minW, minH })),
+      pinnedProjects: pinnedProjects.map(p => ({ path: p, displayName: formatProjectName(p) })),
+    }
+    const blob = new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${activeLayout.replace(/\s+/g, '-').toLowerCase()}-layout.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    const reader = new FileReader()
+    reader.onload = ev => {
+      try {
+        const data = JSON.parse(ev.target?.result as string) as LayoutExport
+        if (!data.version || !Array.isArray(data.items)) throw new Error('Invalid format')
+        const initMappings: Record<string, string> = {}
+        for (const proj of data.pinnedProjects ?? []) {
+          // Auto-match if the exact path exists locally
+          initMappings[proj.path] = allProjects.includes(proj.path) ? proj.path : ''
+        }
+        setImportState({
+          layoutName: data.layoutName ?? 'Imported Layout',
+          items: data.items,
+          originalProjects: data.pinnedProjects ?? [],
+          mappings: initMappings,
+        })
+      } catch {
+        alert(pt ? 'Arquivo inválido — esperado JSON de layout.' : 'Invalid file — expected a layout JSON.')
+      }
+    }
+    reader.readAsText(file)
+  }
+
+  function handleConfirmImport() {
+    if (!importState) return
+    const base = importState.layoutName.trim() || 'Imported Layout'
+    let name = base
+    let n = 2
+    while (layoutNames.includes(name)) name = `${base} (${n++})`
+    createLayout(name)
+    const nextId = nextIdRef.current
+    const newItems: GridItem[] = importState.items.map((it, idx) => ({
+      i: `${it.componentId}__${nextId + idx}`,
+      componentId: it.componentId,
+      x: it.x, y: it.y, w: it.w, h: it.h,
+      minW: it.minW, minH: it.minH,
+    }))
+    nextIdRef.current += importState.items.length
+    // We need to setItems for the new layout after it's created.
+    // switchLayout + setItems both go through the same update queue.
+    setTimeout(() => {
+      setItems(newItems)
+      const mappedProjects = importState.originalProjects
+        .map(p => importState.mappings[p.path])
+        .filter(Boolean) as string[]
+      if (mappedProjects.length > 0) {
+        setPinnedProjects(mappedProjects)
+        setFilters(prev => ({ ...prev, projects: mappedProjects }))
+      }
+    }, 50)
+    setImportState(null)
+  }
+
   if (!loaded) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300, color: 'var(--text-tertiary)', fontSize: 13 }}>
@@ -160,9 +465,10 @@ export default function CustomPage() {
     h: draggedCatalogItem.defaultH,
   } : undefined
 
+  const isDragging = draggedCatalogItem !== null
+
   return (
-    <div style={{ display: 'flex', gap: sidebarOpen ? 16 : 0, alignItems: 'flex-start', minHeight: 'calc(100vh - 250px)' }}>
-      {/* CSS */}
+    <div>
       <style>{`
         .custom-grid .react-grid-item.react-grid-placeholder {
           background: var(--anthropic-orange) !important;
@@ -185,6 +491,7 @@ export default function CustomPage() {
           content: ''; position: absolute;
         }
         .custom-grid .react-grid-item:hover > .react-resizable-handle { opacity: 1; }
+        .custom-grid.locked .react-grid-item > .react-resizable-handle { display: none; }
         .custom-grid .react-grid-item { transition: transform 180ms ease, box-shadow 120ms ease; }
         .custom-grid .react-grid-item.cssTransforms { transition-property: transform, width, height; }
         .custom-grid .react-grid-item.react-draggable-dragging {
@@ -196,6 +503,7 @@ export default function CustomPage() {
         .palette-item[data-dragging="true"] { opacity: 0.5; transform: scale(0.96); }
         .grid-item-remove { opacity: 0; transition: opacity 0.12s; }
         .grid-item-wrap:hover .grid-item-remove { opacity: 1; }
+        .drag-handle-locked { cursor: default !important; }
         .layout-rename-input {
           background: var(--bg-elevated); border: 1px solid var(--anthropic-orange)60;
           border-radius: 6px; color: var(--text-primary); font-family: inherit;
@@ -213,127 +521,294 @@ export default function CustomPage() {
         .icon-btn.danger:hover { color: #ef4444; border-color: #ef444440; }
         .icon-btn.accent { color: var(--anthropic-orange); border-color: var(--anthropic-orange)40; }
         .icon-btn.accent:hover { background: var(--anthropic-orange-dim); }
+        .icon-btn.active { color: var(--anthropic-orange); background: var(--anthropic-orange-dim); border-color: var(--anthropic-orange)40; }
         .icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .custom-aside {
+          overflow: hidden;
+          flex-shrink: 0;
+        }
       `}</style>
 
-      {/* ─── Sidebar reopen button (shown when sidebar is closed) ─── */}
-      {!sidebarOpen && (
+      {/* ─── Toolbar ─── */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        marginBottom: 12,
+        flexWrap: 'wrap',
+        minHeight: 34,
+      }}>
+        {/* Palette toggle */}
         <button
           className="icon-btn"
-          onClick={() => setSidebarOpen(true)}
-          title={pt ? 'Abrir paleta' : 'Open palette'}
-          style={{ position: 'sticky', top: 180, flexShrink: 0, width: 32, height: 32 }}
+          onClick={() => setSidebarOpen(v => !v)}
+          title={sidebarOpen ? (pt ? 'Fechar paleta' : 'Close palette') : (pt ? 'Abrir paleta' : 'Open palette')}
+          style={{ width: 30, height: 30 }}
         >
-          <PanelLeftOpen size={15} />
+          {sidebarOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
         </button>
-      )}
 
-      {/* ─── Aside / Palette ─── */}
-      {sidebarOpen && (
-        <aside style={{
-          width: ASIDE_WIDTH,
-          flexShrink: 0,
-          position: 'sticky',
-          top: 180,
-          maxHeight: 'calc(100vh - 200px)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 10,
-        }}>
+        {/* Divider */}
+        <div style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
 
-          {/* ── Layout management card ── */}
-          <div style={{
-            background: 'var(--bg-card)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-lg)',
-            padding: '12px 14px',
-          }}>
-            {/* Header row */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-              <Layers size={13} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
-              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--text-tertiary)', flex: 1 }}>
-                {pt ? 'Layouts' : 'Layouts'}
-              </span>
-              <button
-                className="icon-btn"
-                onClick={() => setSidebarOpen(false)}
-                title={pt ? 'Fechar paleta' : 'Close palette'}
-              >
-                <PanelLeftClose size={13} />
+        {/* Layout name/switcher */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {renaming ? (
+            <>
+              <input
+                ref={renameInputRef}
+                className="layout-rename-input"
+                value={renameValue}
+                onChange={e => setRenameValue(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleCommitRename(); if (e.key === 'Escape') setRenaming(false) }}
+                onBlur={handleCommitRename}
+                autoFocus
+                style={{ width: 120 }}
+              />
+              <button className="icon-btn accent" onClick={handleCommitRename} title={pt ? 'Salvar' : 'Save'} style={{ width: 26, height: 26 }}>
+                <Check size={12} />
               </button>
-            </div>
-
-            {/* Active layout name (editable) */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-              {renaming ? (
-                <>
-                  <input
-                    ref={renameInputRef}
-                    className="layout-rename-input"
-                    value={renameValue}
-                    onChange={e => setRenameValue(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') handleCommitRename(); if (e.key === 'Escape') setRenaming(false) }}
-                    onBlur={handleCommitRename}
-                    autoFocus
-                  />
-                  <button className="icon-btn accent" onClick={handleCommitRename} title={pt ? 'Salvar' : 'Save'}>
-                    <Check size={12} />
-                  </button>
-                </>
+            </>
+          ) : (
+            <>
+              {layoutNames.length > 1 ? (
+                <select
+                  value={activeLayout}
+                  onChange={e => switchLayout(e.target.value)}
+                  style={{
+                    background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                    borderRadius: 6, color: 'var(--text-primary)', fontFamily: 'inherit',
+                    fontSize: 12, fontWeight: 600, padding: '4px 8px', cursor: 'pointer',
+                    outline: 'none', height: 30,
+                  }}
+                >
+                  {layoutNames.map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
               ) : (
-                <>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    {layoutNames.length > 1 ? (
-                      <select
-                        value={activeLayout}
-                        onChange={e => switchLayout(e.target.value)}
-                        style={{
-                          width: '100%', background: 'var(--bg-elevated)',
-                          border: '1px solid var(--border-subtle)', borderRadius: 6,
-                          color: 'var(--text-primary)', fontFamily: 'inherit',
-                          fontSize: 12, fontWeight: 600, padding: '5px 8px', cursor: 'pointer',
-                          outline: 'none',
-                        }}
-                      >
-                        {layoutNames.map(n => <option key={n} value={n}>{n}</option>)}
-                      </select>
-                    ) : (
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', padding: '5px 0' }}>
-                        {activeLayout}
-                      </div>
-                    )}
-                  </div>
-                  <button className="icon-btn" onClick={handleStartRename} title={pt ? 'Renomear' : 'Rename'}>
-                    <Pencil size={12} />
-                  </button>
-                </>
+                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', padding: '0 4px' }}>
+                  {activeLayout}
+                </span>
               )}
-            </div>
-
-            {/* Action row */}
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button
-                className="icon-btn accent"
-                onClick={handleNewLayout}
-                title={pt ? 'Novo layout' : 'New layout'}
-                style={{ flex: 1, width: 'auto', gap: 5, fontSize: 11, fontWeight: 600 }}
-              >
+              <button className="icon-btn" onClick={handleStartRename} title={pt ? 'Renomear' : 'Rename'} style={{ width: 26, height: 26 }}>
+                <Pencil size={12} />
+              </button>
+              <button className="icon-btn accent" onClick={handleNewLayout} title={pt ? 'Novo layout' : 'New layout'} style={{ width: 26, height: 26 }}>
                 <Plus size={12} />
-                {pt ? 'Novo' : 'New'}
               </button>
               <button
                 className="icon-btn danger"
                 onClick={handleDeleteLayout}
                 title={pt ? 'Deletar layout' : 'Delete layout'}
                 disabled={layoutNames.length <= 1}
-                style={{ opacity: layoutNames.length <= 1 ? 0.3 : 1 }}
+                style={{ width: 26, height: 26 }}
               >
                 <Trash2 size={12} />
               </button>
-            </div>
-          </div>
+            </>
+          )}
+        </div>
 
-          {/* ── Palette header + search ── */}
+        {/* Divider */}
+        <div style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
+
+        {/* Lock toggle */}
+        <button
+          className={`icon-btn ${locked ? 'active' : ''}`}
+          onClick={() => setLocked(v => !v)}
+          title={locked
+            ? (pt ? 'Desbloquear (habilitar drag e resize)' : 'Unlock (enable drag & resize)')
+            : (pt ? 'Bloquear (desabilitar drag e resize)' : 'Lock (disable drag & resize)')}
+          style={{ width: 30, height: 30 }}
+        >
+          {locked ? <Lock size={14} /> : <Unlock size={14} />}
+        </button>
+
+        {/* Divider */}
+        <div style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
+
+        {/* Pinned projects picker */}
+        <div ref={projectPickerRef} style={{ position: 'relative' }}>
+          <button
+            className={`icon-btn ${pinnedProjects.length > 0 ? 'active' : ''}`}
+            onClick={() => setProjectPickerOpen(v => !v)}
+            title={pt ? 'Projetos fixados neste layout' : 'Projects pinned to this layout'}
+            style={{ width: 'auto', paddingLeft: 8, paddingRight: 8, gap: 5, height: 30, fontSize: 11, fontWeight: 500 }}
+          >
+            <FolderOpen size={13} />
+            {pinnedProjects.length > 0
+              ? `${pinnedProjects.length} ${pt ? 'projeto(s) fixado(s)' : 'pinned'}`
+              : (pt ? 'Fixar projetos' : 'Pin projects')}
+          </button>
+          {projectPickerOpen && (
+            <div style={{
+              position: 'absolute', top: '100%', left: 0, marginTop: 6, zIndex: 50,
+              background: 'var(--bg-card)', border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-lg)', padding: 8, minWidth: 260, maxWidth: 340,
+              boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-tertiary)', padding: '4px 8px 6px' }}>
+                {pt ? 'Fixar projetos neste layout' : 'Pin projects to this layout'}
+              </div>
+              <div style={{ position: 'relative', marginBottom: 6 }}>
+                <Search size={11} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)', pointerEvents: 'none' }} />
+                <input
+                  ref={projectSearchRef}
+                  type="text"
+                  placeholder={pt ? 'Buscar projeto…' : 'Search project…'}
+                  value={projectSearch}
+                  onChange={e => setProjectSearch(e.target.value)}
+                  style={{
+                    width: '100%', boxSizing: 'border-box',
+                    padding: '6px 10px 6px 28px',
+                    background: 'var(--bg-elevated)',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: 7, fontSize: 12,
+                    color: 'var(--text-primary)', fontFamily: 'inherit', outline: 'none',
+                  }}
+                  onFocus={e => e.currentTarget.style.borderColor = 'var(--anthropic-orange)40'}
+                  onBlur={e => e.currentTarget.style.borderColor = 'var(--border-subtle)'}
+                />
+              </div>
+              {allProjects.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '6px 8px' }}>
+                  {pt ? 'Nenhum projeto encontrado' : 'No projects found'}
+                </div>
+              ) : (
+                <div style={{ maxHeight: 240, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {filteredProjects.length === 0 && (
+                    <div style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '6px 8px' }}>
+                      {pt ? 'Nenhum resultado' : 'No results'}
+                    </div>
+                  )}
+                  {filteredProjects.map(path => {
+                    const pinned = pinnedProjects.includes(path)
+                    return (
+                      <label key={path} style={{
+                        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px',
+                        borderRadius: 6, cursor: 'pointer',
+                        background: pinned ? 'var(--anthropic-orange-dim)' : 'transparent',
+                        transition: 'background 0.12s',
+                      }}
+                        onMouseEnter={e => { if (!pinned) (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)' }}
+                        onMouseLeave={e => { if (!pinned) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={pinned}
+                          onChange={() => {
+                            setPinnedProjects(
+                              pinned ? pinnedProjects.filter(p => p !== path) : [...pinnedProjects, path]
+                            )
+                            setFilters(prev => ({
+                              ...prev,
+                              projects: pinned ? prev.projects.filter(p => p !== path) : [...prev.projects, path],
+                            }))
+                          }}
+                          style={{ accentColor: 'var(--anthropic-orange)', flexShrink: 0 }}
+                        />
+                        <span style={{
+                          fontSize: 12, color: pinned ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                          fontWeight: pinned ? 600 : 400,
+                        }}>
+                          {formatProjectName(path)}
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+              {pinnedProjects.length > 0 && (
+                <button
+                  onClick={() => { setPinnedProjects([]); setFilters(prev => ({ ...prev, projects: [] })) }}
+                  style={{
+                    marginTop: 6, width: '100%', padding: '5px 8px', background: 'transparent',
+                    border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer',
+                    fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'inherit',
+                    transition: 'color 0.12s, border-color 0.12s',
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#ef4444'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#ef444460' }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}
+                >
+                  {pt ? 'Remover todos os projetos fixados' : 'Remove all pinned projects'}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Divider */}
+        <div style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
+
+        {/* Export / Import */}
+        <button
+          className="icon-btn"
+          onClick={handleExport}
+          title={pt ? 'Exportar layout como JSON' : 'Export layout as JSON'}
+          style={{ width: 26, height: 26 }}
+        >
+          <Download size={12} />
+        </button>
+        <button
+          className="icon-btn"
+          onClick={() => importFileRef.current?.click()}
+          title={pt ? 'Importar layout de JSON' : 'Import layout from JSON'}
+          style={{ width: 26, height: 26 }}
+        >
+          <Upload size={12} />
+        </button>
+        <input
+          ref={importFileRef}
+          type="file"
+          accept=".json,application/json"
+          style={{ display: 'none' }}
+          onChange={handleImportFile}
+        />
+
+        {/* Clear canvas — spacer on left */}
+        {items.length > 0 && !locked && (
+          <>
+            <div style={{ flex: 1 }} />
+            <button
+              onClick={() => {
+                if (confirm(pt ? 'Remover todos os componentes do canvas?' : 'Remove all components from the canvas?')) reset()
+              }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 5,
+                padding: '5px 10px', background: 'transparent',
+                border: '1px solid var(--border)', borderRadius: 6,
+                color: 'var(--text-tertiary)', cursor: 'pointer',
+                fontFamily: 'inherit', fontSize: 11, fontWeight: 500,
+                transition: 'all 0.15s', height: 30,
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#ef4444'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#ef444460' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}
+            >
+              <RotateCcw size={11} />
+              {pt ? 'Limpar' : 'Clear'}
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* ─── Main row: aside + canvas ─── */}
+      <div ref={outerRowRef} style={{ display: 'flex', gap: sidebarOpen ? ASIDE_GAP : 0, alignItems: 'flex-start', minHeight: 'calc(100vh - 300px)' }}>
+
+        {/* ─── Aside / Palette ─── */}
+        {sidebarOpen && (
+        <aside
+          className="custom-aside"
+          style={{
+            width: ASIDE_WIDTH,
+            position: 'sticky',
+            top: 140,
+            maxHeight: 'calc(100vh - 160px)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+          }}
+        >
+          {/* ── Palette search ── */}
           <div style={{
             background: 'var(--bg-card)',
             border: '1px solid var(--border)',
@@ -341,8 +816,8 @@ export default function CustomPage() {
             padding: '12px 14px 10px',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-              <Layers size={14} style={{ color: 'var(--anthropic-orange)' }} />
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+              <Layers size={13} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
+              <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
                 {pt ? 'Componentes' : 'Components'}
               </div>
             </div>
@@ -440,50 +915,39 @@ export default function CustomPage() {
               )
             })}
           </div>
-
-          {items.length > 0 && (
-            <button
-              onClick={() => {
-                if (confirm(pt ? 'Remover todos os componentes do canvas?' : 'Remove all components from the canvas?')) reset()
-              }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center',
-                padding: '8px 12px', background: 'transparent',
-                border: '1px solid var(--border)', borderRadius: 8,
-                color: 'var(--text-tertiary)', cursor: 'pointer',
-                fontFamily: 'inherit', fontSize: 12, fontWeight: 500, transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#ef4444'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#ef444460' }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}
-            >
-              <RotateCcw size={12} />
-              {pt ? 'Limpar canvas' : 'Clear canvas'}
-            </button>
-          )}
         </aside>
-      )}
+        )}
 
-      {/* ─── Main canvas ─── */}
-      <div ref={containerRef} style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          position: 'relative',
-          background: 'var(--bg-base)',
-          border: '1px dashed var(--border)',
-          borderRadius: 'var(--radius-lg)',
-          minHeight: 400,
-          padding: 8,
-        }}>
+        {/* ─── Main canvas ─── */}
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            overflow: 'hidden',
+            position: 'relative',
+            minHeight: isDragging ? 600 : 400,
+          }}
+        >
+          {/* Lock overlay — transparent shield that blocks drag/click events */}
+          {locked && items.length > 0 && (
+            <div style={{
+              position: 'absolute', inset: 0, zIndex: 20,
+              background: 'transparent', cursor: 'default',
+            }} />
+          )}
+
           {items.length === 0 && (
             <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0 }}>
-              <EmptyState pt={pt} />
+              <EmptyState pt={pt} isDragging={isDragging} />
             </div>
           )}
+
           {mounted && gridWidth > 0 && (
             <GridLayout
-              className="custom-grid"
+              className={`custom-grid${locked ? ' locked' : ''}`}
               width={gridWidth}
               layout={layout}
-              style={items.length === 0 ? { minHeight: 380 } : undefined}
+              style={items.length === 0 ? { minHeight: isDragging ? 580 : 380 } : undefined}
               gridConfig={{
                 cols: GRID_COLS,
                 rowHeight: GRID_ROW_HEIGHT,
@@ -491,69 +955,180 @@ export default function CustomPage() {
                 containerPadding: null,
                 maxRows: Infinity,
               }}
-              dragConfig={{ enabled: true, bounded: false, handle: '.grid-drag-handle', threshold: 3 }}
-              resizeConfig={{ enabled: true, handles: ['se'] }}
-              dropConfig={{ enabled: true, defaultItem: { w: 4, h: 3 } }}
+              dragConfig={{
+                enabled: !locked,
+                bounded: true,
+                handle: '.grid-drag-handle',
+                threshold: 3,
+              }}
+              resizeConfig={{ enabled: !locked, handles: ['se'] }}
+              dropConfig={{ enabled: !locked, defaultItem: { w: 4, h: 3 } }}
               droppingItem={droppingItem}
               onLayoutChange={onLayoutChange}
               onDrop={onDrop}
               autoSize
             >
-              {items.map(item => {
-                const catalog = getCatalogItem(item.componentId)
-                if (!catalog) return <div key={item.i} />
-                return (
-                  <div key={item.i} className="grid-item-wrap" style={{ overflow: 'hidden', borderRadius: 'var(--radius-lg)' }}>
-                    <div
-                      className="grid-drag-handle"
-                      title={pt ? 'Arrastar' : 'Drag'}
-                      style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 24, zIndex: 3, cursor: 'grab' }}
-                    />
-                    <button
-                      className="grid-item-remove"
-                      onClick={() => removeItem(item.i)}
-                      title={pt ? 'Remover' : 'Remove'}
-                      style={{
-                        position: 'absolute', top: 6, right: 6, zIndex: 4,
-                        width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                        borderRadius: 6, color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0,
-                      }}
-                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#ef4444'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#ef4444' }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}
-                    >
-                      <X size={12} />
-                    </button>
-                    <div style={{ width: '100%', height: '100%', overflow: 'auto' }}>
-                      {catalog.render(ctx)}
+                {items.map(item => {
+                  const catalog = getCatalogItem(item.componentId)
+                  if (!catalog) return <div key={item.i} />
+                  return (
+                    <div key={item.i} className="grid-item-wrap" style={{ overflow: 'hidden', borderRadius: 'var(--radius-lg)' }}>
+                      <div
+                        className={`grid-drag-handle${locked ? ' drag-handle-locked' : ''}`}
+                        title={locked ? (pt ? 'Bloqueado' : 'Locked') : (pt ? 'Arrastar' : 'Drag')}
+                        style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 24, zIndex: 3, cursor: locked ? 'default' : 'grab' }}
+                      />
+                      {!locked && (
+                        <button
+                          className="grid-item-remove"
+                          onClick={() => removeItem(item.i)}
+                          title={pt ? 'Remover' : 'Remove'}
+                          style={{
+                            position: 'absolute', top: 6, right: 6, zIndex: 4,
+                            width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                            borderRadius: 6, color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0,
+                          }}
+                          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#ef4444'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#ef4444' }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
+                      <div style={{ width: '100%', height: '100%', overflow: 'auto' }}>
+                        {catalog.render(ctx)}
+                      </div>
                     </div>
-                  </div>
-                )
-              })}
-            </GridLayout>
-          )}
+                  )
+                })}
+              </GridLayout>
+            )}
         </div>
       </div>
+
+      {/* ─── Import modal ─── */}
+      {importState && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1000,
+          background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          backdropFilter: 'blur(4px)',
+        }}
+          onClick={e => { if (e.target === e.currentTarget) setImportState(null) }}
+        >
+          <div style={{
+            background: 'var(--bg-card)', border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-xl, 16px)', padding: 24, width: 480, maxWidth: '90vw',
+            maxHeight: '80vh', display: 'flex', flexDirection: 'column', gap: 16,
+            boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
+                {pt ? 'Importar layout' : 'Import layout'}
+              </div>
+              <button className="icon-btn" onClick={() => setImportState(null)} style={{ width: 26, height: 26 }}>
+                <X size={12} />
+              </button>
+            </div>
+
+            {/* Layout name */}
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 6 }}>
+                {pt ? 'Nome do layout' : 'Layout name'}
+              </label>
+              <input
+                value={importState.layoutName}
+                onChange={e => setImportState(s => s ? { ...s, layoutName: e.target.value } : s)}
+                style={{
+                  width: '100%', boxSizing: 'border-box', padding: '8px 12px',
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                  borderRadius: 8, fontSize: 13, color: 'var(--text-primary)',
+                  fontFamily: 'inherit', outline: 'none',
+                }}
+                onFocus={e => e.currentTarget.style.borderColor = 'var(--anthropic-orange)60'}
+                onBlur={e => e.currentTarget.style.borderColor = 'var(--border-subtle)'}
+              />
+            </div>
+
+            {/* Project mappings */}
+            {importState.originalProjects.length > 0 && (
+              <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {pt ? 'Mapeamento de projetos' : 'Project mapping'}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5, marginBottom: 4 }}>
+                  {pt
+                    ? 'Selecione o projeto local correspondente a cada projeto do layout importado.'
+                    : 'Select the local project that corresponds to each project in the imported layout.'}
+                </div>
+                {importState.originalProjects.map(proj => (
+                  <div key={proj.path} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <FolderOpen size={11} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {proj.displayName} <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>({proj.path})</span>
+                      </span>
+                    </div>
+                    <ProjectSelect
+                      value={importState.mappings[proj.path] ?? ''}
+                      options={allProjects}
+                      pt={pt}
+                      onChange={val => setImportState(s => s ? { ...s, mappings: { ...s.mappings, [proj.path]: val } } : s)}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
+              <button
+                onClick={() => setImportState(null)}
+                style={{
+                  padding: '8px 16px', background: 'transparent', border: '1px solid var(--border)',
+                  borderRadius: 8, cursor: 'pointer', fontSize: 12, color: 'var(--text-secondary)',
+                  fontFamily: 'inherit', fontWeight: 500,
+                }}
+              >
+                {pt ? 'Cancelar' : 'Cancel'}
+              </button>
+              <button
+                onClick={handleConfirmImport}
+                style={{
+                  padding: '8px 20px', background: 'var(--anthropic-orange)', border: 'none',
+                  borderRadius: 8, cursor: 'pointer', fontSize: 12, color: '#fff',
+                  fontFamily: 'inherit', fontWeight: 600,
+                }}
+              >
+                {pt ? 'Importar' : 'Import'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
-function EmptyState({ pt }: { pt: boolean }) {
+function EmptyState({ pt, isDragging }: { pt: boolean; isDragging: boolean }) {
   return (
     <div style={{
       height: '100%', padding: '60px 40px', textAlign: 'center',
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16,
+      transition: 'opacity 0.15s',
     }}>
       <div style={{
         width: 56, height: 56,
-        background: 'var(--anthropic-orange-dim)', border: '1px solid var(--anthropic-orange)40',
+        background: isDragging ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+        border: isDragging ? '1px solid var(--anthropic-orange)60' : '1px solid var(--border)',
         borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        transition: 'background 0.15s, border-color 0.15s',
       }}>
-        <Layers size={24} color="var(--anthropic-orange)" />
+        <Layers size={24} color={isDragging ? 'var(--anthropic-orange)' : 'var(--text-tertiary)'} />
       </div>
       <div>
-        <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>
-          {pt ? 'Monte sua página' : 'Build your own page'}
+        <div style={{ fontSize: 16, fontWeight: 700, color: isDragging ? 'var(--anthropic-orange)' : 'var(--text-primary)', marginBottom: 6, transition: 'color 0.15s' }}>
+          {isDragging
+            ? (pt ? 'Solte aqui' : 'Drop here')
+            : (pt ? 'Monte sua página' : 'Build your own page')}
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.6, maxWidth: 440 }}>
           {pt
@@ -564,3 +1139,4 @@ function EmptyState({ pt }: { pt: boolean }) {
     </div>
   )
 }
+

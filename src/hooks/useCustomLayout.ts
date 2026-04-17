@@ -13,17 +13,19 @@ export interface GridItem {
 
 interface LayoutState {
   layouts: Record<string, GridItem[]>
+  pinnedProjects: Record<string, string[]>  // layout name → pinned project paths
   active: string
 }
 
 interface RawPrefs {
   layouts?: Record<string, GridItem[]>
   activeLayout?: string
+  pinnedProjects?: Record<string, string[]>
   customLayout?: GridItem[] // legacy single-layout format
 }
 
 const INIT_NAME = 'Layout 1'
-const INIT_STATE: LayoutState = { layouts: { [INIT_NAME]: [] }, active: INIT_NAME }
+const INIT_STATE: LayoutState = { layouts: { [INIT_NAME]: [] }, pinnedProjects: {}, active: INIT_NAME }
 
 export function useCustomLayout() {
   const [state, setState] = useState<LayoutState>(INIT_STATE)
@@ -37,15 +39,16 @@ export function useCustomLayout() {
       .then(r => r.ok ? r.json() as Promise<RawPrefs> : null)
       .then(prefs => {
         if (!prefs) return
+        const pinnedProjects = prefs.pinnedProjects ?? {}
         if (prefs.layouts && Object.keys(prefs.layouts).length > 0) {
           const names = Object.keys(prefs.layouts)
           const active: string = (prefs.activeLayout && prefs.layouts[prefs.activeLayout])
             ? prefs.activeLayout
             : names[0]!
-          setState({ layouts: prefs.layouts, active })
+          setState({ layouts: prefs.layouts, pinnedProjects, active })
         } else if (prefs.customLayout && Array.isArray(prefs.customLayout)) {
           // Migrate legacy single-layout format
-          setState({ layouts: { [INIT_NAME]: prefs.customLayout }, active: INIT_NAME })
+          setState({ layouts: { [INIT_NAME]: prefs.customLayout }, pinnedProjects, active: INIT_NAME })
         }
       })
       .catch(() => {})
@@ -59,7 +62,7 @@ export function useCustomLayout() {
       await fetch('/api/preferences', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ layouts: s.layouts, activeLayout: s.active }),
+        body: JSON.stringify({ layouts: s.layouts, activeLayout: s.active, pinnedProjects: s.pinnedProjects }),
       })
     } catch {}
     finally {
@@ -87,6 +90,9 @@ export function useCustomLayout() {
   // Items for the active layout
   const items = state.layouts[state.active] ?? []
 
+  // Pinned projects for the active layout
+  const pinnedProjects = state.pinnedProjects[state.active] ?? []
+
   const setItems = useCallback((next: GridItem[]) => {
     update(prev => ({ ...prev, layouts: { ...prev.layouts, [prev.active]: next } }))
   }, [update])
@@ -109,6 +115,13 @@ export function useCustomLayout() {
     update(prev => ({ ...prev, layouts: { ...prev.layouts, [prev.active]: [] } }))
   }, [update])
 
+  const setPinnedProjects = useCallback((projects: string[]) => {
+    update(prev => ({
+      ...prev,
+      pinnedProjects: { ...prev.pinnedProjects, [prev.active]: projects },
+    }))
+  }, [update])
+
   // Layout management
   const layoutNames = Object.keys(state.layouts)
 
@@ -121,7 +134,7 @@ export function useCustomLayout() {
     if (!trimmed) return
     update(prev => {
       if (prev.layouts[trimmed]) return { ...prev, active: trimmed }
-      return { layouts: { ...prev.layouts, [trimmed]: [] }, active: trimmed }
+      return { ...prev, layouts: { ...prev.layouts, [trimmed]: [] }, active: trimmed }
     })
   }, [update])
 
@@ -131,9 +144,14 @@ export function useCustomLayout() {
     update(prev => {
       if (!prev.layouts[oldName]) return prev
       if (prev.layouts[trimmed] && oldName !== trimmed) return prev
-      const { [oldName]: layoutItems = [], ...rest } = prev.layouts
+      const { [oldName]: layoutItems = [], ...restLayouts } = prev.layouts
+      const { [oldName]: oldPinned = [], ...restPinned } = prev.pinnedProjects
       const active = prev.active === oldName ? trimmed : prev.active
-      return { layouts: { ...rest, [trimmed]: layoutItems }, active }
+      return {
+        layouts: { ...restLayouts, [trimmed]: layoutItems },
+        pinnedProjects: oldPinned.length > 0 ? { ...restPinned, [trimmed]: oldPinned } : restPinned,
+        active,
+      }
     })
   }, [update])
 
@@ -141,10 +159,11 @@ export function useCustomLayout() {
     update(prev => {
       const names = Object.keys(prev.layouts)
       if (names.length <= 1) return prev
-      const { [name]: _, ...rest } = prev.layouts
-      const fallback = Object.keys(rest)[0] ?? INIT_NAME
+      const { [name]: _, ...restLayouts } = prev.layouts
+      const { [name]: __, ...restPinned } = prev.pinnedProjects
+      const fallback = Object.keys(restLayouts)[0] ?? INIT_NAME
       const active = prev.active === name ? fallback : prev.active
-      return { layouts: rest, active }
+      return { layouts: restLayouts, pinnedProjects: restPinned, active }
     })
   }, [update])
 
@@ -152,6 +171,8 @@ export function useCustomLayout() {
     items, setItems, addItem, removeItem, reset, loaded,
     layoutNames,
     activeLayout: state.active,
+    pinnedProjects,
+    setPinnedProjects,
     switchLayout, createLayout, renameLayout, deleteLayout,
   }
 }
