@@ -30,7 +30,8 @@
     "watch:cli": "bun run src/tui/index.ts",
     "stub": "bun run scripts/ensure-type-stub.ts",
     "test": "bun test",
-    "prepare": "husky"
+    "prepare": "husky",
+    "mcp": "bun run mcp/agentistics-mcp.ts"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.5.0",
@@ -50,6 +51,7 @@
   },
   "dependencies": {
     "@inquirer/prompts": "^8.4.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-metrics-otlp-http": "^0.57.2",
     "@opentelemetry/sdk-metrics": "^1.30.1",

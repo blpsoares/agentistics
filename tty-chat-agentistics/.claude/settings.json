@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "agentistics": {
+      "command": "bun",
+      "args": ["run", "mcp/agentistics-mcp.ts"],
+      "cwd": "/home/mithrandir/agentistics"
+    }
+  },
+  "permissions": {
+    "allow": [
+      "WebFetch(http://localhost:3001/*)"
+    ]
+  }
+}

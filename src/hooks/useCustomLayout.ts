@@ -157,12 +157,10 @@ export function useCustomLayout() {
 
   const deleteLayout = useCallback((name: string) => {
     update(prev => {
-      const names = Object.keys(prev.layouts)
-      if (names.length <= 1) return prev
       const { [name]: _, ...restLayouts } = prev.layouts
       const { [name]: __, ...restPinned } = prev.pinnedProjects
-      const fallback = Object.keys(restLayouts)[0] ?? INIT_NAME
-      const active = prev.active === name ? fallback : prev.active
+      const remaining = Object.keys(restLayouts)
+      const active = prev.active === name ? (remaining[0] ?? '') : prev.active
       return { layouts: restLayouts, pinnedProjects: restPinned, active }
     })
   }, [update])
@@ -171,14 +169,13 @@ export function useCustomLayout() {
     update(prev => {
       const toDelete = new Set(names)
       const remaining = Object.keys(prev.layouts).filter(n => !toDelete.has(n))
-      if (remaining.length === 0) return prev
       const newLayouts: Record<string, GridItem[]> = {}
       const newPinned: Record<string, string[]> = {}
       for (const n of remaining) {
         newLayouts[n] = prev.layouts[n]!
         if (prev.pinnedProjects[n]) newPinned[n] = prev.pinnedProjects[n]!
       }
-      const active = toDelete.has(prev.active) ? remaining[0]! : prev.active
+      const active = toDelete.has(prev.active) ? (remaining[0] ?? '') : prev.active
       return { layouts: newLayouts, pinnedProjects: newPinned, active }
     })
   }, [update])
