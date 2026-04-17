@@ -39,6 +39,7 @@
     "@types/html2canvas": "^1.0.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/react-grid-layout": "^2.1.0",
     "@vitejs/plugin-react": "^6.0.1",
     "concurrently": "^9.2.1",
     "husky": "^9.1.7",
@@ -59,6 +60,8 @@
     "lucide-react": "^1.7.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
+    "react-grid-layout": "^2.2.3",
+    "react-router-dom": "^7.14.1",
     "recharts": "^3.8.1"
   }
 }

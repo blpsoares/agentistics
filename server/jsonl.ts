@@ -116,6 +116,7 @@ export async function parseSessionJsonl(
 
   let cwd = '', startTime = '', lastTime = '', firstPrompt = '', modelId = ''
   let userMsgs = 0, assistantMsgs = 0, inputTokens = 0, outputTokens = 0
+  let cacheReadTokens = 0, cacheCreationTokens = 0
   let gitCommits = 0, gitPushes = 0
   let toolErrors = 0, userInterruptions = 0
   let hasMcp = false
@@ -191,12 +192,14 @@ export async function parseSessionJsonl(
       assistantMsgs++
       if (ts) lastAssistantTs = ts
       const msg = e.message as Record<string, unknown> | undefined
-      if (!modelId && typeof msg?.model === 'string') modelId = msg.model
+      if (!modelId && typeof msg?.model === 'string' && msg.model.startsWith('claude-')) modelId = msg.model
       const msgOutputTokens = (msg?.usage as Record<string, number> | undefined)?.output_tokens ?? 0
       if (msg?.usage) {
         const u = msg.usage as Record<string, number>
-        inputTokens  += u.input_tokens ?? 0
-        outputTokens += u.output_tokens ?? 0
+        inputTokens         += u.input_tokens ?? 0
+        outputTokens        += u.output_tokens ?? 0
+        cacheReadTokens     += u.cache_read_input_tokens ?? 0
+        cacheCreationTokens += u.cache_creation_input_tokens ?? 0
       }
       // Collect tool names in this message for token attribution
       const toolsInMessage: string[] = []
@@ -288,6 +291,8 @@ export async function parseSessionJsonl(
     git_pushes: gitPushes,
     input_tokens: inputTokens,
     output_tokens: outputTokens,
+    cache_read_input_tokens: cacheReadTokens,
+    cache_creation_input_tokens: cacheCreationTokens,
     first_prompt: firstPrompt,
     user_interruptions: userInterruptions,
     user_response_times: userResponseTimes,

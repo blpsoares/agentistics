@@ -14,6 +14,12 @@ interface Props {
   }[]
   height?: number
   theme?: 'dark' | 'light'
+  /** Forces a specific metric and hides the metric selector (for catalog variants). */
+  forcedMetric?: Metric
+  /** Forces overlay mode and hides the metric selector (for catalog variants). */
+  forcedOverlay?: boolean
+  /** Hides all toggles (metric pills, Overlay All, Axes, Legend). */
+  hideControls?: boolean
 }
 
 type Metric = 'value' | 'sessions' | 'tools'
@@ -82,12 +88,14 @@ function ToggleBtn({ active, onClick, children }: { active: boolean; onClick: ()
   )
 }
 
-export function ActivityChart({ data, height = 180, theme }: Props) {
-  const [metric, setMetric] = useState<Metric>('value')
-  const [overlayAll, setOverlayAll] = useState(false)
+export function ActivityChart({ data, height = 180, theme, forcedMetric, forcedOverlay, hideControls }: Props) {
+  const [metric, setMetric] = useState<Metric>(forcedMetric ?? 'value')
+  const [overlayAll, setOverlayAll] = useState(forcedOverlay ?? false)
   const [showAxes, setShowAxes] = useState(true)
   const [showLegend, setShowLegend] = useState(true)
-  const isOverlay = overlayAll
+  const effectiveMetric: Metric = forcedMetric ?? metric
+  const isOverlay = forcedOverlay ?? overlayAll
+  const isLocked = forcedMetric !== undefined || forcedOverlay !== undefined || hideControls === true
   const METRICS = getMetrics(theme)
   const DATA_METRICS = METRICS as { key: 'value'|'sessions'|'tools'; label: string; color: string }[]
 
@@ -107,11 +115,12 @@ export function ActivityChart({ data, height = 180, theme }: Props) {
 
   const activeLegendItems = isOverlay
     ? DATA_METRICS
-    : DATA_METRICS.filter(m => m.key === metric as string)
+    : DATA_METRICS.filter(m => m.key === effectiveMetric as string)
 
   return (
     <div>
-      {/* Top bar: metric selector + toggles */}
+      {/* Top bar: metric selector + toggles — hidden in locked/variant mode */}
+      {!isLocked && (
       <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         {METRICS.map(m => (
           <button
@@ -157,6 +166,7 @@ export function ActivityChart({ data, height = 180, theme }: Props) {
           <ToggleBtn active={showLegend} onClick={() => setShowLegend(v => !v)}>Legend</ToggleBtn>
         </div>
       </div>
+      )}
 
       {/* Legend */}
       {showLegend && (
@@ -222,7 +232,7 @@ export function ActivityChart({ data, height = 180, theme }: Props) {
                   />
                 ))
               : (() => {
-                  const m = DATA_METRICS.find(x => x.key === (metric as string)) ?? DATA_METRICS[0]
+                  const m = DATA_METRICS.find(x => x.key === (effectiveMetric as string)) ?? DATA_METRICS[0]
                   if (!m) return null
                   return (
                     <Area

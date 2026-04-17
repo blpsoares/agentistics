@@ -1,11 +1,13 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
+import { Outlet, NavLink, useLocation } from 'react-router-dom'
 import { version } from '../package.json'
 import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, RefreshCw, FileCode, TrendingUp, BarChart2,
   Sun, Moon, Globe, AlertTriangle, Download, Upload,
-  Maximize2, X, GripVertical, Trophy, Activity, Bot, Sparkles, Settings,
+  Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
+  Target, Home, DollarSign, Layers,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -13,6 +15,7 @@ import type { Filters } from './lib/types'
 import type { Lang, Theme } from './lib/types'
 import { formatProjectName, setHomeDir, MODEL_PRICING } from './lib/types'
 import { StatCard } from './components/StatCard'
+import { StreakBreakdownButton } from './components/StreakBreakdownButton'
 import { ActivityHeatmap } from './components/ActivityHeatmap'
 import { ActivityChart } from './components/ActivityChart'
 import { HourChart } from './components/HourChart'
@@ -26,6 +29,10 @@ import { PDFExportModal } from './components/PDFExportModal'
 import { HealthWarnings } from './components/HealthWarnings'
 import { ToolMetricsPanel } from './components/ToolMetricsPanel'
 import { AgentMetricsPanel } from './components/AgentMetricsPanel'
+import { CacheHitRatePanel } from './components/CacheHitRatePanel'
+import { BudgetPanel } from './components/BudgetPanel'
+import { SessionDrilldownModal } from './components/SessionDrilldownModal'
+import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
 import { format, parseISO, parse } from 'date-fns'
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
@@ -546,6 +553,10 @@ function LiveSettingsModal({
   )
 }
 
+function fmtFull(n: number): string {
+  return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+}
+
 function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string {
   if (currency === 'BRL') {
     const brl = usd * rate
@@ -557,13 +568,89 @@ function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string
   return `USD ${usd.toFixed(2)}`
 }
 
-export default function App() {
+function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string {
+  if (currency === 'BRL') {
+    const brl = usd * rate
+    if (brl < 0.00001) return '<R$0,00001'
+    const [intPart, decPart] = brl.toFixed(6).split('.')
+    return `R$${(intPart ?? '0').replace(/\B(?=(\d{3})+$)/g, '.')},${decPart}`
+  }
+  if (usd < 0.000001) return '<USD 0.000001'
+  return `USD ${usd.toFixed(6)}`
+}
+
+function NavTabs({ lang }: { lang: Lang }) {
+  const location = useLocation()
+  const pt = lang === 'pt'
+
+  const tabs: { to: string; labelPt: string; labelEn: string; icon: React.ReactNode }[] = [
+    { to: '/',          labelPt: 'Home',         labelEn: 'Home',         icon: <Home size={12} /> },
+    { to: '/costs',     labelPt: 'Custos',       labelEn: 'Costs',        icon: <DollarSign size={12} /> },
+    { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={12} /> },
+    { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={12} /> },
+    { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={12} /> },
+  ]
+
+  return (
+    <nav style={{ display: 'flex', gap: 2, height: 42, alignItems: 'center', overflowX: 'auto' }}>
+      {tabs.map(tab => {
+        const active = tab.to === '/'
+          ? location.pathname === '/'
+          : location.pathname.startsWith(tab.to)
+        return (
+          <NavLink
+            key={tab.to}
+            to={tab.to}
+            end={tab.to === '/'}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '7px 12px',
+              borderRadius: 8,
+              textDecoration: 'none',
+              fontSize: 12,
+              fontWeight: active ? 700 : 500,
+              fontFamily: 'inherit',
+              color: active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+              background: active ? 'var(--anthropic-orange-dim)' : 'transparent',
+              border: active ? '1px solid var(--anthropic-orange)30' : '1px solid transparent',
+              transition: 'all 0.15s',
+              whiteSpace: 'nowrap',
+            }}
+            onMouseEnter={e => {
+              if (!active) {
+                ;(e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-primary)'
+                ;(e.currentTarget as HTMLAnchorElement).style.background = 'var(--bg-elevated)'
+              }
+            }}
+            onMouseLeave={e => {
+              if (!active) {
+                ;(e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-tertiary)'
+                ;(e.currentTarget as HTMLAnchorElement).style.background = 'transparent'
+              }
+            }}
+          >
+            {tab.icon}
+            {pt ? tab.labelPt : tab.labelEn}
+          </NavLink>
+        )
+      })}
+    </nav>
+  )
+}
+
+export default function AppLayout() {
+  const location = useLocation()
+  const isCustomPage = location.pathname === '/custom'
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
   const [showLiveSettings, setShowLiveSettings] = useState(false)
-  const [lang, setLang] = useState<Lang>('en')
-  const [theme, setTheme] = useState<Theme>('dark')
-  const [currency, setCurrency] = useState<'USD' | 'BRL'>('USD')
+  const [lang, setLangState] = useState<Lang>('en')
+  const [theme, setThemeState] = useState<Theme>('dark')
+  const [currency, setCurrencyState] = useState<'USD' | 'BRL'>('USD')
+
+  const setLang = useCallback((l: Lang) => setLangState(l), [])
+  const setTheme = useCallback((t: Theme) => setThemeState(t), [])
+  const setCurrency = useCallback((c: 'USD' | 'BRL') => setCurrencyState(c), [])
   const [brlRate, setBrlRate] = useState(5.70)
   const [filters, setFilters] = useState<Filters>({
     dateRange: 'all',
@@ -575,6 +662,22 @@ export default function App() {
   const [infoModalIndex, setInfoModalIndex] = useState<number | null>(null)
   const [showExportModal, setShowExportModal] = useState(false)
   const [expandedChart, setExpandedChart] = useState<string | null>(null)
+  const [selectedSession, setSelectedSession] = useState<import('./lib/types').SessionMeta | null>(null)
+  const [monthlyBudgetUSD, setMonthlyBudgetUSD] = useState<number | null>(() => {
+    try {
+      const raw = localStorage.getItem('agentistics-monthly-budget-usd')
+      if (!raw) return null
+      const v = parseFloat(raw)
+      return isNaN(v) ? null : v
+    } catch { return null }
+  })
+  const updateBudget = useCallback((v: number | null) => {
+    setMonthlyBudgetUSD(v)
+    try {
+      if (v === null) localStorage.removeItem('agentistics-monthly-budget-usd')
+      else localStorage.setItem('agentistics-monthly-budget-usd', String(v))
+    } catch { /* ignore quota/disabled storage */ }
+  }, [])
 
   type CardId = 'messages' | 'sessions' | 'tool-calls' | 'input-tokens' | 'output-tokens' | 'cost' | 'streak' | 'longest-session' | 'commits' | 'files'
   const DEFAULT_CARD_ORDER: CardId[] = [
@@ -596,14 +699,44 @@ export default function App() {
     } catch {}
     return DEFAULT_CARD_ORDER
   })
-  const dragCardRef = useRef<CardId | null>(null)
-  const [dragOverCard, setDragOverCard] = useState<CardId | null>(null)
+  const [showPrefsModal, setShowPrefsModal] = useState(false)
+
+  const [cardPrecision, setCardPrecisionState] = useState<Record<string, boolean>>({})
+  const precisionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const setCardPrecision = useCallback((id: string, v: boolean) => {
+    setCardPrecisionState(prev => {
+      const next = { ...prev, [id]: v }
+      if (precisionSaveTimer.current) clearTimeout(precisionSaveTimer.current)
+      precisionSaveTimer.current = setTimeout(() => {
+        fetch('/api/preferences', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cardPrecision: next }),
+        }).catch(() => {})
+      }, 400)
+      return next
+    })
+  }, [])
   const [scrolled, setScrolled] = useState(false)
   const [highlightUpdates, setHighlightUpdates] = useState(true)
   const highlightUpdatesRef = useRef(true)
   const flashTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const prevDerivedFingerprintRef = useRef<Record<string, string>>({})
   const liveFlashFirstRunRef = useRef(true)
+
+  useEffect(() => {
+    fetch('/api/preferences')
+      .then(r => r.ok ? r.json() : null)
+      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[] } | null) => {
+        if (!prefs) return
+        if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
+        if (prefs.lang) setLangState(prefs.lang)
+        if (prefs.theme) setThemeState(prefs.theme)
+        if (prefs.currency) setCurrencyState(prefs.currency)
+        if (prefs.cardOrder) setCardOrder(prefs.cardOrder as CardId[])
+      })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -646,30 +779,68 @@ export default function App() {
       .catch(() => { /* silently use defaults */ })
   }, [])
 
+  // Maps home-page flash IDs → canvas catalog component IDs so both flash together
+  const CATALOG_FLASH_MAP: Record<string, string[]> = {
+    'messages':        ['kpi.messages'],
+    'sessions':        ['kpi.sessions'],
+    'tool-calls':      ['kpi.tool-calls'],
+    'cost':            ['kpi.cost', 'costs.budget', 'costs.cache'],
+    'streak':          ['kpi.streak'],
+    'longest-session': ['kpi.longest-session'],
+    'commits':         ['kpi.commits'],
+    'files':           ['kpi.files'],
+    'input-tokens':    ['kpi.input-tokens'],
+    'output-tokens':   ['kpi.output-tokens'],
+    'activity':        ['activity.chart', 'activity.chart-messages', 'activity.chart-sessions', 'activity.chart-tools'],
+    'heatmap':         ['activity.heatmap'],
+    'hours':           ['activity.hours', 'activity.hours-bar'],
+    'models':          ['costs.model-breakdown'],
+    'projects':        ['projects.list', 'projects.languages'],
+    'tools':           ['tools.metrics'],
+    'agents':          ['tools.agents'],
+    'sessions-list':   ['sessions.recent'],
+    'highlights':      ['sessions.highlights'],
+  }
+
   const triggerFlash = useCallback((ids: string[]) => {
     if (!highlightUpdatesRef.current) return
+    const expanded = [...ids]
     for (const id of ids) {
-      const el = document.querySelector(`[data-flash-id="${id}"]`) as HTMLElement | null
-      if (!el) continue
-      if (flashTimersRef.current[id]) {
-        clearTimeout(flashTimersRef.current[id])
-        delete flashTimersRef.current[id]
-      }
-      el.classList.remove('live-flash')
-      void el.offsetWidth
-      el.classList.add('live-flash')
-      flashTimersRef.current[id] = setTimeout(() => {
-        el.classList.remove('live-flash')
-        delete flashTimersRef.current[id]
-      }, 1400)
+      const extra = CATALOG_FLASH_MAP[id]
+      if (extra) expanded.push(...extra)
     }
+    for (const id of expanded) {
+      const els = Array.from(document.querySelectorAll(`[data-flash-id="${id}"]`))
+      for (const elRaw of els) {
+        const el = elRaw as HTMLElement
+        if (flashTimersRef.current[id]) {
+          clearTimeout(flashTimersRef.current[id])
+          delete flashTimersRef.current[id]
+        }
+        el.classList.remove('live-flash')
+        void el.offsetWidth
+        el.classList.add('live-flash')
+        flashTimersRef.current[id] = setTimeout(() => {
+          el.classList.remove('live-flash')
+          delete flashTimersRef.current[id]
+        }, 1400)
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const derived = useDerivedStats(data, filters)
 
   const models = useMemo(() => {
     if (!data) return []
-    return Object.keys(data.statsCache.modelUsage ?? {})
+    const set = new Set<string>()
+    for (const id of Object.keys(data.statsCache.modelUsage ?? {})) {
+      if (id.startsWith('claude-')) set.add(id)
+    }
+    for (const s of data.sessions) {
+      if (s.model && s.model.startsWith('claude-')) set.add(s.model)
+    }
+    return Array.from(set)
   }, [data])
 
   // When a project filter is active, compute which models are actually used in those projects
@@ -916,221 +1087,6 @@ export default function App() {
     ? Object.values(derived.modelUsage).reduce((s, u) => s + u.outputTokens, 0)
     : derived.outputTokens
 
-  // ── Drag handlers ─────────────────────────────────────────────────────────────
-  function handleDragStart(id: CardId) { dragCardRef.current = id }
-  function handleDragOver(e: React.DragEvent, id: CardId) {
-    e.preventDefault()
-    if (dragCardRef.current !== id) setDragOverCard(id)
-  }
-  function handleDrop(id: CardId) {
-    const from = dragCardRef.current
-    if (!from || from === id) { dragCardRef.current = null; setDragOverCard(null); return }
-    const newOrder = [...cardOrder]
-    const fi = newOrder.indexOf(from)
-    const ti = newOrder.indexOf(id)
-    newOrder.splice(fi, 1)
-    newOrder.splice(ti, 0, from)
-    setCardOrder(newOrder)
-    localStorage.setItem('claude-stats-card-order', JSON.stringify(newOrder))
-    dragCardRef.current = null
-    setDragOverCard(null)
-  }
-  function handleDragEnd() { dragCardRef.current = null; setDragOverCard(null) }
-
-  // ── Card renderer ──────────────────────────────────────────────────────────────
-  function renderCard(id: CardId) {
-    const isDragging = dragCardRef.current === id
-    const isOver = dragOverCard === id
-    const wrapperStyle: React.CSSProperties = {
-      opacity: isDragging ? 0.35 : 1,
-      outline: isOver ? '2px dashed var(--anthropic-orange)' : 'none',
-      outlineOffset: -2,
-      borderRadius: 'var(--radius-lg)',
-      transition: 'opacity 0.15s',
-      cursor: 'grab',
-      position: 'relative',
-      display: 'flex',
-      flexDirection: 'column',
-    }
-
-    let card: React.ReactNode = null
-    if (id === 'messages') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Mensagens' : 'Messages'}
-          value={fmt(d.totalMessages)}
-          sub={lang === 'pt' ? 'no período selecionado' : 'in selected period'}
-          icon={<MessageSquare size={15} />}
-          accent="var(--anthropic-orange)"
-          info={infoItems[0]}
-          onInfoClick={() => setInfoModalIndex(0)}
-        />
-      )
-    } else if (id === 'sessions') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Sessões' : 'Sessions'}
-          value={fmt(d.totalSessions)}
-          sub={`avg ${d.totalSessions > 0 ? Math.round(d.totalMessages / d.totalSessions) : 0} msgs/sessão`}
-          icon={<Zap size={15} />}
-          accent="var(--accent-blue)"
-          info={infoItems[1]}
-          onInfoClick={() => setInfoModalIndex(1)}
-        />
-      )
-    } else if (id === 'tool-calls') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Tool calls' : 'Tool calls'}
-          value={fmt(d.totalToolCalls)}
-          sub={lang === 'pt' ? 'execuções totais' : 'total executions'}
-          icon={<Wrench size={15} />}
-          accent="var(--accent-green)"
-          info={infoItems[2]}
-          onInfoClick={() => setInfoModalIndex(2)}
-        />
-      )
-    } else if (id === 'input-tokens') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Tokens entrada' : 'Input tokens'}
-          value={fmt(totalInputTokens)}
-          sub={lang === 'pt' ? 'tokens enviados ao modelo' : 'tokens sent to model'}
-          icon={<Download size={15} />}
-          accent="var(--accent-blue)"
-          info={infoItems[8]}
-          onInfoClick={() => setInfoModalIndex(8)}
-        />
-      )
-    } else if (id === 'output-tokens') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Tokens saída' : 'Output tokens'}
-          value={fmt(totalOutputTokens)}
-          sub={lang === 'pt' ? 'tokens gerados pelo modelo' : 'tokens generated by model'}
-          icon={<Upload size={15} />}
-          accent="var(--accent-purple)"
-          info={infoItems[9]}
-          onInfoClick={() => setInfoModalIndex(9)}
-        />
-      )
-    } else if (id === 'cost') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Custo estimado' : 'Est. cost'}
-          value={fmtCost(d.totalCostUSD, currency, brlRate)}
-          sub={lang === 'pt' ? 'preços da API Anthropic · não é assinatura' : 'Anthropic API pricing · not subscription'}
-          icon={<TrendingUp size={15} />}
-          accent="var(--anthropic-orange)"
-          info={infoItems[5]}
-          onInfoClick={() => setInfoModalIndex(5)}
-          action={
-            <button
-              onClick={() => setCurrency(c => c === 'USD' ? 'BRL' : 'USD')}
-              style={{
-                fontSize: 10, fontWeight: 700,
-                padding: '2px 6px', borderRadius: 4,
-                border: '1px solid var(--border)',
-                background: 'transparent',
-                color: 'var(--text-tertiary)',
-                cursor: 'pointer', fontFamily: 'inherit',
-                transition: 'all 0.15s', letterSpacing: '0.03em',
-              }}
-              title={currency === 'USD' ? 'Switch to BRL (R$)' : 'Switch to USD'}
-            >
-              {currency}
-            </button>
-          }
-        />
-      )
-    } else if (id === 'streak') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Sequência' : 'Streak'}
-          value={`${d.streak}d`}
-          sub={lang === 'pt' ? 'dias consecutivos' : 'consecutive days'}
-          icon={<Flame size={15} />}
-          accent="#ef4444"
-          info={infoItems[3]}
-          onInfoClick={() => setInfoModalIndex(3)}
-        />
-      )
-    } else if (id === 'longest-session') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Sessão mais longa' : 'Longest session'}
-          value={d.longestSession?.duration_minutes ? fmtDuration(d.longestSession.duration_minutes * 60_000) : '—'}
-          sub={d.longestSession
-            ? (() => {
-                const msgs = (d.longestSession!.user_message_count ?? 0) + (d.longestSession!.assistant_message_count ?? 0)
-                const msgStr = `${msgs} ${lang === 'pt' ? 'mensagens' : 'messages'}`
-                if (filters.projects.length === 0 && d.longestSession!.project_path)
-                  return `${msgStr} · ${formatProjectName(d.longestSession!.project_path)}`
-                return msgStr
-              })()
-            : ''}
-          icon={<Clock size={15} />}
-          accent="var(--accent-purple)"
-          info={infoItems[4]}
-          onInfoClick={() => setInfoModalIndex(4)}
-        />
-      )
-    } else if (id === 'commits') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Commits' : 'Commits'}
-          value={d.gitCommits}
-          sub={d.gitPushes > 0
-            ? `${d.gitPushes} ${lang === 'pt' ? 'pushes via Claude' : 'pushes via Claude'}`
-            : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls'}
-          icon={<GitCommit size={15} />}
-          accent="var(--accent-cyan)"
-          info={infoItems[6]}
-          onInfoClick={() => setInfoModalIndex(6)}
-        />
-      )
-    } else if (id === 'files') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Arquivos' : 'Files'}
-          value={d.filesModified}
-          sub={d.linesAdded + d.linesRemoved > 0
-            ? `+${fmt(d.linesAdded)} / -${fmt(d.linesRemoved)} linhas`
-            : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls'}
-          icon={<FileCode size={15} />}
-          accent="var(--accent-green)"
-          info={infoItems[7]}
-          onInfoClick={() => setInfoModalIndex(7)}
-        />
-      )
-    }
-
-    return (
-      <div
-        key={id}
-        data-drag-card={id}
-        data-flash-id={id}
-        draggable
-        onDragStart={() => handleDragStart(id)}
-        onDragOver={e => handleDragOver(e, id)}
-        onDrop={() => handleDrop(id)}
-        onDragEnd={handleDragEnd}
-        style={wrapperStyle}
-      >
-        {/* Drag handle indicator */}
-        <div style={{
-          position: 'absolute', top: 8, left: 8, zIndex: 1,
-          color: 'var(--text-tertiary)', opacity: 0,
-          transition: 'opacity 0.15s',
-          pointerEvents: 'none',
-        }} className="drag-handle">
-          <GripVertical size={12} />
-        </div>
-        {card}
-      </div>
-    )
-  }
-
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
       {/* Header */}
@@ -1214,7 +1170,7 @@ export default function App() {
 
             {/* Theme toggle */}
             <button
-              onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
               style={{
                 width: 32, height: 32,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1269,6 +1225,32 @@ export default function App() {
             >
               <Download size={13} />
               {lang === 'pt' ? 'Exportar' : 'Export'}
+            </button>
+
+            {/* Preferences */}
+            <button
+              onClick={() => setShowPrefsModal(true)}
+              style={{
+                width: 32, height: 32,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                borderRadius: 8,
+                border: '1px solid var(--border)',
+                background: 'transparent',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                transition: 'all 0.15s',
+              }}
+              onMouseEnter={e => {
+                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
+                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--text-tertiary)'
+              }}
+              onMouseLeave={e => {
+                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)'
+                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
+              }}
+              title={lang === 'pt' ? 'Preferências' : 'Preferences'}
+            >
+              <SlidersHorizontal size={14} />
             </button>
 
             {/* Health warnings */}
@@ -1371,8 +1353,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* Filters row — second row of sticky header */}
-        {data && (
+        {/* Filters row — second row of sticky header. Hidden on /custom (filter bar moves into the page). */}
+        {data && !isCustomPage && (
           <div style={{
             borderTop: '1px solid var(--border)',
             maxWidth: 1400,
@@ -1392,184 +1374,36 @@ export default function App() {
             />
           </div>
         )}
+
+        {/* Nav tabs — third row of sticky header */}
+        <div style={{
+          borderTop: '1px solid var(--border)',
+          maxWidth: 1400,
+          margin: '0 auto',
+          padding: '0 32px',
+          width: '100%',
+          boxSizing: 'border-box',
+        }}>
+          <NavTabs lang={lang} />
+        </div>
       </header>
 
-      {/* Main content */}
+      {/* Main content — routed pages render here via <Outlet /> */}
       <main style={{ maxWidth: 1400, margin: '0 auto', padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 20 }}>
-
-        {/* Session date range — reactive to active filters */}
-        {derived.firstSessionDate && derived.lastSessionDate && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: 12,
-            color: 'var(--text-tertiary)',
-            flexWrap: 'wrap',
-          }}>
-            <Calendar size={12} style={{ flexShrink: 0, opacity: 0.6 }} />
-            <span style={{ fontSize: 11, opacity: 0.7 }}>
-              {lang === 'pt' ? '1ª sessão' : 'first session'}
-            </span>
-            <span style={{ color: 'var(--text-secondary)', fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
-              {format(derived.firstSessionDate, 'MMM d, yyyy')}
-            </span>
-            <span style={{ opacity: 0.4 }}>→</span>
-            <span style={{ fontSize: 11, opacity: 0.7 }}>
-              {lang === 'pt' ? 'última sessão' : 'last session'}
-            </span>
-            <span style={{ color: 'var(--text-secondary)', fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
-              {format(derived.lastSessionDate, 'MMM d, yyyy')}
-            </span>
-            <span style={{ opacity: 0.3, margin: '0 2px' }}>·</span>
-            <span>
-              <strong style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
-                {derived.sessionSpanDays.toLocaleString()}
-              </strong>
-              {' '}{lang === 'pt' ? 'dias' : 'days'}
-            </span>
-          </div>
-        )}
-
-        {/* KPI Cards — draggable 5×2 grid */}
-        <style>{`
-          [data-drag-card]:hover .drag-handle { opacity: 1 !important; }
-          [data-drag-card] { user-select: none; }
-          @keyframes liveFlash {
-            0%   { box-shadow: 0 0 0 2px rgba(217,119,6,0.55), 0 0 14px rgba(217,119,6,0.12); }
-            60%  { box-shadow: 0 0 0 2px rgba(217,119,6,0.18), 0 0 6px rgba(217,119,6,0.04); }
-            100% { box-shadow: 0 0 0 0px rgba(217,119,6,0); }
-          }
-          .live-flash { animation: liveFlash 1.2s ease-out forwards; border-radius: var(--radius-lg); }
-        `}</style>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
-          {cardOrder.map(id => renderCard(id))}
-        </div>
-
-        {/* Highlights board */}
-        <Section flashId="highlights" title={<><Trophy size={14} /> {lang === 'pt' ? 'Recordes' : 'Highlights'}</>}>
-          <HighlightsBoard sessions={derived.filteredSessions} projects={data.projects} lang={lang} />
-        </Section>
-
-        {/* Activity: chart (60%) + heatmap (40%) */}
-        <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 16, alignItems: 'stretch' }}>
-          <Section
-            flashId="activity"
-            style={{ height: '100%' }}
-            title={<><BarChart2 size={14} /> {lang === 'pt' ? 'Atividade ao longo do tempo' : 'Activity over time'}</>}
-            onExpand={() => setExpandedChart('activity')}
-          >
-            <ActivityChart data={derived.heatmapData} theme={theme} />
-          </Section>
-
-          <Section
-            flashId="heatmap"
-            style={{ height: '100%' }}
-            title={lang === 'pt' ? 'Heatmap de atividade' : 'Activity heatmap'}
-            onExpand={() => setExpandedChart('heatmap')}
-          >
-            <ActivityHeatmap data={derived.heatmapData} />
-          </Section>
-        </div>
-
-        {/* Hour distribution */}
-        <Section
-          flashId="hours"
-          title={lang === 'pt' ? 'Uso por hora do dia' : 'Usage by hour'}
-          onExpand={() => setExpandedChart('hours')}
-        >
-          <HourChart hourCounts={derived.hourCounts} hourMeta={derived.hourMeta} />
-        </Section>
-
-        {/* Model usage full-width */}
-        <Section
-          flashId="models"
-          title={<><TrendingUp size={14} /> {lang === 'pt' ? 'Uso por modelo' : 'Model usage & cost'}</>}
-          onExpand={() => setExpandedChart('models')}
-        >
-          <ModelBreakdown
-            modelUsage={derived.modelUsage}
-            currency={currency}
-            brlRate={brlRate}
-            fallbackInputTokens={filters.projects.length > 0 ? derived.inputTokens : undefined}
-            fallbackOutputTokens={filters.projects.length > 0 ? derived.outputTokens : undefined}
-            fallbackCostUSD={filters.projects.length > 0 ? derived.totalCostUSD : undefined}
-            note={
-              filters.projects.length > 0
-                ? (lang === 'pt'
-                  ? '* Custo e tokens estimados via taxa ponderada — sessões não registram o modelo utilizado individualmente.'
-                  : '* Cost and tokens estimated via blended rate — sessions do not record the model used individually.')
-                : (filters.dateRange !== 'all' || filters.customStart || filters.customEnd
-                  ? (lang === 'pt'
-                    ? '* Valores aproximados: tokens rateados pelo total diário. Proporção input/output baseada no histórico global.'
-                    : '* Approximate values: tokens prorated from daily totals. Input/output split based on global historical ratio.')
-                  : undefined)
-            }
-          />
-        </Section>
-
-        {/* Projects (left, 2-col grid) + Tools/Languages stacked (right) */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'stretch' }}>
-          <Section
-            flashId="projects"
-            style={{ height: '100%' }}
-            title={<><FileCode size={14} /> {lang === 'pt' ? 'Principais projetos' : 'Top projects'}</>}
-            action={
-              filters.projects.length > 0 ? (
-                <button
-                  onClick={() => setFilters(f => ({ ...f, projects: [] }))}
-                  style={{
-                    fontSize: 11, color: 'var(--text-tertiary)',
-                    background: 'transparent', border: 'none',
-                    cursor: 'pointer', fontFamily: 'inherit',
-                  }}
-                >
-                  {lang === 'pt' ? 'Limpar' : 'Clear'}
-                </button>
-              ) : null
-            }
-          >
-            <ProjectsList
-              projectStats={derived.projectStats}
-              onFilter={path => setFilters(f => ({ ...f, projects: [path] }))}
-            />
-          </Section>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Section flashId="tools" title={<><Wrench size={14} /> {lang === 'pt' ? 'Métricas de ferramentas' : 'Tool metrics'}</>}>
-              <ToolMetricsPanel
-                toolCounts={derived.toolCounts}
-                toolOutputTokens={derived.toolOutputTokens}
-                agentFileReads={derived.agentFileReads}
-                lang={lang}
-              />
-            </Section>
-
-            <Section title={<><FileCode size={14} /> {lang === 'pt' ? 'Linguagens' : 'Languages'}</>}>
-              <TagCloud data={derived.langCounts} color="var(--accent-blue)" />
-            </Section>
-          </div>
-        </div>
-
-        {/* Agent metrics */}
-        <Section flashId="agents" title={<><Bot size={14} /> {lang === 'pt' ? 'Métricas de agentes' : 'Agent metrics'}</>}>
-          <AgentMetricsPanel
-            invocations={derived.agentInvocations}
-            agentTypeBreakdown={derived.agentTypeBreakdown}
-            totalInvocations={derived.totalAgentInvocations}
-            totalTokens={derived.totalAgentTokens}
-            totalCostUSD={derived.totalAgentCostUSD}
-            totalDurationMs={derived.totalAgentDurationMs}
-            currency={currency}
-            brlRate={brlRate}
-            lang={lang}
-          />
-        </Section>
-
-        {/* Recent sessions */}
-        <Section flashId="sessions-list" title={<><Clock size={14} /> {lang === 'pt' ? 'Sessões recentes' : 'Recent sessions'}</>}>
-          <RecentSessions sessions={derived.filteredSessions} lang={lang} />
-        </Section>
+        <Outlet context={{
+          data,
+          derived,
+          statsCache,
+          filters, setFilters,
+          lang, theme, currency, setCurrency, brlRate,
+          monthlyBudgetUSD, updateBudget,
+          totalInputTokens, totalOutputTokens,
+          setExpandedChart, setSelectedSession, setInfoModalIndex,
+          infoItems,
+          cardOrder, setCardOrder: setCardOrder as (o: string[]) => void,
+          cardPrecision, setCardPrecision,
+          sessionCountByProject, models, modelsInProject,
+        }} />
       </main>
 
       {/* Live settings modal */}
@@ -1585,6 +1419,33 @@ export default function App() {
           highlightUpdates={highlightUpdates}
           setHighlightUpdates={v => { setHighlightUpdates(v); highlightUpdatesRef.current = v }}
           onClose={() => setShowLiveSettings(false)}
+        />
+      )}
+
+      {/* Preferences modal */}
+      {showPrefsModal && (
+        <PreferencesModal
+          initial={{ lang, theme, currency, cardOrder, cardPrecision }}
+          onSave={(draft: PrefsDraft) => {
+            setLangState(draft.lang)
+            setThemeState(draft.theme)
+            setCurrencyState(draft.currency)
+            setCardOrder(draft.cardOrder as CardId[])
+            setCardPrecisionState(draft.cardPrecision)
+            fetch('/api/preferences', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                lang: draft.lang,
+                theme: draft.theme,
+                currency: draft.currency,
+                cardOrder: draft.cardOrder,
+                cardPrecision: draft.cardPrecision,
+              }),
+            }).catch(() => {})
+            setShowPrefsModal(false)
+          }}
+          onClose={() => setShowPrefsModal(false)}
         />
       )}
 
@@ -1642,6 +1503,18 @@ export default function App() {
             }
           />
         </ChartModal>
+      )}
+
+      {/* Session drilldown modal */}
+      {selectedSession && (
+        <SessionDrilldownModal
+          session={selectedSession}
+          globalModelUsage={data.statsCache.modelUsage ?? {}}
+          currency={currency}
+          brlRate={brlRate}
+          lang={lang}
+          onClose={() => setSelectedSession(null)}
+        />
       )}
 
       {/* PDF Export Modal */}

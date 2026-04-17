@@ -1,5 +1,6 @@
 import React from 'react'
 import { Info } from 'lucide-react'
+import { PrecisionToggle } from './PrecisionToggle'
 
 interface StatCardProps {
   label: string
@@ -14,9 +15,12 @@ interface StatCardProps {
   }
   onInfoClick?: () => void
   action?: React.ReactNode
+  fullPrecision?: boolean
+  onTogglePrecision?: () => void
+  lang?: string
 }
 
-export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-orange)', info, onInfoClick, action }: StatCardProps) {
+export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-orange)', info, onInfoClick, action, fullPrecision, onTogglePrecision, lang }: StatCardProps) {
   return (
     <div style={{
       background: 'var(--bg-card)',
@@ -57,6 +61,14 @@ export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-or
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {action}
+          {onTogglePrecision && (
+            <PrecisionToggle
+              full={fullPrecision ?? false}
+              accent={accent}
+              onToggle={onTogglePrecision}
+              lang={lang}
+            />
+          )}
           {info && (
             <button
               onClick={onInfoClick}
@@ -89,7 +101,11 @@ export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-or
       </div>
 
       <div>
-        <div style={{ fontSize: 26, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.1 }}>
+        <div style={{
+          fontSize: String(value).length > 11 ? 15 : String(value).length > 8 ? 19 : String(value).length > 5 ? 22 : 26,
+          fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.15,
+          wordBreak: 'break-all',
+        }}>
           {value}
         </div>
         {sub && (

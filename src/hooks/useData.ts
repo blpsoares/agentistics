@@ -192,7 +192,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       if (!s.start_time) return false
       if (!inRange(parseISO(s.start_time), start, end)) return false
       if (projectFiltered && !projectSet.has(s.project_path)) return false
-      if (modelSet && s.model && !modelSet.has(s.model)) return false
+      if (modelSet && (!s.model || !modelSet.has(s.model))) return false
       return true
     })
 
@@ -255,6 +255,20 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
           ...(data.sessions ?? []).filter(s => s.start_time).map(s => format(parseISO(s.start_time), 'yyyy-MM-dd')),
         ])
     const streak = calcStreak(activeDates)
+
+    // ── Per-project streaks (for streak breakdown popup) ──
+    // Always computed from filteredSessions so it respects active filters.
+    const projectDateMap: Record<string, Set<string>> = {}
+    for (const sess of filteredSessions) {
+      if (!sess.project_path || !sess.start_time) continue
+      const day = format(parseISO(sess.start_time), 'yyyy-MM-dd')
+      if (!projectDateMap[sess.project_path]) projectDateMap[sess.project_path] = new Set()
+      projectDateMap[sess.project_path]!.add(day)
+    }
+    const projectStreaks = Object.entries(projectDateMap)
+      .map(([path, dates]) => ({ path, streak: calcStreak(dates) }))
+      .filter(p => p.streak > 0)
+      .sort((a, b) => b.streak - a.streak)
 
     // ── Heatmap data ──
     let heatmapData: { date: string; value: number; sessions: number; tools: number }[]
@@ -335,12 +349,29 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // ── Cost calculation ──
     let totalCostUSD = 0
     if (projectFiltered) {
-      // Blended rate on session-level input/output tokens
-      const blended = blendedCostPerToken(globalModelUsage)
-      const sessionInputTokens  = filteredSessions.reduce((s, sess) => s + (sess.input_tokens ?? 0), 0)
-      const sessionOutputTokens = filteredSessions.reduce((s, sess) => s + (sess.output_tokens ?? 0), 0)
-      totalCostUSD = (sessionInputTokens / 1_000_000) * blended.input
-                   + (sessionOutputTokens / 1_000_000) * blended.output
+      if (modelSet) {
+        // Model filter is active — every session's model is known (it passed the model filter).
+        // Use each session's actual model for per-session calcCost; fall back to the single
+        // filtered model when the session has no model field.
+        const fallbackModel = modelSet.size === 1 ? [...modelSet][0]! : undefined
+        for (const sess of filteredSessions) {
+          const m = sess.model ?? fallbackModel
+          totalCostUSD += calcCost({
+            inputTokens: sess.input_tokens ?? 0,
+            outputTokens: sess.output_tokens ?? 0,
+            cacheReadInputTokens: sess.cache_read_input_tokens ?? 0,
+            cacheCreationInputTokens: sess.cache_creation_input_tokens ?? 0,
+            webSearchRequests: 0, costUSD: 0,
+          }, m ?? '')
+        }
+      } else {
+        // No model filter — use blended rate as approximation (model unknown per session)
+        const blended = blendedCostPerToken(globalModelUsage)
+        const sessionInputTokens  = filteredSessions.reduce((s, sess) => s + (sess.input_tokens ?? 0), 0)
+        const sessionOutputTokens = filteredSessions.reduce((s, sess) => s + (sess.output_tokens ?? 0), 0)
+        totalCostUSD = (sessionInputTokens / 1_000_000) * blended.input
+                     + (sessionOutputTokens / 1_000_000) * blended.output
+      }
     } else {
       totalCostUSD = Object.entries(filteredModelUsage).reduce((s, [id, u]) => s + calcCost(u, id), 0)
     }
@@ -463,6 +494,49 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       return best
     }, null)
 
+    // ── Cache efficiency (filter-aware, derived from filteredModelUsage) ──
+    // hit rate = cacheRead / (input + cacheRead). cacheCreation is a one-time premium paid
+    // to create the cache, not consumption from it — excluded from the denominator.
+    // Savings model: compare actual spend with what the same tokens would have cost as
+    // plain input, then subtract the extra we paid for cache writes.
+    const cacheTotals = Object.values(filteredModelUsage).reduce(
+      (acc, u) => ({
+        inputTokens: acc.inputTokens + (u.inputTokens ?? 0),
+        cacheReadInputTokens: acc.cacheReadInputTokens + (u.cacheReadInputTokens ?? 0),
+        cacheCreationInputTokens: acc.cacheCreationInputTokens + (u.cacheCreationInputTokens ?? 0),
+      }),
+      { inputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+    )
+    const cacheDenominator = cacheTotals.inputTokens + cacheTotals.cacheReadInputTokens
+    const cacheHitRate = cacheDenominator > 0 ? cacheTotals.cacheReadInputTokens / cacheDenominator : 0
+
+    const blended = blendedCostPerToken(globalModelUsage)
+    // What cacheRead tokens would have cost as plain input
+    const cacheHypotheticalInputUSD = (cacheTotals.cacheReadInputTokens / 1_000_000) * blended.input
+    // What cacheRead tokens actually cost
+    const cacheActualReadUSD = (cacheTotals.cacheReadInputTokens / 1_000_000) * blended.cacheRead
+    // Gross savings vs paying as regular input
+    const cacheGrossSavedUSD = cacheHypotheticalInputUSD - cacheActualReadUSD
+    // Premium paid for cache writes (extra over regular input)
+    const cacheWriteOverheadUSD = Math.max(
+      0,
+      (cacheTotals.cacheCreationInputTokens / 1_000_000) * (blended.cacheWrite - blended.input),
+    )
+    // Net savings
+    const cacheNetSavedUSD = cacheGrossSavedUSD - cacheWriteOverheadUSD
+
+    // Per-model hit rate (only for models with data)
+    const cachePerModel: Record<string, { hitRate: number; cacheReadTokens: number; inputTokens: number }> = {}
+    for (const [modelId, u] of Object.entries(filteredModelUsage)) {
+      const denom = (u.inputTokens ?? 0) + (u.cacheReadInputTokens ?? 0)
+      if (denom === 0) continue
+      cachePerModel[modelId] = {
+        hitRate: (u.cacheReadInputTokens ?? 0) / denom,
+        cacheReadTokens: u.cacheReadInputTokens ?? 0,
+        inputTokens: u.inputTokens ?? 0,
+      }
+    }
+
     // ── Meta coverage range (commits/files only exist in meta sessions) ──
     const allMetaDates = (data.sessions ?? [])
       .filter(s => s._source === 'meta' && s.start_time)
@@ -489,6 +563,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       totalToolCalls,
       totalCostUSD,
       streak,
+      projectStreaks,
       heatmapData,
       modelUsage: filteredModelUsage,
       modelTokensByDate,
@@ -520,6 +595,12 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       firstSessionDate,
       lastSessionDate,
       sessionSpanDays,
+      cacheHitRate,
+      cacheTotals,
+      cacheGrossSavedUSD,
+      cacheWriteOverheadUSD,
+      cacheNetSavedUSD,
+      cachePerModel,
     }
   }, [data, filters])
 }

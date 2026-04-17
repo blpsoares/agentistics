@@ -14,6 +14,7 @@ interface Props {
   models: string[]
   modelsInProject?: Set<string> | null
   lang: Lang
+  compact?: boolean
 }
 
 const DATE_RANGES: { key: DateRange; labelPt: string; labelEn: string }[] = [
@@ -38,7 +39,7 @@ const CTL: React.CSSProperties = {
   alignItems: 'center',
 }
 
-export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelsInProject, lang }: Props) {
+export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelsInProject, lang, compact }: Props) {
   const [showProjectsModal, setShowProjectsModal] = useState(false)
   const [showModelDropdown, setShowModelDropdown] = useState(false)
   const modelDropdownRef = useRef<HTMLDivElement>(null)
@@ -92,7 +93,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         gap: 8,
         alignItems: 'center',
         flexWrap: 'wrap',
-        padding: '8px 0',
+        padding: compact ? '10px 12px' : '8px 0',
       }}>
 
         {/* Date range presets */}
@@ -118,7 +119,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         </div>
 
         {/* Divider */}
-        <div style={{ width: 1, height: 20, background: 'var(--border)', flexShrink: 0 }} />
+        {!compact && <div style={{ width: 1, height: 20, background: 'var(--border)', flexShrink: 0 }} />}
 
         {/* Custom date range */}
         <div style={{
@@ -186,7 +187,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         </div>
 
         {/* Divider */}
-        <div style={{ width: 1, height: 20, background: 'var(--border)', flexShrink: 0 }} />
+        {!compact && <div style={{ width: 1, height: 20, background: 'var(--border)', flexShrink: 0 }} />}
 
         {/* Projects */}
         <button

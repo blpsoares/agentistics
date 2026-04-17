@@ -5,20 +5,22 @@ import { PROJECTS_DIR, SESSION_META_DIR, STATS_CACHE_FILE, HOME_DIR } from './co
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
 import { UUID_RE, decodeProjectDir, getProjectGitStats } from './git'
 import { parseSessionJsonl } from './jsonl'
-import { runHealthChecks, analyzeToolHealthIssues } from './health'
+import { runHealthChecks, analyzeToolHealthIssues, analyzeCacheStaleness } from './health'
 import { extractAgentMetricsFromFile } from './agent-metrics'
 
-/** Extract the model ID from a JSONL file by reading only the first assistant message. */
+/** Extract the model ID from a JSONL file by reading only the first assistant message.
+ *  Skips `<synthetic>` — Claude Code sentinel for system-generated turns, not a real model. */
 async function extractModelFromJsonl(filePath: string): Promise<string | undefined> {
   try {
     const content = await readFile(filePath, 'utf-8')
-    for (const raw of content.split('\n').slice(0, 80)) {
+    for (const raw of content.split('\n').slice(0, 200)) {
       const line = raw.trim()
       if (!line) continue
       try {
         const e = JSON.parse(line)
-        if (e.type === 'assistant' && typeof e.message?.model === 'string' && e.message.model) {
-          return e.message.model as string
+        const m = e.message?.model
+        if (e.type === 'assistant' && typeof m === 'string' && m && m.startsWith('claude-')) {
+          return m as string
         }
       } catch { /* skip */ }
     }
@@ -171,13 +173,14 @@ async function scanProjectDir(
           if (!content) return
 
           if (needsModel) {
-            for (const raw of content.split('\n').slice(0, 80)) {
+            for (const raw of content.split('\n').slice(0, 200)) {
               const line = raw.trim()
               if (!line) continue
               try {
                 const e = JSON.parse(line)
-                if (e.type === 'assistant' && typeof e.message?.model === 'string' && e.message.model) {
-                  metaEntry.model = e.message.model as string
+                const m = e.message?.model
+                if (e.type === 'assistant' && typeof m === 'string' && m && m.startsWith('claude-')) {
+                  metaEntry.model = m as string
                   break
                 }
               } catch { /* skip */ }
@@ -351,6 +354,96 @@ export async function buildApiResponse(): Promise<ApiResponse> {
   return _promise
 }
 
+/** Merge sessions newer than `statsCache.lastComputedDate` into the cache in-place.
+ *  Fills gaps left by Claude Code's own stats-cache updater (e.g. activity from today
+ *  that hasn't been rolled into ~/.claude/stats-cache.json yet). Only sessions whose
+ *  model starts with `claude-` are counted (skips `<synthetic>` and other sentinels). */
+function supplementStatsCache(statsCache: StatsCache, sessions: SessionMeta[]): void {
+  if (sessions.length === 0) return
+  const lastComputed = statsCache.lastComputedDate ?? ''
+
+  const dailyModel = new Map<string, Map<string, number>>()
+  const modelTotals = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>()
+  const dailyActivity = new Map<string, { messageCount: number; sessionCount: number; toolCallCount: number }>()
+
+  for (const s of sessions) {
+    if (!s.start_time) continue
+    const day = s.start_time.slice(0, 10)
+    if (lastComputed && day <= lastComputed) continue
+
+    const da = dailyActivity.get(day) ?? { messageCount: 0, sessionCount: 0, toolCallCount: 0 }
+    da.messageCount += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
+    da.sessionCount += 1
+    da.toolCallCount += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
+    dailyActivity.set(day, da)
+
+    const model = s.model
+    if (!model || !model.startsWith('claude-')) continue
+    const inp = s.input_tokens ?? 0
+    const out = s.output_tokens ?? 0
+    const cr  = s.cache_read_input_tokens ?? 0
+    const cw  = s.cache_creation_input_tokens ?? 0
+    const total = inp + out + cr + cw
+    if (total === 0) continue
+
+    const byModel = dailyModel.get(day) ?? new Map<string, number>()
+    byModel.set(model, (byModel.get(model) ?? 0) + total)
+    dailyModel.set(day, byModel)
+
+    const mt = modelTotals.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    mt.input     += inp
+    mt.output    += out
+    mt.cacheRead += cr
+    mt.cacheWrite += cw
+    modelTotals.set(model, mt)
+  }
+
+  if (dailyActivity.size === 0 && dailyModel.size === 0 && modelTotals.size === 0) return
+
+  // dailyActivity — upsert by date, then sort
+  statsCache.dailyActivity = statsCache.dailyActivity ?? []
+  const daIndex = new Map(statsCache.dailyActivity.map((d, i) => [d.date, i]))
+  for (const [date, v] of dailyActivity) {
+    const idx = daIndex.get(date)
+    if (idx !== undefined) statsCache.dailyActivity[idx] = { date, ...v }
+    else statsCache.dailyActivity.push({ date, ...v })
+  }
+  statsCache.dailyActivity.sort((a, b) => a.date.localeCompare(b.date))
+
+  // dailyModelTokens — upsert by date
+  statsCache.dailyModelTokens = statsCache.dailyModelTokens ?? []
+  const dmtIndex = new Map(statsCache.dailyModelTokens.map((d, i) => [d.date, i]))
+  for (const [date, byModel] of dailyModel) {
+    const tokensByModel: Record<string, number> = {}
+    for (const [m, t] of byModel) tokensByModel[m] = t
+    const idx = dmtIndex.get(date)
+    if (idx !== undefined) statsCache.dailyModelTokens[idx] = { date, tokensByModel }
+    else statsCache.dailyModelTokens.push({ date, tokensByModel })
+  }
+  statsCache.dailyModelTokens.sort((a, b) => a.date.localeCompare(b.date))
+
+  // modelUsage — increment existing entries or create new ones
+  statsCache.modelUsage = statsCache.modelUsage ?? {}
+  for (const [model, t] of modelTotals) {
+    const existing = statsCache.modelUsage[model]
+    if (existing) {
+      existing.inputTokens             += t.input
+      existing.outputTokens            += t.output
+      existing.cacheReadInputTokens    += t.cacheRead
+      existing.cacheCreationInputTokens += t.cacheWrite
+    } else {
+      statsCache.modelUsage[model] = {
+        inputTokens: t.input,
+        outputTokens: t.output,
+        cacheReadInputTokens: t.cacheRead,
+        cacheCreationInputTokens: t.cacheWrite,
+        webSearchRequests: 0,
+        costUSD: 0,
+      }
+    }
+  }
+}
+
 type ProgressFn = (stage: string, progress: number, detail?: string) => void
 
 async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiResponse> {
@@ -404,6 +497,11 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
 
     // Post-processing health checks based on session data (tool metrics)
     analyzeToolHealthIssues(sessions, healthIssues)
+
+    // Staleness check runs BEFORE supplementation so the warning reflects the original cache state
+    analyzeCacheStaleness(statsCache, sessions, healthIssues)
+    // Supplement the cache with sessions newer than lastComputedDate so UI totals stay accurate
+    supplementStatsCache(statsCache, sessions)
 
     const totalTokens = sessions.reduce((sum, s) => sum + (s.input_tokens ?? 0) + (s.output_tokens ?? 0), 0)
     onProgress('finalizing', 1, String(totalTokens))
