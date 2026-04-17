@@ -290,35 +290,30 @@ export interface UseTutorialReturn {
   onSkipAll: () => void
 }
 
+// completedFeaturesFromPrefs is passed from App.tsx after its own prefs fetch,
+// avoiding a duplicate fetch and eliminating race conditions with loading state.
 export function useTutorial(
-  lang: 'en' | 'pt',
   isCustomPage: boolean,
+  completedFeaturesFromPrefs: string[] | null,
 ): UseTutorialReturn {
-  const [completedFeatures, setCompletedFeatures] = useState<Set<string>>(new Set())
-  const [prefsLoaded, setPrefsLoaded] = useState(false)
+  const [completedFeatures, setCompletedFeatures] = useState<string[]>([])
   const [activeFeatureKey, setActiveFeatureKey] = useState<string | null>(null)
   const [stepIndex, setStepIndex] = useState(0)
   const [steps, setSteps] = useState<TutorialStep[]>([])
 
-  // Load completed features from preferences
+  // Sync from parent prefs once they arrive
   useEffect(() => {
-    fetch('/api/preferences')
-      .then(r => r.ok ? r.json() : null)
-      .then((prefs: { tutorialCompletedFeatures?: string[] } | null) => {
-        if (prefs?.tutorialCompletedFeatures) {
-          setCompletedFeatures(new Set(prefs.tutorialCompletedFeatures))
-        }
-        setPrefsLoaded(true)
-      })
-      .catch(() => setPrefsLoaded(true))
-  }, [])
+    if (completedFeaturesFromPrefs === null) return
+    setCompletedFeatures(completedFeaturesFromPrefs)
+  }, [completedFeaturesFromPrefs])
 
-  // Decide which tutorial to show once prefs are loaded
+  // Decide which tutorial to show once prefs are available
   useEffect(() => {
-    if (!prefsLoaded) return
+    if (completedFeaturesFromPrefs === null) return
 
     const featureKey = isCustomPage ? 'custom-page-v1' : 'onboarding-v1'
-    if (completedFeatures.has(featureKey)) return
+    if (completedFeatures.includes(featureKey)) return
+    if (activeFeatureKey === featureKey) return // already active
 
     const relevantSteps = ALL_TUTORIAL_STEPS.filter(s => s.featureKey === featureKey)
     if (relevantSteps.length === 0) return
@@ -326,17 +321,16 @@ export function useTutorial(
     setActiveFeatureKey(featureKey)
     setSteps(relevantSteps)
     setStepIndex(0)
-  }, [prefsLoaded, isCustomPage, completedFeatures])
+  }, [completedFeaturesFromPrefs, isCustomPage, completedFeatures, activeFeatureKey])
 
   const markComplete = useCallback((featureKey: string) => {
     setCompletedFeatures(prev => {
-      const next = new Set(prev)
-      next.add(featureKey)
-      const arr = Array.from(next)
+      if (prev.includes(featureKey)) return prev
+      const next = [...prev, featureKey]
       fetch('/api/preferences', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tutorialCompletedFeatures: arr }),
+        body: JSON.stringify({ tutorialCompletedFeatures: next }),
       }).catch(() => {})
       return next
     })

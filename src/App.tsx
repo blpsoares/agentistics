@@ -704,8 +704,9 @@ export default function AppLayout() {
   })
   const [showPrefsModal, setShowPrefsModal] = useState(false)
 
-  // Tutorial
-  const tutorial = useTutorial(lang, isCustomPage)
+  // Tutorial — null means prefs not yet loaded (tutorial waits)
+  const [tutorialCompletedFeatures, setTutorialCompletedFeatures] = useState<string[] | null>(null)
+  const tutorial = useTutorial(isCustomPage, tutorialCompletedFeatures)
 
   const [cardPrecision, setCardPrecisionState] = useState<Record<string, boolean>>({})
   const precisionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -738,8 +739,8 @@ export default function AppLayout() {
   useEffect(() => {
     fetch('/api/preferences')
       .then(r => r.ok ? r.json() : null)
-      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; seenUpdateVersions?: string[] } | null) => {
-        if (!prefs) return
+      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; seenUpdateVersions?: string[]; tutorialCompletedFeatures?: string[] } | null) => {
+        if (!prefs) { setTutorialCompletedFeatures([]); return }
         if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
         if (prefs.lang) setLangState(prefs.lang)
         if (prefs.theme) setThemeState(prefs.theme)
@@ -747,6 +748,8 @@ export default function AppLayout() {
         if (prefs.cardOrder) setCardOrder(prefs.cardOrder as CardId[])
         const existingSeen = prefs.seenUpdateVersions ?? []
         setSeenUpdateVersions(existingSeen)
+        // Pass tutorial state to hook (null = waiting, [] = no completed features)
+        setTutorialCompletedFeatures(prefs.tutorialCompletedFeatures ?? [])
 
         // Check version after prefs are loaded so we know seen versions
         fetch('/api/version')
@@ -760,7 +763,7 @@ export default function AppLayout() {
           })
           .catch(() => {})
       })
-      .catch(() => {})
+      .catch(() => { setTutorialCompletedFeatures([]) })
   }, [])
 
   const dismissUpdateNotification = useCallback(() => {
