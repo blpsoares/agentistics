@@ -1160,14 +1160,12 @@ export default function AppLayout() {
       card = (
         <StatCard
           label={lang === 'pt' ? 'Custo estimado' : 'Est. cost'}
-          value={full ? fmtCostFull(d.totalCostUSD, currency, brlRate) : fmtCost(d.totalCostUSD, currency, brlRate)}
+          value={fmtCost(d.totalCostUSD, currency, brlRate)}
           sub={lang === 'pt' ? 'preços da API Anthropic · não é assinatura' : 'Anthropic API pricing · not subscription'}
           icon={<TrendingUp size={15} />}
           accent="var(--anthropic-orange)"
           info={infoItems[5]}
           onInfoClick={() => setInfoModalIndex(5)}
-          fullPrecision={full}
-          onTogglePrecision={toggleFull}
           action={
             <button
               onClick={() => setCurrency(c => c === 'USD' ? 'BRL' : 'USD')}
@@ -1197,7 +1195,7 @@ export default function AppLayout() {
           accent="#ef4444"
           info={infoItems[3]}
           onInfoClick={() => setInfoModalIndex(3)}
-          action={d.projectStreaks.length >= 2
+          action={d.projectStreaks.length >= 1 && filters.projects.length !== 1
             ? <StreakBreakdownButton items={d.projectStreaks} pt={lang === 'pt'} />
             : undefined}
         />

@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import type { AppContext } from './app-context'
 import { formatProjectName } from './types'
-import { fmt, fmtDuration, fmtCost, fmtFull, fmtCostFull } from './format'
+import { fmt, fmtDuration, fmtCost, fmtFull } from './format'
 import { StatCard } from '../components/StatCard'
 import { StreakBreakdownButton } from '../components/StreakBreakdownButton'
 import { HighlightsBoard } from '../components/HighlightsBoard'
@@ -123,27 +123,27 @@ export const CATALOG: CatalogItem[] = [
   {
     id: 'kpi.cost', labelPt: 'Custo estimado', labelEn: 'Estimated cost', category: 'kpi',
     icon: TrendingUp, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
-    render: (ctx) => kpiCard(
-      ctx, 'kpi.cost',
-      ctx.lang === 'pt' ? 'Custo estimado' : 'Est. cost',
-      'var(--anthropic-orange)',
-      <TrendingUp size={15} />,
-      fmtCost(ctx.derived.totalCostUSD, ctx.currency, ctx.brlRate),
-      fmtCostFull(ctx.derived.totalCostUSD, ctx.currency, ctx.brlRate),
-      ctx.lang === 'pt' ? 'preços da API Anthropic' : 'Anthropic API pricing',
+    render: ({ derived, lang, currency, brlRate }) => (
+      <StatCard
+        label={lang === 'pt' ? 'Custo estimado' : 'Est. cost'}
+        value={fmtCost(derived.totalCostUSD, currency, brlRate)}
+        sub={lang === 'pt' ? 'preços da API Anthropic' : 'Anthropic API pricing'}
+        icon={<TrendingUp size={15} />}
+        accent="var(--anthropic-orange)"
+      />
     ),
   },
   {
     id: 'kpi.streak', labelPt: 'Sequência', labelEn: 'Streak', category: 'kpi',
     icon: Flame, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
-    render: ({ derived, lang }) => (
+    render: ({ derived, lang, filters }) => (
       <StatCard
         label={lang === 'pt' ? 'Sequência' : 'Streak'}
         value={`${derived.streak}d`}
         sub={lang === 'pt' ? 'dias consecutivos' : 'consecutive days'}
         icon={<Flame size={15} />}
         accent="#ef4444"
-        action={derived.projectStreaks.length >= 2
+        action={derived.projectStreaks.length >= 1 && filters.projects.length !== 1
           ? <StreakBreakdownButton items={derived.projectStreaks} pt={lang === 'pt'} />
           : undefined}
       />

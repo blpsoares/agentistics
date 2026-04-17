@@ -109,7 +109,11 @@ export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-or
       </div>
 
       <div>
-        <div style={{ fontSize: 26, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.1 }}>
+        <div style={{
+          fontSize: String(value).length > 11 ? 15 : String(value).length > 8 ? 19 : String(value).length > 5 ? 22 : 26,
+          fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.15,
+          wordBreak: 'break-all',
+        }}>
           {value}
         </div>
         {sub && (
