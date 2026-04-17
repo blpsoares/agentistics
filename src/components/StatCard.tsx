@@ -1,5 +1,5 @@
 import React from 'react'
-import { Info, Maximize2, Minimize2 } from 'lucide-react'
+import { Info } from 'lucide-react'
 
 interface StatCardProps {
   label: string
@@ -64,18 +64,17 @@ export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-or
               onClick={onTogglePrecision}
               title={fullPrecision ? 'Show abbreviated' : 'Show exact number'}
               style={{
-                width: 18, height: 18,
-                borderRadius: '50%',
-                background: fullPrecision ? `${accent}20` : 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: fullPrecision ? accent : 'var(--text-tertiary)',
-                padding: 0,
-                transition: 'color 0.15s, background 0.15s',
+                fontSize: 10, fontWeight: 700,
+                padding: '2px 5px', borderRadius: 4,
+                border: `1px solid ${fullPrecision ? accent : 'var(--border)'}`,
+                background: fullPrecision ? `${accent}18` : 'transparent',
+                color: fullPrecision ? accent : 'var(--text-secondary)',
+                cursor: 'pointer', fontFamily: 'inherit',
+                transition: 'all 0.15s', letterSpacing: '0.03em',
+                lineHeight: 1.4,
               }}
             >
-              {fullPrecision ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
+              {fullPrecision ? '1.234' : '~1K'}
             </button>
           )}
           {info && (
