@@ -8,7 +8,7 @@ import {
   Layers, X, RotateCcw, Search, ChevronDown, ChevronRight,
   PanelLeftClose, PanelLeftOpen, Plus, Trash2, Pencil, Check,
   Lock, Unlock, FolderOpen, Download, Upload,
-  MoreHorizontal, Undo2, Redo2, Dice5, Save,
+  MoreHorizontal, Undo2, Redo2, Dice5, Save, Copy, Settings2,
 } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import { CATALOG, CATEGORY_LABELS, getCatalogItem, type CatalogItem, type CatalogCategory } from '../lib/componentCatalog'
@@ -197,8 +197,8 @@ export default function CustomPage() {
   const {
     items, setItems, addItem, removeItem, reset, loaded,
     layoutNames, activeLayout,
-    pinnedProjects, setPinnedProjects,
-    switchLayout, createLayout, renameLayout, deleteLayout,
+    pinnedProjects, pinnedProjectsMap, setPinnedProjects,
+    switchLayout, createLayout, renameLayout, deleteLayout, deleteLayouts, duplicateLayout,
   } = useCustomLayout()
 
   // All known project paths from data
@@ -375,6 +375,14 @@ export default function CustomPage() {
 
   const [importState, setImportState] = useState<ImportState | null>(null)
   const importFileRef = useRef<HTMLInputElement>(null)
+
+  // Duplicate layout modal
+  interface DupState { newName: string; pinned: string[] }
+  const [dupModal, setDupModal] = useState<DupState | null>(null)
+
+  // Manage layouts modal (bulk delete)
+  const [manageOpen, setManageOpen] = useState(false)
+  const [manageSelected, setManageSelected] = useState<Set<string>>(new Set())
 
   const pt = lang === 'pt'
 
@@ -756,6 +764,14 @@ export default function CustomPage() {
                 <Plus size={12} />
               </button>
               <button
+                className="icon-btn"
+                onClick={() => setDupModal({ newName: `${pt ? 'Cópia de' : 'Copy of'} ${activeLayout}`, pinned: [...pinnedProjects] })}
+                title={pt ? 'Duplicar layout' : 'Duplicate layout'}
+                style={{ width: 26, height: 26 }}
+              >
+                <Copy size={12} />
+              </button>
+              <button
                 className="icon-btn danger"
                 onClick={handleDeleteLayout}
                 title={pt ? 'Deletar layout' : 'Delete layout'}
@@ -764,6 +780,16 @@ export default function CustomPage() {
               >
                 <Trash2 size={12} />
               </button>
+              {layoutNames.length > 1 && (
+                <button
+                  className="icon-btn"
+                  onClick={() => { setManageSelected(new Set()); setManageOpen(true) }}
+                  title={pt ? 'Gerenciar layouts' : 'Manage layouts'}
+                  style={{ width: 26, height: 26 }}
+                >
+                  <Settings2 size={12} />
+                </button>
+              )}
             </>
           )}
         </div>
@@ -1139,13 +1165,8 @@ export default function CustomPage() {
             minHeight: isDragging ? 600 : 400,
           }}
         >
-          {/* Lock overlay — transparent shield that blocks drag/click events */}
-          {locked && items.length > 0 && (
-            <div style={{
-              position: 'absolute', inset: 0, zIndex: 20,
-              background: 'transparent', cursor: 'default',
-            }} />
-          )}
+          {/* No overlay needed: dragConfig.enabled=false and resizeConfig.enabled=false handle lock.
+              An overlay would block scroll inside card components. */}
 
           {items.length === 0 && (
             <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0 }}>
@@ -1214,6 +1235,168 @@ export default function CustomPage() {
             )}
         </div>
       </div>
+
+      {/* ─── Duplicate layout modal ─── */}
+      {dupModal && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+          onClick={e => { if (e.target === e.currentTarget) setDupModal(null) }}
+        >
+          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-xl,16px)', padding: 24, width: 440, maxWidth: '90vw', maxHeight: '80vh', display: 'flex', flexDirection: 'column', gap: 16, boxShadow: '0 20px 60px rgba(0,0,0,0.4)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
+                {pt ? 'Duplicar layout' : 'Duplicate layout'}
+              </div>
+              <button className="icon-btn" onClick={() => setDupModal(null)} style={{ width: 26, height: 26 }}><X size={12} /></button>
+            </div>
+
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 6 }}>
+                {pt ? 'Nome do novo layout' : 'New layout name'}
+              </label>
+              <input
+                autoFocus
+                value={dupModal.newName}
+                onChange={e => setDupModal(s => s ? { ...s, newName: e.target.value } : s)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && dupModal.newName.trim()) {
+                    duplicateLayout(activeLayout, dupModal.newName, dupModal.pinned)
+                    setDupModal(null)
+                  }
+                  if (e.key === 'Escape') setDupModal(null)
+                }}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '8px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 8, fontSize: 13, color: 'var(--text-primary)', fontFamily: 'inherit', outline: 'none' }}
+                onFocus={e => e.currentTarget.style.borderColor = 'var(--anthropic-orange)60'}
+                onBlur={e => e.currentTarget.style.borderColor = 'var(--border-subtle)'}
+              />
+            </div>
+
+            {allProjects.length > 0 && (
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 8 }}>
+                  {pt ? 'Projetos fixados' : 'Pinned projects'}
+                </label>
+                <div style={{ maxHeight: 180, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {allProjects.map(path => {
+                    const checked = dupModal.pinned.includes(path)
+                    return (
+                      <label key={path} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, cursor: 'pointer', background: checked ? 'var(--anthropic-orange-dim)' : 'transparent' }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setDupModal(s => s ? { ...s, pinned: checked ? s.pinned.filter(p => p !== path) : [...s.pinned, path] } : s)}
+                          style={{ accentColor: 'var(--anthropic-orange)', flexShrink: 0 }}
+                        />
+                        <span style={{ fontSize: 12, color: checked ? 'var(--anthropic-orange)' : 'var(--text-secondary)', fontWeight: checked ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {formatProjectName(path)}
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setDupModal(null)} style={{ padding: '8px 16px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, cursor: 'pointer', fontSize: 12, color: 'var(--text-secondary)', fontFamily: 'inherit', fontWeight: 500 }}>
+                {pt ? 'Cancelar' : 'Cancel'}
+              </button>
+              <button
+                disabled={!dupModal.newName.trim()}
+                onClick={() => { duplicateLayout(activeLayout, dupModal.newName, dupModal.pinned); setDupModal(null) }}
+                style={{ padding: '8px 20px', background: dupModal.newName.trim() ? 'var(--anthropic-orange)' : 'var(--bg-elevated)', border: 'none', borderRadius: 8, cursor: dupModal.newName.trim() ? 'pointer' : 'not-allowed', fontSize: 12, color: dupModal.newName.trim() ? '#fff' : 'var(--text-tertiary)', fontFamily: 'inherit', fontWeight: 600, transition: 'background 0.15s' }}
+              >
+                {pt ? 'Duplicar' : 'Duplicate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Manage layouts modal (bulk delete) ─── */}
+      {manageOpen && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+          onClick={e => { if (e.target === e.currentTarget) setManageOpen(false) }}
+        >
+          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-xl,16px)', padding: 24, width: 420, maxWidth: '90vw', maxHeight: '80vh', display: 'flex', flexDirection: 'column', gap: 16, boxShadow: '0 20px 60px rgba(0,0,0,0.4)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
+                {pt ? 'Gerenciar layouts' : 'Manage layouts'}
+              </div>
+              <button className="icon-btn" onClick={() => setManageOpen(false)} style={{ width: 26, height: 26 }}><X size={12} /></button>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={manageSelected.size > 0 && manageSelected.size === layoutNames.filter(n => n !== activeLayout || layoutNames.length > 1).length}
+                onChange={e => {
+                  if (e.target.checked) setManageSelected(new Set(layoutNames.filter(n => layoutNames.length === 1 ? false : n !== activeLayout || manageSelected.size < layoutNames.length - 1)))
+                  else setManageSelected(new Set())
+                }}
+                style={{ accentColor: 'var(--anthropic-orange)' }}
+              />
+              <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+                {pt ? 'Selecionar todos' : 'Select all'}
+              </span>
+            </div>
+
+            <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {layoutNames.map(name => {
+                const isActive = name === activeLayout
+                const canSelect = layoutNames.length > 1 && !(isActive && manageSelected.size >= layoutNames.length - 1)
+                const selected = manageSelected.has(name)
+                return (
+                  <label key={name} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderRadius: 8, cursor: canSelect ? 'pointer' : 'default', background: selected ? 'rgba(239,68,68,0.07)' : isActive ? 'var(--anthropic-orange-dim)' : 'transparent', border: `1px solid ${selected ? 'rgba(239,68,68,0.25)' : 'transparent'}`, transition: 'background 0.1s' }}>
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      disabled={!canSelect}
+                      onChange={() => {
+                        setManageSelected(prev => {
+                          const next = new Set(prev)
+                          if (next.has(name)) next.delete(name); else next.add(name)
+                          return next
+                        })
+                      }}
+                      style={{ accentColor: '#ef4444', flexShrink: 0 }}
+                    />
+                    <span style={{ flex: 1, fontSize: 13, fontWeight: isActive ? 600 : 400, color: isActive ? 'var(--anthropic-orange)' : 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {name}
+                    </span>
+                    {isActive && (
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)', borderRadius: 4 }}>
+                        {pt ? 'ativo' : 'active'}
+                      </span>
+                    )}
+                  </label>
+                )
+              })}
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+              <button onClick={() => setManageOpen(false)} style={{ padding: '8px 16px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, cursor: 'pointer', fontSize: 12, color: 'var(--text-secondary)', fontFamily: 'inherit', fontWeight: 500 }}>
+                {pt ? 'Fechar' : 'Close'}
+              </button>
+              <button
+                disabled={manageSelected.size === 0}
+                onClick={() => {
+                  const names = [...manageSelected]
+                  const msg = pt
+                    ? `Deletar ${names.length} layout(s) selecionado(s)?`
+                    : `Delete ${names.length} selected layout(s)?`
+                  if (confirm(msg)) { deleteLayouts(names); setManageSelected(new Set()); setManageOpen(false) }
+                }}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', background: manageSelected.size > 0 ? '#ef4444' : 'var(--bg-elevated)', border: 'none', borderRadius: 8, cursor: manageSelected.size > 0 ? 'pointer' : 'not-allowed', fontSize: 12, color: manageSelected.size > 0 ? '#fff' : 'var(--text-tertiary)', fontFamily: 'inherit', fontWeight: 600, transition: 'background 0.15s' }}
+              >
+                <Trash2 size={12} />
+                {pt ? `Deletar selecionados (${manageSelected.size})` : `Delete selected (${manageSelected.size})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─── Import modal ─── */}
       {importState && (

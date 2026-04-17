@@ -167,12 +167,44 @@ export function useCustomLayout() {
     })
   }, [update])
 
+  const deleteLayouts = useCallback((names: string[]) => {
+    update(prev => {
+      const toDelete = new Set(names)
+      const remaining = Object.keys(prev.layouts).filter(n => !toDelete.has(n))
+      if (remaining.length === 0) return prev
+      const newLayouts: Record<string, GridItem[]> = {}
+      const newPinned: Record<string, string[]> = {}
+      for (const n of remaining) {
+        newLayouts[n] = prev.layouts[n]!
+        if (prev.pinnedProjects[n]) newPinned[n] = prev.pinnedProjects[n]!
+      }
+      const active = toDelete.has(prev.active) ? remaining[0]! : prev.active
+      return { layouts: newLayouts, pinnedProjects: newPinned, active }
+    })
+  }, [update])
+
+  const duplicateLayout = useCallback((sourceName: string, newName: string, newPinned: string[]) => {
+    update(prev => {
+      const trimmed = newName.trim()
+      if (!trimmed) return prev
+      const base = prev.layouts[sourceName] ?? []
+      const nextId = Date.now()
+      const cloned = base.map((it, idx) => ({ ...it, i: `${it.componentId}__${nextId + idx}` }))
+      const newLayouts = { ...prev.layouts, [trimmed]: cloned }
+      const newPinnedMap = newPinned.length > 0
+        ? { ...prev.pinnedProjects, [trimmed]: newPinned }
+        : { ...prev.pinnedProjects }
+      return { layouts: newLayouts, pinnedProjects: newPinnedMap, active: trimmed }
+    })
+  }, [update])
+
   return {
     items, setItems, addItem, removeItem, reset, loaded,
     layoutNames,
     activeLayout: state.active,
     pinnedProjects,
+    pinnedProjectsMap: state.pinnedProjects,
     setPinnedProjects,
-    switchLayout, createLayout, renameLayout, deleteLayout,
+    switchLayout, createLayout, renameLayout, deleteLayout, deleteLayouts, duplicateLayout,
   }
 }
