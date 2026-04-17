@@ -33,6 +33,7 @@ import { CacheHitRatePanel } from './components/CacheHitRatePanel'
 import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
 import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
+import { TtyChat } from './components/TtyChat'
 import { format, parseISO, parse } from 'date-fns'
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
@@ -1528,6 +1529,9 @@ export default function AppLayout() {
           onClose={() => setShowExportModal(false)}
         />
       )}
+
+      {/* TTY Chat — floating button + panel, globally available */}
+      <TtyChat lang={lang} />
 
       {/* Footer */}
       <footer style={{

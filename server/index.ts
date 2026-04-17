@@ -4,6 +4,7 @@ import { PORT } from './config'
 import { getRates } from './rates'
 import { buildApiResponse, buildApiResponseStream } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
+import { streamViaClaude, type ChatMessage } from './chat-tty'
 import {
   sseClients,
   sseEncoder,
@@ -156,6 +157,48 @@ Bun.serve({
         return new Response(JSON.stringify(updated), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return new Response(JSON.stringify({ error: message }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    if (url.pathname === '/api/chat-tty' && req.method === 'POST') {
+      try {
+        const body = await req.json() as { message: string; history?: ChatMessage[] }
+        const { message, history = [] } = body
+        const enc = new TextEncoder()
+        const stream = new ReadableStream<Uint8Array>({
+          start(ctrl) {
+            streamViaClaude(
+              message,
+              history,
+              (text) => {
+                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ text })}\n\n`))
+              },
+              () => {
+                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ done: true })}\n\n`))
+                ctrl.close()
+              },
+              (err) => {
+                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ error: err })}\n\n`))
+                ctrl.close()
+              },
+            )
+          },
+        })
+        return new Response(stream, {
+          status: 200,
+          headers: {
+            ...CORS_HEADERS,
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+          },
         })
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
