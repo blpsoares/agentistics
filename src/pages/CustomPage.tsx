@@ -266,9 +266,18 @@ export default function CustomPage() {
   // containerRef is on the outer flex row so totalWidth is stable.
   // gridWidth is computed synchronously — no ResizeObserver lag when aside toggles.
   const { width: totalWidth, containerRef: outerRowRef, mounted } = useContainerWidth()
-  const gridWidth = totalWidth > 0
+  const MIN_GRID_WIDTH = 280  // below this, RGL column widths go negative
+  const rawGridWidth = totalWidth > 0
     ? totalWidth - (sidebarOpen ? ASIDE_WIDTH + ASIDE_GAP : 0)
     : 0
+  const gridWidth = rawGridWidth > 0 ? Math.max(rawGridWidth, MIN_GRID_WIDTH) : 0
+
+  // Auto-close sidebar when viewport is too narrow to show both
+  useEffect(() => {
+    if (totalWidth > 0 && totalWidth < ASIDE_WIDTH + MIN_GRID_WIDTH + ASIDE_GAP + 20) {
+      setSidebarOpen(false)
+    }
+  }, [totalWidth])
 
   const [importState, setImportState] = useState<ImportState | null>(null)
   const importFileRef = useRef<HTMLInputElement>(null)
@@ -923,7 +932,8 @@ export default function CustomPage() {
           style={{
             flex: 1,
             minWidth: 0,
-            overflow: 'hidden',
+            overflowX: rawGridWidth < MIN_GRID_WIDTH ? 'auto' : 'hidden',
+            overflowY: 'visible',
             position: 'relative',
             minHeight: isDragging ? 600 : 400,
           }}
