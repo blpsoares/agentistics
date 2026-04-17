@@ -4,12 +4,12 @@ import { format } from 'date-fns'
 import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, FileCode, TrendingUp, BarChart2,
-  Download, Upload, GripVertical, Trophy, Bot, Target,
+  Download, Upload, Trophy, Bot, Target,
   Calendar,
 } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import { formatProjectName } from '../lib/types'
-import { fmt, fmtDuration, fmtCost } from '../lib/format'
+import { fmt, fmtFull, fmtDuration, fmtCost } from '../lib/format'
 import { Section } from '../components/Section'
 import { StatCard } from '../components/StatCard'
 import { HighlightsBoard } from '../components/HighlightsBoard'
@@ -24,6 +24,7 @@ import { TagCloud } from '../components/TagCloud'
 import { ToolMetricsPanel } from '../components/ToolMetricsPanel'
 import { AgentMetricsPanel } from '../components/AgentMetricsPanel'
 import { RecentSessions } from '../components/RecentSessions'
+import { StreakBreakdownButton } from '../components/StreakBreakdownButton'
 
 type CardId = 'messages' | 'sessions' | 'tool-calls' | 'input-tokens' | 'output-tokens' | 'cost' | 'streak' | 'longest-session' | 'commits' | 'files'
 
@@ -35,68 +36,42 @@ export default function HomePage() {
     monthlyBudgetUSD, updateBudget,
     totalInputTokens, totalOutputTokens,
     setExpandedChart, setSelectedSession, setInfoModalIndex,
-    infoItems, cardOrder, setCardOrder, dragCardRef, dragOverCard, setDragOverCard,
+    infoItems, cardOrder,
+    cardPrecision, setCardPrecision,
   } = ctx
   const d = derived
 
-  function handleDragStart(id: CardId) { dragCardRef.current = id }
-  function handleDragOver(e: React.DragEvent, id: CardId) {
-    e.preventDefault()
-    if (dragCardRef.current !== id) setDragOverCard(id)
-  }
-  function handleDrop(id: CardId) {
-    const from = dragCardRef.current as CardId | null
-    if (!from || from === id) { dragCardRef.current = null; setDragOverCard(null); return }
-    const newOrder = [...cardOrder] as CardId[]
-    const fi = newOrder.indexOf(from)
-    const ti = newOrder.indexOf(id)
-    newOrder.splice(fi, 1)
-    newOrder.splice(ti, 0, from)
-    setCardOrder(newOrder as string[])
-    localStorage.setItem('claude-stats-card-order', JSON.stringify(newOrder))
-    dragCardRef.current = null
-    setDragOverCard(null)
-  }
-  function handleDragEnd() { dragCardRef.current = null; setDragOverCard(null) }
-
   function renderCard(id: CardId) {
-    const isDragging = dragCardRef.current === id
-    const isOver = dragOverCard === id
-    const wrapperStyle: React.CSSProperties = {
-      opacity: isDragging ? 0.35 : 1,
-      outline: isOver ? '2px dashed var(--anthropic-orange)' : 'none',
-      outlineOffset: -2,
-      borderRadius: 'var(--radius-lg)',
-      transition: 'opacity 0.15s',
-      cursor: 'grab',
-      position: 'relative',
-      display: 'flex',
-      flexDirection: 'column',
-    }
+    const fullKey = `kpi.${id}`
+    const full = cardPrecision[fullKey] ?? false
+    const toggleFull = () => setCardPrecision(fullKey, !full)
+    const tog = (rawVal: number) => rawVal >= 1000 ? toggleFull : undefined
 
     let card: React.ReactNode = null
     if (id === 'messages') {
-      card = <StatCard label={lang === 'pt' ? 'Mensagens' : 'Messages'} value={fmt(d.totalMessages)} sub={lang === 'pt' ? 'no período selecionado' : 'in selected period'} icon={<MessageSquare size={15} />} accent="var(--anthropic-orange)" info={infoItems[0]} onInfoClick={() => setInfoModalIndex(0)} />
+      card = <StatCard lang={lang} label={lang === 'pt' ? 'Mensagens' : 'Messages'} value={full ? fmtFull(d.totalMessages) : fmt(d.totalMessages)} sub={lang === 'pt' ? 'no período selecionado' : 'in selected period'} icon={<MessageSquare size={15} />} accent="var(--anthropic-orange)" info={infoItems[0]} onInfoClick={() => setInfoModalIndex(0)} fullPrecision={full} onTogglePrecision={tog(d.totalMessages)} />
     } else if (id === 'sessions') {
-      card = <StatCard label={lang === 'pt' ? 'Sessões' : 'Sessions'} value={fmt(d.totalSessions)} sub={`avg ${d.totalSessions > 0 ? Math.round(d.totalMessages / d.totalSessions) : 0} msgs/sessão`} icon={<Zap size={15} />} accent="var(--accent-blue)" info={infoItems[1]} onInfoClick={() => setInfoModalIndex(1)} />
+      card = <StatCard lang={lang} label={lang === 'pt' ? 'Sessões' : 'Sessions'} value={full ? fmtFull(d.totalSessions) : fmt(d.totalSessions)} sub={`avg ${d.totalSessions > 0 ? Math.round(d.totalMessages / d.totalSessions) : 0} msgs/sessão`} icon={<Zap size={15} />} accent="var(--accent-blue)" info={infoItems[1]} onInfoClick={() => setInfoModalIndex(1)} fullPrecision={full} onTogglePrecision={tog(d.totalSessions)} />
     } else if (id === 'tool-calls') {
-      card = <StatCard label={lang === 'pt' ? 'Tool calls' : 'Tool calls'} value={fmt(d.totalToolCalls)} sub={lang === 'pt' ? 'execuções totais' : 'total executions'} icon={<Wrench size={15} />} accent="var(--accent-green)" info={infoItems[2]} onInfoClick={() => setInfoModalIndex(2)} />
+      card = <StatCard lang={lang} label={lang === 'pt' ? 'Tool calls' : 'Tool calls'} value={full ? fmtFull(d.totalToolCalls) : fmt(d.totalToolCalls)} sub={lang === 'pt' ? 'execuções totais' : 'total executions'} icon={<Wrench size={15} />} accent="var(--accent-green)" info={infoItems[2]} onInfoClick={() => setInfoModalIndex(2)} fullPrecision={full} onTogglePrecision={tog(d.totalToolCalls)} />
     } else if (id === 'input-tokens') {
-      card = <StatCard label={lang === 'pt' ? 'Tokens entrada' : 'Input tokens'} value={fmt(totalInputTokens)} sub={lang === 'pt' ? 'tokens enviados ao modelo' : 'tokens sent to model'} icon={<Download size={15} />} accent="var(--accent-blue)" info={infoItems[8]} onInfoClick={() => setInfoModalIndex(8)} />
+      card = <StatCard lang={lang} label={lang === 'pt' ? 'Tokens entrada' : 'Input tokens'} value={full ? fmtFull(totalInputTokens) : fmt(totalInputTokens)} sub={lang === 'pt' ? 'tokens enviados ao modelo' : 'tokens sent to model'} icon={<Download size={15} />} accent="var(--accent-blue)" info={infoItems[8]} onInfoClick={() => setInfoModalIndex(8)} fullPrecision={full} onTogglePrecision={tog(totalInputTokens)} />
     } else if (id === 'output-tokens') {
-      card = <StatCard label={lang === 'pt' ? 'Tokens saída' : 'Output tokens'} value={fmt(totalOutputTokens)} sub={lang === 'pt' ? 'tokens gerados pelo modelo' : 'tokens generated by model'} icon={<Upload size={15} />} accent="var(--accent-purple)" info={infoItems[9]} onInfoClick={() => setInfoModalIndex(9)} />
+      card = <StatCard lang={lang} label={lang === 'pt' ? 'Tokens saída' : 'Output tokens'} value={full ? fmtFull(totalOutputTokens) : fmt(totalOutputTokens)} sub={lang === 'pt' ? 'tokens gerados pelo modelo' : 'tokens generated by model'} icon={<Upload size={15} />} accent="var(--accent-purple)" info={infoItems[9]} onInfoClick={() => setInfoModalIndex(9)} fullPrecision={full} onTogglePrecision={tog(totalOutputTokens)} />
     } else if (id === 'cost') {
       card = (
         <StatCard label={lang === 'pt' ? 'Custo estimado' : 'Est. cost'} value={fmtCost(d.totalCostUSD, currency, brlRate)} sub={lang === 'pt' ? 'preços da API Anthropic · não é assinatura' : 'Anthropic API pricing · not subscription'} icon={<TrendingUp size={15} />} accent="var(--anthropic-orange)" info={infoItems[5]} onInfoClick={() => setInfoModalIndex(5)}
           action={
-            <button onClick={() => setCurrency(c => c === 'USD' ? 'BRL' : 'USD')} style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s', letterSpacing: '0.03em' }} title={currency === 'USD' ? 'Switch to BRL (R$)' : 'Switch to USD'}>
+            <button onClick={() => setCurrency(currency === 'USD' ? 'BRL' : 'USD')} style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s', letterSpacing: '0.03em' }} title={currency === 'USD' ? 'Switch to BRL (R$)' : 'Switch to USD'}>
               {currency}
             </button>
           }
         />
       )
     } else if (id === 'streak') {
-      card = <StatCard label={lang === 'pt' ? 'Sequência' : 'Streak'} value={`${d.streak}d`} sub={lang === 'pt' ? 'dias consecutivos' : 'consecutive days'} icon={<Flame size={15} />} accent="#ef4444" info={infoItems[3]} onInfoClick={() => setInfoModalIndex(3)} />
+      card = <StatCard label={lang === 'pt' ? 'Sequência' : 'Streak'} value={`${d.streak}d`} sub={lang === 'pt' ? 'dias consecutivos' : 'consecutive days'} icon={<Flame size={15} />} accent="#ef4444" info={infoItems[3]} onInfoClick={() => setInfoModalIndex(3)}
+        action={d.projectStreaks && d.projectStreaks.length >= 1 && filters.projects.length !== 1 ? <StreakBreakdownButton items={d.projectStreaks} pt={lang === 'pt'} /> : undefined}
+      />
     } else if (id === 'longest-session') {
       card = (
         <StatCard label={lang === 'pt' ? 'Sessão mais longa' : 'Longest session'} value={d.longestSession?.duration_minutes ? fmtDuration(d.longestSession.duration_minutes * 60_000) : '—'}
@@ -118,18 +93,9 @@ export default function HomePage() {
     return (
       <div
         key={id}
-        data-drag-card={id}
         data-flash-id={id}
-        draggable
-        onDragStart={() => handleDragStart(id)}
-        onDragOver={e => handleDragOver(e, id)}
-        onDrop={() => handleDrop(id)}
-        onDragEnd={handleDragEnd}
-        style={wrapperStyle}
+        style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}
       >
-        <div style={{ position: 'absolute', top: 8, left: 8, zIndex: 1, color: 'var(--text-tertiary)', opacity: 0, transition: 'opacity 0.15s', pointerEvents: 'none' }} className="drag-handle">
-          <GripVertical size={12} />
-        </div>
         {card}
       </div>
     )
@@ -153,8 +119,6 @@ export default function HomePage() {
 
       {/* KPI Cards grid */}
       <style>{`
-        [data-drag-card]:hover .drag-handle { opacity: 1 !important; }
-        [data-drag-card] { user-select: none; }
         @keyframes liveFlash {
           0%   { box-shadow: 0 0 0 2px rgba(217,119,6,0.55), 0 0 14px rgba(217,119,6,0.12); }
           60%  { box-shadow: 0 0 0 2px rgba(217,119,6,0.18), 0 0 6px rgba(217,119,6,0.04); }

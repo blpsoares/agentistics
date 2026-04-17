@@ -5,7 +5,7 @@ import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, RefreshCw, FileCode, TrendingUp, BarChart2,
   Sun, Moon, Globe, AlertTriangle, Download, Upload,
-  Maximize2, X, GripVertical, Trophy, Activity, Bot, Sparkles, Settings,
+  Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers,
 } from 'lucide-react'
@@ -32,6 +32,7 @@ import { AgentMetricsPanel } from './components/AgentMetricsPanel'
 import { CacheHitRatePanel } from './components/CacheHitRatePanel'
 import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
+import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
 import { format, parseISO, parse } from 'date-fns'
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
@@ -641,9 +642,13 @@ export default function AppLayout() {
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
   const [showLiveSettings, setShowLiveSettings] = useState(false)
-  const [lang, setLang] = useState<Lang>('en')
-  const [theme, setTheme] = useState<Theme>('dark')
-  const [currency, setCurrency] = useState<'USD' | 'BRL'>('USD')
+  const [lang, setLangState] = useState<Lang>('en')
+  const [theme, setThemeState] = useState<Theme>('dark')
+  const [currency, setCurrencyState] = useState<'USD' | 'BRL'>('USD')
+
+  const setLang = useCallback((l: Lang) => setLangState(l), [])
+  const setTheme = useCallback((t: Theme) => setThemeState(t), [])
+  const setCurrency = useCallback((c: 'USD' | 'BRL') => setCurrencyState(c), [])
   const [brlRate, setBrlRate] = useState(5.70)
   const [filters, setFilters] = useState<Filters>({
     dateRange: 'all',
@@ -692,8 +697,7 @@ export default function AppLayout() {
     } catch {}
     return DEFAULT_CARD_ORDER
   })
-  const dragCardRef = useRef<CardId | null>(null)
-  const [dragOverCard, setDragOverCard] = useState<CardId | null>(null)
+  const [showPrefsModal, setShowPrefsModal] = useState(false)
 
   const [cardPrecision, setCardPrecisionState] = useState<Record<string, boolean>>({})
   const precisionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -721,8 +725,13 @@ export default function AppLayout() {
   useEffect(() => {
     fetch('/api/preferences')
       .then(r => r.ok ? r.json() : null)
-      .then((prefs: { cardPrecision?: Record<string, boolean> } | null) => {
-        if (prefs?.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
+      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[] } | null) => {
+        if (!prefs) return
+        if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
+        if (prefs.lang) setLangState(prefs.lang)
+        if (prefs.theme) setThemeState(prefs.theme)
+        if (prefs.currency) setCurrencyState(prefs.currency)
+        if (prefs.cardOrder) setCardOrder(prefs.cardOrder as CardId[])
       })
       .catch(() => {})
   }, [])
@@ -1076,237 +1085,6 @@ export default function AppLayout() {
     ? Object.values(derived.modelUsage).reduce((s, u) => s + u.outputTokens, 0)
     : derived.outputTokens
 
-  // ── Drag handlers ─────────────────────────────────────────────────────────────
-  function handleDragStart(id: CardId) { dragCardRef.current = id }
-  function handleDragOver(e: React.DragEvent, id: CardId) {
-    e.preventDefault()
-    if (dragCardRef.current !== id) setDragOverCard(id)
-  }
-  function handleDrop(id: CardId) {
-    const from = dragCardRef.current
-    if (!from || from === id) { dragCardRef.current = null; setDragOverCard(null); return }
-    const newOrder = [...cardOrder]
-    const fi = newOrder.indexOf(from)
-    const ti = newOrder.indexOf(id)
-    newOrder.splice(fi, 1)
-    newOrder.splice(ti, 0, from)
-    setCardOrder(newOrder)
-    localStorage.setItem('claude-stats-card-order', JSON.stringify(newOrder))
-    dragCardRef.current = null
-    setDragOverCard(null)
-  }
-  function handleDragEnd() { dragCardRef.current = null; setDragOverCard(null) }
-
-  // ── Card renderer ──────────────────────────────────────────────────────────────
-  function renderCard(id: CardId) {
-    const isDragging = dragCardRef.current === id
-    const isOver = dragOverCard === id
-    const wrapperStyle: React.CSSProperties = {
-      opacity: isDragging ? 0.35 : 1,
-      outline: isOver ? '2px dashed var(--anthropic-orange)' : 'none',
-      outlineOffset: -2,
-      borderRadius: 'var(--radius-lg)',
-      transition: 'opacity 0.15s',
-      cursor: 'grab',
-      position: 'relative',
-      display: 'flex',
-      flexDirection: 'column',
-    }
-
-    let card: React.ReactNode = null
-    const fullKey = `kpi.${id}`
-    const full = cardPrecision[fullKey] ?? false
-    const toggleFull = () => setCardPrecision(fullKey, !full)
-    if (id === 'messages') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Mensagens' : 'Messages'}
-          value={full ? fmtFull(d.totalMessages) : fmt(d.totalMessages)}
-          sub={lang === 'pt' ? 'no período selecionado' : 'in selected period'}
-          icon={<MessageSquare size={15} />}
-          accent="var(--anthropic-orange)"
-          info={infoItems[0]}
-          onInfoClick={() => setInfoModalIndex(0)}
-          fullPrecision={full}
-          onTogglePrecision={toggleFull}
-        />
-      )
-    } else if (id === 'sessions') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Sessões' : 'Sessions'}
-          value={full ? fmtFull(d.totalSessions) : fmt(d.totalSessions)}
-          sub={`avg ${d.totalSessions > 0 ? Math.round(d.totalMessages / d.totalSessions) : 0} msgs/sessão`}
-          icon={<Zap size={15} />}
-          accent="var(--accent-blue)"
-          info={infoItems[1]}
-          onInfoClick={() => setInfoModalIndex(1)}
-          fullPrecision={full}
-          onTogglePrecision={toggleFull}
-        />
-      )
-    } else if (id === 'tool-calls') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Tool calls' : 'Tool calls'}
-          value={full ? fmtFull(d.totalToolCalls) : fmt(d.totalToolCalls)}
-          sub={lang === 'pt' ? 'execuções totais' : 'total executions'}
-          icon={<Wrench size={15} />}
-          accent="var(--accent-green)"
-          info={infoItems[2]}
-          onInfoClick={() => setInfoModalIndex(2)}
-          fullPrecision={full}
-          onTogglePrecision={toggleFull}
-        />
-      )
-    } else if (id === 'input-tokens') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Tokens entrada' : 'Input tokens'}
-          value={full ? fmtFull(totalInputTokens) : fmt(totalInputTokens)}
-          sub={lang === 'pt' ? 'tokens enviados ao modelo' : 'tokens sent to model'}
-          icon={<Download size={15} />}
-          accent="var(--accent-blue)"
-          info={infoItems[8]}
-          onInfoClick={() => setInfoModalIndex(8)}
-          fullPrecision={full}
-          onTogglePrecision={toggleFull}
-        />
-      )
-    } else if (id === 'output-tokens') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Tokens saída' : 'Output tokens'}
-          value={full ? fmtFull(totalOutputTokens) : fmt(totalOutputTokens)}
-          sub={lang === 'pt' ? 'tokens gerados pelo modelo' : 'tokens generated by model'}
-          icon={<Upload size={15} />}
-          accent="var(--accent-purple)"
-          info={infoItems[9]}
-          onInfoClick={() => setInfoModalIndex(9)}
-          fullPrecision={full}
-          onTogglePrecision={toggleFull}
-        />
-      )
-    } else if (id === 'cost') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Custo estimado' : 'Est. cost'}
-          value={fmtCost(d.totalCostUSD, currency, brlRate)}
-          sub={lang === 'pt' ? 'preços da API Anthropic · não é assinatura' : 'Anthropic API pricing · not subscription'}
-          icon={<TrendingUp size={15} />}
-          accent="var(--anthropic-orange)"
-          info={infoItems[5]}
-          onInfoClick={() => setInfoModalIndex(5)}
-          action={
-            <button
-              onClick={() => setCurrency(c => c === 'USD' ? 'BRL' : 'USD')}
-              style={{
-                fontSize: 10, fontWeight: 700,
-                padding: '2px 6px', borderRadius: 4,
-                border: '1px solid var(--border)',
-                background: 'transparent',
-                color: 'var(--text-tertiary)',
-                cursor: 'pointer', fontFamily: 'inherit',
-                transition: 'all 0.15s', letterSpacing: '0.03em',
-              }}
-              title={currency === 'USD' ? 'Switch to BRL (R$)' : 'Switch to USD'}
-            >
-              {currency}
-            </button>
-          }
-        />
-      )
-    } else if (id === 'streak') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Sequência' : 'Streak'}
-          value={`${d.streak}d`}
-          sub={lang === 'pt' ? 'dias consecutivos' : 'consecutive days'}
-          icon={<Flame size={15} />}
-          accent="#ef4444"
-          info={infoItems[3]}
-          onInfoClick={() => setInfoModalIndex(3)}
-          action={d.projectStreaks.length >= 1 && filters.projects.length !== 1
-            ? <StreakBreakdownButton items={d.projectStreaks} pt={lang === 'pt'} />
-            : undefined}
-        />
-      )
-    } else if (id === 'longest-session') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Sessão mais longa' : 'Longest session'}
-          value={d.longestSession?.duration_minutes ? fmtDuration(d.longestSession.duration_minutes * 60_000) : '—'}
-          sub={d.longestSession
-            ? (() => {
-                const msgs = (d.longestSession!.user_message_count ?? 0) + (d.longestSession!.assistant_message_count ?? 0)
-                const msgStr = `${msgs} ${lang === 'pt' ? 'mensagens' : 'messages'}`
-                if (filters.projects.length === 0 && d.longestSession!.project_path)
-                  return `${msgStr} · ${formatProjectName(d.longestSession!.project_path)}`
-                return msgStr
-              })()
-            : ''}
-          icon={<Clock size={15} />}
-          accent="var(--accent-purple)"
-          info={infoItems[4]}
-          onInfoClick={() => setInfoModalIndex(4)}
-        />
-      )
-    } else if (id === 'commits') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Commits' : 'Commits'}
-          value={d.gitCommits}
-          sub={d.gitPushes > 0
-            ? `${d.gitPushes} ${lang === 'pt' ? 'pushes via Claude' : 'pushes via Claude'}`
-            : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls'}
-          icon={<GitCommit size={15} />}
-          accent="var(--accent-cyan)"
-          info={infoItems[6]}
-          onInfoClick={() => setInfoModalIndex(6)}
-        />
-      )
-    } else if (id === 'files') {
-      card = (
-        <StatCard
-          label={lang === 'pt' ? 'Arquivos' : 'Files'}
-          value={d.filesModified}
-          sub={d.linesAdded + d.linesRemoved > 0
-            ? `+${fmt(d.linesAdded)} / -${fmt(d.linesRemoved)} linhas`
-            : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls'}
-          icon={<FileCode size={15} />}
-          accent="var(--accent-green)"
-          info={infoItems[7]}
-          onInfoClick={() => setInfoModalIndex(7)}
-        />
-      )
-    }
-
-    return (
-      <div
-        key={id}
-        data-drag-card={id}
-        data-flash-id={id}
-        draggable
-        onDragStart={() => handleDragStart(id)}
-        onDragOver={e => handleDragOver(e, id)}
-        onDrop={() => handleDrop(id)}
-        onDragEnd={handleDragEnd}
-        style={wrapperStyle}
-      >
-        {/* Drag handle indicator */}
-        <div style={{
-          position: 'absolute', top: 8, left: 8, zIndex: 1,
-          color: 'var(--text-tertiary)', opacity: 0,
-          transition: 'opacity 0.15s',
-          pointerEvents: 'none',
-        }} className="drag-handle">
-          <GripVertical size={12} />
-        </div>
-        {card}
-      </div>
-    )
-  }
-
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
       {/* Header */}
@@ -1390,7 +1168,7 @@ export default function AppLayout() {
 
             {/* Theme toggle */}
             <button
-              onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
               style={{
                 width: 32, height: 32,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1445,6 +1223,32 @@ export default function AppLayout() {
             >
               <Download size={13} />
               {lang === 'pt' ? 'Exportar' : 'Export'}
+            </button>
+
+            {/* Preferences */}
+            <button
+              onClick={() => setShowPrefsModal(true)}
+              style={{
+                width: 32, height: 32,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                borderRadius: 8,
+                border: '1px solid var(--border)',
+                background: 'transparent',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                transition: 'all 0.15s',
+              }}
+              onMouseEnter={e => {
+                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
+                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--text-tertiary)'
+              }}
+              onMouseLeave={e => {
+                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)'
+                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
+              }}
+              title={lang === 'pt' ? 'Preferências' : 'Preferences'}
+            >
+              <SlidersHorizontal size={14} />
             </button>
 
             {/* Health warnings */}
@@ -1594,7 +1398,7 @@ export default function AppLayout() {
           totalInputTokens, totalOutputTokens,
           setExpandedChart, setSelectedSession, setInfoModalIndex,
           infoItems,
-          cardOrder, setCardOrder, dragCardRef, dragOverCard, setDragOverCard,
+          cardOrder, setCardOrder: setCardOrder as (o: string[]) => void,
           cardPrecision, setCardPrecision,
         }} />
       </main>
@@ -1612,6 +1416,33 @@ export default function AppLayout() {
           highlightUpdates={highlightUpdates}
           setHighlightUpdates={v => { setHighlightUpdates(v); highlightUpdatesRef.current = v }}
           onClose={() => setShowLiveSettings(false)}
+        />
+      )}
+
+      {/* Preferences modal */}
+      {showPrefsModal && (
+        <PreferencesModal
+          initial={{ lang, theme, currency, cardOrder, cardPrecision }}
+          onSave={(draft: PrefsDraft) => {
+            setLangState(draft.lang)
+            setThemeState(draft.theme)
+            setCurrencyState(draft.currency)
+            setCardOrder(draft.cardOrder as CardId[])
+            setCardPrecisionState(draft.cardPrecision)
+            fetch('/api/preferences', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                lang: draft.lang,
+                theme: draft.theme,
+                currency: draft.currency,
+                cardOrder: draft.cardOrder,
+                cardPrecision: draft.cardPrecision,
+              }),
+            }).catch(() => {})
+            setShowPrefsModal(false)
+          }}
+          onClose={() => setShowPrefsModal(false)}
         />
       )}
 

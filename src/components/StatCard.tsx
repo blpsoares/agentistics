@@ -1,5 +1,6 @@
 import React from 'react'
 import { Info } from 'lucide-react'
+import { PrecisionToggle } from './PrecisionToggle'
 
 interface StatCardProps {
   label: string
@@ -16,9 +17,10 @@ interface StatCardProps {
   action?: React.ReactNode
   fullPrecision?: boolean
   onTogglePrecision?: () => void
+  lang?: string
 }
 
-export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-orange)', info, onInfoClick, action, fullPrecision, onTogglePrecision }: StatCardProps) {
+export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-orange)', info, onInfoClick, action, fullPrecision, onTogglePrecision, lang }: StatCardProps) {
   return (
     <div style={{
       background: 'var(--bg-card)',
@@ -60,22 +62,12 @@ export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-or
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {action}
           {onTogglePrecision && (
-            <button
-              onClick={onTogglePrecision}
-              title={fullPrecision ? 'Abreviar número' : 'Ver número completo'}
-              style={{
-                fontSize: 10, fontWeight: 700,
-                padding: '2px 5px', borderRadius: 4,
-                border: `1px solid ${fullPrecision ? 'var(--border)' : `${accent}80`}`,
-                background: fullPrecision ? 'transparent' : `${accent}12`,
-                color: fullPrecision ? 'var(--text-secondary)' : accent,
-                cursor: 'pointer', fontFamily: 'monospace',
-                transition: 'all 0.15s', letterSpacing: '0.01em',
-                lineHeight: 1.4,
-              }}
-            >
-              {fullPrecision ? '1.2M' : '1.234'}
-            </button>
+            <PrecisionToggle
+              full={fullPrecision ?? false}
+              accent={accent}
+              onToggle={onTogglePrecision}
+              lang={lang}
+            />
           )}
           {info && (
             <button

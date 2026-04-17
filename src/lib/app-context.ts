@@ -24,7 +24,7 @@ export interface AppContext {
   lang: Lang
   theme: Theme
   currency: 'USD' | 'BRL'
-  setCurrency: React.Dispatch<React.SetStateAction<'USD' | 'BRL'>>
+  setCurrency: (c: 'USD' | 'BRL') => void
   brlRate: number
 
   // budget
@@ -43,12 +43,9 @@ export interface AppContext {
   // info items for KPI cards
   infoItems: InfoItem[]
 
-  // drag state for KPI cards
+  // card order for home page (managed via preferences)
   cardOrder: string[]
   setCardOrder: React.Dispatch<React.SetStateAction<string[]>>
-  dragCardRef: React.MutableRefObject<string | null>
-  dragOverCard: string | null
-  setDragOverCard: (v: string | null) => void
 
   // per-card full precision toggle
   cardPrecision: Record<string, boolean>
