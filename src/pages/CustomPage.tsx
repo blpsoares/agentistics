@@ -511,7 +511,6 @@ export default function CustomPage() {
   }
 
   function handleDeleteLayout() {
-    if (layoutNames.length <= 1) return
     const hasItems = items.length > 0
     const msg = pt
       ? `Deletar o layout "${activeLayout}"?${hasItems ? ' Todos os componentes serão removidos.' : ''}`
@@ -596,6 +595,37 @@ export default function CustomPage() {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300, color: 'var(--text-tertiary)', fontSize: 13 }}>
         {pt ? 'Carregando layout personalizado…' : 'Loading custom layout…'}
+      </div>
+    )
+  }
+
+  if (layoutNames.length === 0) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 'calc(100vh - 200px)', flexDirection: 'column', gap: 20 }}>
+        <div style={{ width: 64, height: 64, background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Layers size={28} color="var(--text-tertiary)" />
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 }}>
+            {pt ? 'Nenhum layout' : 'No layouts'}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginBottom: 24 }}>
+            {pt ? 'Crie um layout para começar.' : 'Create a layout to get started.'}
+          </div>
+          <button
+            onClick={handleNewLayout}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 8,
+              padding: '10px 24px', background: 'var(--anthropic-orange)',
+              border: 'none', borderRadius: 8, cursor: 'pointer',
+              fontFamily: 'inherit', fontSize: 14, fontWeight: 700, color: '#fff',
+              boxShadow: '0 2px 8px rgba(217,119,6,0.3)',
+            }}
+          >
+            <Plus size={16} />
+            {pt ? 'Novo layout' : 'New layout'}
+          </button>
+        </div>
       </div>
     )
   }
@@ -779,32 +809,29 @@ export default function CustomPage() {
                     <Copy size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
                     {pt ? 'Duplicar' : 'Duplicate'}
                   </button>
+                  <div style={{ height: 1, background: 'var(--border)', margin: '3px 0' }} />
+                  {/* Manage / bulk — only when multiple layouts */}
                   {layoutNames.length > 1 && (
-                    <>
-                      <div style={{ height: 1, background: 'var(--border)', margin: '3px 0' }} />
-                      {/* Manage / bulk */}
-                      <button
-                        onClick={() => { setLayoutMenuOpen(false); setManageSelected(new Set()); setManageOpen(true) }}
-                        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, color: 'var(--text-primary)', textAlign: 'left' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elevated)')}
-                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                      >
-                        <Settings2 size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
-                        {pt ? 'Gerenciar layouts…' : 'Manage layouts…'}
-                      </button>
-                      <div style={{ height: 1, background: 'var(--border)', margin: '3px 0' }} />
-                      {/* Delete current */}
-                      <button
-                        onClick={() => { setLayoutMenuOpen(false); handleDeleteLayout() }}
-                        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, color: '#ef4444', textAlign: 'left' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(239,68,68,0.08)')}
-                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                      >
-                        <Trash2 size={13} style={{ flexShrink: 0 }} />
-                        {pt ? 'Deletar layout' : 'Delete layout'}
-                      </button>
-                    </>
+                    <button
+                      onClick={() => { setLayoutMenuOpen(false); setManageSelected(new Set()); setManageOpen(true) }}
+                      style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, color: 'var(--text-primary)', textAlign: 'left' }}
+                      onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elevated)')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <Settings2 size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                      {pt ? 'Gerenciar layouts…' : 'Manage layouts…'}
+                    </button>
                   )}
+                  {/* Delete current */}
+                  <button
+                    onClick={() => { setLayoutMenuOpen(false); handleDeleteLayout() }}
+                    style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, color: '#ef4444', textAlign: 'left' }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'rgba(239,68,68,0.08)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <Trash2 size={13} style={{ flexShrink: 0 }} />
+                    {pt ? 'Deletar layout' : 'Delete layout'}
+                  </button>
                 </div>,
                 document.body
               )}
@@ -954,6 +981,7 @@ export default function CustomPage() {
               models={ctx.models}
               modelsInProject={ctx.modelsInProject}
               lang={lang}
+              compact
             />
           </div>
 
@@ -1243,9 +1271,9 @@ export default function CustomPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input
                 type="checkbox"
-                checked={manageSelected.size > 0 && manageSelected.size === layoutNames.filter(n => n !== activeLayout || layoutNames.length > 1).length}
+                checked={manageSelected.size === layoutNames.length && layoutNames.length > 0}
                 onChange={e => {
-                  if (e.target.checked) setManageSelected(new Set(layoutNames.filter(n => layoutNames.length === 1 ? false : n !== activeLayout || manageSelected.size < layoutNames.length - 1)))
+                  if (e.target.checked) setManageSelected(new Set(layoutNames))
                   else setManageSelected(new Set())
                 }}
                 style={{ accentColor: 'var(--anthropic-orange)' }}
@@ -1258,7 +1286,7 @@ export default function CustomPage() {
             <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
               {layoutNames.map(name => {
                 const isActive = name === activeLayout
-                const canSelect = layoutNames.length > 1 && !(isActive && manageSelected.size >= layoutNames.length - 1)
+                const canSelect = true
                 const selected = manageSelected.has(name)
                 return (
                   <label key={name} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderRadius: 8, cursor: canSelect ? 'pointer' : 'default', background: selected ? 'rgba(239,68,68,0.07)' : isActive ? 'var(--anthropic-orange-dim)' : 'transparent', border: `1px solid ${selected ? 'rgba(239,68,68,0.25)' : 'transparent'}`, transition: 'background 0.1s' }}>
