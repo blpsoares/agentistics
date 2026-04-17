@@ -6,6 +6,7 @@ import {
   Sun, Moon, Globe, AlertTriangle, Download, Upload,
   Maximize2, X, GripVertical, Trophy, Activity, Bot, Sparkles, Settings,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
+  Target,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -26,6 +27,9 @@ import { PDFExportModal } from './components/PDFExportModal'
 import { HealthWarnings } from './components/HealthWarnings'
 import { ToolMetricsPanel } from './components/ToolMetricsPanel'
 import { AgentMetricsPanel } from './components/AgentMetricsPanel'
+import { CacheHitRatePanel } from './components/CacheHitRatePanel'
+import { BudgetPanel } from './components/BudgetPanel'
+import { SessionDrilldownModal } from './components/SessionDrilldownModal'
 import { format, parseISO, parse } from 'date-fns'
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
@@ -575,6 +579,22 @@ export default function App() {
   const [infoModalIndex, setInfoModalIndex] = useState<number | null>(null)
   const [showExportModal, setShowExportModal] = useState(false)
   const [expandedChart, setExpandedChart] = useState<string | null>(null)
+  const [selectedSession, setSelectedSession] = useState<import('./lib/types').SessionMeta | null>(null)
+  const [monthlyBudgetUSD, setMonthlyBudgetUSD] = useState<number | null>(() => {
+    try {
+      const raw = localStorage.getItem('agentistics-monthly-budget-usd')
+      if (!raw) return null
+      const v = parseFloat(raw)
+      return isNaN(v) ? null : v
+    } catch { return null }
+  })
+  const updateBudget = useCallback((v: number | null) => {
+    setMonthlyBudgetUSD(v)
+    try {
+      if (v === null) localStorage.removeItem('agentistics-monthly-budget-usd')
+      else localStorage.setItem('agentistics-monthly-budget-usd', String(v))
+    } catch { /* ignore quota/disabled storage */ }
+  }, [])
 
   type CardId = 'messages' | 'sessions' | 'tool-calls' | 'input-tokens' | 'output-tokens' | 'cost' | 'streak' | 'longest-session' | 'commits' | 'files'
   const DEFAULT_CARD_ORDER: CardId[] = [
@@ -1508,6 +1528,42 @@ export default function App() {
           />
         </Section>
 
+        {/* Budget + Cache efficiency */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'stretch' }}>
+          <Section
+            flashId="budget"
+            style={{ height: '100%' }}
+            title={<><Target size={14} /> {lang === 'pt' ? 'Orçamento & projeção' : 'Budget & forecast'}</>}
+          >
+            <BudgetPanel
+              statsCache={statsCache}
+              budgetUSD={monthlyBudgetUSD}
+              onBudgetChange={updateBudget}
+              currency={currency}
+              brlRate={brlRate}
+              lang={lang}
+            />
+          </Section>
+
+          <Section
+            flashId="cache"
+            style={{ height: '100%' }}
+            title={<><Zap size={14} /> {lang === 'pt' ? 'Eficiência de cache' : 'Cache efficiency'}</>}
+          >
+            <CacheHitRatePanel
+              hitRate={derived.cacheHitRate}
+              cacheTotals={derived.cacheTotals}
+              grossSavedUSD={derived.cacheGrossSavedUSD}
+              writeOverheadUSD={derived.cacheWriteOverheadUSD}
+              netSavedUSD={derived.cacheNetSavedUSD}
+              perModel={derived.cachePerModel}
+              currency={currency}
+              brlRate={brlRate}
+              lang={lang}
+            />
+          </Section>
+        </div>
+
         {/* Projects (left, 2-col grid) + Tools/Languages stacked (right) */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'stretch' }}>
           <Section
@@ -1568,7 +1624,7 @@ export default function App() {
 
         {/* Recent sessions */}
         <Section flashId="sessions-list" title={<><Clock size={14} /> {lang === 'pt' ? 'Sessões recentes' : 'Recent sessions'}</>}>
-          <RecentSessions sessions={derived.filteredSessions} lang={lang} />
+          <RecentSessions sessions={derived.filteredSessions} lang={lang} onSelect={setSelectedSession} />
         </Section>
       </main>
 
@@ -1642,6 +1698,18 @@ export default function App() {
             }
           />
         </ChartModal>
+      )}
+
+      {/* Session drilldown modal */}
+      {selectedSession && (
+        <SessionDrilldownModal
+          session={selectedSession}
+          globalModelUsage={data.statsCache.modelUsage ?? {}}
+          currency={currency}
+          brlRate={brlRate}
+          lang={lang}
+          onClose={() => setSelectedSession(null)}
+        />
       )}
 
       {/* PDF Export Modal */}

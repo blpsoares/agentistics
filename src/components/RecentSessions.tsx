@@ -19,6 +19,7 @@ import {
 interface Props {
   sessions: SessionMeta[]
   lang: 'pt' | 'en'
+  onSelect?: (session: SessionMeta) => void
 }
 
 type SortKey = 'date' | 'tokens' | 'messages' | 'tools' | 'files'
@@ -211,7 +212,7 @@ function IconButton({
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50]
 
-export function RecentSessions({ sessions, lang }: Props) {
+export function RecentSessions({ sessions, lang, onSelect }: Props) {
   const t = T[lang]
 
   // Sort state
@@ -360,15 +361,28 @@ export function RecentSessions({ sessions, lang }: Props) {
             const tools = totalTools(s)
             const msgs = totalMessages(s)
 
+            const clickable = Boolean(onSelect)
             return (
               <div
                 key={s.session_id}
+                onClick={clickable ? () => onSelect!(s) : undefined}
+                onKeyDown={clickable ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect!(s) } }) : undefined}
+                tabIndex={clickable ? 0 : undefined}
+                role={clickable ? 'button' : undefined}
                 style={{
                   background: 'var(--bg-elevated)',
                   border: '1px solid var(--border-subtle)',
                   borderRadius: 10,
                   padding: '12px 14px',
+                  cursor: clickable ? 'pointer' : 'default',
+                  transition: 'border-color 0.15s, background 0.15s',
                 }}
+                onMouseEnter={clickable ? (e => {
+                  (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--anthropic-orange)'
+                }) : undefined}
+                onMouseLeave={clickable ? (e => {
+                  (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border-subtle)'
+                }) : undefined}
               >
                 {/* Header */}
                 <div

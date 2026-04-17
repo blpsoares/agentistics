@@ -463,6 +463,49 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       return best
     }, null)
 
+    // ── Cache efficiency (filter-aware, derived from filteredModelUsage) ──
+    // hit rate = cacheRead / (input + cacheRead). cacheCreation is a one-time premium paid
+    // to create the cache, not consumption from it — excluded from the denominator.
+    // Savings model: compare actual spend with what the same tokens would have cost as
+    // plain input, then subtract the extra we paid for cache writes.
+    const cacheTotals = Object.values(filteredModelUsage).reduce(
+      (acc, u) => ({
+        inputTokens: acc.inputTokens + (u.inputTokens ?? 0),
+        cacheReadInputTokens: acc.cacheReadInputTokens + (u.cacheReadInputTokens ?? 0),
+        cacheCreationInputTokens: acc.cacheCreationInputTokens + (u.cacheCreationInputTokens ?? 0),
+      }),
+      { inputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+    )
+    const cacheDenominator = cacheTotals.inputTokens + cacheTotals.cacheReadInputTokens
+    const cacheHitRate = cacheDenominator > 0 ? cacheTotals.cacheReadInputTokens / cacheDenominator : 0
+
+    const blended = blendedCostPerToken(globalModelUsage)
+    // What cacheRead tokens would have cost as plain input
+    const cacheHypotheticalInputUSD = (cacheTotals.cacheReadInputTokens / 1_000_000) * blended.input
+    // What cacheRead tokens actually cost
+    const cacheActualReadUSD = (cacheTotals.cacheReadInputTokens / 1_000_000) * blended.cacheRead
+    // Gross savings vs paying as regular input
+    const cacheGrossSavedUSD = cacheHypotheticalInputUSD - cacheActualReadUSD
+    // Premium paid for cache writes (extra over regular input)
+    const cacheWriteOverheadUSD = Math.max(
+      0,
+      (cacheTotals.cacheCreationInputTokens / 1_000_000) * (blended.cacheWrite - blended.input),
+    )
+    // Net savings
+    const cacheNetSavedUSD = cacheGrossSavedUSD - cacheWriteOverheadUSD
+
+    // Per-model hit rate (only for models with data)
+    const cachePerModel: Record<string, { hitRate: number; cacheReadTokens: number; inputTokens: number }> = {}
+    for (const [modelId, u] of Object.entries(filteredModelUsage)) {
+      const denom = (u.inputTokens ?? 0) + (u.cacheReadInputTokens ?? 0)
+      if (denom === 0) continue
+      cachePerModel[modelId] = {
+        hitRate: (u.cacheReadInputTokens ?? 0) / denom,
+        cacheReadTokens: u.cacheReadInputTokens ?? 0,
+        inputTokens: u.inputTokens ?? 0,
+      }
+    }
+
     // ── Meta coverage range (commits/files only exist in meta sessions) ──
     const allMetaDates = (data.sessions ?? [])
       .filter(s => s._source === 'meta' && s.start_time)
@@ -520,6 +563,12 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       firstSessionDate,
       lastSessionDate,
       sessionSpanDays,
+      cacheHitRate,
+      cacheTotals,
+      cacheGrossSavedUSD,
+      cacheWriteOverheadUSD,
+      cacheNetSavedUSD,
+      cachePerModel,
     }
   }, [data, filters])
 }
