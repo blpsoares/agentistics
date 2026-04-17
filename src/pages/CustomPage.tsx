@@ -707,14 +707,17 @@ export default function CustomPage() {
       `}</style>
 
       {/* ─── Toolbar ─── */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 4, marginBottom: 14,
-        background: 'var(--bg-card)', border: '1px solid var(--border)',
-        borderRadius: 10, padding: '5px 10px', flexWrap: 'wrap', minHeight: 42,
-      }}>
+      <div
+        data-tutorial-id="custom-toolbar"
+        style={{
+          display: 'flex', alignItems: 'center', gap: 4, marginBottom: 14,
+          background: 'var(--bg-card)', border: '1px solid var(--border)',
+          borderRadius: 10, padding: '5px 10px', flexWrap: 'wrap', minHeight: 42,
+        }}
+      >
 
         {/* ── Layout selector ── always visible */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <div data-tutorial-id="custom-layout-name" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           {renaming ? (
             <>
               <input
@@ -957,6 +960,7 @@ export default function CustomPage() {
         {/* ─── Aside / Palette ─── */}
         {sidebarOpen && !locked && (
         <aside
+          data-tutorial-id="custom-aside"
           className="custom-aside"
           style={{
             width: ASIDE_WIDTH,
@@ -969,7 +973,7 @@ export default function CustomPage() {
           }}
         >
           {/* ── Filters (date, projects, models) — replaces the global header filter bar ── */}
-          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', flexShrink: 0, overflow: 'hidden' }}>
+          <div data-tutorial-id="custom-filters-bar" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', flexShrink: 0, overflow: 'hidden' }}>
             <FiltersBar
               filters={filters}
               onChange={next => {

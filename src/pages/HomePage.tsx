@@ -126,7 +126,7 @@ export default function HomePage() {
         }
         .live-flash { animation: liveFlash 1.2s ease-out forwards; border-radius: var(--radius-lg); }
       `}</style>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
+      <div data-tutorial-id="stats-cards" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
         {(cardOrder as CardId[]).map(id => renderCard(id))}
       </div>
 
@@ -140,7 +140,7 @@ export default function HomePage() {
         <Section flashId="activity" style={{ height: '100%' }} title={<><BarChart2 size={14} /> {lang === 'pt' ? 'Atividade ao longo do tempo' : 'Activity over time'}</>} onExpand={() => setExpandedChart('activity')}>
           <ActivityChart data={derived.heatmapData} theme={theme} />
         </Section>
-        <Section flashId="heatmap" style={{ height: '100%' }} title={lang === 'pt' ? 'Heatmap de atividade' : 'Activity heatmap'} onExpand={() => setExpandedChart('heatmap')}>
+        <Section tutorialId="activity-heatmap" flashId="heatmap" style={{ height: '100%' }} title={lang === 'pt' ? 'Heatmap de atividade' : 'Activity heatmap'} onExpand={() => setExpandedChart('heatmap')}>
           <ActivityHeatmap data={derived.heatmapData} />
         </Section>
       </div>

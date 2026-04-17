@@ -33,6 +33,9 @@ import { CacheHitRatePanel } from './components/CacheHitRatePanel'
 import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
 import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
+import { TutorialOverlay } from './components/TutorialOverlay'
+import { UpdateNotification } from './components/UpdateNotification'
+import { useTutorial } from './hooks/useTutorial'
 import { format, parseISO, parse } from 'date-fns'
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
@@ -701,6 +704,9 @@ export default function AppLayout() {
   })
   const [showPrefsModal, setShowPrefsModal] = useState(false)
 
+  // Tutorial
+  const tutorial = useTutorial(lang, isCustomPage)
+
   const [cardPrecision, setCardPrecisionState] = useState<Record<string, boolean>>({})
   const precisionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const setCardPrecision = useCallback((id: string, v: boolean) => {
@@ -724,19 +730,51 @@ export default function AppLayout() {
   const prevDerivedFingerprintRef = useRef<Record<string, string>>({})
   const liveFlashFirstRunRef = useRef(true)
 
+  // Version check state
+  const [versionInfo, setVersionInfo] = useState<{ current: string; latest: string | null; hasUpdate: boolean } | null>(null)
+  const [showUpdateNotification, setShowUpdateNotification] = useState(false)
+  const [seenUpdateVersions, setSeenUpdateVersions] = useState<string[]>([])
+
   useEffect(() => {
     fetch('/api/preferences')
       .then(r => r.ok ? r.json() : null)
-      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[] } | null) => {
+      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; seenUpdateVersions?: string[] } | null) => {
         if (!prefs) return
         if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
         if (prefs.lang) setLangState(prefs.lang)
         if (prefs.theme) setThemeState(prefs.theme)
         if (prefs.currency) setCurrencyState(prefs.currency)
         if (prefs.cardOrder) setCardOrder(prefs.cardOrder as CardId[])
+        const existingSeen = prefs.seenUpdateVersions ?? []
+        setSeenUpdateVersions(existingSeen)
+
+        // Check version after prefs are loaded so we know seen versions
+        fetch('/api/version')
+          .then(r => r.ok ? r.json() : null)
+          .then((info: { current: string; latest: string | null; hasUpdate: boolean } | null) => {
+            if (!info) return
+            setVersionInfo(info)
+            if (info.hasUpdate && info.latest && !existingSeen.includes(info.latest)) {
+              setShowUpdateNotification(true)
+            }
+          })
+          .catch(() => {})
       })
       .catch(() => {})
   }, [])
+
+  const dismissUpdateNotification = useCallback(() => {
+    setShowUpdateNotification(false)
+    if (versionInfo?.latest) {
+      const next = [...seenUpdateVersions.filter(v => v !== versionInfo.latest), versionInfo.latest]
+      setSeenUpdateVersions(next)
+      fetch('/api/preferences', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seenUpdateVersions: next }),
+      }).catch(() => {})
+    }
+  }, [versionInfo, seenUpdateVersions])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -1116,9 +1154,36 @@ export default function AppLayout() {
               alt="agentistics"
               style={{ height: 64, width: 'auto' }}
             />
-            <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
-              {lang === 'pt' ? 'Atualizado em' : 'Updated'}{' '}
-              {statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : lang === 'pt' ? 'hoje' : 'today'}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
+                {lang === 'pt' ? 'Atualizado em' : 'Updated'}{' '}
+                {statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : lang === 'pt' ? 'hoje' : 'today'}
+              </div>
+              {/* Version info — discrete, only visible */}
+              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span>v{version}</span>
+                {versionInfo?.hasUpdate && versionInfo.latest && (
+                  <span
+                    onClick={() => setShowUpdateNotification(true)}
+                    style={{
+                      cursor: 'pointer',
+                      color: 'var(--anthropic-orange)',
+                      fontWeight: 600,
+                      fontSize: 9,
+                      padding: '1px 5px',
+                      background: 'var(--anthropic-orange-dim)',
+                      borderRadius: 4,
+                      letterSpacing: '0.04em',
+                    }}
+                    title={`v${versionInfo.latest} available`}
+                  >
+                    ↑ v{versionInfo.latest}
+                  </span>
+                )}
+                {versionInfo && !versionInfo.hasUpdate && versionInfo.latest && (
+                  <span style={{ color: 'var(--text-tertiary)', fontSize: 9, opacity: 0.6 }}>✓ up to date</span>
+                )}
+              </div>
             </div>
           </div>
 
@@ -1134,6 +1199,7 @@ export default function AppLayout() {
 
             {/* Language toggle */}
             <button
+              data-tutorial-id="lang-toggle"
               onClick={() => {
                 const next = lang === 'pt' ? 'en' : 'pt'
                 setLang(next)
@@ -1196,6 +1262,7 @@ export default function AppLayout() {
 
             {/* Export report */}
             <button
+              data-tutorial-id="export-pdf"
               onClick={() => setShowExportModal(true)}
               style={{
                 height: 32,
@@ -1229,6 +1296,7 @@ export default function AppLayout() {
 
             {/* Preferences */}
             <button
+              data-tutorial-id="prefs-btn"
               onClick={() => setShowPrefsModal(true)}
               style={{
                 width: 32, height: 32,
@@ -1259,14 +1327,17 @@ export default function AppLayout() {
             )}
 
             {/* Live updates pill */}
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '0 4px 0 10px',
-              height: 32,
-              borderRadius: 8,
-              border: '1px solid var(--border)',
-              background: 'var(--bg-secondary)',
-            }}>
+            <div
+              data-tutorial-id="live-updates"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '0 4px 0 10px',
+                height: 32,
+                borderRadius: 8,
+                border: '1px solid var(--border)',
+                background: 'var(--bg-secondary)',
+              }}
+            >
               <Activity size={12} style={{ color: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', flexShrink: 0, transition: 'color 0.2s' }} />
               <span style={{ fontSize: 11, fontWeight: 500, color: liveUpdates ? 'var(--text-primary)' : 'var(--text-tertiary)', whiteSpace: 'nowrap', transition: 'color 0.2s', userSelect: 'none' }}>
                 Live
@@ -1355,14 +1426,17 @@ export default function AppLayout() {
 
         {/* Filters row — second row of sticky header. Hidden on /custom (filter bar moves into the page). */}
         {data && !isCustomPage && (
-          <div style={{
-            borderTop: '1px solid var(--border)',
-            maxWidth: 1400,
-            margin: '0 auto',
-            padding: '0 32px',
-            width: '100%',
-            boxSizing: 'border-box',
-          }}>
+          <div
+            data-tutorial-id="filters-bar"
+            style={{
+              borderTop: '1px solid var(--border)',
+              maxWidth: 1400,
+              margin: '0 auto',
+              padding: '0 32px',
+              width: '100%',
+              boxSizing: 'border-box',
+            }}
+          >
             <FiltersBar
               filters={filters}
               onChange={setFilters}
@@ -1376,14 +1450,17 @@ export default function AppLayout() {
         )}
 
         {/* Nav tabs — third row of sticky header */}
-        <div style={{
-          borderTop: '1px solid var(--border)',
-          maxWidth: 1400,
-          margin: '0 auto',
-          padding: '0 32px',
-          width: '100%',
-          boxSizing: 'border-box',
-        }}>
+        <div
+          data-tutorial-id="nav-tabs"
+          style={{
+            borderTop: '1px solid var(--border)',
+            maxWidth: 1400,
+            margin: '0 auto',
+            padding: '0 32px',
+            width: '100%',
+            boxSizing: 'border-box',
+          }}
+        >
           <NavTabs lang={lang} />
         </div>
       </header>
@@ -1526,6 +1603,28 @@ export default function AppLayout() {
           currency={currency}
           brlRate={brlRate}
           onClose={() => setShowExportModal(false)}
+        />
+      )}
+
+      {/* Tutorial overlay */}
+      {tutorial.visible && (
+        <TutorialOverlay
+          steps={tutorial.steps}
+          stepIndex={tutorial.stepIndex}
+          lang={lang}
+          onNext={tutorial.onNext}
+          onSkip={tutorial.onSkip}
+          onSkipAll={tutorial.onSkipAll}
+        />
+      )}
+
+      {/* Update notification */}
+      {showUpdateNotification && versionInfo?.hasUpdate && versionInfo.latest && (
+        <UpdateNotification
+          currentVersion={versionInfo.current}
+          latestVersion={versionInfo.latest}
+          lang={lang}
+          onClose={dismissUpdateNotification}
         />
       )}
 

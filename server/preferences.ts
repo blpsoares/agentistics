@@ -22,6 +22,8 @@ export interface Preferences {
   theme?: 'dark' | 'light'
   currency?: 'USD' | 'BRL'
   cardPrecision?: Record<string, boolean>
+  tutorialCompletedFeatures?: string[]
+  seenUpdateVersions?: string[]
 }
 
 const DEFAULT_PREFS: Preferences = {

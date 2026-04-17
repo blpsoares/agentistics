@@ -4,6 +4,7 @@ import { PORT } from './config'
 import { getRates } from './rates'
 import { buildApiResponse, buildApiResponseStream } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
+import { getVersionInfo } from './version'
 import {
   sseClients,
   sseEncoder,
@@ -76,6 +77,22 @@ Bun.serve({
         status: 200,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
+    }
+
+    if (url.pathname === '/api/version' && req.method === 'GET') {
+      try {
+        const info = await getVersionInfo()
+        return new Response(JSON.stringify(info), {
+          status: 200,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return new Response(JSON.stringify({ error: message }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
     }
 
     if (url.pathname === '/api/rates' && req.method === 'GET') {

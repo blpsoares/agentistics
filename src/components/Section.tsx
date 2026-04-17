@@ -7,13 +7,15 @@ interface Props {
   action?: React.ReactNode
   onExpand?: () => void
   flashId?: string
+  tutorialId?: string
   style?: React.CSSProperties
 }
 
-export function Section({ title, children, action, onExpand, flashId, style: extraStyle }: Props) {
+export function Section({ title, children, action, onExpand, flashId, tutorialId, style: extraStyle }: Props) {
   return (
     <div
       data-flash-id={flashId}
+      data-tutorial-id={tutorialId}
       style={{
         background: 'var(--bg-card)',
         border: '1px solid var(--border)',
