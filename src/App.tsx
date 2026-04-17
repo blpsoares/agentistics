@@ -15,6 +15,7 @@ import type { Filters } from './lib/types'
 import type { Lang, Theme } from './lib/types'
 import { formatProjectName, setHomeDir, MODEL_PRICING } from './lib/types'
 import { StatCard } from './components/StatCard'
+import { StreakBreakdownButton } from './components/StreakBreakdownButton'
 import { ActivityHeatmap } from './components/ActivityHeatmap'
 import { ActivityChart } from './components/ActivityChart'
 import { HourChart } from './components/HourChart'
@@ -1196,6 +1197,9 @@ export default function AppLayout() {
           accent="#ef4444"
           info={infoItems[3]}
           onInfoClick={() => setInfoModalIndex(3)}
+          action={d.projectStreaks.length >= 2
+            ? <StreakBreakdownButton items={d.projectStreaks} pt={lang === 'pt'} />
+            : undefined}
         />
       )
     } else if (id === 'longest-session') {

@@ -9,6 +9,7 @@ import type { AppContext } from './app-context'
 import { formatProjectName } from './types'
 import { fmt, fmtDuration, fmtCost, fmtFull, fmtCostFull } from './format'
 import { StatCard } from '../components/StatCard'
+import { StreakBreakdownButton } from '../components/StreakBreakdownButton'
 import { HighlightsBoard } from '../components/HighlightsBoard'
 import { ActivityChart } from '../components/ActivityChart'
 import { ActivityHeatmap } from '../components/ActivityHeatmap'
@@ -50,6 +51,7 @@ export interface CatalogItem {
   /** Renders the component using current app context. */
   render: (ctx: AppContext) => React.ReactNode
 }
+
 
 function kpiCard(
   ctx: AppContext,
@@ -141,6 +143,9 @@ export const CATALOG: CatalogItem[] = [
         sub={lang === 'pt' ? 'dias consecutivos' : 'consecutive days'}
         icon={<Flame size={15} />}
         accent="#ef4444"
+        action={derived.projectStreaks.length >= 2
+          ? <StreakBreakdownButton items={derived.projectStreaks} pt={lang === 'pt'} />
+          : undefined}
       />
     ),
   },

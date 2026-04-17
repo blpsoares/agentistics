@@ -256,6 +256,20 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
         ])
     const streak = calcStreak(activeDates)
 
+    // ── Per-project streaks (for streak breakdown popup) ──
+    // Always computed from filteredSessions so it respects active filters.
+    const projectDateMap: Record<string, Set<string>> = {}
+    for (const sess of filteredSessions) {
+      if (!sess.project_path || !sess.start_time) continue
+      const day = format(parseISO(sess.start_time), 'yyyy-MM-dd')
+      if (!projectDateMap[sess.project_path]) projectDateMap[sess.project_path] = new Set()
+      projectDateMap[sess.project_path]!.add(day)
+    }
+    const projectStreaks = Object.entries(projectDateMap)
+      .map(([path, dates]) => ({ path, streak: calcStreak(dates) }))
+      .filter(p => p.streak > 0)
+      .sort((a, b) => b.streak - a.streak)
+
     // ── Heatmap data ──
     let heatmapData: { date: string; value: number; sessions: number; tools: number }[]
     if (sessionFiltered) {
@@ -549,6 +563,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       totalToolCalls,
       totalCostUSD,
       streak,
+      projectStreaks,
       heatmapData,
       modelUsage: filteredModelUsage,
       modelTokensByDate,
