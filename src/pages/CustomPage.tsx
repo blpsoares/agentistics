@@ -207,10 +207,11 @@ export default function CustomPage() {
     [data.projects]
   )
 
-  const [projectPickerOpen, setProjectPickerOpen] = useState(false)
   const [projectSearch, setProjectSearch] = useState('')
-  const projectPickerRef = useRef<HTMLDivElement>(null)
-  const projectSearchRef = useRef<HTMLInputElement>(null)
+  // Layout options menu (rename / duplicate / delete)
+  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false)
+  const layoutMenuBtnRef = useRef<HTMLButtonElement>(null)
+  const [layoutMenuPos, setLayoutMenuPos] = useState({ top: 0, left: 0 })
 
   const filteredProjects = useMemo(() => {
     const q = projectSearch.trim().toLowerCase()
@@ -335,26 +336,13 @@ export default function CustomPage() {
     setFilters(prev => ({ ...prev, projects: pinnedProjects }))
   }, [activeLayout]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Focus search when picker opens; clear on close
+  // Close layout options menu on outside click
   useEffect(() => {
-    if (projectPickerOpen) {
-      setTimeout(() => projectSearchRef.current?.focus(), 30)
-    } else {
-      setProjectSearch('')
-    }
-  }, [projectPickerOpen])
-
-  // Close project picker on outside click
-  useEffect(() => {
-    if (!projectPickerOpen) return
-    function handleClick(e: MouseEvent) {
-      if (projectPickerRef.current && !projectPickerRef.current.contains(e.target as Node)) {
-        setProjectPickerOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [projectPickerOpen])
+    if (!layoutMenuOpen) return
+    function onDown() { setLayoutMenuOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [layoutMenuOpen])
 
   // containerRef is on the outer flex row so totalWidth is stable.
   // gridWidth is computed synchronously — no ResizeObserver lag when aside toggles.
@@ -743,44 +731,90 @@ export default function CustomPage() {
         {!locked && !renaming && (
           <>
             <div style={{ width: 1, height: 16, background: 'var(--border)', flexShrink: 0, margin: '0 2px' }} />
-            {/* Rename */}
-            <button className="icon-btn" onClick={handleStartRename} title={pt ? 'Renomear' : 'Rename'} style={{ width: 26, height: 26 }}>
-              <SquarePen size={12} />
-            </button>
             {/* New layout */}
             <button className="icon-btn accent" onClick={handleNewLayout} title={pt ? 'Novo layout' : 'New layout'} style={{ width: 26, height: 26 }}>
               <Plus size={12} />
             </button>
-            {/* Duplicate */}
-            <button
-              className="icon-btn"
-              onClick={() => setDupModal({ newName: `${pt ? 'Cópia de' : 'Copy of'} ${activeLayout}`, pinned: [...pinnedProjects] })}
-              title={pt ? 'Duplicar layout' : 'Duplicate layout'}
-              style={{ width: 26, height: 26 }}
-            >
-              <Copy size={12} />
-            </button>
-            {/* Delete current */}
-            <button
-              className="icon-btn danger"
-              onClick={handleDeleteLayout}
-              title={pt ? 'Deletar layout' : 'Delete layout'}
-              disabled={layoutNames.length <= 1}
-              style={{ width: 26, height: 26 }}
-            >
-              <Trash2 size={12} />
-            </button>
-            {/* Manage (bulk delete) */}
-            {layoutNames.length > 1 && (
+            {/* Layout options: rename / duplicate / delete */}
+            <div style={{ position: 'relative' }}>
               <button
+                ref={layoutMenuBtnRef}
                 className="icon-btn"
-                onClick={() => { setManageSelected(new Set()); setManageOpen(true) }}
-                title={pt ? 'Gerenciar layouts' : 'Manage layouts'}
+                onMouseDown={e => e.stopPropagation()}
+                onClick={e => {
+                  e.stopPropagation()
+                  if (!layoutMenuOpen && layoutMenuBtnRef.current) {
+                    const r = layoutMenuBtnRef.current.getBoundingClientRect()
+                    setLayoutMenuPos({ top: r.bottom + 4, left: r.left })
+                  }
+                  setLayoutMenuOpen(v => !v)
+                }}
+                title={pt ? 'Opções do layout' : 'Layout options'}
                 style={{ width: 26, height: 26 }}
               >
-                <Settings2 size={12} />
+                <MoreHorizontal size={12} />
               </button>
-            )}
+              {layoutMenuOpen && createPortal(
+                <div
+                  onMouseDown={e => e.stopPropagation()}
+                  style={{
+                    position: 'fixed', top: layoutMenuPos.top, left: layoutMenuPos.left,
+                    zIndex: 9999, minWidth: 180,
+                    background: 'var(--bg-card)', border: '1px solid var(--border)',
+                    borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+                    overflow: 'hidden', padding: '4px 0',
+                  }}
+                >
+                  {/* Rename */}
+                  <button
+                    onClick={() => { setLayoutMenuOpen(false); handleStartRename() }}
+                    style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, color: 'var(--text-primary)', textAlign: 'left' }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elevated)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <SquarePen size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                    {pt ? 'Renomear' : 'Rename'}
+                  </button>
+                  {/* Duplicate */}
+                  <button
+                    onClick={() => { setLayoutMenuOpen(false); setDupModal({ newName: `${pt ? 'Cópia de' : 'Copy of'} ${activeLayout}`, pinned: [...pinnedProjects] }) }}
+                    style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, color: 'var(--text-primary)', textAlign: 'left' }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elevated)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <Copy size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                    {pt ? 'Duplicar' : 'Duplicate'}
+                  </button>
+                  {layoutNames.length > 1 && (
+                    <>
+                      <div style={{ height: 1, background: 'var(--border)', margin: '3px 0' }} />
+                      {/* Manage / bulk */}
+                      <button
+                        onClick={() => { setLayoutMenuOpen(false); setManageSelected(new Set()); setManageOpen(true) }}
+                        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, color: 'var(--text-primary)', textAlign: 'left' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elevated)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <Settings2 size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                        {pt ? 'Gerenciar layouts…' : 'Manage layouts…'}
+                      </button>
+                      <div style={{ height: 1, background: 'var(--border)', margin: '3px 0' }} />
+                      {/* Delete current */}
+                      <button
+                        onClick={() => { setLayoutMenuOpen(false); handleDeleteLayout() }}
+                        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, color: '#ef4444', textAlign: 'left' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(239,68,68,0.08)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <Trash2 size={13} style={{ flexShrink: 0 }} />
+                        {pt ? 'Deletar layout' : 'Delete layout'}
+                      </button>
+                    </>
+                  )}
+                </div>,
+                document.body
+              )}
+            </div>
           </>
         )}
 
@@ -816,120 +850,8 @@ export default function CustomPage() {
         {/* ── Spacer pushes everything right ── */}
         <div style={{ flex: 1 }} />
 
-        {/* ── RIGHT GROUP: pin | download | upload | [clear] | [cancel | save] | [edit] ── */}
+        {/* ── RIGHT GROUP: download | upload | [clear] | [cancel | save] | [edit] ── */}
 
-        {/* Pinned projects picker */}
-        <div ref={projectPickerRef} style={{ position: 'relative' }}>
-          <button
-            className={`icon-btn ${pinnedProjects.length > 0 ? 'active' : ''}`}
-            onClick={() => setProjectPickerOpen(v => !v)}
-            title={pt ? 'Projetos fixados neste layout' : 'Projects pinned to this layout'}
-            style={{ width: 'auto', paddingLeft: 8, paddingRight: 8, gap: 5, height: 28, fontSize: 11, fontWeight: 500 }}
-          >
-            <FolderOpen size={13} />
-            {pinnedProjects.length > 0
-              ? `${pinnedProjects.length} ${pt ? 'projeto(s) fixado(s)' : 'pinned'}`
-              : (pt ? 'Fixar projetos' : 'Pin projects')}
-          </button>
-          {projectPickerOpen && (
-            <div style={{
-              position: 'absolute', top: '100%', left: 0, marginTop: 6, zIndex: 50,
-              background: 'var(--bg-card)', border: '1px solid var(--border)',
-              borderRadius: 'var(--radius-lg)', padding: 8, minWidth: 260, maxWidth: 340,
-              boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
-            }}>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-tertiary)', padding: '4px 8px 6px' }}>
-                {pt ? 'Fixar projetos neste layout' : 'Pin projects to this layout'}
-              </div>
-              <div style={{ position: 'relative', marginBottom: 6 }}>
-                <Search size={11} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)', pointerEvents: 'none' }} />
-                <input
-                  ref={projectSearchRef}
-                  type="text"
-                  placeholder={pt ? 'Buscar projeto…' : 'Search project…'}
-                  value={projectSearch}
-                  onChange={e => setProjectSearch(e.target.value)}
-                  style={{
-                    width: '100%', boxSizing: 'border-box',
-                    padding: '6px 10px 6px 28px',
-                    background: 'var(--bg-elevated)',
-                    border: '1px solid var(--border-subtle)',
-                    borderRadius: 7, fontSize: 12,
-                    color: 'var(--text-primary)', fontFamily: 'inherit', outline: 'none',
-                  }}
-                  onFocus={e => e.currentTarget.style.borderColor = 'var(--anthropic-orange)40'}
-                  onBlur={e => e.currentTarget.style.borderColor = 'var(--border-subtle)'}
-                />
-              </div>
-              {allProjects.length === 0 ? (
-                <div style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '6px 8px' }}>
-                  {pt ? 'Nenhum projeto encontrado' : 'No projects found'}
-                </div>
-              ) : (
-                <div style={{ maxHeight: 240, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  {filteredProjects.length === 0 && (
-                    <div style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '6px 8px' }}>
-                      {pt ? 'Nenhum resultado' : 'No results'}
-                    </div>
-                  )}
-                  {filteredProjects.map(path => {
-                    const pinned = pinnedProjects.includes(path)
-                    return (
-                      <label key={path} style={{
-                        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px',
-                        borderRadius: 6, cursor: 'pointer',
-                        background: pinned ? 'var(--anthropic-orange-dim)' : 'transparent',
-                        transition: 'background 0.12s',
-                      }}
-                        onMouseEnter={e => { if (!pinned) (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)' }}
-                        onMouseLeave={e => { if (!pinned) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={pinned}
-                          onChange={() => {
-                            setPinnedProjects(
-                              pinned ? pinnedProjects.filter(p => p !== path) : [...pinnedProjects, path]
-                            )
-                            setFilters(prev => ({
-                              ...prev,
-                              projects: pinned ? prev.projects.filter(p => p !== path) : [...prev.projects, path],
-                            }))
-                          }}
-                          style={{ accentColor: 'var(--anthropic-orange)', flexShrink: 0 }}
-                        />
-                        <span style={{
-                          fontSize: 12, color: pinned ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                          fontWeight: pinned ? 600 : 400,
-                        }}>
-                          {formatProjectName(path)}
-                        </span>
-                      </label>
-                    )
-                  })}
-                </div>
-              )}
-              {pinnedProjects.length > 0 && (
-                <button
-                  onClick={() => { setPinnedProjects([]); setFilters(prev => ({ ...prev, projects: [] })) }}
-                  style={{
-                    marginTop: 6, width: '100%', padding: '5px 8px', background: 'transparent',
-                    border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer',
-                    fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'inherit',
-                    transition: 'color 0.12s, border-color 0.12s',
-                  }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#ef4444'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#ef444460' }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}
-                >
-                  {pt ? 'Remover todos os projetos fixados' : 'Remove all pinned projects'}
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div style={{ width: 1, height: 16, background: 'var(--border)', flexShrink: 0, margin: '0 2px' }} />
 
         {/* Export / Import */}
         <button className="icon-btn" onClick={handleExport} title={pt ? 'Exportar layout como JSON' : 'Export layout as JSON'} style={{ width: 26, height: 26 }}>
@@ -1025,6 +947,72 @@ export default function CustomPage() {
             gap: 10,
           }}
         >
+          {/* ── Project filter ── */}
+          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '12px 14px 10px', flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <FolderOpen size={13} style={{ color: pinnedProjects.length > 0 ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', flexShrink: 0 }} />
+              <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-tertiary)', flex: 1 }}>
+                {pt ? 'Projetos' : 'Projects'}
+              </div>
+              {pinnedProjects.length > 0 && (
+                <button
+                  onClick={() => { setPinnedProjects([]); setFilters(prev => ({ ...prev, projects: [] })) }}
+                  style={{ fontSize: 10, color: 'var(--text-tertiary)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '1px 4px', borderRadius: 4, fontFamily: 'inherit' }}
+                  onMouseEnter={e => (e.currentTarget.style.color = '#ef4444')}
+                  onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-tertiary)')}
+                  title={pt ? 'Limpar seleção' : 'Clear selection'}
+                >
+                  {pt ? 'Limpar' : 'Clear'}
+                </button>
+              )}
+            </div>
+            {allProjects.length > 0 && (
+              <div style={{ position: 'relative', marginBottom: 6 }}>
+                <Search size={11} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)', pointerEvents: 'none' }} />
+                <input
+                  type="text"
+                  placeholder={pt ? 'Buscar…' : 'Search…'}
+                  value={projectSearch}
+                  onChange={e => setProjectSearch(e.target.value)}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px 6px 26px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, fontSize: 11, color: 'var(--text-primary)', fontFamily: 'inherit', outline: 'none' }}
+                  onFocus={e => e.currentTarget.style.borderColor = 'var(--anthropic-orange)40'}
+                  onBlur={e => e.currentTarget.style.borderColor = 'var(--border-subtle)'}
+                />
+              </div>
+            )}
+            {allProjects.length === 0 ? (
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', padding: '4px 2px' }}>{pt ? 'Nenhum projeto' : 'No projects'}</div>
+            ) : filteredProjects.length === 0 ? (
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', padding: '4px 2px' }}>{pt ? 'Nenhum resultado' : 'No results'}</div>
+            ) : (
+              <div style={{ maxHeight: 160, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {filteredProjects.map(path => {
+                  const pinned = pinnedProjects.includes(path)
+                  return (
+                    <label key={path} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '5px 4px', borderRadius: 6, cursor: 'pointer', background: pinned ? 'var(--anthropic-orange-dim)' : 'transparent' }}
+                      onMouseEnter={e => { if (!pinned) (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)' }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = pinned ? 'var(--anthropic-orange-dim)' : 'transparent' }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={pinned}
+                        onChange={() => {
+                          const next = pinned ? pinnedProjects.filter(p => p !== path) : [...pinnedProjects, path]
+                          setPinnedProjects(next)
+                          setFilters(prev => ({ ...prev, projects: next }))
+                        }}
+                        style={{ accentColor: 'var(--anthropic-orange)', flexShrink: 0 }}
+                      />
+                      <span style={{ fontSize: 11, color: pinned ? 'var(--anthropic-orange)' : 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: pinned ? 600 : 400 }}>
+                        {formatProjectName(path)}
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
           {/* ── Palette search ── */}
           <div style={{
             background: 'var(--bg-card)',
