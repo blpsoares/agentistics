@@ -335,12 +335,29 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // ── Cost calculation ──
     let totalCostUSD = 0
     if (projectFiltered) {
-      // Blended rate on session-level input/output tokens
-      const blended = blendedCostPerToken(globalModelUsage)
-      const sessionInputTokens  = filteredSessions.reduce((s, sess) => s + (sess.input_tokens ?? 0), 0)
-      const sessionOutputTokens = filteredSessions.reduce((s, sess) => s + (sess.output_tokens ?? 0), 0)
-      totalCostUSD = (sessionInputTokens / 1_000_000) * blended.input
-                   + (sessionOutputTokens / 1_000_000) * blended.output
+      if (modelSet) {
+        // Model filter is active — every session's model is known (it passed the model filter).
+        // Use each session's actual model for per-session calcCost; fall back to the single
+        // filtered model when the session has no model field.
+        const fallbackModel = modelSet.size === 1 ? [...modelSet][0]! : undefined
+        for (const sess of filteredSessions) {
+          const m = sess.model ?? fallbackModel
+          totalCostUSD += calcCost({
+            inputTokens: sess.input_tokens ?? 0,
+            outputTokens: sess.output_tokens ?? 0,
+            cacheReadInputTokens: sess.cache_read_input_tokens ?? 0,
+            cacheCreationInputTokens: sess.cache_creation_input_tokens ?? 0,
+            webSearchRequests: 0, costUSD: 0,
+          }, m ?? '')
+        }
+      } else {
+        // No model filter — use blended rate as approximation (model unknown per session)
+        const blended = blendedCostPerToken(globalModelUsage)
+        const sessionInputTokens  = filteredSessions.reduce((s, sess) => s + (sess.input_tokens ?? 0), 0)
+        const sessionOutputTokens = filteredSessions.reduce((s, sess) => s + (sess.output_tokens ?? 0), 0)
+        totalCostUSD = (sessionInputTokens / 1_000_000) * blended.input
+                     + (sessionOutputTokens / 1_000_000) * blended.output
+      }
     } else {
       totalCostUSD = Object.entries(filteredModelUsage).reduce((s, [id, u]) => s + calcCost(u, id), 0)
     }
