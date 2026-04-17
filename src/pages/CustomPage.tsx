@@ -8,6 +8,7 @@ import {
   Layers, X, RotateCcw, Search, ChevronDown, ChevronRight,
   PanelLeftClose, PanelLeftOpen, Plus, Trash2, Pencil, Check,
   Lock, Unlock, FolderOpen, Download, Upload,
+  MoreHorizontal, Undo2, Redo2, Dice5, Save,
 } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import { CATALOG, CATEGORY_LABELS, getCatalogItem, type CatalogItem, type CatalogCategory } from '../lib/componentCatalog'
@@ -228,6 +229,98 @@ export default function CustomPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [locked, setLocked] = useState(false)
 
+  // Undo / redo stacks — each entry is a frozen snapshot of items[]
+  const [undoStack, setUndoStack] = useState<GridItem[][]>([])
+  const [redoStack, setRedoStack] = useState<GridItem[][]>([])
+  // Snapshot captured when user unlocks — used by Cancel to revert
+  const [editBaseline, setEditBaseline] = useState<GridItem[] | null>(null)
+  // Snapshot captured on drag/resize start — pushed to undo on stop
+  const preDragRef = useRef<GridItem[] | null>(null)
+  // Per-card 3-dot menu state
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null)
+
+  function pushUndo(snapshot: GridItem[]) {
+    setUndoStack(prev => [...prev.slice(-40), snapshot])
+    setRedoStack([])
+  }
+
+  function handleUndo() {
+    if (undoStack.length === 0 || locked) return
+    setRedoStack(prev => [...prev, items])
+    const prev = undoStack[undoStack.length - 1]!
+    setUndoStack(s => s.slice(0, -1))
+    setItems(prev)
+  }
+
+  function handleRedo() {
+    if (redoStack.length === 0 || locked) return
+    setUndoStack(prev => [...prev, items])
+    const next = redoStack[redoStack.length - 1]!
+    setRedoStack(s => s.slice(0, -1))
+    setItems(next)
+  }
+
+  function handleUnlock() {
+    setEditBaseline(items.map(it => ({ ...it })))
+    setLocked(false)
+  }
+
+  function handleSave() {
+    setEditBaseline(null)
+    setLocked(true)
+  }
+
+  function handleCancelEdit() {
+    if (editBaseline !== null) {
+      setItems(editBaseline)
+      setUndoStack([])
+      setRedoStack([])
+    }
+    setEditBaseline(null)
+    setLocked(true)
+  }
+
+  function removeItemWithHistory(i: string) {
+    pushUndo(items)
+    removeItem(i)
+  }
+
+  function handleReset() {
+    if (!confirm(pt ? 'Remover todos os componentes do canvas?' : 'Remove all components from the canvas?')) return
+    pushUndo(items)
+    reset()
+  }
+
+  function resizeItem(itemI: string, w: number, h: number) {
+    const newItems = items.map(it =>
+      it.i === itemI ? { ...it, w: Math.min(w, GRID_COLS - it.x), h: Math.max(h, it.minH ?? 1) } : it
+    )
+    pushUndo(items)
+    setItems(newItems)
+  }
+
+  function generateRandomLayout() {
+    const shuffled = [...CATALOG].sort(() => Math.random() - 0.5)
+    const picked = shuffled.slice(0, Math.floor(Math.random() * 5) + 5)
+    let curX = 0, curY = 0, rowH = 0
+    const newItems: GridItem[] = []
+    const nextId = nextIdRef.current
+    picked.forEach((item, idx) => {
+      if (curX + item.defaultW > GRID_COLS) { curX = 0; curY += rowH; rowH = 0 }
+      newItems.push({
+        i: `${item.id}__${nextId + idx}`,
+        componentId: item.id,
+        x: curX, y: curY, w: item.defaultW, h: item.defaultH,
+        minW: item.minW, minH: item.minH,
+      })
+      curX += item.defaultW
+      rowH = Math.max(rowH, item.defaultH)
+    })
+    nextIdRef.current = nextId + picked.length
+    pushUndo(items)
+    setItems(newItems)
+  }
+
   const [renaming, setRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const renameInputRef = useRef<HTMLInputElement>(null)
@@ -284,6 +377,27 @@ export default function CustomPage() {
 
   const pt = lang === 'pt'
 
+  // Keyboard shortcuts for undo/redo
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (locked) return
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      if (e.ctrlKey && e.key === 'z' && !e.shiftKey) { e.preventDefault(); handleUndo() }
+      if (e.ctrlKey && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) { e.preventDefault(); handleRedo() }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [locked, undoStack, redoStack, items]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Close card menu on outside click
+  useEffect(() => {
+    if (!openMenuId) return
+    function onDown() { setOpenMenuId(null) }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [openMenuId])
+
   const groupedCatalog = useMemo(() => {
     const q = query.trim().toLowerCase()
     const groups: Record<CatalogCategory, CatalogItem[]> = {
@@ -333,6 +447,7 @@ export default function CustomPage() {
     draggedCatalogItemRef.current = null
     setDraggedCatalogItem(null)
     if (!catalog || !item) return
+    pushUndo(items)
     const instanceId = `${catalog.id}__${nextIdRef.current++}`
     addItem({
       i: instanceId,
@@ -357,6 +472,32 @@ export default function CustomPage() {
     // Only clear visual state; ref is cleared by onDrop on a successful drop.
     // If the user dropped outside the canvas, ref stays until next dragstart — harmless.
     setDraggedCatalogItem(null)
+  }
+
+  function onGridDragStart() {
+    preDragRef.current = items.map(it => ({ ...it }))
+  }
+
+  function onGridDragStop() {
+    if (preDragRef.current) {
+      setUndoStack(prev => [...prev.slice(-40), preDragRef.current!])
+      setRedoStack([])
+      preDragRef.current = null
+    }
+  }
+
+  function onGridResizeStop() {
+    if (preDragRef.current) {
+      setUndoStack(prev => [...prev.slice(-40), preDragRef.current!])
+      setRedoStack([])
+      preDragRef.current = null
+    } else {
+      pushUndo(items)
+    }
+  }
+
+  function onGridResizeStart() {
+    preDragRef.current = items.map(it => ({ ...it }))
   }
 
   function handleNewLayout() {
@@ -629,14 +770,74 @@ export default function CustomPage() {
         {/* Lock toggle */}
         <button
           className={`icon-btn ${locked ? 'active' : ''}`}
-          onClick={() => setLocked(v => !v)}
+          onClick={locked ? handleUnlock : handleSave}
           title={locked
-            ? (pt ? 'Desbloquear (habilitar drag e resize)' : 'Unlock (enable drag & resize)')
-            : (pt ? 'Bloquear (desabilitar drag e resize)' : 'Lock (disable drag & resize)')}
+            ? (pt ? 'Desbloquear (habilitar edição)' : 'Unlock (enable editing)')
+            : (pt ? 'Bloquear (salvar e desabilitar edição)' : 'Lock (save & disable editing)')}
           style={{ width: 30, height: 30 }}
         >
           {locked ? <Lock size={14} /> : <Unlock size={14} />}
         </button>
+
+        {/* Edit-mode actions: undo / redo / dice / cancel — only when unlocked */}
+        {!locked && (
+          <>
+            <div style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
+
+            <button
+              className="icon-btn"
+              onClick={handleUndo}
+              disabled={undoStack.length === 0}
+              title={pt ? 'Desfazer (Ctrl+Z)' : 'Undo (Ctrl+Z)'}
+              style={{ width: 28, height: 28 }}
+            >
+              <Undo2 size={13} />
+            </button>
+            <button
+              className="icon-btn"
+              onClick={handleRedo}
+              disabled={redoStack.length === 0}
+              title={pt ? 'Refazer (Ctrl+Y)' : 'Redo (Ctrl+Y)'}
+              style={{ width: 28, height: 28 }}
+            >
+              <Redo2 size={13} />
+            </button>
+
+            <div style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
+
+            <button
+              className="icon-btn"
+              onClick={generateRandomLayout}
+              title={pt ? 'Gerar layout aleatório' : 'Random layout'}
+              style={{ width: 28, height: 28 }}
+            >
+              <Dice5 size={13} />
+            </button>
+
+            {editBaseline !== null && (
+              <>
+                <div style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
+                <button
+                  className="icon-btn accent"
+                  onClick={handleSave}
+                  title={pt ? 'Salvar e bloquear' : 'Save & lock'}
+                  style={{ width: 'auto', paddingLeft: 8, paddingRight: 8, gap: 4, height: 28, fontSize: 11, fontWeight: 600 }}
+                >
+                  <Save size={12} />
+                  {pt ? 'Salvar' : 'Save'}
+                </button>
+                <button
+                  className="icon-btn"
+                  onClick={handleCancelEdit}
+                  title={pt ? 'Cancelar edição (reverter alterações)' : 'Cancel editing (revert changes)'}
+                  style={{ width: 'auto', paddingLeft: 8, paddingRight: 8, height: 28, fontSize: 11, fontWeight: 500 }}
+                >
+                  {pt ? 'Cancelar' : 'Cancel'}
+                </button>
+              </>
+            )}
+          </>
+        )}
 
         {/* Divider */}
         <div style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
@@ -785,9 +986,7 @@ export default function CustomPage() {
           <>
             <div style={{ flex: 1 }} />
             <button
-              onClick={() => {
-                if (confirm(pt ? 'Remover todos os componentes do canvas?' : 'Remove all components from the canvas?')) reset()
-              }}
+              onClick={handleReset}
               style={{
                 display: 'flex', alignItems: 'center', gap: 5,
                 padding: '5px 10px', background: 'transparent',
@@ -973,7 +1172,7 @@ export default function CustomPage() {
               }}
               dragConfig={{
                 enabled: !locked,
-                bounded: true,
+                bounded: false,
                 handle: '.grid-drag-handle',
                 threshold: 3,
               }}
@@ -982,6 +1181,10 @@ export default function CustomPage() {
               droppingItem={droppingItem}
               onLayoutChange={onLayoutChange}
               onDrop={onDrop}
+              onDragStart={onGridDragStart}
+              onDragStop={onGridDragStop}
+              onResizeStart={onGridResizeStart}
+              onResizeStop={onGridResizeStop}
               autoSize
             >
                 {items.map(item => {
@@ -995,21 +1198,15 @@ export default function CustomPage() {
                         style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 24, zIndex: 3, cursor: locked ? 'default' : 'grab' }}
                       />
                       {!locked && (
-                        <button
-                          className="grid-item-remove"
-                          onClick={() => removeItem(item.i)}
-                          title={pt ? 'Remover' : 'Remove'}
-                          style={{
-                            position: 'absolute', top: 6, right: 6, zIndex: 4,
-                            width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                            borderRadius: 6, color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0,
-                          }}
-                          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#ef4444'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#ef4444' }}
-                          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)' }}
-                        >
-                          <X size={12} />
-                        </button>
+                        <CardMenu
+                          itemI={item.i}
+                          open={openMenuId === item.i}
+                          onOpen={() => setOpenMenuId(item.i)}
+                          onClose={() => setOpenMenuId(null)}
+                          onRemove={() => removeItemWithHistory(item.i)}
+                          onResize={(w, h) => resizeItem(item.i, w, h)}
+                          pt={pt}
+                        />
                       )}
                       <div style={{ width: '100%', height: '100%', overflow: 'auto' }}>
                         {catalog.render(ctx)}
@@ -1121,6 +1318,110 @@ export default function CustomPage() {
         </div>
       )}
     </div>
+  )
+}
+
+const SIZE_PRESETS = [
+  { labelEn: 'Small (3×3)', labelPt: 'Pequeno (3×3)', w: 3, h: 3 },
+  { labelEn: 'Medium (4×4)', labelPt: 'Médio (4×4)', w: 4, h: 4 },
+  { labelEn: 'Large (6×5)', labelPt: 'Grande (6×5)', w: 6, h: 5 },
+  { labelEn: 'Wide (8×4)', labelPt: 'Largo (8×4)', w: 8, h: 4 },
+  { labelEn: 'Full (12×5)', labelPt: 'Completo (12×5)', w: 12, h: 5 },
+]
+
+function CardMenu({
+  itemI, open, onOpen, onClose, onRemove, onResize, pt,
+}: {
+  itemI: string
+  open: boolean
+  onOpen: () => void
+  onClose: () => void
+  onRemove: () => void
+  onResize: (w: number, h: number) => void
+  pt: boolean
+}) {
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const [menuPos, setMenuPos] = useState({ top: 0, right: 0 })
+
+  function handleOpen(e: React.MouseEvent) {
+    e.stopPropagation()
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect()
+      setMenuPos({ top: r.bottom + 4, right: window.innerWidth - r.right })
+    }
+    open ? onClose() : onOpen()
+  }
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        className="grid-item-remove"
+        onMouseDown={e => e.stopPropagation()}
+        onClick={handleOpen}
+        title={pt ? 'Opções do card' : 'Card options'}
+        style={{
+          position: 'absolute', top: 6, right: 6, zIndex: 4,
+          width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+          borderRadius: 6, color: 'var(--text-tertiary)', cursor: 'pointer', padding: 0,
+        }}
+      >
+        <MoreHorizontal size={12} />
+      </button>
+
+      {open && createPortal(
+        <div
+          onMouseDown={e => e.stopPropagation()}
+          style={{
+            position: 'fixed', top: menuPos.top, right: menuPos.right,
+            zIndex: 9999, minWidth: 170,
+            background: 'var(--bg-card)', border: '1px solid var(--border)',
+            borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+            overflow: 'hidden', padding: '4px 0',
+          }}
+        >
+          <button
+            onClick={() => { onClose(); onRemove() }}
+            style={{
+              width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+              padding: '8px 14px', background: 'transparent', border: 'none',
+              cursor: 'pointer', fontFamily: 'inherit', fontSize: 12,
+              color: '#ef4444', textAlign: 'left',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(239,68,68,0.08)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+          >
+            <X size={12} />
+            {pt ? 'Remover' : 'Remove'}
+          </button>
+
+          <div style={{ height: 1, background: 'var(--border)', margin: '3px 0' }} />
+
+          <div style={{ padding: '4px 14px 2px', fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+            {pt ? 'Tamanho' : 'Size'}
+          </div>
+
+          {SIZE_PRESETS.map(p => (
+            <button
+              key={p.labelEn}
+              onClick={() => { onClose(); onResize(p.w, p.h) }}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center',
+                padding: '7px 14px', background: 'transparent', border: 'none',
+                cursor: 'pointer', fontFamily: 'inherit', fontSize: 12,
+                color: 'var(--text-secondary)', textAlign: 'left',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elevated)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+            >
+              {pt ? p.labelPt : p.labelEn}
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+    </>
   )
 }
 
