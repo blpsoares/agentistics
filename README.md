@@ -43,6 +43,7 @@
 - [Available Filters](#available-filters)
 - [Charts and Visualizations](#charts-and-visualizations)
 - [Statistics Cards](#statistics-cards)
+- [Custom Layout Builder](#custom-layout-builder)
 - [Live Updates](#live-updates)
 - [PDF Export](#pdf-export)
 - [Themes and Languages](#themes-and-languages)
@@ -352,6 +353,40 @@ Cards per model with:
 - Estimated cost per model
 - Footer with total cost when multiple models are present
 
+### Budget & Cost Forecast
+
+Panel for monitoring your monthly spend against a configurable budget:
+
+- Set a monthly budget in USD or BRL (editable inline with the pencil icon)
+- Shows current-month spend computed from `dailyModelTokens` and the global model usage proportions
+- Completion bar with color coding: green < 70%, yellow 70–90%, red > 90%
+- Forecast: projects end-of-month spend based on days elapsed
+- Clears the budget with a single click when set
+
+### Cache Efficiency
+
+Panel showing how effectively the prompt cache is being used:
+
+- **Overall hit rate** = cacheRead / (cacheRead + input) — color-coded: red < 30%, yellow 30–60%, green ≥ 60%
+- **Gross saved** — tokens that would have been billed as input but were served from cache
+- **Write overhead** — extra cost of creating/refreshing the cache
+- **Net saved** — gross − overhead (actual savings)
+- Per-model breakdown with individual hit rates
+- Tips for improving cache efficiency based on the current tier
+
+### Session Drilldown
+
+Click any row in the Recent Sessions table to open a detailed modal:
+
+- Duration, project, date, estimated cost
+- Token breakdown: input / output / cache read / cache write
+- Tool call list with counts
+- Languages detected in the session
+- Git commits and pushes
+- Lines added / removed, files modified
+- Agent invocations (if available)
+- First prompt preview
+
 ### Top Projects
 
 2-column grid with the 12 most active projects:
@@ -376,6 +411,8 @@ Paginated table with:
 - 🟠 Orange = session-meta (complete data)
 - 🔵 Blue = direct JSONL
 - 🟣 Purple = subdirectory
+
+Click any row to open the **Session Drilldown** modal with full details.
 
 ### Highlights
 
@@ -443,6 +480,57 @@ Detects and counts reads of agent instruction/configuration files:
 | `copilot-instructions.md` | copilot-instructions |
 | `CONVENTIONS.md` | CONVENTIONS.md |
 | `.windsurfrules` | .windsurfrules |
+
+---
+
+## Custom Layout Builder
+
+The `/custom` page lets you build a fully custom analytics view by arranging any combination of dashboard components on a free-form grid.
+
+### Layouts
+
+- Create and name as many **layouts** as you want, each independently configurable
+- Each layout has its own **pinned projects** — a per-layout project filter that activates when you switch to that layout
+- **Switch** between layouts via the dropdown in the toolbar
+- **Duplicate** a layout (with optional project mapping)
+- **Bulk delete** multiple layouts from the manage modal
+- **Export / Import** any layout as a JSON file to share between machines or users
+- When all layouts are deleted, a centered "New layout" button is shown to get started
+
+### Edit Mode
+
+Layouts open in **locked (view) mode** by default. Click **Edit** to enter edit mode:
+
+| Control | Action |
+|---------|--------|
+| `Edit` button | Enter edit mode |
+| `Save` button | Save and return to view mode |
+| `Cancel` button | Discard changes and revert to the pre-edit snapshot |
+| `Ctrl+Z` / `Ctrl+Y` | Undo / Redo (up to 40 steps) |
+| Dice button | Generate a random layout |
+| `Clear` button | Remove all components from the canvas |
+| `⋯` menu | Rename · Duplicate · Manage layouts · Delete layout |
+
+### Component Palette
+
+In edit mode, a sidebar palette lists all available components grouped by category:
+
+| Category | Components |
+|----------|------------|
+| **KPI** | Messages, Sessions, Tool calls, Input tokens, Output tokens, Estimated cost, Streak, Longest session, Commits, Files |
+| **Activity** | Activity chart (messages / sessions / tools / overlay), Heatmap, Hourly usage |
+| **Costs** | Model breakdown, Budget & forecast, Cache hit rate |
+| **Projects** | Top projects, Tag cloud |
+| **Tools** | Tool metrics (calls), Tool metrics (tokens), Agent metrics |
+| **Sessions** | Recent sessions, Highlights / Records |
+
+- **Drag** any item from the palette onto the grid to place it
+- **Resize** components by dragging the bottom-right handle
+- **3-dot menu** on each card: Remove or apply one of 5 size presets (Small 3×3 → Full 12×5)
+
+### Filters in Edit Mode
+
+When editing, the global filter bar (dates, projects, models) moves into the sidebar. Changes to filters are saved as **pinned projects** for the active layout and applied globally while that layout is active.
 
 ---
 
@@ -552,10 +640,22 @@ agentistics/
 │   │   └── index.ts             # Terminal TUI: live stats in the terminal
 │   ├── embedded-dist.generated.ts  # Auto-generated (gitignored) — frontend assets for binary
 │   ├── App.tsx
+│   ├── pages/
+│   │   ├── HomePage.tsx         # Main dashboard (KPIs, charts, sessions)
+│   │   ├── CustomPage.tsx       # Custom layout builder (/custom)
+│   │   ├── CostsPage.tsx        # Cost deep-dive page
+│   │   ├── ProjectsPage.tsx     # Projects overview page
+│   │   └── ToolsPage.tsx        # Tools breakdown page
+│   ├── hooks/
+│   │   ├── useData.ts           # Fetches /api/data + SSE + useDerivedStats()
+│   │   └── useCustomLayout.ts   # Custom layout state + persistence
 │   ├── components/
 │   │   ├── ActivityChart.tsx
 │   │   ├── ActivityHeatmap.tsx
 │   │   ├── AgentMetricsPanel.tsx
+│   │   ├── BudgetPanel.tsx      # Monthly budget tracking + forecast
+│   │   ├── CacheHitRatePanel.tsx # Cache efficiency + savings
+│   │   ├── ChartModal.tsx       # Expanded chart modal
 │   │   ├── DatePicker.tsx
 │   │   ├── FiltersBar.tsx
 │   │   ├── HealthWarnings.tsx
@@ -564,13 +664,22 @@ agentistics/
 │   │   ├── InfoModal.tsx
 │   │   ├── ModelBreakdown.tsx
 │   │   ├── PDFExportModal.tsx
+│   │   ├── PreferencesModal.tsx # Theme, language, currency, card order
+│   │   ├── PrecisionToggle.tsx
 │   │   ├── ProjectsList.tsx
 │   │   ├── ProjectsModal.tsx
 │   │   ├── RecentSessions.tsx
+│   │   ├── Section.tsx
+│   │   ├── SessionDrilldownModal.tsx # Per-session detail modal
 │   │   ├── StatCard.tsx
+│   │   ├── StreakBreakdownButton.tsx
+│   │   ├── TagCloud.tsx
 │   │   └── ToolMetricsPanel.tsx
 │   └── lib/
 │       ├── types.ts             # TypeScript types + MODEL_PRICING + calcCost()
+│       ├── app-context.ts       # AppContext interface (shared React context type)
+│       ├── componentCatalog.tsx # Component catalog for the custom layout builder
+│       ├── format.ts            # Shared formatting helpers (fmt, fmtCost, fmtDuration)
 │       ├── otel.ts              # OpenTelemetry metric definitions
 │       └── i18n.ts              # PT/EN translations
 ├── package.json

@@ -31,14 +31,24 @@ server/                    — server-side modules (never bundled by Vite)
 
 src/ (React + Vite, port 5173 in dev)
   ├── lib/
-  │   ├── types.ts         → all shared types + pricing functions (single source of truth)
-  │   ├── i18n.ts          → PT/EN translations
-  │   └── otel.ts          → OpenTelemetry helpers
+  │   ├── types.ts              → all shared types + pricing functions (single source of truth)
+  │   ├── app-context.ts        → AppContext interface (React context type shared by all pages)
+  │   ├── componentCatalog.tsx  → catalog of all components available in the custom layout builder
+  │   ├── format.ts             → shared display helpers: fmt(), fmtCost(), fmtDuration()
+  │   ├── i18n.ts               → PT/EN translations
+  │   └── otel.ts               → OpenTelemetry helpers
   ├── hooks/
-  │   └── useData.ts       → fetches /api/data + SSE subscription + useDerivedStats()
+  │   ├── useData.ts            → fetches /api/data + SSE subscription + useDerivedStats()
+  │   └── useCustomLayout.ts    → custom layout state: named layouts, pinned projects, persistence
+  ├── pages/
+  │   ├── HomePage.tsx          → main dashboard (KPIs, charts, sessions)
+  │   ├── CustomPage.tsx        → custom layout builder (/custom route)
+  │   ├── CostsPage.tsx         → cost deep-dive page
+  │   ├── ProjectsPage.tsx      → projects overview page
+  │   └── ToolsPage.tsx         → tools breakdown page
   ├── tui/
-  │   └── index.ts         → terminal TUI (live stats in the terminal, no browser needed)
-  └── components/          → UI (charts, cards, heatmap, PDF export)
+  │   └── index.ts              → terminal TUI (live stats in the terminal, no browser needed)
+  └── components/               → UI (charts, cards, heatmap, modals, PDF export)
 
 scripts/embed-dist.ts
   └── Reads dist/ after vite build and generates src/embedded-dist.generated.ts
@@ -157,6 +167,10 @@ Agent metrics are extracted from raw JSONL files by `server/agent-metrics.ts`. T
 - **Binary mode**: `agentop server` sets `SERVE_STATIC=1`; server.ts serves the embedded frontend on the same port as the API
 - **`src/embedded-dist.generated.ts`** is in `.gitignore` — auto-generated, never commit it
 - **`server/` modules** are server-only — never import them from `src/` (Vite would try to bundle them and fail on Node/Bun APIs)
+- **Custom layout persistence**: `useCustomLayout` saves `{ layouts, activeLayout, pinnedProjects }` to `/api/preferences`. Layouts open **locked** by default; edit mode requires clicking "Edit". When all layouts are deleted, `active` is `''` (empty string) — CustomPage shows an empty state in this case
+- **`componentCatalog.tsx`** is the single source of truth for what can be placed on the custom page — every component has a `render(ctx: AppContext)` function; to add a new component, add it there
+- **`app-context.ts`** defines `AppContext` — the shape of the outlet context passed from `App.tsx` to all pages via `useOutletContext<AppContext>()`. Add new global state here when it must be accessible from any page or from custom layout components
+- **`format.ts`** contains shared display helpers (`fmt`, `fmtCost`, `fmtDuration`, `fmtFull`) — never duplicate these inline
 
 ## Development
 
