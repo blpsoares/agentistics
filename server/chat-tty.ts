@@ -17,6 +17,7 @@ export async function streamViaClaude(
   history: ChatMessage[],
   model: ChatModelId,
   onChunk: (text: string) => void,
+  onTool: (name: string) => void,
   onDone: () => void,
   onError: (err: string) => void,
 ): Promise<void> {
@@ -39,6 +40,7 @@ export async function streamViaClaude(
     let lineBuffer = ''
     let emittedLength = 0
     let gotResult = false
+    const seenTools = new Set<string>()
 
     for await (const raw of proc.stdout as unknown as AsyncIterable<Uint8Array>) {
       lineBuffer += decoder.decode(raw, { stream: true })
@@ -51,11 +53,16 @@ export async function streamViaClaude(
         try {
           const event = JSON.parse(trimmed) as Record<string, unknown>
           if (event.type === 'assistant') {
-            const msg = event.message as { content?: Array<{ type: string; text?: string }> } | undefined
+            const msg = event.message as { content?: Array<{ type: string; text?: string; name?: string }> } | undefined
             for (const block of msg?.content ?? []) {
               if (block.type === 'text' && typeof block.text === 'string') {
                 const delta = block.text.slice(emittedLength)
                 if (delta) { onChunk(delta); emittedLength = block.text.length }
+              } else if (block.type === 'tool_use' && typeof block.name === 'string') {
+                if (!seenTools.has(block.name)) {
+                  seenTools.add(block.name)
+                  onTool(block.name)
+                }
               }
             }
           } else if (event.type === 'result') {

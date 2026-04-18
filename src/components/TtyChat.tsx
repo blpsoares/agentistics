@@ -1,12 +1,21 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import {
-  MessageSquare, X, Send, Bot, Loader, AlertCircle, Trash2,
+  MessageSquare, X, Send, Loader, AlertCircle, Trash2,
   Maximize2, Minimize2, Terminal, Play, ChevronRight,
+  Wrench, ChevronDown, ChevronUp,
 } from 'lucide-react'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
 
 type Lang = 'pt' | 'en'
-type ChatMessage = { role: 'user' | 'assistant'; content: string; terminal?: boolean; exitCode?: number }
+
+type ChatMessage = {
+  role: 'user' | 'assistant'
+  content: string
+  terminal?: boolean
+  exitCode?: number
+  timestamp: number
+  tools?: string[]
+}
 
 const BADGE_COLORS: Record<string, string> = {
   Fast:     'var(--accent-green)',
@@ -14,60 +23,73 @@ const BADGE_COLORS: Record<string, string> = {
   Powerful: 'var(--accent-purple)',
 }
 
-function playNotification() {
-  try {
-    const ctx = new AudioContext()
-    const playTone = (freq: number, start: number, duration: number) => {
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.connect(gain)
-      gain.connect(ctx.destination)
-      osc.frequency.value = freq
-      osc.type = 'sine'
-      gain.gain.setValueAtTime(0, start)
-      gain.gain.linearRampToValueAtTime(0.12, start + 0.015)
-      gain.gain.exponentialRampToValueAtTime(0.001, start + duration)
-      osc.start(start)
-      osc.stop(start + duration)
-    }
-    playTone(880,  ctx.currentTime,       0.22)
-    playTone(1100, ctx.currentTime + 0.1, 0.22)
-  } catch { /* ignore AudioContext errors */ }
+const TOOL_LABELS: Record<string, string> = {
+  agentistics_summary:          'Reading metrics',
+  agentistics_projects:         'Fetching projects',
+  agentistics_sessions:         'Loading sessions',
+  agentistics_costs:            'Analyzing costs',
+  agentistics_get_layouts:      'Reading layouts',
+  agentistics_create_layout:    'Creating layout',
+  agentistics_add_component:    'Adding component',
+  agentistics_remove_component: 'Removing component',
+  agentistics_set_active_layout:'Activating layout',
+  agentistics_delete_layout:    'Deleting layout',
+  agentistics_build_layout:     'Building layout',
+  agentistics_component_catalog:'Reading catalog',
 }
 
-// ── Markdown-ish content renderer ───────────────────────────────────────────
-
-interface CodeBlockProps {
-  lang: string
-  code: string
-  onRun?: (code: string) => void
+function formatToolName(raw: string): string {
+  const clean = raw.replace(/^mcp__\w+__/, '')
+  return TOOL_LABELS[clean] ?? clean.replace(/_/g, ' ')
 }
+
+function fmtTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+// ── Audio ─────────────────────────────────────────────────────────────────────
+
+function createPlayFn(ctxRef: React.MutableRefObject<AudioContext | null>) {
+  return function playNotification() {
+    const ctx = ctxRef.current
+    if (!ctx) return
+    ctx.resume().then(() => {
+      const now = ctx.currentTime
+      const playTone = (freq: number, start: number, dur: number) => {
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.connect(gain)
+        gain.connect(ctx.destination)
+        osc.type = 'sine'
+        osc.frequency.value = freq
+        gain.gain.setValueAtTime(0, start)
+        gain.gain.linearRampToValueAtTime(0.18, start + 0.02)
+        gain.gain.exponentialRampToValueAtTime(0.001, start + dur)
+        osc.start(start)
+        osc.stop(start + dur)
+      }
+      playTone(880,  now,        0.25)
+      playTone(1100, now + 0.12, 0.25)
+    }).catch(() => {/* ignore */})
+  }
+}
+
+// ── Markdown renderer ─────────────────────────────────────────────────────────
+
+interface CodeBlockProps { lang: string; code: string; onRun?: (c: string) => void }
 
 function CodeBlock({ lang: codeLang, code, onRun }: CodeBlockProps) {
   const isRunnable = ['bash', 'sh', 'shell', 'zsh'].includes(codeLang.toLowerCase())
   return (
     <div style={{ position: 'relative', margin: '6px 0' }}>
       <pre style={{
-        background: 'var(--bg-base)',
-        border: '1px solid var(--border)',
-        borderRadius: 6,
-        padding: isRunnable ? '8px 12px 8px 12px' : '10px 12px',
-        fontSize: 12,
-        overflowX: 'auto',
-        whiteSpace: 'pre',
-        fontFamily: 'monospace',
-        color: 'var(--text-secondary)',
-        margin: 0,
-        paddingBottom: isRunnable ? 30 : undefined,
+        background: 'var(--bg-base)', border: '1px solid var(--border)',
+        borderRadius: 6, padding: isRunnable ? '8px 12px 30px' : '10px 12px',
+        fontSize: 12, overflowX: 'auto', whiteSpace: 'pre',
+        fontFamily: 'monospace', color: 'var(--text-secondary)', margin: 0,
       }}>
         {codeLang && (
-          <span style={{
-            display: 'block',
-            fontSize: 10,
-            color: 'var(--text-tertiary)',
-            marginBottom: 6,
-            fontFamily: 'inherit',
-          }}>
+          <span style={{ display: 'block', fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 6 }}>
             {codeLang}
           </span>
         )}
@@ -77,68 +99,29 @@ function CodeBlock({ lang: codeLang, code, onRun }: CodeBlockProps) {
         <button
           onClick={() => onRun(code.trim())}
           style={{
-            position: 'absolute',
-            bottom: 6,
-            right: 8,
+            position: 'absolute', bottom: 6, right: 8,
             display: 'flex', alignItems: 'center', gap: 4,
-            padding: '3px 8px',
-            borderRadius: 5,
+            padding: '3px 8px', borderRadius: 5, fontSize: 10, fontWeight: 700,
             border: '1px solid var(--accent-green)40',
             background: 'color-mix(in srgb, var(--accent-green) 12%, transparent)',
-            color: 'var(--accent-green)',
-            fontSize: 10, fontWeight: 700,
-            cursor: 'pointer',
-            fontFamily: 'inherit',
-            transition: 'all 0.15s',
+            color: 'var(--accent-green)', cursor: 'pointer', fontFamily: 'inherit',
           }}
-          title="Run in terminal"
         >
-          <Play size={9} />
-          Run
+          <Play size={9} /> Run
         </button>
       )}
     </div>
   )
 }
 
-function renderContent(text: string, onRun?: (code: string) => void): React.ReactNode[] {
-  const codeBlockRe = /```([^\n]*)\n([\s\S]*?)```/g
-  const inlineCodeRe = /`([^`]+)`/g
-  const boldRe = /\*\*([^*]+)\*\*/g
-
-  const parts: React.ReactNode[] = []
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-
-  codeBlockRe.lastIndex = 0
-  while ((match = codeBlockRe.exec(text)) !== null) {
-    const before = text.slice(lastIndex, match.index)
-    if (before) parts.push(...renderInline(before, parts.length, boldRe, inlineCodeRe))
-    parts.push(
-      <CodeBlock key={`cb-${match.index}`} lang={match[1]?.trim() ?? ''} code={match[2] ?? ''} onRun={onRun} />
-    )
-    lastIndex = match.index + match[0].length
-  }
-
-  const remaining = text.slice(lastIndex)
-  if (remaining) parts.push(...renderInline(remaining, parts.length, boldRe, inlineCodeRe))
-  return parts
-}
-
-function renderInline(
-  text: string,
-  baseKey: number,
-  boldRe: RegExp,
-  inlineCodeRe: RegExp,
-): React.ReactNode[] {
+function renderInline(text: string, baseKey: number): React.ReactNode[] {
   const segments: React.ReactNode[] = []
-  // Split on inline code first
   const codeChunks = text.split(/(`[^`]+`)/g)
-  let segIdx = 0
+  let idx = 0
   for (const chunk of codeChunks) {
     if (chunk.startsWith('`') && chunk.endsWith('`') && chunk.length > 2) {
       segments.push(
-        <code key={`ic-${baseKey}-${segIdx}`} style={{
+        <code key={`ic-${baseKey}-${idx}`} style={{
           background: 'var(--bg-elevated)', border: '1px solid var(--border)',
           borderRadius: 3, padding: '1px 5px', fontSize: 12,
           fontFamily: 'monospace', color: 'var(--text-primary)',
@@ -147,35 +130,104 @@ function renderInline(
         </code>
       )
     } else {
-      // Handle bold and plain text + newlines
       const boldChunks = chunk.split(/(\*\*[^*]+\*\*)/g)
-      for (const bChunk of boldChunks) {
-        if (bChunk.startsWith('**') && bChunk.endsWith('**') && bChunk.length > 4) {
-          segments.push(<strong key={`b-${baseKey}-${segIdx}`} style={{ fontWeight: 700 }}>{bChunk.slice(2, -2)}</strong>)
+      for (const b of boldChunks) {
+        if (b.startsWith('**') && b.endsWith('**') && b.length > 4) {
+          segments.push(<strong key={`b-${baseKey}-${idx}`} style={{ fontWeight: 700 }}>{b.slice(2, -2)}</strong>)
         } else {
-          segments.push(<span key={`t-${baseKey}-${segIdx}`} style={{ whiteSpace: 'pre-wrap' }}>{bChunk}</span>)
+          segments.push(<span key={`t-${baseKey}-${idx}`} style={{ whiteSpace: 'pre-wrap' }}>{b}</span>)
         }
-        segIdx++
+        idx++
       }
     }
-    segIdx++
+    idx++
   }
-  // reset regex lastIndex
-  boldRe.lastIndex = 0
-  inlineCodeRe.lastIndex = 0
   return segments
 }
 
-// ── Message component ────────────────────────────────────────────────────────
+function renderContent(text: string, onRun?: (c: string) => void): React.ReactNode[] {
+  const codeBlockRe = /```([^\n]*)\n([\s\S]*?)```/g
+  const parts: React.ReactNode[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+  codeBlockRe.lastIndex = 0
+  while ((match = codeBlockRe.exec(text)) !== null) {
+    const before = text.slice(lastIndex, match.index)
+    if (before) parts.push(...renderInline(before, parts.length))
+    parts.push(<CodeBlock key={`cb-${match.index}`} lang={match[1]?.trim() ?? ''} code={match[2] ?? ''} onRun={onRun} />)
+    lastIndex = match.index + match[0].length
+  }
+  const remaining = text.slice(lastIndex)
+  if (remaining) parts.push(...renderInline(remaining, parts.length))
+  return parts
+}
+
+// ── Tool activity bubble ──────────────────────────────────────────────────────
+
+function ToolActivity({ tools, live, pt }: { tools: string[]; live: boolean; pt: boolean }) {
+  const [expanded, setExpanded] = useState(false)
+  if (tools.length === 0) return null
+  const label = live
+    ? formatToolName(tools[tools.length - 1]!)
+    : pt ? `${tools.length} ação${tools.length > 1 ? 'ões' : ''} tomada${tools.length > 1 ? 's' : ''}` : `${tools.length} action${tools.length > 1 ? 's' : ''} taken`
+
+  return (
+    <div style={{
+      marginBottom: 6,
+      border: '1px solid var(--border)',
+      borderRadius: 8,
+      background: 'var(--bg-elevated)',
+      overflow: 'hidden',
+      fontSize: 11,
+    }}>
+      <button
+        onClick={() => !live && setExpanded(v => !v)}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 6,
+          padding: '5px 9px', background: 'transparent', border: 'none',
+          cursor: live ? 'default' : 'pointer', fontFamily: 'inherit', color: 'var(--text-tertiary)',
+          textAlign: 'left',
+        }}
+      >
+        {live
+          ? <Loader size={10} style={{ animation: 'ttyChatSpin 1s linear infinite', flexShrink: 0, color: 'var(--anthropic-orange)' }} />
+          : <Wrench size={10} style={{ flexShrink: 0 }} />
+        }
+        <span style={{ flex: 1, color: live ? 'var(--anthropic-orange)' : 'var(--text-tertiary)' }}>{label}</span>
+        {!live && (expanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />)}
+      </button>
+      {!live && expanded && (
+        <div style={{ borderTop: '1px solid var(--border)', padding: '4px 9px 6px' }}>
+          {tools.map((t, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '2px 0', color: 'var(--text-tertiary)' }}>
+              <span style={{ fontSize: 9, opacity: 0.5 }}>✓</span>
+              <span>{formatToolName(t)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Message component ─────────────────────────────────────────────────────────
 
 function Message({
-  msg, isStreaming, onRun,
+  msg, isLiveStreaming, currentTools, onRun, pt,
 }: {
   msg: ChatMessage
-  isStreaming?: boolean
+  isLiveStreaming?: boolean
+  currentTools?: string[]
   onRun: (cmd: string) => void
+  pt: boolean
 }) {
   const isUser = msg.role === 'user'
+
+  const timeEl = (
+    <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 4, display: 'block', textAlign: isUser ? 'right' : 'left' }}>
+      {fmtTime(msg.timestamp)}
+    </span>
+  )
 
   if (msg.terminal) {
     return (
@@ -185,23 +237,17 @@ function Message({
           <span style={{ fontSize: 10, color: 'var(--accent-green)', fontWeight: 700 }}>
             {msg.exitCode === 0 ? 'done' : msg.exitCode !== undefined ? `exit ${msg.exitCode}` : 'running…'}
           </span>
+          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 'auto' }}>{fmtTime(msg.timestamp)}</span>
         </div>
         <pre style={{
           background: 'var(--bg-base)',
           border: `1px solid ${msg.exitCode !== undefined && msg.exitCode !== 0 ? 'rgba(239,68,68,0.3)' : 'var(--border)'}`,
-          borderRadius: 6,
-          padding: '8px 12px',
-          fontSize: 12,
-          fontFamily: 'monospace',
-          color: 'var(--text-secondary)',
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-all',
-          margin: 0,
-          maxHeight: 280,
-          overflowY: 'auto',
+          borderRadius: 6, padding: '8px 12px', fontSize: 12,
+          fontFamily: 'monospace', color: 'var(--text-secondary)',
+          whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+          margin: 0, maxHeight: 280, overflowY: 'auto',
         }}>
-          {msg.content || (isStreaming ? '' : '(no output)')}
-          {isStreaming && <span style={{ animation: 'ttyChatBlink 0.9s step-end infinite' }}>▋</span>}
+          {msg.content || (isLiveStreaming ? '' : '(no output)')}
         </pre>
       </div>
     )
@@ -209,38 +255,40 @@ function Message({
 
   return (
     <div style={{
-      display: 'flex',
-      flexDirection: 'column',
+      display: 'flex', flexDirection: 'column',
       alignItems: isUser ? 'flex-end' : 'flex-start',
-      marginBottom: 14,
-      animation: 'ttyChatFadeIn 0.15s ease-out',
+      marginBottom: 14, animation: 'ttyChatFadeIn 0.15s ease-out',
     }}>
+      {!isUser && (isLiveStreaming ? currentTools : msg.tools) && (
+        <ToolActivity
+          tools={isLiveStreaming ? (currentTools ?? []) : (msg.tools ?? [])}
+          live={!!isLiveStreaming}
+          pt={pt}
+        />
+      )}
       <div style={{
-        maxWidth: '90%',
-        padding: isUser ? '8px 14px' : '10px 14px',
+        maxWidth: '90%', padding: isUser ? '8px 14px' : '10px 14px',
         borderRadius: isUser ? '14px 14px 4px 14px' : '4px 14px 14px 14px',
         background: isUser ? 'var(--anthropic-orange-dim)' : 'var(--bg-card)',
         border: `1px solid ${isUser ? 'var(--anthropic-orange)30' : 'var(--border)'}`,
-        fontSize: 13,
-        color: 'var(--text-primary)',
-        lineHeight: 1.58,
-        wordBreak: 'break-word',
+        fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.58, wordBreak: 'break-word',
       }}>
-        {renderContent(msg.content, isUser ? undefined : onRun)}
-        {isStreaming && (
-          <span style={{
-            display: 'inline-block', width: 6, height: 14,
-            background: 'var(--anthropic-orange)', borderRadius: 1, marginLeft: 2,
-            verticalAlign: 'text-bottom',
-            animation: 'ttyChatBlink 0.9s step-end infinite',
-          }} />
-        )}
+        {msg.content
+          ? renderContent(msg.content, isUser ? undefined : onRun)
+          : isLiveStreaming
+            ? <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-tertiary)', fontSize: 12 }}>
+                <Loader size={11} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
+                {pt ? 'Escrevendo...' : 'Writing...'}
+              </span>
+            : null
+        }
       </div>
+      {timeEl}
     </div>
   )
 }
 
-// ── Model picker (first open) ────────────────────────────────────────────────
+// ── Model picker ──────────────────────────────────────────────────────────────
 
 function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) => void }) {
   const [selected, setSelected] = useState<ChatModelId>(DEFAULT_CHAT_MODEL)
@@ -248,27 +296,19 @@ function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) =
   return (
     <div style={{
       position: 'absolute', inset: 0, zIndex: 10,
-      background: 'var(--bg-surface)',
-      borderRadius: 'inherit',
+      background: 'var(--bg-surface)', borderRadius: 'inherit',
       display: 'flex', flexDirection: 'column',
       padding: '20px 16px 16px',
       animation: 'ttyChatFadeIn 0.2s ease-out',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
-        <div style={{
-          width: 32, height: 32, borderRadius: 9,
-          background: 'var(--anthropic-orange-dim)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0,
-        }}>
-          <Bot size={16} color="var(--anthropic-orange)" />
-        </div>
+        <img src="/minimalistLogo.png" alt="Agni" style={{ width: 32, height: 32, borderRadius: 9, objectFit: 'cover' }} />
         <div>
           <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
-            {pt ? 'Escolha o modelo' : 'Choose a model'}
+            {pt ? 'Olá! Sou Agni 👋' : 'Hi! I\'m Agni 👋'}
           </div>
           <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-            {pt ? 'Você pode trocar depois nas preferências' : 'You can change this later in preferences'}
+            {pt ? 'Escolha o modelo para começar' : 'Choose a model to get started'}
           </div>
         </div>
       </div>
@@ -283,11 +323,10 @@ function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) =
               onClick={() => setSelected(m.id)}
               style={{
                 display: 'flex', alignItems: 'center', gap: 12,
-                padding: '12px 14px', borderRadius: 10,
+                padding: '12px 14px', borderRadius: 10, textAlign: 'left',
                 border: active ? '1.5px solid var(--anthropic-orange)' : '1px solid var(--border)',
                 background: active ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
-                cursor: 'pointer', textAlign: 'left',
-                transition: 'all 0.15s', fontFamily: 'inherit',
+                cursor: 'pointer', transition: 'all 0.15s', fontFamily: 'inherit',
               }}
             >
               <div style={{
@@ -295,8 +334,9 @@ function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) =
                 background: active ? 'color-mix(in srgb, var(--anthropic-orange) 15%, transparent)' : 'var(--bg-card)',
                 border: `1px solid ${active ? 'var(--anthropic-orange)40' : 'var(--border)'}`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
+                overflow: 'hidden',
               }}>
-                <Bot size={17} color={active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)'} />
+                <img src="/minimalistLogo.png" alt="" style={{ width: 22, height: 22, objectFit: 'contain', opacity: active ? 1 : 0.5 }} />
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 3 }}>
@@ -326,14 +366,11 @@ function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) =
       <button
         onClick={() => onPick(selected)}
         style={{
-          marginTop: 14,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+          marginTop: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
           padding: '10px 16px', borderRadius: 8, fontSize: 13, fontWeight: 700,
           border: '1px solid var(--anthropic-orange)',
-          background: 'var(--anthropic-orange-dim)',
-          color: 'var(--anthropic-orange)',
-          cursor: 'pointer', fontFamily: 'inherit',
-          transition: 'all 0.15s',
+          background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+          cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s',
         }}
       >
         {pt ? 'Começar a conversar' : 'Start chatting'}
@@ -343,7 +380,7 @@ function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) =
   )
 }
 
-// ── Main component ───────────────────────────────────────────────────────────
+// ── Main component ────────────────────────────────────────────────────────────
 
 interface TtyChatProps {
   lang: Lang
@@ -360,11 +397,16 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
   const [streaming, setStreaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [hasUnread, setHasUnread] = useState(false)
+  const [currentTools, setCurrentTools] = useState<string[]>([])
 
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const openRef = useRef(open)
   const soundRef = useRef(chatSoundEnabled)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+
+  // playNotification uses the stored AudioContext
+  const playNotification = useCallback(createPlayFn(audioCtxRef), [])
 
   useEffect(() => { openRef.current = open }, [open])
   useEffect(() => { soundRef.current = chatSoundEnabled }, [chatSoundEnabled])
@@ -375,14 +417,25 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
 
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
-  }, [messages, streaming])
+  }, [messages, streaming, currentTools])
+
+  const initAudio = () => {
+    if (!audioCtxRef.current) {
+      try { audioCtxRef.current = new AudioContext() } catch { /* ignore */ }
+    }
+  }
+
+  const handleFabClick = () => {
+    initAudio()
+    setOpen(v => !v)
+  }
 
   const execCmd = useCallback(async (command: string) => {
-    const cmdMsg: ChatMessage = { role: 'user', content: `$ ${command}`, terminal: false }
-    setMessages(prev => [...prev, cmdMsg])
-
-    const outIdx = messages.length + 1
-    setMessages(prev => [...prev, { role: 'assistant', content: '', terminal: true }])
+    const cmdMsg: ChatMessage = { role: 'user', content: `$ ${command}`, terminal: false, timestamp: Date.now() }
+    setMessages(prev => {
+      const outMsg: ChatMessage = { role: 'assistant', content: '', terminal: true, timestamp: Date.now() }
+      return [...prev, cmdMsg, outMsg]
+    })
     setStreaming(true)
 
     let accum = ''
@@ -410,20 +463,22 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
           const line = part.replace(/^data: /, '').trim()
           if (!line) continue
           try {
-            const ev = JSON.parse(line) as { text?: string; stderr?: boolean; exitCode?: number; done?: boolean; error?: string }
+            const ev = JSON.parse(line) as { text?: string; exitCode?: number; done?: boolean; error?: string }
             if (ev.error) { setError(ev.error); break }
             if (ev.text) {
               accum += ev.text
               setMessages(prev => {
                 const copy = [...prev]
-                copy[outIdx] = { role: 'assistant', content: accum, terminal: true }
+                const last = copy[copy.length - 1]
+                if (last?.terminal) copy[copy.length - 1] = { ...last, content: accum }
                 return copy
               })
             }
             if (ev.done) {
               setMessages(prev => {
                 const copy = [...prev]
-                copy[outIdx] = { role: 'assistant', content: accum, terminal: true, exitCode: ev.exitCode ?? 0 }
+                const last = copy[copy.length - 1]
+                if (last?.terminal) copy[copy.length - 1] = { ...last, content: accum, exitCode: ev.exitCode ?? 0 }
                 return copy
               })
             }
@@ -435,16 +490,15 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
     } finally {
       setStreaming(false)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length])
+  }, [])
 
   const sendMessage = useCallback(async () => {
     const text = input.trim()
     if (!text || streaming) return
     setInput('')
     setError(null)
+    setCurrentTools([])
 
-    // /run or /bash command shortcut
     const runMatch = text.match(/^\/(?:run|bash|sh)\s+(.+)/s)
     if (runMatch) {
       await execCmd(runMatch[1]!.trim())
@@ -452,13 +506,18 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
     }
 
     const model = chatModel ?? DEFAULT_CHAT_MODEL
-    const userMsg: ChatMessage = { role: 'user', content: text }
-    const history = messages.filter(m => !m.terminal)
-    setMessages(prev => [...prev, userMsg])
+    const userMsg: ChatMessage = { role: 'user', content: text, timestamp: Date.now() }
+    const history = messages.filter(m => !m.terminal).map(m => ({ role: m.role, content: m.content }))
+
+    setMessages(prev => [
+      ...prev,
+      userMsg,
+      { role: 'assistant', content: '', timestamp: Date.now() },
+    ])
     setStreaming(true)
 
-    const assistantIdx = messages.length + 1
     let accum = ''
+    let toolsAccum: string[] = []
 
     try {
       const res = await fetch('/api/chat-tty', {
@@ -467,8 +526,6 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
         body: JSON.stringify({ message: text, history, model }),
       })
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
-
-      setMessages(prev => [...prev, { role: 'assistant', content: '' }])
 
       const reader = res.body.getReader()
       const dec = new TextDecoder()
@@ -485,17 +542,33 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
           const line = part.replace(/^data: /, '').trim()
           if (!line) continue
           try {
-            const ev = JSON.parse(line) as { text?: string; done?: boolean; error?: string }
+            const ev = JSON.parse(line) as { text?: string; tool?: string; done?: boolean; error?: string }
             if (ev.error) { setError(ev.error); setStreaming(false); return }
+            if (ev.tool) {
+              toolsAccum = [...toolsAccum, ev.tool]
+              setCurrentTools(toolsAccum)
+            }
             if (ev.text) {
               accum += ev.text
               setMessages(prev => {
                 const copy = [...prev]
-                copy[assistantIdx] = { role: 'assistant', content: accum }
+                const last = copy[copy.length - 1]
+                if (last?.role === 'assistant' && !last.terminal) {
+                  copy[copy.length - 1] = { ...last, content: accum }
+                }
                 return copy
               })
             }
             if (ev.done) {
+              setMessages(prev => {
+                const copy = [...prev]
+                const last = copy[copy.length - 1]
+                if (last?.role === 'assistant' && !last.terminal) {
+                  copy[copy.length - 1] = { ...last, content: accum, tools: toolsAccum.length > 0 ? toolsAccum : undefined }
+                }
+                return copy
+              })
+              setCurrentTools([])
               setStreaming(false)
               if (!openRef.current) {
                 setHasUnread(true)
@@ -510,43 +583,45 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
       if ((err as Error).name !== 'AbortError') setError(err instanceof Error ? err.message : String(err))
     } finally {
       setStreaming(false)
+      setCurrentTools([])
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [input, streaming, messages, chatModel, execCmd])
+  }, [input, streaming, messages, chatModel, execCmd, playNotification])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
   }
 
-  const clearChat = () => { setMessages([]); setError(null); setStreaming(false); setHasUnread(false) }
+  const clearChat = () => { setMessages([]); setError(null); setStreaming(false); setHasUnread(false); setCurrentTools([]) }
 
   const pt = lang === 'pt'
   const effectiveModel = chatModel ?? DEFAULT_CHAT_MODEL
   const modelInfo = CHAT_MODELS.find(m => m.id === effectiveModel)
 
-  // Panel geometry
   const panelStyle: React.CSSProperties = fullscreen
-    ? { position: 'fixed', inset: 16, width: 'auto', height: 'auto', bottom: 16 }
+    ? { position: 'fixed', inset: 16, width: 'auto', height: 'auto' }
     : { position: 'fixed', bottom: 80, right: 24, width: 400, height: 580, maxHeight: 'calc(100vh - 120px)' }
+
+  // Detect if currently streaming an assistant message (last message is empty assistant waiting)
+  const lastMsg = messages[messages.length - 1]
+  const isAssistantStreaming = streaming && lastMsg?.role === 'assistant' && !lastMsg.terminal
 
   return (
     <>
       <style>{`
-        @keyframes ttyChatBlink   { 0%,100%{opacity:1} 50%{opacity:0} }
         @keyframes ttyChatSpin    { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
         @keyframes ttyChatFadeIn  { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
         @keyframes ttyChatSlideIn { from{opacity:0;transform:translateX(18px)} to{opacity:1;transform:none} }
+        @keyframes ttyChatBlink   { 0%,100%{opacity:1} 50%{opacity:0} }
         .tty-fab:hover { border-color: var(--anthropic-orange) !important; color: var(--anthropic-orange) !important; }
         .tty-icon-btn:hover { color: var(--text-primary) !important; border-color: var(--text-secondary) !important; }
-        .tty-run-btn:hover { background: color-mix(in srgb, var(--accent-green) 22%, transparent) !important; }
         .tty-send-btn:hover:not(:disabled) { background: var(--anthropic-orange) !important; color: #fff !important; }
       `}</style>
 
-      {/* ── Floating action button ── */}
+      {/* FAB */}
       <button
         className="tty-fab"
-        onClick={() => setOpen(v => !v)}
-        title={pt ? 'Chat com IA' : 'AI Chat'}
+        onClick={handleFabClick}
+        title={pt ? 'Chat com Agni' : 'Chat with Agni'}
         style={{
           position: 'fixed', bottom: 24, right: 24, zIndex: 500,
           width: 46, height: 46, borderRadius: '50%',
@@ -557,9 +632,14 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           boxShadow: '0 4px 18px rgba(0,0,0,0.35)',
           transition: 'all 0.2s',
+          overflow: 'hidden',
+          padding: 0,
         }}
       >
-        {open ? <X size={17} /> : <MessageSquare size={17} />}
+        {open
+          ? <X size={17} />
+          : <img src="/minimalistLogo.png" alt="Agni" style={{ width: 26, height: 26, objectFit: 'contain' }} />
+        }
         {!open && hasUnread && (
           <span style={{
             position: 'absolute', top: 8, right: 8,
@@ -571,7 +651,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
         )}
       </button>
 
-      {/* ── Chat panel ── */}
+      {/* Panel */}
       {open && (
         <div style={{
           ...panelStyle,
@@ -579,40 +659,42 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
           display: 'flex', flexDirection: 'column',
           background: 'var(--bg-surface)',
           border: '1px solid var(--border)',
-          borderRadius: fullscreen ? 14 : 14,
+          borderRadius: 14,
           boxShadow: '0 10px 48px rgba(0,0,0,0.45)',
           overflow: 'hidden',
           animation: 'ttyChatSlideIn 0.18s ease-out',
         }}>
 
-          {/* Model picker overlay (first open) */}
           {chatModel === null && (
-            <ModelPicker lang={lang} onPick={(id) => { onModelSet(id) }} />
+            <ModelPicker lang={lang} onPick={onModelSet} />
           )}
 
-          {/* ── Header ── */}
+          {/* Header */}
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '10px 14px',
-            borderBottom: '1px solid var(--border)',
-            background: 'var(--bg-card)',
-            flexShrink: 0,
+            padding: '10px 14px', borderBottom: '1px solid var(--border)',
+            background: 'var(--bg-card)', flexShrink: 0,
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
               <div style={{
-                width: 28, height: 28, borderRadius: 8,
-                background: 'var(--anthropic-orange-dim)',
+                width: 30, height: 30, borderRadius: 8, overflow: 'hidden', flexShrink: 0,
+                background: 'var(--bg-elevated)', border: '1px solid var(--border)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                <Bot size={14} color="var(--anthropic-orange)" />
+                <img src="/minimalistLogo.png" alt="Agni" style={{ width: 22, height: 22, objectFit: 'contain' }} />
               </div>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
-                  {pt ? 'Assistente' : 'Assistant'}
+                  Agni
                 </div>
                 <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
                   {streaming ? (
-                    <span style={{ color: 'var(--anthropic-orange)' }}>● {pt ? 'pensando...' : 'thinking...'}</span>
+                    <span style={{ color: 'var(--anthropic-orange)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <Loader size={8} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
+                      {currentTools.length > 0
+                        ? formatToolName(currentTools[currentTools.length - 1]!)
+                        : (pt ? 'pensando...' : 'thinking...')}
+                    </span>
                   ) : (
                     <>
                       <span>{modelInfo?.label ?? effectiveModel}</span>
@@ -653,33 +735,28 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
             </div>
           </div>
 
-          {/* ── Messages ── */}
+          {/* Messages */}
           <div ref={listRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 14px 6px' }}>
-            {messages.length === 0 && (
+            {messages.length === 0 && !streaming && (
               <div style={{
                 height: '100%', display: 'flex', flexDirection: 'column',
                 alignItems: 'center', justifyContent: 'center',
                 gap: 10, color: 'var(--text-tertiary)', textAlign: 'center', padding: '0 20px',
               }}>
-                <Bot size={28} style={{ opacity: 0.25 }} />
+                <img src="/minimalistLogo.png" alt="Agni" style={{ width: 36, height: 36, objectFit: 'contain', opacity: 0.3 }} />
                 <div style={{ fontSize: 13, fontWeight: 600 }}>
-                  {pt ? 'Pergunte sobre suas métricas' : 'Ask about your metrics'}
+                  {pt ? 'Olá! Sou o Agni' : 'Hi! I\'m Agni'}
                 </div>
                 <div style={{ fontSize: 11, lineHeight: 1.65, opacity: 0.7 }}>
                   {pt
-                    ? 'Analiso custos, sessões, projetos e posso criar layouts personalizados.'
+                    ? 'Analiso custos, sessões, projetos e crio layouts personalizados.'
                     : 'I can analyze costs, sessions, projects and build custom layouts.'}
                 </div>
                 <div style={{
-                  marginTop: 6,
-                  background: 'var(--bg-elevated)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 8,
-                  padding: '8px 12px',
-                  fontSize: 11,
-                  color: 'var(--text-tertiary)',
-                  textAlign: 'left',
-                  lineHeight: 1.8,
+                  marginTop: 4, background: 'var(--bg-elevated)',
+                  border: '1px solid var(--border)', borderRadius: 8,
+                  padding: '8px 12px', fontSize: 11, color: 'var(--text-tertiary)',
+                  textAlign: 'left', lineHeight: 1.8,
                 }}>
                   <code style={{ color: 'var(--accent-green)' }}>/run ls -la</code>{' '}
                   {pt ? '— executa comando' : '— run a command'}<br />
@@ -691,26 +768,17 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
 
             {messages.map((msg, i) => {
               const isLast = i === messages.length - 1
-              const isStreamingThis = isLast && streaming
               return (
-                <Message key={i} msg={msg} isStreaming={isStreamingThis} onRun={execCmd} />
+                <Message
+                  key={i}
+                  msg={msg}
+                  isLiveStreaming={isLast && streaming ? true : undefined}
+                  currentTools={isLast && streaming ? currentTools : undefined}
+                  onRun={execCmd}
+                  pt={pt}
+                />
               )
             })}
-
-            {/* Thinking indicator — between user msg and first assistant chunk */}
-            {streaming && messages.length > 0 && messages[messages.length - 1]?.role === 'user' && !messages[messages.length - 1]?.terminal && (
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '6px 10px', borderRadius: 8,
-                background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                fontSize: 11, color: 'var(--text-tertiary)',
-                marginBottom: 14, width: 'fit-content',
-                animation: 'ttyChatFadeIn 0.2s ease-out',
-              }}>
-                <Loader size={11} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
-                {pt ? 'Consultando dados...' : 'Fetching data...'}
-              </div>
-            )}
 
             {error && (
               <div style={{
@@ -725,10 +793,9 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
             )}
           </div>
 
-          {/* ── Input area ── */}
+          {/* Input area */}
           <div style={{
-            borderTop: '1px solid var(--border)',
-            padding: '10px 12px',
+            borderTop: '1px solid var(--border)', padding: '10px 12px',
             display: 'flex', alignItems: 'flex-end', gap: 8,
             background: 'var(--bg-card)', flexShrink: 0,
           }}>

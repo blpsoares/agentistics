@@ -181,6 +181,9 @@ Bun.serve({
               (text) => {
                 ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ text })}\n\n`))
               },
+              (tool) => {
+                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ tool })}\n\n`))
+              },
               () => {
                 ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ done: true })}\n\n`))
                 ctrl.close()
