@@ -37,44 +37,55 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
 
   if (entries.length === 0) {
     const hasFallback = fallbackCostUSD !== undefined && (fallbackInputTokens ?? 0) + (fallbackOutputTokens ?? 0) > 0
+    if (!hasFallback) {
+      return (
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic', textAlign: 'center', padding: 24 }}>
+          {note ?? 'No model data available'}
+        </div>
+      )
+    }
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {hasFallback && (
-          <div style={{
-            background: 'var(--bg-elevated)',
-            borderRadius: 'var(--radius-md)',
-            padding: '14px 16px',
-            border: '1px solid var(--border-subtle)',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
+      <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', overflow: 'hidden' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: GRID, gap: 8, padding: '8px 14px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-card)' }}>
+          <span style={COL}>Model</span>
+          <span style={{ ...COL, textAlign: 'right' }}>Input</span>
+          <span style={{ ...COL, textAlign: 'right' }}>Output</span>
+          <span style={{ ...COL, textAlign: 'right' }}>C.Read</span>
+          <span style={{ ...COL, textAlign: 'right' }}>C.Write</span>
+          <span style={{ ...COL, textAlign: 'right' }}>Cost</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: GRID, gap: 8, padding: '10px 14px', alignItems: 'center' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              <div style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--text-tertiary)', flexShrink: 0 }} />
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', lineHeight: 1 }}>
                 All models (blended)
               </span>
-              <span style={{
-                fontSize: 13, fontWeight: 700,
-                color: 'var(--anthropic-orange)',
-                background: 'var(--anthropic-orange-dim)',
-                padding: '2px 8px',
-                borderRadius: 6,
-              }}>
-                {fmtCost(fallbackCostUSD!, currency, brlRate)}
-              </span>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              {[
-                { label: 'Input', value: fmt(fallbackInputTokens ?? 0), color: 'var(--accent-blue)' },
-                { label: 'Output', value: fmt(fallbackOutputTokens ?? 0), color: 'var(--accent-green)' },
-              ].map(({ label, value, color: c }) => (
-                <div key={label} style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: c }}>{value}</div>
-                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 1 }}>{label}</div>
-                </div>
-              ))}
+            <div style={{ height: 2, background: 'var(--bg-card)', borderRadius: 1 }}>
+              <div style={{ height: '100%', width: '100%', background: 'linear-gradient(90deg, var(--text-tertiary), var(--text-tertiary)40)', borderRadius: 1 }} />
             </div>
           </div>
-        )}
-        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic', textAlign: 'center', padding: hasFallback ? '0 0 8px' : 24 }}>
-          {note ?? 'No model data available'}
+          <div style={{ textAlign: 'right' }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent-blue)' }}>{fmt(fallbackInputTokens ?? 0)}</span>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent-green)' }}>{fmt(fallbackOutputTokens ?? 0)}</span>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>—</span>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>—</span>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)', padding: '2px 7px', borderRadius: 5, whiteSpace: 'nowrap' }}>
+              {fmtCost(fallbackCostUSD!, currency, brlRate)}
+            </span>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic', textAlign: 'center', padding: '8px 14px', borderTop: '1px solid var(--border-subtle)' }}>
+          {note ?? '* Cost and tokens estimated via blended rate — sessions do not record the model used individually.'}
         </div>
       </div>
     )

@@ -160,15 +160,11 @@ export default function HomePage() {
           fallbackOutputTokens={filters.projects.length > 0 ? derived.outputTokens : undefined}
           fallbackCostUSD={filters.projects.length > 0 ? derived.totalCostUSD : undefined}
           note={
-            filters.projects.length > 0
+            filters.dateRange !== 'all' || filters.customStart || filters.customEnd
               ? (lang === 'pt'
-                ? '* Custo e tokens estimados via taxa ponderada — sessões não registram o modelo utilizado individualmente.'
-                : '* Cost and tokens estimated via blended rate — sessions do not record the model used individually.')
-              : (filters.dateRange !== 'all' || filters.customStart || filters.customEnd
-                ? (lang === 'pt'
-                  ? '* Valores aproximados: tokens rateados pelo total diário. Proporção input/output baseada no histórico global.'
-                  : '* Approximate values: tokens prorated from daily totals. Input/output split based on global historical ratio.')
-                : undefined)
+                ? '* Valores aproximados: tokens rateados pelo total diário. Proporção input/output baseada no histórico global.'
+                : '* Approximate values: tokens prorated from daily totals. Input/output split based on global historical ratio.')
+              : undefined
           }
         />
       </Section>
