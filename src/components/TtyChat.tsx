@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   MessageSquare, X, Send, Loader, AlertCircle, Trash2,
   Maximize2, Minimize2, Terminal, Play, ChevronRight,
-  Wrench, ChevronDown, ChevronUp,
+  Wrench, ChevronDown, ChevronUp, ArrowRight,
 } from 'lucide-react'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
 
@@ -114,38 +115,82 @@ function CodeBlock({ lang: codeLang, code, onRun }: CodeBlockProps) {
   )
 }
 
-function renderInline(text: string, baseKey: number): React.ReactNode[] {
+// Matches [→ label](/route) or [label](/route) where route starts with /
+const NAV_LINK_RE = /\[([^\]]+)\]\((\/[^)]*)\)/g
+
+function renderInline(
+  text: string,
+  baseKey: number,
+  onNavigate?: (path: string) => void,
+): React.ReactNode[] {
   const segments: React.ReactNode[] = []
-  const codeChunks = text.split(/(`[^`]+`)/g)
+
+  // First extract nav links
+  const navParts = text.split(NAV_LINK_RE)
+  // split result: [before, label, path, before, label, path, ...]
   let idx = 0
-  for (const chunk of codeChunks) {
-    if (chunk.startsWith('`') && chunk.endsWith('`') && chunk.length > 2) {
-      segments.push(
-        <code key={`ic-${baseKey}-${idx}`} style={{
-          background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-          borderRadius: 3, padding: '1px 5px', fontSize: 12,
-          fontFamily: 'monospace', color: 'var(--text-primary)',
-        }}>
-          {chunk.slice(1, -1)}
-        </code>
-      )
-    } else {
-      const boldChunks = chunk.split(/(\*\*[^*]+\*\*)/g)
-      for (const b of boldChunks) {
-        if (b.startsWith('**') && b.endsWith('**') && b.length > 4) {
-          segments.push(<strong key={`b-${baseKey}-${idx}`} style={{ fontWeight: 700 }}>{b.slice(2, -2)}</strong>)
+  for (let i = 0; i < navParts.length; i++) {
+    const part = navParts[i]!
+    if (i % 3 === 0) {
+      // plain text segment — parse inline code + bold
+      const codeChunks = part.split(/(`[^`]+`)/g)
+      for (const chunk of codeChunks) {
+        if (chunk.startsWith('`') && chunk.endsWith('`') && chunk.length > 2) {
+          segments.push(
+            <code key={`ic-${baseKey}-${idx}`} style={{
+              background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+              borderRadius: 3, padding: '1px 5px', fontSize: 12,
+              fontFamily: 'monospace', color: 'var(--text-primary)',
+            }}>
+              {chunk.slice(1, -1)}
+            </code>
+          )
         } else {
-          segments.push(<span key={`t-${baseKey}-${idx}`} style={{ whiteSpace: 'pre-wrap' }}>{b}</span>)
+          const boldChunks = chunk.split(/(\*\*[^*]+\*\*)/g)
+          for (const b of boldChunks) {
+            if (b.startsWith('**') && b.endsWith('**') && b.length > 4) {
+              segments.push(<strong key={`b-${baseKey}-${idx}`} style={{ fontWeight: 700 }}>{b.slice(2, -2)}</strong>)
+            } else {
+              segments.push(<span key={`t-${baseKey}-${idx}`} style={{ whiteSpace: 'pre-wrap' }}>{b}</span>)
+            }
+            idx++
+          }
         }
         idx++
       }
+    } else if (i % 3 === 1) {
+      // label — next element (i+1) is the path
+      const label = part
+      const path = navParts[i + 1]!
+      i++ // skip path element
+      segments.push(
+        <button
+          key={`nav-${baseKey}-${idx}`}
+          onClick={() => onNavigate?.(path)}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5,
+            padding: '5px 10px', borderRadius: 7, fontSize: 12, fontWeight: 600,
+            border: '1px solid var(--anthropic-orange)50',
+            background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+            cursor: 'pointer', fontFamily: 'inherit',
+            margin: '6px 0', transition: 'all 0.15s',
+          }}
+        >
+          <ArrowRight size={11} />
+          {label.replace(/^→\s*/, '')}
+        </button>
+      )
+      idx++
     }
-    idx++
   }
   return segments
 }
 
-function renderContent(text: string, onRun?: (c: string) => void): React.ReactNode[] {
+function renderContent(
+  text: string,
+  onRun?: (c: string) => void,
+  onNavigate?: (path: string) => void,
+): React.ReactNode[] {
   const codeBlockRe = /```([^\n]*)\n([\s\S]*?)```/g
   const parts: React.ReactNode[] = []
   let lastIndex = 0
@@ -153,12 +198,12 @@ function renderContent(text: string, onRun?: (c: string) => void): React.ReactNo
   codeBlockRe.lastIndex = 0
   while ((match = codeBlockRe.exec(text)) !== null) {
     const before = text.slice(lastIndex, match.index)
-    if (before) parts.push(...renderInline(before, parts.length))
+    if (before) parts.push(...renderInline(before, parts.length, onNavigate))
     parts.push(<CodeBlock key={`cb-${match.index}`} lang={match[1]?.trim() ?? ''} code={match[2] ?? ''} onRun={onRun} />)
     lastIndex = match.index + match[0].length
   }
   const remaining = text.slice(lastIndex)
-  if (remaining) parts.push(...renderInline(remaining, parts.length))
+  if (remaining) parts.push(...renderInline(remaining, parts.length, onNavigate))
   return parts
 }
 
@@ -213,12 +258,13 @@ function ToolActivity({ tools, live, pt }: { tools: string[]; live: boolean; pt:
 // ── Message component ─────────────────────────────────────────────────────────
 
 function Message({
-  msg, isLiveStreaming, currentTools, onRun, pt,
+  msg, isLiveStreaming, currentTools, onRun, onNavigate, pt,
 }: {
   msg: ChatMessage
   isLiveStreaming?: boolean
   currentTools?: string[]
   onRun: (cmd: string) => void
+  onNavigate: (path: string) => void
   pt: boolean
 }) {
   const isUser = msg.role === 'user'
@@ -282,12 +328,12 @@ function Message({
     }}>
       {/* Avatar */}
       <div style={{
-        width: 26, height: 26, borderRadius: '50%', flexShrink: 0,
+        width: 34, height: 34, borderRadius: '50%', flexShrink: 0,
         background: 'var(--bg-elevated)', border: '1px solid var(--border)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         overflow: 'hidden', marginTop: 2,
       }}>
-        <img src="/minimalistLogo.png" alt="Nay" style={{ width: 18, height: 18, objectFit: 'contain' }} />
+        <img src="/minimalistLogo.png" alt="Nay" style={{ width: 26, height: 26, objectFit: 'contain' }} />
       </div>
 
       {/* Content column */}
@@ -307,7 +353,7 @@ function Message({
           fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.58, wordBreak: 'break-word',
         }}>
           {msg.content
-            ? renderContent(msg.content, onRun)
+            ? renderContent(msg.content, onRun, onNavigate)
             : isLiveStreaming
               ? <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-tertiary)', fontSize: 12 }}>
                   <Loader size={11} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
@@ -424,6 +470,12 @@ interface TtyChatProps {
 }
 
 export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyChatProps) {
+  const navigate = useNavigate()
+  const handleNavigate = useCallback((path: string) => {
+    navigate(path)
+    setOpen(false)
+  }, [navigate])
+
   const [open, setOpen] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -806,6 +858,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
                   isLiveStreaming={isLast && streaming ? true : undefined}
                   currentTools={isLast && streaming ? currentTools : undefined}
                   onRun={execCmd}
+                  onNavigate={handleNavigate}
                   pt={pt}
                 />
               )
