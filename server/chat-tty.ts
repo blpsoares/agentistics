@@ -20,7 +20,7 @@ export type ChatModelId = typeof CHAT_MODELS[number]['id']
 const NAY_CLAUDE_MD = `# agentistics — project context
 
 This workspace connects to the agentistics analytics dashboard via MCP tools.
-The agentistics server must be running at http://localhost:3001.
+The agentistics server must be running at http://localhost:47291.
 
 ---
 
@@ -101,19 +101,20 @@ Always call agentistics_component_catalog before building any layout.
 Available routes: / (home), /projects, /costs, /tools, /custom
 `
 
-// MCP settings written dynamically so the cwd path is always correct for this machine.
-function buildNaySettings() {
+// MCP settings written dynamically so the cwd path and port are always correct.
+function buildNaySettings(port: number) {
   return {
     mcpServers: {
       agentistics: {
         command: 'bun',
         args: ['run', 'mcp/agentistics-mcp.ts'],
         cwd: AGENTISTICS_ROOT,
+        env: { AGENTISTICS_API: `http://localhost:${port}` },
       },
     },
     permissions: {
       allow: [
-        'WebFetch(http://localhost:3001/*)',
+        `WebFetch(http://localhost:${port}/*)`,
         // Allow all agentistics MCP tools without prompting (non-interactive --print mode)
         'mcp__agentistics__agentistics_summary',
         'mcp__agentistics__agentistics_projects',
@@ -133,13 +134,17 @@ function buildNaySettings() {
 }
 
 // Called at server startup — idempotent, safe to run on every restart.
-export async function ensureNayChat(): Promise<void> {
+export async function ensureNayChat(port: number): Promise<void> {
+  const claudeMd = NAY_CLAUDE_MD.replace(
+    /http:\/\/localhost:\d+/g,
+    `http://localhost:${port}`,
+  )
   const dotClaude = path.join(NAY_CHAT_DIR, '.claude')
   await mkdir(dotClaude, { recursive: true })
-  await writeFile(path.join(NAY_CHAT_DIR, 'CLAUDE.md'), NAY_CLAUDE_MD)
+  await writeFile(path.join(NAY_CHAT_DIR, 'CLAUDE.md'), claudeMd)
   await writeFile(
     path.join(dotClaude, 'settings.json'),
-    JSON.stringify(buildNaySettings(), null, 2),
+    JSON.stringify(buildNaySettings(port), null, 2),
   )
 }
 

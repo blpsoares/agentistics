@@ -25,7 +25,7 @@ import type { ModelUsage, SessionMeta } from '../lib/types'
 
 const HOME_DIR    = process.env.HOME ?? process.env.USERPROFILE ?? ''
 const CLAUDE_DIR  = join(HOME_DIR, '.claude')
-const API_BASE    = 'http://localhost:3001'
+const API_BASE    = `http://localhost:${process.env.PORT ?? '47291'}`
 const SESSION_START = Date.now()
 
 function showGoodbye(opts?: {
@@ -746,7 +746,7 @@ async function ensureApiRunning(): Promise<void> {
 
   if (!ok) {
     if (spawnedServer) { spawnedServer.kill(); spawnedServer = null }
-    console.error(`\n${RD}Nao foi possivel iniciar o servidor API (porta 3001).${R}`)
+    console.error(`\n${RD}Nao foi possivel iniciar o servidor API (porta 47291).${R}`)
     process.exit(1)
   }
   console.log(`${AM}Servidor iniciado (pid ${spawnedServer?.pid}).${R}`)

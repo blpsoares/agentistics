@@ -20,7 +20,7 @@ import {
 
 setupFileWatcher()
 maybeSpawnWatcher()
-ensureNayChat().catch(err => console.error('[nay-chat] failed to initialize:', err))
+ensureNayChat(PORT).catch(err => console.error('[nay-chat] failed to initialize:', err))
 
 
 // ---------------------------------------------------------------------------
@@ -304,7 +304,7 @@ const _SEP = `${_D}${'─'.repeat(44)}${_R}`
 const _DOT = `${_EM}●${_R}`
 const _URL = (u: string) => `${_CY}${_B}${u}${_R}`
 
-const _UI_PORT = process.env.VITE_PORT ?? '5173'
+const _UI_PORT = process.env.VITE_PORT ?? '47292'
 const _UI_URL  = SERVE_STATIC ? `http://localhost:${PORT}` : `http://localhost:${_UI_PORT}`
 const _UI_TAG  = SERVE_STATIC ? ` ${_D}embedded${_R}` : ''
 

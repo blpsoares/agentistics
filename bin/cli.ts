@@ -18,7 +18,7 @@ Commands:
 
 Options:
   --help, -h    Show this help message
-  --port <n>    Port for the web server (default: 3001)  [server only]
+  --port <n>    Port for the web server (default: 47291)  [server only]
 
 Examples:
   agentop server
