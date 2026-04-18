@@ -146,6 +146,34 @@ export async function ensureNayChat(port: number): Promise<void> {
     path.join(dotClaude, 'settings.json'),
     JSON.stringify(buildNaySettings(port), null, 2),
   )
+  await registerMcpGlobally(port)
+}
+
+// Registers the agentistics MCP via `claude mcp add -s user` so that
+// claude --print mode (which reads ~/.claude.json user scope) can find the tools.
+// Safe to call on every restart — skips if already registered with the same port.
+async function registerMcpGlobally(port: number): Promise<void> {
+  const apiUrl = `http://localhost:${port}`
+  const mcpScript = path.join(AGENTISTICS_ROOT, 'mcp', 'agentistics-mcp.ts')
+
+  // Check if already registered with the correct URL
+  try {
+    const dotClaudeJson = path.join(HOME_DIR, '.claude.json')
+    const raw = await Bun.file(dotClaudeJson).text()
+    const json = JSON.parse(raw) as Record<string, unknown>
+    const servers = json['mcpServers'] as Record<string, { env?: Record<string, string> }> | undefined
+    const existing = servers?.['agentistics']
+    if (existing?.env?.['AGENTISTICS_API'] === apiUrl) return // already up to date
+  } catch { /* read or parse failed — proceed with registration */ }
+
+  // Use the official CLI to register at user scope
+  const proc = Bun.spawn(
+    ['claude', 'mcp', 'add', '-s', 'user', 'agentistics',
+      '-e', `AGENTISTICS_API=${apiUrl}`,
+      '--', 'bun', 'run', mcpScript],
+    { stdout: 'pipe', stderr: 'pipe' },
+  )
+  await proc.exited
 }
 
 export async function streamViaClaude(
