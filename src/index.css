@@ -166,8 +166,14 @@ html, body {
   html, body {
     /* Prevent horizontal scroll */
     overflow-x: hidden;
+    max-width: 100vw;
     /* Smooth momentum scrolling on iOS */
     -webkit-overflow-scrolling: touch;
+  }
+
+  #root {
+    max-width: 100vw;
+    overflow-x: hidden;
   }
 
   /* Hide scrollbars on mobile to save space */

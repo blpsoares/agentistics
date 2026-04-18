@@ -1,6 +1,7 @@
 import React from 'react'
 import { Info } from 'lucide-react'
 import { PrecisionToggle } from './PrecisionToggle'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 interface StatCardProps {
   label: string
@@ -21,12 +22,13 @@ interface StatCardProps {
 }
 
 export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-orange)', info, onInfoClick, action, fullPrecision, onTogglePrecision, lang }: StatCardProps) {
+  const isMobile = useIsMobile()
   return (
     <div style={{
       background: 'var(--bg-card)',
       border: '1px solid var(--border)',
       borderRadius: 'var(--radius-lg)',
-      padding: '20px 22px',
+      padding: isMobile ? '14px 14px' : '20px 22px',
       display: 'flex',
       flexDirection: 'column',
       gap: 12,

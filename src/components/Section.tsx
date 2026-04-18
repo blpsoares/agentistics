@@ -1,5 +1,6 @@
 import React from 'react'
 import { Maximize2 } from 'lucide-react'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 interface Props {
   title: React.ReactNode
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export function Section({ title, children, action, onExpand, flashId, style: extraStyle }: Props) {
+  const isMobile = useIsMobile()
   return (
     <div
       data-flash-id={flashId}
@@ -18,7 +20,7 @@ export function Section({ title, children, action, onExpand, flashId, style: ext
         background: 'var(--bg-card)',
         border: '1px solid var(--border)',
         borderRadius: 'var(--radius-lg)',
-        padding: '20px 22px',
+        padding: isMobile ? '14px 14px' : '20px 22px',
         boxSizing: 'border-box',
         ...extraStyle,
       }}
