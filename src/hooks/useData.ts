@@ -495,8 +495,10 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     }, null)
 
     // ── Cache efficiency (filter-aware, derived from filteredModelUsage) ──
-    // hit rate = cacheRead / (input + cacheRead). cacheCreation is a one-time premium paid
-    // to create the cache, not consumption from it — excluded from the denominator.
+    // hit rate = cacheRead / (input + cacheRead + cacheCreation).
+    // cacheCreation tokens are included in the denominator because they ARE tokens sent to the
+    // model — including them avoids artificially inflated rates that approach 100% for heavy
+    // Claude Code users where cacheRead dwarfs uncached input by orders of magnitude.
     // Savings model: compare actual spend with what the same tokens would have cost as
     // plain input, then subtract the extra we paid for cache writes.
     const cacheTotals = Object.values(filteredModelUsage).reduce(
@@ -507,7 +509,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       }),
       { inputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
     )
-    const cacheDenominator = cacheTotals.inputTokens + cacheTotals.cacheReadInputTokens
+    const cacheDenominator = cacheTotals.inputTokens + cacheTotals.cacheReadInputTokens + cacheTotals.cacheCreationInputTokens
     const cacheHitRate = cacheDenominator > 0 ? cacheTotals.cacheReadInputTokens / cacheDenominator : 0
 
     const blended = blendedCostPerToken(globalModelUsage)
@@ -528,7 +530,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // Per-model hit rate (only for models with data)
     const cachePerModel: Record<string, { hitRate: number; cacheReadTokens: number; inputTokens: number }> = {}
     for (const [modelId, u] of Object.entries(filteredModelUsage)) {
-      const denom = (u.inputTokens ?? 0) + (u.cacheReadInputTokens ?? 0)
+      const denom = (u.inputTokens ?? 0) + (u.cacheReadInputTokens ?? 0) + (u.cacheCreationInputTokens ?? 0)
       if (denom === 0) continue
       cachePerModel[modelId] = {
         hitRate: (u.cacheReadInputTokens ?? 0) / denom,
