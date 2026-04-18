@@ -1,6 +1,6 @@
 import path from 'node:path'
 
-const TTY_CHAT_CWD = path.resolve(import.meta.dir, '../tty-chat-agentistics')
+const TTY_CHAT_CWD = path.join(process.env.HOME ?? '/root', 'nay-chat')
 
 export type ChatMessage = { role: 'user' | 'assistant'; content: string }
 
