@@ -6,7 +6,7 @@ import {
   MessageSquare, X, Send, Loader, AlertCircle, Trash2,
   Maximize2, Minimize2, Terminal, Play, ChevronRight,
   Wrench, ChevronDown, ChevronUp, ArrowRight, Filter, History, Plus,
-  ShieldAlert, Check, ExternalLink, Paperclip, FileText as FileTextIcon,
+  ShieldAlert, Check, ExternalLink, Paperclip, FileText as FileTextIcon, Minus,
 } from 'lucide-react'
 
 // ── Attachment type (Nay only handles images + text files) ────────────────────
@@ -662,6 +662,38 @@ function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) =
   )
 }
 
+// ── Nay floating window localStorage helpers ──────────────────────────────────
+
+const NAY_POS_KEY  = 'agentistics-nay-chat-pos'
+const NAY_SIZE_KEY = 'agentistics-nay-chat-size'
+
+function loadNayPos(): { x: number; y: number } {
+  try {
+    const raw = localStorage.getItem(NAY_POS_KEY)
+    if (raw) return JSON.parse(raw) as { x: number; y: number }
+  } catch { /* ignore */ }
+  return {
+    x: Math.max(0, window.innerWidth / 2 - 200),
+    y: 80,
+  }
+}
+
+function loadNaySize(): { w: number; h: number } {
+  try {
+    const raw = localStorage.getItem(NAY_SIZE_KEY)
+    if (raw) return JSON.parse(raw) as { w: number; h: number }
+  } catch { /* ignore */ }
+  return { w: 420, h: 580 }
+}
+
+function saveNayPos(pos: { x: number; y: number }) {
+  try { localStorage.setItem(NAY_POS_KEY, JSON.stringify(pos)) } catch { /* ignore */ }
+}
+
+function saveNaySize(size: { w: number; h: number }) {
+  try { localStorage.setItem(NAY_SIZE_KEY, JSON.stringify(size)) } catch { /* ignore */ }
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 import type { ChatMessage as ClaudeChatMessage } from './ClaudeChat'
@@ -756,6 +788,29 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   const [nayAttachments, setNayAttachments] = useState<NayAttachment[]>([])
   const nayFileInputRef = useRef<HTMLInputElement>(null)
 
+  // Nay floating window state
+  const [nayDetached, setNayDetached] = useState(false)
+  const [nayMinimized, setNayMinimized] = useState(false)
+  const [nayPos, setNayPos] = useState<{ x: number; y: number }>(() => loadNayPos())
+  const [naySize, setNaySize] = useState<{ w: number; h: number }>(() => loadNaySize())
+  const NAY_FAB_W = 46
+  const NAY_FAB_H = 58
+  const [nayFabPos, setNayFabPos] = useState<{ x: number; y: number }>(() => ({
+    x: typeof window !== 'undefined' ? window.innerWidth - NAY_FAB_W - 80 : 300,
+    y: typeof window !== 'undefined' ? window.innerHeight - NAY_FAB_H - 78 : 600,
+  }))
+
+  // Nay floating window refs
+  const nayWindowRef = useRef<HTMLDivElement>(null)
+  const nayFabRef = useRef<HTMLDivElement>(null)
+  const nayDragRef = useRef({ active: false, startX: 0, startY: 0, origX: 0, origY: 0 })
+  const nayResizeRef = useRef({ active: false, startX: 0, startY: 0, origW: 0, origH: 0 })
+  const nayFabDragRef = useRef({ active: false, moved: false, startX: 0, startY: 0, origX: 0, origY: 0 })
+  const nayPosRef = useRef(nayPos)
+  const naySizeRef = useRef(naySize)
+  const nayFabPosRef = useRef(nayFabPos)
+  const nayFloatListRef = useRef<HTMLDivElement>(null)
+
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const openRef = useRef(open)
@@ -767,6 +822,9 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
 
   useEffect(() => { openRef.current = open }, [open])
   useEffect(() => { soundRef.current = chatSoundEnabled }, [chatSoundEnabled])
+  useEffect(() => { nayPosRef.current = nayPos }, [nayPos])
+  useEffect(() => { naySizeRef.current = naySize }, [naySize])
+  useEffect(() => { nayFabPosRef.current = nayFabPos }, [nayFabPos])
 
   // Track visual viewport (keyboard-aware) for mobile panel positioning
   const [vpRect, setVpRect] = useState({ top: 0, height: typeof window !== 'undefined' ? window.innerHeight : 844 })
@@ -874,6 +932,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
 
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
+    if (nayFloatListRef.current) nayFloatListRef.current.scrollTop = nayFloatListRef.current.scrollHeight
   }, [messages, streaming, currentTools])
 
   // Poll for new messages on historical Nay sessions (real-time view)
@@ -936,6 +995,104 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
     initAudio()
     setOpen(v => !v)
   }
+
+  // ── Nay floating window drag/resize handlers ──────────────────────────────
+
+  const onNayHeaderMouseDown = useCallback((e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return
+    e.preventDefault()
+    nayDragRef.current = {
+      active: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: nayPosRef.current.x,
+      origY: nayPosRef.current.y,
+    }
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!nayDragRef.current.active) return
+      const dx = ev.clientX - nayDragRef.current.startX
+      const dy = ev.clientY - nayDragRef.current.startY
+      const newX = Math.max(0, Math.min(window.innerWidth - naySizeRef.current.w, nayDragRef.current.origX + dx))
+      const newY = Math.max(0, Math.min(window.innerHeight - 60, nayDragRef.current.origY + dy))
+      nayPosRef.current = { x: newX, y: newY }
+      if (nayWindowRef.current) {
+        nayWindowRef.current.style.left = `${newX}px`
+        nayWindowRef.current.style.top = `${newY}px`
+      }
+    }
+    const onMouseUp = () => {
+      nayDragRef.current.active = false
+      setNayPos({ ...nayPosRef.current })
+      saveNayPos(nayPosRef.current)
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }, [])
+
+  const onNayResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    nayResizeRef.current = {
+      active: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      origW: naySizeRef.current.w,
+      origH: naySizeRef.current.h,
+    }
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!nayResizeRef.current.active) return
+      const dx = ev.clientX - nayResizeRef.current.startX
+      const dy = ev.clientY - nayResizeRef.current.startY
+      const newW = Math.max(360, nayResizeRef.current.origW + dx)
+      const newH = Math.max(400, nayResizeRef.current.origH + dy)
+      naySizeRef.current = { w: newW, h: newH }
+      if (nayWindowRef.current) {
+        nayWindowRef.current.style.width = `${newW}px`
+        nayWindowRef.current.style.height = `${newH}px`
+      }
+    }
+    const onMouseUp = () => {
+      nayResizeRef.current.active = false
+      setNaySize({ ...naySizeRef.current })
+      saveNaySize(naySizeRef.current)
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }, [])
+
+  const onNayFabMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    nayFabDragRef.current = {
+      active: true, moved: false,
+      startX: e.clientX, startY: e.clientY,
+      origX: nayFabPosRef.current.x, origY: nayFabPosRef.current.y,
+    }
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!nayFabDragRef.current.active) return
+      const dx = ev.clientX - nayFabDragRef.current.startX
+      const dy = ev.clientY - nayFabDragRef.current.startY
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) nayFabDragRef.current.moved = true
+      const newX = Math.max(0, Math.min(window.innerWidth - NAY_FAB_W, nayFabDragRef.current.origX + dx))
+      const newY = Math.max(0, Math.min(window.innerHeight - NAY_FAB_H, nayFabDragRef.current.origY + dy))
+      nayFabPosRef.current = { x: newX, y: newY }
+      if (nayFabRef.current) {
+        nayFabRef.current.style.left = `${newX}px`
+        nayFabRef.current.style.top = `${newY}px`
+      }
+    }
+    const onMouseUp = () => {
+      nayFabDragRef.current.active = false
+      setNayFabPos({ ...nayFabPosRef.current })
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }, [])
 
   const handleNayPaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const imageItem = Array.from(e.clipboardData.items).find(i => i.type.startsWith('image/'))
@@ -1199,6 +1356,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
           .tty-send-btn:hover:not(:disabled) { background: var(--anthropic-orange) !important; color: #fff !important; }
         }
         .tty-send-btn:active:not(:disabled) { background: var(--anthropic-orange) !important; color: #fff !important; }
+        .tty-nay-header { cursor: grab; user-select: none; }
+        .tty-nay-header:active { cursor: grabbing; }
       `}</style>
 
       {/* FAB */}
@@ -1305,6 +1464,21 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
               {messages.length > 0 && (
                 <button className="tty-icon-btn" onClick={clearChat} title={pt ? 'Nova conversa' : 'New conversation'} style={iconBtnStyle}>
                   <Plus size={12} />
+                </button>
+              )}
+              {activeTab === 'nay' && !isMobile && (
+                <button
+                  className="tty-icon-btn"
+                  onClick={() => {
+                    setNayDetached(true)
+                    setNayMinimized(false)
+                    setOpen(false)
+                    setActiveTab('claude')
+                  }}
+                  title={pt ? 'Destacar janela Nay' : 'Detach Nay window'}
+                  style={iconBtnStyle}
+                >
+                  <ExternalLink size={12} />
                 </button>
               )}
               <button
@@ -1640,6 +1814,438 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             />
           )}
 
+        </div>
+      )}
+
+      {/* Nay floating window — minimized FAB */}
+      {nayDetached && nayMinimized && (
+        <div
+          ref={nayFabRef}
+          onMouseDown={onNayFabMouseDown}
+          onClick={() => {
+            if (nayFabDragRef.current.moved) { nayFabDragRef.current.moved = false; return }
+            setNayMinimized(false)
+          }}
+          style={{
+            position: 'fixed',
+            left: nayFabPos.x,
+            top: nayFabPos.y,
+            zIndex: 551,
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+            cursor: 'grab', userSelect: 'none',
+          }}
+        >
+          <div style={{
+            position: 'relative',
+            width: NAY_FAB_W, height: NAY_FAB_W, borderRadius: '50%',
+            border: '1.5px solid var(--anthropic-orange)',
+            background: 'var(--anthropic-orange-dim)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            overflow: 'hidden', pointerEvents: 'none',
+          }}>
+            <img src="/minimalistLogo.png" alt="Nay" style={{ width: 26, height: 26, objectFit: 'contain' }} />
+          </div>
+          <span style={{ fontSize: 9, color: 'var(--text-tertiary)', lineHeight: 1, pointerEvents: 'none' }}>Nay</span>
+          {/* X badge to fully close */}
+          <button
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => {
+              e.stopPropagation()
+              setNayDetached(false)
+              setNayMinimized(false)
+              setOpen(false)
+            }}
+            title={pt ? 'Fechar Nay' : 'Close Nay'}
+            style={{
+              position: 'absolute', top: -4, right: -4,
+              width: 16, height: 16, borderRadius: '50%',
+              background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer', color: 'var(--text-tertiary)', padding: 0, zIndex: 1,
+            }}
+          >
+            <X size={8} />
+          </button>
+        </div>
+      )}
+
+      {/* Nay floating window */}
+      {nayDetached && !nayMinimized && (
+        <div
+          ref={nayWindowRef}
+          style={{
+            position: 'fixed',
+            left: nayPos.x,
+            top: nayPos.y,
+            width: naySize.w,
+            height: naySize.h,
+            zIndex: 551,
+            display: 'flex', flexDirection: 'column',
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 14,
+            boxShadow: '0 10px 48px rgba(0,0,0,0.45)',
+            overflow: 'hidden',
+            animation: 'ttyChatSlideIn 0.18s ease-out',
+          }}
+        >
+          {/* Floating header — drag handle */}
+          <div
+            className="tty-nay-header"
+            onMouseDown={onNayHeaderMouseDown}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '10px 14px', borderBottom: '1px solid var(--border)',
+              background: 'var(--bg-card)', flexShrink: 0,
+              cursor: 'grab', userSelect: 'none',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+              <div style={{
+                width: 30, height: 30, borderRadius: 8, overflow: 'hidden', flexShrink: 0,
+                background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <img src="/minimalistLogo.png" alt="Nay" style={{ width: 22, height: 22, objectFit: 'contain' }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
+                  Nay
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  {streaming ? (
+                    <span style={{ color: 'var(--anthropic-orange)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <Loader size={8} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
+                      {currentTools.length > 0
+                        ? formatToolName(currentTools[currentTools.length - 1]!)
+                        : (pt ? 'pensando...' : 'thinking...')}
+                    </span>
+                  ) : (
+                    <>
+                      <span>{modelInfo?.label ?? effectiveModel}</span>
+                      {modelInfo && (
+                        <span style={{
+                          fontSize: 9, fontWeight: 700,
+                          color: BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)',
+                          background: `color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
+                          border: `1px solid color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
+                          padding: '0px 4px', borderRadius: 3,
+                        }}>
+                          {modelInfo.badge}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              {messages.length > 0 && (
+                <button className="tty-icon-btn" onClick={clearChat} title={pt ? 'Nova conversa' : 'New conversation'} style={iconBtnStyle}>
+                  <Plus size={12} />
+                </button>
+              )}
+              <button
+                className="tty-icon-btn"
+                onClick={openHistory}
+                title={pt ? 'Histórico de conversas' : 'Conversation history'}
+                style={{ ...iconBtnStyle, color: showHistory ? 'var(--anthropic-orange)' : 'var(--text-secondary)' }}
+              >
+                <History size={12} />
+              </button>
+              {/* Re-attach button */}
+              <button
+                className="tty-icon-btn"
+                onClick={() => {
+                  setNayDetached(false)
+                  setNayMinimized(false)
+                  setOpen(true)
+                  setActiveTab('nay')
+                }}
+                title={pt ? 'Encaixar no chat' : 'Re-attach to chat'}
+                style={iconBtnStyle}
+              >
+                <ExternalLink size={12} style={{ transform: 'scaleX(-1)' }} />
+              </button>
+              {/* Minimize */}
+              <button
+                className="tty-icon-btn"
+                onClick={() => setNayMinimized(true)}
+                title={pt ? 'Minimizar' : 'Minimize'}
+                style={iconBtnStyle}
+              >
+                <Minus size={12} />
+              </button>
+              {/* Close → back to corner */}
+              <button className="tty-icon-btn" onClick={() => { setNayDetached(false); setNayMinimized(false) }} title={pt ? 'Fechar' : 'Close'} style={iconBtnStyle}>
+                <X size={12} />
+              </button>
+            </div>
+          </div>
+
+          {/* History panel */}
+          {showHistory && (
+            <div style={{
+              position: 'absolute', inset: 0, top: 52, zIndex: 10,
+              background: 'var(--bg-surface)',
+              display: 'flex', flexDirection: 'column',
+              borderTop: '1px solid var(--border)',
+              animation: 'ttyChatFadeIn 0.15s ease-out',
+            }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '10px 14px', borderBottom: '1px solid var(--border)',
+                background: 'var(--bg-card)', flexShrink: 0,
+              }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <History size={12} style={{ color: 'var(--anthropic-orange)' }} />
+                  {pt ? 'Histórico' : 'History'}
+                </span>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    onClick={newConversation}
+                    style={{
+                      fontSize: 11, padding: '4px 10px', borderRadius: 6,
+                      border: '1px solid var(--anthropic-orange)60',
+                      background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+                      cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+                    }}
+                  >
+                    <Plus size={10} />
+                    {pt ? 'Nova' : 'New'}
+                  </button>
+                  <button onClick={() => setShowHistory(false)} className="tty-icon-btn" style={iconBtnStyle}>
+                    <X size={12} />
+                  </button>
+                </div>
+              </div>
+              <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
+                {historyLoading ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-tertiary)' }}>
+                    <Loader size={16} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
+                  </div>
+                ) : historyList.length === 0 ? (
+                  <div style={{
+                    height: '100%', display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', justifyContent: 'center',
+                    color: 'var(--text-tertiary)', fontSize: 12, gap: 6,
+                  }}>
+                    <History size={28} style={{ opacity: 0.2 }} />
+                    {pt ? 'Nenhuma conversa ainda' : 'No conversations yet'}
+                  </div>
+                ) : historyList.map(convo => (
+                  <div
+                    key={convo.id}
+                    onClick={() => restoreConversation(convo.id)}
+                    style={{
+                      padding: '9px 10px', borderRadius: 8, marginBottom: 4,
+                      cursor: 'pointer',
+                      background: convo.id === sessionId ? 'var(--anthropic-orange-dim)' : 'var(--bg-card)',
+                      border: convo.id === sessionId ? '1px solid var(--anthropic-orange)40' : '1px solid var(--border)',
+                      display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8,
+                      transition: 'background 0.12s',
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontSize: 12, fontWeight: 600, color: 'var(--text-primary)',
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        lineHeight: 1.4,
+                      }}>
+                        {convo.title}
+                      </div>
+                      <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 3, display: 'flex', gap: 6 }}>
+                        <span>{new Date(convo.updatedAt).toLocaleDateString(lang === 'pt' ? 'pt-BR' : 'en-US', { day: '2-digit', month: 'short' })}</span>
+                        <span>·</span>
+                        <span>{convo.messageCount} {pt ? 'msgs' : 'msgs'}</span>
+                        {convo.model && (
+                          <>
+                            <span>·</span>
+                            <span>{CHAT_MODELS.find(m => m.id === convo.model)?.label ?? convo.model}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Streaming context bar */}
+          {streaming && (() => {
+            const lastUser = [...messages].reverse().find(m => m.role === 'user' && !m.terminal)
+            if (!lastUser) return null
+            const preview = lastUser.content.length > 120
+              ? lastUser.content.slice(0, 120) + '…'
+              : lastUser.content
+            return (
+              <div style={{
+                flexShrink: 0,
+                borderBottom: '1px solid var(--border)',
+                background: 'var(--bg-card)',
+                padding: '6px 14px',
+                display: 'flex', alignItems: 'center', gap: 8,
+              }}>
+                <span style={{ fontSize: 10, color: 'var(--anthropic-orange)', fontWeight: 700, flexShrink: 0 }}>↑</span>
+                {lastUser.images && lastUser.images.length > 0 && (
+                  <img src={lastUser.images[0]} alt=""
+                    style={{ width: 20, height: 20, borderRadius: 4, objectFit: 'cover', flexShrink: 0 }} />
+                )}
+                <span style={{ fontSize: 11, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {preview || (lastUser.images?.length ? '[image]' : '')}
+                </span>
+              </div>
+            )
+          })()}
+
+          {/* Messages */}
+          <div ref={nayFloatListRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 14px 6px' }}>
+            {messages.length === 0 && !streaming && (
+              <div style={{
+                height: '100%', display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center',
+                gap: 10, color: 'var(--text-tertiary)', textAlign: 'center', padding: '0 20px',
+              }}>
+                <img src="/minimalistLogo.png" alt="Nay" style={{ width: 36, height: 36, objectFit: 'contain', opacity: 0.3 }} />
+                <div style={{ fontSize: 13, fontWeight: 600 }}>
+                  {pt ? 'Olá! Sou o Nay' : 'Hi! I\'m Nay'}
+                </div>
+                <div style={{ fontSize: 11, lineHeight: 1.65, opacity: 0.7 }}>
+                  {pt
+                    ? 'Analiso custos, sessões, projetos e crio layouts personalizados.'
+                    : 'I can analyze costs, sessions, projects and build custom layouts.'}
+                </div>
+                <div style={{
+                  marginTop: 4, background: 'var(--bg-elevated)',
+                  border: '1px solid var(--border)', borderRadius: 8,
+                  padding: '8px 12px', fontSize: 11, color: 'var(--text-tertiary)',
+                  textAlign: 'left', lineHeight: 1.8,
+                }}>
+                  <code style={{ color: 'var(--accent-green)' }}>!ls -la</code>{' '}
+                  {pt ? '— executa comando' : '— run a command'}<br />
+                  <code style={{ color: 'var(--accent-green)' }}>!pwd</code>{' '}
+                  {pt ? '— atalho bash' : '— bash shortcut'}
+                </div>
+              </div>
+            )}
+            {messages.map((msg, i) => {
+              const isLast = i === messages.length - 1
+              return (
+                <Message
+                  key={i}
+                  msg={msg}
+                  isLiveStreaming={isLast && streaming ? true : undefined}
+                  currentTools={isLast && streaming ? currentTools : undefined}
+                  onRun={execCmd}
+                  onNavigate={handleNavigate}
+                  pt={pt}
+                />
+              )
+            })}
+            {showConfirmBar && (
+              <ConfirmBar
+                pt={pt}
+                onConfirm={() => sendMessage(pt ? 'Sim, pode prosseguir.' : 'Yes, proceed.')}
+                onCancel={() => sendMessage(pt ? 'Não, cancele.' : 'No, cancel.')}
+              />
+            )}
+            {error && (
+              <div style={{
+                display: 'flex', alignItems: 'flex-start', gap: 8,
+                padding: '10px 12px', borderRadius: 8, marginBottom: 8,
+                background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
+                fontSize: 12, color: '#ef4444',
+              }}>
+                <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{error}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Input area */}
+          <div style={{ borderTop: '1px solid var(--border)', background: 'var(--bg-card)', flexShrink: 0 }}>
+            {nayAttachments.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, padding: '6px 12px 0' }}>
+                {nayAttachments.map(att => (
+                  <div key={att.id} style={{ position: 'relative', borderRadius: 6, border: '1px solid var(--border)', overflow: 'hidden', background: 'var(--bg-elevated)' }}>
+                    {att.isImage ? (
+                      <img src={att.preview} alt={att.name} style={{ width: 52, height: 52, objectFit: 'cover', display: 'block' }} />
+                    ) : (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 8px', maxWidth: 120 }}>
+                        <FileTextIcon size={12} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
+                        <span style={{ fontSize: 10, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{att.name}</span>
+                      </div>
+                    )}
+                    <button onMouseDown={e => { e.preventDefault(); setNayAttachments(prev => prev.filter(a => a.id !== att.id)) }}
+                      style={{ position: 'absolute', top: 2, right: 2, width: 14, height: 14, borderRadius: '50%', background: 'rgba(0,0,0,0.55)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#fff', padding: 0 }}>
+                      <X size={8} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
+              <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30 }}>
+                <Paperclip size={12} />
+              </button>
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onPaste={handleNayPaste}
+                placeholder={pt ? 'Pergunte algo...' : 'Ask something...'}
+                rows={1}
+                disabled={streaming || chatModel === null}
+                style={{
+                  flex: 1, resize: 'none',
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                  borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit',
+                  color: 'var(--text-primary)', outline: 'none', lineHeight: 1.5,
+                  maxHeight: 120, overflowY: 'auto', transition: 'border-color 0.15s',
+                }}
+                onFocus={e => { e.currentTarget.style.borderColor = 'var(--anthropic-orange)60' }}
+                onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
+                onInput={e => {
+                  const el = e.currentTarget
+                  el.style.height = 'auto'
+                  el.style.height = `${Math.min(el.scrollHeight, 120)}px`
+                }}
+              />
+              <button
+                className="tty-send-btn"
+                onClick={() => sendMessage()}
+                disabled={(!input.trim() && nayAttachments.length === 0) || streaming || chatModel === null}
+                title={pt ? 'Enviar (Enter)' : 'Send (Enter)'}
+                style={{
+                  width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                  border: '1px solid var(--anthropic-orange)60',
+                  background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+                  cursor: (input.trim() || nayAttachments.length > 0) && !streaming ? 'pointer' : 'not-allowed',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  opacity: (input.trim() || nayAttachments.length > 0) && !streaming && chatModel !== null ? 1 : 0.4,
+                  transition: 'all 0.15s',
+                }}
+              >
+                {streaming
+                  ? <Loader size={14} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
+                  : input.trim().startsWith('!') && input.trim().length > 1
+                    ? <Play size={14} />
+                    : <Send size={14} />}
+              </button>
+            </div>
+          </div>
+
+          {/* Resize handle */}
+          <div
+            onMouseDown={onNayResizeMouseDown}
+            style={{
+              position: 'absolute', bottom: 0, right: 0,
+              width: 16, height: 16, cursor: 'nwse-resize',
+              background: 'transparent',
+            }}
+          />
         </div>
       )}
 
