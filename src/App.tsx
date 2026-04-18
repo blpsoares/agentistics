@@ -34,6 +34,7 @@ import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
 import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
 import { TtyChat } from './components/TtyChat'
+import { type ChatModelId } from './lib/chatModels'
 import { format, parseISO, parse } from 'date-fns'
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
@@ -701,6 +702,8 @@ export default function AppLayout() {
     return DEFAULT_CARD_ORDER
   })
   const [showPrefsModal, setShowPrefsModal] = useState(false)
+  const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
+  const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
 
   const [cardPrecision, setCardPrecisionState] = useState<Record<string, boolean>>({})
   const precisionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -728,13 +731,15 @@ export default function AppLayout() {
   useEffect(() => {
     fetch('/api/preferences')
       .then(r => r.ok ? r.json() : null)
-      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[] } | null) => {
+      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean } | null) => {
         if (!prefs) return
         if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
         if (prefs.lang) setLangState(prefs.lang)
         if (prefs.theme) setThemeState(prefs.theme)
         if (prefs.currency) setCurrencyState(prefs.currency)
         if (prefs.cardOrder) setCardOrder(prefs.cardOrder as CardId[])
+        if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
+        if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
       })
       .catch(() => {})
   }, [])
@@ -1426,13 +1431,15 @@ export default function AppLayout() {
       {/* Preferences modal */}
       {showPrefsModal && (
         <PreferencesModal
-          initial={{ lang, theme, currency, cardOrder, cardPrecision }}
+          initial={{ lang, theme, currency, cardOrder, cardPrecision, chatModel, chatSoundEnabled }}
           onSave={(draft: PrefsDraft) => {
             setLangState(draft.lang)
             setThemeState(draft.theme)
             setCurrencyState(draft.currency)
             setCardOrder(draft.cardOrder as CardId[])
             setCardPrecisionState(draft.cardPrecision)
+            if (draft.chatModel) setChatModel(draft.chatModel)
+            setChatSoundEnabled(draft.chatSoundEnabled)
             fetch('/api/preferences', {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
@@ -1442,6 +1449,8 @@ export default function AppLayout() {
                 currency: draft.currency,
                 cardOrder: draft.cardOrder,
                 cardPrecision: draft.cardPrecision,
+                chatModel: draft.chatModel,
+                chatSoundEnabled: draft.chatSoundEnabled,
               }),
             }).catch(() => {})
             setShowPrefsModal(false)
@@ -1531,7 +1540,19 @@ export default function AppLayout() {
       )}
 
       {/* TTY Chat — floating button + panel, globally available */}
-      <TtyChat lang={lang} />
+      <TtyChat
+        lang={lang}
+        chatModel={chatModel}
+        chatSoundEnabled={chatSoundEnabled}
+        onModelSet={(model) => {
+          setChatModel(model)
+          fetch('/api/preferences', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chatModel: model }),
+          }).catch(() => {})
+        }}
+      />
 
       {/* Footer */}
       <footer style={{
