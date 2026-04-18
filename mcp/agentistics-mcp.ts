@@ -9,6 +9,28 @@ import {
 
 const API = process.env.AGENTISTICS_API ?? "http://localhost:47291";
 
+// Minimal pricing table — mirrors src/lib/types.ts MODEL_PRICING
+const PRICES: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
+  "claude-opus-4":     { input: 15,   output: 75,   cacheRead: 1.50,  cacheWrite: 18.75 },
+  "claude-sonnet-4":   { input: 3,    output: 15,   cacheRead: 0.30,  cacheWrite: 3.75  },
+  "claude-haiku-4":    { input: 0.80, output: 4,    cacheRead: 0.08,  cacheWrite: 1.00  },
+  "claude-3-5-sonnet": { input: 3,    output: 15,   cacheRead: 0.30,  cacheWrite: 3.75  },
+  "claude-3-5-haiku":  { input: 0.80, output: 4,    cacheRead: 0.08,  cacheWrite: 1.00  },
+  "claude-3-opus":     { input: 15,   output: 75,   cacheRead: 1.50,  cacheWrite: 18.75 },
+};
+const FALLBACK_PRICE = { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75 };
+
+function getPrice(modelId: string) {
+  if (!modelId) return FALLBACK_PRICE;
+  const key = Object.keys(PRICES).find(k => modelId.toLowerCase().includes(k));
+  return key ? PRICES[key]! : FALLBACK_PRICE;
+}
+
+function calcCostUSD(input: number, output: number, cacheRead: number, cacheWrite: number, model: string): number {
+  const p = getPrice(model);
+  return (input * p.input + output * p.output + cacheRead * p.cacheRead + cacheWrite * p.cacheWrite) / 1_000_000;
+}
+
 // Static mirror of src/lib/componentCatalog.tsx — keep in sync when adding components
 const CATALOG = [
   // KPI cards
@@ -273,10 +295,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const topModel =
           Object.entries(models as Record<string, { totalTokens?: number }>)
             .sort(([, a], [, b]) => (b.totalTokens ?? 0) - (a.totalTokens ?? 0))[0]?.[0] ?? "—";
-        const projects = (data.projects ?? []) as Array<{ name: string; sessions?: number }>;
+        const projects = (data.projects ?? []) as Array<{ name: string; sessions?: Array<unknown> }>;
         const topProject =
           [...projects]
-            .sort((a: any, b: any) => (b.sessions ?? 0) - (a.sessions ?? 0))[0]?.name ?? "—";
+            .sort((a, b) => (b.sessions?.length ?? 0) - (a.sessions?.length ?? 0))[0]?.name ?? "—";
 
         return {
           content: [{
@@ -300,39 +322,73 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
       case "agentistics_projects": {
         const data = await apiGet("/api/data");
-        const rows = (data.projects ?? []) as Array<Record<string, unknown>>;
-        const summary = rows
-          .map((p: any) => ({
-            name: p.name,
-            path: p.path,
-            sessions: p.sessions ?? 0,
-            messages: p.messages ?? 0,
-            inputTokens: p.inputTokens ?? 0,
-            outputTokens: p.outputTokens ?? 0,
-            estimatedCostUSD: p.costUSD ?? 0,
-            lastActive: p.lastActive,
-            languages: p.languages ?? [],
-          }))
-          .sort((a: any, b: any) => (b.sessions ?? 0) - (a.sessions ?? 0));
+        // projects[] only has {name, path, sessions:[{sessionId}]} — aggregate tokens/cost from sessions
+        const allSessions = (data.sessions ?? []) as Array<any>;
+        const byPath: Record<string, { inputTokens: number; outputTokens: number; cacheRead: number; cacheWrite: number; costUSD: number; messages: number; lastActive: string; languages: string[] }> = {};
+        for (const s of allSessions) {
+          const key = s.project_path as string;
+          if (!key) continue;
+          if (!byPath[key]) byPath[key] = { inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, costUSD: 0, messages: 0, lastActive: "", languages: [] };
+          const agg = byPath[key]!;
+          const inp = s.input_tokens ?? 0;
+          const out = s.output_tokens ?? 0;
+          const cr  = s.cache_read_input_tokens ?? 0;
+          const cw  = s.cache_creation_input_tokens ?? 0;
+          agg.inputTokens  += inp;
+          agg.outputTokens += out;
+          agg.cacheRead    += cr;
+          agg.cacheWrite   += cw;
+          agg.costUSD      += calcCostUSD(inp, out, cr, cw, s.model ?? "");
+          agg.messages     += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0);
+          if (!agg.lastActive || (s.start_time ?? "") > agg.lastActive) agg.lastActive = s.start_time ?? "";
+          for (const lang of s.languages ?? []) if (!agg.languages.includes(lang)) agg.languages.push(lang);
+        }
+        const projects = (data.projects ?? []) as Array<any>;
+        const summary = projects
+          .map((p: any) => {
+            const agg = byPath[p.path] ?? { inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, costUSD: 0, messages: 0, lastActive: "", languages: [] };
+            return {
+              name: p.name,
+              path: p.path,
+              sessions: (p.sessions ?? []).length,
+              messages: agg.messages,
+              inputTokens: agg.inputTokens,
+              outputTokens: agg.outputTokens,
+              totalTokens: agg.inputTokens + agg.outputTokens,
+              estimatedCostUSD: Math.round(agg.costUSD * 10000) / 10000,
+              lastActive: agg.lastActive || null,
+              languages: agg.languages,
+            };
+          })
+          .sort((a: any, b: any) => b.totalTokens - a.totalTokens);
         return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
       }
 
       case "agentistics_sessions": {
         const limit = Math.min((args as any)?.limit ?? 20, 50);
         const data = await apiGet("/api/data");
-        const rows = ((data.sessions ?? []) as Array<Record<string, unknown>>)
+        const rows = ((data.sessions ?? []) as Array<any>)
           .slice(0, limit)
-          .map((s: any) => ({
-            id: s.session_id,
-            project: s.project_path,
-            startedAt: s.started_at,
-            durationMinutes: s.duration_minutes,
-            messages:
-              (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0),
-            inputTokens: s.total_input_tokens ?? 0,
-            outputTokens: s.total_output_tokens ?? 0,
-            model: s.model ?? null,
-          }));
+          .map((s: any) => {
+            const inp = s.input_tokens ?? 0;
+            const out = s.output_tokens ?? 0;
+            const cr  = s.cache_read_input_tokens ?? 0;
+            const cw  = s.cache_creation_input_tokens ?? 0;
+            return {
+              id: s.session_id,
+              project: s.project_path,
+              startedAt: s.start_time,
+              durationMinutes: s.duration_minutes,
+              messages: (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0),
+              inputTokens: inp,
+              outputTokens: out,
+              cacheReadTokens: cr,
+              cacheWriteTokens: cw,
+              totalTokens: inp + out + cr + cw,
+              estimatedCostUSD: Math.round(calcCostUSD(inp, out, cr, cw, s.model ?? "") * 10000) / 10000,
+              model: s.model ?? null,
+            };
+          });
         return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
       }
 
