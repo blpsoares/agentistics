@@ -1,6 +1,7 @@
 import React from 'react'
 import type { ModelUsage } from '../lib/types'
 import { formatModel, calcCost, getModelColor } from '../lib/types'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 interface Props {
   modelUsage: Record<string, ModelUsage>
@@ -31,8 +32,10 @@ function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string
 
 const COL: React.CSSProperties = { fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }
 const GRID = 'minmax(120px,1fr) 56px 64px 64px 64px 88px'
+const GRID_MOBILE = 'minmax(100px,1fr) 56px 70px 88px'
 
 export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1, fallbackInputTokens, fallbackOutputTokens, fallbackCostUSD }: Props) {
+  const isMobile = useIsMobile()
   const entries = Object.entries(modelUsage).filter(([, u]) => u && (u.inputTokens + u.outputTokens) > 0)
 
   if (entries.length === 0) {
@@ -107,7 +110,7 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
     }}>
       {/* Header */}
       <div style={{
-        display: 'grid', gridTemplateColumns: GRID, gap: 8,
+        display: 'grid', gridTemplateColumns: isMobile ? GRID_MOBILE : GRID, gap: 8,
         padding: '8px 14px',
         borderBottom: '1px solid var(--border-subtle)',
         background: 'var(--bg-card)',
@@ -115,8 +118,8 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
         <span style={COL}>Model</span>
         <span style={{ ...COL, textAlign: 'right' }}>Input</span>
         <span style={{ ...COL, textAlign: 'right' }}>Output</span>
-        <span style={{ ...COL, textAlign: 'right' }}>C.Read</span>
-        <span style={{ ...COL, textAlign: 'right' }}>C.Write</span>
+        {!isMobile && <span style={{ ...COL, textAlign: 'right' }}>C.Read</span>}
+        {!isMobile && <span style={{ ...COL, textAlign: 'right' }}>C.Write</span>}
         <span style={{ ...COL, textAlign: 'right' }}>Cost</span>
       </div>
 
@@ -130,7 +133,7 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
 
         return (
           <div key={modelId} style={{
-            display: 'grid', gridTemplateColumns: GRID, gap: 8,
+            display: 'grid', gridTemplateColumns: isMobile ? GRID_MOBILE : GRID, gap: 8,
             padding: '10px 14px',
             alignItems: 'center',
             borderBottom: isLast ? 'none' : '1px solid var(--border-subtle)',
@@ -157,11 +160,11 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
 
             {/* Token stats — compact, right-aligned */}
             {[
-              { v: usage.inputTokens,             c: 'var(--accent-blue)'   },
-              { v: usage.outputTokens,            c: 'var(--accent-green)'  },
-              { v: usage.cacheReadInputTokens,    c: 'var(--accent-cyan)'   },
-              { v: usage.cacheCreationInputTokens,c: 'var(--accent-purple)' },
-            ].map(({ v, c }, idx) => (
+              { v: usage.inputTokens,              c: 'var(--accent-blue)',   show: true  },
+              { v: usage.outputTokens,             c: 'var(--accent-green)',  show: true  },
+              { v: usage.cacheReadInputTokens,     c: 'var(--accent-cyan)',   show: !isMobile },
+              { v: usage.cacheCreationInputTokens, c: 'var(--accent-purple)', show: !isMobile },
+            ].filter(x => x.show).map(({ v, c }, idx) => (
               <div key={idx} style={{ textAlign: 'right' }}>
                 <span style={{ fontSize: 12, fontWeight: 600, color: c }}>{fmt(v)}</span>
               </div>
@@ -186,7 +189,7 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
       {/* Total row */}
       {entries.length > 1 && (
         <div style={{
-          display: 'grid', gridTemplateColumns: GRID, gap: 8,
+          display: 'grid', gridTemplateColumns: isMobile ? GRID_MOBILE : GRID, gap: 8,
           padding: '9px 14px',
           borderTop: '1px solid var(--border-subtle)',
           background: 'var(--anthropic-orange-glow)',
@@ -199,11 +202,11 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
             <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 'auto', flexShrink: 0 }}>100%</span>
           </div>
           {[
-            { v: totalInput,      c: 'var(--accent-blue)'   },
-            { v: totalOutput,     c: 'var(--accent-green)'  },
-            { v: totalCacheRead,  c: 'var(--accent-cyan)'   },
-            { v: totalCacheWrite, c: 'var(--accent-purple)' },
-          ].map(({ v, c }, idx) => (
+            { v: totalInput,      c: 'var(--accent-blue)',   show: true       },
+            { v: totalOutput,     c: 'var(--accent-green)',  show: true       },
+            { v: totalCacheRead,  c: 'var(--accent-cyan)',   show: !isMobile  },
+            { v: totalCacheWrite, c: 'var(--accent-purple)', show: !isMobile  },
+          ].filter(x => x.show).map(({ v, c }, idx) => (
             <div key={idx} style={{ textAlign: 'right' }}>
               <span style={{ fontSize: 12, fontWeight: 600, color: c }}>{fmt(v)}</span>
             </div>

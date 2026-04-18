@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { Clock, Download, Upload, MessageSquare, Wrench, FolderOpen } from 'lucide-react'
 import type { SessionMeta, Project } from '../lib/types'
 import { formatProjectName } from '../lib/types'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 function fmt(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -36,6 +37,7 @@ interface HighlightsBoardProps {
 
 export function HighlightsBoard({ sessions, projects, lang }: HighlightsBoardProps) {
   const pt = lang === 'pt'
+  const isMobile = useIsMobile()
 
   if (sessions.length === 0) {
     return (
@@ -126,12 +128,13 @@ export function HighlightsBoard({ sessions, projects, lang }: HighlightsBoardPro
       {/* Number of cards: 5 always + 1 conditional (topProjectEntry) */}
       {(() => {
         const cardCount = topProjectEntry ? 6 : 5
-        // last card's column span: fill leftover columns when not aligned to 3
-        const lastSpan = cardCount % 3 === 0 ? 1 : 3 - (cardCount % 3) + 1
+        const cols = isMobile ? 2 : 3
+        // last card's column span: fill leftover columns when not aligned to cols
+        const lastSpan = cardCount % cols === 0 ? 1 : cols - (cardCount % cols) + 1
         const lastStyle = lastSpan > 1 ? { gridColumn: `span ${lastSpan}` } : {}
 
       return (
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)', gap: isMobile ? 10 : 14 }}>
 
         <HighlightCard
           label={pt ? 'Sessão mais longa' : 'Longest session'}

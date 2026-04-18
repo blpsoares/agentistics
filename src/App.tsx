@@ -1217,10 +1217,10 @@ export default function AppLayout() {
               alt="agentistics"
               style={{ height: isMobile ? 44 : 64, width: 'auto' }}
             />
-            <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
+            {!isMobile && <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
               {lang === 'pt' ? 'Atualizado em' : 'Updated'}{' '}
               {statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : lang === 'pt' ? 'hoje' : 'today'}
-            </div>
+            </div>}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 10 }}>
@@ -1269,8 +1269,8 @@ export default function AppLayout() {
               {lang === 'pt' ? 'EN' : 'PT'}
             </button>}
 
-            {/* Theme toggle */}
-            <button
+            {/* Theme toggle — hidden on mobile (accessible via preferences) */}
+            {!isMobile && <button
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
               style={{
                 width: 32, height: 32,
@@ -1293,7 +1293,7 @@ export default function AppLayout() {
               title={theme === 'dark' ? (lang === 'pt' ? 'Tema claro' : 'Light theme') : (lang === 'pt' ? 'Tema escuro' : 'Dark theme')}
             >
               {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
-            </button>
+            </button>}
 
             {/* Export report — hidden on mobile */}
             {!isMobile && <button
@@ -1376,16 +1376,16 @@ export default function AppLayout() {
             {/* Live updates pill */}
             <div style={{
               display: 'flex', alignItems: 'center', gap: 6,
-              padding: '0 4px 0 10px',
+              padding: isMobile ? '0 8px' : '0 4px 0 10px',
               height: 32,
               borderRadius: 8,
               border: '1px solid var(--border)',
               background: 'var(--bg-secondary)',
             }}>
-              <Activity size={12} style={{ color: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', flexShrink: 0, transition: 'color 0.2s' }} />
-              <span style={{ fontSize: 11, fontWeight: 500, color: liveUpdates ? 'var(--text-primary)' : 'var(--text-tertiary)', whiteSpace: 'nowrap', transition: 'color 0.2s', userSelect: 'none' }}>
+              {!isMobile && <Activity size={12} style={{ color: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', flexShrink: 0, transition: 'color 0.2s' }} />}
+              {!isMobile && <span style={{ fontSize: 11, fontWeight: 500, color: liveUpdates ? 'var(--text-primary)' : 'var(--text-tertiary)', whiteSpace: 'nowrap', transition: 'color 0.2s', userSelect: 'none' }}>
                 Live
-              </span>
+              </span>}
 
               {/* iPhone-style toggle */}
               <button
@@ -1415,8 +1415,8 @@ export default function AppLayout() {
                 </span>
               )}
 
-              {/* Settings gear */}
-              <button
+              {/* Settings gear — desktop only */}
+              {!isMobile && <button
                 onClick={() => setShowLiveSettings(true)}
                 title="Live update settings"
                 style={{
@@ -1437,7 +1437,7 @@ export default function AppLayout() {
                 }}
               >
                 <Settings size={12} />
-              </button>
+              </button>}
             </div>
 
             {/* Refresh */}
