@@ -716,25 +716,6 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
     return () => { vv.removeEventListener('resize', update); vv.removeEventListener('scroll', update) }
   }, [isMobile])
 
-  // Lock body scroll when panel is open on mobile (prevents page shift on keyboard open)
-  useEffect(() => {
-    if (!isMobile) return
-    if (open) {
-      document.body.style.overflow = 'hidden'
-      document.body.style.position = 'fixed'
-      document.body.style.width = '100%'
-    } else {
-      document.body.style.overflow = ''
-      document.body.style.position = ''
-      document.body.style.width = ''
-    }
-    return () => {
-      document.body.style.overflow = ''
-      document.body.style.position = ''
-      document.body.style.width = ''
-    }
-  }, [isMobile, open])
-
   // Scroll messages to bottom when viewport resizes (keyboard appears)
   useEffect(() => {
     if (!isMobile || !open) return
@@ -1122,7 +1103,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   const modelInfo = CHAT_MODELS.find(m => m.id === effectiveModel)
 
   const panelStyle: React.CSSProperties = isMobile
-    ? { position: 'fixed', left: 0, right: 0, top: vpRect.top, height: vpRect.height, width: 'auto' }
+    ? { position: 'fixed', left: 0, right: 0, top: 0, height: '100dvh', width: 'auto' }
     : fullscreen
       ? { position: 'fixed', inset: 16, width: 'auto', height: 'auto' }
       : { position: 'fixed', bottom: 80, right: 24, width: 400, height: 580, maxHeight: 'calc(100vh - 120px)' }
