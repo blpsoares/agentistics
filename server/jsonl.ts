@@ -280,6 +280,7 @@ export async function parseSessionJsonl(
     session_id: sessionId,
     project_path: projectPath,
     start_time: startTime,
+    end_time: lastTime || undefined,
     duration_minutes: durationMinutes,
     user_message_count: userMsgs,
     assistant_message_count: assistantMsgs,

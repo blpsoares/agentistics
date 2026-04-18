@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { AppData, Filters, DateRange, AgentInvocation } from '../lib/types'
 import { calcCost, getModelPrice, MODEL_PRICING } from '../lib/types'
-import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays } from 'date-fns'
+import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays } from 'date-fns'
 
 export interface StageProgress {
   progress: number
@@ -249,7 +249,17 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // Otherwise, supplement stats-cache dates with all session start dates (fresher than stats-cache).
     // Session start_times are ISO UTC strings — format() normalises to local date.
     const activeDates = sessionFiltered
-      ? new Set(filteredSessions.filter(s => s.start_time).map(s => format(parseISO(s.start_time), 'yyyy-MM-dd')))
+      ? (() => {
+          const set = new Set<string>()
+          for (const s of filteredSessions) {
+            if (!s.start_time) continue
+            const start = startOfDay(parseISO(s.start_time))
+            const end = s.end_time ? startOfDay(parseISO(s.end_time)) : start
+            const span = differenceInCalendarDays(end, start)
+            for (let i = 0; i <= span; i++) set.add(format(addDays(start, i), 'yyyy-MM-dd'))
+          }
+          return set
+        })()
       : new Set([
           ...(data.statsCache.dailyActivity ?? []).map(d => d.date),
           ...(data.sessions ?? []).filter(s => s.start_time).map(s => format(parseISO(s.start_time), 'yyyy-MM-dd')),
@@ -257,13 +267,20 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const streak = calcStreak(activeDates)
 
     // ── Per-project streaks (for streak breakdown popup) ──
-    // Always computed from filteredSessions so it respects active filters.
+    // Uses all sessions (no date-range filter) to mirror the global streak, which also
+    // ignores the date filter (it reads from statsCache.dailyActivity covering all history).
+    // Model filter is preserved when active so per-project streaks remain consistent.
     const projectDateMap: Record<string, Set<string>> = {}
-    for (const sess of filteredSessions) {
+    for (const sess of data.sessions) {
       if (!sess.project_path || !sess.start_time) continue
-      const day = format(parseISO(sess.start_time), 'yyyy-MM-dd')
-      if (!projectDateMap[sess.project_path]) projectDateMap[sess.project_path] = new Set()
-      projectDateMap[sess.project_path]!.add(day)
+      if (modelSet && (!sess.model || !modelSet.has(sess.model))) continue
+      const dates = projectDateMap[sess.project_path] ?? (projectDateMap[sess.project_path] = new Set())
+      const start = startOfDay(parseISO(sess.start_time))
+      const end = sess.end_time ? startOfDay(parseISO(sess.end_time)) : start
+      const span = differenceInCalendarDays(end, start)
+      for (let i = 0; i <= span; i++) {
+        dates.add(format(addDays(start, i), 'yyyy-MM-dd'))
+      }
     }
     const projectStreaks = Object.entries(projectDateMap)
       .map(([path, dates]) => ({ path, streak: calcStreak(dates) }))
