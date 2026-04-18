@@ -112,7 +112,22 @@ function buildNaySettings() {
       },
     },
     permissions: {
-      allow: ['WebFetch(http://localhost:3001/*)'],
+      allow: [
+        'WebFetch(http://localhost:3001/*)',
+        // Allow all agentistics MCP tools without prompting (non-interactive --print mode)
+        'mcp__agentistics__agentistics_summary',
+        'mcp__agentistics__agentistics_projects',
+        'mcp__agentistics__agentistics_sessions',
+        'mcp__agentistics__agentistics_costs',
+        'mcp__agentistics__agentistics_component_catalog',
+        'mcp__agentistics__agentistics_get_layouts',
+        'mcp__agentistics__agentistics_build_layout',
+        'mcp__agentistics__agentistics_add_component',
+        'mcp__agentistics__agentistics_remove_component',
+        'mcp__agentistics__agentistics_create_layout',
+        'mcp__agentistics__agentistics_set_active_layout',
+        'mcp__agentistics__agentistics_delete_layout',
+      ],
     },
   }
 }
