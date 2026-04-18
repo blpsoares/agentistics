@@ -4,6 +4,7 @@ import { HOME_DIR } from './config'
 
 const AGENTISTICS_ROOT = path.resolve(import.meta.dir, '..')
 export const NAY_CHAT_DIR = path.join(HOME_DIR, '.agentistics', 'nay-chat')
+export const CLAUDE_CHAT_DIR = path.join(HOME_DIR, '.agentistics', 'claude-chat')
 
 export type ChatMessage = { role: 'user' | 'assistant'; content: string }
 
@@ -30,8 +31,9 @@ The agentistics server must be running at http://localhost:47291.
 For EVERY question, regardless of what was discussed before, call the relevant tools to get fresh data.
 Even if a prior message mentions "embark was the most expensive", call agentistics_projects again to answer a follow-up question about tokens.
 
-**Rule 2 — Never describe what you are about to do.**
+**Rule 2 — Never describe what you are about to do. Never ask for permission.**
 Call tools immediately. Do not write "I will analyze...", "Let me check...", "Aguarde...", "Com base no relatório acima...". Just call the tool and respond with the actual result.
+All tools in this workspace are pre-approved — never ask "may I", "please confirm", "preciso de sua permissão", or any similar phrasing. Just act.
 
 **Rule 3 — Never reference "the Nay agent" or "the report above" as a source.**
 You have direct tool access. Use it. If you need data, call the tool.
@@ -61,6 +63,7 @@ The PROJECT_PATH must be the exact \`path\` field returned by agentistics_projec
 | "Most expensive session?" | agentistics_sessions |
 | "Cost breakdown by model?" | agentistics_costs |
 | "Build a layout" | agentistics_component_catalog then agentistics_build_layout |
+| "Generate/export a PDF report" | agentistics_export_pdf |
 | Any follow-up question | Call tools again — never rely on prior conversation |
 
 ---
@@ -81,6 +84,7 @@ The PROJECT_PATH must be the exact \`path\` field returned by agentistics_projec
 | agentistics_create_layout | Create a new empty named layout |
 | agentistics_set_active_layout | Switch which layout is shown on /custom |
 | agentistics_delete_layout | Delete a layout permanently |
+| agentistics_export_pdf | Generate a PDF report URL — returns a link that auto-opens the export modal |
 
 ---
 
@@ -137,12 +141,18 @@ export function buildNaySettings(port: number) {
         'mcp__agentistics__agentistics_create_layout',
         'mcp__agentistics__agentistics_set_active_layout',
         'mcp__agentistics__agentistics_delete_layout',
+        'mcp__agentistics__agentistics_export_pdf',
       ],
     },
   }
 }
 
 // Called at server startup — idempotent, safe to run on every restart.
+// Creates the general-purpose Claude chat working directory.
+export async function ensureClaudeChat(): Promise<void> {
+  await mkdir(CLAUDE_CHAT_DIR, { recursive: true })
+}
+
 export async function ensureNayChat(port: number): Promise<void> {
   const claudeMd = NAY_CLAUDE_MD.replace(
     /http:\/\/localhost:\d+/g,
@@ -185,6 +195,11 @@ async function registerMcpGlobally(port: number): Promise<void> {
   await proc.exited
 }
 
+export interface StreamViaClaudioOpts {
+  cwd?: string
+  thinkingBudget?: number
+}
+
 export async function streamViaClaude(
   message: string,
   history: ChatMessage[],
@@ -193,19 +208,37 @@ export async function streamViaClaude(
   onTool: (name: string) => void,
   onDone: () => void,
   onError: (err: string) => void,
+  onSessionId?: (id: string) => void,
+  resumeSessionId?: string | null,
+  opts?: StreamViaClaudioOpts,
 ): Promise<void> {
-  const recent = history.filter(h => h.content.trim()).slice(-8)
-  let prompt = ''
-  for (const h of recent) {
-    prompt += `${h.role === 'user' ? 'User' : 'Assistant'}: ${h.content}\n\n`
+  // When resuming a session, just pass the new message — history is in the JSONL
+  // When starting a new session, fall back to the old inline-history approach
+  let prompt: string
+  const args = ['claude', '--print', '--output-format', 'stream-json', '--verbose']
+
+  if (opts?.thinkingBudget && opts.thinkingBudget > 0) {
+    args.push('--budget-tokens', String(opts.thinkingBudget))
   }
-  prompt += message.length > 0 && recent.length > 0 ? `User: ${message}` : message
+
+  args.push('--model', model)
+
+  if (resumeSessionId) {
+    args.push('--resume', resumeSessionId)
+    prompt = message
+  } else {
+    const recent = history.filter(h => h.content.trim()).slice(-8)
+    prompt = ''
+    for (const h of recent) {
+      prompt += `${h.role === 'user' ? 'User' : 'Assistant'}: ${h.content}\n\n`
+    }
+    prompt += message.length > 0 && recent.length > 0 ? `User: ${message}` : message
+  }
+
+  const cwd = opts?.cwd ?? NAY_CHAT_DIR
 
   try {
-    const proc = Bun.spawn(
-      ['claude', '--print', '--output-format', 'stream-json', '--verbose', '--model', model],
-      { stdout: 'pipe', stderr: 'pipe', stdin: 'pipe', cwd: NAY_CHAT_DIR },
-    )
+    const proc = Bun.spawn(args, { stdout: 'pipe', stderr: 'pipe', stdin: 'pipe', cwd })
     proc.stdin.write(prompt)
     proc.stdin.end()
 
@@ -240,11 +273,12 @@ export async function streamViaClaude(
             }
           } else if (event.type === 'result') {
             gotResult = true
-            const ev = event as { subtype?: string; error?: unknown }
+            const ev = event as { subtype?: string; error?: unknown; session_id?: string }
             if (ev.subtype === 'error') {
               onError(String(ev.error ?? 'claude CLI error'))
               return
             }
+            if (ev.session_id && onSessionId) onSessionId(ev.session_id)
           }
         } catch { /* ignore malformed lines */ }
       }

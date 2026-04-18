@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import {
   MessageSquare, X, Send, Loader, AlertCircle, Trash2,
   Maximize2, Minimize2, Terminal, Play, ChevronRight,
-  Wrench, ChevronDown, ChevronUp, ArrowRight, Filter,
+  Wrench, ChevronDown, ChevronUp, ArrowRight, Filter, History, Plus,
+  ShieldAlert, Check,
 } from 'lucide-react'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
 import { formatToolName, fmtTime, NAV_LINK_RE } from '../lib/chatUtils'
@@ -20,6 +22,69 @@ type ChatMessage = {
   exitCode?: number
   timestamp: number
   tools?: string[]
+}
+
+type NaySessionSummary = {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messageCount: number
+  model: string
+}
+
+// Detect assistant messages that are asking the user for confirmation/permission
+const CONFIRM_PATTERNS = [
+  /confirme?\b/i, /please confirm/i, /por favor confirm/i,
+  /preciso de sua permiss/i, /need(s)? your (permission|approval)/i,
+  /você (pode|pode) confirmar/i, /can you (confirm|approve)/i,
+  /deseja (prosseguir|continuar)/i, /do you (want|wish) (to )?proceed/i,
+  /quer (que eu|continuar|prosseguir)/i,
+]
+function looksLikeConfirmRequest(text: string): boolean {
+  return CONFIRM_PATTERNS.some(re => re.test(text))
+}
+
+function ConfirmBar({ pt, onConfirm, onCancel }: { pt: boolean; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div style={{
+      margin: '6px 0 10px',
+      padding: '10px 14px',
+      borderRadius: 10,
+      border: '1px solid var(--anthropic-orange)40',
+      background: 'var(--anthropic-orange-dim)',
+      display: 'flex', alignItems: 'center', gap: 10,
+      animation: 'ttyChatFadeIn 0.15s ease-out',
+    }}>
+      <ShieldAlert size={14} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
+      <span style={{ flex: 1, fontSize: 12, color: 'var(--text-secondary)' }}>
+        {pt ? 'Aguardando confirmação' : 'Awaiting confirmation'}
+      </span>
+      <button
+        onClick={onCancel}
+        style={{
+          padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+          border: '1px solid var(--border)', background: 'transparent',
+          color: 'var(--text-secondary)', cursor: 'pointer', fontFamily: 'inherit',
+        }}
+      >
+        {pt ? 'Cancelar' : 'Cancel'}
+      </button>
+      <button
+        onClick={onConfirm}
+        style={{
+          padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700,
+          border: '1px solid var(--anthropic-orange)',
+          background: 'color-mix(in srgb, var(--anthropic-orange) 20%, transparent)',
+          color: 'var(--anthropic-orange)', cursor: 'pointer', fontFamily: 'inherit',
+          display: 'flex', alignItems: 'center', gap: 5,
+        }}
+      >
+        <Check size={11} />
+        {pt ? 'Confirmar' : 'Confirm'}
+      </button>
+    </div>
+  )
 }
 
 const BADGE_COLORS: Record<string, string> = {
@@ -150,6 +215,7 @@ function MarkdownContent({
 }) {
   return (
     <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
       components={{
         code({ className, children, ...props }) {
           const match = /language-(\w+)/.exec(className ?? '')
@@ -589,6 +655,10 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   const [error, setError] = useState<string | null>(null)
   const [hasUnread, setHasUnread] = useState(false)
   const [currentTools, setCurrentTools] = useState<string[]>([])
+  const [showHistory, setShowHistory] = useState(false)
+  const [historyList, setHistoryList] = useState<NaySessionSummary[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [sessionId, setSessionId] = useState<string | null>(null)
 
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -602,6 +672,17 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   useEffect(() => { openRef.current = open }, [open])
   useEffect(() => { soundRef.current = chatSoundEnabled }, [chatSoundEnabled])
 
+  // Update browser tab title to indicate unread Nay message
+  useEffect(() => {
+    const BASE_TITLE = 'Agentistics'
+    if (hasUnread && !open) {
+      document.title = `💬 Nay · ${BASE_TITLE}`
+    } else {
+      document.title = BASE_TITLE
+    }
+    return () => { document.title = BASE_TITLE }
+  }, [hasUnread, open])
+
   useEffect(() => {
     if (open) { setHasUnread(false); inputRef.current?.focus() }
   }, [open])
@@ -610,10 +691,47 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
   }, [messages, streaming, currentTools])
 
+  const openHistory = async () => {
+    setShowHistory(true)
+    setHistoryLoading(true)
+    try {
+      const res = await fetch('/api/nay-sessions')
+      if (res.ok) setHistoryList(await res.json() as NaySessionSummary[])
+    } catch { /* ignore */ }
+    finally { setHistoryLoading(false) }
+  }
+
+  const restoreConversation = async (id: string) => {
+    setShowHistory(false)
+    setError(null)
+    setHistoryLoading(true)
+    try {
+      const res = await fetch(`/api/nay-sessions/${id}`)
+      if (res.ok) {
+        const msgs = await res.json() as Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[] }>
+        setMessages(msgs.map(m => ({ ...m, terminal: false })))
+        // Don't use --resume for restored history sessions — inline-history approach
+        // gives the model proper structured context and ensures MCP tools are triggered.
+        // --resume only makes sense for the live session you're actively building.
+        setSessionId(null)
+      }
+    } catch { /* ignore */ }
+    finally { setHistoryLoading(false) }
+  }
+
+  const newConversation = () => {
+    setMessages([])
+    setSessionId(null)
+    setError(null)
+    setShowHistory(false)
+  }
+
   const initAudio = () => {
     if (!audioCtxRef.current) {
       try { audioCtxRef.current = new AudioContext() } catch { /* ignore */ }
     }
+    // Resume during user gesture so background playback works without further gestures
+    audioCtxRef.current?.resume().catch(() => { /* ignore */ })
   }
 
   const handleFabClick = () => {
@@ -683,12 +801,14 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
     }
   }, [])
 
-  const sendMessage = useCallback(async () => {
-    const text = input.trim()
+  const sendMessage = useCallback(async (overrideText?: string) => {
+    const text = (overrideText ?? input).trim()
     if (!text || streaming) return
-    setInput('')
+    if (!overrideText) setInput('')
     setError(null)
     setCurrentTools([])
+
+    setShowHistory(false)
 
     const runMatch = text.match(/^\/(?:run|bash|sh)\s+(.+)/s)
     if (runMatch) {
@@ -714,7 +834,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
       const res = await fetch('/api/chat-tty', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, history, model }),
+        body: JSON.stringify({ message: text, history, model, sessionId }),
       })
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
 
@@ -733,7 +853,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
           const line = part.replace(/^data: /, '').trim()
           if (!line) continue
           try {
-            const ev = JSON.parse(line) as { text?: string; tool?: string; done?: boolean; error?: string }
+            const ev = JSON.parse(line) as { text?: string; tool?: string; done?: boolean; error?: string; sessionId?: string }
+            if (ev.sessionId) setSessionId(ev.sessionId)
             if (ev.error) { setError(ev.error); setStreaming(false); return }
             if (ev.tool) {
               toolsAccum = [...toolsAccum, ev.tool]
@@ -776,13 +897,13 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
       setStreaming(false)
       setCurrentTools([])
     }
-  }, [input, streaming, messages, chatModel, execCmd, playNotification])
+  }, [input, streaming, messages, chatModel, sessionId, execCmd, playNotification])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
   }
 
-  const clearChat = () => { setMessages([]); setError(null); setStreaming(false); setHasUnread(false); setCurrentTools([]) }
+  const clearChat = () => { setMessages([]); setSessionId(null); setError(null); setStreaming(false); setHasUnread(false); setCurrentTools([]) }
 
   const pt = lang === 'pt'
   const effectiveModel = chatModel ?? DEFAULT_CHAT_MODEL
@@ -796,6 +917,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   const lastMsg = messages[messages.length - 1]
   const isAssistantStreaming = streaming && lastMsg?.role === 'assistant' && !lastMsg.terminal
 
+  // Show confirm buttons if last completed assistant message looks like a permission request
+  const lastCompletedAssistant = !streaming
+    ? [...messages].reverse().find(m => m.role === 'assistant' && !m.terminal && m.content)
+    : undefined
+  const showConfirmBar = !!lastCompletedAssistant && looksLikeConfirmRequest(lastCompletedAssistant.content)
+
   return (
     <>
       <style>{`
@@ -803,6 +930,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
         @keyframes ttyChatFadeIn  { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
         @keyframes ttyChatSlideIn { from{opacity:0;transform:translateX(18px)} to{opacity:1;transform:none} }
         @keyframes ttyChatBlink   { 0%,100%{opacity:1} 50%{opacity:0} }
+        @keyframes ttyChatPulse   { 0%,100%{box-shadow:0 4px 18px rgba(0,0,0,0.35),0 0 0 0 rgba(245,158,11,0.5)} 50%{box-shadow:0 4px 18px rgba(0,0,0,0.35),0 0 0 8px rgba(245,158,11,0)} }
         .tty-fab:hover { border-color: var(--anthropic-orange) !important; color: var(--anthropic-orange) !important; }
         .tty-icon-btn:hover { color: var(--text-primary) !important; border-color: var(--text-secondary) !important; }
         .tty-send-btn:hover:not(:disabled) { background: var(--anthropic-orange) !important; color: #fff !important; }
@@ -816,12 +944,16 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
         style={{
           position: 'fixed', bottom: 24, right: 24, zIndex: 500,
           width: 46, height: 46, borderRadius: '50%',
-          border: open ? '1.5px solid var(--anthropic-orange)' : '1.5px solid var(--border)',
-          background: open ? 'var(--anthropic-orange-dim)' : 'var(--bg-card)',
-          color: open ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+          border: hasUnread && !open
+            ? '1.5px solid var(--anthropic-orange)'
+            : open ? '1.5px solid var(--anthropic-orange)' : '1.5px solid var(--border)',
+          background: hasUnread && !open
+            ? 'var(--anthropic-orange-dim)'
+            : open ? 'var(--anthropic-orange-dim)' : 'var(--bg-card)',
+          color: hasUnread && !open ? 'var(--anthropic-orange)' : open ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
           cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          boxShadow: '0 4px 18px rgba(0,0,0,0.35)',
+          animation: hasUnread && !open ? 'ttyChatPulse 1.8s ease-in-out infinite' : undefined,
           transition: 'all 0.2s',
           overflow: 'hidden',
           padding: 0,
@@ -844,6 +976,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
         <div style={{
           ...panelStyle,
           zIndex: 500,
+          position: 'fixed',
           display: 'flex', flexDirection: 'column',
           background: 'var(--bg-surface)',
           border: '1px solid var(--border)',
@@ -905,10 +1038,18 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               {messages.length > 0 && (
-                <button className="tty-icon-btn" onClick={clearChat} title={pt ? 'Limpar conversa' : 'Clear chat'} style={iconBtnStyle}>
-                  <Trash2 size={12} />
+                <button className="tty-icon-btn" onClick={clearChat} title={pt ? 'Nova conversa' : 'New conversation'} style={iconBtnStyle}>
+                  <Plus size={12} />
                 </button>
               )}
+              <button
+                className="tty-icon-btn"
+                onClick={openHistory}
+                title={pt ? 'Histórico de conversas' : 'Conversation history'}
+                style={{ ...iconBtnStyle, color: showHistory ? 'var(--anthropic-orange)' : 'var(--text-secondary)' }}
+              >
+                <History size={12} />
+              </button>
               <button
                 className="tty-icon-btn"
                 onClick={() => setFullscreen(v => !v)}
@@ -922,6 +1063,96 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
               </button>
             </div>
           </div>
+
+          {/* History panel */}
+          {showHistory && (
+            <div style={{
+              position: 'absolute', inset: 0, top: 52, zIndex: 10,
+              background: 'var(--bg-surface)',
+              display: 'flex', flexDirection: 'column',
+              borderTop: '1px solid var(--border)',
+              animation: 'ttyChatFadeIn 0.15s ease-out',
+            }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '10px 14px', borderBottom: '1px solid var(--border)',
+                background: 'var(--bg-card)', flexShrink: 0,
+              }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <History size={12} style={{ color: 'var(--anthropic-orange)' }} />
+                  {pt ? 'Histórico' : 'History'}
+                </span>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    onClick={newConversation}
+                    style={{
+                      fontSize: 11, padding: '4px 10px', borderRadius: 6,
+                      border: '1px solid var(--anthropic-orange)60',
+                      background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+                      cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+                    }}
+                  >
+                    <Plus size={10} />
+                    {pt ? 'Nova' : 'New'}
+                  </button>
+                  <button onClick={() => setShowHistory(false)} className="tty-icon-btn" style={iconBtnStyle}>
+                    <X size={12} />
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
+                {historyLoading ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-tertiary)' }}>
+                    <Loader size={16} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
+                  </div>
+                ) : historyList.length === 0 ? (
+                  <div style={{
+                    height: '100%', display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', justifyContent: 'center',
+                    color: 'var(--text-tertiary)', fontSize: 12, gap: 6,
+                  }}>
+                    <History size={28} style={{ opacity: 0.2 }} />
+                    {pt ? 'Nenhuma conversa ainda' : 'No conversations yet'}
+                  </div>
+                ) : historyList.map(convo => (
+                  <div
+                    key={convo.id}
+                    onClick={() => restoreConversation(convo.id)}
+                    style={{
+                      padding: '9px 10px', borderRadius: 8, marginBottom: 4,
+                      cursor: 'pointer',
+                      background: convo.id === sessionId ? 'var(--anthropic-orange-dim)' : 'var(--bg-card)',
+                      border: convo.id === sessionId ? '1px solid var(--anthropic-orange)40' : '1px solid var(--border)',
+                      display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8,
+                      transition: 'background 0.12s',
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontSize: 12, fontWeight: 600, color: 'var(--text-primary)',
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        lineHeight: 1.4,
+                      }}>
+                        {convo.title}
+                      </div>
+                      <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 3, display: 'flex', gap: 6 }}>
+                        <span>{new Date(convo.updatedAt).toLocaleDateString(lang === 'pt' ? 'pt-BR' : 'en-US', { day: '2-digit', month: 'short' })}</span>
+                        <span>·</span>
+                        <span>{convo.messageCount} {pt ? 'msgs' : 'msgs'}</span>
+                        {convo.model && (
+                          <>
+                            <span>·</span>
+                            <span>{CHAT_MODELS.find(m => m.id === convo.model)?.label ?? convo.model}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Messages */}
           <div ref={listRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 14px 6px' }}>
@@ -969,6 +1200,14 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
               )
             })}
 
+            {showConfirmBar && (
+              <ConfirmBar
+                pt={pt}
+                onConfirm={() => sendMessage(pt ? 'Sim, pode prosseguir.' : 'Yes, proceed.')}
+                onCancel={() => sendMessage(pt ? 'Não, cancele.' : 'No, cancel.')}
+              />
+            )}
+
             {error && (
               <div style={{
                 display: 'flex', alignItems: 'flex-start', gap: 8,
@@ -1013,7 +1252,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             />
             <button
               className="tty-send-btn"
-              onClick={sendMessage}
+              onClick={() => sendMessage()}
               disabled={!input.trim() || streaming || chatModel === null}
               title={pt ? 'Enviar (Enter)' : 'Send (Enter)'}
               style={{

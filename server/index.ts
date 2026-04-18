@@ -201,14 +201,14 @@ Bun.serve({
     if (url.pathname === '/api/projects-list' && req.method === 'GET') {
       try {
         const dirs = await safeReadDir(PROJECTS_DIR)
-        const entries: { name: string; path: string; sessionCount: number }[] = []
+        const entries: { name: string; path: string; encodedDir: string; sessionCount: number }[] = []
         for (const dir of dirs) {
           const projectPath = decodeProjectDir(dir)
           const files = await safeReadDir(`${PROJECTS_DIR}/${dir}`)
           const sessionCount = files.filter(f => f.endsWith('.jsonl')).length
           if (sessionCount === 0) continue
           const name = projectPath.split('/').filter(Boolean).pop() ?? dir
-          entries.push({ name, path: projectPath, sessionCount })
+          entries.push({ name, path: projectPath, encodedDir: dir, sessionCount })
         }
         entries.sort((a, b) => b.sessionCount - a.sessionCount)
         return new Response(JSON.stringify(entries), {
@@ -240,13 +240,13 @@ Bun.serve({
     // GET /api/claude-sessions?projectPath=...  → list sessions for a project
     // GET /api/claude-sessions/:id?projectPath=... → messages for a session
     if (url.pathname === '/api/claude-sessions' && req.method === 'GET') {
-      const projectPath = url.searchParams.get('projectPath') ?? ''
-      if (!projectPath) {
-        return new Response(JSON.stringify({ error: 'projectPath required' }), {
+      const encodedDir = url.searchParams.get('encodedDir') ?? ''
+      if (!encodedDir) {
+        return new Response(JSON.stringify({ error: 'encodedDir required' }), {
           status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
-      const sessions: ClaudeSessionSummary[] = await listClaudeSessions(projectPath)
+      const sessions: ClaudeSessionSummary[] = await listClaudeSessions(encodedDir)
       return new Response(JSON.stringify(sessions), {
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
@@ -254,13 +254,13 @@ Bun.serve({
 
     if (url.pathname.startsWith('/api/claude-sessions/') && req.method === 'GET') {
       const id = url.pathname.slice('/api/claude-sessions/'.length)
-      const projectPath = url.searchParams.get('projectPath') ?? ''
-      if (!projectPath || !id) {
-        return new Response(JSON.stringify({ error: 'projectPath and id required' }), {
+      const encodedDir = url.searchParams.get('encodedDir') ?? ''
+      if (!encodedDir || !id) {
+        return new Response(JSON.stringify({ error: 'encodedDir and id required' }), {
           status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
-      const msgs: ClaudeSessionMessage[] = await getClaudeSessionMessages(projectPath, id)
+      const msgs: ClaudeSessionMessage[] = await getClaudeSessionMessages(encodedDir, id)
       return new Response(JSON.stringify(msgs), {
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })

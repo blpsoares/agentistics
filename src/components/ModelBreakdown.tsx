@@ -29,6 +29,9 @@ function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string
   return `USD ${usd.toFixed(2)}`
 }
 
+const COL: React.CSSProperties = { fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }
+const GRID = 'minmax(120px,1fr) 56px 64px 64px 64px 88px'
+
 export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1, fallbackInputTokens, fallbackOutputTokens, fallbackCostUSD }: Props) {
   const entries = Object.entries(modelUsage).filter(([, u]) => u && (u.inputTokens + u.outputTokens) > 0)
 
@@ -79,88 +82,131 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
 
   const totalCost = entries.reduce((s, [id, u]) => s + calcCost(u, id), 0)
   const totalTokens = entries.reduce((s, [, u]) => s + u.inputTokens + u.outputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens, 0)
+  const totalInput = entries.reduce((s, [, u]) => s + u.inputTokens, 0)
+  const totalOutput = entries.reduce((s, [, u]) => s + u.outputTokens, 0)
+  const totalCacheRead = entries.reduce((s, [, u]) => s + u.cacheReadInputTokens, 0)
+  const totalCacheWrite = entries.reduce((s, [, u]) => s + u.cacheCreationInputTokens, 0)
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {entries.map(([modelId, usage]) => {
+    <div style={{
+      background: 'var(--bg-elevated)',
+      borderRadius: 'var(--radius-md)',
+      border: '1px solid var(--border-subtle)',
+      overflow: 'hidden',
+    }}>
+      {/* Header */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: GRID, gap: 8,
+        padding: '8px 14px',
+        borderBottom: '1px solid var(--border-subtle)',
+        background: 'var(--bg-card)',
+      }}>
+        <span style={COL}>Model</span>
+        <span style={{ ...COL, textAlign: 'right' }}>Input</span>
+        <span style={{ ...COL, textAlign: 'right' }}>Output</span>
+        <span style={{ ...COL, textAlign: 'right' }}>C.Read</span>
+        <span style={{ ...COL, textAlign: 'right' }}>C.Write</span>
+        <span style={{ ...COL, textAlign: 'right' }}>Cost</span>
+      </div>
+
+      {/* Rows */}
+      {entries.map(([modelId, usage], i) => {
         const costUSD = calcCost(usage, modelId)
         const tokens = usage.inputTokens + usage.outputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens
         const pct = totalTokens > 0 ? tokens / totalTokens : 0
         const color = getModelColor(modelId)
+        const isLast = i === entries.length - 1
 
         return (
           <div key={modelId} style={{
-            background: 'var(--bg-elevated)',
-            borderRadius: 'var(--radius-md)',
-            padding: '14px 16px',
-            border: '1px solid var(--border-subtle)',
+            display: 'grid', gridTemplateColumns: GRID, gap: 8,
+            padding: '10px 14px',
+            alignItems: 'center',
+            borderBottom: isLast ? 'none' : '1px solid var(--border-subtle)',
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
-                <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: 13 }}>
+            {/* Model name + bar */}
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                <div style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1 }}>
                   {formatModel(modelId)}
                 </span>
-              </div>
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                <span style={{
-                  fontSize: 13, fontWeight: 700,
-                  color: 'var(--anthropic-orange)',
-                  background: 'var(--anthropic-orange-dim)',
-                  padding: '2px 8px',
-                  borderRadius: 6,
-                }}>
-                  {fmtCost(costUSD, currency, brlRate)}
+                <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 'auto', flexShrink: 0 }}>
+                  {(pct * 100).toFixed(0)}%
                 </span>
               </div>
+              <div style={{ height: 2, background: 'var(--bg-card)', borderRadius: 1, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', width: `${pct * 100}%`,
+                  background: `linear-gradient(90deg, ${color}, ${color}80)`,
+                  borderRadius: 1, transition: 'width 0.6s ease',
+                }} />
+              </div>
             </div>
 
-            {/* Progress bar */}
-            <div style={{ height: 3, background: 'var(--bg-card)', borderRadius: 2, marginBottom: 10, overflow: 'hidden' }}>
-              <div style={{
-                height: '100%',
-                width: `${pct * 100}%`,
-                background: `linear-gradient(90deg, ${color}, ${color}80)`,
-                borderRadius: 2,
-                transition: 'width 0.6s ease',
-              }} />
-            </div>
+            {/* Token stats — compact, right-aligned */}
+            {[
+              { v: usage.inputTokens,             c: 'var(--accent-blue)'   },
+              { v: usage.outputTokens,            c: 'var(--accent-green)'  },
+              { v: usage.cacheReadInputTokens,    c: 'var(--accent-cyan)'   },
+              { v: usage.cacheCreationInputTokens,c: 'var(--accent-purple)' },
+            ].map(({ v, c }, idx) => (
+              <div key={idx} style={{ textAlign: 'right' }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: c }}>{fmt(v)}</span>
+              </div>
+            ))}
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
-              {[
-                { label: 'Input', value: fmt(usage.inputTokens), color: 'var(--accent-blue)' },
-                { label: 'Output', value: fmt(usage.outputTokens), color: 'var(--accent-green)' },
-                { label: 'Cache Read', value: fmt(usage.cacheReadInputTokens), color: 'var(--accent-cyan)' },
-                { label: 'Cache Write', value: fmt(usage.cacheCreationInputTokens), color: 'var(--accent-purple)' },
-              ].map(({ label, value, color: c }) => (
-                <div key={label} style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: c }}>{value}</div>
-                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 1 }}>{label}</div>
-                </div>
-              ))}
+            {/* Cost */}
+            <div style={{ textAlign: 'right' }}>
+              <span style={{
+                fontSize: 12, fontWeight: 700,
+                color: 'var(--anthropic-orange)',
+                background: 'var(--anthropic-orange-dim)',
+                padding: '2px 7px', borderRadius: 5,
+                whiteSpace: 'nowrap',
+              }}>
+                {fmtCost(costUSD, currency, brlRate)}
+              </span>
             </div>
           </div>
         )
       })}
 
+      {/* Total row */}
       {entries.length > 1 && (
         <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '10px 14px',
+          display: 'grid', gridTemplateColumns: GRID, gap: 8,
+          padding: '9px 14px',
+          borderTop: '1px solid var(--border-subtle)',
           background: 'var(--anthropic-orange-glow)',
-          border: '1px solid var(--anthropic-orange-dim)',
-          borderRadius: 'var(--radius-md)',
+          alignItems: 'center',
         }}>
-          <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500 }}>Estimated Total Cost</span>
-          <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--anthropic-orange)' }}>
-            {fmtCost(totalCost, currency, brlRate)}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Estimated Total
+            </span>
+            <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 'auto', flexShrink: 0 }}>100%</span>
+          </div>
+          {[
+            { v: totalInput,      c: 'var(--accent-blue)'   },
+            { v: totalOutput,     c: 'var(--accent-green)'  },
+            { v: totalCacheRead,  c: 'var(--accent-cyan)'   },
+            { v: totalCacheWrite, c: 'var(--accent-purple)' },
+          ].map(({ v, c }, idx) => (
+            <div key={idx} style={{ textAlign: 'right' }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: c }}>{fmt(v)}</span>
+            </div>
+          ))}
+          <div style={{ textAlign: 'right' }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--anthropic-orange)' }}>
+              {fmtCost(totalCost, currency, brlRate)}
+            </span>
+          </div>
         </div>
       )}
+
       {note && (
-        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic', textAlign: 'center', marginTop: 4 }}>
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic', textAlign: 'center', padding: '8px 14px' }}>
           {note}
         </div>
       )}

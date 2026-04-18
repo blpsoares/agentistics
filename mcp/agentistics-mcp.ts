@@ -126,6 +126,29 @@ function autoPosition(
   return { x: 0, y: maxBottom };
 }
 
+// After packing, extend any item that has empty space to its right
+// (no neighbour sharing any row with it on the right side).
+// This eliminates orphaned gaps like a w:8 chart next to 4 empty columns.
+function fillGaps(
+  items: Array<{ x: number; y: number; w: number; h: number }>,
+  gridW = 12,
+): void {
+  for (const item of items) {
+    const rightEdge = item.x + item.w;
+    if (rightEdge >= gridW) continue;
+    const hasRightNeighbour = items.some(
+      (other) =>
+        other !== item &&
+        other.x >= rightEdge &&
+        other.y < item.y + item.h &&
+        other.y + item.h > item.y,
+    );
+    if (!hasRightNeighbour) {
+      item.w = gridW - item.x;
+    }
+  }
+}
+
 // ─── Server ─────────────────────────────────────────────────────────────────
 
 const server = new Server(
@@ -274,6 +297,21 @@ const TOOLS: Tool[] = [
         name: { type: "string", description: "Name of the layout to delete" },
       },
       required: ["name"],
+    },
+  },
+  {
+    name: "agentistics_export_pdf",
+    description:
+      "Generate a PDF report of Claude Code usage. Returns a URL that, when opened in a browser, automatically opens the PDF export modal pre-configured with the requested options. The user can review settings and click Download to save the PDF.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        range: {
+          type: "string",
+          enum: ["7d", "30d", "90d", "all"],
+          description: "Date range for the report (default: all)",
+        },
+      },
     },
   },
   {
@@ -563,6 +601,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
       }
 
+      case "agentistics_export_pdf": {
+        const a = args as any;
+        const range = (a?.range as string | undefined) ?? "all";
+        const uiBase = API.replace(/:\d+$/, ":47292");
+        const params = new URLSearchParams({ export: "pdf" });
+        if (range !== "all") params.set("range", range);
+        const url = `${uiBase}/?${params.toString()}`;
+        return {
+          content: [{
+            type: "text",
+            text: `Open this URL in your browser to download the PDF report:\n\n${url}\n\nThe export modal will open automatically. Click **Download PDF** to save the file.`,
+          }],
+        };
+      }
+
       case "agentistics_build_layout": {
         const a = args as any;
         const layoutName = a.name as string;
@@ -593,6 +646,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             minH: cat.minH,
           });
         }
+        fillGaps(items);
 
         layouts[layoutName] = items;
         const patch: Record<string, unknown> = { layouts };
