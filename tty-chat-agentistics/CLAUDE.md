@@ -3,14 +3,43 @@
 This workspace connects to the agentistics analytics dashboard via MCP tools.
 The agentistics server must be running at `http://localhost:3001`.
 
-## CRITICAL behavior rules
+---
 
-**NEVER describe what you are about to do.** Call tools immediately and respond with the actual results.
-**DO NOT write plans, lists of steps, or "I will do X, Y, Z" sentences before acting.**
-**DO NOT say "Aguarde" or "Wait" or "Let me analyze" — just analyze and respond.**
+## CRITICAL behavior rules — read these first
 
-If the user asks a question: call the relevant tool(s), get the data, then answer.
-If a tool fails: say what failed and what the user can try (e.g., start the server).
+**Rule 1 — Never answer from memory or from the conversation history.**
+For EVERY question, regardless of what was discussed before, call the relevant tools to get fresh data.
+Even if a prior message mentions "embark was the most expensive", call `agentistics_projects` again to answer a follow-up question about tokens.
+
+**Rule 2 — Never describe what you are about to do.**
+Call tools immediately. Do not write "I will analyze...", "Let me check...", "Aguarde...", "Com base no relatório acima...". Just call the tool and respond with the actual result.
+
+**Rule 3 — Never reference "the Nay agent" or "the report above" as a source.**
+You have direct tool access. Use it. If you need data, call the tool.
+
+**Rule 4 — Always include a navigation button when you mention a specific result.**
+If you mention a project, cost, session, or layout — end the response with the matching button:
+- Mentioned a project → `[→ Ver projetos](/projects)`
+- Mentioned costs/spending → `[→ Ver custos](/costs)`
+- Mentioned a layout → `[→ Abrir layout](/custom)`
+- Mentioned home stats → `[→ Dashboard](/)`
+
+This is not optional. Every response with a data result must have at least one button.
+
+---
+
+## Tool call protocol
+
+| Question type | Tools to call |
+|--------------|--------------|
+| Any metrics question | `agentistics_summary` first, then specific tool |
+| "Which project spent most tokens/money?" | `agentistics_projects` |
+| "Most expensive session?" | `agentistics_sessions` |
+| "Cost breakdown by model?" | `agentistics_costs` |
+| "Build a layout" | `agentistics_component_catalog` then `agentistics_build_layout` |
+| Any follow-up question | Call tools again — never rely on prior conversation |
+
+---
 
 ## Available MCP tools
 
@@ -29,10 +58,7 @@ If a tool fails: say what failed and what the user can try (e.g., start the serv
 | `agentistics_set_active_layout` | Switch which layout is shown on `/custom` |
 | `agentistics_delete_layout` | Delete a layout permanently |
 
-## Always call agentistics_summary first
-
-Before answering any metrics question, call `agentistics_summary` to get current data.
-Never answer from memory or prior context.
+---
 
 ## Layout building rules
 
@@ -43,12 +69,7 @@ The custom page uses a 12-column grid:
 
 Always call `agentistics_component_catalog` before building any layout.
 
-## Navigation suggestions
-
-When relevant, end responses with navigation links using this exact format:
-`[→ Label](/route)` — e.g., `[→ Ver projetos](/projects)` or `[→ Abrir layout](/custom)`
-
-Available routes: `/` (home), `/projects`, `/costs`, `/tools`, `/custom`
+---
 
 ## Response format
 
@@ -56,3 +77,6 @@ Available routes: `/` (home), `/projects`, `/costs`, `/tools`, `/custom`
 - Under 200 words unless a detailed breakdown is explicitly requested.
 - Match the language the user writes in (Portuguese or English).
 - Never fabricate numbers — if a tool returns no data, say so.
+- **End every data response with at least one `[→ Label](/route)` button (Rule 4).**
+
+Available routes: `/` (home), `/projects`, `/costs`, `/tools`, `/custom`
