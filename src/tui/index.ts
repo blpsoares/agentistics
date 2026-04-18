@@ -214,7 +214,8 @@ function computeSnapshot(
     const supplementByDay: Record<string, { messageCount: number; sessionCount: number }> = {}
     for (const s of sessions) {
       if (!s.start_time) continue
-      const day = s.start_time.slice(0, 10)
+      const dt = new Date(s.start_time)
+      const day = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`
       if (dailyDates.has(day)) continue
       if (!supplementByDay[day]) supplementByDay[day] = { messageCount: 0, sessionCount: 0 }
       supplementByDay[day].messageCount += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
@@ -238,22 +239,42 @@ function computeSnapshot(
     cost = Object.entries(mu).reduce((s, [id, u]) => s + calcCost(u, id), 0)
   } else {
     const b = blendedCost(mu)
-    cost = (inTok / 1_000_000) * b.input + (outTok / 1_000_000) * b.output
+    for (const sess of filt) {
+      const m = sess.model
+      if (m) {
+        cost += calcCost({
+          inputTokens: sess.input_tokens ?? 0,
+          outputTokens: sess.output_tokens ?? 0,
+          cacheReadInputTokens: sess.cache_read_input_tokens ?? 0,
+          cacheCreationInputTokens: sess.cache_creation_input_tokens ?? 0,
+          webSearchRequests: 0, costUSD: 0,
+        }, m)
+      } else {
+        cost += ((sess.input_tokens ?? 0) / 1_000_000) * b.input
+             + ((sess.output_tokens ?? 0) / 1_000_000) * b.output
+      }
+    }
   }
 
   // ── Streak — mirrors useDerivedStats exactly ──
   //   with filter    → active dates from filtered sessions only
   //   without filter → union of dailyActivity dates + ALL session dates (covers stale statsCache)
+  // Use local dates consistently (YYYY-MM-DD in local timezone) to avoid UTC boundary issues.
+  const toLocalDate = (iso: string) => {
+    const d = new Date(iso)
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+  }
   const activeDates = isF
-    ? new Set(filt.filter(s => s.start_time).map(s => s.start_time.slice(0, 10)))
+    ? new Set(filt.filter(s => s.start_time).map(s => toLocalDate(s.start_time)))
     : new Set([
         ...daily.map(d => d.date),
-        ...sessions.filter(s => s.start_time).map(s => s.start_time.slice(0, 10)),
+        ...sessions.filter(s => s.start_time).map(s => toLocalDate(s.start_time)),
       ])
   let streak = 0
   for (let i = 0; i <= 365; i++) {
     const d = new Date(); d.setDate(d.getDate() - i)
-    if (activeDates.has(d.toISOString().slice(0, 10))) streak++
+    const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+    if (activeDates.has(dateStr)) streak++
     else if (i > 0) break
   }
 

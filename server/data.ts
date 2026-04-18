@@ -246,7 +246,14 @@ async function scanProjectDir(
   // Normalize all extra sessions to the canonical project path
   for (const s of extraSessions) s.project_path = projectPath
 
-  const git_stats = await getProjectGitStats(projectPath)
+  // Scope git stats to the period of Claude usage (earliest session date)
+  const sessionDates = projectSessions
+    .map(s => s.created || metaMap.get(s.sessionId)?.start_time || '')
+    .filter(Boolean)
+  const earliestSession = sessionDates.length > 0
+    ? sessionDates.reduce((a, b) => a < b ? a : b)
+    : undefined
+  const git_stats = await getProjectGitStats(projectPath, earliestSession)
 
   return {
     project: {

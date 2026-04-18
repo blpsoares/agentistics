@@ -49,17 +49,17 @@ export async function getGitFileStats(
   }
 }
 
-export async function getProjectGitStats(projectPath: string): Promise<ProjectGitStats | undefined> {
+export async function getProjectGitStats(projectPath: string, sinceIso?: string): Promise<ProjectGitStats | undefined> {
   const gitEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' }
   try {
-    // Check if it's a git repo
     await execAsync(`git -C "${projectPath}" rev-parse --git-dir`, { timeout: 3000, env: gitEnv })
   } catch {
     return undefined
   }
   try {
+    const sinceArg = sinceIso ? ` --since="${sinceIso}"` : ''
     const { stdout } = await execAsync(
-      `git -C "${projectPath}" log --numstat --format="COMMIT %H %ai" HEAD`,
+      `git -C "${projectPath}" log --numstat --format="COMMIT %H %ai"${sinceArg} HEAD`,
       { timeout: 10000, env: gitEnv }
     )
     let commits = 0, linesAdded = 0, linesRemoved = 0
