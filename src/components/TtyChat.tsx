@@ -37,11 +37,18 @@ type ChatMessage = {
   files?: string[]    // file names – shown as chips in the bubble
 }
 
+type RawSessionMessage = {
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: number
+  tools?: string[]
+  images?: string[]
+  files?: string[]
+}
+
 // Detect sessions stored with the old inline-history format ("User: ...\nAssistant: ...") and
 // parse them into individual message bubbles for display.
-function expandHistoryBlob(
-  msgs: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[] }>,
-): ChatMessage[] {
+function expandHistoryBlob(msgs: RawSessionMessage[]): ChatMessage[] {
   const out: ChatMessage[] = []
   for (const msg of msgs) {
     const isBlob =
@@ -799,7 +806,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
           setHistoryLoading(true)
           fetch(`/api/nay-sessions/${targetSessionId}`)
             .then(r => r.ok ? r.json() : [])
-            .then((msgs: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[] }>) => {
+            .then((msgs: RawSessionMessage[]) => {
               setMessages(expandHistoryBlob(msgs))
               setSessionId(targetSessionId)
             })
@@ -900,7 +907,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
     try {
       const res = await fetch(`/api/nay-sessions/${id}`)
       if (res.ok) {
-        const msgs = await res.json() as Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[] }>
+        const msgs = await res.json() as RawSessionMessage[]
         setMessages(expandHistoryBlob(msgs))
         setSessionId(id)   // use --resume for next messages to avoid re-sending history as blob
         setViewedNaySessionId(id)
@@ -1484,7 +1491,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 : lastUser.content
               return (
                 <div style={{
-                  position: 'sticky', top: -14, zIndex: 4, // -14 to cancel the parent padding
+                  position: 'sticky', top: 0, zIndex: 4,
                   margin: '-14px -14px 10px -14px',
                   background: 'var(--bg-card)',
                   borderBottom: '1px solid var(--border)',

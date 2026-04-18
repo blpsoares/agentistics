@@ -55,3 +55,4 @@ package-lock.json
 public/*.mp4
 public/*.mov
 public/*.webm
+.scion/agents/

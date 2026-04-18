@@ -16,11 +16,11 @@ describe('buildNaySettings', () => {
     expect(settings.mcpServers.agentistics.args).toContain('mcp/agentistics-mcp.ts')
   })
 
-  it('includes all 12 agentistics MCP tools in permissions.allow', () => {
+  it('includes all 13 agentistics MCP tools in permissions.allow', () => {
     const settings = buildNaySettings(47291)
     const allowed = settings.permissions.allow
     const mcpTools = allowed.filter((p: string) => p.startsWith('mcp__agentistics__'))
-    expect(mcpTools).toHaveLength(12)
+    expect(mcpTools).toHaveLength(13)
   })
 
   it('includes WebFetch permission for the given port', () => {
