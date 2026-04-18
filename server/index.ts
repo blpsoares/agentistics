@@ -6,7 +6,7 @@ import { getVersionInfo } from './version'
 import { buildApiResponse, buildApiResponseStream } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
 import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, type ChatMessage, type ChatModelId, type ChatAttachment } from './chat-tty'
-import { listMcpServers } from './mcp-list'
+import { listMcpServers, removeMcpServer } from './mcp-list'
 import { listNaySessions, getNaySessionMessages } from './nay-sessions'
 import { listClaudeSessions, getClaudeSessionMessages, type ClaudeSessionSummary, type ClaudeSessionMessage } from './claude-sessions'
 import { PROJECTS_DIR } from './config'
@@ -269,10 +269,31 @@ Bun.serve({
 
     if (url.pathname === '/api/mcp-list' && req.method === 'GET') {
       const projectPath = url.searchParams.get('projectPath') ?? null
-      const servers = await listMcpServers(projectPath)
-      return new Response(JSON.stringify(servers), {
+      const result = await listMcpServers(projectPath)
+      return new Response(JSON.stringify(result), {
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
+    }
+
+    if (url.pathname === '/api/mcp-action' && req.method === 'POST') {
+      try {
+        const body = await req.json() as { action: 'remove'; name: string }
+        if (body.action === 'remove') {
+          const result = await removeMcpServer(body.name)
+          return new Response(JSON.stringify(result), {
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        return new Response(JSON.stringify({ ok: false, error: 'unknown action' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify({ ok: false, error: String(err) }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
     }
 
     if (url.pathname === '/api/chat-tty' && req.method === 'POST') {

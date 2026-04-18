@@ -12,6 +12,7 @@ import {
   Wrench,
   FileCode,
   GitCommit,
+  ExternalLink,
 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -206,6 +207,31 @@ function IconButton({
       {children}
     </button>
   )
+}
+
+// ─── Open in Claude / Nay helpers ─────────────────────────────────────────────
+
+function isNayChatSession(projectPath: string): boolean {
+  return projectPath.includes('.agentistics/nay-chat')
+}
+
+function encodeProjectDir(projectPath: string): string {
+  return projectPath.replace(/\//g, '-')
+}
+
+function openSession(s: SessionMeta, e: React.MouseEvent) {
+  e.stopPropagation()
+  if (isNayChatSession(s.project_path)) {
+    window.dispatchEvent(new CustomEvent('agentistics:open-chat', { detail: { tab: 'nay' } }))
+  } else {
+    const encodedDir = encodeProjectDir(s.project_path)
+    window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
+      detail: {
+        tab: 'claude',
+        project: { path: s.project_path, name: s.project_path.split('/').pop() ?? s.project_path, encodedDir },
+      },
+    }))
+  }
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -431,16 +457,51 @@ export function RecentSessions({ sessions, lang, onSelect }: Props) {
                     </div>
                   </div>
 
-                  {/* Timestamp */}
+                  {/* Timestamp + open button */}
                   <div
                     style={{
-                      fontSize: 11,
-                      color: 'var(--text-tertiary)',
                       flexShrink: 0,
-                      textAlign: 'right',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'flex-end',
+                      gap: 4,
                     }}
                   >
-                    {s.start_time ? format(parseISO(s.start_time), 'MMM d, HH:mm') : ''}
+                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                      {s.start_time ? format(parseISO(s.start_time), 'MMM d, HH:mm') : ''}
+                    </span>
+                    <button
+                      onClick={(e) => openSession(s, e)}
+                      title={isNayChatSession(s.project_path) ? 'Open in Nay Chat' : 'Open in Claude'}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 3,
+                        padding: '2px 6px',
+                        borderRadius: 4,
+                        border: '1px solid var(--border-subtle)',
+                        background: 'transparent',
+                        color: 'var(--text-tertiary)',
+                        fontSize: 10,
+                        cursor: 'pointer',
+                        transition: 'all 0.15s',
+                        lineHeight: 1.4,
+                        fontFamily: 'inherit',
+                      }}
+                      onMouseEnter={e => {
+                        const btn = e.currentTarget
+                        btn.style.borderColor = isNayChatSession(s.project_path) ? 'var(--anthropic-orange)' : 'var(--accent-purple, #a855f7)'
+                        btn.style.color = isNayChatSession(s.project_path) ? 'var(--anthropic-orange)' : 'var(--accent-purple, #a855f7)'
+                      }}
+                      onMouseLeave={e => {
+                        const btn = e.currentTarget
+                        btn.style.borderColor = 'var(--border-subtle)'
+                        btn.style.color = 'var(--text-tertiary)'
+                      }}
+                    >
+                      <ExternalLink size={9} />
+                      {isNayChatSession(s.project_path) ? 'Nay' : 'Claude'}
+                    </button>
                   </div>
                 </div>
 

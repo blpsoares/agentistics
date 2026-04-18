@@ -384,7 +384,7 @@ function ClaudeChatMessage({
   )
 }
 
-// ── MCP server type ───────────────────────────────────────────────────────────
+// ── MCP types ─────────────────────────────────────────────────────────────────
 
 type McpServerInfo = {
   name: string
@@ -392,6 +392,18 @@ type McpServerInfo = {
   args: string[]
   env?: Record<string, string>
   scope: 'user' | 'project'
+}
+
+type McpPluginInfo = {
+  id: string
+  name: string
+  registry: string
+  enabled: boolean
+}
+
+type McpListResult = {
+  servers: McpServerInfo[]
+  plugins: McpPluginInfo[]
 }
 
 // ── Project picker ────────────────────────────────────────────────────────────
@@ -693,12 +705,41 @@ function SessionSwitcher({
 
 // ── MCP Panel ─────────────────────────────────────────────────────────────────
 
-function McpPanel({ servers, loading, onClose, pt }: {
-  servers: McpServerInfo[]
+function McpPanel({ result, loading, onClose, onRemoved, pt }: {
+  result: McpListResult
   loading: boolean
   onClose: () => void
+  onRemoved: (name: string) => void
   pt: boolean
 }) {
+  const [removing, setRemoving] = React.useState<string | null>(null)
+  const [removeError, setRemoveError] = React.useState<string | null>(null)
+
+  async function handleRemove(name: string) {
+    setRemoving(name)
+    setRemoveError(null)
+    try {
+      const res = await fetch('/api/mcp-action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'remove', name }),
+      })
+      const data = await res.json() as { ok: boolean; error?: string }
+      if (data.ok) {
+        onRemoved(name)
+      } else {
+        setRemoveError(data.error ?? 'Failed to remove')
+      }
+    } catch {
+      setRemoveError('Network error')
+    } finally {
+      setRemoving(null)
+    }
+  }
+
+  const { servers, plugins } = result
+  const isEmpty = !loading && servers.length === 0 && plugins.length === 0
+
   return (
     <div style={{
       position: 'absolute', inset: 0, zIndex: 10,
@@ -710,55 +751,132 @@ function McpPanel({ servers, loading, onClose, pt }: {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
         <Server size={14} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />
         <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>
-          MCP Servers
+          MCP Servers {!loading && <span style={{ fontWeight: 400, color: 'var(--text-tertiary)' }}>({servers.length})</span>}
         </span>
         <button onClick={onClose} style={{ ...iconBtnStyle, flexShrink: 0 }}>
           <X size={12} />
         </button>
       </div>
 
+      {removeError && (
+        <div style={{ padding: '5px 9px', marginBottom: 8, borderRadius: 6, fontSize: 11,
+          background: 'color-mix(in srgb, var(--accent-red, #ef4444) 10%, transparent)',
+          border: '1px solid color-mix(in srgb, var(--accent-red, #ef4444) 30%, transparent)',
+          color: 'var(--accent-red, #ef4444)' }}>
+          {removeError}
+        </div>
+      )}
+
       {loading ? (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, color: 'var(--text-tertiary)' }}>
           <Loader size={16} style={{ animation: 'claudeChatSpin 1s linear infinite' }} />
         </div>
-      ) : servers.length === 0 ? (
+      ) : isEmpty ? (
         <div style={{ padding: '20px 0', textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 12 }}>
           {pt ? 'Nenhum servidor MCP encontrado' : 'No MCP servers found'}
         </div>
       ) : (
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {servers.map(s => (
-            <div key={s.name} style={{
-              border: '1px solid var(--border)', borderRadius: 8,
-              background: 'var(--bg-card)', overflow: 'hidden',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px' }}>
-                <div style={{
-                  width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                  background: 'var(--accent-green)',
-                  boxShadow: '0 0 0 2px color-mix(in srgb, var(--accent-green) 25%, transparent)',
-                }} />
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>{s.name}</span>
-                <span style={{
-                  fontSize: 9, padding: '1px 6px', borderRadius: 3, fontWeight: 700,
-                  background: s.scope === 'user'
-                    ? 'color-mix(in srgb, var(--accent-purple) 12%, transparent)'
-                    : 'color-mix(in srgb, var(--accent-green) 12%, transparent)',
-                  color: s.scope === 'user' ? 'var(--accent-purple)' : 'var(--accent-green)',
-                  border: `1px solid ${s.scope === 'user'
-                    ? 'color-mix(in srgb, var(--accent-purple) 30%, transparent)'
-                    : 'color-mix(in srgb, var(--accent-green) 30%, transparent)'}`,
+          {/* MCP Servers */}
+          {servers.length > 0 && (
+            <>
+              {servers.map(s => (
+                <div key={s.name} style={{
+                  border: '1px solid var(--border)', borderRadius: 8,
+                  background: 'var(--bg-card)', overflow: 'hidden',
                 }}>
-                  {s.scope}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px' }}>
+                    <div style={{
+                      width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                      background: 'var(--accent-green)',
+                      boxShadow: '0 0 0 2px color-mix(in srgb, var(--accent-green) 25%, transparent)',
+                    }} />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>{s.name}</span>
+                    <span style={{
+                      fontSize: 9, padding: '1px 6px', borderRadius: 3, fontWeight: 700,
+                      background: s.scope === 'user'
+                        ? 'color-mix(in srgb, var(--accent-purple) 12%, transparent)'
+                        : 'color-mix(in srgb, var(--accent-green) 12%, transparent)',
+                      color: s.scope === 'user' ? 'var(--accent-purple)' : 'var(--accent-green)',
+                      border: `1px solid ${s.scope === 'user'
+                        ? 'color-mix(in srgb, var(--accent-purple) 30%, transparent)'
+                        : 'color-mix(in srgb, var(--accent-green) 30%, transparent)'}`,
+                    }}>
+                      {s.scope}
+                    </span>
+                    {s.scope === 'user' && (
+                      <button
+                        onClick={() => { if (!removing) void handleRemove(s.name) }}
+                        disabled={removing === s.name}
+                        title={pt ? 'Desconectar' : 'Disconnect'}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          width: 20, height: 20, borderRadius: 4, border: '1px solid var(--border)',
+                          background: 'transparent', cursor: removing ? 'wait' : 'pointer',
+                          color: 'var(--text-tertiary)', padding: 0,
+                          opacity: removing && removing !== s.name ? 0.4 : 1,
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.color = '#ef4444'; e.currentTarget.style.borderColor = '#ef444480' }}
+                        onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-tertiary)'; e.currentTarget.style.borderColor = 'var(--border)' }}
+                      >
+                        {removing === s.name
+                          ? <Loader size={9} style={{ animation: 'claudeChatSpin 1s linear infinite' }} />
+                          : <X size={9} />
+                        }
+                      </button>
+                    )}
+                  </div>
+                  {s.command && (
+                    <div style={{ padding: '4px 10px 8px', borderTop: '1px solid var(--border)' }}>
+                      <code style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>
+                        {s.command} {s.args.join(' ')}
+                      </code>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* Plugins section */}
+          {plugins.length > 0 && (
+            <>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                marginTop: servers.length > 0 ? 4 : 0,
+                marginBottom: 2,
+              }}>
+                <Plug size={10} style={{ color: 'var(--text-tertiary)' }} />
+                <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Plugins
                 </span>
               </div>
-              <div style={{ padding: '4px 10px 8px', borderTop: '1px solid var(--border)' }}>
-                <code style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>
-                  {s.command} {s.args.join(' ')}
-                </code>
-              </div>
-            </div>
-          ))}
+              {plugins.map(p => (
+                <div key={p.id} style={{
+                  border: '1px solid var(--border)', borderRadius: 8,
+                  background: 'var(--bg-card)',
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
+                }}>
+                  <div style={{
+                    width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                    background: p.enabled ? 'var(--accent-green)' : 'var(--text-tertiary)',
+                    boxShadow: p.enabled ? '0 0 0 2px color-mix(in srgb, var(--accent-green) 25%, transparent)' : 'none',
+                  }} />
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>{p.name}</span>
+                  {p.registry && (
+                    <span style={{
+                      fontSize: 9, padding: '1px 6px', borderRadius: 3, fontWeight: 600,
+                      background: 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)',
+                      color: 'var(--anthropic-orange)',
+                      border: '1px solid color-mix(in srgb, var(--anthropic-orange) 25%, transparent)',
+                    }}>
+                      {p.registry}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>
@@ -926,7 +1044,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
   const fileInputRef = useRef<HTMLInputElement>(null)
   // MCP panel
   const [showMcpPanel, setShowMcpPanel] = useState(false)
-  const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([])
+  const [mcpResult, setMcpResult] = useState<McpListResult>({ servers: [], plugins: [] })
   const [mcpLoading, setMcpLoading] = useState(false)
 
   // Refs for drag/resize
@@ -1175,7 +1293,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
       setMcpLoading(true)
       try {
         const res = await fetch(`/api/mcp-list${projectPath ? `?projectPath=${encodeURIComponent(projectPath)}` : ''}`)
-        if (res.ok) setMcpServers(await res.json() as McpServerInfo[])
+        if (res.ok) setMcpResult(await res.json() as McpListResult)
       } catch { /* ignore */ }
       finally { setMcpLoading(false) }
       return
@@ -1363,7 +1481,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
 
         {/* MCP panel */}
         {showMcpPanel && (
-          <McpPanel servers={mcpServers} loading={mcpLoading} pt={lang === 'pt'} onClose={() => setShowMcpPanel(false)} />
+          <McpPanel result={mcpResult} loading={mcpLoading} pt={lang === 'pt'} onClose={() => setShowMcpPanel(false)} onRemoved={name => setMcpResult(prev => ({ ...prev, servers: prev.servers.filter(s => s.name !== name) }))} />
         )}
 
         {/* Chat UI */}
@@ -1638,7 +1756,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
 
           {/* ── MCP panel ── */}
           {showMcpPanel && (
-            <McpPanel servers={mcpServers} loading={mcpLoading} pt={lang === 'pt'} onClose={() => setShowMcpPanel(false)} />
+            <McpPanel result={mcpResult} loading={mcpLoading} pt={lang === 'pt'} onClose={() => setShowMcpPanel(false)} onRemoved={name => setMcpResult(prev => ({ ...prev, servers: prev.servers.filter(s => s.name !== name) }))} />
           )}
 
           {/* ── Session switcher — shown on top of chat after project selected ── */}

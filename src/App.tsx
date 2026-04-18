@@ -670,6 +670,15 @@ export default function AppLayout() {
   )
   const [expandedChart, setExpandedChart] = useState<string | null>(null)
   const [selectedSession, setSelectedSession] = useState<import('./lib/types').SessionMeta | null>(null)
+
+  // Keep the drilldown modal in sync when live data refreshes
+  useEffect(() => {
+    if (!selectedSession || !data) return
+    const updated = data.sessions.find(s => s.session_id === selectedSession.session_id)
+    if (updated && updated !== selectedSession) setSelectedSession(updated)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data])
+
   const [monthlyBudgetUSD, setMonthlyBudgetUSD] = useState<number | null>(() => {
     try {
       const raw = localStorage.getItem('agentistics-monthly-budget-usd')

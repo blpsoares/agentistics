@@ -698,6 +698,29 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   useEffect(() => { openRef.current = open }, [open])
   useEffect(() => { soundRef.current = chatSoundEnabled }, [chatSoundEnabled])
 
+  // External open trigger: dispatched by RecentSessions "open in Claude/Nay" button
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { tab, project } = (e as CustomEvent<{
+        tab: 'nay' | 'claude'
+        project?: { path: string; name: string; encodedDir: string }
+      }>).detail
+      setOpen(true)
+      setActiveTab(tab)
+      if (tab === 'claude' && project) {
+        onClaudeStateChange?.({
+          projectPath: project.path,
+          projectName: project.name,
+          projectEncodedDir: project.encodedDir,
+          sessionId: null,
+          messages: [],
+        })
+      }
+    }
+    window.addEventListener('agentistics:open-chat', handler)
+    return () => window.removeEventListener('agentistics:open-chat', handler)
+  }, [onClaudeStateChange])
+
   // Update browser tab title to indicate unread Nay message
   useEffect(() => {
     const BASE_TITLE = 'Agentistics'
