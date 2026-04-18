@@ -2,9 +2,15 @@
 
 import { PORT } from './config'
 import { getRates } from './rates'
+import { getVersionInfo } from './version'
 import { buildApiResponse, buildApiResponseStream } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
-import { streamViaClaude, execCommand, ensureNayChat, type ChatMessage, type ChatModelId } from './chat-tty'
+import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, type ChatMessage, type ChatModelId } from './chat-tty'
+import { listNaySessions, getNaySessionMessages } from './nay-sessions'
+import { listClaudeSessions, getClaudeSessionMessages, type ClaudeSessionSummary, type ClaudeSessionMessage } from './claude-sessions'
+import { PROJECTS_DIR } from './config'
+import { safeReadDir } from './utils'
+import { decodeProjectDir } from './git'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -28,6 +34,7 @@ import {
 setupFileWatcher()
 maybeSpawnWatcher()
 ensureNayChat(PORT).catch(err => console.error('[nay-chat] failed to initialize:', err))
+ensureClaudeChat().catch(err => console.error('[claude-chat] failed to initialize:', err))
 
 
 // ---------------------------------------------------------------------------
@@ -85,6 +92,22 @@ Bun.serve({
         status: 200,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
+    }
+
+    if (url.pathname === '/api/version' && req.method === 'GET') {
+      try {
+        const info = await getVersionInfo()
+        return new Response(JSON.stringify(info), {
+          status: 200,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return new Response(JSON.stringify({ error: message }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
     }
 
     if (url.pathname === '/api/rates' && req.method === 'GET') {
@@ -175,10 +198,78 @@ Bun.serve({
       }
     }
 
+    if (url.pathname === '/api/projects-list' && req.method === 'GET') {
+      try {
+        const dirs = await safeReadDir(PROJECTS_DIR)
+        const entries: { name: string; path: string; sessionCount: number }[] = []
+        for (const dir of dirs) {
+          const projectPath = decodeProjectDir(dir)
+          const files = await safeReadDir(`${PROJECTS_DIR}/${dir}`)
+          const sessionCount = files.filter(f => f.endsWith('.jsonl')).length
+          if (sessionCount === 0) continue
+          const name = projectPath.split('/').filter(Boolean).pop() ?? dir
+          entries.push({ name, path: projectPath, sessionCount })
+        }
+        entries.sort((a, b) => b.sessionCount - a.sessionCount)
+        return new Response(JSON.stringify(entries), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return new Response(JSON.stringify({ error: message }), {
+          status: 500, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    if (url.pathname === '/api/nay-sessions' && req.method === 'GET') {
+      const sessions = await listNaySessions()
+      return new Response(JSON.stringify(sessions), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (url.pathname.startsWith('/api/nay-sessions/') && req.method === 'GET') {
+      const id = url.pathname.slice('/api/nay-sessions/'.length)
+      const messages = await getNaySessionMessages(id)
+      return new Response(JSON.stringify(messages), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // GET /api/claude-sessions?projectPath=...  → list sessions for a project
+    // GET /api/claude-sessions/:id?projectPath=... → messages for a session
+    if (url.pathname === '/api/claude-sessions' && req.method === 'GET') {
+      const projectPath = url.searchParams.get('projectPath') ?? ''
+      if (!projectPath) {
+        return new Response(JSON.stringify({ error: 'projectPath required' }), {
+          status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const sessions: ClaudeSessionSummary[] = await listClaudeSessions(projectPath)
+      return new Response(JSON.stringify(sessions), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (url.pathname.startsWith('/api/claude-sessions/') && req.method === 'GET') {
+      const id = url.pathname.slice('/api/claude-sessions/'.length)
+      const projectPath = url.searchParams.get('projectPath') ?? ''
+      if (!projectPath || !id) {
+        return new Response(JSON.stringify({ error: 'projectPath and id required' }), {
+          status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const msgs: ClaudeSessionMessage[] = await getClaudeSessionMessages(projectPath, id)
+      return new Response(JSON.stringify(msgs), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (url.pathname === '/api/chat-tty' && req.method === 'POST') {
       try {
-        const body = await req.json() as { message: string; history?: ChatMessage[]; model?: ChatModelId }
-        const { message, history = [], model = 'claude-sonnet-4-6' } = body
+        const body = await req.json() as { message: string; history?: ChatMessage[]; model?: ChatModelId; sessionId?: string | null }
+        const { message, history = [], model = 'claude-sonnet-4-6', sessionId = null } = body
         const enc = new TextEncoder()
         const stream = new ReadableStream<Uint8Array>({
           start(ctrl) {
@@ -200,6 +291,61 @@ Bun.serve({
                 ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ error: err })}\n\n`))
                 ctrl.close()
               },
+              (id) => {
+                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ sessionId: id })}\n\n`))
+              },
+              sessionId,
+            )
+          },
+        })
+        return new Response(stream, {
+          status: 200,
+          headers: {
+            ...CORS_HEADERS,
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+          },
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return new Response(JSON.stringify({ error: message }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    if (url.pathname === '/api/claude-chat' && req.method === 'POST') {
+      try {
+        const body = await req.json() as { message: string; history?: ChatMessage[]; model?: ChatModelId; sessionId?: string | null; thinkingBudget?: number; projectPath?: string }
+        const { message, history = [], model = 'claude-sonnet-4-6', sessionId = null, thinkingBudget, projectPath } = body
+        const enc = new TextEncoder()
+        const stream = new ReadableStream<Uint8Array>({
+          start(ctrl) {
+            streamViaClaude(
+              message,
+              history,
+              model,
+              (text) => {
+                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ text })}\n\n`))
+              },
+              (tool) => {
+                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ tool })}\n\n`))
+              },
+              () => {
+                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ done: true })}\n\n`))
+                ctrl.close()
+              },
+              (err) => {
+                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ error: err })}\n\n`))
+                ctrl.close()
+              },
+              (id) => {
+                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ sessionId: id })}\n\n`))
+              },
+              sessionId,
+              { cwd: projectPath ?? CLAUDE_CHAT_DIR, thinkingBudget },
             )
           },
         })

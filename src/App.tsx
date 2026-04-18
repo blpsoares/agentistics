@@ -35,6 +35,8 @@ import { SessionDrilldownModal } from './components/SessionDrilldownModal'
 import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
 import { DevConfigPanel } from './components/DevConfigPanel'
 import { TtyChat } from './components/TtyChat'
+import { ClaudeChat } from './components/ClaudeChat'
+import { UpdateModal } from './components/UpdateModal'
 import { type ChatModelId } from './lib/chatModels'
 import { format, parseISO, parse } from 'date-fns'
 
@@ -663,7 +665,9 @@ export default function AppLayout() {
     models: [],
   })
   const [infoModalIndex, setInfoModalIndex] = useState<number | null>(null)
-  const [showExportModal, setShowExportModal] = useState(false)
+  const [showExportModal, setShowExportModal] = useState(
+    () => new URLSearchParams(window.location.search).has('export')
+  )
   const [expandedChart, setExpandedChart] = useState<string | null>(null)
   const [selectedSession, setSelectedSession] = useState<import('./lib/types').SessionMeta | null>(null)
   const [monthlyBudgetUSD, setMonthlyBudgetUSD] = useState<number | null>(() => {
@@ -703,6 +707,7 @@ export default function AppLayout() {
     return DEFAULT_CARD_ORDER
   })
   const [showPrefsModal, setShowPrefsModal] = useState(false)
+  const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string } | null>(null)
   const [showDevConfig, setShowDevConfig] = useState(false)
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
@@ -742,6 +747,15 @@ export default function AppLayout() {
         if (prefs.cardOrder) setCardOrder(prefs.cardOrder as CardId[])
         if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
         if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
+      })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/version')
+      .then(r => r.ok ? r.json() : null)
+      .then((info: { current: string; latest: string; hasUpdate: boolean } | null) => {
+        if (info?.hasUpdate) setUpdateInfo({ current: info.current, latest: info.latest })
       })
       .catch(() => {})
   }, [])
@@ -1478,6 +1492,16 @@ export default function AppLayout() {
       {/* Dev Config Panel */}
       {showDevConfig && <DevConfigPanel onClose={() => setShowDevConfig(false)} />}
 
+      {/* Update available modal */}
+      {updateInfo && (
+        <UpdateModal
+          current={updateInfo.current}
+          latest={updateInfo.latest}
+          lang={lang}
+          onClose={() => setUpdateInfo(null)}
+        />
+      )}
+
       {/* Info Modal */}
       {infoModalIndex !== null && (
         <InfoModal
@@ -1574,6 +1598,9 @@ export default function AppLayout() {
           }).catch(() => {})
         }}
       />
+
+      {/* Claude Chat — floating draggable window + FAB */}
+      <ClaudeChat lang={lang} />
 
       {/* Footer */}
       <footer style={{
