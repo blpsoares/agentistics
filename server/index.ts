@@ -5,7 +5,8 @@ import { getRates } from './rates'
 import { getVersionInfo } from './version'
 import { buildApiResponse, buildApiResponseStream } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
-import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, type ChatMessage, type ChatModelId } from './chat-tty'
+import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, type ChatMessage, type ChatModelId, type ChatAttachment } from './chat-tty'
+import { listMcpServers } from './mcp-list'
 import { listNaySessions, getNaySessionMessages } from './nay-sessions'
 import { listClaudeSessions, getClaudeSessionMessages, type ClaudeSessionSummary, type ClaudeSessionMessage } from './claude-sessions'
 import { PROJECTS_DIR } from './config'
@@ -266,10 +267,18 @@ Bun.serve({
       })
     }
 
+    if (url.pathname === '/api/mcp-list' && req.method === 'GET') {
+      const projectPath = url.searchParams.get('projectPath') ?? null
+      const servers = await listMcpServers(projectPath)
+      return new Response(JSON.stringify(servers), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (url.pathname === '/api/chat-tty' && req.method === 'POST') {
       try {
-        const body = await req.json() as { message: string; history?: ChatMessage[]; model?: ChatModelId; sessionId?: string | null }
-        const { message, history = [], model = 'claude-sonnet-4-6', sessionId = null } = body
+        const body = await req.json() as { message: string; history?: ChatMessage[]; model?: ChatModelId; sessionId?: string | null; attachments?: ChatAttachment[] }
+        const { message, history = [], model = 'claude-sonnet-4-6', sessionId = null, attachments } = body
         const enc = new TextEncoder()
         const stream = new ReadableStream<Uint8Array>({
           start(ctrl) {
@@ -295,6 +304,7 @@ Bun.serve({
                 ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ sessionId: id })}\n\n`))
               },
               sessionId,
+              { attachments },
             )
           },
         })
@@ -318,8 +328,8 @@ Bun.serve({
 
     if (url.pathname === '/api/claude-chat' && req.method === 'POST') {
       try {
-        const body = await req.json() as { message: string; history?: ChatMessage[]; model?: ChatModelId; sessionId?: string | null; thinkingBudget?: number; projectPath?: string }
-        const { message, history = [], model = 'claude-sonnet-4-6', sessionId = null, thinkingBudget, projectPath } = body
+        const body = await req.json() as { message: string; history?: ChatMessage[]; model?: ChatModelId; sessionId?: string | null; thinkingBudget?: number; projectPath?: string; attachments?: ChatAttachment[] }
+        const { message, history = [], model = 'claude-sonnet-4-6', sessionId = null, thinkingBudget, projectPath, attachments } = body
         const enc = new TextEncoder()
         const stream = new ReadableStream<Uint8Array>({
           start(ctrl) {
@@ -345,7 +355,7 @@ Bun.serve({
                 ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ sessionId: id })}\n\n`))
               },
               sessionId,
-              { cwd: projectPath ?? CLAUDE_CHAT_DIR, thinkingBudget },
+              { cwd: projectPath ?? CLAUDE_CHAT_DIR, thinkingBudget, attachments },
             )
           },
         })

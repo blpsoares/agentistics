@@ -712,6 +712,11 @@ export default function AppLayout() {
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
   const [claudeDetached, setClaudeDetached] = useState(false)
+  // Lifted Claude Chat state so project/session is preserved when toggling detach/attach
+  const [claudeSharedState, setClaudeSharedState] = useState<{
+    projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
+    sessionId: string | null; messages: import('./components/ClaudeChat').ChatMessage[]
+  }>({ projectPath: null, projectName: null, projectEncodedDir: null, sessionId: null, messages: [] })
 
   const [cardPrecision, setCardPrecisionState] = useState<Record<string, boolean>>({})
   const precisionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1548,13 +1553,9 @@ export default function AppLayout() {
             modelUsage={derived.modelUsage}
             currency={currency}
             brlRate={brlRate}
-            note={
-              filters.projects.length > 0
-                ? (lang === 'pt'
-                  ? 'Breakdown por modelo indisponível com filtro de projeto ativo.'
-                  : 'Per-model breakdown unavailable when project filter is active.')
-                : undefined
-            }
+            fallbackInputTokens={filters.projects.length > 0 ? derived.inputTokens : undefined}
+            fallbackOutputTokens={filters.projects.length > 0 ? derived.outputTokens : undefined}
+            fallbackCostUSD={filters.projects.length > 0 ? derived.totalCostUSD : undefined}
           />
         </ChartModal>
       )}
@@ -1599,10 +1600,25 @@ export default function AppLayout() {
             body: JSON.stringify({ chatModel: model }),
           }).catch(() => {})
         }}
+        claudeSharedState={claudeSharedState}
+        onClaudeStateChange={setClaudeSharedState}
       />
 
       {/* Claude Chat — floating draggable window (only when detached from TtyChat tab) */}
-      {claudeDetached && <ClaudeChat lang={lang} onAttach={() => setClaudeDetached(false)} />}
+      {claudeDetached && (
+        <ClaudeChat
+          lang={lang}
+          onAttach={() => setClaudeDetached(false)}
+          initialProject={claudeSharedState.projectPath ? {
+            path: claudeSharedState.projectPath,
+            name: claudeSharedState.projectName ?? '',
+            encodedDir: claudeSharedState.projectEncodedDir ?? '',
+          } : null}
+          initialSessionId={claudeSharedState.sessionId}
+          initialMessages={claudeSharedState.messages}
+          onStateChange={setClaudeSharedState}
+        />
+      )}
 
       {/* Footer */}
       <footer style={{

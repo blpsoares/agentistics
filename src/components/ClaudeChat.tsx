@@ -4,10 +4,22 @@ import remarkGfm from 'remark-gfm'
 import {
   X, Send, Loader, AlertCircle, Minus,
   Wrench, ChevronDown, ChevronUp, Brain, FolderOpen, Check, History,
-  MessageSquarePlus, Clock, ExternalLink,
+  MessageSquarePlus, Clock, ExternalLink, Paperclip, Image as ImageIcon,
+  FileText, Server, Plug,
 } from 'lucide-react'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
 import { formatToolName, fmtTime } from '../lib/chatUtils'
+
+// ── Attachment type ───────────────────────────────────────────────────────────
+
+type Attachment = {
+  id: string
+  name: string
+  mimeType: string
+  data: string     // base64 for images, plain text for files
+  isImage: boolean
+  preview?: string // data URL for display
+}
 
 type Lang = 'pt' | 'en'
 
@@ -27,11 +39,13 @@ function thinkingLabel(budget: ThinkingBudget): string {
   return '32K'
 }
 
-type ChatMessage = {
+export type ChatMessage = {
   role: 'user' | 'assistant'
   content: string
   timestamp: number
   tools?: string[]
+  images?: string[]  // data URLs of attached images (user messages)
+  files?: string[]   // attached file names (user messages)
 }
 
 const BADGE_COLORS: Record<string, string> = {
@@ -274,6 +288,28 @@ function ClaudeChatMessage({
         display: 'flex', flexDirection: 'column', alignItems: 'flex-end',
         marginBottom: 14, animation: 'claudeChatFadeIn 0.15s ease-out',
       }}>
+        {/* Image thumbnails */}
+        {msg.images && msg.images.length > 0 && (
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end', marginBottom: 5, maxWidth: '90%' }}>
+            {msg.images.map((src, i) => (
+              <img key={i} src={src} alt="attachment"
+                style={{ maxWidth: 180, maxHeight: 130, borderRadius: 8, objectFit: 'cover',
+                  border: '1px solid color-mix(in srgb, var(--accent-purple) 30%, transparent)' }} />
+            ))}
+          </div>
+        )}
+        {/* File name chips */}
+        {msg.files && msg.files.length > 0 && (
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end', marginBottom: 5 }}>
+            {msg.files.map((name, i) => (
+              <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11,
+                padding: '2px 8px', borderRadius: 5, background: 'var(--bg-elevated)',
+                border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+                <FileText size={10} /> {name}
+              </span>
+            ))}
+          </div>
+        )}
         <div style={{
           maxWidth: '90%', padding: '8px 14px',
           borderRadius: '14px 14px 4px 14px',
@@ -346,6 +382,16 @@ function ClaudeChatMessage({
       </div>
     </div>
   )
+}
+
+// ── MCP server type ───────────────────────────────────────────────────────────
+
+type McpServerInfo = {
+  name: string
+  command: string
+  args: string[]
+  env?: Record<string, string>
+  scope: 'user' | 'project'
 }
 
 // ── Project picker ────────────────────────────────────────────────────────────
@@ -645,6 +691,182 @@ function SessionSwitcher({
   )
 }
 
+// ── MCP Panel ─────────────────────────────────────────────────────────────────
+
+function McpPanel({ servers, loading, onClose, pt }: {
+  servers: McpServerInfo[]
+  loading: boolean
+  onClose: () => void
+  pt: boolean
+}) {
+  return (
+    <div style={{
+      position: 'absolute', inset: 0, zIndex: 10,
+      background: 'var(--bg-surface)', borderRadius: 'inherit',
+      display: 'flex', flexDirection: 'column',
+      padding: '14px 14px 14px',
+      animation: 'claudeChatFadeIn 0.15s ease-out',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+        <Server size={14} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>
+          MCP Servers
+        </span>
+        <button onClick={onClose} style={{ ...iconBtnStyle, flexShrink: 0 }}>
+          <X size={12} />
+        </button>
+      </div>
+
+      {loading ? (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, color: 'var(--text-tertiary)' }}>
+          <Loader size={16} style={{ animation: 'claudeChatSpin 1s linear infinite' }} />
+        </div>
+      ) : servers.length === 0 ? (
+        <div style={{ padding: '20px 0', textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 12 }}>
+          {pt ? 'Nenhum servidor MCP encontrado' : 'No MCP servers found'}
+        </div>
+      ) : (
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {servers.map(s => (
+            <div key={s.name} style={{
+              border: '1px solid var(--border)', borderRadius: 8,
+              background: 'var(--bg-card)', overflow: 'hidden',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px' }}>
+                <div style={{
+                  width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                  background: 'var(--accent-green)',
+                  boxShadow: '0 0 0 2px color-mix(in srgb, var(--accent-green) 25%, transparent)',
+                }} />
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>{s.name}</span>
+                <span style={{
+                  fontSize: 9, padding: '1px 6px', borderRadius: 3, fontWeight: 700,
+                  background: s.scope === 'user'
+                    ? 'color-mix(in srgb, var(--accent-purple) 12%, transparent)'
+                    : 'color-mix(in srgb, var(--accent-green) 12%, transparent)',
+                  color: s.scope === 'user' ? 'var(--accent-purple)' : 'var(--accent-green)',
+                  border: `1px solid ${s.scope === 'user'
+                    ? 'color-mix(in srgb, var(--accent-purple) 30%, transparent)'
+                    : 'color-mix(in srgb, var(--accent-green) 30%, transparent)'}`,
+                }}>
+                  {s.scope}
+                </span>
+              </div>
+              <div style={{ padding: '4px 10px 8px', borderTop: '1px solid var(--border)' }}>
+                <code style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>
+                  {s.command} {s.args.join(' ')}
+                </code>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Attachment preview strip ───────────────────────────────────────────────────
+
+function AttachmentStrip({ attachments, onRemove }: {
+  attachments: Attachment[]
+  onRemove: (id: string) => void
+}) {
+  if (attachments.length === 0) return null
+  return (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', gap: 5,
+      padding: '6px 10px 0',
+      borderTop: '1px solid var(--border)',
+    }}>
+      {attachments.map(att => (
+        <div key={att.id} style={{
+          position: 'relative', display: 'inline-flex', alignItems: 'center',
+          borderRadius: 6, border: '1px solid var(--border)', overflow: 'hidden',
+          background: 'var(--bg-elevated)',
+        }}>
+          {att.isImage ? (
+            <img src={att.preview} alt={att.name}
+              style={{ width: 52, height: 52, objectFit: 'cover', display: 'block' }} />
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 8px', maxWidth: 120 }}>
+              <FileText size={12} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />
+              <span style={{ fontSize: 10, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {att.name}
+              </span>
+            </div>
+          )}
+          <button
+            onMouseDown={e => { e.preventDefault(); onRemove(att.id) }}
+            style={{
+              position: 'absolute', top: 2, right: 2,
+              width: 14, height: 14, borderRadius: '50%',
+              background: 'rgba(0,0,0,0.55)', border: 'none',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer', color: '#fff', padding: 0,
+            }}
+          >
+            <X size={8} />
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Slash command autocomplete ────────────────────────────────────────────────
+
+function SlashSuggestions({ input, onSelect, accent }: {
+  input: string
+  onSelect: (cmd: string) => void
+  accent: string
+}) {
+  if (!input.startsWith('/')) return null
+  const prefix = input.split(' ')[0]!.toLowerCase()
+  const matches = CLAUDE_SLASH_COMMANDS.filter(c => c.cmd.startsWith(prefix))
+  if (matches.length === 0) return null
+  return (
+    <div style={{
+      position: 'absolute', bottom: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 20,
+      background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10,
+      boxShadow: '0 -8px 24px rgba(0,0,0,0.25)', overflow: 'hidden',
+      animation: 'claudeChatFadeIn 0.12s ease-out',
+    }}>
+      {matches.map(c => (
+        <button
+          key={c.cmd}
+          onMouseDown={e => { e.preventDefault(); onSelect(c.hint ? `${c.cmd} ` : c.cmd) }}
+          style={{
+            width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+            padding: '8px 12px', background: 'transparent', border: 'none',
+            borderBottom: '1px solid var(--border)', cursor: 'pointer', fontFamily: 'inherit',
+            textAlign: 'left', transition: 'background 0.1s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-elevated)' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+        >
+          <span style={{ fontSize: 12, fontWeight: 700, color: accent, minWidth: 90 }}>{c.cmd}</span>
+          {c.hint && <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>{c.hint}</span>}
+          <span style={{ fontSize: 11, color: 'var(--text-secondary)', marginLeft: 'auto' }}>{c.desc}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ── Slash commands ────────────────────────────────────────────────────────────
+
+const CLAUDE_SLASH_COMMANDS = [
+  { cmd: '/clear',   hint: '',                  desc: 'Clear messages and start fresh' },
+  { cmd: '/new',     hint: '',                  desc: 'Start a new session' },
+  { cmd: '/resume',  hint: '',                  desc: 'Open session switcher' },
+  { cmd: '/model',   hint: 'haiku|sonnet|opus', desc: 'Switch model' },
+  { cmd: '/think',   hint: 'off|8k|16k|32k',   desc: 'Set thinking budget' },
+  { cmd: '/compact', hint: '',                  desc: 'Compact conversation context' },
+  { cmd: '/mcp',     hint: '',                  desc: 'List connected MCP servers' },
+  { cmd: '/project', hint: '',                  desc: 'Switch project' },
+  { cmd: '/help',    hint: '',                  desc: 'Show available commands' },
+]
+
 // ── Icon button style ─────────────────────────────────────────────────────────
 
 const iconBtnStyle: React.CSSProperties = {
@@ -663,11 +885,16 @@ interface ClaudeChatProps {
   embedded?: boolean
   onDetach?: () => void
   onAttach?: () => void
+  // Lift state up so decouple/attach preserves session/project
+  initialProject?: { path: string; name: string; encodedDir: string } | null
+  initialSessionId?: string | null
+  initialMessages?: ChatMessage[]
+  onStateChange?: (state: { projectPath: string | null; projectName: string | null; projectEncodedDir: string | null; sessionId: string | null; messages: ChatMessage[] }) => void
 }
 
-export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach }: ClaudeChatProps) {
-  // Window state
-  const [open, setOpen] = useState(false)
+export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initialProject, initialSessionId, initialMessages, onStateChange }: ClaudeChatProps) {
+  // Window state — when rendered as floating (onAttach present), start open immediately
+  const [open, setOpen] = useState(() => !embedded && !!onAttach)
   const [minimized, setMinimized] = useState(false)
   const [pos, setPos] = useState<{ x: number; y: number }>(() => loadPos())
   const [size, setSize] = useState<{ w: number; h: number }>(() => loadSize())
@@ -682,18 +909,25 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach }: Claud
   // Chat state
   const [model, setModel] = useState<ChatModelId>(DEFAULT_CHAT_MODEL)
   const [thinking, setThinking] = useState<ThinkingBudget>(false)
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>(() => initialMessages ?? [])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
-  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [sessionId, setSessionId] = useState<string | null>(() => initialSessionId ?? null)
   const [currentTools, setCurrentTools] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [showModelPicker, setShowModelPicker] = useState(false)
-  const [projectPath, setProjectPath] = useState<string | null>(null)
-  const [projectName, setProjectName] = useState<string | null>(null)
-  const [projectEncodedDir, setProjectEncodedDir] = useState<string | null>(null)
+  const [projectPath, setProjectPath] = useState<string | null>(() => initialProject?.path ?? null)
+  const [projectName, setProjectName] = useState<string | null>(() => initialProject?.name ?? null)
+  const [projectEncodedDir, setProjectEncodedDir] = useState<string | null>(() => initialProject?.encodedDir ?? null)
   const [showProjectPicker, setShowProjectPicker] = useState(false)
   const [showSessionPicker, setShowSessionPicker] = useState(false)
+  // Attachments
+  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  // MCP panel
+  const [showMcpPanel, setShowMcpPanel] = useState(false)
+  const [mcpServers, setMcpServers] = useState<McpServerInfo[]>([])
+  const [mcpLoading, setMcpLoading] = useState(false)
 
   // Refs for drag/resize
   const windowRef = useRef<HTMLDivElement>(null)
@@ -712,6 +946,68 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach }: Claud
   useEffect(() => { sizeRef.current = size }, [size])
   useEffect(() => { openRef.current = open }, [open])
   useEffect(() => { fabPosRef.current = fabPos }, [fabPos])
+
+  // Propagate state changes upward so parent can preserve when toggling float mode
+  useEffect(() => {
+    onStateChange?.({ projectPath, projectName, projectEncodedDir, sessionId, messages })
+  }, [projectPath, projectName, projectEncodedDir, sessionId, messages]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Attachment handlers ───────────────────────────────────────────────────
+
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData.items)
+    const imageItem = items.find(i => i.type.startsWith('image/'))
+    if (!imageItem) return
+    e.preventDefault()
+    const blob = imageItem.getAsFile()
+    if (!blob) return
+    const reader = new FileReader()
+    reader.onload = ev => {
+      const dataUrl = ev.target?.result as string
+      setAttachments(prev => [...prev, {
+        id: crypto.randomUUID(),
+        name: `screenshot.${imageItem.type.split('/')[1] ?? 'png'}`,
+        mimeType: imageItem.type,
+        data: dataUrl.split(',')[1]!,
+        isImage: true,
+        preview: dataUrl,
+      }])
+    }
+    reader.readAsDataURL(blob)
+  }, [])
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? [])
+    for (const file of files) {
+      const reader = new FileReader()
+      if (file.type.startsWith('image/')) {
+        reader.onload = ev => {
+          const dataUrl = ev.target?.result as string
+          setAttachments(prev => [...prev, {
+            id: crypto.randomUUID(),
+            name: file.name,
+            mimeType: file.type,
+            data: dataUrl.split(',')[1]!,
+            isImage: true,
+            preview: dataUrl,
+          }])
+        }
+        reader.readAsDataURL(file)
+      } else {
+        reader.onload = ev => {
+          setAttachments(prev => [...prev, {
+            id: crypto.randomUUID(),
+            name: file.name,
+            mimeType: file.type || 'text/plain',
+            data: ev.target?.result as string,
+            isImage: false,
+          }])
+        }
+        reader.readAsText(file)
+      }
+    }
+    e.target.value = ''
+  }, [])
 
   // Auto-scroll on messages
   useEffect(() => {
@@ -857,27 +1153,74 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach }: Claud
 
   const sendMessage = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim()
-    if (!text || streaming) return
+    const hasAttachments = attachments.length > 0
+    if ((!text && !hasAttachments) || streaming) return
     if (!overrideText) setInput('')
     setError(null)
     setCurrentTools([])
     setShowModelPicker(false)
 
-    // Slash commands
-    if (text === '/clear') {
-      setMessages([])
-      setSessionId(null)
-      setError(null)
+    // Slash commands (client-side only — no API call)
+    if (text === '/clear' || text === '/new') {
+      setMessages([]); setSessionId(null); setError(null); setAttachments([]); return
+    }
+    if (text === '/resume') {
+      setShowSessionPicker(true); return
+    }
+    if (text === '/project') {
+      setShowProjectPicker(true); return
+    }
+    if (text === '/mcp') {
+      setShowMcpPanel(true)
+      setMcpLoading(true)
+      try {
+        const res = await fetch(`/api/mcp-list${projectPath ? `?projectPath=${encodeURIComponent(projectPath)}` : ''}`)
+        if (res.ok) setMcpServers(await res.json() as McpServerInfo[])
+      } catch { /* ignore */ }
+      finally { setMcpLoading(false) }
       return
     }
-    if (text === '/new') {
-      setMessages([])
-      setSessionId(null)
-      setError(null)
+    if (text === '/help') {
+      const helpText = CLAUDE_SLASH_COMMANDS
+        .map(c => `**${c.cmd}**${c.hint ? ` \`${c.hint}\`` : ''} — ${c.desc}`)
+        .join('\n')
+      setMessages(prev => [...prev,
+        { role: 'user', content: '/help', timestamp: Date.now() },
+        { role: 'assistant', content: `### Available commands\n\n${helpText}`, timestamp: Date.now() },
+      ])
       return
     }
+    const modelMatch = text.match(/^\/model(?:\s+(.+))?$/i)
+    if (modelMatch) {
+      const arg = modelMatch[1]?.trim().toLowerCase()
+      if (arg) {
+        const found = CHAT_MODELS.find(m => m.id.includes(arg) || m.label.toLowerCase().includes(arg))
+        if (found) { setModel(found.id); return }
+      }
+      setShowModelPicker(true); return
+    }
+    const thinkMatch = text.match(/^\/think(?:\s+(.+))?$/i)
+    if (thinkMatch) {
+      const arg = thinkMatch[1]?.trim().toLowerCase()
+      if (arg === 'off') { setThinking(false); return }
+      if (arg === '8k') { setThinking(8000); return }
+      if (arg === '16k') { setThinking(16000); return }
+      if (arg === '32k') { setThinking(32000); return }
+      setThinking(prev => nextThinkingBudget(prev)); return
+    }
+    // Unknown bare slash commands — don't send
+    if (text.startsWith('/') && !text.includes(' ') && !hasAttachments) return
 
-    const userMsg: ChatMessage = { role: 'user', content: text, timestamp: Date.now() }
+    const pendingAttachments = attachments
+    setAttachments([])
+
+    const userMsg: ChatMessage = {
+      role: 'user',
+      content: text,
+      timestamp: Date.now(),
+      images: pendingAttachments.filter(a => a.isImage).map(a => a.preview!),
+      files: pendingAttachments.filter(a => !a.isImage).map(a => a.name),
+    }
     const history = messages.map(m => ({ role: m.role, content: m.content }))
 
     setMessages(prev => [
@@ -901,6 +1244,9 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach }: Claud
           sessionId,
           thinkingBudget: thinking || undefined,
           projectPath: projectPath ?? undefined,
+          attachments: pendingAttachments.length > 0
+            ? pendingAttachments.map(a => ({ name: a.name, mimeType: a.mimeType, data: a.data, isImage: a.isImage }))
+            : undefined,
         }),
       })
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
@@ -962,7 +1308,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach }: Claud
       setStreaming(false)
       setCurrentTools([])
     }
-  }, [input, streaming, messages, model, sessionId, thinking, minimized, onOpen])
+  }, [input, streaming, messages, model, sessionId, thinking, minimized, onOpen, attachments, projectPath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendMessage() }
@@ -1015,8 +1361,13 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach }: Claud
           />
         )}
 
+        {/* MCP panel */}
+        {showMcpPanel && (
+          <McpPanel servers={mcpServers} loading={mcpLoading} pt={lang === 'pt'} onClose={() => setShowMcpPanel(false)} />
+        )}
+
         {/* Chat UI */}
-        {projectPath && !showProjectPicker && !showSessionPicker && <>
+        {projectPath && !showProjectPicker && !showSessionPicker && !showMcpPanel && <>
           {/* Embedded toolbar: project + model + thinking + history + decouple */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 4,
@@ -1147,35 +1498,43 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach }: Claud
           </div>
 
           {/* Input */}
-          <div style={{ borderTop: '1px solid var(--border)', padding: '8px 10px', display: 'flex',
-            alignItems: 'flex-end', gap: 8, background: 'var(--bg-card)', flexShrink: 0 }}>
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={lang === 'pt' ? 'Pergunte algo...' : 'Ask anything...'}
-              rows={1}
-              disabled={streaming}
-              style={{ flex: 1, resize: 'none', background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit',
-                color: 'var(--text-primary)', outline: 'none', lineHeight: 1.5,
-                maxHeight: 120, overflowY: 'auto', transition: 'border-color 0.15s' }}
-              onFocus={e => { e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--accent-purple) 60%, transparent)' }}
-              onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
-              onInput={e => { const el = e.currentTarget; el.style.height = 'auto'; el.style.height = `${Math.min(el.scrollHeight, 120)}px` }}
-            />
-            <button className="claude-send-btn"
-              onClick={() => { void sendMessage() }}
-              disabled={!input.trim() || streaming}
-              style={{ width: 34, height: 34, borderRadius: 8, flexShrink: 0,
-                border: '1px solid color-mix(in srgb, var(--accent-purple) 50%, transparent)',
-                background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)',
-                color: 'var(--accent-purple)', cursor: input.trim() && !streaming ? 'pointer' : 'not-allowed',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                opacity: input.trim() && !streaming ? 1 : 0.4, transition: 'all 0.15s' }}>
-              {streaming ? <Loader size={14} style={{ animation: 'claudeChatSpin 1s linear infinite' }} /> : <Send size={14} />}
-            </button>
+          <div style={{ position: 'relative', flexShrink: 0, borderTop: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+            <SlashSuggestions input={input} onSelect={cmd => { setInput(cmd); inputRef.current?.focus() }} accent="var(--accent-purple)" />
+            <AttachmentStrip attachments={attachments} onRemove={id => setAttachments(prev => prev.filter(a => a.id !== id))} />
+            <input ref={fileInputRef} type="file" multiple accept="image/*,text/*,.pdf,.md,.json,.ts,.js,.py,.txt,.csv" onChange={handleFileSelect} style={{ display: 'none' }} />
+            <div style={{ padding: '8px 10px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
+              <button className="claude-icon-btn" onClick={() => fileInputRef.current?.click()} title="Attach file or image" style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30 }}>
+                <Paperclip size={12} />
+              </button>
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                placeholder={lang === 'pt' ? 'Pergunte algo... (cole imagens com Ctrl+V)' : 'Ask anything... (paste images with Ctrl+V)'}
+                rows={1}
+                disabled={streaming}
+                style={{ flex: 1, resize: 'none', background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                  borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit',
+                  color: 'var(--text-primary)', outline: 'none', lineHeight: 1.5,
+                  maxHeight: 120, overflowY: 'auto', transition: 'border-color 0.15s' }}
+                onFocus={e => { e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--accent-purple) 60%, transparent)' }}
+                onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
+                onInput={e => { const el = e.currentTarget; el.style.height = 'auto'; el.style.height = `${Math.min(el.scrollHeight, 120)}px` }}
+              />
+              <button className="claude-send-btn"
+                onClick={() => { void sendMessage() }}
+                disabled={(!input.trim() && attachments.length === 0) || streaming}
+                style={{ width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                  border: '1px solid color-mix(in srgb, var(--accent-purple) 50%, transparent)',
+                  background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)',
+                  color: 'var(--accent-purple)', cursor: (input.trim() || attachments.length > 0) && !streaming ? 'pointer' : 'not-allowed',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  opacity: (input.trim() || attachments.length > 0) && !streaming ? 1 : 0.4, transition: 'all 0.15s' }}>
+                {streaming ? <Loader size={14} style={{ animation: 'claudeChatSpin 1s linear infinite' }} /> : <Send size={14} />}
+              </button>
+            </div>
           </div>
         </>}
       </div>
@@ -1277,6 +1636,11 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach }: Claud
             />
           )}
 
+          {/* ── MCP panel ── */}
+          {showMcpPanel && (
+            <McpPanel servers={mcpServers} loading={mcpLoading} pt={lang === 'pt'} onClose={() => setShowMcpPanel(false)} />
+          )}
+
           {/* ── Session switcher — shown on top of chat after project selected ── */}
           {projectPath && !showProjectPicker && projectName && projectEncodedDir && showSessionPicker && (
             <SessionSwitcher
@@ -1303,7 +1667,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach }: Claud
           )}
 
           {/* ── Chat UI — only rendered after a project is selected ── */}
-          {projectPath && !showProjectPicker && <>
+          {projectPath && !showProjectPicker && !showMcpPanel && <>
 
           {/* Header — drag handle */}
           <div
@@ -1574,55 +1938,60 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach }: Claud
           </div>
 
           {/* Input area */}
-          <div style={{
-            borderTop: '1px solid var(--border)', padding: '10px 12px',
-            display: 'flex', alignItems: 'flex-end', gap: 8,
-            background: 'var(--bg-card)', flexShrink: 0,
-          }}>
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ask anything... (/clear or /new to reset)"
-              rows={1}
-              disabled={streaming}
-              style={{
-                flex: 1, resize: 'none',
-                background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit',
-                color: 'var(--text-primary)', outline: 'none', lineHeight: 1.5,
-                maxHeight: 120, overflowY: 'auto', transition: 'border-color 0.15s',
-              }}
-              onFocus={e => { e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--accent-purple) 60%, transparent)' }}
-              onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
-              onInput={e => {
-                const el = e.currentTarget
-                el.style.height = 'auto'
-                el.style.height = `${Math.min(el.scrollHeight, 120)}px`
-              }}
-            />
-            <button
-              className="claude-send-btn"
-              onClick={() => { void sendMessage() }}
-              disabled={!input.trim() || streaming}
-              title="Send (Enter)"
-              style={{
-                width: 34, height: 34, borderRadius: 8, flexShrink: 0,
-                border: '1px solid color-mix(in srgb, var(--accent-purple) 50%, transparent)',
-                background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)',
-                color: 'var(--accent-purple)',
-                cursor: input.trim() && !streaming ? 'pointer' : 'not-allowed',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                opacity: input.trim() && !streaming ? 1 : 0.4,
-                transition: 'all 0.15s',
-              }}
-            >
-              {streaming
-                ? <Loader size={14} style={{ animation: 'claudeChatSpin 1s linear infinite' }} />
-                : <Send size={14} />
-              }
-            </button>
+          <div style={{ position: 'relative', flexShrink: 0, borderTop: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+            <SlashSuggestions input={input} onSelect={cmd => { setInput(cmd); inputRef.current?.focus() }} accent="var(--accent-purple)" />
+            <AttachmentStrip attachments={attachments} onRemove={id => setAttachments(prev => prev.filter(a => a.id !== id))} />
+            <input ref={fileInputRef} type="file" multiple accept="image/*,text/*,.pdf,.md,.json,.ts,.js,.py,.txt,.csv" onChange={handleFileSelect} style={{ display: 'none' }} />
+            <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
+              <button className="claude-icon-btn" onClick={() => fileInputRef.current?.click()} title="Attach file or image" style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30 }}>
+                <Paperclip size={12} />
+              </button>
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                placeholder="Ask anything... (paste images with Ctrl+V)"
+                rows={1}
+                disabled={streaming}
+                style={{
+                  flex: 1, resize: 'none',
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                  borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit',
+                  color: 'var(--text-primary)', outline: 'none', lineHeight: 1.5,
+                  maxHeight: 120, overflowY: 'auto', transition: 'border-color 0.15s',
+                }}
+                onFocus={e => { e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--accent-purple) 60%, transparent)' }}
+                onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
+                onInput={e => {
+                  const el = e.currentTarget
+                  el.style.height = 'auto'
+                  el.style.height = `${Math.min(el.scrollHeight, 120)}px`
+                }}
+              />
+              <button
+                className="claude-send-btn"
+                onClick={() => { void sendMessage() }}
+                disabled={(!input.trim() && attachments.length === 0) || streaming}
+                title="Send (Enter)"
+                style={{
+                  width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                  border: '1px solid color-mix(in srgb, var(--accent-purple) 50%, transparent)',
+                  background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)',
+                  color: 'var(--accent-purple)',
+                  cursor: (input.trim() || attachments.length > 0) && !streaming ? 'pointer' : 'not-allowed',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  opacity: (input.trim() || attachments.length > 0) && !streaming ? 1 : 0.4,
+                  transition: 'all 0.15s',
+                }}
+              >
+                {streaming
+                  ? <Loader size={14} style={{ animation: 'claudeChatSpin 1s linear infinite' }} />
+                  : <Send size={14} />
+                }
+              </button>
+            </div>
           </div>
 
           {/* ── end chat UI ── */}

@@ -6,8 +6,18 @@ import {
   MessageSquare, X, Send, Loader, AlertCircle, Trash2,
   Maximize2, Minimize2, Terminal, Play, ChevronRight,
   Wrench, ChevronDown, ChevronUp, ArrowRight, Filter, History, Plus,
-  ShieldAlert, Check, ExternalLink,
+  ShieldAlert, Check, ExternalLink, Paperclip, FileText as FileTextIcon,
 } from 'lucide-react'
+
+// ── Attachment type (Nay only handles images + text files) ────────────────────
+type NayAttachment = {
+  id: string
+  name: string
+  mimeType: string
+  data: string
+  isImage: boolean
+  preview?: string
+}
 import { ClaudeChat } from './ClaudeChat'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
 import { formatToolName, fmtTime, NAV_LINK_RE } from '../lib/chatUtils'
@@ -589,6 +599,8 @@ function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) =
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+import type { ChatMessage as ClaudeChatMessage } from './ClaudeChat'
+
 interface TtyChatProps {
   lang: Lang
   chatModel: ChatModelId | null
@@ -597,6 +609,14 @@ interface TtyChatProps {
   filters: Filters
   setFilters: React.Dispatch<React.SetStateAction<Filters>>
   onDetachClaude?: () => void
+  claudeSharedState?: {
+    projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
+    sessionId: string | null; messages: ClaudeChatMessage[]
+  }
+  onClaudeStateChange?: (s: {
+    projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
+    sessionId: string | null; messages: ClaudeChatMessage[]
+  }) => void
 }
 
 /** Parses filter query params from a nav path like /costs?projects=path1|path2 */
@@ -627,7 +647,7 @@ interface PendingNavigation {
   newProjects: string[]
 }
 
-export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters, setFilters, onDetachClaude }: TtyChatProps) {
+export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters, setFilters, onDetachClaude, claudeSharedState, onClaudeStateChange }: TtyChatProps) {
   const navigate = useNavigate()
   const [pendingNav, setPendingNav] = useState<PendingNavigation | null>(null)
 
@@ -662,6 +682,9 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   const [historyList, setHistoryList] = useState<NaySessionSummary[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [sessionId, setSessionId] = useState<string | null>(null)
+
+  const [nayAttachments, setNayAttachments] = useState<NayAttachment[]>([])
+  const nayFileInputRef = useRef<HTMLInputElement>(null)
 
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -742,6 +765,52 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
     setOpen(v => !v)
   }
 
+  const handleNayPaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const imageItem = Array.from(e.clipboardData.items).find(i => i.type.startsWith('image/'))
+    if (!imageItem) return
+    e.preventDefault()
+    const blob = imageItem.getAsFile()
+    if (!blob) return
+    const reader = new FileReader()
+    reader.onload = ev => {
+      const dataUrl = ev.target?.result as string
+      setNayAttachments(prev => [...prev, {
+        id: crypto.randomUUID(),
+        name: `screenshot.${imageItem.type.split('/')[1] ?? 'png'}`,
+        mimeType: imageItem.type,
+        data: dataUrl.split(',')[1]!,
+        isImage: true,
+        preview: dataUrl,
+      }])
+    }
+    reader.readAsDataURL(blob)
+  }, [])
+
+  const handleNayFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    for (const file of Array.from(e.target.files ?? [])) {
+      const reader = new FileReader()
+      if (file.type.startsWith('image/')) {
+        reader.onload = ev => {
+          const dataUrl = ev.target?.result as string
+          setNayAttachments(prev => [...prev, {
+            id: crypto.randomUUID(), name: file.name, mimeType: file.type,
+            data: dataUrl.split(',')[1]!, isImage: true, preview: dataUrl,
+          }])
+        }
+        reader.readAsDataURL(file)
+      } else {
+        reader.onload = ev => {
+          setNayAttachments(prev => [...prev, {
+            id: crypto.randomUUID(), name: file.name, mimeType: file.type || 'text/plain',
+            data: ev.target?.result as string, isImage: false,
+          }])
+        }
+        reader.readAsText(file)
+      }
+    }
+    e.target.value = ''
+  }, [])
+
   const execCmd = useCallback(async (command: string) => {
     const cmdMsg: ChatMessage = { role: 'user', content: `$ ${command}`, terminal: false, timestamp: Date.now() }
     setMessages(prev => {
@@ -806,21 +875,25 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
 
   const sendMessage = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim()
-    if (!text || streaming) return
+    const hasAttachments = nayAttachments.length > 0
+    if ((!text && !hasAttachments) || streaming) return
     if (!overrideText) setInput('')
     setError(null)
     setCurrentTools([])
-
     setShowHistory(false)
 
-    const runMatch = text.match(/^\/(?:run|bash|sh)\s+(.+)/s)
-    if (runMatch) {
-      await execCmd(runMatch[1]!.trim())
+    if (text.startsWith('!') && text.length > 1) {
+      await execCmd(text.slice(1).trimStart())
       return
     }
 
+    const pendingAttachments = nayAttachments
+    setNayAttachments([])
+
     const model = chatModel ?? DEFAULT_CHAT_MODEL
-    const userMsg: ChatMessage = { role: 'user', content: text, timestamp: Date.now() }
+    const userMsg: ChatMessage = {
+      role: 'user', content: text, timestamp: Date.now(),
+    }
     const history = messages.filter(m => !m.terminal).map(m => ({ role: m.role, content: m.content }))
 
     setMessages(prev => [
@@ -837,7 +910,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
       const res = await fetch('/api/chat-tty', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, history, model, sessionId }),
+        body: JSON.stringify({
+          message: text, history, model, sessionId,
+          attachments: pendingAttachments.length > 0
+            ? pendingAttachments.map(a => ({ name: a.name, mimeType: a.mimeType, data: a.data, isImage: a.isImage }))
+            : undefined,
+        }),
       })
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
 
@@ -900,7 +978,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
       setStreaming(false)
       setCurrentTools([])
     }
-  }, [input, streaming, messages, chatModel, sessionId, execCmd, playNotification])
+  }, [input, streaming, messages, chatModel, sessionId, execCmd, playNotification, nayAttachments]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
@@ -1212,9 +1290,9 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                   padding: '8px 12px', fontSize: 11, color: 'var(--text-tertiary)',
                   textAlign: 'left', lineHeight: 1.8,
                 }}>
-                  <code style={{ color: 'var(--accent-green)' }}>/run ls -la</code>{' '}
+                  <code style={{ color: 'var(--accent-green)' }}>!ls -la</code>{' '}
                   {pt ? '— executa comando' : '— run a command'}<br />
-                  <code style={{ color: 'var(--accent-green)' }}>/bash pwd</code>{' '}
+                  <code style={{ color: 'var(--accent-green)' }}>!pwd</code>{' '}
                   {pt ? '— atalho bash' : '— bash shortcut'}
                 </div>
               </div>
@@ -1257,17 +1335,40 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
           </div>
 
           {/* Input area */}
-          <div style={{
-            borderTop: '1px solid var(--border)', padding: '10px 12px',
-            display: 'flex', alignItems: 'flex-end', gap: 8,
-            background: 'var(--bg-card)', flexShrink: 0,
-          }}>
+          <div style={{ borderTop: '1px solid var(--border)', background: 'var(--bg-card)', flexShrink: 0 }}>
+            {/* Attachment strip */}
+            {nayAttachments.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, padding: '6px 12px 0' }}>
+                {nayAttachments.map(att => (
+                  <div key={att.id} style={{ position: 'relative', borderRadius: 6, border: '1px solid var(--border)', overflow: 'hidden', background: 'var(--bg-elevated)' }}>
+                    {att.isImage ? (
+                      <img src={att.preview} alt={att.name} style={{ width: 52, height: 52, objectFit: 'cover', display: 'block' }} />
+                    ) : (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 8px', maxWidth: 120 }}>
+                        <FileTextIcon size={12} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
+                        <span style={{ fontSize: 10, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{att.name}</span>
+                      </div>
+                    )}
+                    <button onMouseDown={e => { e.preventDefault(); setNayAttachments(prev => prev.filter(a => a.id !== att.id)) }}
+                      style={{ position: 'absolute', top: 2, right: 2, width: 14, height: 14, borderRadius: '50%', background: 'rgba(0,0,0,0.55)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#fff', padding: 0 }}>
+                      <X size={8} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <input ref={nayFileInputRef} type="file" multiple accept="image/*,text/*,.md,.json,.ts,.js,.py,.txt,.csv" onChange={handleNayFileSelect} style={{ display: 'none' }} />
+          <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
+            <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30 }}>
+              <Paperclip size={12} />
+            </button>
             <textarea
               ref={inputRef}
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={pt ? 'Pergunte algo ou /run <cmd>...' : 'Ask something or /run <cmd>...'}
+              onPaste={handleNayPaste}
+              placeholder={pt ? 'Pergunte algo ou !<cmd>... (cole imagens)' : 'Ask something or !<cmd>... (paste images)'}
               rows={1}
               disabled={streaming || chatModel === null}
               style={{
@@ -1288,29 +1389,44 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             <button
               className="tty-send-btn"
               onClick={() => sendMessage()}
-              disabled={!input.trim() || streaming || chatModel === null}
+              disabled={(!input.trim() && nayAttachments.length === 0) || streaming || chatModel === null}
               title={pt ? 'Enviar (Enter)' : 'Send (Enter)'}
               style={{
                 width: 34, height: 34, borderRadius: 8, flexShrink: 0,
                 border: '1px solid var(--anthropic-orange)60',
                 background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
-                cursor: input.trim() && !streaming ? 'pointer' : 'not-allowed',
+                cursor: (input.trim() || nayAttachments.length > 0) && !streaming ? 'pointer' : 'not-allowed',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                opacity: input.trim() && !streaming && chatModel !== null ? 1 : 0.4,
+                opacity: (input.trim() || nayAttachments.length > 0) && !streaming && chatModel !== null ? 1 : 0.4,
                 transition: 'all 0.15s',
               }}
             >
               {streaming
                 ? <Loader size={14} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
-                : input.trim().match(/^\/(?:run|bash|sh)\s/)
+                : input.trim().startsWith('!') && input.trim().length > 1
                   ? <Play size={14} />
                   : <Send size={14} />}
             </button>
           </div>
+          </div>
 
           </>}
 
-          {activeTab === 'claude' && <ClaudeChat embedded lang={lang} onDetach={() => { onDetachClaude?.(); setActiveTab('nay') }} />}
+          {activeTab === 'claude' && (
+            <ClaudeChat
+              embedded
+              lang={lang}
+              onDetach={() => { onDetachClaude?.(); setActiveTab('nay') }}
+              initialProject={claudeSharedState?.projectPath ? {
+                path: claudeSharedState.projectPath,
+                name: claudeSharedState.projectName ?? '',
+                encodedDir: claudeSharedState.projectEncodedDir ?? '',
+              } : null}
+              initialSessionId={claudeSharedState?.sessionId ?? null}
+              initialMessages={claudeSharedState?.messages ?? []}
+              onStateChange={onClaudeStateChange}
+            />
+          )}
 
         </div>
       )}

@@ -195,9 +195,17 @@ async function registerMcpGlobally(port: number): Promise<void> {
   await proc.exited
 }
 
+export type ChatAttachment = {
+  name: string
+  mimeType: string
+  data: string   // base64 for images, plain text for text files
+  isImage: boolean
+}
+
 export interface StreamViaClaudioOpts {
   cwd?: string
   thinkingBudget?: number
+  attachments?: ChatAttachment[]
 }
 
 export async function streamViaClaude(
@@ -223,23 +231,66 @@ export async function streamViaClaude(
 
   args.push('--model', model)
 
+  const imageAttachments = opts?.attachments?.filter(a => a.isImage) ?? []
+  const textAttachments = opts?.attachments?.filter(a => !a.isImage) ?? []
+
+  // Inject text-file contents into the message
+  let augmentedMessage = message
+  for (const att of textAttachments) {
+    const ext = att.name.split('.').pop() ?? ''
+    augmentedMessage = `[Attached file: ${att.name}]\n\`\`\`${ext}\n${att.data}\n\`\`\`\n\n${augmentedMessage}`
+  }
+
   if (resumeSessionId) {
     args.push('--resume', resumeSessionId)
-    prompt = message
+    prompt = augmentedMessage
   } else {
     const recent = history.filter(h => h.content.trim()).slice(-8)
     prompt = ''
     for (const h of recent) {
       prompt += `${h.role === 'user' ? 'User' : 'Assistant'}: ${h.content}\n\n`
     }
-    prompt += message.length > 0 && recent.length > 0 ? `User: ${message}` : message
+    prompt += augmentedMessage.length > 0 && recent.length > 0 ? `User: ${augmentedMessage}` : augmentedMessage
+  }
+
+  // When images are attached, switch to stream-json input so we can send base64 image blocks
+  if (imageAttachments.length > 0) {
+    args.push('--input-format', 'stream-json')
   }
 
   const cwd = opts?.cwd ?? NAY_CHAT_DIR
 
   try {
     const proc = Bun.spawn(args, { stdout: 'pipe', stderr: 'pipe', stdin: 'pipe', cwd })
-    proc.stdin.write(prompt)
+
+    if (imageAttachments.length > 0) {
+      // Build a multimodal content array
+      type ContentBlock =
+        | { type: 'text'; text: string }
+        | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+
+      const content: ContentBlock[] = []
+      // For non-resume sessions, prepend history as a text block
+      if (!resumeSessionId) {
+        const recent = history.filter(h => h.content.trim()).slice(-8)
+        if (recent.length > 0) {
+          let histText = ''
+          for (const h of recent) {
+            histText += `${h.role === 'user' ? 'User' : 'Assistant'}: ${h.content}\n\n`
+          }
+          content.push({ type: 'text', text: histText.trimEnd() })
+        }
+      }
+      for (const att of imageAttachments) {
+        content.push({ type: 'image', source: { type: 'base64', media_type: att.mimeType, data: att.data } })
+      }
+      content.push({ type: 'text', text: augmentedMessage })
+
+      const event = JSON.stringify({ type: 'user', message: { content } })
+      proc.stdin.write(event + '\n')
+    } else {
+      proc.stdin.write(prompt)
+    }
     proc.stdin.end()
 
     const decoder = new TextDecoder()
