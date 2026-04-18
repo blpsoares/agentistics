@@ -1476,11 +1476,9 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             )}
             <input ref={nayFileInputRef} type="file" multiple accept="image/*,text/*,.md,.json,.ts,.js,.py,.txt,.csv" onChange={handleNayFileSelect} style={{ display: 'none' }} />
           <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
-            {!isMobile && (
-              <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30 }}>
-                <Paperclip size={12} />
-              </button>
-            )}
+            <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30 }}>
+              <Paperclip size={12} />
+            </button>
             <textarea
               ref={inputRef}
               value={input}

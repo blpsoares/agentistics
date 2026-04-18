@@ -286,7 +286,7 @@ export async function streamViaClaude(
       }
       content.push({ type: 'text', text: augmentedMessage })
 
-      const event = JSON.stringify({ type: 'user', message: { content } })
+      const event = JSON.stringify({ type: 'user', message: { role: 'user', content } })
       proc.stdin.write(event + '\n')
     } else {
       proc.stdin.write(prompt)
