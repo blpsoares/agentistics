@@ -63,7 +63,7 @@ export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-or
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {action}
-          {onTogglePrecision && (
+          {onTogglePrecision && !isMobile && (
             <PrecisionToggle
               full={fullPrecision ?? false}
               accent={accent}

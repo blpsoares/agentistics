@@ -198,7 +198,7 @@ export function AgentMetricsPanel({
             ({pt ? `exibindo ${displayInvocations.length} de ${totalInvocations}` : `showing ${displayInvocations.length} of ${totalInvocations}`})
           </span>
         </div>
-        <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: isMobile ? 'auto' : 'hidden' }}>
+        <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: isMobile ? 'auto' : 'hidden', width: '100%' }}>
           <div style={{ minWidth: isMobile ? 480 : undefined }}>
           {/* Table header */}
           <div style={{
