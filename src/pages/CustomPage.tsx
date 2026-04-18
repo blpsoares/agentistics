@@ -15,6 +15,7 @@ import { CATALOG, CATEGORY_LABELS, getCatalogItem, type CatalogItem, type Catalo
 import { useCustomLayout, type GridItem } from '../hooks/useCustomLayout'
 import { formatProjectName } from '../lib/types'
 import { FiltersBar } from '../components/FiltersBar'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 const GRID_COLS = 12
 const GRID_ROW_HEIGHT = 40
@@ -367,6 +368,7 @@ export default function CustomPage() {
   const [manageSelected, setManageSelected] = useState<Set<string>>(new Set())
 
   const pt = lang === 'pt'
+  const isMobile = useIsMobile()
 
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
@@ -626,6 +628,67 @@ export default function CustomPage() {
             {pt ? 'Novo layout' : 'New layout'}
           </button>
         </div>
+      </div>
+    )
+  }
+
+  // ── Mobile view: render items as a vertical list, no drag/resize ───────────
+  if (isMobile) {
+    const sortedItems = [...items].sort((a, b) => a.y !== b.y ? a.y - b.y : a.x - b.x)
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {/* Mobile toolbar: layout name + edit-not-available notice */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          background: 'var(--bg-card)', border: '1px solid var(--border)',
+          borderRadius: 10, padding: '8px 12px',
+        }}>
+          {layoutNames.length > 1 ? (
+            <select
+              value={activeLayout}
+              onChange={e => switchLayout(e.target.value)}
+              style={{
+                background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                borderRadius: 6, color: 'var(--text-primary)', fontFamily: 'inherit',
+                fontSize: 12, fontWeight: 600, padding: '4px 8px', cursor: 'pointer',
+                outline: 'none', flex: 1,
+              }}
+            >
+              {layoutNames.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          ) : (
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', flex: 1 }}>
+              {activeLayout}
+            </span>
+          )}
+          <span style={{
+            fontSize: 10, color: 'var(--text-tertiary)', padding: '3px 7px',
+            border: '1px solid var(--border)', borderRadius: 6,
+            background: 'var(--bg-elevated)',
+          }}>
+            {pt ? 'Edição só no desktop' : 'Edit on desktop'}
+          </span>
+        </div>
+
+        {/* Items stacked */}
+        {sortedItems.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-tertiary)', fontSize: 13 }}>
+            {pt ? 'Nenhum componente. Adicione no desktop.' : 'No components. Add them on desktop.'}
+          </div>
+        ) : (
+          sortedItems.map(item => {
+            const catalog = getCatalogItem(item.componentId)
+            if (!catalog) return null
+            return (
+              <div key={item.i} style={{
+                background: 'var(--bg-card)', border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-lg)', overflow: 'hidden',
+              }}>
+                {catalog.render(ctx)}
+              </div>
+            )
+          })
+        )}
       </div>
     )
   }

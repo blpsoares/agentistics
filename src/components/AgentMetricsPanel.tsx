@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { CheckCircle, XCircle, ChevronDown, ChevronUp, Bot } from 'lucide-react'
 import type { AgentInvocation } from '../lib/types'
 import type { Lang } from '../lib/types'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 interface AgentMetricsPanelProps {
   invocations: AgentInvocation[]
@@ -99,6 +100,7 @@ export function AgentMetricsPanel({
 }: AgentMetricsPanelProps) {
   const [showAll, setShowAll] = useState(false)
   const pt = lang === 'pt'
+  const isMobile = useIsMobile()
 
   if (totalInvocations === 0) {
     return (
@@ -127,7 +129,7 @@ export function AgentMetricsPanel({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Summary cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 12 }}>
         <SummaryCard
           label={pt ? 'Invocações' : 'Invocations'}
           value={String(totalInvocations)}
@@ -162,7 +164,7 @@ export function AgentMetricsPanel({
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {sortedTypes.map(([type, stats]) => (
-              <div key={type} style={{ display: 'grid', gridTemplateColumns: '160px 1fr 60px 80px 80px', gap: 10, alignItems: 'center', fontSize: 11 }}>
+              <div key={type} style={{ display: 'grid', gridTemplateColumns: isMobile ? 'minmax(0,1fr) 1fr 50px' : '160px 1fr 60px 80px 80px', gap: isMobile ? 8 : 10, alignItems: 'center', fontSize: 11 }}>
                 <AgentTypeBadge type={type} />
                 <div style={{ position: 'relative', height: 6, background: 'var(--bg-elevated)', borderRadius: 3, overflow: 'hidden' }}>
                   <div style={{
@@ -176,12 +178,12 @@ export function AgentMetricsPanel({
                 <span style={{ color: 'var(--text-primary)', fontWeight: 600, textAlign: 'right' }}>
                   {stats.count}×
                 </span>
-                <span style={{ color: 'var(--text-secondary)', textAlign: 'right' }}>
+                {!isMobile && <span style={{ color: 'var(--text-secondary)', textAlign: 'right' }}>
                   {fmtTokens(stats.tokens)} tok
-                </span>
-                <span style={{ color: 'var(--anthropic-orange)', textAlign: 'right' }}>
+                </span>}
+                {!isMobile && <span style={{ color: 'var(--anthropic-orange)', textAlign: 'right' }}>
                   {fmtCost(stats.costUSD, currency, brlRate)}
-                </span>
+                </span>}
               </div>
             ))}
           </div>
@@ -196,7 +198,8 @@ export function AgentMetricsPanel({
             ({pt ? `exibindo ${displayInvocations.length} de ${totalInvocations}` : `showing ${displayInvocations.length} of ${totalInvocations}`})
           </span>
         </div>
-        <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: isMobile ? 'auto' : 'hidden', width: '100%' }}>
+          <div style={{ minWidth: isMobile ? 480 : undefined }}>
           {/* Table header */}
           <div style={{
             display: 'grid',
@@ -262,6 +265,7 @@ export function AgentMetricsPanel({
               </span>
             </div>
           ))}
+          </div>
         </div>
 
         {invocations.length > 10 && (

@@ -139,7 +139,7 @@ function ClaudeMarkdown({ text }: { text: string }) {
         a({ href, children }) {
           return (
             <a href={href} target="_blank" rel="noopener noreferrer"
-              style={{ color: 'var(--accent-purple)' }}>
+              style={{ color: 'var(--anthropic-orange)' }}>
               {children}
             </a>
           )
@@ -168,7 +168,7 @@ function ClaudeMarkdown({ text }: { text: string }) {
         blockquote({ children }) {
           return (
             <blockquote style={{
-              borderLeft: '3px solid var(--accent-purple)60',
+              borderLeft: '3px solid color-mix(in srgb, var(--anthropic-orange) 60%, transparent)',
               margin: '6px 0', paddingLeft: 10,
               color: 'var(--text-secondary)', fontStyle: 'italic',
             }}>
@@ -244,10 +244,10 @@ function ClaudeToolActivity({ tools, live }: { tools: string[]; live: boolean })
         }}
       >
         {live
-          ? <Loader size={10} style={{ animation: 'claudeChatSpin 1s linear infinite', flexShrink: 0, color: 'var(--accent-purple)' }} />
+          ? <Loader size={10} style={{ animation: 'claudeChatSpin 1s linear infinite', flexShrink: 0, color: 'var(--anthropic-orange)' }} />
           : <Wrench size={10} style={{ flexShrink: 0 }} />
         }
-        <span style={{ flex: 1, color: live ? 'var(--accent-purple)' : 'var(--text-tertiary)' }}>{label}</span>
+        <span style={{ flex: 1, color: live ? 'var(--anthropic-orange)' : 'var(--text-tertiary)' }}>{label}</span>
         {!live && (expanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />)}
       </button>
       {!live && expanded && (
@@ -294,7 +294,7 @@ function ClaudeChatMessage({
             {msg.images.map((src, i) => (
               <img key={i} src={src} alt="attachment"
                 style={{ maxWidth: 180, maxHeight: 130, borderRadius: 8, objectFit: 'cover',
-                  border: '1px solid color-mix(in srgb, var(--accent-purple) 30%, transparent)' }} />
+                  border: '1px solid color-mix(in srgb, var(--anthropic-orange) 30%, transparent)' }} />
             ))}
           </div>
         )}
@@ -313,8 +313,8 @@ function ClaudeChatMessage({
         <div style={{
           maxWidth: '90%', padding: '8px 14px',
           borderRadius: '14px 14px 4px 14px',
-          background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)',
-          border: '1px solid color-mix(in srgb, var(--accent-purple) 25%, transparent)',
+          background: 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
+          border: '1px solid color-mix(in srgb, var(--anthropic-orange) 25%, transparent)',
           fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.58, wordBreak: 'break-word',
         }}>
           <ClaudeMarkdown text={msg.content} />
@@ -352,9 +352,9 @@ function ClaudeChatMessage({
           <div style={{
             display: 'inline-flex', alignItems: 'center', gap: 5,
             padding: '3px 8px', borderRadius: 5, marginBottom: 6,
-            background: 'color-mix(in srgb, var(--accent-purple) 10%, transparent)',
-            border: '1px solid color-mix(in srgb, var(--accent-purple) 25%, transparent)',
-            fontSize: 11, color: 'var(--accent-purple)',
+            background: 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--anthropic-orange) 25%, transparent)',
+            fontSize: 11, color: 'var(--anthropic-orange)',
             animation: 'claudeChatPulse 1.8s ease-in-out infinite',
           }}>
             <Brain size={10} />
@@ -444,7 +444,7 @@ function ProjectPicker({
       animation: 'claudeChatFadeIn 0.15s ease-out',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-        <FolderOpen size={16} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />
+        <FolderOpen size={16} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
         <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>
           {pt ? 'Escolha um projeto' : 'Choose a project'}
         </span>
@@ -466,7 +466,7 @@ function ProjectPicker({
           color: 'var(--text-primary)', outline: 'none', fontFamily: 'inherit',
           marginBottom: 10, flexShrink: 0,
         }}
-        onFocus={e => { e.currentTarget.style.borderColor = 'var(--accent-purple)60' }}
+        onFocus={e => { e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--anthropic-orange) 60%, transparent)' }}
         onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
       />
 
@@ -492,8 +492,8 @@ function ProjectPicker({
             onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-elevated)' }}
             onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
           >
-            <div style={{ width: 28, height: 28, borderRadius: 7, background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-purple) 25%, transparent)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <FolderOpen size={13} style={{ color: 'var(--accent-purple)' }} />
+            <div style={{ width: 28, height: 28, borderRadius: 7, background: 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)', border: '1px solid color-mix(in srgb, var(--anthropic-orange) 25%, transparent)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <FolderOpen size={13} style={{ color: 'var(--anthropic-orange)' }} />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -602,7 +602,7 @@ function SessionSwitcher({
     }}>
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-        <Clock size={14} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />
+        <Clock size={14} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>
             {pt ? 'Sessões do projeto' : 'Project sessions'}
@@ -612,7 +612,7 @@ function SessionSwitcher({
             style={{
               background: 'none', border: 'none', padding: 0, cursor: 'pointer',
               fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4,
-              color: 'var(--accent-purple)', fontSize: 10,
+              color: 'var(--anthropic-orange)', fontSize: 10,
             }}
           >
             <FolderOpen size={9} />
@@ -630,10 +630,10 @@ function SessionSwitcher({
         style={{
           display: 'flex', alignItems: 'center', gap: 8,
           padding: '8px 12px', borderRadius: 8, marginBottom: 10,
-          border: '1px solid color-mix(in srgb, var(--accent-purple) 40%, transparent)',
-          background: 'color-mix(in srgb, var(--accent-purple) 10%, transparent)',
+          border: '1px solid color-mix(in srgb, var(--anthropic-orange) 40%, transparent)',
+          background: 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)',
           cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0,
-          color: 'var(--accent-purple)', fontSize: 12, fontWeight: 600,
+          color: 'var(--anthropic-orange)', fontSize: 12, fontWeight: 600,
         }}
       >
         <MessageSquarePlus size={13} />
@@ -661,8 +661,8 @@ function SessionSwitcher({
               style={{
                 display: 'flex', flexDirection: 'column', gap: 3,
                 padding: '9px 11px', borderRadius: 8, textAlign: 'left',
-                border: `1px solid ${isActive ? 'color-mix(in srgb, var(--accent-purple) 40%, transparent)' : 'var(--border)'}`,
-                background: isActive ? 'color-mix(in srgb, var(--accent-purple) 8%, transparent)' : 'transparent',
+                border: `1px solid ${isActive ? 'color-mix(in srgb, var(--anthropic-orange) 40%, transparent)' : 'var(--border)'}`,
+                background: isActive ? 'color-mix(in srgb, var(--anthropic-orange) 8%, transparent)' : 'transparent',
                 cursor: isLoading ? 'wait' : 'pointer', fontFamily: 'inherit',
                 transition: 'background 0.1s',
                 opacity: isLoading ? 0.6 : 1,
@@ -672,9 +672,9 @@ function SessionSwitcher({
             >
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
                 {isLoading
-                  ? <Loader size={10} style={{ animation: 'claudeChatSpin 1s linear infinite', color: 'var(--accent-purple)', flexShrink: 0, marginTop: 1 }} />
+                  ? <Loader size={10} style={{ animation: 'claudeChatSpin 1s linear infinite', color: 'var(--anthropic-orange)', flexShrink: 0, marginTop: 1 }} />
                   : isActive
-                    ? <Check size={10} style={{ color: 'var(--accent-purple)', flexShrink: 0, marginTop: 1 }} />
+                    ? <Check size={10} style={{ color: 'var(--anthropic-orange)', flexShrink: 0, marginTop: 1 }} />
                     : <History size={10} style={{ color: 'var(--text-tertiary)', flexShrink: 0, marginTop: 1 }} />
                 }
                 <span style={{
@@ -749,7 +749,7 @@ function McpPanel({ result, loading, onClose, onRemoved, pt }: {
       animation: 'claudeChatFadeIn 0.15s ease-out',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-        <Server size={14} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />
+        <Server size={14} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
         <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>
           MCP Servers {!loading && <span style={{ fontWeight: 400, color: 'var(--text-tertiary)' }}>({servers.length})</span>}
         </span>
@@ -795,11 +795,11 @@ function McpPanel({ result, loading, onClose, onRemoved, pt }: {
                     <span style={{
                       fontSize: 9, padding: '1px 6px', borderRadius: 3, fontWeight: 700,
                       background: s.scope === 'user'
-                        ? 'color-mix(in srgb, var(--accent-purple) 12%, transparent)'
+                        ? 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)'
                         : 'color-mix(in srgb, var(--accent-green) 12%, transparent)',
-                      color: s.scope === 'user' ? 'var(--accent-purple)' : 'var(--accent-green)',
+                      color: s.scope === 'user' ? 'var(--anthropic-orange)' : 'var(--accent-green)',
                       border: `1px solid ${s.scope === 'user'
-                        ? 'color-mix(in srgb, var(--accent-purple) 30%, transparent)'
+                        ? 'color-mix(in srgb, var(--anthropic-orange) 30%, transparent)'
                         : 'color-mix(in srgb, var(--accent-green) 30%, transparent)'}`,
                     }}>
                       {s.scope}
@@ -907,7 +907,7 @@ function AttachmentStrip({ attachments, onRemove }: {
               style={{ width: 52, height: 52, objectFit: 'cover', display: 'block' }} />
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 8px', maxWidth: 120 }}>
-              <FileText size={12} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />
+              <FileText size={12} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
               <span style={{ fontSize: 10, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {att.name}
               </span>
@@ -1059,6 +1059,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const openRef = useRef(open)
+  const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => { posRef.current = pos }, [pos])
   useEffect(() => { sizeRef.current = size }, [size])
@@ -1288,7 +1289,10 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
     const text = (overrideText ?? input).trim()
     const hasAttachments = attachments.length > 0
     if ((!text && !hasAttachments) || streaming) return
-    if (!overrideText) setInput('')
+    if (!overrideText) {
+      setInput('')
+      if (inputRef.current) inputRef.current.style.height = 'auto'
+    }
     setError(null)
     setCurrentTools([])
     setShowModelPicker(false)
@@ -1362,6 +1366,8 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
       { role: 'assistant', content: '', timestamp: Date.now() },
     ])
     setStreaming(true)
+    const abortCtrl = new AbortController()
+    abortRef.current = abortCtrl
 
     let accum = ''
     let toolsAccum: string[] = []
@@ -1370,6 +1376,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
       const res = await fetch('/api/claude-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: abortCtrl.signal,
         body: JSON.stringify({
           message: text,
           history,
@@ -1443,8 +1450,22 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
     }
   }, [input, streaming, messages, model, sessionId, thinking, minimized, onOpen, attachments, projectPath]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const stopStreaming = () => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    setStreaming(false)
+    setCurrentTools([])
+    setMessages(prev => {
+      const copy = [...prev]
+      const last = copy[copy.length - 1]
+      if (last?.role === 'assistant' && last.content === '') copy.pop()
+      return copy
+    })
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendMessage() }
+    const isMobile = window.innerWidth < 768
+    if (!isMobile && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendMessage() }
   }
 
   const modelInfo = CHAT_MODELS.find(m => m.id === model)
@@ -1458,7 +1479,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
           @keyframes claudeChatFadeIn  { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
           @keyframes claudeChatPulse   { 0%,100%{opacity:1} 50%{opacity:0.5} }
           .claude-icon-btn:hover { color: var(--text-primary) !important; border-color: var(--text-secondary) !important; }
-          .claude-send-btn:hover:not(:disabled) { background: var(--accent-purple) !important; color: #fff !important; border-color: var(--accent-purple) !important; }
+          .claude-send-btn:hover:not(:disabled) { background: var(--anthropic-orange) !important; color: #fff !important; border-color: var(--anthropic-orange) !important; }
           .claude-model-opt:hover { background: var(--bg-elevated) !important; }
         `}</style>
 
@@ -1512,8 +1533,8 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
               onClick={() => setShowProjectPicker(true)}
               title={projectName ?? 'Project'}
               style={{ ...iconBtnStyle, gap: 4, width: 'auto', padding: '0 6px', fontSize: 10, maxWidth: 120,
-                color: 'var(--accent-purple)', borderColor: 'color-mix(in srgb, var(--accent-purple) 40%, transparent)',
-                background: 'color-mix(in srgb, var(--accent-purple) 8%, transparent)' }}
+                color: 'var(--anthropic-orange)', borderColor: 'color-mix(in srgb, var(--anthropic-orange) 40%, transparent)',
+                background: 'color-mix(in srgb, var(--anthropic-orange) 8%, transparent)' }}
             >
               <FolderOpen size={10} />
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{projectName}</span>
@@ -1523,7 +1544,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
               className="claude-icon-btn"
               onClick={() => setShowSessionPicker(v => !v)}
               title={lang === 'pt' ? 'Sessões' : 'Sessions'}
-              style={{ ...iconBtnStyle, color: showSessionPicker ? 'var(--accent-purple)' : 'var(--text-tertiary)' }}
+              style={{ ...iconBtnStyle, color: showSessionPicker ? 'var(--anthropic-orange)' : 'var(--text-tertiary)' }}
             >
               <History size={11} />
             </button>
@@ -1537,9 +1558,9 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
               title={thinking ? `Extended thinking: ${thinkingLabel(thinking)} tokens` : 'Enable extended thinking'}
               style={{
                 ...iconBtnStyle,
-                color: thinking ? 'var(--accent-purple)' : 'var(--text-tertiary)',
-                borderColor: thinking ? 'color-mix(in srgb, var(--accent-purple) 40%, transparent)' : 'var(--border)',
-                background: thinking ? 'color-mix(in srgb, var(--accent-purple) 10%, transparent)' : 'transparent',
+                color: thinking ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                borderColor: thinking ? 'color-mix(in srgb, var(--anthropic-orange) 40%, transparent)' : 'var(--border)',
+                background: thinking ? 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)' : 'transparent',
                 width: thinking ? 'auto' : 28, padding: thinking ? '0 6px' : 0, gap: 4, minWidth: 28,
               }}
             >
@@ -1607,8 +1628,8 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                 <img src="/claudeLogo.png" alt="Claude" style={{ width: 36, height: 36, objectFit: 'contain', opacity: 0.4 }} />
                 <div style={{ fontSize: 13, fontWeight: 600 }}>Claude</div>
                 <div style={{ fontSize: 11, opacity: 0.7, display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <FolderOpen size={11} style={{ color: 'var(--accent-purple)' }} />
-                  <span style={{ color: 'var(--accent-purple)' }}>{projectName}</span>
+                  <FolderOpen size={11} style={{ color: 'var(--anthropic-orange)' }} />
+                  <span style={{ color: 'var(--anthropic-orange)' }}>{projectName}</span>
                 </div>
               </div>
             )}
@@ -1632,11 +1653,11 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
 
           {/* Input */}
           <div style={{ position: 'relative', flexShrink: 0, borderTop: '1px solid var(--border)', background: 'var(--bg-card)' }}>
-            <SlashSuggestions input={input} onSelect={cmd => { setInput(cmd); inputRef.current?.focus() }} accent="var(--accent-purple)" />
+            <SlashSuggestions input={input} onSelect={cmd => { setInput(cmd); inputRef.current?.focus() }} accent="var(--anthropic-orange)" />
             <AttachmentStrip attachments={attachments} onRemove={id => setAttachments(prev => prev.filter(a => a.id !== id))} />
             <input ref={fileInputRef} type="file" multiple accept="image/*,text/*,.pdf,.md,.json,.ts,.js,.py,.txt,.csv" onChange={handleFileSelect} style={{ display: 'none' }} />
             <div style={{ padding: '8px 10px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
-              <button className="claude-icon-btn" onClick={() => fileInputRef.current?.click()} title="Attach file or image" style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30 }}>
+              <button className="claude-icon-btn" onClick={() => fileInputRef.current?.click()} title="Attach file or image" style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30, alignSelf: 'flex-end', marginBottom: 1 }}>
                 <Paperclip size={12} />
               </button>
               <textarea
@@ -1652,7 +1673,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                   borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit',
                   color: 'var(--text-primary)', outline: 'none', lineHeight: 1.5,
                   maxHeight: 120, overflowY: 'auto', transition: 'border-color 0.15s' }}
-                onFocus={e => { e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--accent-purple) 60%, transparent)' }}
+                onFocus={e => { e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--anthropic-orange) 60%, transparent)' }}
                 onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
                 onInput={e => { const el = e.currentTarget; el.style.height = 'auto'; el.style.height = `${Math.min(el.scrollHeight, 120)}px` }}
               />
@@ -1660,9 +1681,9 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                 onClick={() => { void sendMessage() }}
                 disabled={(!input.trim() && attachments.length === 0) || streaming}
                 style={{ width: 34, height: 34, borderRadius: 8, flexShrink: 0,
-                  border: '1px solid color-mix(in srgb, var(--accent-purple) 50%, transparent)',
-                  background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)',
-                  color: 'var(--accent-purple)', cursor: (input.trim() || attachments.length > 0) && !streaming ? 'pointer' : 'not-allowed',
+                  border: '1px solid color-mix(in srgb, var(--anthropic-orange) 50%, transparent)',
+                  background: 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
+                  color: 'var(--anthropic-orange)', cursor: (input.trim() || attachments.length > 0) && !streaming ? 'pointer' : 'not-allowed',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   opacity: (input.trim() || attachments.length > 0) && !streaming ? 1 : 0.4, transition: 'all 0.15s' }}>
                 {streaming ? <Loader size={14} style={{ animation: 'claudeChatSpin 1s linear infinite' }} /> : <Send size={14} />}
@@ -1681,9 +1702,9 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
         @keyframes claudeChatFadeIn  { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
         @keyframes claudeChatSlideIn { from{opacity:0;transform:scale(0.96)} to{opacity:1;transform:none} }
         @keyframes claudeChatPulse   { 0%,100%{opacity:1} 50%{opacity:0.5} }
-        .claude-fab:hover { border-color: var(--accent-purple) !important; }
+        .claude-fab:hover { border-color: var(--anthropic-orange) !important; }
         .claude-icon-btn:hover { color: var(--text-primary) !important; border-color: var(--text-secondary) !important; }
-        .claude-send-btn:hover:not(:disabled) { background: var(--accent-purple) !important; color: #fff !important; border-color: var(--accent-purple) !important; }
+        .claude-send-btn:hover:not(:disabled) { background: var(--anthropic-orange) !important; color: #fff !important; border-color: var(--anthropic-orange) !important; }
         .claude-model-opt:hover { background: var(--bg-elevated) !important; }
         .claude-header { cursor: grab; user-select: none; }
         .claude-header:active { cursor: grabbing; }
@@ -1827,14 +1848,14 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                 </div>
                 <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
                   {streaming ? (
-                    <span style={{ color: 'var(--accent-purple)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ color: 'var(--anthropic-orange)', display: 'flex', alignItems: 'center', gap: 4 }}>
                       <Loader size={8} style={{ animation: 'claudeChatSpin 1s linear infinite' }} />
                       {currentTools.length > 0
                         ? formatToolName(currentTools[currentTools.length - 1]!)
                         : 'thinking...'}
                     </span>
                   ) : projectName ? (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 3, color: 'var(--accent-purple)' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 3, color: 'var(--anthropic-orange)' }}>
                       <FolderOpen size={9} />
                       {projectName}
                     </span>
@@ -1868,9 +1889,9 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                   title={lang === 'pt' ? 'Sessões do projeto' : 'Project sessions'}
                   style={{
                     ...iconBtnStyle,
-                    color: showSessionPicker ? 'var(--accent-purple)' : 'var(--text-tertiary)',
-                    borderColor: showSessionPicker ? 'color-mix(in srgb, var(--accent-purple) 40%, transparent)' : 'var(--border)',
-                    background: showSessionPicker ? 'color-mix(in srgb, var(--accent-purple) 10%, transparent)' : 'transparent',
+                    color: showSessionPicker ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                    borderColor: showSessionPicker ? 'color-mix(in srgb, var(--anthropic-orange) 40%, transparent)' : 'var(--border)',
+                    background: showSessionPicker ? 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)' : 'transparent',
                   }}
                 >
                   <History size={12} />
@@ -1884,9 +1905,9 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                 title={projectName ? `Project: ${projectName}` : 'Select project'}
                 style={{
                   ...iconBtnStyle,
-                  color: projectPath ? 'var(--accent-purple)' : 'var(--text-tertiary)',
-                  borderColor: projectPath ? 'color-mix(in srgb, var(--accent-purple) 40%, transparent)' : 'var(--border)',
-                  background: projectPath ? 'color-mix(in srgb, var(--accent-purple) 10%, transparent)' : 'transparent',
+                  color: projectPath ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                  borderColor: projectPath ? 'color-mix(in srgb, var(--anthropic-orange) 40%, transparent)' : 'var(--border)',
+                  background: projectPath ? 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)' : 'transparent',
                 }}
               >
                 <FolderOpen size={12} />
@@ -1899,9 +1920,9 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                 title={thinking ? `Extended thinking: ${thinkingLabel(thinking)} tokens` : 'Enable extended thinking'}
                 style={{
                   ...iconBtnStyle,
-                  color: thinking ? 'var(--accent-purple)' : 'var(--text-tertiary)',
-                  borderColor: thinking ? 'color-mix(in srgb, var(--accent-purple) 40%, transparent)' : 'var(--border)',
-                  background: thinking ? 'color-mix(in srgb, var(--accent-purple) 10%, transparent)' : 'transparent',
+                  color: thinking ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                  borderColor: thinking ? 'color-mix(in srgb, var(--anthropic-orange) 40%, transparent)' : 'var(--border)',
+                  background: thinking ? 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)' : 'transparent',
                   position: 'relative',
                   width: thinking ? 'auto' : 28,
                   padding: thinking ? '0 6px' : 0,
@@ -2002,11 +2023,11 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                 <Minus size={12} />
               </button>
 
-              {/* Close */}
+              {/* Close — re-attaches when floating, otherwise just closes */}
               <button
                 className="claude-icon-btn"
-                onClick={() => setOpen(false)}
-                title="Close"
+                onClick={() => onAttach ? onAttach() : setOpen(false)}
+                title={lang === 'pt' ? 'Fechar' : 'Close'}
                 style={iconBtnStyle}
               >
                 <X size={12} />
@@ -2029,8 +2050,8 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                 <img src="/claudeLogo.png" alt="Claude" style={{ width: 36, height: 36, objectFit: 'contain', opacity: 0.3 }} />
                 <div style={{ fontSize: 13, fontWeight: 600 }}>Chat with Claude</div>
                 <div style={{ fontSize: 11, lineHeight: 1.65, opacity: 0.7, display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <FolderOpen size={11} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />
-                  <span style={{ color: 'var(--accent-purple)' }}>{projectName}</span>
+                  <FolderOpen size={11} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
+                  <span style={{ color: 'var(--anthropic-orange)' }}>{projectName}</span>
                 </div>
                 <div style={{
                   background: 'var(--bg-elevated)',
@@ -2038,8 +2059,8 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                   padding: '8px 12px', fontSize: 11, color: 'var(--text-tertiary)',
                   textAlign: 'left', lineHeight: 1.8,
                 }}>
-                  <code style={{ color: 'var(--accent-purple)' }}>/clear</code>{' '}— clear messages<br />
-                  <code style={{ color: 'var(--accent-purple)' }}>/new</code>{' '}— start new session
+                  <code style={{ color: 'var(--anthropic-orange)' }}>/clear</code>{' '}— clear messages<br />
+                  <code style={{ color: 'var(--anthropic-orange)' }}>/new</code>{' '}— start new session
                 </div>
               </div>
             )}
@@ -2072,7 +2093,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
 
           {/* Input area */}
           <div style={{ position: 'relative', flexShrink: 0, borderTop: '1px solid var(--border)', background: 'var(--bg-card)' }}>
-            <SlashSuggestions input={input} onSelect={cmd => { setInput(cmd); inputRef.current?.focus() }} accent="var(--accent-purple)" />
+            <SlashSuggestions input={input} onSelect={cmd => { setInput(cmd); inputRef.current?.focus() }} accent="var(--anthropic-orange)" />
             <AttachmentStrip attachments={attachments} onRemove={id => setAttachments(prev => prev.filter(a => a.id !== id))} />
             <input ref={fileInputRef} type="file" multiple accept="image/*,text/*,.pdf,.md,.json,.ts,.js,.py,.txt,.csv" onChange={handleFileSelect} style={{ display: 'none' }} />
             <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
@@ -2091,11 +2112,11 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                 style={{
                   flex: 1, resize: 'none',
                   background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                  borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit',
+                  borderRadius: 8, padding: '8px 10px', fontSize: 16, fontFamily: 'inherit',
                   color: 'var(--text-primary)', outline: 'none', lineHeight: 1.5,
                   maxHeight: 120, overflowY: 'auto', transition: 'border-color 0.15s',
                 }}
-                onFocus={e => { e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--accent-purple) 60%, transparent)' }}
+                onFocus={e => { e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--anthropic-orange) 60%, transparent)' }}
                 onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
                 onInput={e => {
                   const el = e.currentTarget
@@ -2103,27 +2124,41 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                   el.style.height = `${Math.min(el.scrollHeight, 120)}px`
                 }}
               />
-              <button
-                className="claude-send-btn"
-                onClick={() => { void sendMessage() }}
-                disabled={(!input.trim() && attachments.length === 0) || streaming}
-                title="Send (Enter)"
-                style={{
-                  width: 34, height: 34, borderRadius: 8, flexShrink: 0,
-                  border: '1px solid color-mix(in srgb, var(--accent-purple) 50%, transparent)',
-                  background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)',
-                  color: 'var(--accent-purple)',
-                  cursor: (input.trim() || attachments.length > 0) && !streaming ? 'pointer' : 'not-allowed',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  opacity: (input.trim() || attachments.length > 0) && !streaming ? 1 : 0.4,
-                  transition: 'all 0.15s',
-                }}
-              >
-                {streaming
-                  ? <Loader size={14} style={{ animation: 'claudeChatSpin 1s linear infinite' }} />
-                  : <Send size={14} />
-                }
-              </button>
+              {streaming ? (
+                <button
+                  onClick={stopStreaming}
+                  title="Stop"
+                  style={{
+                    width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                    border: '1px solid rgba(239,68,68,0.4)',
+                    background: 'rgba(239,68,68,0.1)', color: '#ef4444',
+                    cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  <X size={14} />
+                </button>
+              ) : (
+                <button
+                  className="claude-send-btn"
+                  onClick={() => { void sendMessage() }}
+                  disabled={!input.trim() && attachments.length === 0}
+                  title="Send (Enter)"
+                  style={{
+                    width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                    border: '1px solid color-mix(in srgb, var(--anthropic-orange) 50%, transparent)',
+                    background: 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
+                    color: 'var(--anthropic-orange)',
+                    cursor: (input.trim() || attachments.length > 0) ? 'pointer' : 'not-allowed',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    opacity: (input.trim() || attachments.length > 0) ? 1 : 0.4,
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  <Send size={14} />
+                </button>
+              )}
             </div>
           </div>
 

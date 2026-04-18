@@ -19,6 +19,8 @@ export type NaySessionMessage = {
   content: string
   timestamp: number
   tools?: string[]
+  images?: string[]   // base64 data URLs extracted from image content blocks
+  files?: string[]    // file names extracted from text attachment blocks
 }
 
 export function getNayChatProjectDir(): string {
@@ -108,7 +110,24 @@ export async function getNaySessionMessages(id: string): Promise<NaySessionMessa
           const isPureToolResult = arr.every(p => p.type === 'tool_result')
           if (!isPureToolResult) {
             const text = arr.find(p => p.type === 'text' && typeof p.text === 'string')?.text as string | undefined
-            if (text) messages.push({ role: 'user', content: text, timestamp: ts })
+            const images = arr
+              .filter(p => p.type === 'image')
+              .map(p => {
+                const src = p.source as Record<string, unknown> | undefined
+                if (src?.type === 'base64' && typeof src.media_type === 'string' && typeof src.data === 'string') {
+                  return `data:${src.media_type};base64,${src.data}`
+                }
+                return null
+              })
+              .filter(Boolean) as string[]
+            if (text || images.length > 0) {
+              messages.push({
+                role: 'user',
+                content: text ?? '',
+                timestamp: ts,
+                ...(images.length > 0 ? { images } : {}),
+              })
+            }
           }
         }
       } else if (e.type === 'assistant') {

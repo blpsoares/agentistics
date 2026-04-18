@@ -2,6 +2,7 @@ import React from 'react'
 import { Zap, Lightbulb, TrendingDown, TrendingUp, Info } from 'lucide-react'
 import { formatModel, getModelColor } from '../lib/types'
 import type { Lang } from '../lib/types'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 interface Props {
   hitRate: number
@@ -108,6 +109,7 @@ export function CacheHitRatePanel({
   lang,
 }: Props) {
   const pt = lang === 'pt'
+  const isMobile = useIsMobile()
   const totalRelevant = cacheTotals.inputTokens + cacheTotals.cacheReadInputTokens + cacheTotals.cacheCreationInputTokens
 
   if (totalRelevant === 0) {
@@ -153,7 +155,7 @@ export function CacheHitRatePanel({
       {/* Hero gauge + money stats */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: '200px 1fr',
+        gridTemplateColumns: isMobile ? '1fr' : '200px 1fr',
         gap: 10,
         alignItems: 'stretch',
       }}>
@@ -246,7 +248,7 @@ export function CacheHitRatePanel({
             return (
               <div key={modelId} style={{
                 display: 'grid',
-                gridTemplateColumns: '130px 1fr 44px',
+                gridTemplateColumns: isMobile ? '100px 1fr 44px' : '130px 1fr 44px',
                 gap: 8,
                 alignItems: 'center',
                 fontSize: 11,

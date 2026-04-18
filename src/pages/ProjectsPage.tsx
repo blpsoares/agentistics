@@ -2,6 +2,7 @@ import React from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { FileCode, Clock, FolderOpen } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { Section } from '../components/Section'
 import { ProjectsList } from '../components/ProjectsList'
 import { TagCloud } from '../components/TagCloud'
@@ -10,6 +11,7 @@ import { RecentSessions } from '../components/RecentSessions'
 export default function ProjectsPage() {
   const ctx = useOutletContext<AppContext>()
   const { derived, filters, setFilters, lang, setSelectedSession } = ctx
+  const isMobile = useIsMobile()
 
   return (
     <>
@@ -21,7 +23,7 @@ export default function ProjectsPage() {
           : 'Which projects you worked on, in which languages, and your most recent sessions.'}
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 16, alignItems: 'stretch' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '3fr 2fr', gap: 16, alignItems: 'stretch' }}>
         <Section flashId="projects" style={{ height: '100%' }} title={<><FileCode size={14} /> {lang === 'pt' ? 'Principais projetos' : 'Top projects'}</>}
           action={filters.projects.length > 0 ? (
             <button onClick={() => setFilters(f => ({ ...f, projects: [] }))} style={{ fontSize: 11, color: 'var(--text-tertiary)', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>

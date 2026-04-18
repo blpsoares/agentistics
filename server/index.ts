@@ -325,7 +325,7 @@ Bun.serve({
                 ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ sessionId: id })}\n\n`))
               },
               sessionId,
-              { attachments },
+              { attachments, signal: req.signal },
             )
           },
         })
@@ -376,7 +376,7 @@ Bun.serve({
                 ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ sessionId: id })}\n\n`))
               },
               sessionId,
-              { cwd: projectPath ?? CLAUDE_CHAT_DIR, thinkingBudget, attachments },
+              { cwd: projectPath ?? CLAUDE_CHAT_DIR, thinkingBudget, attachments, signal: req.signal },
             )
           },
         })

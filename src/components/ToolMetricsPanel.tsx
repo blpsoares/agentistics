@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { FileText, ArrowDownWideNarrow } from 'lucide-react'
 import type { Lang } from '../lib/types'
 import { t } from '../lib/i18n'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 interface Props {
   toolCounts: Record<string, number>
@@ -23,6 +24,7 @@ function fmt(n: number): string {
 }
 
 export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads, lang, forcedMode, hideAgentReads }: Props) {
+  const isMobile = useIsMobile()
   const [viewMode, setViewMode] = useState<ViewMode>(forcedMode ?? 'calls')
   const effectiveMode: ViewMode = forcedMode ?? viewMode
   const showToggle = forcedMode === undefined
@@ -95,7 +97,7 @@ export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads,
           {t('tools.no_data', lang)}
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '5px 20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)', gap: '5px 20px' }}>
           {entries.map(([name, value]) => {
             const pct = value / max
             const shareOfTotal = total > 0 ? value / total : 0
@@ -111,7 +113,7 @@ export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads,
             return (
               <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <div style={{
-                  width: 90,
+                  width: isMobile ? 100 : 90,
                   fontSize: 11,
                   fontWeight: isVillain ? 700 : 500,
                   color: isVillain ? '#ef4444' : 'var(--text-secondary)',
