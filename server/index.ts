@@ -4,7 +4,7 @@ import { PORT } from './config'
 import { getRates } from './rates'
 import { buildApiResponse, buildApiResponseStream } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
-import { streamViaClaude, execCommand, type ChatMessage, type ChatModelId } from './chat-tty'
+import { streamViaClaude, execCommand, ensureNayChat, type ChatMessage, type ChatModelId } from './chat-tty'
 import {
   sseClients,
   sseEncoder,
@@ -20,6 +20,7 @@ import {
 
 setupFileWatcher()
 maybeSpawnWatcher()
+ensureNayChat().catch(err => console.error('[nay-chat] failed to initialize:', err))
 
 
 // ---------------------------------------------------------------------------
