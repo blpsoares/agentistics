@@ -6,7 +6,7 @@ import {
   MessageSquare, X, Send, Loader, AlertCircle, Trash2,
   Maximize2, Minimize2, Terminal, Play, ChevronRight,
   Wrench, ChevronDown, ChevronUp, ArrowRight, Filter, History, Plus,
-  ShieldAlert, Check, ExternalLink, Paperclip, FileText as FileTextIcon, Minus,
+  ShieldAlert, Check, ExternalLink, Paperclip, FileText as FileTextIcon, Minus, Brain,
 } from 'lucide-react'
 
 // ── Attachment type (Nay only handles images + text files) ────────────────────
@@ -25,6 +25,18 @@ import { t } from '../lib/i18n'
 import type { Filters } from '../lib/types'
 
 type Lang = 'pt' | 'en'
+
+type ThinkingBudget = false | 8000 | 16000 | 32000
+const THINKING_CYCLE: ThinkingBudget[] = [false, 8000, 16000, 32000]
+function nextThinkingBudget(cur: ThinkingBudget): ThinkingBudget {
+  return THINKING_CYCLE[(THINKING_CYCLE.indexOf(cur) + 1) % THINKING_CYCLE.length]!
+}
+function thinkingLabel(b: ThinkingBudget): string {
+  if (!b) return ''
+  if (b === 8000) return '8K'
+  if (b === 16000) return '16K'
+  return '32K'
+}
 
 type ChatMessage = {
   role: 'user' | 'assistant'
@@ -711,11 +723,11 @@ interface TtyChatProps {
   onReattachClaude?: () => void
   claudeSharedState?: {
     projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
-    sessionId: string | null; messages: ClaudeChatMessage[]
+    sessionId: string | null; messages: ClaudeChatMessage[]; model?: ChatModelId
   }
   onClaudeStateChange?: (s: {
     projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
-    sessionId: string | null; messages: ClaudeChatMessage[]
+    sessionId: string | null; messages: ClaudeChatMessage[]; model?: ChatModelId
   }) => void
 }
 
@@ -784,6 +796,9 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   const [historyList, setHistoryList] = useState<NaySessionSummary[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [nayThinking, setNayThinking] = useState<ThinkingBudget>(false)
+  const [showNayModelPicker, setShowNayModelPicker] = useState(false)
+  const [claudeCurrentModel, setClaudeCurrentModel] = useState<ChatModelId>(DEFAULT_CHAT_MODEL)
   // Track which historical Nay session is being viewed (for live polling)
   const [viewedNaySessionId, setViewedNaySessionId] = useState<string | null>(null)
 
@@ -828,6 +843,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   useEffect(() => { soundRef.current = chatSoundEnabled }, [chatSoundEnabled])
   useEffect(() => { if (nayDetached) setActiveTab('claude') }, [nayDetached])
   useEffect(() => { if (claudeDetached) setActiveTab('nay') }, [claudeDetached])
+  useEffect(() => { if (claudeSharedState?.model) setClaudeCurrentModel(claudeSharedState.model) }, [claudeSharedState?.model])
   useEffect(() => { nayPosRef.current = nayPos }, [nayPos])
   useEffect(() => { naySizeRef.current = naySize }, [naySize])
   useEffect(() => { nayFabPosRef.current = nayFabPos }, [nayFabPos])
@@ -1259,6 +1275,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
         signal: abortCtrl.signal,
         body: JSON.stringify({
           message: text, history, model, sessionId,
+          thinkingBudget: nayThinking || undefined,
           attachments: pendingAttachments.length > 0
             ? pendingAttachments.map(a => ({ name: a.name, mimeType: a.mimeType, data: a.data, isImage: a.isImage }))
             : undefined,
@@ -1476,33 +1493,54 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
                   {activeTab === 'claude' ? 'Claude' : 'Nay'}
                 </div>
-                {activeTab === 'nay' && (
-                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                    {streaming ? (
-                      <span style={{ color: 'var(--accent-purple)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <Loader size={8} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
-                        {currentTools.length > 0
-                          ? formatToolName(currentTools[currentTools.length - 1]!)
-                          : (pt ? 'pensando...' : 'thinking...')}
-                      </span>
-                    ) : (
-                      <>
-                        <span>{modelInfo?.label ?? effectiveModel}</span>
-                        {modelInfo && (
-                          <span style={{
-                            fontSize: 9, fontWeight: 700,
-                            color: BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)',
-                            background: `color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
-                            border: `1px solid color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
-                            padding: '0px 4px', borderRadius: 3,
-                          }}>
-                            {modelInfo.badge}
+                {(() => {
+                  if (activeTab === 'nay') {
+                    return (
+                      <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        {streaming ? (
+                          <span style={{ color: 'var(--accent-purple)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Loader size={8} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
+                            {currentTools.length > 0
+                              ? formatToolName(currentTools[currentTools.length - 1]!)
+                              : (pt ? 'pensando...' : 'thinking...')}
                           </span>
+                        ) : (
+                          <>
+                            <span>{modelInfo?.label ?? effectiveModel}</span>
+                            {modelInfo && (
+                              <span style={{
+                                fontSize: 9, fontWeight: 700,
+                                color: BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)',
+                                background: `color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
+                                border: `1px solid color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
+                                padding: '0px 4px', borderRadius: 3,
+                              }}>
+                                {modelInfo.badge}
+                              </span>
+                            )}
+                          </>
                         )}
-                      </>
-                    )}
-                  </div>
-                )}
+                      </div>
+                    )
+                  }
+                  const claudeModelInfo = CHAT_MODELS.find(m => m.id === claudeCurrentModel)
+                  return (
+                    <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span>{claudeModelInfo?.label ?? claudeCurrentModel}</span>
+                      {claudeModelInfo && (
+                        <span style={{
+                          fontSize: 9, fontWeight: 700,
+                          color: BADGE_COLORS[claudeModelInfo.badge] ?? 'var(--text-tertiary)',
+                          background: `color-mix(in srgb, ${BADGE_COLORS[claudeModelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
+                          border: `1px solid color-mix(in srgb, ${BADGE_COLORS[claudeModelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
+                          padding: '0px 4px', borderRadius: 3,
+                        }}>
+                          {claudeModelInfo.badge}
+                        </span>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
             </div>
 
@@ -1841,6 +1879,69 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
               </div>
             )}
             <input ref={nayFileInputRef} type="file" multiple accept="image/*,text/*,.md,.json,.ts,.js,.py,.txt,.csv" onChange={handleNayFileSelect} style={{ display: 'none' }} />
+
+          {/* Nay toolbar: thinking + model picker */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 12px 0', justifyContent: 'flex-end' }}>
+            {/* Thinking toggle */}
+            <button
+              className="tty-icon-btn"
+              onClick={() => setNayThinking(prev => nextThinkingBudget(prev))}
+              title={nayThinking ? `Extended thinking: ${thinkingLabel(nayThinking)} tokens` : 'Enable extended thinking'}
+              style={{
+                ...iconBtnStyle,
+                color: nayThinking ? 'var(--accent-purple)' : 'var(--text-tertiary)',
+                borderColor: nayThinking ? 'color-mix(in srgb, var(--accent-purple) 40%, transparent)' : 'var(--border)',
+                background: nayThinking ? 'color-mix(in srgb, var(--accent-purple) 10%, transparent)' : 'transparent',
+                width: nayThinking ? 'auto' : 28, padding: nayThinking ? '0 6px' : 0, gap: 4, minWidth: 28,
+              }}
+            >
+              <Brain size={11} />
+              {nayThinking && <span style={{ fontSize: 9, fontWeight: 700 }}>{thinkingLabel(nayThinking)}</span>}
+            </button>
+
+            {/* Model picker */}
+            <div style={{ position: 'relative' }}>
+              <button
+                className="tty-icon-btn"
+                onClick={() => setShowNayModelPicker(v => !v)}
+                title="Change model"
+                style={{ ...iconBtnStyle, width: 'auto', padding: '0 6px', gap: 4, fontSize: 10 }}
+              >
+                <span>{modelInfo?.label ?? effectiveModel}</span>
+                <ChevronDown size={9} />
+              </button>
+              {showNayModelPicker && (
+                <div style={{
+                  position: 'absolute', bottom: 'calc(100% + 4px)', right: 0, zIndex: 10, minWidth: 180,
+                  background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10,
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden',
+                }}>
+                  {CHAT_MODELS.map(m => {
+                    const active = effectiveModel === m.id
+                    const badgeColor = BADGE_COLORS[m.badge] ?? 'var(--text-tertiary)'
+                    return (
+                      <button key={m.id} className="tty-icon-btn"
+                        onClick={() => { onModelSet(m.id); setShowNayModelPicker(false) }}
+                        style={{
+                          width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+                          background: active ? 'var(--bg-elevated)' : 'transparent', border: 'none',
+                          cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                          borderBottom: '1px solid var(--border)', transition: 'background 0.1s',
+                          borderRadius: 0,
+                        }}>
+                        <span style={{ flex: 1, fontSize: 12, fontWeight: active ? 700 : 400, color: active ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{m.label}</span>
+                        <span style={{ fontSize: 9, fontWeight: 700, color: badgeColor,
+                          background: `color-mix(in srgb, ${badgeColor} 12%, transparent)`,
+                          border: `1px solid color-mix(in srgb, ${badgeColor} 30%, transparent)`,
+                          padding: '1px 5px', borderRadius: 3 }}>{m.badge}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
           <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
             <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30, alignSelf: 'flex-end', marginBottom: 1 }}>
               <Paperclip size={12} />
@@ -1921,7 +2022,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
               } : null}
               initialSessionId={claudeSharedState?.sessionId ?? null}
               initialMessages={claudeSharedState?.messages ?? []}
-              onStateChange={onClaudeStateChange}
+              onStateChange={(s) => { if (s.model) setClaudeCurrentModel(s.model); onClaudeStateChange?.(s) }}
             />
           )}
 

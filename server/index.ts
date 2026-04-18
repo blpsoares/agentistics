@@ -1,13 +1,14 @@
 // embeddedDist is loaded inside server/sse.ts (conditional on SERVE_STATIC=1)
 
+import { readFile } from 'node:fs/promises'
 import { PORT } from './config'
 import { getRates } from './rates'
 import { getVersionInfo } from './version'
 import { buildApiResponse, buildApiResponseStream } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
-import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, NAY_CHAT_DIR, type ChatMessage, type ChatModelId, type ChatAttachment } from './chat-tty'
+import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, type ChatMessage, type ChatModelId, type ChatAttachment } from './chat-tty'
 import { listMcpServers, removeMcpServer } from './mcp-list'
-import { listNaySessions, getNaySessionMessages, getNayChatProjectDir } from './nay-sessions'
+import { listNaySessions, getNaySessionMessages } from './nay-sessions'
 import { listClaudeSessions, getClaudeSessionMessages, type ClaudeSessionSummary, type ClaudeSessionMessage } from './claude-sessions'
 import { PROJECTS_DIR } from './config'
 import { safeReadDir } from './utils'
@@ -27,6 +28,25 @@ import {
   serveStatic,
   SERVE_STATIC,
 } from './sse'
+
+// ---------------------------------------------------------------------------
+// Reads the first `cwd` field found in a JSONL session file.
+// Used by /api/projects-list to get the real project path without ambiguous decoding.
+// ---------------------------------------------------------------------------
+async function readCwdFromJsonl(filePath: string): Promise<string | null> {
+  try {
+    const content = await readFile(filePath, 'utf-8')
+    for (const raw of content.split('\n').slice(0, 100)) {
+      const line = raw.trim()
+      if (!line) continue
+      try {
+        const e = JSON.parse(line)
+        if (typeof e.cwd === 'string' && e.cwd) return e.cwd
+      } catch { /* skip */ }
+    }
+  } catch { /* file unreadable */ }
+  return null
+}
 
 // ---------------------------------------------------------------------------
 // Start file watching and optionally spawn the OTel watcher daemon
@@ -203,15 +223,20 @@ Bun.serve({
       try {
         const dirs = await safeReadDir(PROJECTS_DIR)
         const entries: { name: string; path: string; encodedDir: string; sessionCount: number }[] = []
-        const nayChatEncodedDir = getNayChatProjectDir().split('/').pop() ?? ''
-        for (const dir of dirs) {
-          const projectPath = dir === nayChatEncodedDir ? NAY_CHAT_DIR : decodeProjectDir(dir)
-          const files = await safeReadDir(`${PROJECTS_DIR}/${dir}`)
-          const sessionCount = files.filter(f => f.endsWith('.jsonl')).length
-          if (sessionCount === 0) continue
+        await Promise.all(dirs.map(async dir => {
+          const dirPath = `${PROJECTS_DIR}/${dir}`
+          const files = await safeReadDir(dirPath)
+          const jsonlFiles = files.filter(f => f.endsWith('.jsonl'))
+          if (jsonlFiles.length === 0) return
+          const fallbackPath = decodeProjectDir(dir)
+          let projectPath = fallbackPath
+          for (const f of jsonlFiles) {
+            const cwd = await readCwdFromJsonl(`${dirPath}/${f}`)
+            if (cwd) { projectPath = cwd; break }
+          }
           const name = projectPath.split('/').filter(Boolean).pop() ?? dir
-          entries.push({ name, path: projectPath, encodedDir: dir, sessionCount })
-        }
+          entries.push({ name, path: projectPath, encodedDir: dir, sessionCount: jsonlFiles.length })
+        }))
         entries.sort((a, b) => b.sessionCount - a.sessionCount)
         return new Response(JSON.stringify(entries), {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -299,8 +324,8 @@ Bun.serve({
 
     if (url.pathname === '/api/chat-tty' && req.method === 'POST') {
       try {
-        const body = await req.json() as { message: string; history?: ChatMessage[]; model?: ChatModelId; sessionId?: string | null; attachments?: ChatAttachment[] }
-        const { message, history = [], model = 'claude-sonnet-4-6', sessionId = null, attachments } = body
+        const body = await req.json() as { message: string; history?: ChatMessage[]; model?: ChatModelId; sessionId?: string | null; thinkingBudget?: number; attachments?: ChatAttachment[] }
+        const { message, history = [], model = 'claude-sonnet-4-6', sessionId = null, thinkingBudget, attachments } = body
         const enc = new TextEncoder()
         const stream = new ReadableStream<Uint8Array>({
           start(ctrl) {
@@ -326,7 +351,7 @@ Bun.serve({
                 ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ sessionId: id })}\n\n`))
               },
               sessionId,
-              { attachments, signal: req.signal },
+              { thinkingBudget, attachments, signal: req.signal },
             )
           },
         })

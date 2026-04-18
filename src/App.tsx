@@ -789,6 +789,7 @@ export default function AppLayout() {
   const [claudeSharedState, setClaudeSharedState] = useState<{
     projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
     sessionId: string | null; messages: import('./components/ClaudeChat').ChatMessage[]
+    model?: import('./lib/chatModels').ChatModelId
   }>({ projectPath: null, projectName: null, projectEncodedDir: null, sessionId: null, messages: [] })
 
   const [cardPrecision, setCardPrecisionState] = useState<Record<string, boolean>>({})
