@@ -7,7 +7,7 @@ import {
   Sun, Moon, Globe, AlertTriangle, Download, Upload,
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
-  Target, Home, DollarSign, Layers,
+  Target, Home, DollarSign, Layers, Code2,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -33,6 +33,7 @@ import { CacheHitRatePanel } from './components/CacheHitRatePanel'
 import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
 import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
+import { DevConfigPanel } from './components/DevConfigPanel'
 import { TtyChat } from './components/TtyChat'
 import { type ChatModelId } from './lib/chatModels'
 import { format, parseISO, parse } from 'date-fns'
@@ -702,6 +703,7 @@ export default function AppLayout() {
     return DEFAULT_CARD_ORDER
   })
   const [showPrefsModal, setShowPrefsModal] = useState(false)
+  const [showDevConfig, setShowDevConfig] = useState(false)
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
 
@@ -1259,6 +1261,20 @@ export default function AppLayout() {
               <SlidersHorizontal size={14} />
             </button>
 
+            {/* Dev config */}
+            <button
+              onClick={() => setShowDevConfig(true)}
+              style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                borderRadius: 8, border: '1px solid var(--border)', background: 'transparent',
+                color: 'var(--text-secondary)', cursor: 'pointer', transition: 'all 0.15s',
+                fontFamily: 'monospace', fontSize: 13, fontWeight: 600 }}
+              onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-primary)'; e.currentTarget.style.borderColor = 'var(--text-tertiary)' }}
+              onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.borderColor = 'var(--border)' }}
+              title="Dev config"
+            >
+              {'</>'}
+            </button>
+
             {/* Health warnings */}
             {data?.healthIssues && data.healthIssues.length > 0 && (
               <HealthWarnings issues={data.healthIssues} lang={lang} />
@@ -1459,6 +1475,9 @@ export default function AppLayout() {
         />
       )}
 
+      {/* Dev Config Panel */}
+      {showDevConfig && <DevConfigPanel onClose={() => setShowDevConfig(false)} />}
+
       {/* Info Modal */}
       {infoModalIndex !== null && (
         <InfoModal
@@ -1544,6 +1563,8 @@ export default function AppLayout() {
         lang={lang}
         chatModel={chatModel}
         chatSoundEnabled={chatSoundEnabled}
+        filters={filters}
+        setFilters={setFilters}
         onModelSet={(model) => {
           setChatModel(model)
           fetch('/api/preferences', {

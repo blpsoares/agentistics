@@ -6,6 +6,13 @@ import { buildApiResponse, buildApiResponseStream } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
 import { streamViaClaude, execCommand, ensureNayChat, type ChatMessage, type ChatModelId } from './chat-tty'
 import {
+  readEnvConfig,
+  writeEnvConfig,
+  readEnvConfigBackup,
+  restoreEnvConfig,
+  CONFIG_FIELDS,
+} from './env-config'
+import {
   sseClients,
   sseEncoder,
   setupFileWatcher,
@@ -29,7 +36,7 @@ ensureNayChat(PORT).catch(err => console.error('[nay-chat] failed to initialize:
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, PUT, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 }
 
@@ -254,6 +261,62 @@ Bun.serve({
         const message = err instanceof Error ? err.message : String(err)
         return new Response(JSON.stringify({ error: message }), {
           status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    if (url.pathname === '/api/config' && req.method === 'GET') {
+      try {
+        const config = readEnvConfig()
+        const backup = readEnvConfigBackup()
+        const active: Record<string, string> = {}
+        for (const field of CONFIG_FIELDS) {
+          active[field.key] = process.env[field.key] ?? field.default
+        }
+        return new Response(JSON.stringify({ config, backup, active }), {
+          status: 200,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return new Response(JSON.stringify({ error: message }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    if (url.pathname === '/api/config' && req.method === 'PUT') {
+      try {
+        const body = await req.json() as { values: Record<string, string> }
+        writeEnvConfig(body.values)
+        const config = readEnvConfig()
+        return new Response(JSON.stringify({ ok: true, config }), {
+          status: 200,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return new Response(JSON.stringify({ error: message }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    if (url.pathname === '/api/config/restore' && req.method === 'POST') {
+      try {
+        const ok = restoreEnvConfig()
+        const config = readEnvConfig()
+        return new Response(JSON.stringify({ ok, config }), {
+          status: 200,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return new Response(JSON.stringify({ error: message }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
     }

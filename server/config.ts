@@ -1,4 +1,7 @@
 import { join } from 'path'
+import { loadEnvConfig } from './env-config'
+
+loadEnvConfig()
 
 export const HOME_DIR = process.env.HOME ?? process.env.USERPROFILE ?? ''
 export const CLAUDE_DIR = join(HOME_DIR, '.claude')
