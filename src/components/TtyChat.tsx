@@ -253,37 +253,71 @@ function Message({
     )
   }
 
+  if (isUser) {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'flex-end',
+        marginBottom: 14, animation: 'ttyChatFadeIn 0.15s ease-out',
+      }}>
+        <div style={{
+          maxWidth: '90%', padding: '8px 14px',
+          borderRadius: '14px 14px 4px 14px',
+          background: 'var(--anthropic-orange-dim)',
+          border: '1px solid var(--anthropic-orange)30',
+          fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.58, wordBreak: 'break-word',
+        }}>
+          {renderContent(msg.content)}
+        </div>
+        {timeEl}
+      </div>
+    )
+  }
+
+  // Assistant message — with avatar
+  const toolsToShow = isLiveStreaming ? currentTools : msg.tools
   return (
     <div style={{
-      display: 'flex', flexDirection: 'column',
-      alignItems: isUser ? 'flex-end' : 'flex-start',
+      display: 'flex', alignItems: 'flex-start', gap: 8,
       marginBottom: 14, animation: 'ttyChatFadeIn 0.15s ease-out',
     }}>
-      {!isUser && (isLiveStreaming ? currentTools : msg.tools) && (
-        <ToolActivity
-          tools={isLiveStreaming ? (currentTools ?? []) : (msg.tools ?? [])}
-          live={!!isLiveStreaming}
-          pt={pt}
-        />
-      )}
+      {/* Avatar */}
       <div style={{
-        maxWidth: '90%', padding: isUser ? '8px 14px' : '10px 14px',
-        borderRadius: isUser ? '14px 14px 4px 14px' : '4px 14px 14px 14px',
-        background: isUser ? 'var(--anthropic-orange-dim)' : 'var(--bg-card)',
-        border: `1px solid ${isUser ? 'var(--anthropic-orange)30' : 'var(--border)'}`,
-        fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.58, wordBreak: 'break-word',
+        width: 26, height: 26, borderRadius: '50%', flexShrink: 0,
+        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        overflow: 'hidden', marginTop: 2,
       }}>
-        {msg.content
-          ? renderContent(msg.content, isUser ? undefined : onRun)
-          : isLiveStreaming
-            ? <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-tertiary)', fontSize: 12 }}>
-                <Loader size={11} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
-                {pt ? 'Escrevendo...' : 'Writing...'}
-              </span>
-            : null
-        }
+        <img src="/minimalistLogo.png" alt="Nay" style={{ width: 18, height: 18, objectFit: 'contain' }} />
       </div>
-      {timeEl}
+
+      {/* Content column */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {toolsToShow && toolsToShow.length > 0 && (
+          <ToolActivity
+            tools={toolsToShow}
+            live={!!isLiveStreaming}
+            pt={pt}
+          />
+        )}
+        <div style={{
+          padding: '10px 14px',
+          borderRadius: '4px 14px 14px 14px',
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border)',
+          fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.58, wordBreak: 'break-word',
+        }}>
+          {msg.content
+            ? renderContent(msg.content, onRun)
+            : isLiveStreaming
+              ? <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-tertiary)', fontSize: 12 }}>
+                  <Loader size={11} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
+                  {pt ? 'Escrevendo...' : 'Writing...'}
+                </span>
+              : null
+          }
+        </div>
+        {timeEl}
+      </div>
     </div>
   )
 }
@@ -302,10 +336,10 @@ function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) =
       animation: 'ttyChatFadeIn 0.2s ease-out',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
-        <img src="/minimalistLogo.png" alt="Agni" style={{ width: 32, height: 32, borderRadius: 9, objectFit: 'cover' }} />
+        <img src="/minimalistLogo.png" alt="Nay" style={{ width: 32, height: 32, borderRadius: 9, objectFit: 'cover' }} />
         <div>
           <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
-            {pt ? 'Olá! Sou Agni 👋' : 'Hi! I\'m Agni 👋'}
+            {pt ? 'Olá! Sou Nay 👋' : 'Hi! I\'m Nay 👋'}
           </div>
           <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
             {pt ? 'Escolha o modelo para começar' : 'Choose a model to get started'}
@@ -621,7 +655,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
       <button
         className="tty-fab"
         onClick={handleFabClick}
-        title={pt ? 'Chat com Agni' : 'Chat with Agni'}
+        title={pt ? 'Chat com Nay' : 'Chat with Nay'}
         style={{
           position: 'fixed', bottom: 24, right: 24, zIndex: 500,
           width: 46, height: 46, borderRadius: '50%',
@@ -636,10 +670,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
           padding: 0,
         }}
       >
-        {open
-          ? <X size={17} />
-          : <img src="/minimalistLogo.png" alt="Agni" style={{ width: 26, height: 26, objectFit: 'contain' }} />
-        }
+        {open ? <X size={17} /> : <MessageSquare size={17} />}
         {!open && hasUnread && (
           <span style={{
             position: 'absolute', top: 8, right: 8,
@@ -681,11 +712,11 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
                 background: 'var(--bg-elevated)', border: '1px solid var(--border)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                <img src="/minimalistLogo.png" alt="Agni" style={{ width: 22, height: 22, objectFit: 'contain' }} />
+                <img src="/minimalistLogo.png" alt="Nay" style={{ width: 22, height: 22, objectFit: 'contain' }} />
               </div>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
-                  Agni
+                  Nay
                 </div>
                 <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
                   {streaming ? (
@@ -743,9 +774,9 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
                 alignItems: 'center', justifyContent: 'center',
                 gap: 10, color: 'var(--text-tertiary)', textAlign: 'center', padding: '0 20px',
               }}>
-                <img src="/minimalistLogo.png" alt="Agni" style={{ width: 36, height: 36, objectFit: 'contain', opacity: 0.3 }} />
+                <img src="/minimalistLogo.png" alt="Nay" style={{ width: 36, height: 36, objectFit: 'contain', opacity: 0.3 }} />
                 <div style={{ fontSize: 13, fontWeight: 600 }}>
-                  {pt ? 'Olá! Sou o Agni' : 'Hi! I\'m Agni'}
+                  {pt ? 'Olá! Sou o Nay' : 'Hi! I\'m Nay'}
                 </div>
                 <div style={{ fontSize: 11, lineHeight: 1.65, opacity: 0.7 }}>
                   {pt
