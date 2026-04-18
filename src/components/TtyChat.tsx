@@ -703,6 +703,44 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   useEffect(() => { openRef.current = open }, [open])
   useEffect(() => { soundRef.current = chatSoundEnabled }, [chatSoundEnabled])
 
+  // Track visual viewport (keyboard-aware) for mobile panel positioning
+  const [vpRect, setVpRect] = useState({ top: 0, height: typeof window !== 'undefined' ? window.innerHeight : 844 })
+  useEffect(() => {
+    if (!isMobile) return
+    const vv = window.visualViewport
+    if (!vv) return
+    function update() { setVpRect({ top: Math.round(vv!.offsetTop), height: Math.round(vv!.height) }) }
+    update()
+    vv.addEventListener('resize', update)
+    vv.addEventListener('scroll', update)
+    return () => { vv.removeEventListener('resize', update); vv.removeEventListener('scroll', update) }
+  }, [isMobile])
+
+  // Lock body scroll when panel is open on mobile (prevents page shift on keyboard open)
+  useEffect(() => {
+    if (!isMobile) return
+    if (open) {
+      document.body.style.overflow = 'hidden'
+      document.body.style.position = 'fixed'
+      document.body.style.width = '100%'
+    } else {
+      document.body.style.overflow = ''
+      document.body.style.position = ''
+      document.body.style.width = ''
+    }
+    return () => {
+      document.body.style.overflow = ''
+      document.body.style.position = ''
+      document.body.style.width = ''
+    }
+  }, [isMobile, open])
+
+  // Scroll messages to bottom when viewport resizes (keyboard appears)
+  useEffect(() => {
+    if (!isMobile || !open) return
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
+  }, [vpRect.height, isMobile, open])
+
   // External open trigger: dispatched by RecentSessions "open in Claude/Nay" button
   useEffect(() => {
     const handler = (e: Event) => {
@@ -1083,7 +1121,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   const modelInfo = CHAT_MODELS.find(m => m.id === effectiveModel)
 
   const panelStyle: React.CSSProperties = isMobile
-    ? { position: 'fixed', inset: 0, width: 'auto', height: 'auto' }
+    ? { position: 'fixed', left: 0, right: 0, top: vpRect.top, height: vpRect.height, width: 'auto' }
     : fullscreen
       ? { position: 'fixed', inset: 16, width: 'auto', height: 'auto' }
       : { position: 'fixed', bottom: 80, right: 24, width: 400, height: 580, maxHeight: 'calc(100vh - 120px)' }
@@ -1453,31 +1491,33 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             )}
             <input ref={nayFileInputRef} type="file" multiple accept="image/*,text/*,.md,.json,.ts,.js,.py,.txt,.csv" onChange={handleNayFileSelect} style={{ display: 'none' }} />
           <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
-            <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30 }}>
-              <Paperclip size={12} />
-            </button>
+            {!isMobile && (
+              <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30 }}>
+                <Paperclip size={12} />
+              </button>
+            )}
             <textarea
               ref={inputRef}
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handleNayPaste}
-              placeholder={pt ? 'Pergunte algo ou !<cmd>... (cole imagens)' : 'Ask something or !<cmd>... (paste images)'}
+              placeholder={pt ? 'Pergunte algo...' : 'Ask something...'}
               rows={1}
               disabled={streaming || chatModel === null}
               style={{
                 flex: 1, resize: 'none',
                 background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit',
+                borderRadius: 8, padding: '8px 10px', fontSize: isMobile ? 16 : 13, fontFamily: 'inherit',
                 color: 'var(--text-primary)', outline: 'none', lineHeight: 1.5,
-                maxHeight: 120, overflowY: 'auto', transition: 'border-color 0.15s',
+                maxHeight: isMobile ? 80 : 120, overflowY: 'auto', transition: 'border-color 0.15s',
               }}
               onFocus={e => { e.currentTarget.style.borderColor = 'var(--anthropic-orange)60' }}
               onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
               onInput={e => {
                 const el = e.currentTarget
                 el.style.height = 'auto'
-                el.style.height = `${Math.min(el.scrollHeight, 120)}px`
+                el.style.height = `${Math.min(el.scrollHeight, isMobile ? 80 : 120)}px`
               }}
             />
             <button

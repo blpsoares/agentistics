@@ -1649,7 +1649,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                 rows={1}
                 disabled={streaming}
                 style={{ flex: 1, resize: 'none', background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                  borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit',
+                  borderRadius: 8, padding: '8px 10px', fontSize: 16, fontFamily: 'inherit',
                   color: 'var(--text-primary)', outline: 'none', lineHeight: 1.5,
                   maxHeight: 120, overflowY: 'auto', transition: 'border-color 0.15s' }}
                 onFocus={e => { e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--accent-purple) 60%, transparent)' }}
@@ -2091,7 +2091,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                 style={{
                   flex: 1, resize: 'none',
                   background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                  borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit',
+                  borderRadius: 8, padding: '8px 10px', fontSize: 16, fontFamily: 'inherit',
                   color: 'var(--text-primary)', outline: 'none', lineHeight: 1.5,
                   maxHeight: 120, overflowY: 'auto', transition: 'border-color 0.15s',
                 }}
