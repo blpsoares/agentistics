@@ -1657,7 +1657,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
             <AttachmentStrip attachments={attachments} onRemove={id => setAttachments(prev => prev.filter(a => a.id !== id))} />
             <input ref={fileInputRef} type="file" multiple accept="image/*,text/*,.pdf,.md,.json,.ts,.js,.py,.txt,.csv" onChange={handleFileSelect} style={{ display: 'none' }} />
             <div style={{ padding: '8px 10px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
-              <button className="claude-icon-btn" onClick={() => fileInputRef.current?.click()} title="Attach file or image" style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30 }}>
+              <button className="claude-icon-btn" onClick={() => fileInputRef.current?.click()} title="Attach file or image" style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30, alignSelf: 'flex-end', marginBottom: 1 }}>
                 <Paperclip size={12} />
               </button>
               <textarea
@@ -1670,7 +1670,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                 rows={1}
                 disabled={streaming}
                 style={{ flex: 1, resize: 'none', background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                  borderRadius: 8, padding: '8px 10px', fontSize: 16, fontFamily: 'inherit',
+                  borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit',
                   color: 'var(--text-primary)', outline: 'none', lineHeight: 1.5,
                   maxHeight: 120, overflowY: 'auto', transition: 'border-color 0.15s' }}
                 onFocus={e => { e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--anthropic-orange) 60%, transparent)' }}
@@ -2023,11 +2023,11 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                 <Minus size={12} />
               </button>
 
-              {/* Close */}
+              {/* Close — re-attaches when floating, otherwise just closes */}
               <button
                 className="claude-icon-btn"
-                onClick={() => setOpen(false)}
-                title="Close"
+                onClick={() => onAttach ? onAttach() : setOpen(false)}
+                title={lang === 'pt' ? 'Fechar' : 'Close'}
                 style={iconBtnStyle}
               >
                 <X size={12} />

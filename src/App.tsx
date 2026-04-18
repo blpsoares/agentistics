@@ -1679,6 +1679,8 @@ export default function AppLayout() {
         setFilters={setFilters}
         isMobile={isMobile}
         onDetachClaude={() => setClaudeDetached(true)}
+        claudeDetached={claudeDetached}
+        onReattachClaude={() => setClaudeDetached(false)}
         onModelSet={(model) => {
           setChatModel(model)
           fetch('/api/preferences', {

@@ -707,6 +707,8 @@ interface TtyChatProps {
   setFilters: React.Dispatch<React.SetStateAction<Filters>>
   isMobile?: boolean
   onDetachClaude?: () => void
+  claudeDetached?: boolean
+  onReattachClaude?: () => void
   claudeSharedState?: {
     projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
     sessionId: string | null; messages: ClaudeChatMessage[]
@@ -745,7 +747,7 @@ interface PendingNavigation {
   newProjects: string[]
 }
 
-export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters, setFilters, isMobile, onDetachClaude, claudeSharedState, onClaudeStateChange }: TtyChatProps) {
+export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters, setFilters, isMobile, onDetachClaude, claudeDetached, onReattachClaude, claudeSharedState, onClaudeStateChange }: TtyChatProps) {
   const navigate = useNavigate()
   const [pendingNav, setPendingNav] = useState<PendingNavigation | null>(null)
 
@@ -1541,8 +1543,49 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             </div>
           </div>
 
+          {/* Both detached — show re-attach panel instead of tabs */}
+          {nayDetached && claudeDetached && (
+            <div style={{
+              flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+              gap: 16, padding: '32px 24px', color: 'var(--text-tertiary)', textAlign: 'center',
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+                {pt ? 'Ambos os chats estão flutuando' : 'Both chats are floating'}
+              </div>
+              <div style={{ fontSize: 11, lineHeight: 1.7, opacity: 0.8 }}>
+                {pt ? 'Clique em um dos botões abaixo para acoplar o chat de volta ao painel.' : 'Click one of the buttons below to re-attach a chat to this panel.'}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: 220 }}>
+                <button
+                  onClick={() => { setNayDetached(false); setNayMinimized(false); setActiveTab('nay') }}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    padding: '9px 14px', borderRadius: 8, border: '1px solid color-mix(in srgb, var(--accent-purple) 40%, transparent)',
+                    background: 'color-mix(in srgb, var(--accent-purple) 10%, transparent)',
+                    color: 'var(--accent-purple)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
+                  }}
+                >
+                  <img src="/minimalistLogo.png" alt="Nay" style={{ width: 14, height: 14, objectFit: 'contain' }} />
+                  {pt ? 'Acoplar Nay' : 'Re-attach Nay'}
+                </button>
+                <button
+                  onClick={() => { onReattachClaude?.(); setActiveTab('claude') }}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    padding: '9px 14px', borderRadius: 8, border: '1px solid color-mix(in srgb, var(--anthropic-orange) 40%, transparent)',
+                    background: 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)',
+                    color: 'var(--anthropic-orange)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
+                  }}
+                >
+                  <img src="/claudeLogo.png" alt="Claude" style={{ width: 14, height: 14, objectFit: 'contain' }} />
+                  {pt ? 'Acoplar Claude' : 'Re-attach Claude'}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Tab bar */}
-          <div style={{
+          {!(nayDetached && claudeDetached) && <div style={{
             display: 'flex', borderBottom: '1px solid var(--border)',
             background: 'var(--bg-card)', flexShrink: 0,
           }}>
@@ -1569,7 +1612,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 {tab === 'nay' ? 'Nay' : 'Claude'}
               </button>
             ))}
-          </div>
+          </div>}
 
           {activeTab === 'nay' && <>
 
@@ -1782,7 +1825,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             )}
             <input ref={nayFileInputRef} type="file" multiple accept="image/*,text/*,.md,.json,.ts,.js,.py,.txt,.csv" onChange={handleNayFileSelect} style={{ display: 'none' }} />
           <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
-            <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30 }}>
+            <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30, alignSelf: 'flex-end', marginBottom: 1 }}>
               <Paperclip size={12} />
             </button>
             <textarea
@@ -2216,7 +2259,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
               </div>
             )}
             <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
-              <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30 }}>
+              <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30, alignSelf: 'flex-end', marginBottom: 1 }}>
                 <Paperclip size={12} />
               </button>
               <textarea
