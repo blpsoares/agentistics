@@ -804,7 +804,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   }, [hasUnread, open])
 
   useEffect(() => {
-    if (open) { setHasUnread(false); inputRef.current?.focus() }
+    if (open) { setHasUnread(false); inputRef.current?.focus({ preventScroll: true }) }
   }, [open])
 
   useEffect(() => {
@@ -1103,7 +1103,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   const modelInfo = CHAT_MODELS.find(m => m.id === effectiveModel)
 
   const panelStyle: React.CSSProperties = isMobile
-    ? { position: 'fixed', left: 0, right: 0, top: 0, height: '100dvh', width: 'auto' }
+    ? { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, width: 'auto', height: 'auto' }
     : fullscreen
       ? { position: 'fixed', inset: 16, width: 'auto', height: 'auto' }
       : { position: 'fixed', bottom: 80, right: 24, width: 400, height: 580, maxHeight: 'calc(100vh - 120px)' }
@@ -1126,9 +1126,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
         @keyframes ttyChatSlideIn { from{opacity:0;transform:translateX(18px)} to{opacity:1;transform:none} }
         @keyframes ttyChatBlink   { 0%,100%{opacity:1} 50%{opacity:0} }
         @keyframes ttyChatPulse   { 0%,100%{box-shadow:0 4px 18px rgba(0,0,0,0.35),0 0 0 0 rgba(245,158,11,0.5)} 50%{box-shadow:0 4px 18px rgba(0,0,0,0.35),0 0 0 8px rgba(245,158,11,0)} }
-        .tty-fab:hover { border-color: var(--anthropic-orange) !important; color: var(--anthropic-orange) !important; }
-        .tty-icon-btn:hover { color: var(--text-primary) !important; border-color: var(--text-secondary) !important; }
-        .tty-send-btn:hover:not(:disabled) { background: var(--anthropic-orange) !important; color: #fff !important; }
+        @media (hover: hover) {
+          .tty-fab:hover { border-color: var(--anthropic-orange) !important; color: var(--anthropic-orange) !important; }
+          .tty-icon-btn:hover { color: var(--text-primary) !important; border-color: var(--text-secondary) !important; }
+          .tty-send-btn:hover:not(:disabled) { background: var(--anthropic-orange) !important; color: #fff !important; }
+        }
+        .tty-send-btn:active:not(:disabled) { background: var(--anthropic-orange) !important; color: #fff !important; }
       `}</style>
 
       {/* FAB */}
@@ -1382,7 +1385,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
           )}
 
           {/* Messages */}
-          <div ref={listRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 14px 6px' }}>
+          <div ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 14px 6px' }}>
             {messages.length === 0 && !streaming && (
               <div style={{
                 height: '100%', display: 'flex', flexDirection: 'column',
