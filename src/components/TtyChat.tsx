@@ -814,6 +814,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
 
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
   const openRef = useRef(open)
   const soundRef = useRef(chatSoundEnabled)
   const audioCtxRef = useRef<AudioContext | null>(null)
@@ -1248,6 +1249,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
       { role: 'assistant', content: '', timestamp: Date.now() },
     ])
     setStreaming(true)
+    const abortCtrl = new AbortController()
+    abortRef.current = abortCtrl
 
     let accum = ''
     let toolsAccum: string[] = []
@@ -1256,6 +1259,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
       const res = await fetch('/api/chat-tty', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: abortCtrl.signal,
         body: JSON.stringify({
           message: text, history, model, sessionId,
           attachments: pendingAttachments.length > 0
@@ -1332,6 +1336,22 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   }
 
   const clearChat = () => { setMessages([]); setSessionId(null); setError(null); setStreaming(false); setHasUnread(false); setCurrentTools([]) }
+
+  const stopStreaming = () => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    setStreaming(false)
+    setCurrentTools([])
+    // Finalise the last assistant message with whatever was accumulated
+    setMessages(prev => {
+      const copy = [...prev]
+      const last = copy[copy.length - 1]
+      if (last?.role === 'assistant' && !last.terminal && last.content === '') {
+        copy.pop() // remove empty placeholder
+      }
+      return copy
+    })
+  }
 
   const pt = lang === 'pt'
   const effectiveModel = chatModel ?? DEFAULT_CHAT_MODEL
@@ -1794,27 +1814,40 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 el.style.height = `${Math.min(el.scrollHeight, isMobile ? 80 : 120)}px`
               }}
             />
-            <button
-              className="tty-send-btn"
-              onClick={() => sendMessage()}
-              disabled={(!input.trim() && nayAttachments.length === 0) || streaming || chatModel === null}
-              title={pt ? 'Enviar (Enter)' : 'Send (Enter)'}
-              style={{
-                width: 34, height: 34, borderRadius: 8, flexShrink: 0,
-                border: '1px solid var(--anthropic-orange)60',
-                background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
-                cursor: (input.trim() || nayAttachments.length > 0) && !streaming ? 'pointer' : 'not-allowed',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                opacity: (input.trim() || nayAttachments.length > 0) && !streaming && chatModel !== null ? 1 : 0.4,
-                transition: 'all 0.15s',
-              }}
-            >
-              {streaming
-                ? <Loader size={14} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
-                : input.trim().startsWith('!') && input.trim().length > 1
-                  ? <Play size={14} />
-                  : <Send size={14} />}
-            </button>
+            {streaming ? (
+              <button
+                onClick={stopStreaming}
+                title={pt ? 'Cancelar' : 'Stop'}
+                style={{
+                  width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                  border: '1px solid rgba(239,68,68,0.4)',
+                  background: 'rgba(239,68,68,0.1)', color: '#ef4444',
+                  cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'all 0.15s',
+                }}
+              >
+                <X size={14} />
+              </button>
+            ) : (
+              <button
+                className="tty-send-btn"
+                onClick={() => sendMessage()}
+                disabled={(!input.trim() && nayAttachments.length === 0) || chatModel === null}
+                title={pt ? 'Enviar (Enter)' : 'Send (Enter)'}
+                style={{
+                  width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                  border: '1px solid var(--anthropic-orange)60',
+                  background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+                  cursor: (input.trim() || nayAttachments.length > 0) ? 'pointer' : 'not-allowed',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  opacity: (input.trim() || nayAttachments.length > 0) && chatModel !== null ? 1 : 0.4,
+                  transition: 'all 0.15s',
+                }}
+              >
+                {input.trim().startsWith('!') && input.trim().length > 1 ? <Play size={14} /> : <Send size={14} />}
+              </button>
+            )}
           </div>
           </div>
 
@@ -2215,27 +2248,40 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                   el.style.height = `${Math.min(el.scrollHeight, 120)}px`
                 }}
               />
-              <button
-                className="tty-send-btn"
-                onClick={() => sendMessage()}
-                disabled={(!input.trim() && nayAttachments.length === 0) || streaming || chatModel === null}
-                title={pt ? 'Enviar (Enter)' : 'Send (Enter)'}
-                style={{
-                  width: 34, height: 34, borderRadius: 8, flexShrink: 0,
-                  border: '1px solid var(--anthropic-orange)60',
-                  background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
-                  cursor: (input.trim() || nayAttachments.length > 0) && !streaming ? 'pointer' : 'not-allowed',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  opacity: (input.trim() || nayAttachments.length > 0) && !streaming && chatModel !== null ? 1 : 0.4,
-                  transition: 'all 0.15s',
-                }}
-              >
-                {streaming
-                  ? <Loader size={14} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
-                  : input.trim().startsWith('!') && input.trim().length > 1
-                    ? <Play size={14} />
-                    : <Send size={14} />}
-              </button>
+              {streaming ? (
+                <button
+                  onClick={stopStreaming}
+                  title={pt ? 'Cancelar' : 'Stop'}
+                  style={{
+                    width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                    border: '1px solid rgba(239,68,68,0.4)',
+                    background: 'rgba(239,68,68,0.1)', color: '#ef4444',
+                    cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  <X size={14} />
+                </button>
+              ) : (
+                <button
+                  className="tty-send-btn"
+                  onClick={() => sendMessage()}
+                  disabled={(!input.trim() && nayAttachments.length === 0) || chatModel === null}
+                  title={pt ? 'Enviar (Enter)' : 'Send (Enter)'}
+                  style={{
+                    width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                    border: '1px solid var(--anthropic-orange)60',
+                    background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+                    cursor: (input.trim() || nayAttachments.length > 0) ? 'pointer' : 'not-allowed',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    opacity: (input.trim() || nayAttachments.length > 0) && chatModel !== null ? 1 : 0.4,
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  {input.trim().startsWith('!') && input.trim().length > 1 ? <Play size={14} /> : <Send size={14} />}
+                </button>
+              )}
             </div>
           </div>
 

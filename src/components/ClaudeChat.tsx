@@ -1059,6 +1059,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const openRef = useRef(open)
+  const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => { posRef.current = pos }, [pos])
   useEffect(() => { sizeRef.current = size }, [size])
@@ -1365,6 +1366,8 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
       { role: 'assistant', content: '', timestamp: Date.now() },
     ])
     setStreaming(true)
+    const abortCtrl = new AbortController()
+    abortRef.current = abortCtrl
 
     let accum = ''
     let toolsAccum: string[] = []
@@ -1373,6 +1376,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
       const res = await fetch('/api/claude-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: abortCtrl.signal,
         body: JSON.stringify({
           message: text,
           history,
@@ -1445,6 +1449,19 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
       setCurrentTools([])
     }
   }, [input, streaming, messages, model, sessionId, thinking, minimized, onOpen, attachments, projectPath]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const stopStreaming = () => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    setStreaming(false)
+    setCurrentTools([])
+    setMessages(prev => {
+      const copy = [...prev]
+      const last = copy[copy.length - 1]
+      if (last?.role === 'assistant' && last.content === '') copy.pop()
+      return copy
+    })
+  }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const isMobile = window.innerWidth < 768
@@ -2107,27 +2124,41 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
                   el.style.height = `${Math.min(el.scrollHeight, 120)}px`
                 }}
               />
-              <button
-                className="claude-send-btn"
-                onClick={() => { void sendMessage() }}
-                disabled={(!input.trim() && attachments.length === 0) || streaming}
-                title="Send (Enter)"
-                style={{
-                  width: 34, height: 34, borderRadius: 8, flexShrink: 0,
-                  border: '1px solid color-mix(in srgb, var(--accent-purple) 50%, transparent)',
-                  background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)',
-                  color: 'var(--accent-purple)',
-                  cursor: (input.trim() || attachments.length > 0) && !streaming ? 'pointer' : 'not-allowed',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  opacity: (input.trim() || attachments.length > 0) && !streaming ? 1 : 0.4,
-                  transition: 'all 0.15s',
-                }}
-              >
-                {streaming
-                  ? <Loader size={14} style={{ animation: 'claudeChatSpin 1s linear infinite' }} />
-                  : <Send size={14} />
-                }
-              </button>
+              {streaming ? (
+                <button
+                  onClick={stopStreaming}
+                  title="Stop"
+                  style={{
+                    width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                    border: '1px solid rgba(239,68,68,0.4)',
+                    background: 'rgba(239,68,68,0.1)', color: '#ef4444',
+                    cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  <X size={14} />
+                </button>
+              ) : (
+                <button
+                  className="claude-send-btn"
+                  onClick={() => { void sendMessage() }}
+                  disabled={!input.trim() && attachments.length === 0}
+                  title="Send (Enter)"
+                  style={{
+                    width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                    border: '1px solid color-mix(in srgb, var(--accent-purple) 50%, transparent)',
+                    background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)',
+                    color: 'var(--accent-purple)',
+                    cursor: (input.trim() || attachments.length > 0) ? 'pointer' : 'not-allowed',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    opacity: (input.trim() || attachments.length > 0) ? 1 : 0.4,
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  <Send size={14} />
+                </button>
+              )}
             </div>
           </div>
 

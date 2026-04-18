@@ -210,6 +210,7 @@ export interface StreamViaClaudioOpts {
   cwd?: string
   thinkingBudget?: number
   attachments?: ChatAttachment[]
+  signal?: AbortSignal
 }
 
 export async function streamViaClaude(
@@ -266,6 +267,7 @@ export async function streamViaClaude(
 
   try {
     const proc = Bun.spawn(args, { stdout: 'pipe', stderr: 'pipe', stdin: 'pipe', cwd })
+    opts?.signal?.addEventListener('abort', () => { try { proc.kill() } catch { /* already dead */ } }, { once: true })
 
     if (imageAttachments.length > 0) {
       // Build a multimodal content array
