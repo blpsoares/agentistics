@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 import {
   X, Send, Loader, AlertCircle, Minus,
   Wrench, ChevronDown, ChevronUp, Brain, FolderOpen, Check, History,
-  MessageSquarePlus, Clock,
+  MessageSquarePlus, Clock, ExternalLink,
 } from 'lucide-react'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
 import { formatToolName, fmtTime } from '../lib/chatUtils'
@@ -304,7 +304,7 @@ function ClaudeChatMessage({
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         overflow: 'hidden', marginTop: 2,
       }}>
-        <img src="/minimalistLogo.png" alt="Claude" style={{ width: 26, height: 26, objectFit: 'contain' }} />
+        <img src="/claudeLogo.png" alt="Claude" style={{ width: 26, height: 26, objectFit: 'contain' }} />
       </div>
 
       {/* Content column */}
@@ -660,9 +660,12 @@ const iconBtnStyle: React.CSSProperties = {
 interface ClaudeChatProps {
   lang: Lang
   onOpen?: () => void
+  embedded?: boolean
+  onDetach?: () => void
+  onAttach?: () => void
 }
 
-export function ClaudeChat({ lang, onOpen }: ClaudeChatProps) {
+export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach }: ClaudeChatProps) {
   // Window state
   const [open, setOpen] = useState(false)
   const [minimized, setMinimized] = useState(false)
@@ -967,6 +970,218 @@ export function ClaudeChat({ lang, onOpen }: ClaudeChatProps) {
 
   const modelInfo = CHAT_MODELS.find(m => m.id === model)
 
+  // ── Embedded mode (inside TtyChat tab) ───────────────────────────────────────
+  if (embedded) {
+    return (
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+        <style>{`
+          @keyframes claudeChatSpin    { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+          @keyframes claudeChatFadeIn  { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+          @keyframes claudeChatPulse   { 0%,100%{opacity:1} 50%{opacity:0.5} }
+          .claude-icon-btn:hover { color: var(--text-primary) !important; border-color: var(--text-secondary) !important; }
+          .claude-send-btn:hover:not(:disabled) { background: var(--accent-purple) !important; color: #fff !important; border-color: var(--accent-purple) !important; }
+          .claude-model-opt:hover { background: var(--bg-elevated) !important; }
+        `}</style>
+
+        {/* Project picker — full screen inside the embedded container */}
+        {(!projectPath || showProjectPicker) && (
+          <ProjectPicker
+            lang={lang}
+            canClose={!!projectPath}
+            onClose={() => setShowProjectPicker(false)}
+            onSelect={p => {
+              setProjectPath(p.path)
+              setProjectName(p.name)
+              setProjectEncodedDir(p.encodedDir)
+              setShowProjectPicker(false)
+              setMessages([])
+              setSessionId(null)
+              setShowSessionPicker(true)
+            }}
+          />
+        )}
+
+        {/* Session switcher */}
+        {projectPath && !showProjectPicker && projectName && projectEncodedDir && showSessionPicker && (
+          <SessionSwitcher
+            lang={lang}
+            projectName={projectName}
+            encodedDir={projectEncodedDir}
+            activeSessionId={sessionId}
+            onClose={() => setShowSessionPicker(false)}
+            onNewSession={() => { setMessages([]); setSessionId(null); setShowSessionPicker(false) }}
+            onLoadSession={(id, msgs) => { setMessages(msgs.map(m => ({ ...m }))); setSessionId(id); setShowSessionPicker(false) }}
+            onChangeProject={() => { setShowSessionPicker(false); setShowProjectPicker(true) }}
+          />
+        )}
+
+        {/* Chat UI */}
+        {projectPath && !showProjectPicker && !showSessionPicker && <>
+          {/* Embedded toolbar: project + model + thinking + history + decouple */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 4,
+            padding: '5px 10px', borderBottom: '1px solid var(--border)',
+            background: 'var(--bg-card)', flexShrink: 0,
+          }}>
+            <button
+              className="claude-icon-btn"
+              onClick={() => setShowProjectPicker(true)}
+              title={projectName ?? 'Project'}
+              style={{ ...iconBtnStyle, gap: 4, width: 'auto', padding: '0 6px', fontSize: 10, maxWidth: 120,
+                color: 'var(--accent-purple)', borderColor: 'color-mix(in srgb, var(--accent-purple) 40%, transparent)',
+                background: 'color-mix(in srgb, var(--accent-purple) 8%, transparent)' }}
+            >
+              <FolderOpen size={10} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{projectName}</span>
+            </button>
+
+            <button
+              className="claude-icon-btn"
+              onClick={() => setShowSessionPicker(v => !v)}
+              title={lang === 'pt' ? 'Sessões' : 'Sessions'}
+              style={{ ...iconBtnStyle, color: showSessionPicker ? 'var(--accent-purple)' : 'var(--text-tertiary)' }}
+            >
+              <History size={11} />
+            </button>
+
+            <div style={{ flex: 1 }} />
+
+            {/* Thinking toggle */}
+            <button
+              className="claude-icon-btn"
+              onClick={() => setThinking(prev => nextThinkingBudget(prev))}
+              title={thinking ? `Extended thinking: ${thinkingLabel(thinking)} tokens` : 'Enable extended thinking'}
+              style={{
+                ...iconBtnStyle,
+                color: thinking ? 'var(--accent-purple)' : 'var(--text-tertiary)',
+                borderColor: thinking ? 'color-mix(in srgb, var(--accent-purple) 40%, transparent)' : 'var(--border)',
+                background: thinking ? 'color-mix(in srgb, var(--accent-purple) 10%, transparent)' : 'transparent',
+                width: thinking ? 'auto' : 28, padding: thinking ? '0 6px' : 0, gap: 4, minWidth: 28,
+              }}
+            >
+              <Brain size={11} />
+              {thinking && <span style={{ fontSize: 9, fontWeight: 700 }}>{thinkingLabel(thinking)}</span>}
+            </button>
+
+            {/* Model picker */}
+            <div style={{ position: 'relative' }}>
+              <button
+                className="claude-icon-btn"
+                onClick={() => setShowModelPicker(v => !v)}
+                title="Change model"
+                style={{ ...iconBtnStyle, width: 'auto', padding: '0 6px', gap: 4, fontSize: 10 }}
+              >
+                <span>{modelInfo?.label ?? model}</span>
+                <ChevronDown size={9} />
+              </button>
+              {showModelPicker && (
+                <div style={{
+                  position: 'absolute', bottom: 'calc(100% + 4px)', right: 0, zIndex: 10, minWidth: 180,
+                  background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10,
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden',
+                  animation: 'claudeChatFadeIn 0.12s ease-out',
+                }}>
+                  {CHAT_MODELS.map(m => {
+                    const active = model === m.id
+                    const badgeColor = BADGE_COLORS[m.badge] ?? 'var(--text-tertiary)'
+                    return (
+                      <button key={m.id} className="claude-model-opt"
+                        onClick={() => { setModel(m.id); setShowModelPicker(false) }}
+                        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+                          background: active ? 'var(--bg-elevated)' : 'transparent', border: 'none',
+                          cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                          borderBottom: '1px solid var(--border)', transition: 'background 0.1s' }}>
+                        <span style={{ flex: 1, fontSize: 12, fontWeight: active ? 700 : 400, color: active ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{m.label}</span>
+                        <span style={{ fontSize: 9, fontWeight: 700, color: badgeColor,
+                          background: `color-mix(in srgb, ${badgeColor} 12%, transparent)`,
+                          border: `1px solid color-mix(in srgb, ${badgeColor} 30%, transparent)`,
+                          padding: '1px 5px', borderRadius: 3 }}>{m.badge}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Decouple button */}
+            <button
+              className="claude-icon-btn"
+              onClick={onDetach}
+              title={lang === 'pt' ? 'Destacar janela' : 'Detach window'}
+              style={iconBtnStyle}
+            >
+              <ExternalLink size={11} />
+            </button>
+          </div>
+
+          {/* Messages */}
+          <div ref={listRef} onClick={() => setShowModelPicker(false)}
+            style={{ flex: 1, overflowY: 'auto', padding: '14px 14px 6px' }}>
+            {messages.length === 0 && !streaming && (
+              <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                gap: 10, color: 'var(--text-tertiary)', textAlign: 'center', padding: '0 20px' }}>
+                <img src="/claudeLogo.png" alt="Claude" style={{ width: 36, height: 36, objectFit: 'contain', opacity: 0.4 }} />
+                <div style={{ fontSize: 13, fontWeight: 600 }}>Claude</div>
+                <div style={{ fontSize: 11, opacity: 0.7, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <FolderOpen size={11} style={{ color: 'var(--accent-purple)' }} />
+                  <span style={{ color: 'var(--accent-purple)' }}>{projectName}</span>
+                </div>
+              </div>
+            )}
+            {messages.map((msg, i) => {
+              const isLast = i === messages.length - 1
+              return (
+                <ClaudeChatMessage key={i} msg={msg}
+                  isLiveStreaming={isLast && streaming ? true : undefined}
+                  currentTools={isLast && streaming ? currentTools : undefined}
+                  thinking={thinking} />
+              )
+            })}
+            {error && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 12px', borderRadius: 8, marginBottom: 8,
+                background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', fontSize: 12, color: '#ef4444' }}>
+                <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{error}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Input */}
+          <div style={{ borderTop: '1px solid var(--border)', padding: '8px 10px', display: 'flex',
+            alignItems: 'flex-end', gap: 8, background: 'var(--bg-card)', flexShrink: 0 }}>
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={lang === 'pt' ? 'Pergunte algo...' : 'Ask anything...'}
+              rows={1}
+              disabled={streaming}
+              style={{ flex: 1, resize: 'none', background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                borderRadius: 8, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit',
+                color: 'var(--text-primary)', outline: 'none', lineHeight: 1.5,
+                maxHeight: 120, overflowY: 'auto', transition: 'border-color 0.15s' }}
+              onFocus={e => { e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--accent-purple) 60%, transparent)' }}
+              onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
+              onInput={e => { const el = e.currentTarget; el.style.height = 'auto'; el.style.height = `${Math.min(el.scrollHeight, 120)}px` }}
+            />
+            <button className="claude-send-btn"
+              onClick={() => { void sendMessage() }}
+              disabled={!input.trim() || streaming}
+              style={{ width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                border: '1px solid color-mix(in srgb, var(--accent-purple) 50%, transparent)',
+                background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)',
+                color: 'var(--accent-purple)', cursor: input.trim() && !streaming ? 'pointer' : 'not-allowed',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                opacity: input.trim() && !streaming ? 1 : 0.4, transition: 'all 0.15s' }}>
+              {streaming ? <Loader size={14} style={{ animation: 'claudeChatSpin 1s linear infinite' }} /> : <Send size={14} />}
+            </button>
+          </div>
+        </>}
+      </div>
+    )
+  }
+
   return (
     <>
       <style>{`
@@ -1017,7 +1232,7 @@ export function ClaudeChat({ lang, onOpen }: ClaudeChatProps) {
               pointerEvents: 'none',
             }}
           >
-            <img src="/minimalistLogo.png" alt="Claude" style={{ width: 26, height: 26, objectFit: 'contain' }} />
+            <img src="/claudeLogo.png" alt="Claude" style={{ width: 26, height: 26, objectFit: 'contain' }} />
           </div>
           <span style={{ fontSize: 9, color: 'var(--text-tertiary)', lineHeight: 1, pointerEvents: 'none' }}>Claude</span>
         </div>
@@ -1107,7 +1322,7 @@ export function ClaudeChat({ lang, onOpen }: ClaudeChatProps) {
                 background: 'var(--bg-elevated)', border: '1px solid var(--border)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                <img src="/minimalistLogo.png" alt="Claude" style={{ width: 22, height: 22, objectFit: 'contain' }} />
+                <img src="/claudeLogo.png" alt="Claude" style={{ width: 22, height: 22, objectFit: 'contain' }} />
               </div>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
@@ -1268,6 +1483,18 @@ export function ClaudeChat({ lang, onOpen }: ClaudeChatProps) {
                 )}
               </div>
 
+              {/* Attach / re-embed button */}
+              {onAttach && (
+                <button
+                  className="claude-icon-btn"
+                  onClick={onAttach}
+                  title={lang === 'pt' ? 'Encaixar no chat' : 'Attach to chat'}
+                  style={iconBtnStyle}
+                >
+                  <ExternalLink size={12} style={{ transform: 'scaleX(-1)' }} />
+                </button>
+              )}
+
               {/* Minimize */}
               <button
                 className="claude-icon-btn"
@@ -1302,7 +1529,7 @@ export function ClaudeChat({ lang, onOpen }: ClaudeChatProps) {
                 alignItems: 'center', justifyContent: 'center',
                 gap: 10, color: 'var(--text-tertiary)', textAlign: 'center', padding: '0 20px',
               }}>
-                <img src="/minimalistLogo.png" alt="Claude" style={{ width: 36, height: 36, objectFit: 'contain', opacity: 0.3 }} />
+                <img src="/claudeLogo.png" alt="Claude" style={{ width: 36, height: 36, objectFit: 'contain', opacity: 0.3 }} />
                 <div style={{ fontSize: 13, fontWeight: 600 }}>Chat with Claude</div>
                 <div style={{ fontSize: 11, lineHeight: 1.65, opacity: 0.7, display: 'flex', alignItems: 'center', gap: 5 }}>
                   <FolderOpen size={11} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />

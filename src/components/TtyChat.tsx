@@ -6,8 +6,9 @@ import {
   MessageSquare, X, Send, Loader, AlertCircle, Trash2,
   Maximize2, Minimize2, Terminal, Play, ChevronRight,
   Wrench, ChevronDown, ChevronUp, ArrowRight, Filter, History, Plus,
-  ShieldAlert, Check,
+  ShieldAlert, Check, ExternalLink,
 } from 'lucide-react'
+import { ClaudeChat } from './ClaudeChat'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
 import { formatToolName, fmtTime, NAV_LINK_RE } from '../lib/chatUtils'
 import { t } from '../lib/i18n'
@@ -595,6 +596,7 @@ interface TtyChatProps {
   onModelSet: (model: ChatModelId) => void
   filters: Filters
   setFilters: React.Dispatch<React.SetStateAction<Filters>>
+  onDetachClaude?: () => void
 }
 
 /** Parses filter query params from a nav path like /costs?projects=path1|path2 */
@@ -625,7 +627,7 @@ interface PendingNavigation {
   newProjects: string[]
 }
 
-export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters, setFilters }: TtyChatProps) {
+export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters, setFilters, onDetachClaude }: TtyChatProps) {
   const navigate = useNavigate()
   const [pendingNav, setPendingNav] = useState<PendingNavigation | null>(null)
 
@@ -649,6 +651,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
 
   const [open, setOpen] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
+  const [activeTab, setActiveTab] = useState<'nay' | 'claude'>('nay')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -1064,6 +1067,38 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             </div>
           </div>
 
+          {/* Tab bar */}
+          <div style={{
+            display: 'flex', borderBottom: '1px solid var(--border)',
+            background: 'var(--bg-card)', flexShrink: 0,
+          }}>
+            {(['nay', 'claude'] as const).map(tab => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                style={{
+                  flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  padding: '7px 0', border: 'none', background: 'transparent',
+                  cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: activeTab === tab ? 700 : 400,
+                  color: activeTab === tab ? (tab === 'nay' ? 'var(--anthropic-orange)' : 'var(--accent-purple)') : 'var(--text-tertiary)',
+                  borderBottom: activeTab === tab
+                    ? `2px solid ${tab === 'nay' ? 'var(--anthropic-orange)' : 'var(--accent-purple)'}`
+                    : '2px solid transparent',
+                  transition: 'all 0.15s',
+                }}
+              >
+                <img
+                  src={tab === 'nay' ? '/minimalistLogo.png' : '/claudeLogo.png'}
+                  alt={tab}
+                  style={{ width: 14, height: 14, objectFit: 'contain' }}
+                />
+                {tab === 'nay' ? 'Nay' : 'Claude'}
+              </button>
+            ))}
+          </div>
+
+          {activeTab === 'nay' && <>
+
           {/* History panel */}
           {showHistory && (
             <div style={{
@@ -1272,6 +1307,11 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                   : <Send size={14} />}
             </button>
           </div>
+
+          </>}
+
+          {activeTab === 'claude' && <ClaudeChat embedded lang={lang} onDetach={() => { onDetachClaude?.(); setActiveTab('nay') }} />}
+
         </div>
       )}
 

@@ -711,6 +711,7 @@ export default function AppLayout() {
   const [showDevConfig, setShowDevConfig] = useState(false)
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
+  const [claudeDetached, setClaudeDetached] = useState(false)
 
   const [cardPrecision, setCardPrecisionState] = useState<Record<string, boolean>>({})
   const precisionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1589,6 +1590,7 @@ export default function AppLayout() {
         chatSoundEnabled={chatSoundEnabled}
         filters={filters}
         setFilters={setFilters}
+        onDetachClaude={() => setClaudeDetached(true)}
         onModelSet={(model) => {
           setChatModel(model)
           fetch('/api/preferences', {
@@ -1599,8 +1601,8 @@ export default function AppLayout() {
         }}
       />
 
-      {/* Claude Chat — floating draggable window + FAB */}
-      <ClaudeChat lang={lang} />
+      {/* Claude Chat — floating draggable window (only when detached from TtyChat tab) */}
+      {claudeDetached && <ClaudeChat lang={lang} onAttach={() => setClaudeDetached(false)} />}
 
       {/* Footer */}
       <footer style={{
