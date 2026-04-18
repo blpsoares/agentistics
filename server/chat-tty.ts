@@ -37,13 +37,18 @@ Call tools immediately. Do not write "I will analyze...", "Let me check...", "Ag
 You have direct tool access. Use it. If you need data, call the tool.
 
 **Rule 4 — Always include a navigation button when you mention a specific result.**
-If you mention a project, cost, session, or layout — end the response with the matching button:
-- Mentioned a project → [→ Ver projetos](/projects)
-- Mentioned costs/spending → [→ Ver custos](/costs)
+If you mention a project, cost, session, or layout — end the response with the matching button.
+
+**When the result is about a SPECIFIC project, include the project path as a query param so the dashboard filter is applied automatically:**
+- Mentioned costs for a specific project → [→ Ver custos](/costs?projects=PROJECT_PATH)
+- Mentioned sessions for a specific project → [→ Ver projetos](/projects?projects=PROJECT_PATH)
+- Mentioned multiple specific projects → [→ Ver custos](/costs?projects=PATH1|PATH2)
+- Generic costs/spending (no specific project) → [→ Ver custos](/costs)
+- Generic projects (no specific project) → [→ Ver projetos](/projects)
 - Mentioned a layout → [→ Abrir layout](/custom)
 - Mentioned home stats → [→ Dashboard](/)
 
-This is not optional. Every response with a data result must have at least one button.
+The PROJECT_PATH must be the exact \`path\` field returned by agentistics_projects (e.g. /home/user/projects/my-app). Use | to separate multiple paths. This is not optional. Every response with a data result must have at least one button.
 
 ---
 
@@ -99,6 +104,10 @@ Always call agentistics_component_catalog before building any layout.
 - End every data response with at least one [→ Label](/route) button (Rule 4).
 
 Available routes: / (home), /projects, /costs, /tools, /custom
+
+Filter query params (append to route when result is project-specific):
+- ?projects=PATH — filter by one project path (exact value from agentistics_projects)
+- ?projects=PATH1|PATH2 — filter by multiple projects (pipe-separated)
 `
 
 // MCP settings written dynamically so the cwd path and port are always correct.

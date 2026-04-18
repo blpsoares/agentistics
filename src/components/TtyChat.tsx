@@ -1,12 +1,15 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
+import ReactMarkdown from 'react-markdown'
 import {
   MessageSquare, X, Send, Loader, AlertCircle, Trash2,
   Maximize2, Minimize2, Terminal, Play, ChevronRight,
-  Wrench, ChevronDown, ChevronUp, ArrowRight,
+  Wrench, ChevronDown, ChevronUp, ArrowRight, Filter,
 } from 'lucide-react'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
 import { formatToolName, fmtTime, NAV_LINK_RE } from '../lib/chatUtils'
+import { t } from '../lib/i18n'
+import type { Filters } from '../lib/types'
 
 type Lang = 'pt' | 'en'
 
@@ -92,54 +95,31 @@ function CodeBlock({ lang: codeLang, code, onRun }: CodeBlockProps) {
   )
 }
 
-function renderInline(
+function renderContent(
   text: string,
-  baseKey: number,
+  onRun?: (c: string) => void,
   onNavigate?: (path: string) => void,
-): React.ReactNode[] {
-  const segments: React.ReactNode[] = []
-
-  // First extract nav links
+): React.ReactNode {
+  // Replace custom nav links [label](nav:path) before rendering
   const navParts = text.split(NAV_LINK_RE)
-  // split result: [before, label, path, before, label, path, ...]
-  let idx = 0
+  // If there are no nav links, render directly
+  if (navParts.length === 1) {
+    return <MarkdownContent text={text} onRun={onRun} onNavigate={onNavigate} />
+  }
+
+  // Mix nav buttons with markdown segments
+  const nodes: React.ReactNode[] = []
   for (let i = 0; i < navParts.length; i++) {
     const part = navParts[i]!
     if (i % 3 === 0) {
-      // plain text segment — parse inline code + bold
-      const codeChunks = part.split(/(`[^`]+`)/g)
-      for (const chunk of codeChunks) {
-        if (chunk.startsWith('`') && chunk.endsWith('`') && chunk.length > 2) {
-          segments.push(
-            <code key={`ic-${baseKey}-${idx}`} style={{
-              background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-              borderRadius: 3, padding: '1px 5px', fontSize: 12,
-              fontFamily: 'monospace', color: 'var(--text-primary)',
-            }}>
-              {chunk.slice(1, -1)}
-            </code>
-          )
-        } else {
-          const boldChunks = chunk.split(/(\*\*[^*]+\*\*)/g)
-          for (const b of boldChunks) {
-            if (b.startsWith('**') && b.endsWith('**') && b.length > 4) {
-              segments.push(<strong key={`b-${baseKey}-${idx}`} style={{ fontWeight: 700 }}>{b.slice(2, -2)}</strong>)
-            } else {
-              segments.push(<span key={`t-${baseKey}-${idx}`} style={{ whiteSpace: 'pre-wrap' }}>{b}</span>)
-            }
-            idx++
-          }
-        }
-        idx++
-      }
+      if (part) nodes.push(<MarkdownContent key={i} text={part} onRun={onRun} onNavigate={onNavigate} />)
     } else if (i % 3 === 1) {
-      // label — next element (i+1) is the path
       const label = part
       const path = navParts[i + 1]!
-      i++ // skip path element
-      segments.push(
+      i++
+      nodes.push(
         <button
-          key={`nav-${baseKey}-${idx}`}
+          key={`nav-${i}`}
           onClick={() => onNavigate?.(path)}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 5,
@@ -154,31 +134,137 @@ function renderInline(
           {label.replace(/^→\s*/, '')}
         </button>
       )
-      idx++
     }
   }
-  return segments
+  return <>{nodes}</>
 }
 
-function renderContent(
-  text: string,
-  onRun?: (c: string) => void,
-  onNavigate?: (path: string) => void,
-): React.ReactNode[] {
-  const codeBlockRe = /```([^\n]*)\n([\s\S]*?)```/g
-  const parts: React.ReactNode[] = []
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-  codeBlockRe.lastIndex = 0
-  while ((match = codeBlockRe.exec(text)) !== null) {
-    const before = text.slice(lastIndex, match.index)
-    if (before) parts.push(...renderInline(before, parts.length, onNavigate))
-    parts.push(<CodeBlock key={`cb-${match.index}`} lang={match[1]?.trim() ?? ''} code={match[2] ?? ''} onRun={onRun} />)
-    lastIndex = match.index + match[0].length
-  }
-  const remaining = text.slice(lastIndex)
-  if (remaining) parts.push(...renderInline(remaining, parts.length, onNavigate))
-  return parts
+function MarkdownContent({
+  text,
+  onRun,
+  onNavigate,
+}: {
+  text: string
+  onRun?: (c: string) => void
+  onNavigate?: (path: string) => void
+}) {
+  return (
+    <ReactMarkdown
+      components={{
+        code({ className, children, ...props }) {
+          const match = /language-(\w+)/.exec(className ?? '')
+          const inline = !match && !String(children).includes('\n')
+          if (inline) {
+            return (
+              <code
+                style={{
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                  borderRadius: 3, padding: '1px 5px', fontSize: 12,
+                  fontFamily: 'monospace', color: 'var(--text-primary)',
+                }}
+                {...props}
+              >
+                {children}
+              </code>
+            )
+          }
+          const lang = match?.[1] ?? ''
+          const code = String(children).replace(/\n$/, '')
+          return <CodeBlock lang={lang} code={code} onRun={onRun} />
+        },
+        a({ href, children }) {
+          if (href && onNavigate && !href.startsWith('http')) {
+            return (
+              <button
+                onClick={() => onNavigate(href)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  background: 'none', border: 'none', padding: 0,
+                  color: 'var(--anthropic-orange)', cursor: 'pointer',
+                  fontFamily: 'inherit', fontSize: 'inherit', textDecoration: 'underline',
+                }}
+              >
+                {children}
+              </button>
+            )
+          }
+          return (
+            <a href={href} target="_blank" rel="noopener noreferrer"
+              style={{ color: 'var(--anthropic-orange)' }}>
+              {children}
+            </a>
+          )
+        },
+        p({ children }) {
+          return <p style={{ margin: '4px 0', lineHeight: 1.58 }}>{children}</p>
+        },
+        h1({ children }) {
+          return <h1 style={{ fontSize: 16, fontWeight: 700, margin: '10px 0 4px', color: 'var(--text-primary)' }}>{children}</h1>
+        },
+        h2({ children }) {
+          return <h2 style={{ fontSize: 14, fontWeight: 700, margin: '8px 0 4px', color: 'var(--text-primary)' }}>{children}</h2>
+        },
+        h3({ children }) {
+          return <h3 style={{ fontSize: 13, fontWeight: 700, margin: '6px 0 2px', color: 'var(--text-primary)' }}>{children}</h3>
+        },
+        ul({ children }) {
+          return <ul style={{ margin: '4px 0', paddingLeft: 18, lineHeight: 1.7 }}>{children}</ul>
+        },
+        ol({ children }) {
+          return <ol style={{ margin: '4px 0', paddingLeft: 18, lineHeight: 1.7 }}>{children}</ol>
+        },
+        li({ children }) {
+          return <li style={{ marginBottom: 2 }}>{children}</li>
+        },
+        blockquote({ children }) {
+          return (
+            <blockquote style={{
+              borderLeft: '3px solid var(--anthropic-orange)60',
+              margin: '6px 0', paddingLeft: 10,
+              color: 'var(--text-secondary)', fontStyle: 'italic',
+            }}>
+              {children}
+            </blockquote>
+          )
+        },
+        strong({ children }) {
+          return <strong style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{children}</strong>
+        },
+        em({ children }) {
+          return <em style={{ fontStyle: 'italic' }}>{children}</em>
+        },
+        hr() {
+          return <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '8px 0' }} />
+        },
+        table({ children }) {
+          return (
+            <div style={{ overflowX: 'auto', margin: '6px 0' }}>
+              <table style={{ borderCollapse: 'collapse', fontSize: 12, width: '100%' }}>{children}</table>
+            </div>
+          )
+        },
+        th({ children }) {
+          return (
+            <th style={{
+              border: '1px solid var(--border)', padding: '4px 8px',
+              background: 'var(--bg-elevated)', fontWeight: 700, textAlign: 'left',
+            }}>
+              {children}
+            </th>
+          )
+        },
+        td({ children }) {
+          return (
+            <td style={{ border: '1px solid var(--border)', padding: '4px 8px' }}>
+              {children}
+            </td>
+          )
+        },
+      }}
+    >
+      {text}
+    </ReactMarkdown>
+  )
 }
 
 // ── Tool activity bubble ──────────────────────────────────────────────────────
@@ -441,14 +527,59 @@ interface TtyChatProps {
   chatModel: ChatModelId | null
   chatSoundEnabled: boolean
   onModelSet: (model: ChatModelId) => void
+  filters: Filters
+  setFilters: React.Dispatch<React.SetStateAction<Filters>>
 }
 
-export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyChatProps) {
+/** Parses filter query params from a nav path like /costs?projects=path1|path2 */
+function parseNavFilters(path: string): { cleanPath: string; projects: string[] | null } {
+  const qIdx = path.indexOf('?')
+  if (qIdx === -1) return { cleanPath: path, projects: null }
+  const cleanPath = path.slice(0, qIdx)
+  const params = new URLSearchParams(path.slice(qIdx + 1))
+  const projectsRaw = params.get('projects')
+  if (!projectsRaw) return { cleanPath, projects: null }
+  const projects = projectsRaw.split('|').map(p => p.trim()).filter(Boolean)
+  return { cleanPath, projects: projects.length > 0 ? projects : null }
+}
+
+/** Returns true if any filter is non-default */
+function hasActiveFilters(filters: Filters): boolean {
+  return (
+    filters.dateRange !== 'all' ||
+    filters.customStart !== '' ||
+    filters.customEnd !== '' ||
+    filters.projects.length > 0 ||
+    filters.models.length > 0
+  )
+}
+
+interface PendingNavigation {
+  cleanPath: string
+  newProjects: string[]
+}
+
+export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters, setFilters }: TtyChatProps) {
   const navigate = useNavigate()
+  const [pendingNav, setPendingNav] = useState<PendingNavigation | null>(null)
+
   const handleNavigate = useCallback((path: string) => {
-    navigate(path)
+    const { cleanPath, projects } = parseNavFilters(path)
+    if (projects && projects.length > 0) {
+      // Filter data in the link — check if current filters would be overwritten
+      if (hasActiveFilters(filters)) {
+        setPendingNav({ cleanPath, newProjects: projects })
+        return
+      }
+      // No active filters — apply silently and navigate
+      setFilters(prev => ({ ...prev, projects }))
+      navigate(cleanPath)
+      setOpen(false)
+      return
+    }
+    navigate(cleanPath)
     setOpen(false)
-  }, [navigate])
+  }, [navigate, filters, setFilters])
 
   const [open, setOpen] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
@@ -901,6 +1032,148 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet }: TtyCh
                   ? <Play size={14} />
                   : <Send size={14} />}
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Filter change confirmation dialog */}
+      {pendingNav && (
+        <div
+          onClick={() => setPendingNav(null)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 600,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 24,
+            backdropFilter: 'blur(4px)',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border)',
+              borderRadius: 14,
+              padding: '22px 24px',
+              width: 360,
+              boxShadow: '0 8px 40px rgba(0,0,0,0.45)',
+              display: 'flex', flexDirection: 'column', gap: 16,
+              animation: 'ttyChatFadeIn 0.18s ease-out',
+            }}
+          >
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{
+                width: 30, height: 30,
+                background: 'var(--anthropic-orange-dim)',
+                borderRadius: 8,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                flexShrink: 0,
+              }}>
+                <Filter size={14} color="var(--anthropic-orange)" />
+              </div>
+              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
+                {t('chat.filter_change_title', lang)}
+              </span>
+            </div>
+
+            {/* Body */}
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0, lineHeight: 1.55 }}>
+              {t('chat.filter_change_body', lang)}
+            </p>
+
+            {/* Current vs New */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {/* Current filter */}
+              <div style={{
+                padding: '10px 12px', borderRadius: 8,
+                background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+              }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
+                  {t('chat.filter_change_current', lang)}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {filters.projects.length > 0
+                    ? filters.projects.map(p => (
+                        <span key={p} style={{
+                          padding: '2px 8px', borderRadius: 4,
+                          background: 'var(--bg-card)', border: '1px solid var(--border)',
+                          fontSize: 11, color: 'var(--text-primary)',
+                          maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {p.split('/').pop() ?? p}
+                        </span>
+                      ))
+                    : <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
+                        {t('chat.filter_change_all', lang)}
+                      </span>
+                  }
+                </div>
+              </div>
+
+              {/* Arrow */}
+              <div style={{ textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 16 }}>↓</div>
+
+              {/* New filter */}
+              <div style={{
+                padding: '10px 12px', borderRadius: 8,
+                background: 'color-mix(in srgb, var(--anthropic-orange) 8%, transparent)',
+                border: '1px solid var(--anthropic-orange)40',
+              }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--anthropic-orange)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
+                  {t('chat.filter_change_new', lang)}
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {pendingNav.newProjects.map(p => (
+                    <span key={p} style={{
+                      padding: '2px 8px', borderRadius: 4,
+                      background: 'var(--anthropic-orange-dim)', border: '1px solid var(--anthropic-orange)50',
+                      fontSize: 11, color: 'var(--anthropic-orange)',
+                      maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {p.split('/').pop() ?? p}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Buttons */}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setPendingNav(null)}
+                style={{
+                  padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+                  border: '1px solid var(--border)', background: 'transparent',
+                  color: 'var(--text-secondary)', cursor: 'pointer', fontFamily: 'inherit',
+                  transition: 'all 0.15s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--text-tertiary)'; e.currentTarget.style.color = 'var(--text-primary)' }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)' }}
+              >
+                {t('chat.filter_change_cancel', lang)}
+              </button>
+              <button
+                onClick={() => {
+                  setFilters(prev => ({ ...prev, projects: pendingNav.newProjects }))
+                  navigate(pendingNav.cleanPath)
+                  setPendingNav(null)
+                  setOpen(false)
+                }}
+                style={{
+                  padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+                  border: '1px solid var(--anthropic-orange)',
+                  background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+                  cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s',
+                  display: 'flex', alignItems: 'center', gap: 6,
+                }}
+                onMouseEnter={e => { e.currentTarget.style.opacity = '0.8' }}
+                onMouseLeave={e => { e.currentTarget.style.opacity = '1' }}
+              >
+                <ArrowRight size={13} />
+                {t('chat.filter_change_confirm', lang)}
+              </button>
+            </div>
           </div>
         </div>
       )}
