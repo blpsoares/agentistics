@@ -1111,7 +1111,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   }, [input, streaming, messages, chatModel, sessionId, execCmd, playNotification, nayAttachments]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
+    // Mobile: Enter = newline, send button sends. Desktop: Enter sends, Shift+Enter = newline.
+    if (!isMobile && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
   }
 
   const clearChat = () => { setMessages([]); setSessionId(null); setError(null); setStreaming(false); setHasUnread(false); setCurrentTools([]) }

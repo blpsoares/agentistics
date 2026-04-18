@@ -1444,7 +1444,8 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
   }, [input, streaming, messages, model, sessionId, thinking, minimized, onOpen, attachments, projectPath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendMessage() }
+    const isMobile = window.innerWidth < 768
+    if (!isMobile && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendMessage() }
   }
 
   const modelInfo = CHAT_MODELS.find(m => m.id === model)
