@@ -1451,6 +1451,33 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             </div>
           )}
 
+          {/* Streaming context bar — shows the last user message while assistant is responding */}
+          {streaming && (() => {
+            const lastUser = [...messages].reverse().find(m => m.role === 'user' && !m.terminal)
+            if (!lastUser) return null
+            const preview = lastUser.content.length > 120
+              ? lastUser.content.slice(0, 120) + '…'
+              : lastUser.content
+            return (
+              <div style={{
+                flexShrink: 0,
+                borderBottom: '1px solid var(--border)',
+                background: 'var(--bg-card)',
+                padding: '6px 14px',
+                display: 'flex', alignItems: 'center', gap: 8,
+              }}>
+                <span style={{ fontSize: 10, color: 'var(--anthropic-orange)', fontWeight: 700, flexShrink: 0 }}>↑</span>
+                {lastUser.images && lastUser.images.length > 0 && (
+                  <img src={lastUser.images[0]} alt=""
+                    style={{ width: 20, height: 20, borderRadius: 4, objectFit: 'cover', flexShrink: 0 }} />
+                )}
+                <span style={{ fontSize: 11, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {preview || (lastUser.images?.length ? '[image]' : '')}
+                </span>
+              </div>
+            )
+          })()}
+
           {/* Messages */}
           <div ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 14px 6px' }}>
             {messages.length === 0 && !streaming && (
@@ -1481,36 +1508,6 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 </div>
               </div>
             )}
-
-            {/* Sticky user-message context while assistant is streaming */}
-            {streaming && (() => {
-              const lastUser = [...messages].reverse().find(m => m.role === 'user' && !m.terminal)
-              if (!lastUser) return null
-              const preview = lastUser.content.length > 100
-                ? lastUser.content.slice(0, 100) + '…'
-                : lastUser.content
-              return (
-                <div style={{
-                  position: 'sticky', top: 0, zIndex: 4,
-                  margin: '-14px -14px 10px -14px',
-                  background: 'var(--bg-card)',
-                  borderBottom: '1px solid var(--border)',
-                  padding: '7px 14px',
-                  display: 'flex', alignItems: 'center', gap: 8,
-                }}>
-                  <span style={{ fontSize: 10, color: 'var(--anthropic-orange)', fontWeight: 700, flexShrink: 0, letterSpacing: '0.04em' }}>
-                    ↑
-                  </span>
-                  {lastUser.images && lastUser.images.length > 0 && (
-                    <img src={lastUser.images[0]} alt=""
-                      style={{ width: 22, height: 22, borderRadius: 4, objectFit: 'cover', flexShrink: 0 }} />
-                  )}
-                  <span style={{ fontSize: 11, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {preview || (lastUser.images?.length ? `[image]` : '')}
-                  </span>
-                </div>
-              )
-            })()}
 
             {messages.map((msg, i) => {
               const isLast = i === messages.length - 1
