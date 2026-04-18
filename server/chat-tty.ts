@@ -114,7 +114,7 @@ export function buildNaySettings(port: number) {
     },
     permissions: {
       allow: [
-        `WebFetch(http://localhost:${port}/*)`,
+        'WebFetch(domain:localhost)',
         // Allow all agentistics MCP tools without prompting (non-interactive --print mode)
         'mcp__agentistics__agentistics_summary',
         'mcp__agentistics__agentistics_projects',

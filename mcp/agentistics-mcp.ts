@@ -98,12 +98,32 @@ function nextId(items: Array<{ i: string }>): string {
   return String(max + 1);
 }
 
+// First-fit shelf packing across a 12-column grid.
+// Scans every y level from 0 downward and returns the leftmost x where
+// an item of width `newW` fits without overlapping existing items.
 function autoPosition(
-  items: Array<{ y: number; h: number }>,
+  items: Array<{ x: number; y: number; w: number; h: number }>,
+  newW = 3,
+  gridW = 12,
 ): { x: number; y: number } {
   if (items.length === 0) return { x: 0, y: 0 };
-  const maxY = Math.max(...items.map((item) => item.y + item.h));
-  return { x: 0, y: maxY };
+  const maxBottom = Math.max(...items.map((i) => i.y + i.h));
+  for (let y = 0; y <= maxBottom; y++) {
+    // Occupied x-ranges at this y level
+    const blocks = items
+      .filter((i) => i.y <= y && i.y + i.h > y)
+      .map((i) => ({ start: i.x, end: i.x + i.w }))
+      .sort((a, b) => a.start - b.start);
+    // Find leftmost gap >= newW
+    let x = 0;
+    for (const block of blocks) {
+      if (block.start >= x + newW) break; // gap before this block fits
+      if (block.end > x) x = block.end;
+    }
+    if (x + newW <= gridW) return { x, y };
+  }
+  // No gap found — place at bottom
+  return { x: 0, y: maxBottom };
 }
 
 // ─── Server ─────────────────────────────────────────────────────────────────
@@ -470,7 +490,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const pos =
           a.x !== undefined && a.y !== undefined
             ? { x: a.x as number, y: a.y as number }
-            : autoPosition(current);
+            : autoPosition(current, (a.w as number | undefined) ?? catalogItem.defaultW);
 
         const newItem = {
           i: nextId(current),
@@ -561,7 +581,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const items: Array<any> = [];
         for (const componentId of componentIds) {
           const cat = CATALOG.find((c) => c.id === componentId)!;
-          const pos = autoPosition(items);
+          const pos = autoPosition(items, cat.defaultW);
           items.push({
             i: nextId(items),
             componentId,

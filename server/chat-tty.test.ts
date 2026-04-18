@@ -26,7 +26,7 @@ describe('buildNaySettings', () => {
   it('includes WebFetch permission for the given port', () => {
     const settings = buildNaySettings(12345)
     const webFetch = settings.permissions.allow.find((p: string) => p.startsWith('WebFetch'))
-    expect(webFetch).toBe('WebFetch(http://localhost:12345/*)')
+    expect(webFetch).toBe('WebFetch(domain:localhost)')
   })
 
   it('uses a different port correctly', () => {
