@@ -37,6 +37,37 @@ type ChatMessage = {
   files?: string[]    // file names – shown as chips in the bubble
 }
 
+// Detect sessions stored with the old inline-history format ("User: ...\nAssistant: ...") and
+// parse them into individual message bubbles for display.
+function expandHistoryBlob(
+  msgs: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[] }>,
+): ChatMessage[] {
+  const out: ChatMessage[] = []
+  for (const msg of msgs) {
+    const isBlob =
+      msg.role === 'user' &&
+      (msg.content.startsWith('User: ') || msg.content.startsWith('Assistant: ')) &&
+      (msg.content.includes('\nUser: ') || msg.content.includes('\nAssistant: '))
+    if (!isBlob) { out.push({ ...msg, terminal: false }); continue }
+
+    let currentRole: 'user' | 'assistant' | null = null
+    let currentLines: string[] = []
+    const flush = () => {
+      if (!currentRole) return
+      const content = currentLines.join('\n').trim()
+      if (content) out.push({ role: currentRole, content, timestamp: msg.timestamp, terminal: false })
+      currentLines = []
+    }
+    for (const line of msg.content.split('\n')) {
+      if (line.startsWith('User: '))       { flush(); currentRole = 'user';      currentLines = [line.slice(6)] }
+      else if (line.startsWith('Assistant: ')) { flush(); currentRole = 'assistant'; currentLines = [line.slice(11)] }
+      else currentLines.push(line)
+    }
+    flush()
+  }
+  return out
+}
+
 type NaySessionSummary = {
   id: string
   title: string
@@ -769,8 +800,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
           fetch(`/api/nay-sessions/${targetSessionId}`)
             .then(r => r.ok ? r.json() : [])
             .then((msgs: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[] }>) => {
-              setMessages(msgs.map(m => ({ ...m, terminal: false })))
-              setSessionId(null)
+              setMessages(expandHistoryBlob(msgs))
+              setSessionId(targetSessionId)
             })
             .catch(() => {})
             .finally(() => setHistoryLoading(false))
@@ -870,11 +901,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
       const res = await fetch(`/api/nay-sessions/${id}`)
       if (res.ok) {
         const msgs = await res.json() as Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[] }>
-        setMessages(msgs.map(m => ({ ...m, terminal: false })))
-        // Don't use --resume for restored history sessions — inline-history approach
-        // gives the model proper structured context and ensures MCP tools are triggered.
-        // --resume only makes sense for the live session you're actively building.
-        setSessionId(null)
+        setMessages(expandHistoryBlob(msgs))
+        setSessionId(id)   // use --resume for next messages to avoid re-sending history as blob
         setViewedNaySessionId(id)
       }
     } catch { /* ignore */ }
