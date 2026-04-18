@@ -7,7 +7,7 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 
-const API = process.env.AGENTISTICS_API ?? "http://localhost:3001";
+const API = process.env.AGENTISTICS_API ?? "http://localhost:47291";
 
 // Static mirror of src/lib/componentCatalog.tsx — keep in sync when adding components
 const CATALOG = [

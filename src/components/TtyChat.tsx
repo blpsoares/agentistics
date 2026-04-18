@@ -6,6 +6,7 @@ import {
   Wrench, ChevronDown, ChevronUp, ArrowRight,
 } from 'lucide-react'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
+import { formatToolName, fmtTime, NAV_LINK_RE } from '../lib/chatUtils'
 
 type Lang = 'pt' | 'en'
 
@@ -22,30 +23,6 @@ const BADGE_COLORS: Record<string, string> = {
   Fast:     'var(--accent-green)',
   Balanced: 'var(--anthropic-orange)',
   Powerful: 'var(--accent-purple)',
-}
-
-const TOOL_LABELS: Record<string, string> = {
-  agentistics_summary:          'Reading metrics',
-  agentistics_projects:         'Fetching projects',
-  agentistics_sessions:         'Loading sessions',
-  agentistics_costs:            'Analyzing costs',
-  agentistics_get_layouts:      'Reading layouts',
-  agentistics_create_layout:    'Creating layout',
-  agentistics_add_component:    'Adding component',
-  agentistics_remove_component: 'Removing component',
-  agentistics_set_active_layout:'Activating layout',
-  agentistics_delete_layout:    'Deleting layout',
-  agentistics_build_layout:     'Building layout',
-  agentistics_component_catalog:'Reading catalog',
-}
-
-function formatToolName(raw: string): string {
-  const clean = raw.replace(/^mcp__\w+__/, '')
-  return TOOL_LABELS[clean] ?? clean.replace(/_/g, ' ')
-}
-
-function fmtTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 // ── Audio ─────────────────────────────────────────────────────────────────────
@@ -114,9 +91,6 @@ function CodeBlock({ lang: codeLang, code, onRun }: CodeBlockProps) {
     </div>
   )
 }
-
-// Matches [→ label](/route) or [label](/route) where route starts with /
-const NAV_LINK_RE = /\[([^\]]+)\]\((\/[^)]*)\)/g
 
 function renderInline(
   text: string,

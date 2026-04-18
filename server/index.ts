@@ -314,6 +314,7 @@ process.stdout.write(
   `${_SEP}\n` +
   `  ${_WH}api${_R}  ${_DOT}  ${_URL(`http://localhost:${PORT}`)}\n` +
   `  ${_WH} ui${_R}  ${_DOT}  ${_URL(_UI_URL)}${_UI_TAG}\n` +
+  `  ${_WH}mcp${_R}  ${_DOT}  ${_D}agentistics (stdio → http://localhost:${PORT})${_R}\n` +
   `${_SEP}\n\n`
 )
 } catch (err: unknown) {

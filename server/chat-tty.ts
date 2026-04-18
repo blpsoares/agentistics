@@ -102,7 +102,7 @@ Available routes: / (home), /projects, /costs, /tools, /custom
 `
 
 // MCP settings written dynamically so the cwd path and port are always correct.
-function buildNaySettings(port: number) {
+export function buildNaySettings(port: number) {
   return {
     mcpServers: {
       agentistics: {
