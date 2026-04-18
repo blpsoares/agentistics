@@ -1070,6 +1070,21 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
     onStateChange?.({ projectPath, projectName, projectEncodedDir, sessionId, messages })
   }, [projectPath, projectName, projectEncodedDir, sessionId, messages]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Poll for new messages written externally (e.g. from VS Code Claude extension)
+  // so the viewer stays up-to-date in real time without the user having to refresh.
+  useEffect(() => {
+    if (!sessionId || !projectEncodedDir || streaming) return
+    const id = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/claude-sessions/${sessionId}?encodedDir=${encodeURIComponent(projectEncodedDir)}`)
+        if (!res.ok) return
+        const fresh: ChatMessage[] = await res.json()
+        setMessages(prev => fresh.length > prev.length ? fresh : prev)
+      } catch { /* ignore */ }
+    }, 3000)
+    return () => clearInterval(id)
+  }, [sessionId, projectEncodedDir, streaming])
+
   // ── Attachment handlers ───────────────────────────────────────────────────
 
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {

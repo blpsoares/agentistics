@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import {
   X, Clock, FileCode, GitCommit, Wrench, MessageSquare, Bot, Zap, AlertTriangle,
-  CheckCircle, XCircle, Globe, Server,
+  CheckCircle, XCircle, Globe, Server, ExternalLink,
 } from 'lucide-react'
 import type { SessionMeta, Lang } from '../lib/types'
 import { formatProjectName, formatModel, calcCost, getModelColor } from '../lib/types'
@@ -193,18 +193,43 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
               <span>{fmtDuration(session.duration_minutes ?? 0)}</span>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              width: 30, height: 30,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              border: '1px solid var(--border)', borderRadius: 8,
-              background: 'transparent', color: 'var(--text-tertiary)',
-              cursor: 'pointer', flexShrink: 0,
-            }}
-          >
-            <X size={14} />
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+            <button
+              onClick={() => {
+                const isNay = session.project_path.includes('.agentistics/nay-chat')
+                const encodedDir = session.project_path.replace(/\//g, '-')
+                window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
+                  detail: isNay
+                    ? { tab: 'nay', sessionId: session.session_id }
+                    : { tab: 'claude', sessionId: session.session_id, project: { path: session.project_path, name: session.project_path.split('/').pop() ?? session.project_path, encodedDir } },
+                }))
+              }}
+              title={session.project_path.includes('.agentistics/nay-chat') ? 'Open in Nay Chat' : 'Open in Claude'}
+              style={{
+                height: 30, padding: '0 10px',
+                display: 'flex', alignItems: 'center', gap: 5,
+                border: '1px solid var(--border)', borderRadius: 8,
+                background: 'transparent',
+                color: session.project_path.includes('.agentistics/nay-chat') ? 'var(--anthropic-orange)' : 'var(--accent-purple, #a855f7)',
+                cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 500,
+              }}
+            >
+              <ExternalLink size={12} />
+              {session.project_path.includes('.agentistics/nay-chat') ? 'Nay' : 'Claude'}
+            </button>
+            <button
+              onClick={onClose}
+              style={{
+                width: 30, height: 30,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                border: '1px solid var(--border)', borderRadius: 8,
+                background: 'transparent', color: 'var(--text-tertiary)',
+                cursor: 'pointer', flexShrink: 0,
+              }}
+            >
+              <X size={14} />
+            </button>
+          </div>
         </div>
 
         <div style={{ padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 18 }}>

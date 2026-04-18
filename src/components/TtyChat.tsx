@@ -672,6 +672,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   const [open, setOpen] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   const [activeTab, setActiveTab] = useState<'nay' | 'claude'>('nay')
+  // Incremented to force ClaudeChat to remount with fresh initial props
+  const [claudeResetKey, setClaudeResetKey] = useState(0)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -682,6 +684,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   const [historyList, setHistoryList] = useState<NaySessionSummary[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [sessionId, setSessionId] = useState<string | null>(null)
+  // Track which historical Nay session is being viewed (for live polling)
+  const [viewedNaySessionId, setViewedNaySessionId] = useState<string | null>(null)
 
   const [nayAttachments, setNayAttachments] = useState<NayAttachment[]>([])
   const nayFileInputRef = useRef<HTMLInputElement>(null)
@@ -701,20 +705,67 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   // External open trigger: dispatched by RecentSessions "open in Claude/Nay" button
   useEffect(() => {
     const handler = (e: Event) => {
-      const { tab, project } = (e as CustomEvent<{
+      const { tab, project, sessionId: targetSessionId } = (e as CustomEvent<{
         tab: 'nay' | 'claude'
+        sessionId?: string
         project?: { path: string; name: string; encodedDir: string }
       }>).detail
+
       setOpen(true)
-      setActiveTab(tab)
-      if (tab === 'claude' && project) {
-        onClaudeStateChange?.({
-          projectPath: project.path,
-          projectName: project.name,
-          projectEncodedDir: project.encodedDir,
-          sessionId: null,
-          messages: [],
-        })
+
+      if (tab === 'nay') {
+        setActiveTab('nay')
+        if (targetSessionId) {
+          // Load the specific Nay session history
+          setError(null)
+          setHistoryLoading(true)
+          fetch(`/api/nay-sessions/${targetSessionId}`)
+            .then(r => r.ok ? r.json() : [])
+            .then((msgs: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[] }>) => {
+              setMessages(msgs.map(m => ({ ...m, terminal: false })))
+              setSessionId(null)
+            })
+            .catch(() => {})
+            .finally(() => setHistoryLoading(false))
+        }
+      } else if (tab === 'claude' && project) {
+        if (targetSessionId) {
+          // Fetch messages FIRST, then switch tab so ClaudeChat mounts with data ready
+          fetch(`/api/claude-sessions/${targetSessionId}?encodedDir=${encodeURIComponent(project.encodedDir)}`)
+            .then(r => r.ok ? r.json() : [])
+            .then((msgs: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[] }>) => {
+              onClaudeStateChange?.({
+                projectPath: project.path,
+                projectName: project.name,
+                projectEncodedDir: project.encodedDir,
+                sessionId: targetSessionId,
+                messages: msgs,
+              })
+              setClaudeResetKey(k => k + 1)
+              setActiveTab('claude')
+            })
+            .catch(() => {
+              onClaudeStateChange?.({
+                projectPath: project.path,
+                projectName: project.name,
+                projectEncodedDir: project.encodedDir,
+                sessionId: targetSessionId,
+                messages: [],
+              })
+              setClaudeResetKey(k => k + 1)
+              setActiveTab('claude')
+            })
+        } else {
+          onClaudeStateChange?.({
+            projectPath: project.path,
+            projectName: project.name,
+            projectEncodedDir: project.encodedDir,
+            sessionId: null,
+            messages: [],
+          })
+          setClaudeResetKey(k => k + 1)
+          setActiveTab('claude')
+        }
       }
     }
     window.addEventListener('agentistics:open-chat', handler)
@@ -740,6 +791,20 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
   }, [messages, streaming, currentTools])
 
+  // Poll for new messages on historical Nay sessions (real-time view)
+  useEffect(() => {
+    if (!viewedNaySessionId || streaming) return
+    const id = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/nay-sessions/${viewedNaySessionId}`)
+        if (!res.ok) return
+        const fresh: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[] }> = await res.json()
+        setMessages(prev => fresh.length > prev.length ? fresh.map(m => ({ ...m, terminal: false })) : prev)
+      } catch { /* ignore */ }
+    }, 3000)
+    return () => clearInterval(id)
+  }, [viewedNaySessionId, streaming])
+
   const openHistory = async () => {
     setShowHistory(true)
     setHistoryLoading(true)
@@ -763,6 +828,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
         // gives the model proper structured context and ensures MCP tools are triggered.
         // --resume only makes sense for the live session you're actively building.
         setSessionId(null)
+        setViewedNaySessionId(id)
       }
     } catch { /* ignore */ }
     finally { setHistoryLoading(false) }
@@ -773,6 +839,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
     setSessionId(null)
     setError(null)
     setShowHistory(false)
+    setViewedNaySessionId(null)
   }
 
   const initAudio = () => {
@@ -904,6 +971,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
     setError(null)
     setCurrentTools([])
     setShowHistory(false)
+    setViewedNaySessionId(null) // user is now in live chat mode, stop polling historical session
 
     if (text.startsWith('!') && text.length > 1) {
       await execCmd(text.slice(1).trimStart())
@@ -1437,6 +1505,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
 
           {activeTab === 'claude' && (
             <ClaudeChat
+              key={claudeResetKey}
               embedded
               lang={lang}
               onDetach={() => { onDetachClaude?.(); setActiveTab('nay') }}

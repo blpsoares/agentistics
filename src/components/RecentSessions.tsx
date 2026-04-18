@@ -222,12 +222,15 @@ function encodeProjectDir(projectPath: string): string {
 function openSession(s: SessionMeta, e: React.MouseEvent) {
   e.stopPropagation()
   if (isNayChatSession(s.project_path)) {
-    window.dispatchEvent(new CustomEvent('agentistics:open-chat', { detail: { tab: 'nay' } }))
+    window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
+      detail: { tab: 'nay', sessionId: s.session_id },
+    }))
   } else {
     const encodedDir = encodeProjectDir(s.project_path)
     window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
       detail: {
         tab: 'claude',
+        sessionId: s.session_id,
         project: { path: s.project_path, name: s.project_path.split('/').pop() ?? s.project_path, encodedDir },
       },
     }))
