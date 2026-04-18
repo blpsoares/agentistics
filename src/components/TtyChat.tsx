@@ -791,6 +791,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   // Nay floating window state
   const [nayDetached, setNayDetached] = useState(false)
   const [nayMinimized, setNayMinimized] = useState(false)
+  const [nayFlash, setNayFlash] = useState(false)
   const [nayPos, setNayPos] = useState<{ x: number; y: number }>(() => loadNayPos())
   const [naySize, setNaySize] = useState<{ w: number; h: number }>(() => loadNaySize())
   const NAY_FAB_W = 46
@@ -993,6 +994,16 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
 
   const handleFabClick = () => {
     initAudio()
+    if (nayDetached) {
+      if (nayMinimized) {
+        setNayMinimized(false)
+      } else {
+        // Bring floating window to view with a flash
+        setNayFlash(true)
+        setTimeout(() => setNayFlash(false), 600)
+      }
+      return
+    }
     setOpen(v => !v)
   }
 
@@ -1350,6 +1361,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
         @keyframes ttyChatSlideIn { from{opacity:0;transform:translateX(18px)} to{opacity:1;transform:none} }
         @keyframes ttyChatBlink   { 0%,100%{opacity:1} 50%{opacity:0} }
         @keyframes ttyChatPulse   { 0%,100%{box-shadow:0 4px 18px rgba(0,0,0,0.35),0 0 0 0 rgba(245,158,11,0.5)} 50%{box-shadow:0 4px 18px rgba(0,0,0,0.35),0 0 0 8px rgba(245,158,11,0)} }
+        @keyframes ttyChatFlash   { 0%,100%{box-shadow:0 10px 48px rgba(0,0,0,0.45)} 30%{box-shadow:0 0 0 4px rgba(245,158,11,0.6),0 10px 48px rgba(0,0,0,0.45)} }
         @media (hover: hover) {
           .tty-fab:hover { border-color: var(--anthropic-orange) !important; color: var(--anthropic-orange) !important; }
           .tty-icon-btn:hover { color: var(--text-primary) !important; border-color: var(--text-secondary) !important; }
@@ -1364,30 +1376,41 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
       <button
         className="tty-fab"
         onClick={handleFabClick}
-        title={pt ? 'Chat com Nay' : 'Chat with Nay'}
+        title={nayDetached
+          ? (nayMinimized ? (pt ? 'Restaurar Nay' : 'Restore Nay') : (pt ? 'Trazer Nay para frente' : 'Bring Nay to front'))
+          : (pt ? 'Chat com Nay' : 'Chat with Nay')}
         style={{
           position: 'fixed', bottom: isMobile ? 68 : 24, right: 24, zIndex: 300,
           width: 46, height: 46, borderRadius: '50%',
-          border: hasUnread && !open
+          border: nayDetached
             ? '1.5px solid var(--anthropic-orange)'
-            : open ? '1.5px solid var(--anthropic-orange)' : '1.5px solid var(--border)',
-          background: hasUnread && !open
+            : (hasUnread && !open) || open ? '1.5px solid var(--anthropic-orange)' : '1.5px solid var(--border)',
+          background: nayDetached
             ? 'var(--anthropic-orange-dim)'
-            : open ? 'var(--anthropic-orange-dim)' : 'var(--bg-card)',
-          color: hasUnread && !open ? 'var(--anthropic-orange)' : open ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+            : (hasUnread && !open) || open ? 'var(--anthropic-orange-dim)' : 'var(--bg-card)',
+          color: nayDetached || hasUnread || open ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
           cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          animation: hasUnread && !open ? 'ttyChatPulse 1.8s ease-in-out infinite' : undefined,
+          animation: (hasUnread && !open && !nayDetached) ? 'ttyChatPulse 1.8s ease-in-out infinite' : undefined,
           transition: 'all 0.2s',
           overflow: 'hidden',
           padding: 0,
         }}
       >
-        {open ? <X size={17} /> : <MessageSquare size={17} />}
-        {!open && hasUnread && (
+        {open && !nayDetached ? <X size={17} /> : nayDetached ? <ExternalLink size={15} /> : <MessageSquare size={17} />}
+        {!open && !nayDetached && hasUnread && (
           <span style={{
             position: 'absolute', top: 8, right: 8,
             width: 9, height: 9, borderRadius: '50%',
+            background: 'var(--anthropic-orange)',
+            border: '1.5px solid var(--bg-base)',
+            animation: 'ttyChatBlink 1.8s ease-in-out infinite',
+          }} />
+        )}
+        {nayDetached && nayMinimized && (
+          <span style={{
+            position: 'absolute', top: 7, right: 7,
+            width: 10, height: 10, borderRadius: '50%',
             background: 'var(--anthropic-orange)',
             border: '1.5px solid var(--bg-base)',
             animation: 'ttyChatBlink 1.8s ease-in-out infinite',
@@ -1836,7 +1859,6 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
           }}
         >
           <div style={{
-            position: 'relative',
             width: NAY_FAB_W, height: NAY_FAB_W, borderRadius: '50%',
             border: '1.5px solid var(--anthropic-orange)',
             background: 'var(--anthropic-orange-dim)',
@@ -1846,26 +1868,6 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             <img src="/minimalistLogo.png" alt="Nay" style={{ width: 26, height: 26, objectFit: 'contain' }} />
           </div>
           <span style={{ fontSize: 9, color: 'var(--text-tertiary)', lineHeight: 1, pointerEvents: 'none' }}>Nay</span>
-          {/* X badge to fully close */}
-          <button
-            onMouseDown={e => e.stopPropagation()}
-            onClick={e => {
-              e.stopPropagation()
-              setNayDetached(false)
-              setNayMinimized(false)
-              setOpen(false)
-            }}
-            title={pt ? 'Fechar Nay' : 'Close Nay'}
-            style={{
-              position: 'absolute', top: -4, right: -4,
-              width: 16, height: 16, borderRadius: '50%',
-              background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              cursor: 'pointer', color: 'var(--text-tertiary)', padding: 0, zIndex: 1,
-            }}
-          >
-            <X size={8} />
-          </button>
         </div>
       )}
 
@@ -1886,7 +1888,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             borderRadius: 14,
             boxShadow: '0 10px 48px rgba(0,0,0,0.45)',
             overflow: 'hidden',
-            animation: 'ttyChatSlideIn 0.18s ease-out',
+            animation: nayFlash ? 'ttyChatFlash 0.6s ease-out' : 'ttyChatSlideIn 0.18s ease-out',
           }}
         >
           {/* Floating header — drag handle */}
