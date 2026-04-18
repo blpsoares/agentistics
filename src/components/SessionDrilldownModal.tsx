@@ -1,12 +1,14 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import {
   X, Clock, FileCode, GitCommit, Wrench, MessageSquare, Bot, Zap, AlertTriangle,
-  CheckCircle, XCircle, Globe, Server,
+  CheckCircle, XCircle, Globe, Server, ExternalLink,
 } from 'lucide-react'
 import type { SessionMeta, Lang } from '../lib/types'
 import { formatProjectName, formatModel, calcCost, getModelColor } from '../lib/types'
 import { blendedCostPerToken } from '../hooks/useData'
+import { fmtFull } from '../lib/format'
+import { PrecisionToggle } from './PrecisionToggle'
 
 interface Props {
   session: SessionMeta
@@ -17,7 +19,8 @@ interface Props {
   onClose: () => void
 }
 
-function fmt(n: number): string {
+function fmt(n: number, full = false): string {
+  if (full) return fmtFull(n)
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return String(n)
@@ -73,6 +76,7 @@ function sessionCost(session: SessionMeta, globalModelUsage: Props['globalModelU
 
 export function SessionDrilldownModal({ session, globalModelUsage, currency, brlRate, lang, onClose }: Props) {
   const pt = lang === 'pt'
+  const [fullPrecision, setFullPrecision] = useState(false)
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -189,18 +193,43 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
               <span>{fmtDuration(session.duration_minutes ?? 0)}</span>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              width: 30, height: 30,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              border: '1px solid var(--border)', borderRadius: 8,
-              background: 'transparent', color: 'var(--text-tertiary)',
-              cursor: 'pointer', flexShrink: 0,
-            }}
-          >
-            <X size={14} />
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+            <button
+              onClick={() => {
+                const isNay = session.project_path.includes('.agentistics/nay-chat')
+                const encodedDir = session.project_path.replace(/\//g, '-')
+                window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
+                  detail: isNay
+                    ? { tab: 'nay', sessionId: session.session_id }
+                    : { tab: 'claude', sessionId: session.session_id, project: { path: session.project_path, name: session.project_path.split('/').pop() ?? session.project_path, encodedDir } },
+                }))
+              }}
+              title={session.project_path.includes('.agentistics/nay-chat') ? 'Open in Nay Chat' : 'Open in Claude'}
+              style={{
+                height: 30, padding: '0 10px',
+                display: 'flex', alignItems: 'center', gap: 5,
+                border: '1px solid var(--border)', borderRadius: 8,
+                background: 'transparent',
+                color: session.project_path.includes('.agentistics/nay-chat') ? 'var(--anthropic-orange)' : 'var(--accent-purple, #a855f7)',
+                cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 500,
+              }}
+            >
+              <ExternalLink size={12} />
+              {session.project_path.includes('.agentistics/nay-chat') ? 'Nay' : 'Claude'}
+            </button>
+            <button
+              onClick={onClose}
+              style={{
+                width: 30, height: 30,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                border: '1px solid var(--border)', borderRadius: 8,
+                background: 'transparent', color: 'var(--text-tertiary)',
+                cursor: 'pointer', flexShrink: 0,
+              }}
+            >
+              <X size={14} />
+            </button>
+          </div>
         </div>
 
         <div style={{ padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -223,17 +252,22 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
           )}
 
           {/* KPIs */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
-            <Kpi icon={<MessageSquare size={12} />} label={pt ? 'Mensagens' : 'Messages'} value={String(totalMessages)} accent="var(--accent-blue, #3b82f6)" />
-            <Kpi icon={<Zap size={12} />} label="Tokens" value={fmt(totalTokens)} accent="var(--anthropic-orange)" />
-            <Kpi icon={<Wrench size={12} />} label="Tool calls" value={String(totalTools)} accent="var(--accent-green, #22c55e)" />
-            <Kpi icon={<GitCommit size={12} />} label="Commits" value={String(session.git_commits ?? 0)} accent="var(--accent-purple, #a855f7)" />
-            <Kpi
-              icon={<span style={{ fontSize: 10, fontWeight: 800 }}>$</span>}
-              label={pt ? 'Custo' : 'Cost'}
-              value={fmtCost(cost, currency, brlRate)}
-              accent="var(--anthropic-orange)"
-            />
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginBottom: 6 }}>
+              <PrecisionToggle full={fullPrecision} accent="var(--anthropic-orange)" onToggle={() => setFullPrecision(v => !v)} lang={lang} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
+              <Kpi icon={<MessageSquare size={12} />} label={pt ? 'Mensagens' : 'Messages'} value={fmt(totalMessages, fullPrecision)} accent="var(--accent-blue, #3b82f6)" />
+              <Kpi icon={<Zap size={12} />} label="Tokens" value={fmt(totalTokens, fullPrecision)} accent="var(--anthropic-orange)" />
+              <Kpi icon={<Wrench size={12} />} label="Tool calls" value={fmt(totalTools, fullPrecision)} accent="var(--accent-green, #22c55e)" />
+              <Kpi icon={<GitCommit size={12} />} label="Commits" value={String(session.git_commits ?? 0)} accent="var(--accent-purple, #a855f7)" />
+              <Kpi
+                icon={<span style={{ fontSize: 10, fontWeight: 800 }}>$</span>}
+                label={pt ? 'Custo' : 'Cost'}
+                value={fmtCost(cost, currency, brlRate)}
+                accent="var(--anthropic-orange)"
+              />
+            </div>
           </div>
 
           {/* Token split */}
@@ -248,7 +282,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
                 {pt ? 'Divisão de tokens' : 'Token breakdown'}
               </span>
               <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
-                {fmt(totalTokens)} total
+                {fmt(totalTokens, fullPrecision)} total
               </span>
             </div>
             <div style={{ display: 'flex', height: 8, background: 'var(--bg-card)', borderRadius: 4, overflow: 'hidden', marginBottom: 8 }}>
@@ -261,10 +295,10 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
             </div>
             <div style={{ display: 'flex', gap: 14, fontSize: 11 }}>
               <span style={{ color: 'var(--accent-blue, #3b82f6)', fontWeight: 600 }}>
-                ■ Input: {fmt(session.input_tokens ?? 0)}
+                ■ Input: {fmt(session.input_tokens ?? 0, fullPrecision)}
               </span>
               <span style={{ color: 'var(--accent-green, #22c55e)', fontWeight: 600 }}>
-                ■ Output: {fmt(session.output_tokens ?? 0)}
+                ■ Output: {fmt(session.output_tokens ?? 0, fullPrecision)}
               </span>
             </div>
           </div>
@@ -303,7 +337,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
                         {count}×
                       </span>
                       <span style={{ color: 'var(--text-tertiary)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                        {tokens > 0 ? `${fmt(tokens)} tkn` : '—'}
+                        {tokens > 0 ? `${fmt(tokens, fullPrecision)} tkn` : '—'}
                       </span>
                     </div>
                   )
@@ -334,7 +368,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
                 {pt ? `Invocações de agentes (${agentInvocations.length})` : `Agent invocations (${agentInvocations.length})`}
                 {session.agentMetrics && (
                   <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--text-tertiary)' }}>
-                    {fmt(session.agentMetrics.totalTokens)} tokens · {fmtCost(session.agentMetrics.totalCostUSD, currency, brlRate)} · {fmtAgentDuration(session.agentMetrics.totalDurationMs)}
+                    {fmt(session.agentMetrics.totalTokens, fullPrecision)} tokens · {fmtCost(session.agentMetrics.totalCostUSD, currency, brlRate)} · {fmtAgentDuration(session.agentMetrics.totalDurationMs)}
                   </span>
                 )}
               </div>
@@ -371,7 +405,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
                         {inv.description || <em style={{ color: 'var(--text-tertiary)' }}>—</em>}
                       </span>
                     </div>
-                    <span style={{ color: 'var(--text-primary)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmt(inv.totalTokens)}</span>
+                    <span style={{ color: 'var(--text-primary)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmt(inv.totalTokens, fullPrecision)}</span>
                     <span style={{ color: 'var(--text-secondary)', textAlign: 'right' }}>{fmtAgentDuration(inv.totalDurationMs)}</span>
                     <span style={{ color: 'var(--anthropic-orange)', textAlign: 'right' }}>{fmtCost(inv.costUSD, currency, brlRate)}</span>
                   </div>
@@ -386,7 +420,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
           )}
 
           {/* Hour distribution + git + errors in 2 cols */}
-          <div style={{ display: 'grid', gridTemplateColumns: activeHours > 0 ? '2fr 1fr' : '1fr', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: activeHours > 0 ? '2fr 1fr' : '1fr', gap: 14, alignItems: 'start' }}>
             {activeHours > 0 && (
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
@@ -431,7 +465,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
                       session.git_pushes > 0 ? `${session.git_pushes} pushes` : null,
                       session.files_modified > 0 ? `${session.files_modified} ${pt ? 'arquivos' : 'files'}` : null,
                       (session.lines_added > 0 || session.lines_removed > 0)
-                        ? `+${fmt(session.lines_added ?? 0)} / -${fmt(session.lines_removed ?? 0)}`
+                        ? `+${fmt(session.lines_added ?? 0, fullPrecision)} / -${fmt(session.lines_removed ?? 0, fullPrecision)}`
                         : null,
                     ].filter(Boolean).join(' · ')
                   }

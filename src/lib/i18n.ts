@@ -143,6 +143,16 @@ export const translations: Record<Lang, Record<string, string>> = {
     'cost.cache_read': 'Leitura de cache',
     'cost.cache_write': 'Escrita de cache',
     'cost.total': 'Total',
+
+    // Chat filter change dialog
+    'chat.filter_change_title': 'Filtro será alterado',
+    'chat.filter_change_body': 'Seu filtro atual será alterado para refletir o resultado da busca.',
+    'chat.filter_change_confirm': 'Aplicar e navegar',
+    'chat.filter_change_cancel': 'Cancelar',
+    'chat.filter_change_new': 'Novo filtro',
+    'chat.filter_change_current': 'Filtro atual',
+    'chat.filter_change_projects': 'Projetos',
+    'chat.filter_change_all': 'Todos',
   },
 
   en: {
@@ -287,6 +297,16 @@ export const translations: Record<Lang, Record<string, string>> = {
     'cost.cache_read': 'Cache read',
     'cost.cache_write': 'Cache write',
     'cost.total': 'Total',
+
+    // Chat filter change dialog
+    'chat.filter_change_title': 'Filter will change',
+    'chat.filter_change_body': 'Your current filter will be changed to reflect the search result.',
+    'chat.filter_change_confirm': 'Apply and navigate',
+    'chat.filter_change_cancel': 'Cancel',
+    'chat.filter_change_new': 'New filter',
+    'chat.filter_change_current': 'Current filter',
+    'chat.filter_change_projects': 'Projects',
+    'chat.filter_change_all': 'All',
   },
 };
 

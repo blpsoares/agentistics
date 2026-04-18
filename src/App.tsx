@@ -7,7 +7,7 @@ import {
   Sun, Moon, Globe, AlertTriangle, Download, Upload,
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
-  Target, Home, DollarSign, Layers,
+  Target, Home, DollarSign, Layers, Code2,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -33,6 +33,11 @@ import { CacheHitRatePanel } from './components/CacheHitRatePanel'
 import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
 import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
+import { DevConfigPanel } from './components/DevConfigPanel'
+import { TtyChat } from './components/TtyChat'
+import { ClaudeChat } from './components/ClaudeChat'
+import { UpdateModal } from './components/UpdateModal'
+import { type ChatModelId } from './lib/chatModels'
 import { format, parseISO, parse } from 'date-fns'
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
@@ -660,9 +665,20 @@ export default function AppLayout() {
     models: [],
   })
   const [infoModalIndex, setInfoModalIndex] = useState<number | null>(null)
-  const [showExportModal, setShowExportModal] = useState(false)
+  const [showExportModal, setShowExportModal] = useState(
+    () => new URLSearchParams(window.location.search).has('export')
+  )
   const [expandedChart, setExpandedChart] = useState<string | null>(null)
   const [selectedSession, setSelectedSession] = useState<import('./lib/types').SessionMeta | null>(null)
+
+  // Keep the drilldown modal in sync when live data refreshes
+  useEffect(() => {
+    if (!selectedSession || !data) return
+    const updated = data.sessions.find(s => s.session_id === selectedSession.session_id)
+    if (updated && updated !== selectedSession) setSelectedSession(updated)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data])
+
   const [monthlyBudgetUSD, setMonthlyBudgetUSD] = useState<number | null>(() => {
     try {
       const raw = localStorage.getItem('agentistics-monthly-budget-usd')
@@ -700,6 +716,16 @@ export default function AppLayout() {
     return DEFAULT_CARD_ORDER
   })
   const [showPrefsModal, setShowPrefsModal] = useState(false)
+  const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string } | null>(null)
+  const [showDevConfig, setShowDevConfig] = useState(false)
+  const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
+  const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
+  const [claudeDetached, setClaudeDetached] = useState(false)
+  // Lifted Claude Chat state so project/session is preserved when toggling detach/attach
+  const [claudeSharedState, setClaudeSharedState] = useState<{
+    projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
+    sessionId: string | null; messages: import('./components/ClaudeChat').ChatMessage[]
+  }>({ projectPath: null, projectName: null, projectEncodedDir: null, sessionId: null, messages: [] })
 
   const [cardPrecision, setCardPrecisionState] = useState<Record<string, boolean>>({})
   const precisionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -727,13 +753,24 @@ export default function AppLayout() {
   useEffect(() => {
     fetch('/api/preferences')
       .then(r => r.ok ? r.json() : null)
-      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[] } | null) => {
+      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean } | null) => {
         if (!prefs) return
         if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
         if (prefs.lang) setLangState(prefs.lang)
         if (prefs.theme) setThemeState(prefs.theme)
         if (prefs.currency) setCurrencyState(prefs.currency)
         if (prefs.cardOrder) setCardOrder(prefs.cardOrder as CardId[])
+        if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
+        if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
+      })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/version')
+      .then(r => r.ok ? r.json() : null)
+      .then((info: { current: string; latest: string; hasUpdate: boolean } | null) => {
+        if (info?.hasUpdate) setUpdateInfo({ current: info.current, latest: info.latest })
       })
       .catch(() => {})
   }, [])
@@ -1253,6 +1290,20 @@ export default function AppLayout() {
               <SlidersHorizontal size={14} />
             </button>
 
+            {/* Dev config */}
+            <button
+              onClick={() => setShowDevConfig(true)}
+              style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                borderRadius: 8, border: '1px solid var(--border)', background: 'transparent',
+                color: 'var(--text-secondary)', cursor: 'pointer', transition: 'all 0.15s',
+                fontFamily: 'monospace', fontSize: 13, fontWeight: 600 }}
+              onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-primary)'; e.currentTarget.style.borderColor = 'var(--text-tertiary)' }}
+              onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.borderColor = 'var(--border)' }}
+              title="Dev config"
+            >
+              {'</>'}
+            </button>
+
             {/* Health warnings */}
             {data?.healthIssues && data.healthIssues.length > 0 && (
               <HealthWarnings issues={data.healthIssues} lang={lang} />
@@ -1425,13 +1476,15 @@ export default function AppLayout() {
       {/* Preferences modal */}
       {showPrefsModal && (
         <PreferencesModal
-          initial={{ lang, theme, currency, cardOrder, cardPrecision }}
+          initial={{ lang, theme, currency, cardOrder, cardPrecision, chatModel, chatSoundEnabled }}
           onSave={(draft: PrefsDraft) => {
             setLangState(draft.lang)
             setThemeState(draft.theme)
             setCurrencyState(draft.currency)
             setCardOrder(draft.cardOrder as CardId[])
             setCardPrecisionState(draft.cardPrecision)
+            if (draft.chatModel) setChatModel(draft.chatModel)
+            setChatSoundEnabled(draft.chatSoundEnabled)
             fetch('/api/preferences', {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
@@ -1441,11 +1494,26 @@ export default function AppLayout() {
                 currency: draft.currency,
                 cardOrder: draft.cardOrder,
                 cardPrecision: draft.cardPrecision,
+                chatModel: draft.chatModel,
+                chatSoundEnabled: draft.chatSoundEnabled,
               }),
             }).catch(() => {})
             setShowPrefsModal(false)
           }}
           onClose={() => setShowPrefsModal(false)}
+        />
+      )}
+
+      {/* Dev Config Panel */}
+      {showDevConfig && <DevConfigPanel onClose={() => setShowDevConfig(false)} />}
+
+      {/* Update available modal */}
+      {updateInfo && (
+        <UpdateModal
+          current={updateInfo.current}
+          latest={updateInfo.latest}
+          lang={lang}
+          onClose={() => setUpdateInfo(null)}
         />
       )}
 
@@ -1494,13 +1562,9 @@ export default function AppLayout() {
             modelUsage={derived.modelUsage}
             currency={currency}
             brlRate={brlRate}
-            note={
-              filters.projects.length > 0
-                ? (lang === 'pt'
-                  ? 'Breakdown por modelo indisponível com filtro de projeto ativo.'
-                  : 'Per-model breakdown unavailable when project filter is active.')
-                : undefined
-            }
+            fallbackInputTokens={filters.projects.length > 0 ? derived.inputTokens : undefined}
+            fallbackOutputTokens={filters.projects.length > 0 ? derived.outputTokens : undefined}
+            fallbackCostUSD={filters.projects.length > 0 ? derived.totalCostUSD : undefined}
           />
         </ChartModal>
       )}
@@ -1526,6 +1590,42 @@ export default function AppLayout() {
           currency={currency}
           brlRate={brlRate}
           onClose={() => setShowExportModal(false)}
+        />
+      )}
+
+      {/* TTY Chat — floating button + panel, globally available */}
+      <TtyChat
+        lang={lang}
+        chatModel={chatModel}
+        chatSoundEnabled={chatSoundEnabled}
+        filters={filters}
+        setFilters={setFilters}
+        onDetachClaude={() => setClaudeDetached(true)}
+        onModelSet={(model) => {
+          setChatModel(model)
+          fetch('/api/preferences', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chatModel: model }),
+          }).catch(() => {})
+        }}
+        claudeSharedState={claudeSharedState}
+        onClaudeStateChange={setClaudeSharedState}
+      />
+
+      {/* Claude Chat — floating draggable window (only when detached from TtyChat tab) */}
+      {claudeDetached && (
+        <ClaudeChat
+          lang={lang}
+          onAttach={() => setClaudeDetached(false)}
+          initialProject={claudeSharedState.projectPath ? {
+            path: claudeSharedState.projectPath,
+            name: claudeSharedState.projectName ?? '',
+            encodedDir: claudeSharedState.projectEncodedDir ?? '',
+          } : null}
+          initialSessionId={claudeSharedState.sessionId}
+          initialMessages={claudeSharedState.messages}
+          onStateChange={setClaudeSharedState}
         />
       )}
 

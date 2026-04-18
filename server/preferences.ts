@@ -22,6 +22,8 @@ export interface Preferences {
   theme?: 'dark' | 'light'
   currency?: 'USD' | 'BRL'
   cardPrecision?: Record<string, boolean>
+  chatModel?: string
+  chatSoundEnabled?: boolean
 }
 
 const DEFAULT_PREFS: Preferences = {

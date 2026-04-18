@@ -317,8 +317,26 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     let filteredModelUsage: Record<string, import('../lib/types').ModelUsage>
 
     if (projectFiltered) {
-      // No per-model session data — model breakdown unavailable when filtering by project
+      // Build per-model breakdown from sessions that have a model field.
+      // Sessions without a model field are excluded from the per-model breakdown.
       filteredModelUsage = {}
+      for (const sess of filteredSessions) {
+        const m = sess.model
+        if (!m) continue
+        if (modelSet && !modelSet.has(m)) continue
+        if (!filteredModelUsage[m]) {
+          filteredModelUsage[m] = {
+            inputTokens: 0, outputTokens: 0,
+            cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            webSearchRequests: 0, costUSD: 0,
+          }
+        }
+        const entry = filteredModelUsage[m]!
+        entry.inputTokens              += sess.input_tokens ?? 0
+        entry.outputTokens             += sess.output_tokens ?? 0
+        entry.cacheReadInputTokens     += sess.cache_read_input_tokens ?? 0
+        entry.cacheCreationInputTokens += sess.cache_creation_input_tokens ?? 0
+      }
     } else if (dateFiltered) {
       // Build approximate model usage from dailyModelTokens (date-filtered).
       // We only have total tokens per model per day, so we split input/output using
@@ -366,28 +384,24 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // ── Cost calculation ──
     let totalCostUSD = 0
     if (projectFiltered) {
-      if (modelSet) {
-        // Model filter is active — every session's model is known (it passed the model filter).
-        // Use each session's actual model for per-session calcCost; fall back to the single
-        // filtered model when the session has no model field.
-        const fallbackModel = modelSet.size === 1 ? [...modelSet][0]! : undefined
-        for (const sess of filteredSessions) {
-          const m = sess.model ?? fallbackModel
+      // Use per-session calcCost with the session's model field (includes cache tokens).
+      // Sessions without a model fall back to blended rate on input+output only.
+      const blended = blendedCostPerToken(globalModelUsage)
+      const modelSetFallback = modelSet?.size === 1 ? [...modelSet][0]! : undefined
+      for (const sess of filteredSessions) {
+        const m = sess.model ?? modelSetFallback
+        if (m) {
           totalCostUSD += calcCost({
             inputTokens: sess.input_tokens ?? 0,
             outputTokens: sess.output_tokens ?? 0,
             cacheReadInputTokens: sess.cache_read_input_tokens ?? 0,
             cacheCreationInputTokens: sess.cache_creation_input_tokens ?? 0,
             webSearchRequests: 0, costUSD: 0,
-          }, m ?? '')
+          }, m)
+        } else {
+          totalCostUSD += ((sess.input_tokens ?? 0) / 1_000_000) * blended.input
+                       + ((sess.output_tokens ?? 0) / 1_000_000) * blended.output
         }
-      } else {
-        // No model filter — use blended rate as approximation (model unknown per session)
-        const blended = blendedCostPerToken(globalModelUsage)
-        const sessionInputTokens  = filteredSessions.reduce((s, sess) => s + (sess.input_tokens ?? 0), 0)
-        const sessionOutputTokens = filteredSessions.reduce((s, sess) => s + (sess.output_tokens ?? 0), 0)
-        totalCostUSD = (sessionInputTokens / 1_000_000) * blended.input
-                     + (sessionOutputTokens / 1_000_000) * blended.output
       }
     } else {
       totalCostUSD = Object.entries(filteredModelUsage).reduce((s, [id, u]) => s + calcCost(u, id), 0)
@@ -512,8 +526,10 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     }, null)
 
     // ── Cache efficiency (filter-aware, derived from filteredModelUsage) ──
-    // hit rate = cacheRead / (input + cacheRead). cacheCreation is a one-time premium paid
-    // to create the cache, not consumption from it — excluded from the denominator.
+    // hit rate = cacheRead / (input + cacheRead + cacheCreation).
+    // cacheCreation tokens are included in the denominator because they ARE tokens sent to the
+    // model — including them avoids artificially inflated rates that approach 100% for heavy
+    // Claude Code users where cacheRead dwarfs uncached input by orders of magnitude.
     // Savings model: compare actual spend with what the same tokens would have cost as
     // plain input, then subtract the extra we paid for cache writes.
     const cacheTotals = Object.values(filteredModelUsage).reduce(
@@ -524,7 +540,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       }),
       { inputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
     )
-    const cacheDenominator = cacheTotals.inputTokens + cacheTotals.cacheReadInputTokens
+    const cacheDenominator = cacheTotals.inputTokens + cacheTotals.cacheReadInputTokens + cacheTotals.cacheCreationInputTokens
     const cacheHitRate = cacheDenominator > 0 ? cacheTotals.cacheReadInputTokens / cacheDenominator : 0
 
     const blended = blendedCostPerToken(globalModelUsage)
@@ -545,7 +561,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // Per-model hit rate (only for models with data)
     const cachePerModel: Record<string, { hitRate: number; cacheReadTokens: number; inputTokens: number }> = {}
     for (const [modelId, u] of Object.entries(filteredModelUsage)) {
-      const denom = (u.inputTokens ?? 0) + (u.cacheReadInputTokens ?? 0)
+      const denom = (u.inputTokens ?? 0) + (u.cacheReadInputTokens ?? 0) + (u.cacheCreationInputTokens ?? 0)
       if (denom === 0) continue
       cachePerModel[modelId] = {
         hitRate: (u.cacheReadInputTokens ?? 0) / denom,

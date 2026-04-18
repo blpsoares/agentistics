@@ -134,39 +134,52 @@ export function CacheHitRatePanel({
     .sort((a, b) => (b[1].cacheReadTokens + b[1].inputTokens) - (a[1].cacheReadTokens + a[1].inputTokens))
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      {/* Hero gauge */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {/* What is prompt cache */}
+      <div style={{
+        fontSize: 11,
+        color: 'var(--text-secondary)',
+        lineHeight: 1.5,
+        padding: '8px 10px',
+        background: 'var(--bg-elevated)',
+        borderRadius: 8,
+        border: '1px solid var(--border-subtle)',
+      }}>
+        {pt
+          ? <>O <strong style={{ color: 'var(--text-primary)' }}>prompt cache</strong> reutiliza partes do contexto entre turnos — CLAUDE.md, arquivos abertos, histórico da conversa. Tokens lidos do cache custam <strong style={{ color: 'var(--text-primary)' }}>~10× menos</strong> que input normal; criá-lo custa ~1,25× (pago uma vez, amortizado nas leituras seguintes).</>
+          : <>The <strong style={{ color: 'var(--text-primary)' }}>prompt cache</strong> reuses context across turns — CLAUDE.md, open files, conversation history. Cache reads cost <strong style={{ color: 'var(--text-primary)' }}>~10× less</strong> than regular input; writing costs ~1.25× (paid once, amortised over subsequent reads).</>}
+      </div>
+
+      {/* Hero gauge + money stats */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: '240px 1fr',
-        gap: 18,
+        gridTemplateColumns: '200px 1fr',
+        gap: 10,
         alignItems: 'stretch',
       }}>
         <div style={{
           background: 'var(--bg-elevated)',
           border: `1px solid ${color}33`,
-          borderRadius: 12,
-          padding: '16px 18px',
+          borderRadius: 10,
+          padding: '12px 14px',
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'center',
-          gap: 8,
-          position: 'relative',
-          overflow: 'hidden',
+          gap: 6,
         }}>
           <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>
-            {pt ? 'Cache hit rate' : 'Cache hit rate'}
+            Cache hit rate
           </div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-            <span style={{ fontSize: 38, fontWeight: 700, color, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 5 }}>
+            <span style={{ fontSize: 32, fontWeight: 700, color, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
               {pct}
             </span>
-            <span style={{ fontSize: 18, fontWeight: 600, color, opacity: 0.7 }}>%</span>
+            <span style={{ fontSize: 15, fontWeight: 600, color, opacity: 0.7 }}>%</span>
             <span style={{
               marginLeft: 'auto',
-              fontSize: 10,
+              fontSize: 9,
               fontWeight: 700,
-              padding: '3px 8px',
+              padding: '2px 7px',
               borderRadius: 999,
               background: `${color}22`,
               color,
@@ -176,7 +189,7 @@ export function CacheHitRatePanel({
               {tierLabel(tier, pt)}
             </span>
           </div>
-          <div style={{ height: 6, background: 'var(--bg-card)', borderRadius: 3, overflow: 'hidden', marginTop: 2 }}>
+          <div style={{ height: 5, background: 'var(--bg-card)', borderRadius: 3, overflow: 'hidden' }}>
             <div style={{
               width: `${pct}%`,
               height: '100%',
@@ -184,10 +197,10 @@ export function CacheHitRatePanel({
               transition: 'width 0.6s ease',
             }} />
           </div>
-          <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 2 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
             {pt
-              ? `${fmtTokens(cacheTotals.cacheReadInputTokens)} de ${fmtTokens(cacheTotals.inputTokens + cacheTotals.cacheReadInputTokens)} tokens de input vieram do cache`
-              : `${fmtTokens(cacheTotals.cacheReadInputTokens)} of ${fmtTokens(cacheTotals.inputTokens + cacheTotals.cacheReadInputTokens)} input tokens came from cache`}
+              ? `${fmtTokens(cacheTotals.cacheReadInputTokens)} de ${fmtTokens(totalRelevant)} tokens do cache`
+              : `${fmtTokens(cacheTotals.cacheReadInputTokens)} of ${fmtTokens(totalRelevant)} tokens from cache`}
           </div>
         </div>
 
@@ -195,91 +208,89 @@ export function CacheHitRatePanel({
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(3, 1fr)',
-          gap: 10,
+          gap: 8,
         }}>
           <Stat
             label={pt ? 'Economia bruta' : 'Gross savings'}
             value={fmtCost(grossSavedUSD, currency, brlRate)}
-            sub={pt ? 'vs. pagar como input normal' : 'vs. paying as regular input'}
+            sub={pt ? 'vs. input normal' : 'vs. regular input'}
             accent="var(--accent-green, #22c55e)"
-            icon={<TrendingDown size={12} />}
+            icon={<TrendingDown size={11} />}
           />
           <Stat
-            label={pt ? 'Custo do write' : 'Write overhead'}
+            label={pt ? 'Custo write' : 'Write overhead'}
             value={fmtCost(writeOverheadUSD, currency, brlRate)}
-            sub={pt ? 'prêmio pago para criar cache' : 'premium paid to create cache'}
+            sub={pt ? 'prêmio para criar cache' : 'premium to create cache'}
             accent="#f59e0b"
-            icon={<TrendingUp size={12} />}
+            icon={<TrendingUp size={11} />}
           />
           <Stat
             label={pt ? 'Economia líquida' : 'Net savings'}
             value={fmtCost(netSavedUSD, currency, brlRate)}
-            sub={pt ? 'no período selecionado' : 'in selected period'}
+            sub={pt ? 'no período' : 'in period'}
             accent={netSavedUSD >= 0 ? 'var(--anthropic-orange)' : '#ef4444'}
-            icon={<Zap size={12} />}
+            icon={<Zap size={11} />}
           />
         </div>
       </div>
 
       {/* Per-model breakdown */}
       {perModelEntries.length > 1 && (
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             {pt ? 'Por modelo' : 'Per model'}
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {perModelEntries.map(([modelId, v]) => {
-              const mPct = Math.round(v.hitRate * 100)
-              const mColor = getModelColor(modelId)
-              return (
-                <div key={modelId} style={{
-                  display: 'grid',
-                  gridTemplateColumns: '140px 1fr 60px',
-                  gap: 10,
-                  alignItems: 'center',
-                  fontSize: 11,
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: mColor, flexShrink: 0 }} />
-                    <span style={{ color: 'var(--text-primary)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {formatModel(modelId)}
-                    </span>
-                  </div>
-                  <div style={{ position: 'relative', height: 5, background: 'var(--bg-elevated)', borderRadius: 3, overflow: 'hidden' }}>
-                    <div style={{
-                      position: 'absolute', left: 0, top: 0, bottom: 0,
-                      width: `${mPct}%`,
-                      background: mColor,
-                      opacity: 0.7,
-                      borderRadius: 3,
-                    }} />
-                  </div>
-                  <span style={{ color: 'var(--text-primary)', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                    {mPct}%
+          {perModelEntries.map(([modelId, v]) => {
+            const mPct = Math.round(v.hitRate * 100)
+            const mColor = getModelColor(modelId)
+            return (
+              <div key={modelId} style={{
+                display: 'grid',
+                gridTemplateColumns: '130px 1fr 44px',
+                gap: 8,
+                alignItems: 'center',
+                fontSize: 11,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <div style={{ width: 7, height: 7, borderRadius: '50%', background: mColor, flexShrink: 0 }} />
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {formatModel(modelId)}
                   </span>
                 </div>
-              )
-            })}
-          </div>
+                <div style={{ position: 'relative', height: 4, background: 'var(--bg-elevated)', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{
+                    position: 'absolute', left: 0, top: 0, bottom: 0,
+                    width: `${mPct}%`,
+                    background: mColor,
+                    opacity: 0.7,
+                    borderRadius: 3,
+                  }} />
+                </div>
+                <span style={{ color: 'var(--text-primary)', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                  {mPct}%
+                </span>
+              </div>
+            )
+          })}
         </div>
       )}
 
-      {/* Tips */}
+      {/* Tips — show only first 2 */}
       <div style={{
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-subtle)',
-        borderRadius: 10,
-        padding: '12px 14px',
+        borderRadius: 8,
+        padding: '10px 12px',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-          <Lightbulb size={13} style={{ color }} />
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+          <Lightbulb size={12} style={{ color }} />
+          <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-primary)' }}>
             {pt ? 'Como melhorar' : 'How to improve'}
           </span>
         </div>
-        <ul style={{ margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {tips.map((tip, i) => (
-            <li key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+        <ul style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {tips.slice(0, 2).map((tip, i) => (
+            <li key={i} style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
               {tip}
             </li>
           ))}
@@ -290,16 +301,16 @@ export function CacheHitRatePanel({
       <div style={{
         display: 'flex',
         alignItems: 'flex-start',
-        gap: 6,
+        gap: 5,
         fontSize: 10,
         color: 'var(--text-tertiary)',
-        lineHeight: 1.5,
+        lineHeight: 1.4,
       }}>
-        <Info size={11} style={{ flexShrink: 0, marginTop: 1, opacity: 0.6 }} />
+        <Info size={10} style={{ flexShrink: 0, marginTop: 1, opacity: 0.6 }} />
         <span>
           {pt
-            ? 'hit rate = cacheRead ÷ (input + cacheRead). Cache read cobrado a ~10% do preço de input. Cache write cobrado a ~125% do preço de input — criação vale a pena quando o prefixo é reusado ≥ 2 vezes.'
-            : 'hit rate = cacheRead ÷ (input + cacheRead). Cache read is billed at ~10% of input price. Cache write is billed at ~125% of input price — creation pays off when the prefix is reused ≥ 2 times.'}
+            ? 'hit rate = cacheRead ÷ (input + cacheRead + cacheCreation). Read ~10% do preço; write ~125% — amortizado em ≥ 2 reuses.'
+            : 'hit rate = cacheRead ÷ (input + cacheRead + cacheCreation). Read ~10% of input price; write ~125% — amortised over ≥ 2 reuses.'}
         </span>
       </div>
     </div>
@@ -317,20 +328,21 @@ function Stat({ label, value, sub, accent, icon }: {
     <div style={{
       background: 'var(--bg-elevated)',
       border: '1px solid var(--border-subtle)',
-      borderRadius: 10,
-      padding: '12px 14px',
+      borderRadius: 8,
+      padding: '10px 12px',
       display: 'flex',
       flexDirection: 'column',
-      gap: 3,
+      gap: 2,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
         <span style={{ color: accent, display: 'flex' }}>{icon}</span>
         {label}
       </div>
-      <div style={{ fontSize: 18, fontWeight: 700, color: accent, lineHeight: 1.1 }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: accent, lineHeight: 1.1 }}>
         {value}
       </div>
       <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>{sub}</div>
     </div>
   )
 }
+
