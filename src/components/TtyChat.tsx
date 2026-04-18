@@ -102,12 +102,12 @@ function ConfirmBar({ pt, onConfirm, onCancel }: { pt: boolean; onConfirm: () =>
       margin: '6px 0 10px',
       padding: '10px 14px',
       borderRadius: 10,
-      border: '1px solid var(--anthropic-orange)40',
-      background: 'var(--anthropic-orange-dim)',
+      border: '1px solid color-mix(in srgb, var(--accent-purple) 40%, transparent)',
+      background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)',
       display: 'flex', alignItems: 'center', gap: 10,
       animation: 'ttyChatFadeIn 0.15s ease-out',
     }}>
-      <ShieldAlert size={14} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
+      <ShieldAlert size={14} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />
       <span style={{ flex: 1, fontSize: 12, color: 'var(--text-secondary)' }}>
         {pt ? 'Aguardando confirmação' : 'Awaiting confirmation'}
       </span>
@@ -125,9 +125,9 @@ function ConfirmBar({ pt, onConfirm, onCancel }: { pt: boolean; onConfirm: () =>
         onClick={onConfirm}
         style={{
           padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700,
-          border: '1px solid var(--anthropic-orange)',
-          background: 'color-mix(in srgb, var(--anthropic-orange) 20%, transparent)',
-          color: 'var(--anthropic-orange)', cursor: 'pointer', fontFamily: 'inherit',
+          border: '1px solid var(--accent-purple)',
+          background: 'color-mix(in srgb, var(--accent-purple) 20%, transparent)',
+          color: 'var(--accent-purple)', cursor: 'pointer', fontFamily: 'inherit',
           display: 'flex', alignItems: 'center', gap: 5,
         }}
       >
@@ -240,8 +240,8 @@ function renderContent(
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 5,
             padding: '5px 10px', borderRadius: 7, fontSize: 12, fontWeight: 600,
-            border: '1px solid var(--anthropic-orange)50',
-            background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+            border: '1px solid color-mix(in srgb, var(--accent-purple) 50%, transparent)',
+            background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)', color: 'var(--accent-purple)',
             cursor: 'pointer', fontFamily: 'inherit',
             margin: '6px 0', transition: 'all 0.15s',
           }}
@@ -297,7 +297,7 @@ function MarkdownContent({
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: 4,
                   background: 'none', border: 'none', padding: 0,
-                  color: 'var(--anthropic-orange)', cursor: 'pointer',
+                  color: 'var(--accent-purple)', cursor: 'pointer',
                   fontFamily: 'inherit', fontSize: 'inherit', textDecoration: 'underline',
                 }}
               >
@@ -307,7 +307,7 @@ function MarkdownContent({
           }
           return (
             <a href={href} target="_blank" rel="noopener noreferrer"
-              style={{ color: 'var(--anthropic-orange)' }}>
+              style={{ color: 'var(--accent-purple)' }}>
               {children}
             </a>
           )
@@ -336,7 +336,7 @@ function MarkdownContent({
         blockquote({ children }) {
           return (
             <blockquote style={{
-              borderLeft: '3px solid var(--anthropic-orange)60',
+              borderLeft: '3px solid color-mix(in srgb, var(--accent-purple) 60%, transparent)',
               margin: '6px 0', paddingLeft: 10,
               color: 'var(--text-secondary)', fontStyle: 'italic',
             }}>
@@ -412,10 +412,10 @@ function ToolActivity({ tools, live, pt }: { tools: string[]; live: boolean; pt:
         }}
       >
         {live
-          ? <Loader size={10} style={{ animation: 'ttyChatSpin 1s linear infinite', flexShrink: 0, color: 'var(--anthropic-orange)' }} />
+          ? <Loader size={10} style={{ animation: 'ttyChatSpin 1s linear infinite', flexShrink: 0, color: 'var(--accent-purple)' }} />
           : <Wrench size={10} style={{ flexShrink: 0 }} />
         }
-        <span style={{ flex: 1, color: live ? 'var(--anthropic-orange)' : 'var(--text-tertiary)' }}>{label}</span>
+        <span style={{ flex: 1, color: live ? 'var(--accent-purple)' : 'var(--text-tertiary)' }}>{label}</span>
         {!live && (expanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />)}
       </button>
       {!live && expanded && (
@@ -488,7 +488,7 @@ function Message({
             {msg.images.map((src, i) => (
               <img key={i} src={src} alt="attachment"
                 style={{ maxWidth: 130, maxHeight: 100, borderRadius: 8, objectFit: 'cover',
-                  border: '1px solid var(--anthropic-orange)40' }} />
+                  border: '1px solid color-mix(in srgb, var(--accent-purple) 40%, transparent)' }} />
             ))}
           </div>
         )}
@@ -498,9 +498,9 @@ function Message({
             {msg.files.map((name, i) => (
               <span key={i} style={{
                 fontSize: 10, padding: '2px 7px', borderRadius: 6,
-                background: 'var(--anthropic-orange-dim)',
-                border: '1px solid var(--anthropic-orange)30',
-                color: 'var(--anthropic-orange)',
+                background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)',
+                border: '1px solid color-mix(in srgb, var(--accent-purple) 30%, transparent)',
+                color: 'var(--accent-purple)',
               }}>{name}</span>
             ))}
           </div>
@@ -509,8 +509,8 @@ function Message({
           <div style={{
             maxWidth: '90%', padding: '8px 14px',
             borderRadius: '14px 14px 4px 14px',
-            background: 'var(--anthropic-orange-dim)',
-            border: '1px solid var(--anthropic-orange)30',
+            background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--accent-purple) 30%, transparent)',
             fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.58, wordBreak: 'break-word',
           }}>
             {renderContent(msg.content)}
@@ -606,15 +606,15 @@ function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) =
               style={{
                 display: 'flex', alignItems: 'center', gap: 12,
                 padding: '12px 14px', borderRadius: 10, textAlign: 'left',
-                border: active ? '1.5px solid var(--anthropic-orange)' : '1px solid var(--border)',
-                background: active ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+                border: active ? '1.5px solid var(--accent-purple)' : '1px solid var(--border)',
+                background: active ? 'color-mix(in srgb, var(--accent-purple) 12%, transparent)' : 'var(--bg-elevated)',
                 cursor: 'pointer', transition: 'all 0.15s', fontFamily: 'inherit',
               }}
             >
               <div style={{
                 width: 36, height: 36, borderRadius: 9, flexShrink: 0,
-                background: active ? 'color-mix(in srgb, var(--anthropic-orange) 15%, transparent)' : 'var(--bg-card)',
-                border: `1px solid ${active ? 'var(--anthropic-orange)40' : 'var(--border)'}`,
+                background: active ? 'color-mix(in srgb, var(--accent-purple) 15%, transparent)' : 'var(--bg-card)',
+                border: `1px solid ${active ? 'color-mix(in srgb, var(--accent-purple) 40%, transparent)' : 'var(--border)'}`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 overflow: 'hidden',
               }}>
@@ -622,7 +622,7 @@ function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) =
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 3 }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: active ? 'var(--anthropic-orange)' : 'var(--text-primary)' }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: active ? 'var(--accent-purple)' : 'var(--text-primary)' }}>
                     {m.label}
                   </span>
                   <span style={{
@@ -650,8 +650,8 @@ function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) =
         style={{
           marginTop: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
           padding: '10px 16px', borderRadius: 8, fontSize: 13, fontWeight: 700,
-          border: '1px solid var(--anthropic-orange)',
-          background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+          border: '1px solid var(--accent-purple)',
+          background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)', color: 'var(--accent-purple)',
           cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s',
         }}
       >
@@ -824,6 +824,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
 
   useEffect(() => { openRef.current = open }, [open])
   useEffect(() => { soundRef.current = chatSoundEnabled }, [chatSoundEnabled])
+  // When Nay is detached, the embedded panel should show Claude tab
+  useEffect(() => { if (nayDetached) setActiveTab('claude') }, [nayDetached])
   useEffect(() => { nayPosRef.current = nayPos }, [nayPos])
   useEffect(() => { naySizeRef.current = naySize }, [naySize])
   useEffect(() => { nayFabPosRef.current = nayFabPos }, [nayFabPos])
@@ -995,16 +997,9 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
 
   const handleFabClick = () => {
     initAudio()
-    if (nayDetached) {
-      if (nayMinimized) {
-        setNayMinimized(false)
-      } else {
-        // Bring floating window to view with a flash
-        setNayFlash(true)
-        setTimeout(() => setNayFlash(false), 600)
-      }
-      return
-    }
+    // If Nay is minimized to bubble, restore it
+    if (nayDetached && nayMinimized) setNayMinimized(false)
+    // Always toggle the panel so Claude tab stays accessible
     setOpen(v => !v)
   }
 
@@ -1383,11 +1378,11 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
         @keyframes ttyChatPulse   { 0%,100%{box-shadow:0 4px 18px rgba(0,0,0,0.35),0 0 0 0 rgba(245,158,11,0.5)} 50%{box-shadow:0 4px 18px rgba(0,0,0,0.35),0 0 0 8px rgba(245,158,11,0)} }
         @keyframes ttyChatFlash   { 0%,100%{box-shadow:0 10px 48px rgba(0,0,0,0.45)} 30%{box-shadow:0 0 0 4px rgba(245,158,11,0.6),0 10px 48px rgba(0,0,0,0.45)} }
         @media (hover: hover) {
-          .tty-fab:hover { border-color: var(--anthropic-orange) !important; color: var(--anthropic-orange) !important; }
+          .tty-fab:hover { border-color: var(--accent-purple) !important; color: var(--accent-purple) !important; }
           .tty-icon-btn:hover { color: var(--text-primary) !important; border-color: var(--text-secondary) !important; }
-          .tty-send-btn:hover:not(:disabled) { background: var(--anthropic-orange) !important; color: #fff !important; }
+          .tty-send-btn:hover:not(:disabled) { background: var(--accent-purple) !important; color: #fff !important; }
         }
-        .tty-send-btn:active:not(:disabled) { background: var(--anthropic-orange) !important; color: #fff !important; }
+        .tty-send-btn:active:not(:disabled) { background: var(--accent-purple) !important; color: #fff !important; }
         .tty-nay-header { cursor: grab; user-select: none; }
         .tty-nay-header:active { cursor: grabbing; }
       `}</style>
@@ -1403,12 +1398,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
           position: 'fixed', bottom: isMobile ? 68 : 24, right: 24, zIndex: 300,
           width: 46, height: 46, borderRadius: '50%',
           border: nayDetached
-            ? '1.5px solid var(--anthropic-orange)'
-            : (hasUnread && !open) || open ? '1.5px solid var(--anthropic-orange)' : '1.5px solid var(--border)',
+            ? '1.5px solid var(--accent-purple)'
+            : (hasUnread && !open) || open ? '1.5px solid var(--accent-purple)' : '1.5px solid var(--border)',
           background: nayDetached
-            ? 'var(--anthropic-orange-dim)'
-            : (hasUnread && !open) || open ? 'var(--anthropic-orange-dim)' : 'var(--bg-card)',
-          color: nayDetached || hasUnread || open ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+            ? 'color-mix(in srgb, var(--accent-purple) 12%, transparent)'
+            : (hasUnread && !open) || open ? 'color-mix(in srgb, var(--accent-purple) 12%, transparent)' : 'var(--bg-card)',
+          color: nayDetached || hasUnread || open ? 'var(--accent-purple)' : 'var(--text-secondary)',
           cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           animation: (hasUnread && !open && !nayDetached) ? 'ttyChatPulse 1.8s ease-in-out infinite' : undefined,
@@ -1422,7 +1417,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
           <span style={{
             position: 'absolute', top: 8, right: 8,
             width: 9, height: 9, borderRadius: '50%',
-            background: 'var(--anthropic-orange)',
+            background: 'var(--accent-purple)',
             border: '1.5px solid var(--bg-base)',
             animation: 'ttyChatBlink 1.8s ease-in-out infinite',
           }} />
@@ -1431,7 +1426,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
           <span style={{
             position: 'absolute', top: 7, right: 7,
             width: 10, height: 10, borderRadius: '50%',
-            background: 'var(--anthropic-orange)',
+            background: 'var(--accent-purple)',
             border: '1.5px solid var(--bg-base)',
             animation: 'ttyChatBlink 1.8s ease-in-out infinite',
           }} />
@@ -1477,7 +1472,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 </div>
                 <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
                   {streaming ? (
-                    <span style={{ color: 'var(--anthropic-orange)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ color: 'var(--accent-purple)', display: 'flex', alignItems: 'center', gap: 4 }}>
                       <Loader size={8} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
                       {currentTools.length > 0
                         ? formatToolName(currentTools[currentTools.length - 1]!)
@@ -1528,7 +1523,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 className="tty-icon-btn"
                 onClick={openHistory}
                 title={pt ? 'Histórico de conversas' : 'Conversation history'}
-                style={{ ...iconBtnStyle, color: showHistory ? 'var(--anthropic-orange)' : 'var(--text-secondary)' }}
+                style={{ ...iconBtnStyle, color: showHistory ? 'var(--accent-purple)' : 'var(--text-secondary)' }}
               >
                 <History size={12} />
               </button>
@@ -1551,7 +1546,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             display: 'flex', borderBottom: '1px solid var(--border)',
             background: 'var(--bg-card)', flexShrink: 0,
           }}>
-            {(['nay', 'claude'] as const).map(tab => (
+            {(['nay', 'claude'] as const).filter(tab => !(tab === 'nay' && nayDetached)).map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -1559,9 +1554,9 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                   flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                   padding: '7px 0', border: 'none', background: 'transparent',
                   cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: activeTab === tab ? 700 : 400,
-                  color: activeTab === tab ? (tab === 'nay' ? 'var(--anthropic-orange)' : 'var(--accent-purple)') : 'var(--text-tertiary)',
+                  color: activeTab === tab ? (tab === 'nay' ? 'var(--accent-purple)' : 'var(--anthropic-orange)') : 'var(--text-tertiary)',
                   borderBottom: activeTab === tab
-                    ? `2px solid ${tab === 'nay' ? 'var(--anthropic-orange)' : 'var(--accent-purple)'}`
+                    ? `2px solid ${tab === 'nay' ? 'var(--accent-purple)' : 'var(--anthropic-orange)'}`
                     : '2px solid transparent',
                   transition: 'all 0.15s',
                 }}
@@ -1593,7 +1588,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 background: 'var(--bg-card)', flexShrink: 0,
               }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <History size={12} style={{ color: 'var(--anthropic-orange)' }} />
+                  <History size={12} style={{ color: 'var(--accent-purple)' }} />
                   {pt ? 'Histórico' : 'History'}
                 </span>
                 <div style={{ display: 'flex', gap: 6 }}>
@@ -1601,8 +1596,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                     onClick={newConversation}
                     style={{
                       fontSize: 11, padding: '4px 10px', borderRadius: 6,
-                      border: '1px solid var(--anthropic-orange)60',
-                      background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+                      border: '1px solid color-mix(in srgb, var(--accent-purple) 60%, transparent)',
+                      background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)', color: 'var(--accent-purple)',
                       cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
                     }}
                   >
@@ -1636,8 +1631,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                     style={{
                       padding: '9px 10px', borderRadius: 8, marginBottom: 4,
                       cursor: 'pointer',
-                      background: convo.id === sessionId ? 'var(--anthropic-orange-dim)' : 'var(--bg-card)',
-                      border: convo.id === sessionId ? '1px solid var(--anthropic-orange)40' : '1px solid var(--border)',
+                      background: convo.id === sessionId ? 'color-mix(in srgb, var(--accent-purple) 12%, transparent)' : 'var(--bg-card)',
+                      border: convo.id === sessionId ? '1px solid color-mix(in srgb, var(--accent-purple) 40%, transparent)' : '1px solid var(--border)',
                       display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8,
                       transition: 'background 0.12s',
                     }}
@@ -1683,7 +1678,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 padding: '6px 14px',
                 display: 'flex', alignItems: 'center', gap: 8,
               }}>
-                <span style={{ fontSize: 10, color: 'var(--anthropic-orange)', fontWeight: 700, flexShrink: 0 }}>↑</span>
+                <span style={{ fontSize: 10, color: 'var(--accent-purple)', fontWeight: 700, flexShrink: 0 }}>↑</span>
                 {lastUser.images && lastUser.images.length > 0 && (
                   <img src={lastUser.images[0]} alt=""
                     style={{ width: 20, height: 20, borderRadius: 4, objectFit: 'cover', flexShrink: 0 }} />
@@ -1773,7 +1768,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                       <img src={att.preview} alt={att.name} style={{ width: 52, height: 52, objectFit: 'cover', display: 'block' }} />
                     ) : (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 8px', maxWidth: 120 }}>
-                        <FileTextIcon size={12} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
+                        <FileTextIcon size={12} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />
                         <span style={{ fontSize: 10, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{att.name}</span>
                       </div>
                     )}
@@ -1806,7 +1801,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 color: 'var(--text-primary)', outline: 'none', lineHeight: 1.5,
                 maxHeight: isMobile ? 80 : 120, overflowY: 'auto', transition: 'border-color 0.15s',
               }}
-              onFocus={e => { e.currentTarget.style.borderColor = 'var(--anthropic-orange)60' }}
+              onFocus={e => { e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--accent-purple) 60%, transparent)' }}
               onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
               onInput={e => {
                 const el = e.currentTarget
@@ -1837,8 +1832,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 title={pt ? 'Enviar (Enter)' : 'Send (Enter)'}
                 style={{
                   width: 34, height: 34, borderRadius: 8, flexShrink: 0,
-                  border: '1px solid var(--anthropic-orange)60',
-                  background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+                  border: '1px solid color-mix(in srgb, var(--accent-purple) 60%, transparent)',
+                  background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)', color: 'var(--accent-purple)',
                   cursor: (input.trim() || nayAttachments.length > 0) ? 'pointer' : 'not-allowed',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   opacity: (input.trim() || nayAttachments.length > 0) && chatModel !== null ? 1 : 0.4,
@@ -1893,8 +1888,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
         >
           <div style={{
             width: NAY_FAB_W, height: NAY_FAB_W, borderRadius: '50%',
-            border: '1.5px solid var(--anthropic-orange)',
-            background: 'var(--anthropic-orange-dim)',
+            border: '1.5px solid var(--accent-purple)',
+            background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             overflow: 'hidden', pointerEvents: 'none',
           }}>
@@ -1949,7 +1944,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 </div>
                 <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
                   {streaming ? (
-                    <span style={{ color: 'var(--anthropic-orange)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ color: 'var(--accent-purple)', display: 'flex', alignItems: 'center', gap: 4 }}>
                       <Loader size={8} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
                       {currentTools.length > 0
                         ? formatToolName(currentTools[currentTools.length - 1]!)
@@ -1984,7 +1979,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 className="tty-icon-btn"
                 onClick={openHistory}
                 title={pt ? 'Histórico de conversas' : 'Conversation history'}
-                style={{ ...iconBtnStyle, color: showHistory ? 'var(--anthropic-orange)' : 'var(--text-secondary)' }}
+                style={{ ...iconBtnStyle, color: showHistory ? 'var(--accent-purple)' : 'var(--text-secondary)' }}
               >
                 <History size={12} />
               </button>
@@ -2033,7 +2028,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 background: 'var(--bg-card)', flexShrink: 0,
               }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <History size={12} style={{ color: 'var(--anthropic-orange)' }} />
+                  <History size={12} style={{ color: 'var(--accent-purple)' }} />
                   {pt ? 'Histórico' : 'History'}
                 </span>
                 <div style={{ display: 'flex', gap: 6 }}>
@@ -2041,8 +2036,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                     onClick={newConversation}
                     style={{
                       fontSize: 11, padding: '4px 10px', borderRadius: 6,
-                      border: '1px solid var(--anthropic-orange)60',
-                      background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+                      border: '1px solid color-mix(in srgb, var(--accent-purple) 60%, transparent)',
+                      background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)', color: 'var(--accent-purple)',
                       cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
                     }}
                   >
@@ -2075,8 +2070,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                     style={{
                       padding: '9px 10px', borderRadius: 8, marginBottom: 4,
                       cursor: 'pointer',
-                      background: convo.id === sessionId ? 'var(--anthropic-orange-dim)' : 'var(--bg-card)',
-                      border: convo.id === sessionId ? '1px solid var(--anthropic-orange)40' : '1px solid var(--border)',
+                      background: convo.id === sessionId ? 'color-mix(in srgb, var(--accent-purple) 12%, transparent)' : 'var(--bg-card)',
+                      border: convo.id === sessionId ? '1px solid color-mix(in srgb, var(--accent-purple) 40%, transparent)' : '1px solid var(--border)',
                       display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8,
                       transition: 'background 0.12s',
                     }}
@@ -2122,7 +2117,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 padding: '6px 14px',
                 display: 'flex', alignItems: 'center', gap: 8,
               }}>
-                <span style={{ fontSize: 10, color: 'var(--anthropic-orange)', fontWeight: 700, flexShrink: 0 }}>↑</span>
+                <span style={{ fontSize: 10, color: 'var(--accent-purple)', fontWeight: 700, flexShrink: 0 }}>↑</span>
                 {lastUser.images && lastUser.images.length > 0 && (
                   <img src={lastUser.images[0]} alt=""
                     style={{ width: 20, height: 20, borderRadius: 4, objectFit: 'cover', flexShrink: 0 }} />
@@ -2208,7 +2203,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                       <img src={att.preview} alt={att.name} style={{ width: 52, height: 52, objectFit: 'cover', display: 'block' }} />
                     ) : (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 8px', maxWidth: 120 }}>
-                        <FileTextIcon size={12} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
+                        <FileTextIcon size={12} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />
                         <span style={{ fontSize: 10, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{att.name}</span>
                       </div>
                     )}
@@ -2240,7 +2235,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                   color: 'var(--text-primary)', outline: 'none', lineHeight: 1.5,
                   maxHeight: 120, overflowY: 'auto', transition: 'border-color 0.15s',
                 }}
-                onFocus={e => { e.currentTarget.style.borderColor = 'var(--anthropic-orange)60' }}
+                onFocus={e => { e.currentTarget.style.borderColor = 'color-mix(in srgb, var(--accent-purple) 60%, transparent)' }}
                 onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
                 onInput={e => {
                   const el = e.currentTarget
@@ -2271,8 +2266,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                   title={pt ? 'Enviar (Enter)' : 'Send (Enter)'}
                   style={{
                     width: 34, height: 34, borderRadius: 8, flexShrink: 0,
-                    border: '1px solid var(--anthropic-orange)60',
-                    background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+                    border: '1px solid color-mix(in srgb, var(--accent-purple) 60%, transparent)',
+                    background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)', color: 'var(--accent-purple)',
                     cursor: (input.trim() || nayAttachments.length > 0) ? 'pointer' : 'not-allowed',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     opacity: (input.trim() || nayAttachments.length > 0) && chatModel !== null ? 1 : 0.4,
@@ -2327,12 +2322,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <div style={{
                 width: 30, height: 30,
-                background: 'var(--anthropic-orange-dim)',
+                background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)',
                 borderRadius: 8,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 flexShrink: 0,
               }}>
-                <Filter size={14} color="var(--anthropic-orange)" />
+                <Filter size={14} color="var(--accent-purple)" />
               </div>
               <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
                 {t('chat.filter_change_title', lang)}
@@ -2379,18 +2374,18 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
               {/* New filter */}
               <div style={{
                 padding: '10px 12px', borderRadius: 8,
-                background: 'color-mix(in srgb, var(--anthropic-orange) 8%, transparent)',
-                border: '1px solid var(--anthropic-orange)40',
+                background: 'color-mix(in srgb, var(--accent-purple) 8%, transparent)',
+                border: '1px solid color-mix(in srgb, var(--accent-purple) 40%, transparent)',
               }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--anthropic-orange)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent-purple)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
                   {t('chat.filter_change_new', lang)}
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                   {pendingNav.newProjects.map(p => (
                     <span key={p} style={{
                       padding: '2px 8px', borderRadius: 4,
-                      background: 'var(--anthropic-orange-dim)', border: '1px solid var(--anthropic-orange)50',
-                      fontSize: 11, color: 'var(--anthropic-orange)',
+                      background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-purple) 50%, transparent)',
+                      fontSize: 11, color: 'var(--accent-purple)',
                       maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>
                       {p.split('/').pop() ?? p}
@@ -2424,8 +2419,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 }}
                 style={{
                   padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600,
-                  border: '1px solid var(--anthropic-orange)',
-                  background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+                  border: '1px solid var(--accent-purple)',
+                  background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)', color: 'var(--accent-purple)',
                   cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s',
                   display: 'flex', alignItems: 'center', gap: 6,
                 }}
