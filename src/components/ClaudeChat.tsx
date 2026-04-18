@@ -1608,15 +1608,17 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
               )}
             </div>
 
-            {/* Decouple button */}
-            <button
-              className="claude-icon-btn"
-              onClick={onDetach}
-              title={lang === 'pt' ? 'Destacar janela' : 'Detach window'}
-              style={iconBtnStyle}
-            >
-              <ExternalLink size={11} />
-            </button>
+            {/* Decouple button — only shown in standalone mode; embedded mode uses TtyChat header */}
+            {onDetach && !embedded && (
+              <button
+                className="claude-icon-btn"
+                onClick={onDetach}
+                title={lang === 'pt' ? 'Destacar janela' : 'Detach window'}
+                style={iconBtnStyle}
+              >
+                <ExternalLink size={11} />
+              </button>
+            )}
           </div>
 
           {/* Messages */}
