@@ -987,7 +987,10 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
     const text = (overrideText ?? input).trim()
     const hasAttachments = nayAttachments.length > 0
     if ((!text && !hasAttachments) || streaming) return
-    if (!overrideText) setInput('')
+    if (!overrideText) {
+      setInput('')
+      if (inputRef.current) inputRef.current.style.height = 'auto'
+    }
     setError(null)
     setCurrentTools([])
     setShowHistory(false)

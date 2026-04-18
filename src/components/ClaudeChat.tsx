@@ -1288,7 +1288,10 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
     const text = (overrideText ?? input).trim()
     const hasAttachments = attachments.length > 0
     if ((!text && !hasAttachments) || streaming) return
-    if (!overrideText) setInput('')
+    if (!overrideText) {
+      setInput('')
+      if (inputRef.current) inputRef.current.style.height = 'auto'
+    }
     setError(null)
     setCurrentTools([])
     setShowModelPicker(false)
