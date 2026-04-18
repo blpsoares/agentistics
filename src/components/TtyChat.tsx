@@ -33,6 +33,8 @@ type ChatMessage = {
   exitCode?: number
   timestamp: number
   tools?: string[]
+  images?: string[]   // data URLs – shown as thumbnails in the bubble
+  files?: string[]    // file names – shown as chips in the bubble
 }
 
 type NaySessionSummary = {
@@ -442,15 +444,40 @@ function Message({
         display: 'flex', flexDirection: 'column', alignItems: 'flex-end',
         marginBottom: 14, animation: 'ttyChatFadeIn 0.15s ease-out',
       }}>
-        <div style={{
-          maxWidth: '90%', padding: '8px 14px',
-          borderRadius: '14px 14px 4px 14px',
-          background: 'var(--anthropic-orange-dim)',
-          border: '1px solid var(--anthropic-orange)30',
-          fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.58, wordBreak: 'break-word',
-        }}>
-          {renderContent(msg.content)}
-        </div>
+        {/* Image thumbnails above the bubble */}
+        {msg.images && msg.images.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', marginBottom: 5, maxWidth: '90%' }}>
+            {msg.images.map((src, i) => (
+              <img key={i} src={src} alt="attachment"
+                style={{ maxWidth: 130, maxHeight: 100, borderRadius: 8, objectFit: 'cover',
+                  border: '1px solid var(--anthropic-orange)40' }} />
+            ))}
+          </div>
+        )}
+        {/* File chips above the bubble */}
+        {msg.files && msg.files.length > 0 && (
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end', marginBottom: 5, maxWidth: '90%' }}>
+            {msg.files.map((name, i) => (
+              <span key={i} style={{
+                fontSize: 10, padding: '2px 7px', borderRadius: 6,
+                background: 'var(--anthropic-orange-dim)',
+                border: '1px solid var(--anthropic-orange)30',
+                color: 'var(--anthropic-orange)',
+              }}>{name}</span>
+            ))}
+          </div>
+        )}
+        {msg.content && (
+          <div style={{
+            maxWidth: '90%', padding: '8px 14px',
+            borderRadius: '14px 14px 4px 14px',
+            background: 'var(--anthropic-orange-dim)',
+            border: '1px solid var(--anthropic-orange)30',
+            fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.58, wordBreak: 'break-word',
+          }}>
+            {renderContent(msg.content)}
+          </div>
+        )}
         {timeEl}
       </div>
     )
@@ -1007,6 +1034,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
     const model = chatModel ?? DEFAULT_CHAT_MODEL
     const userMsg: ChatMessage = {
       role: 'user', content: text, timestamp: Date.now(),
+      images: pendingAttachments.filter(a => a.isImage).map(a => a.preview!),
+      files: pendingAttachments.filter(a => !a.isImage).map(a => a.name),
     }
     const history = messages.filter(m => !m.terminal).map(m => ({ role: m.role, content: m.content }))
 
@@ -1417,6 +1446,36 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 </div>
               </div>
             )}
+
+            {/* Sticky user-message context while assistant is streaming */}
+            {streaming && (() => {
+              const lastUser = [...messages].reverse().find(m => m.role === 'user' && !m.terminal)
+              if (!lastUser) return null
+              const preview = lastUser.content.length > 100
+                ? lastUser.content.slice(0, 100) + '…'
+                : lastUser.content
+              return (
+                <div style={{
+                  position: 'sticky', top: -14, zIndex: 4, // -14 to cancel the parent padding
+                  margin: '-14px -14px 10px -14px',
+                  background: 'var(--bg-card)',
+                  borderBottom: '1px solid var(--border)',
+                  padding: '7px 14px',
+                  display: 'flex', alignItems: 'center', gap: 8,
+                }}>
+                  <span style={{ fontSize: 10, color: 'var(--anthropic-orange)', fontWeight: 700, flexShrink: 0, letterSpacing: '0.04em' }}>
+                    ↑
+                  </span>
+                  {lastUser.images && lastUser.images.length > 0 && (
+                    <img src={lastUser.images[0]} alt=""
+                      style={{ width: 22, height: 22, borderRadius: 4, objectFit: 'cover', flexShrink: 0 }} />
+                  )}
+                  <span style={{ fontSize: 11, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {preview || (lastUser.images?.length ? `[image]` : '')}
+                  </span>
+                </div>
+              )
+            })()}
 
             {messages.map((msg, i) => {
               const isLast = i === messages.length - 1
