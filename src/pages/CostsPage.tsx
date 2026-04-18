@@ -2,6 +2,7 @@ import React from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { TrendingUp, Zap, Target, Sparkles } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { Section } from '../components/Section'
 import { ModelBreakdown } from '../components/ModelBreakdown'
 import { BudgetPanel } from '../components/BudgetPanel'
@@ -15,6 +16,7 @@ export default function CostsPage() {
     monthlyBudgetUSD, updateBudget,
     setExpandedChart,
   } = ctx
+  const isMobile = useIsMobile()
 
   return (
     <>
@@ -44,7 +46,7 @@ export default function CostsPage() {
         />
       </Section>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'stretch' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16, alignItems: 'stretch' }}>
         <Section flashId="budget" style={{ height: '100%' }} title={<><Target size={14} /> {lang === 'pt' ? 'Orçamento & projeção' : 'Budget & forecast'}</>}>
           <BudgetPanel statsCache={statsCache} budgetUSD={monthlyBudgetUSD} onBudgetChange={updateBudget} currency={currency} brlRate={brlRate} lang={lang} />
         </Section>

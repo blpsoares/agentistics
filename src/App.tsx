@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
+import { useIsMobile } from './hooks/useIsMobile'
 import type { Filters } from './lib/types'
 import type { Lang, Theme } from './lib/types'
 import { formatProjectName, setHomeDir, MODEL_PRICING } from './lib/types'
@@ -584,6 +585,68 @@ function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): st
   return `USD ${usd.toFixed(6)}`
 }
 
+function MobileBottomNav({ lang }: { lang: Lang }) {
+  const location = useLocation()
+  const pt = lang === 'pt'
+
+  const tabs = [
+    { to: '/',         labelPt: 'Home',       labelEn: 'Home',      icon: Home },
+    { to: '/costs',    labelPt: 'Custos',     labelEn: 'Costs',     icon: DollarSign },
+    { to: '/projects', labelPt: 'Projetos',   labelEn: 'Projects',  icon: FolderOpen },
+    { to: '/tools',    labelPt: 'Ferramentas',labelEn: 'Tools',     icon: Wrench },
+    { to: '/custom',   labelPt: 'Custom',     labelEn: 'Custom',    icon: Layers },
+  ] as const
+
+  return (
+    <nav
+      className="mobile-bottom-nav"
+      style={{
+        position: 'fixed',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        zIndex: 200,
+        background: 'var(--bg-surface)',
+        borderTop: '1px solid var(--border)',
+        display: 'flex',
+        alignItems: 'stretch',
+        height: 56,
+      }}
+    >
+      {tabs.map(tab => {
+        const active = tab.to === '/'
+          ? location.pathname === '/'
+          : location.pathname.startsWith(tab.to)
+        const Icon = tab.icon
+        return (
+          <NavLink
+            key={tab.to}
+            to={tab.to}
+            end={tab.to === '/'}
+            style={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 3,
+              textDecoration: 'none',
+              color: active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+              fontSize: 10,
+              fontWeight: active ? 700 : 500,
+              transition: 'color 0.15s',
+              padding: '6px 0',
+            }}
+          >
+            <Icon size={18} />
+            <span>{pt ? tab.labelPt : tab.labelEn}</span>
+          </NavLink>
+        )
+      })}
+    </nav>
+  )
+}
+
 function NavTabs({ lang }: { lang: Lang }) {
   const location = useLocation()
   const pt = lang === 'pt'
@@ -646,6 +709,7 @@ function NavTabs({ lang }: { lang: Lang }) {
 export default function AppLayout() {
   const location = useLocation()
   const isCustomPage = location.pathname === '/custom'
+  const isMobile = useIsMobile()
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
   const [showLiveSettings, setShowLiveSettings] = useState(false)
@@ -1141,8 +1205,8 @@ export default function AppLayout() {
         <div style={{
           maxWidth: 1400,
           margin: '0 auto',
-          padding: '0 32px',
-          height: 56,
+          padding: isMobile ? '0 16px' : '0 32px',
+          height: isMobile ? 48 : 56,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -1151,7 +1215,7 @@ export default function AppLayout() {
             <img
               src='/minimalistLogo.png'
               alt="agentistics"
-              style={{ height: 64, width: 'auto' }}
+              style={{ height: isMobile ? 44 : 64, width: 'auto' }}
             />
             <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
               {lang === 'pt' ? 'Atualizado em' : 'Updated'}{' '}
@@ -1159,8 +1223,8 @@ export default function AppLayout() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {statsCache.firstSessionDate && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 10 }}>
+            {!isMobile && statsCache.firstSessionDate && (
               <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'right' }}>
                 <div>{lang === 'pt' ? 'Desde' : 'Since'} {format(parseISO(statsCache.firstSessionDate), 'MMM d, yyyy')}</div>
                 <div style={{ color: 'var(--text-secondary)' }}>
@@ -1169,8 +1233,8 @@ export default function AppLayout() {
               </div>
             )}
 
-            {/* Language toggle */}
-            <button
+            {/* Language toggle — hidden on mobile (accessible via preferences) */}
+            {!isMobile && <button
               onClick={() => {
                 const next = lang === 'pt' ? 'en' : 'pt'
                 setLang(next)
@@ -1203,7 +1267,7 @@ export default function AppLayout() {
             >
               <Globe size={13} />
               {lang === 'pt' ? 'EN' : 'PT'}
-            </button>
+            </button>}
 
             {/* Theme toggle */}
             <button
@@ -1231,8 +1295,8 @@ export default function AppLayout() {
               {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
             </button>
 
-            {/* Export report */}
-            <button
+            {/* Export report — hidden on mobile */}
+            {!isMobile && <button
               onClick={() => setShowExportModal(true)}
               style={{
                 height: 32,
@@ -1262,7 +1326,7 @@ export default function AppLayout() {
             >
               <Download size={13} />
               {lang === 'pt' ? 'Exportar' : 'Export'}
-            </button>
+            </button>}
 
             {/* Preferences */}
             <button
@@ -1290,8 +1354,8 @@ export default function AppLayout() {
               <SlidersHorizontal size={14} />
             </button>
 
-            {/* Dev config */}
-            <button
+            {/* Dev config — hidden on mobile */}
+            {!isMobile && <button
               onClick={() => setShowDevConfig(true)}
               style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
                 borderRadius: 8, border: '1px solid var(--border)', background: 'transparent',
@@ -1302,7 +1366,7 @@ export default function AppLayout() {
               title="Dev config"
             >
               {'</>'}
-            </button>
+            </button>}
 
             {/* Health warnings */}
             {data?.healthIssues && data.healthIssues.length > 0 && (
@@ -1410,9 +1474,10 @@ export default function AppLayout() {
             borderTop: '1px solid var(--border)',
             maxWidth: 1400,
             margin: '0 auto',
-            padding: '0 32px',
+            padding: isMobile ? '0 16px' : '0 32px',
             width: '100%',
             boxSizing: 'border-box',
+            overflowX: isMobile ? 'auto' : undefined,
           }}>
             <FiltersBar
               filters={filters}
@@ -1426,21 +1491,30 @@ export default function AppLayout() {
           </div>
         )}
 
-        {/* Nav tabs — third row of sticky header */}
-        <div style={{
-          borderTop: '1px solid var(--border)',
-          maxWidth: 1400,
-          margin: '0 auto',
-          padding: '0 32px',
-          width: '100%',
-          boxSizing: 'border-box',
-        }}>
-          <NavTabs lang={lang} />
-        </div>
+        {/* Nav tabs — third row of sticky header (desktop only; mobile uses bottom nav) */}
+        {!isMobile && (
+          <div style={{
+            borderTop: '1px solid var(--border)',
+            maxWidth: 1400,
+            margin: '0 auto',
+            padding: '0 32px',
+            width: '100%',
+            boxSizing: 'border-box',
+          }}>
+            <NavTabs lang={lang} />
+          </div>
+        )}
       </header>
 
       {/* Main content — routed pages render here via <Outlet /> */}
-      <main style={{ maxWidth: 1400, margin: '0 auto', padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <main style={{
+        maxWidth: 1400,
+        margin: '0 auto',
+        padding: isMobile ? '16px 16px 80px' : '24px 32px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: isMobile ? 14 : 20,
+      }}>
         <Outlet context={{
           data,
           derived,
@@ -1593,6 +1667,9 @@ export default function AppLayout() {
         />
       )}
 
+      {/* Mobile bottom navigation bar */}
+      {isMobile && <MobileBottomNav lang={lang} />}
+
       {/* TTY Chat — floating button + panel, globally available */}
       <TtyChat
         lang={lang}
@@ -1600,6 +1677,7 @@ export default function AppLayout() {
         chatSoundEnabled={chatSoundEnabled}
         filters={filters}
         setFilters={setFilters}
+        isMobile={isMobile}
         onDetachClaude={() => setClaudeDetached(true)}
         onModelSet={(model) => {
           setChatModel(model)

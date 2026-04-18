@@ -1,5 +1,6 @@
 import React from 'react'
 import { useOutletContext } from 'react-router-dom'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { format } from 'date-fns'
 import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
@@ -40,6 +41,7 @@ export default function HomePage() {
     cardPrecision, setCardPrecision,
   } = ctx
   const d = derived
+  const isMobile = useIsMobile()
 
   function renderCard(id: CardId) {
     const fullKey = `kpi.${id}`
@@ -126,7 +128,7 @@ export default function HomePage() {
         }
         .live-flash { animation: liveFlash 1.2s ease-out forwards; border-radius: var(--radius-lg); }
       `}</style>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(5, 1fr)', gap: 12 }}>
         {(cardOrder as CardId[]).map(id => renderCard(id))}
       </div>
 
@@ -136,7 +138,7 @@ export default function HomePage() {
       </Section>
 
       {/* Activity + Heatmap */}
-      <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 16, alignItems: 'stretch' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '3fr 2fr', gap: 16, alignItems: 'stretch' }}>
         <Section flashId="activity" style={{ height: '100%' }} title={<><BarChart2 size={14} /> {lang === 'pt' ? 'Atividade ao longo do tempo' : 'Activity over time'}</>} onExpand={() => setExpandedChart('activity')}>
           <ActivityChart data={derived.heatmapData} theme={theme} />
         </Section>
@@ -180,7 +182,7 @@ export default function HomePage() {
       </Section>
 
       {/* Projects + Languages */}
-      <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 16, alignItems: 'stretch' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '3fr 2fr', gap: 16, alignItems: 'stretch' }}>
         <Section flashId="projects" style={{ height: '100%' }} title={<><FileCode size={14} /> {lang === 'pt' ? 'Principais projetos' : 'Top projects'}</>}
           action={filters.projects.length > 0 ? (
             <button onClick={() => setFilters(f => ({ ...f, projects: [] }))} style={{ fontSize: 11, color: 'var(--text-tertiary)', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>

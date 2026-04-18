@@ -608,6 +608,7 @@ interface TtyChatProps {
   onModelSet: (model: ChatModelId) => void
   filters: Filters
   setFilters: React.Dispatch<React.SetStateAction<Filters>>
+  isMobile?: boolean
   onDetachClaude?: () => void
   claudeSharedState?: {
     projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
@@ -647,7 +648,7 @@ interface PendingNavigation {
   newProjects: string[]
 }
 
-export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters, setFilters, onDetachClaude, claudeSharedState, onClaudeStateChange }: TtyChatProps) {
+export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters, setFilters, isMobile, onDetachClaude, claudeSharedState, onClaudeStateChange }: TtyChatProps) {
   const navigate = useNavigate()
   const [pendingNav, setPendingNav] = useState<PendingNavigation | null>(null)
 
@@ -1081,9 +1082,11 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   const effectiveModel = chatModel ?? DEFAULT_CHAT_MODEL
   const modelInfo = CHAT_MODELS.find(m => m.id === effectiveModel)
 
-  const panelStyle: React.CSSProperties = fullscreen
-    ? { position: 'fixed', inset: 16, width: 'auto', height: 'auto' }
-    : { position: 'fixed', bottom: 80, right: 24, width: 400, height: 580, maxHeight: 'calc(100vh - 120px)' }
+  const panelStyle: React.CSSProperties = isMobile
+    ? { position: 'fixed', inset: 0, width: 'auto', height: 'auto' }
+    : fullscreen
+      ? { position: 'fixed', inset: 16, width: 'auto', height: 'auto' }
+      : { position: 'fixed', bottom: 80, right: 24, width: 400, height: 580, maxHeight: 'calc(100vh - 120px)' }
 
   // Detect if currently streaming an assistant message (last message is empty assistant waiting)
   const lastMsg = messages[messages.length - 1]
@@ -1114,7 +1117,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
         onClick={handleFabClick}
         title={pt ? 'Chat com Nay' : 'Chat with Nay'}
         style={{
-          position: 'fixed', bottom: 24, right: 24, zIndex: 500,
+          position: 'fixed', bottom: isMobile ? 68 : 24, right: 24, zIndex: 300,
           width: 46, height: 46, borderRadius: '50%',
           border: hasUnread && !open
             ? '1.5px solid var(--anthropic-orange)'
@@ -1147,15 +1150,15 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
       {open && (
         <div style={{
           ...panelStyle,
-          zIndex: 500,
+          zIndex: 400,
           position: 'fixed',
           display: 'flex', flexDirection: 'column',
           background: 'var(--bg-surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 14,
-          boxShadow: '0 10px 48px rgba(0,0,0,0.45)',
+          border: isMobile ? 'none' : '1px solid var(--border)',
+          borderRadius: isMobile ? 0 : 14,
+          boxShadow: isMobile ? 'none' : '0 10px 48px rgba(0,0,0,0.45)',
           overflow: 'hidden',
-          animation: 'ttyChatSlideIn 0.18s ease-out',
+          animation: isMobile ? undefined : 'ttyChatSlideIn 0.18s ease-out',
         }}>
 
           {chatModel === null && (
