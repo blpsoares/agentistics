@@ -1512,7 +1512,6 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                   onClick={() => {
                     setNayDetached(true)
                     setNayMinimized(false)
-                    setOpen(false)
                     setActiveTab('claude')
                   }}
                   title={pt ? 'Destacar janela Nay' : 'Detach Nay window'}
@@ -1614,7 +1613,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             ))}
           </div>}
 
-          {activeTab === 'nay' && <>
+          {!(nayDetached && claudeDetached) && activeTab === 'nay' && <>
 
           {/* History panel */}
           {showHistory && (
@@ -1891,7 +1890,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
 
           </>}
 
-          {activeTab === 'claude' && (
+          {!(nayDetached && claudeDetached) && activeTab === 'claude' && (
             <ClaudeChat
               key={claudeResetKey}
               embedded

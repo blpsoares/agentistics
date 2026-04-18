@@ -5,9 +5,9 @@ import { getRates } from './rates'
 import { getVersionInfo } from './version'
 import { buildApiResponse, buildApiResponseStream } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
-import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, type ChatMessage, type ChatModelId, type ChatAttachment } from './chat-tty'
+import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, NAY_CHAT_DIR, type ChatMessage, type ChatModelId, type ChatAttachment } from './chat-tty'
 import { listMcpServers, removeMcpServer } from './mcp-list'
-import { listNaySessions, getNaySessionMessages } from './nay-sessions'
+import { listNaySessions, getNaySessionMessages, getNayChatProjectDir } from './nay-sessions'
 import { listClaudeSessions, getClaudeSessionMessages, type ClaudeSessionSummary, type ClaudeSessionMessage } from './claude-sessions'
 import { PROJECTS_DIR } from './config'
 import { safeReadDir } from './utils'
@@ -203,8 +203,9 @@ Bun.serve({
       try {
         const dirs = await safeReadDir(PROJECTS_DIR)
         const entries: { name: string; path: string; encodedDir: string; sessionCount: number }[] = []
+        const nayChatEncodedDir = getNayChatProjectDir().split('/').pop() ?? ''
         for (const dir of dirs) {
-          const projectPath = decodeProjectDir(dir)
+          const projectPath = dir === nayChatEncodedDir ? NAY_CHAT_DIR : decodeProjectDir(dir)
           const files = await safeReadDir(`${PROJECTS_DIR}/${dir}`)
           const sessionCount = files.filter(f => f.endsWith('.jsonl')).length
           if (sessionCount === 0) continue
