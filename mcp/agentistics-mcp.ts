@@ -141,7 +141,7 @@ function fillGaps(
         other !== item &&
         other.x >= rightEdge &&
         other.y < item.y + item.h &&
-        other.y + item.h > item.y,
+        other.y + other.h > item.y,
     );
     if (!hasRightNeighbour) {
       item.w = gridW - item.x;
@@ -358,16 +358,37 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           [...projects]
             .sort((a, b) => (b.sessions?.length ?? 0) - (a.sessions?.length ?? 0))[0]?.name ?? "—";
 
+        // Aggregate from sessions for accurate totals (statsCache may be stale or empty)
+        const allSessions = (data.sessions ?? []) as Array<any>;
+        let totalCostUSD = 0;
+        let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheWrite = 0;
+        for (const s of allSessions) {
+          const inp = s.input_tokens ?? 0;
+          const out = s.output_tokens ?? 0;
+          const cr  = s.cache_read_input_tokens ?? 0;
+          const cw  = s.cache_creation_input_tokens ?? 0;
+          totalInput    += inp;
+          totalOutput   += out;
+          totalCacheRead  += cr;
+          totalCacheWrite += cw;
+          totalCostUSD  += calcCostUSD(inp, out, cr, cw, s.model ?? "");
+        }
+        // Fall back to statsCache if sessions carry no token data
+        const finalInput       = totalInput    || (totals.inputTokens      ?? 0);
+        const finalOutput      = totalOutput   || (totals.outputTokens     ?? 0);
+        const finalCacheRead   = totalCacheRead  || (totals.cacheReadTokens  ?? 0);
+        const finalCacheWrite  = totalCacheWrite || (totals.cacheWriteTokens ?? 0);
+
         return {
           content: [{
             type: "text",
             text: JSON.stringify({
-              totalInputTokens: totals.inputTokens ?? 0,
-              totalOutputTokens: totals.outputTokens ?? 0,
-              totalCacheReadTokens: totals.cacheReadTokens ?? 0,
-              totalCacheWriteTokens: totals.cacheWriteTokens ?? 0,
-              estimatedCostUSD: data.totalCostUSD ?? 0,
-              totalSessions: (data.sessions ?? []).length,
+              totalInputTokens:      finalInput,
+              totalOutputTokens:     finalOutput,
+              totalCacheReadTokens:  finalCacheRead,
+              totalCacheWriteTokens: finalCacheWrite,
+              estimatedCostUSD:      Math.round(totalCostUSD * 100) / 100,
+              totalSessions: allSessions.length,
               totalProjects: projects.length,
               topModel,
               topProject,
@@ -608,10 +629,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const params = new URLSearchParams({ export: "pdf" });
         if (range !== "all") params.set("range", range);
         const url = `${uiBase}/?${params.toString()}`;
+        const rangeLabel = range === "all" ? "all-time" : `last ${range}`;
         return {
           content: [{
             type: "text",
-            text: `Open this URL in your browser to download the PDF report:\n\n${url}\n\nThe export modal will open automatically. Click **Download PDF** to save the file.`,
+            text: `[⬇ Download PDF — ${rangeLabel}](pdf:${url})`,
           }],
         };
       }

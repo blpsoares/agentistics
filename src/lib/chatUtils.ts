@@ -11,6 +11,7 @@ export const TOOL_LABELS: Record<string, string> = {
   agentistics_delete_layout:     'Deleting layout',
   agentistics_build_layout:      'Building layout',
   agentistics_component_catalog: 'Reading catalog',
+  agentistics_export_pdf:        'Generating PDF',
 }
 
 export function formatToolName(raw: string): string {
@@ -24,6 +25,9 @@ export function fmtTime(ts: number): string {
 
 // Matches [→ label](/route) or [label](/route) where route starts with /
 export const NAV_LINK_RE = /\[([^\]]+)\]\((\/[^)]*)\)/g
+
+// Matches [label](pdf:URL) — PDF download button links
+export const PDF_LINK_RE = /\[([^\]]+)\]\(pdf:([^)]+)\)/g
 
 export interface NavLink { label: string; path: string }
 

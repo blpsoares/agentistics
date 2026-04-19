@@ -20,7 +20,7 @@ type NayAttachment = {
 }
 import { ClaudeChat } from './ClaudeChat'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
-import { formatToolName, fmtTime, NAV_LINK_RE } from '../lib/chatUtils'
+import { formatToolName, fmtTime, NAV_LINK_RE, PDF_LINK_RE } from '../lib/chatUtils'
 import { t } from '../lib/i18n'
 import type { Filters } from '../lib/types'
 
@@ -223,48 +223,97 @@ function CodeBlock({ lang: codeLang, code, onRun }: CodeBlockProps) {
   )
 }
 
+// Split text by both nav links and pdf links into typed segments
+type Segment =
+  | { kind: 'text'; value: string }
+  | { kind: 'nav'; label: string; path: string }
+  | { kind: 'pdf'; label: string; url: string }
+
+function parseSegments(text: string): Segment[] {
+  const combined = new RegExp(
+    `${PDF_LINK_RE.source}|${NAV_LINK_RE.source}`,
+    'g',
+  )
+  const segments: Segment[] = []
+  let last = 0
+  let match: RegExpExecArray | null
+  while ((match = combined.exec(text)) !== null) {
+    if (match.index > last) segments.push({ kind: 'text', value: text.slice(last, match.index) })
+    if (match[1] !== undefined && match[2] !== undefined && match[3] === undefined) {
+      // pdf: match — groups 1=label, 2=url
+      segments.push({ kind: 'pdf', label: match[1], url: match[2] })
+    } else if (match[3] !== undefined && match[4] !== undefined) {
+      // nav: match — groups 3=label, 4=path
+      segments.push({ kind: 'nav', label: match[3], path: match[4] })
+    }
+    last = match.index + match[0].length
+  }
+  if (last < text.length) segments.push({ kind: 'text', value: text.slice(last) })
+  return segments
+}
+
 function renderContent(
   text: string,
   onRun?: (c: string) => void,
   onNavigate?: (path: string) => void,
 ): React.ReactNode {
-  // Replace custom nav links [label](nav:path) before rendering
-  const navParts = text.split(NAV_LINK_RE)
-  // If there are no nav links, render directly
-  if (navParts.length === 1) {
+  const segments = parseSegments(text)
+  if (segments.length === 1 && segments[0]!.kind === 'text') {
     return <MarkdownContent text={text} onRun={onRun} onNavigate={onNavigate} />
   }
 
-  // Mix nav buttons with markdown segments
-  const nodes: React.ReactNode[] = []
-  for (let i = 0; i < navParts.length; i++) {
-    const part = navParts[i]!
-    if (i % 3 === 0) {
-      if (part) nodes.push(<MarkdownContent key={i} text={part} onRun={onRun} onNavigate={onNavigate} />)
-    } else if (i % 3 === 1) {
-      const label = part
-      const path = navParts[i + 1]!
-      i++
-      nodes.push(
-        <button
-          key={`nav-${i}`}
-          onClick={() => onNavigate?.(path)}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 5,
-            padding: '5px 10px', borderRadius: 7, fontSize: 12, fontWeight: 600,
-            border: '1px solid color-mix(in srgb, var(--accent-purple) 50%, transparent)',
-            background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)', color: 'var(--accent-purple)',
-            cursor: 'pointer', fontFamily: 'inherit',
-            margin: '6px 0', transition: 'all 0.15s',
-          }}
-        >
-          <ArrowRight size={11} />
-          {label.replace(/^→\s*/, '')}
-        </button>
-      )
-    }
-  }
-  return <>{nodes}</>
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (seg.kind === 'text') {
+          return seg.value
+            ? <MarkdownContent key={i} text={seg.value} onRun={onRun} onNavigate={onNavigate} />
+            : null
+        }
+        if (seg.kind === 'pdf') {
+          return (
+            <a
+              key={i}
+              href={seg.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '7px 14px', borderRadius: 8, fontSize: 13, fontWeight: 700,
+                border: '1px solid color-mix(in srgb, var(--accent-orange) 50%, transparent)',
+                background: 'color-mix(in srgb, var(--accent-orange) 14%, transparent)',
+                color: 'var(--accent-orange)',
+                textDecoration: 'none',
+                margin: '8px 0', transition: 'all 0.15s',
+                cursor: 'pointer',
+              }}
+            >
+              <FileTextIcon size={13} />
+              {seg.label.replace(/^⬇\s*/, '')}
+            </a>
+          )
+        }
+        // nav
+        return (
+          <button
+            key={i}
+            onClick={() => onNavigate?.(seg.path)}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              padding: '5px 10px', borderRadius: 7, fontSize: 12, fontWeight: 600,
+              border: '1px solid color-mix(in srgb, var(--accent-purple) 50%, transparent)',
+              background: 'color-mix(in srgb, var(--accent-purple) 12%, transparent)', color: 'var(--accent-purple)',
+              cursor: 'pointer', fontFamily: 'inherit',
+              margin: '6px 0', transition: 'all 0.15s',
+            }}
+          >
+            <ArrowRight size={11} />
+            {seg.label.replace(/^→\s*/, '')}
+          </button>
+        )
+      })}
+    </>
+  )
 }
 
 function MarkdownContent({
@@ -814,8 +863,9 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   const NAY_FAB_W = 46
   const NAY_FAB_H = 58
   const [nayFabPos, setNayFabPos] = useState<{ x: number; y: number }>(() => ({
-    x: typeof window !== 'undefined' ? window.innerWidth - NAY_FAB_W - 80 : 300,
-    y: typeof window !== 'undefined' ? window.innerHeight - NAY_FAB_H - 78 : 600,
+    // Align with main FAB (right: 24) and sit clearly above it
+    x: typeof window !== 'undefined' ? window.innerWidth - NAY_FAB_W - 24 : 300,
+    y: typeof window !== 'undefined' ? window.innerHeight - NAY_FAB_H - 92 : 500,
   }))
 
   // Nay floating window refs
@@ -1015,9 +1065,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
 
   const handleFabClick = () => {
     initAudio()
-    // If Nay is minimized to bubble, restore it
-    if (nayDetached && nayMinimized) setNayMinimized(false)
-    // Always toggle the panel so Claude tab stays accessible
+    // When Nay is detached: main FAB only manages the panel (Claude tab).
+    // Restoring minimized Nay is the mini FAB's job.
     setOpen(v => !v)
   }
 
@@ -1411,18 +1460,18 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
         className="tty-fab"
         onClick={handleFabClick}
         title={nayDetached
-          ? (nayMinimized ? (pt ? 'Restaurar Nay' : 'Restore Nay') : (pt ? 'Trazer Nay para frente' : 'Bring Nay to front'))
+          ? (pt ? 'Abrir painel' : 'Open panel')
           : (pt ? 'Chat com Nay' : 'Chat with Nay')}
         style={{
           position: 'fixed', bottom: isMobile ? 68 : 24, right: 24, zIndex: 300,
           width: 46, height: 46, borderRadius: '50%',
           border: nayDetached
-            ? '1.5px solid var(--accent-purple)'
+            ? '1.5px solid var(--border)'
             : (hasUnread && !open) || open ? '1.5px solid var(--accent-purple)' : '1.5px solid var(--border)',
           background: nayDetached
-            ? 'color-mix(in srgb, var(--accent-purple) 12%, transparent)'
+            ? 'var(--bg-card)'
             : (hasUnread && !open) || open ? 'color-mix(in srgb, var(--accent-purple) 12%, transparent)' : 'var(--bg-card)',
-          color: nayDetached || hasUnread || open ? 'var(--accent-purple)' : 'var(--text-secondary)',
+          color: (!nayDetached && (hasUnread || open)) ? 'var(--accent-purple)' : 'var(--text-secondary)',
           cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           animation: (hasUnread && !open && !nayDetached) ? 'ttyChatPulse 1.8s ease-in-out infinite' : undefined,
@@ -1432,19 +1481,10 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
         }}
       >
         {open && !nayDetached ? <X size={17} /> : nayDetached ? <ExternalLink size={15} /> : <MessageSquare size={17} />}
-        {!open && !nayDetached && hasUnread && (
+        {!open && hasUnread && !nayDetached && (
           <span style={{
             position: 'absolute', top: 8, right: 8,
             width: 9, height: 9, borderRadius: '50%',
-            background: 'var(--accent-purple)',
-            border: '1.5px solid var(--bg-base)',
-            animation: 'ttyChatBlink 1.8s ease-in-out infinite',
-          }} />
-        )}
-        {nayDetached && nayMinimized && (
-          <span style={{
-            position: 'absolute', top: 7, right: 7,
-            width: 10, height: 10, borderRadius: '50%',
             background: 'var(--accent-purple)',
             border: '1.5px solid var(--bg-base)',
             animation: 'ttyChatBlink 1.8s ease-in-out infinite',

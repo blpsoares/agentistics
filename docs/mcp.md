@@ -39,21 +39,22 @@ claude mcp list
 
 ### `agentistics_summary`
 
-All-time totals across your entire Claude Code history.
+All-time totals aggregated from all sessions. Token counts and cost are computed directly from session records (not from the stats-cache snapshot), so they are always accurate even if the cache is stale.
 
 **Returns:**
 ```json
 {
-  "totalSessions": 142,
-  "totalMessages": 3891,
   "totalInputTokens": 12500000,
   "totalOutputTokens": 890000,
   "totalCacheReadTokens": 45000000,
-  "totalCostUSD": 18.42,
-  "currentStreak": 7,
-  "topProject": "/home/user/projects/my-app",
-  "cacheHitRate": 0.78,
-  "totalToolCalls": 8200
+  "totalCacheWriteTokens": 1200000,
+  "estimatedCostUSD": 18.42,
+  "totalSessions": 142,
+  "totalProjects": 44,
+  "topModel": "claude-sonnet-4-6",
+  "topProject": "my-app",
+  "activeDays": 38,
+  "currentStreak": 7
 }
 ```
 
@@ -61,19 +62,22 @@ All-time totals across your entire Claude Code history.
 
 ### `agentistics_projects`
 
-Per-project breakdown with aggregated token and cost data.
+Per-project breakdown with aggregated token and cost data, sorted by total tokens descending.
 
-**Returns:** array of projects sorted by total tokens descending
+**Returns:** array of projects
 ```json
 [
   {
     "name": "my-app",
     "path": "/home/user/projects/my-app",
-    "sessionCount": 34,
+    "sessions": 34,
+    "messages": 820,
     "inputTokens": 3200000,
     "outputTokens": 220000,
-    "cacheReadTokens": 9100000,
-    "costUSD": 5.21
+    "totalTokens": 3420000,
+    "estimatedCostUSD": 5.21,
+    "lastActive": "2025-01-15T14:30:00Z",
+    "languages": ["TypeScript", "CSS"]
   }
 ]
 ```
@@ -89,20 +93,24 @@ Recent sessions with duration, model, and cost.
 **Parameters:**
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
-| `limit` | number | 20 | Max sessions to return (1–100) |
+| `limit` | number | 20 | Max sessions to return (1–50) |
 
 **Returns:** array of sessions sorted by start time descending
 ```json
 [
   {
-    "sessionId": "abc123",
-    "projectPath": "/home/user/projects/my-app",
-    "startTime": "2025-01-15T14:30:00Z",
+    "id": "abc123",
+    "project": "/home/user/projects/my-app",
+    "startedAt": "2025-01-15T14:30:00Z",
     "durationMinutes": 47,
+    "messages": 34,
     "inputTokens": 85000,
     "outputTokens": 6200,
-    "model": "claude-sonnet-4-6",
-    "estimatedCostUSD": 0.348
+    "cacheReadTokens": 310000,
+    "cacheWriteTokens": 12000,
+    "totalTokens": 413200,
+    "estimatedCostUSD": 0.348,
+    "model": "claude-sonnet-4-6"
   }
 ]
 ```
@@ -111,25 +119,21 @@ Recent sessions with duration, model, and cost.
 
 ### `agentistics_costs`
 
-Model pricing breakdown and cache savings analysis.
+Model pricing breakdown and cache analysis.
 
-**Returns:**
+**Returns:** array of models sorted by total tokens descending
 ```json
-{
-  "byModel": [
-    {
-      "model": "claude-sonnet-4-6",
-      "inputTokens": 8200000,
-      "outputTokens": 610000,
-      "cacheReadTokens": 31000000,
-      "cacheWriteTokens": 1200000,
-      "costUSD": 12.80
-    }
-  ],
-  "cacheHitRate": 0.78,
-  "estimatedSavingsUSD": 9.30,
-  "totalCostUSD": 18.42
-}
+[
+  {
+    "model": "claude-sonnet-4-6",
+    "inputTokens": 8200000,
+    "outputTokens": 610000,
+    "cacheReadTokens": 31000000,
+    "cacheWriteTokens": 1200000,
+    "totalTokens": 41010000,
+    "estimatedCostUSD": 12.80
+  }
+]
 ```
 
 ---
@@ -138,22 +142,33 @@ Model pricing breakdown and cache savings analysis.
 
 Lists all dashboard components available for placement on the custom `/custom` page. **Always call this before building a layout.**
 
-**Returns:**
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `category` | string | Optional filter: `kpi`, `activity`, `costs`, `projects`, `tools`, `sessions` |
+
+**Returns:** array of components with grid sizes and descriptions
 ```json
 [
   {
-    "id": "kpi-messages",
-    "label": "Messages",
-    "category": "KPI",
+    "id": "kpi.cost",
+    "label": "Estimated cost",
+    "category": "kpi",
     "defaultW": 3,
-    "defaultH": 2
+    "defaultH": 3,
+    "minW": 2,
+    "minH": 2,
+    "description": "Estimated USD cost"
   },
   {
-    "id": "activity-chart",
-    "label": "Activity Chart",
-    "category": "Activity",
-    "defaultW": 12,
-    "defaultH": 4
+    "id": "activity.chart",
+    "label": "Activity chart (full)",
+    "category": "activity",
+    "defaultW": 8,
+    "defaultH": 7,
+    "minW": 4,
+    "minH": 4,
+    "description": "Full activity chart with all metrics"
   }
 ]
 ```
@@ -167,12 +182,14 @@ Returns all saved custom layouts and which one is currently active.
 **Returns:**
 ```json
 {
-  "active": "overview",
+  "activeLayout": "overview",
   "layouts": [
     {
       "name": "overview",
-      "items": [
-        { "id": "kpi-cost", "x": 0, "y": 0, "w": 3, "h": 2 }
+      "isActive": true,
+      "componentCount": 5,
+      "components": [
+        { "instanceId": "1", "componentId": "kpi.cost", "x": 0, "y": 0, "w": 3, "h": 3 }
       ]
     }
   ]
@@ -183,7 +200,9 @@ Returns all saved custom layouts and which one is currently active.
 
 ### `agentistics_build_layout`
 
-Creates a complete layout replacing any existing layout with the same name. Components are auto-positioned using first-fit shelf packing on a 12-column grid if positions are not specified.
+Creates a complete layout in one call: creates it, adds all requested components with auto-positioning, and optionally activates it. Ideal for building a themed dashboard from scratch.
+
+Components are positioned using first-fit shelf packing on a 12-column grid. After placement, any component with empty space to its right (no right neighbour in its row range) is extended to fill the full row width.
 
 **Parameters:**
 | Name | Type | Required | Description |
@@ -192,23 +211,28 @@ Creates a complete layout replacing any existing layout with the same name. Comp
 | `componentIds` | string[] | yes | Ordered list of component IDs from the catalog |
 | `activate` | boolean | no | Set as active layout after creating (default: true) |
 
-**Grid rules:**
-- KPI cards: `w=3, h=2` (4 per row)
-- Wide charts: `w=12, h=4`
-- Medium panels: `w=6, h=3–4`
-- Grid is 12 columns wide
+**Grid sizing guidelines (from the catalog defaults):**
+- KPI cards (`kpi.*`): w=3, h=3 — 4 per row
+- Wide charts (`activity.chart`, `tools.*`, `sessions.*`): w=8–12, h=6–8
+- Medium panels (`costs.budget`, `costs.cache`, `activity.heatmap`): w=6, h=7
+- Full-width (`costs.models`, `sessions.highlights`): w=12, h=6–8
+- Projects: `projects.top` w=7, `projects.languages` w=5
+
+Order `componentIds` thoughtfully: KPI cards first, then charts, then tables.
 
 ---
 
 ### `agentistics_add_component`
 
-Adds a single component to an existing layout. The component is auto-positioned after existing items.
+Adds a single component to an existing layout. Auto-positioned after existing items unless `x`/`y` are specified.
 
 **Parameters:**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `layoutName` | string | yes | Target layout name |
+| `layoutName` | string | no | Target layout (defaults to active layout) |
 | `componentId` | string | yes | Component ID from the catalog |
+| `x` | number | no | Column 0–11 (auto-placed if omitted) |
+| `y` | number | no | Row (auto-placed if omitted) |
 | `w` | number | no | Width in grid columns (defaults to catalog default) |
 | `h` | number | no | Height in grid rows (defaults to catalog default) |
 
@@ -216,13 +240,13 @@ Adds a single component to an existing layout. The component is auto-positioned 
 
 ### `agentistics_remove_component`
 
-Removes a component by its instance ID from a layout.
+Removes a component by its instance ID from a layout. Get instance IDs from `agentistics_get_layouts`.
 
 **Parameters:**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `layoutName` | string | yes | Target layout name |
-| `instanceId` | string | yes | The `id` field of the specific item in the layout |
+| `layoutName` | string | no | Layout name (defaults to active layout) |
+| `itemId` | string | yes | Instance ID of the item to remove |
 
 ---
 
@@ -250,12 +274,30 @@ Switches the `/custom` page to display a different layout.
 
 ### `agentistics_delete_layout`
 
-Permanently deletes a layout. Cannot be undone.
+Permanently deletes a layout. Cannot be undone. Cannot delete the last remaining layout.
 
 **Parameters:**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `name` | string | yes | Layout name to delete |
+
+---
+
+### `agentistics_export_pdf`
+
+Generates a PDF report download link. Returns a `[⬇ Download PDF](pdf:URL)` link that the Nay chat renders as a styled download button. Clicking it opens the PDF export modal pre-configured with the requested date range.
+
+**Parameters:**
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `range` | string | `"all"` | Date range: `"7d"`, `"30d"`, `"90d"`, or `"all"` |
+
+**Returns:** a markdown button link
+```
+[⬇ Download PDF — last 30d](pdf:http://localhost:47292/?export=pdf&range=30d)
+```
+
+The Nay chat detects the `pdf:` protocol and renders it as an orange download button. Clicking opens the PDF export modal where you can review and download the report.
 
 ---
 
@@ -267,6 +309,7 @@ Once registered, you can invoke agentistics tools directly from any Claude Code 
 # In a Claude Code chat (not Nay), you can ask:
 "What's my total spend so far this month according to agentistics?"
 "Build me a layout in agentistics with cost KPIs and the activity chart"
+"Generate a PDF of my last 30 days usage"
 ```
 
 Claude Code will automatically use the registered MCP tools. No explicit configuration needed per-project — the registration is at user scope (`~/.claude.json`).
@@ -293,8 +336,9 @@ The server lives at `mcp/agentistics-mcp.ts`. It uses the `@modelcontextprotocol
 
 Key design decisions:
 - **No direct file access** — all data goes through the agentistics API so the same parsing/aggregation logic applies everywhere
-- **Cost calculation** — the MCP server has its own inline `calcCostUSD` that mirrors `src/lib/types.ts` to avoid bundling the frontend module
-- **Auto-position algorithm** — `agentistics_build_layout` uses first-fit shelf packing on a 12-column grid, placing items left-to-right before moving to the next row
+- **Cost calculation** — the MCP has its own inline `calcCostUSD` that mirrors `src/lib/types.ts` to avoid bundling the frontend module; totals in `agentistics_summary` are aggregated from sessions (not from the stats-cache snapshot) for accuracy
+- **Auto-position algorithm** — `agentistics_build_layout` uses first-fit shelf packing on a 12-column grid, then `fillGaps` extends items that have empty space to their right (no right neighbour in the same row range)
+- **PDF links** — `agentistics_export_pdf` returns a `[label](pdf:URL)` markdown link; the Nay chat component detects the `pdf:` protocol and renders it as a download button
 
 ## See also
 
