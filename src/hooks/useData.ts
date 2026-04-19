@@ -299,9 +299,11 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // Uses all sessions (no date-range filter) to mirror the global streak, which also
     // ignores the date filter (it reads from statsCache.dailyActivity covering all history).
     // Model filter is preserved when active so per-project streaks remain consistent.
+    // Project filter IS applied so the breakdown only shows projects in the active filter.
     const projectDateMap: Record<string, Set<string>> = {}
     for (const sess of data.sessions) {
       if (!sess.project_path || !sess.start_time) continue
+      if (projectFiltered && !projectSet.has(sess.project_path)) continue
       if (modelSet && (!sess.model || !modelSet.has(sess.model))) continue
       const dates = projectDateMap[sess.project_path] ?? (projectDateMap[sess.project_path] = new Set())
       if (sess.user_message_timestamps?.length) {
