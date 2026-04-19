@@ -1007,7 +1007,7 @@ interface ClaudeChatProps {
   initialProject?: { path: string; name: string; encodedDir: string } | null
   initialSessionId?: string | null
   initialMessages?: ChatMessage[]
-  onStateChange?: (state: { projectPath: string | null; projectName: string | null; projectEncodedDir: string | null; sessionId: string | null; messages: ChatMessage[] }) => void
+  onStateChange?: (state: { projectPath: string | null; projectName: string | null; projectEncodedDir: string | null; sessionId: string | null; messages: ChatMessage[]; model?: ChatModelId }) => void
 }
 
 export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initialProject, initialSessionId, initialMessages, onStateChange }: ClaudeChatProps) {
@@ -1068,7 +1068,7 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
 
   // Propagate state changes upward so parent can preserve when toggling float mode
   useEffect(() => {
-    onStateChange?.({ projectPath, projectName, projectEncodedDir, sessionId, messages })
+    onStateChange?.({ projectPath, projectName, projectEncodedDir, sessionId, messages, model })
   }, [projectPath, projectName, projectEncodedDir, sessionId, messages]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll for new messages written externally (e.g. from VS Code Claude extension)
@@ -1608,15 +1608,17 @@ export function ClaudeChat({ lang, onOpen, embedded, onDetach, onAttach, initial
               )}
             </div>
 
-            {/* Decouple button */}
-            <button
-              className="claude-icon-btn"
-              onClick={onDetach}
-              title={lang === 'pt' ? 'Destacar janela' : 'Detach window'}
-              style={iconBtnStyle}
-            >
-              <ExternalLink size={11} />
-            </button>
+            {/* Decouple button — only shown in standalone mode; embedded mode uses TtyChat header */}
+            {onDetach && !embedded && (
+              <button
+                className="claude-icon-btn"
+                onClick={onDetach}
+                title={lang === 'pt' ? 'Destacar janela' : 'Detach window'}
+                style={iconBtnStyle}
+              >
+                <ExternalLink size={11} />
+              </button>
+            )}
           </div>
 
           {/* Messages */}

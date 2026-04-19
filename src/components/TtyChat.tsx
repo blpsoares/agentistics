@@ -6,7 +6,7 @@ import {
   MessageSquare, X, Send, Loader, AlertCircle, Trash2,
   Maximize2, Minimize2, Terminal, Play, ChevronRight,
   Wrench, ChevronDown, ChevronUp, ArrowRight, Filter, History, Plus,
-  ShieldAlert, Check, ExternalLink, Paperclip, FileText as FileTextIcon, Minus,
+  ShieldAlert, Check, ExternalLink, Paperclip, FileText as FileTextIcon, Minus, Brain,
 } from 'lucide-react'
 
 // ── Attachment type (Nay only handles images + text files) ────────────────────
@@ -25,6 +25,18 @@ import { t } from '../lib/i18n'
 import type { Filters } from '../lib/types'
 
 type Lang = 'pt' | 'en'
+
+type ThinkingBudget = false | 8000 | 16000 | 32000
+const THINKING_CYCLE: ThinkingBudget[] = [false, 8000, 16000, 32000]
+function nextThinkingBudget(cur: ThinkingBudget): ThinkingBudget {
+  return THINKING_CYCLE[(THINKING_CYCLE.indexOf(cur) + 1) % THINKING_CYCLE.length]!
+}
+function thinkingLabel(b: ThinkingBudget): string {
+  if (!b) return ''
+  if (b === 8000) return '8K'
+  if (b === 16000) return '16K'
+  return '32K'
+}
 
 type ChatMessage = {
   role: 'user' | 'assistant'
@@ -711,11 +723,11 @@ interface TtyChatProps {
   onReattachClaude?: () => void
   claudeSharedState?: {
     projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
-    sessionId: string | null; messages: ClaudeChatMessage[]
+    sessionId: string | null; messages: ClaudeChatMessage[]; model?: ChatModelId
   }
   onClaudeStateChange?: (s: {
     projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
-    sessionId: string | null; messages: ClaudeChatMessage[]
+    sessionId: string | null; messages: ClaudeChatMessage[]; model?: ChatModelId
   }) => void
 }
 
@@ -784,6 +796,9 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   const [historyList, setHistoryList] = useState<NaySessionSummary[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [nayThinking, setNayThinking] = useState<ThinkingBudget>(false)
+  const [showNayModelPicker, setShowNayModelPicker] = useState(false)
+  const [claudeCurrentModel, setClaudeCurrentModel] = useState<ChatModelId>(DEFAULT_CHAT_MODEL)
   // Track which historical Nay session is being viewed (for live polling)
   const [viewedNaySessionId, setViewedNaySessionId] = useState<string | null>(null)
 
@@ -826,8 +841,9 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
 
   useEffect(() => { openRef.current = open }, [open])
   useEffect(() => { soundRef.current = chatSoundEnabled }, [chatSoundEnabled])
-  // When Nay is detached, the embedded panel should show Claude tab
   useEffect(() => { if (nayDetached) setActiveTab('claude') }, [nayDetached])
+  useEffect(() => { if (claudeDetached) setActiveTab('nay') }, [claudeDetached])
+  useEffect(() => { if (claudeSharedState?.model) setClaudeCurrentModel(claudeSharedState.model) }, [claudeSharedState?.model])
   useEffect(() => { nayPosRef.current = nayPos }, [nayPos])
   useEffect(() => { naySizeRef.current = naySize }, [naySize])
   useEffect(() => { nayFabPosRef.current = nayFabPos }, [nayFabPos])
@@ -1259,6 +1275,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
         signal: abortCtrl.signal,
         body: JSON.stringify({
           message: text, history, model, sessionId,
+          thinkingBudget: nayThinking || undefined,
           attachments: pendingAttachments.length > 0
             ? pendingAttachments.map(a => ({ name: a.name, mimeType: a.mimeType, data: a.data, isImage: a.isImage }))
             : undefined,
@@ -1466,53 +1483,79 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                 background: 'var(--bg-elevated)', border: '1px solid var(--border)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                <img src="/minimalistLogo.png" alt="Nay" style={{ width: 22, height: 22, objectFit: 'contain' }} />
+                <img
+                  src={activeTab === 'claude' ? '/claudeLogo.png' : '/minimalistLogo.png'}
+                  alt={activeTab === 'claude' ? 'Claude' : 'Nay'}
+                  style={{ width: 22, height: 22, objectFit: 'contain' }}
+                />
               </div>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
-                  Nay
+                  {activeTab === 'claude' ? 'Claude' : 'Nay'}
                 </div>
-                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  {streaming ? (
-                    <span style={{ color: 'var(--accent-purple)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <Loader size={8} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
-                      {currentTools.length > 0
-                        ? formatToolName(currentTools[currentTools.length - 1]!)
-                        : (pt ? 'pensando...' : 'thinking...')}
-                    </span>
-                  ) : (
-                    <>
-                      <span>{modelInfo?.label ?? effectiveModel}</span>
-                      {modelInfo && (
+                {(() => {
+                  if (activeTab === 'nay') {
+                    return (
+                      <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        {streaming ? (
+                          <span style={{ color: 'var(--accent-purple)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Loader size={8} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
+                            {currentTools.length > 0
+                              ? formatToolName(currentTools[currentTools.length - 1]!)
+                              : (pt ? 'pensando...' : 'thinking...')}
+                          </span>
+                        ) : (
+                          <>
+                            <span>{modelInfo?.label ?? effectiveModel}</span>
+                            {modelInfo && (
+                              <span style={{
+                                fontSize: 9, fontWeight: 700,
+                                color: BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)',
+                                background: `color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
+                                border: `1px solid color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
+                                padding: '0px 4px', borderRadius: 3,
+                              }}>
+                                {modelInfo.badge}
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )
+                  }
+                  const claudeModelInfo = CHAT_MODELS.find(m => m.id === claudeCurrentModel)
+                  return (
+                    <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span>{claudeModelInfo?.label ?? claudeCurrentModel}</span>
+                      {claudeModelInfo && (
                         <span style={{
                           fontSize: 9, fontWeight: 700,
-                          color: BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)',
-                          background: `color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
-                          border: `1px solid color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
+                          color: BADGE_COLORS[claudeModelInfo.badge] ?? 'var(--text-tertiary)',
+                          background: `color-mix(in srgb, ${BADGE_COLORS[claudeModelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
+                          border: `1px solid color-mix(in srgb, ${BADGE_COLORS[claudeModelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
                           padding: '0px 4px', borderRadius: 3,
                         }}>
-                          {modelInfo.badge}
+                          {claudeModelInfo.badge}
                         </span>
                       )}
-                    </>
-                  )}
-                </div>
+                    </div>
+                  )
+                })()}
               </div>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              {messages.length > 0 && (
+              {activeTab === 'nay' && messages.length > 0 && (
                 <button className="tty-icon-btn" onClick={clearChat} title={pt ? 'Nova conversa' : 'New conversation'} style={iconBtnStyle}>
                   <Plus size={12} />
                 </button>
               )}
-              {activeTab === 'nay' && !isMobile && (
+              {activeTab === 'nay' && !nayDetached && !isMobile && (
                 <button
                   className="tty-icon-btn"
                   onClick={() => {
                     setNayDetached(true)
                     setNayMinimized(false)
-                    setOpen(false)
                     setActiveTab('claude')
                   }}
                   title={pt ? 'Destacar janela Nay' : 'Detach Nay window'}
@@ -1521,14 +1564,26 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                   <ExternalLink size={12} />
                 </button>
               )}
-              <button
-                className="tty-icon-btn"
-                onClick={openHistory}
-                title={pt ? 'Histórico de conversas' : 'Conversation history'}
-                style={{ ...iconBtnStyle, color: showHistory ? 'var(--accent-purple)' : 'var(--text-secondary)' }}
-              >
-                <History size={12} />
-              </button>
+              {activeTab === 'claude' && !claudeDetached && !isMobile && (
+                <button
+                  className="tty-icon-btn"
+                  onClick={() => { onDetachClaude?.(); setActiveTab('nay') }}
+                  title={pt ? 'Destacar janela Claude' : 'Detach Claude window'}
+                  style={iconBtnStyle}
+                >
+                  <ExternalLink size={12} />
+                </button>
+              )}
+              {activeTab === 'nay' && (
+                <button
+                  className="tty-icon-btn"
+                  onClick={openHistory}
+                  title={pt ? 'Histórico de conversas' : 'Conversation history'}
+                  style={{ ...iconBtnStyle, color: showHistory ? 'var(--accent-purple)' : 'var(--text-secondary)' }}
+                >
+                  <History size={12} />
+                </button>
+              )}
               <button
                 className="tty-icon-btn"
                 onClick={() => setFullscreen(v => !v)}
@@ -1589,7 +1644,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             display: 'flex', borderBottom: '1px solid var(--border)',
             background: 'var(--bg-card)', flexShrink: 0,
           }}>
-            {(['nay', 'claude'] as const).filter(tab => !(tab === 'nay' && nayDetached)).map(tab => (
+            {(['nay', 'claude'] as const).filter(tab => !(tab === 'nay' && nayDetached) && !(tab === 'claude' && claudeDetached)).map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -1614,7 +1669,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
             ))}
           </div>}
 
-          {activeTab === 'nay' && <>
+          {!nayDetached && activeTab === 'nay' && <>
 
           {/* History panel */}
           {showHistory && (
@@ -1743,12 +1798,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
               }}>
                 <img src="/minimalistLogo.png" alt="Nay" style={{ width: 36, height: 36, objectFit: 'contain', opacity: 0.3 }} />
                 <div style={{ fontSize: 13, fontWeight: 600 }}>
-                  {pt ? 'Olá! Sou o Nay' : 'Hi! I\'m Nay'}
+                  {pt ? 'Olá! Sou a Nay' : 'Hi! I\'m Nay'}
                 </div>
-                <div style={{ fontSize: 11, lineHeight: 1.65, opacity: 0.7 }}>
+                <div style={{ fontSize: 11, lineHeight: 1.65, opacity: 0.7, maxWidth: 220 }}>
                   {pt
-                    ? 'Analiso custos, sessões, projetos e crio layouts personalizados.'
-                    : 'I can analyze costs, sessions, projects and build custom layouts.'}
+                    ? 'Agente de analytics com acesso direto ao dashboard — custos, sessões, projetos e layouts personalizados.'
+                    : 'Analytics agent with direct dashboard access — costs, sessions, projects and custom layouts.'}
                 </div>
                 <div style={{
                   marginTop: 4, background: 'var(--bg-elevated)',
@@ -1824,6 +1879,69 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
               </div>
             )}
             <input ref={nayFileInputRef} type="file" multiple accept="image/*,text/*,.md,.json,.ts,.js,.py,.txt,.csv" onChange={handleNayFileSelect} style={{ display: 'none' }} />
+
+          {/* Nay toolbar: thinking + model picker */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 12px 0', justifyContent: 'flex-end' }}>
+            {/* Thinking toggle */}
+            <button
+              className="tty-icon-btn"
+              onClick={() => setNayThinking(prev => nextThinkingBudget(prev))}
+              title={nayThinking ? `Extended thinking: ${thinkingLabel(nayThinking)} tokens` : 'Enable extended thinking'}
+              style={{
+                ...iconBtnStyle,
+                color: nayThinking ? 'var(--accent-purple)' : 'var(--text-tertiary)',
+                borderColor: nayThinking ? 'color-mix(in srgb, var(--accent-purple) 40%, transparent)' : 'var(--border)',
+                background: nayThinking ? 'color-mix(in srgb, var(--accent-purple) 10%, transparent)' : 'transparent',
+                width: nayThinking ? 'auto' : 28, padding: nayThinking ? '0 6px' : 0, gap: 4, minWidth: 28,
+              }}
+            >
+              <Brain size={11} />
+              {nayThinking && <span style={{ fontSize: 9, fontWeight: 700 }}>{thinkingLabel(nayThinking)}</span>}
+            </button>
+
+            {/* Model picker */}
+            <div style={{ position: 'relative' }}>
+              <button
+                className="tty-icon-btn"
+                onClick={() => setShowNayModelPicker(v => !v)}
+                title="Change model"
+                style={{ ...iconBtnStyle, width: 'auto', padding: '0 6px', gap: 4, fontSize: 10 }}
+              >
+                <span>{modelInfo?.label ?? effectiveModel}</span>
+                <ChevronDown size={9} />
+              </button>
+              {showNayModelPicker && (
+                <div style={{
+                  position: 'absolute', bottom: 'calc(100% + 4px)', right: 0, zIndex: 10, minWidth: 180,
+                  background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10,
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden',
+                }}>
+                  {CHAT_MODELS.map(m => {
+                    const active = effectiveModel === m.id
+                    const badgeColor = BADGE_COLORS[m.badge] ?? 'var(--text-tertiary)'
+                    return (
+                      <button key={m.id} className="tty-icon-btn"
+                        onClick={() => { onModelSet(m.id); setShowNayModelPicker(false) }}
+                        style={{
+                          width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+                          background: active ? 'var(--bg-elevated)' : 'transparent', border: 'none',
+                          cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                          borderBottom: '1px solid var(--border)', transition: 'background 0.1s',
+                          borderRadius: 0,
+                        }}>
+                        <span style={{ flex: 1, fontSize: 12, fontWeight: active ? 700 : 400, color: active ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{m.label}</span>
+                        <span style={{ fontSize: 9, fontWeight: 700, color: badgeColor,
+                          background: `color-mix(in srgb, ${badgeColor} 12%, transparent)`,
+                          border: `1px solid color-mix(in srgb, ${badgeColor} 30%, transparent)`,
+                          padding: '1px 5px', borderRadius: 3 }}>{m.badge}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
           <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
             <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30, alignSelf: 'flex-end', marginBottom: 1 }}>
               <Paperclip size={12} />
@@ -1891,7 +2009,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
 
           </>}
 
-          {activeTab === 'claude' && (
+          {!claudeDetached && activeTab === 'claude' && (
             <ClaudeChat
               key={claudeResetKey}
               embedded
@@ -1904,7 +2022,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
               } : null}
               initialSessionId={claudeSharedState?.sessionId ?? null}
               initialMessages={claudeSharedState?.messages ?? []}
-              onStateChange={onClaudeStateChange}
+              onStateChange={(s) => { if (s.model) setClaudeCurrentModel(s.model); onClaudeStateChange?.(s) }}
             />
           )}
 
@@ -2182,12 +2300,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
               }}>
                 <img src="/minimalistLogo.png" alt="Nay" style={{ width: 36, height: 36, objectFit: 'contain', opacity: 0.3 }} />
                 <div style={{ fontSize: 13, fontWeight: 600 }}>
-                  {pt ? 'Olá! Sou o Nay' : 'Hi! I\'m Nay'}
+                  {pt ? 'Olá! Sou a Nay' : 'Hi! I\'m Nay'}
                 </div>
-                <div style={{ fontSize: 11, lineHeight: 1.65, opacity: 0.7 }}>
+                <div style={{ fontSize: 11, lineHeight: 1.65, opacity: 0.7, maxWidth: 220 }}>
                   {pt
-                    ? 'Analiso custos, sessões, projetos e crio layouts personalizados.'
-                    : 'I can analyze costs, sessions, projects and build custom layouts.'}
+                    ? 'Agente de analytics com acesso direto ao dashboard — custos, sessões, projetos e layouts personalizados.'
+                    : 'Analytics agent with direct dashboard access — costs, sessions, projects and custom layouts.'}
                 </div>
                 <div style={{
                   marginTop: 4, background: 'var(--bg-elevated)',
