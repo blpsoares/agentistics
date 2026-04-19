@@ -268,12 +268,21 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // When project filter is active, derive active dates from filteredSessions only.
     // Otherwise, supplement stats-cache dates with all session start dates (fresher than stats-cache).
     // Session start_times are ISO UTC strings — format() normalises to local date.
+    // Multi-day sessions: use user_message_timestamps when available (most accurate); otherwise
+    // add both start_time and end_time so days beyond the first are not silently dropped.
     const activeDates = sessionFiltered
       ? (() => {
           const set = new Set<string>()
           for (const s of filteredSessions) {
             if (!s.start_time) continue
-            set.add(format(parseISO(s.start_time), 'yyyy-MM-dd'))
+            if (s.user_message_timestamps?.length) {
+              for (const ts of s.user_message_timestamps) {
+                set.add(format(parseISO(ts), 'yyyy-MM-dd'))
+              }
+            } else {
+              set.add(format(parseISO(s.start_time), 'yyyy-MM-dd'))
+              if (s.end_time) set.add(format(parseISO(s.end_time), 'yyyy-MM-dd'))
+            }
           }
           return set
         })()
@@ -282,17 +291,29 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
           ...(data.sessions ?? []).filter(s => s.start_time).map(s => format(parseISO(s.start_time), 'yyyy-MM-dd')),
         ])
     const streak = calcStreak(activeDates)
+    const streakLastActiveDate = streak === 0 && activeDates.size > 0
+      ? (Array.from(activeDates).sort().at(-1) ?? null)
+      : null
 
     // ── Per-project streaks (for streak breakdown popup) ──
     // Uses all sessions (no date-range filter) to mirror the global streak, which also
     // ignores the date filter (it reads from statsCache.dailyActivity covering all history).
     // Model filter is preserved when active so per-project streaks remain consistent.
+    // Project filter IS applied so the breakdown only shows projects in the active filter.
     const projectDateMap: Record<string, Set<string>> = {}
     for (const sess of data.sessions) {
       if (!sess.project_path || !sess.start_time) continue
+      if (projectFiltered && !projectSet.has(sess.project_path)) continue
       if (modelSet && (!sess.model || !modelSet.has(sess.model))) continue
       const dates = projectDateMap[sess.project_path] ?? (projectDateMap[sess.project_path] = new Set())
-      dates.add(format(parseISO(sess.start_time), 'yyyy-MM-dd'))
+      if (sess.user_message_timestamps?.length) {
+        for (const ts of sess.user_message_timestamps) {
+          dates.add(format(parseISO(ts), 'yyyy-MM-dd'))
+        }
+      } else {
+        dates.add(format(parseISO(sess.start_time), 'yyyy-MM-dd'))
+        if (sess.end_time) dates.add(format(parseISO(sess.end_time), 'yyyy-MM-dd'))
+      }
     }
     // ── Streak day breakdown: which projects were active on each day of the current streak ──
     const streakDayBreakdown: { date: string; projects: string[] }[] = []
@@ -317,7 +338,14 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
           if (!s.start_time) continue
           if (projectFiltered && !projectSet.has(s.project_path)) continue
           if (modelSet && (!s.model || !modelSet.has(s.model))) continue
-          set.add(format(parseISO(s.start_time), 'yyyy-MM-dd'))
+          if (s.user_message_timestamps?.length) {
+            for (const ts of s.user_message_timestamps) {
+              set.add(format(parseISO(ts), 'yyyy-MM-dd'))
+            }
+          } else {
+            set.add(format(parseISO(s.start_time), 'yyyy-MM-dd'))
+            if (s.end_time) set.add(format(parseISO(s.end_time), 'yyyy-MM-dd'))
+          }
         }
       } else {
         for (const d of data.statsCache.dailyActivity ?? []) set.add(d.date)
@@ -638,6 +666,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       totalToolCalls,
       totalCostUSD,
       streak,
+      streakLastActiveDate,
       longestStreak,
       streakDayBreakdown,
       heatmapData,

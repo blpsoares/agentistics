@@ -72,7 +72,12 @@ export default function HomePage() {
       )
     } else if (id === 'streak') {
       const bestStr = d.longestStreak > 0 ? ` · ${lang === 'pt' ? 'recorde' : 'best'}: ${d.longestStreak}d` : ''
-      card = <StatCard label={lang === 'pt' ? 'Sequência' : 'Streak'} value={`${d.streak}d`} sub={`${lang === 'pt' ? 'dias consecutivos' : 'consecutive days'}${bestStr}`} icon={<Flame size={15} />} accent="#ef4444" info={infoItems[3]} onInfoClick={() => setInfoModalIndex(3)}
+      const streakSub = d.streak === 0 && d.streakLastActiveDate
+        ? (lang === 'pt'
+          ? `último dia ativo: ${format(new Date(d.streakLastActiveDate + 'T12:00:00'), 'dd/MM')}${bestStr}`
+          : `last active: ${format(new Date(d.streakLastActiveDate + 'T12:00:00'), 'MMM d')}${bestStr}`)
+        : `${lang === 'pt' ? 'dias consecutivos' : 'consecutive days'}${bestStr}`
+      card = <StatCard label={lang === 'pt' ? 'Sequência' : 'Streak'} value={`${d.streak}d`} sub={streakSub} icon={<Flame size={15} />} accent="#ef4444" info={infoItems[3]} onInfoClick={() => setInfoModalIndex(3)}
         action={d.streakDayBreakdown && d.streakDayBreakdown.length > 0 && filters.projects.length !== 1 ? <StreakBreakdownButton items={d.streakDayBreakdown} pt={lang === 'pt'} /> : undefined}
       />
     } else if (id === 'longest-session') {

@@ -26,7 +26,7 @@ import { FiltersBar } from './components/FiltersBar'
 import { RecentSessions } from './components/RecentSessions'
 import { HighlightsBoard } from './components/HighlightsBoard'
 import { InfoModal } from './components/InfoModal'
-import { PDFExportModal } from './components/PDFExportModal'
+import { PDFExportModal, PDFDirectExporter } from './components/PDFExportModal'
 import { HealthWarnings } from './components/HealthWarnings'
 import { ToolMetricsPanel } from './components/ToolMetricsPanel'
 import { AgentMetricsPanel } from './components/AgentMetricsPanel'
@@ -732,6 +732,7 @@ export default function AppLayout() {
   const [showExportModal, setShowExportModal] = useState(
     () => new URLSearchParams(window.location.search).has('export')
   )
+  const [pdfDirectExportRange, setPdfDirectExportRange] = useState<string | null>(null)
   const [expandedChart, setExpandedChart] = useState<string | null>(null)
   const [selectedSession, setSelectedSession] = useState<import('./lib/types').SessionMeta | null>(null)
 
@@ -1677,6 +1678,19 @@ export default function AppLayout() {
         />
       )}
 
+      {/* PDF Direct Export — triggered from chat, no modal */}
+      {pdfDirectExportRange !== null && (
+        <PDFDirectExporter
+          data={data}
+          range={pdfDirectExportRange}
+          currentFilters={filters}
+          lang={lang}
+          currency={currency}
+          brlRate={brlRate}
+          onDone={() => setPdfDirectExportRange(null)}
+        />
+      )}
+
       {/* Mobile bottom navigation bar */}
       {isMobile && <MobileBottomNav lang={lang} />}
 
@@ -1687,6 +1701,7 @@ export default function AppLayout() {
         chatSoundEnabled={chatSoundEnabled}
         filters={filters}
         setFilters={setFilters}
+        onPdfExport={(range) => setPdfDirectExportRange(range)}
         isMobile={isMobile}
         onDetachClaude={() => setClaudeDetached(true)}
         claudeDetached={claudeDetached}

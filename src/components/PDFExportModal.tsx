@@ -647,6 +647,135 @@ function MiniHighlightsSection({ sessions, c, lang }: {
   )
 }
 
+// ── Standalone PDF generation (used by PDFDirectExporter and PDFExportModal) ──
+
+export async function runPDFCapture(el: HTMLElement, pdfTheme: PDFTheme): Promise<void> {
+  const html2canvas = (await import('html2canvas')).default
+  const { jsPDF } = await import('jspdf')
+
+  const offscreen = document.createElement('div')
+  offscreen.style.cssText = `position:fixed;left:-9999px;top:0;width:794px;background:${COLORS[pdfTheme].bg};pointer-events:none;z-index:-1;`
+  const clone = el.cloneNode(true) as HTMLElement
+  offscreen.appendChild(clone)
+  document.body.appendChild(offscreen)
+
+  const canvas = await html2canvas(clone, {
+    scale: 2, useCORS: true, logging: false,
+    backgroundColor: COLORS[pdfTheme].bg,
+    windowWidth: 794,
+  })
+
+  document.body.removeChild(offscreen)
+
+  const A4_W = 210, A4_H = 297
+  const pxPerMm = canvas.width / A4_W
+  const totalH_mm = canvas.height / pxPerMm
+
+  if (totalH_mm <= A4_H) {
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [A4_W, totalH_mm] })
+    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, A4_W, totalH_mm)
+    pdf.save(`claude-stats-${format(new Date(), 'yyyy-MM-dd')}.pdf`)
+  } else {
+    const pageH_px = Math.round(A4_H * pxPerMm)
+    const totalPages = Math.ceil(canvas.height / pageH_px)
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+    for (let page = 0; page < totalPages; page++) {
+      const startY = page * pageH_px
+      const sliceH_px = Math.min(pageH_px, canvas.height - startY)
+      const sliceH_mm = sliceH_px / pxPerMm
+      const slice = document.createElement('canvas')
+      slice.width = canvas.width
+      slice.height = sliceH_px
+      const ctx = slice.getContext('2d')!
+      ctx.fillStyle = COLORS[pdfTheme].bg
+      ctx.fillRect(0, 0, slice.width, slice.height)
+      ctx.drawImage(canvas, 0, startY, canvas.width, sliceH_px, 0, 0, canvas.width, sliceH_px)
+      if (page > 0) pdf.addPage()
+      if (sliceH_mm < A4_H) {
+        const padded = document.createElement('canvas')
+        padded.width = canvas.width
+        padded.height = pageH_px
+        const pCtx = padded.getContext('2d')!
+        pCtx.fillStyle = COLORS[pdfTheme].bg
+        pCtx.fillRect(0, 0, padded.width, padded.height)
+        pCtx.drawImage(slice, 0, 0)
+        pdf.addImage(padded.toDataURL('image/png'), 'PNG', 0, 0, A4_W, A4_H)
+      } else {
+        pdf.addImage(slice.toDataURL('image/png'), 'PNG', 0, 0, A4_W, sliceH_mm)
+      }
+    }
+    pdf.save(`claude-stats-${format(new Date(), 'yyyy-MM-dd')}.pdf`)
+  }
+}
+
+// ── Direct PDF export (no modal) — renders content offscreen and downloads ───
+
+export interface PDFDirectExporterProps {
+  data: AppData
+  range: string
+  currentFilters: Filters
+  lang: Lang
+  currency: 'USD' | 'BRL'
+  brlRate: number
+  onDone: () => void
+}
+
+export function PDFDirectExporter({ data, range, currentFilters, lang, currency, brlRate, onDone }: PDFDirectExporterProps) {
+  const pdfFilters: Filters = {
+    ...currentFilters,
+    dateRange: (range === '7d' || range === '30d' || range === '90d') ? range : 'all',
+    customStart: '',
+    customEnd: '',
+  }
+  const pdfTheme: PDFTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  const derived = useDerivedStats(data, pdfFilters)
+  const blendedRates = useMemo(() => blendedCostPerToken(data.statsCache.modelUsage ?? {}), [data])
+  const contentRef = useRef<HTMLDivElement>(null)
+  const [logoDataUri, setLogoDataUri] = useState<string>('/logo.png')
+  const triggered = useRef(false)
+
+  useEffect(() => {
+    fetch('/logo.png')
+      .then(r => r.blob())
+      .then(blob => new Promise<string>(resolve => {
+        const reader = new FileReader()
+        reader.onloadend = () => resolve(reader.result as string)
+        reader.readAsDataURL(blob)
+      }))
+      .then(setLogoDataUri)
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (!contentRef.current || !derived || triggered.current) return
+    triggered.current = true
+    runPDFCapture(contentRef.current, pdfTheme)
+      .catch(err => console.error('PDF direct export failed:', err))
+      .finally(onDone)
+  }, [derived, logoDataUri])
+
+  return (
+    <div style={{ position: 'fixed', left: -9999, top: 0, width: 794, pointerEvents: 'none', zIndex: -1 }}>
+      <div ref={contentRef}>
+        <PDFContent
+          pdfTheme={pdfTheme}
+          sectionOrder={['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools']}
+          derived={derived}
+          pdfFilters={pdfFilters}
+          lang={lang}
+          currency={currency}
+          brlRate={brlRate}
+          blendedRates={blendedRates}
+          chartMetric="messages"
+          chartOverlay={null}
+          chartOverlayAll={false}
+          logoDataUri={logoDataUri}
+        />
+      </div>
+    </div>
+  )
+}
+
 // ── PDF Content (the exportable A4 page, 794px wide) ─────────────────────────
 
 interface PDFContentProps {
@@ -954,79 +1083,7 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
     if (!contentRef.current || exporting) return
     setExporting(true)
     try {
-      const html2canvas = (await import('html2canvas')).default
-      const { jsPDF } = await import('jspdf')
-
-      const el = contentRef.current
-      // Clone into an isolated off-screen container at the top of <body> so
-      // html2canvas captures the full element with no scroll-offset or
-      // overflow-clipping from the modal's scroll containers.
-      const offscreen = document.createElement('div')
-      // Background ensures any sub-pixel overflow rows captured by html2canvas
-      // match the theme — the body background would be white otherwise.
-      offscreen.style.cssText = `position:fixed;left:-9999px;top:0;width:794px;background:${COLORS[pdfTheme].bg};pointer-events:none;z-index:-1;`
-      const clone = el.cloneNode(true) as HTMLElement
-      offscreen.appendChild(clone)
-      document.body.appendChild(offscreen)
-
-      const canvas = await html2canvas(clone, {
-        scale: 2, useCORS: true, logging: false,
-        backgroundColor: COLORS[pdfTheme].bg,
-        windowWidth: 794,
-      })
-
-      document.body.removeChild(offscreen)
-
-      const A4_W = 210, A4_H = 297 // mm
-      // pxPerMm uses the canvas width as truth — canvas is always 794*scale px wide
-      const pxPerMm = canvas.width / A4_W
-      const totalH_mm = canvas.height / pxPerMm
-
-      if (totalH_mm <= A4_H) {
-        // Single page — trim to exact content height, no whitespace
-        const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [A4_W, totalH_mm] })
-        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, A4_W, totalH_mm)
-        pdf.save(`claude-stats-${format(new Date(), 'yyyy-MM-dd')}.pdf`)
-      } else {
-        // Multi-page: slice the canvas per page — no negative-offset hack, no float drift
-        const pageH_px = Math.round(A4_H * pxPerMm)
-        const totalPages = Math.ceil(canvas.height / pageH_px)
-        const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-
-        for (let page = 0; page < totalPages; page++) {
-          const startY = page * pageH_px
-          const sliceH_px = Math.min(pageH_px, canvas.height - startY)
-          const sliceH_mm = sliceH_px / pxPerMm
-
-          // Slice the canvas for this page
-          const slice = document.createElement('canvas')
-          slice.width = canvas.width
-          slice.height = sliceH_px
-          const ctx = slice.getContext('2d')!
-          // Fill background so partial last slice has no transparent/white area
-          ctx.fillStyle = COLORS[pdfTheme].bg
-          ctx.fillRect(0, 0, slice.width, slice.height)
-          ctx.drawImage(canvas, 0, startY, canvas.width, sliceH_px, 0, 0, canvas.width, sliceH_px)
-
-          if (page > 0) pdf.addPage()
-
-          if (sliceH_mm < A4_H) {
-            // Pad last page to full A4 with theme background so viewers
-            // don't show a white gap below a short custom-height page.
-            const padded = document.createElement('canvas')
-            padded.width = canvas.width
-            padded.height = pageH_px
-            const pCtx = padded.getContext('2d')!
-            pCtx.fillStyle = COLORS[pdfTheme].bg
-            pCtx.fillRect(0, 0, padded.width, padded.height)
-            pCtx.drawImage(slice, 0, 0)
-            pdf.addImage(padded.toDataURL('image/png'), 'PNG', 0, 0, A4_W, A4_H)
-          } else {
-            pdf.addImage(slice.toDataURL('image/png'), 'PNG', 0, 0, A4_W, sliceH_mm)
-          }
-        }
-        pdf.save(`claude-stats-${format(new Date(), 'yyyy-MM-dd')}.pdf`)
-      }
+      await runPDFCapture(contentRef.current, pdfTheme)
       setExportSuccess(true)
       setTimeout(() => setExportSuccess(false), 2500)
     } catch (err) {
