@@ -149,8 +149,8 @@ export const CATALOG: CatalogItem[] = [
         sub={lang === 'pt' ? 'dias consecutivos' : 'consecutive days'}
         icon={<Flame size={15} />}
         accent="#ef4444"
-        action={derived.projectStreaks.length >= 1 && filters.projects.length !== 1
-          ? <StreakBreakdownButton items={derived.projectStreaks} pt={lang === 'pt'} />
+        action={derived.streakDayBreakdown.length > 0 && filters.projects.length !== 1
+          ? <StreakBreakdownButton items={derived.streakDayBreakdown} pt={lang === 'pt'} />
           : undefined}
       />
     ),

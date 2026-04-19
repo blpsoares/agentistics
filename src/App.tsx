@@ -764,18 +764,27 @@ export default function AppLayout() {
     'messages', 'sessions', 'tool-calls', 'input-tokens', 'output-tokens',
     'cost', 'streak', 'longest-session', 'commits', 'files',
   ]
+  // Merges a saved card order with the default, inserting new cards at their default position.
+  function mergeCardOrder(saved: string[]): CardId[] {
+    const savedSet = new Set(saved)
+    const merged = saved.filter(id => DEFAULT_CARD_ORDER.includes(id as CardId)) as CardId[]
+    for (let i = 0; i < DEFAULT_CARD_ORDER.length; i++) {
+      const id = DEFAULT_CARD_ORDER[i]!
+      if (savedSet.has(id)) continue
+      let insertPos = merged.length
+      for (let j = i - 1; j >= 0; j--) {
+        const pred = DEFAULT_CARD_ORDER[j]!
+        const predIdx = merged.indexOf(pred)
+        if (predIdx >= 0) { insertPos = predIdx + 1; break }
+      }
+      merged.splice(insertPos, 0, id)
+    }
+    return merged
+  }
   const [cardOrder, setCardOrder] = useState<CardId[]>(() => {
     try {
       const saved = localStorage.getItem('claude-stats-card-order')
-      if (saved) {
-        const parsed: CardId[] = JSON.parse(saved)
-        const savedSet = new Set(parsed)
-        const merged = parsed.filter(id => DEFAULT_CARD_ORDER.includes(id))
-        for (const id of DEFAULT_CARD_ORDER) {
-          if (!savedSet.has(id)) merged.push(id)
-        }
-        return merged
-      }
+      if (saved) return mergeCardOrder(JSON.parse(saved))
     } catch {}
     return DEFAULT_CARD_ORDER
   })
@@ -823,7 +832,7 @@ export default function AppLayout() {
         if (prefs.lang) setLangState(prefs.lang)
         if (prefs.theme) setThemeState(prefs.theme)
         if (prefs.currency) setCurrencyState(prefs.currency)
-        if (prefs.cardOrder) setCardOrder(prefs.cardOrder as CardId[])
+        if (prefs.cardOrder) setCardOrder(mergeCardOrder(prefs.cardOrder))
         if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
         if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
       })

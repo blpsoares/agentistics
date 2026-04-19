@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, getDateRangeFilter } from './useData'
+import { calcStreak, calcLongestStreak, getDateRangeFilter } from './useData'
 import { format, subDays } from 'date-fns'
 
 // ── calcStreak ────────────────────────────────────────────────────────────────
@@ -49,6 +49,40 @@ describe('calcStreak', () => {
   test('365 dias consecutivos → streak 365', () => {
     const dates = new Set(Array.from({ length: 365 }, (_, i) => d(i)))
     expect(calcStreak(dates, TODAY)).toBe(365)
+  })
+})
+
+// ── calcLongestStreak ─────────────────────────────────────────────────────────
+
+describe('calcLongestStreak', () => {
+  const TODAY = new Date('2026-04-10T12:00:00.000Z')
+  const d = (offset: number) => format(subDays(TODAY, offset), 'yyyy-MM-dd')
+
+  test('set vazio → 0', () => {
+    expect(calcLongestStreak(new Set())).toBe(0)
+  })
+
+  test('um único dia → 1', () => {
+    expect(calcLongestStreak(new Set([d(0)]))).toBe(1)
+  })
+
+  test('3 dias consecutivos → 3', () => {
+    expect(calcLongestStreak(new Set([d(0), d(1), d(2)]))).toBe(3)
+  })
+
+  test('gap no meio — maior bloco vence', () => {
+    // d(0), d(1), d(2) = 3 dias; d(5), d(6) = 2 dias → maior = 3
+    expect(calcLongestStreak(new Set([d(0), d(1), d(2), d(5), d(6)]))).toBe(3)
+  })
+
+  test('streak ativa menor que streak histórica', () => {
+    // Streak ativa: d(0), d(1) = 2 dias; streak histórica: d(10)..d(15) = 6 dias
+    const dates = new Set([d(0), d(1), d(10), d(11), d(12), d(13), d(14), d(15)])
+    expect(calcLongestStreak(dates)).toBe(6)
+  })
+
+  test('dias isolados → 1', () => {
+    expect(calcLongestStreak(new Set([d(0), d(5), d(10)]))).toBe(1)
   })
 })
 

@@ -144,6 +144,26 @@ export function calcStreak(activeDates: Set<string>, today: Date = new Date()): 
   return streak
 }
 
+/**
+ * Calcula o maior streak já atingido no histórico completo de datas ativas.
+ */
+export function calcLongestStreak(activeDates: Set<string>): number {
+  if (activeDates.size === 0) return 0
+  const sorted = Array.from(activeDates).sort()
+  let longest = 1
+  let current = 1
+  for (let i = 1; i < sorted.length; i++) {
+    const diff = differenceInCalendarDays(parseISO(sorted[i]!), parseISO(sorted[i - 1]!))
+    if (diff === 1) {
+      current++
+      if (current > longest) longest = current
+    } else {
+      current = 1
+    }
+  }
+  return longest
+}
+
 /** Blended cost per token using global model usage proportions */
 export function blendedCostPerToken(modelUsage: Record<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }>) {
   let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheWrite = 0
@@ -253,10 +273,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
           const set = new Set<string>()
           for (const s of filteredSessions) {
             if (!s.start_time) continue
-            const start = startOfDay(parseISO(s.start_time))
-            const end = s.end_time ? startOfDay(parseISO(s.end_time)) : start
-            const span = differenceInCalendarDays(end, start)
-            for (let i = 0; i <= span; i++) set.add(format(addDays(start, i), 'yyyy-MM-dd'))
+            set.add(format(parseISO(s.start_time), 'yyyy-MM-dd'))
           }
           return set
         })()
@@ -275,17 +292,42 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       if (!sess.project_path || !sess.start_time) continue
       if (modelSet && (!sess.model || !modelSet.has(sess.model))) continue
       const dates = projectDateMap[sess.project_path] ?? (projectDateMap[sess.project_path] = new Set())
-      const start = startOfDay(parseISO(sess.start_time))
-      const end = sess.end_time ? startOfDay(parseISO(sess.end_time)) : start
-      const span = differenceInCalendarDays(end, start)
-      for (let i = 0; i <= span; i++) {
-        dates.add(format(addDays(start, i), 'yyyy-MM-dd'))
+      dates.add(format(parseISO(sess.start_time), 'yyyy-MM-dd'))
+    }
+    // ── Streak day breakdown: which projects were active on each day of the current streak ──
+    const streakDayBreakdown: { date: string; projects: string[] }[] = []
+    {
+      const now = new Date()
+      for (let i = 0; i <= 365; i++) {
+        const dateStr = format(subDays(now, i), 'yyyy-MM-dd')
+        if (!activeDates.has(dateStr)) { if (i > 0) break; continue }
+        const projects = Object.entries(projectDateMap)
+          .filter(([, dates]) => dates.has(dateStr))
+          .map(([path]) => path)
+          .sort()
+        streakDayBreakdown.push({ date: dateStr, projects })
       }
     }
-    const projectStreaks = Object.entries(projectDateMap)
-      .map(([path, dates]) => ({ path, streak: calcStreak(dates) }))
-      .filter(p => p.streak > 0)
-      .sort((a, b) => b.streak - a.streak)
+
+    // ── Longest streak ever (respects project/model filter, ignores date range) ──
+    const allTimeActiveDates = (() => {
+      const set = new Set<string>()
+      if (projectFiltered || modelSet !== null) {
+        for (const s of data.sessions) {
+          if (!s.start_time) continue
+          if (projectFiltered && !projectSet.has(s.project_path)) continue
+          if (modelSet && (!s.model || !modelSet.has(s.model))) continue
+          set.add(format(parseISO(s.start_time), 'yyyy-MM-dd'))
+        }
+      } else {
+        for (const d of data.statsCache.dailyActivity ?? []) set.add(d.date)
+        for (const s of data.sessions) {
+          if (s.start_time) set.add(format(parseISO(s.start_time), 'yyyy-MM-dd'))
+        }
+      }
+      return set
+    })()
+    const longestStreak = calcLongestStreak(allTimeActiveDates)
 
     // ── Heatmap data ──
     let heatmapData: { date: string; value: number; sessions: number; tools: number }[]
@@ -596,7 +638,8 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       totalToolCalls,
       totalCostUSD,
       streak,
-      projectStreaks,
+      longestStreak,
+      streakDayBreakdown,
       heatmapData,
       modelUsage: filteredModelUsage,
       modelTokensByDate,

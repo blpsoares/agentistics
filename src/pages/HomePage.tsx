@@ -71,8 +71,9 @@ export default function HomePage() {
         />
       )
     } else if (id === 'streak') {
-      card = <StatCard label={lang === 'pt' ? 'Sequência' : 'Streak'} value={`${d.streak}d`} sub={lang === 'pt' ? 'dias consecutivos' : 'consecutive days'} icon={<Flame size={15} />} accent="#ef4444" info={infoItems[3]} onInfoClick={() => setInfoModalIndex(3)}
-        action={d.projectStreaks && d.projectStreaks.length >= 1 && filters.projects.length !== 1 ? <StreakBreakdownButton items={d.projectStreaks} pt={lang === 'pt'} /> : undefined}
+      const bestStr = d.longestStreak > 0 ? ` · ${lang === 'pt' ? 'recorde' : 'best'}: ${d.longestStreak}d` : ''
+      card = <StatCard label={lang === 'pt' ? 'Sequência' : 'Streak'} value={`${d.streak}d`} sub={`${lang === 'pt' ? 'dias consecutivos' : 'consecutive days'}${bestStr}`} icon={<Flame size={15} />} accent="#ef4444" info={infoItems[3]} onInfoClick={() => setInfoModalIndex(3)}
+        action={d.streakDayBreakdown && d.streakDayBreakdown.length > 0 && filters.projects.length !== 1 ? <StreakBreakdownButton items={d.streakDayBreakdown} pt={lang === 'pt'} /> : undefined}
       />
     } else if (id === 'longest-session') {
       card = (
