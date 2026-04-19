@@ -256,6 +256,7 @@ function renderContent(
   text: string,
   onRun?: (c: string) => void,
   onNavigate?: (path: string) => void,
+  onPdfExport?: (range: string) => void,
 ): React.ReactNode {
   const segments = parseSegments(text)
   if (segments.length === 1 && segments[0]!.kind === 'text') {
@@ -271,26 +272,26 @@ function renderContent(
             : null
         }
         if (seg.kind === 'pdf') {
+          const range = (() => {
+            try { return new URL(seg.url).searchParams.get('range') ?? 'all' } catch { return 'all' }
+          })()
           return (
-            <a
+            <button
               key={i}
-              href={seg.url}
-              target="_blank"
-              rel="noopener noreferrer"
+              onClick={() => onPdfExport?.(range)}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6,
                 padding: '7px 14px', borderRadius: 8, fontSize: 13, fontWeight: 700,
                 border: '1px solid color-mix(in srgb, var(--accent-orange) 50%, transparent)',
                 background: 'color-mix(in srgb, var(--accent-orange) 14%, transparent)',
                 color: 'var(--accent-orange)',
-                textDecoration: 'none',
                 margin: '8px 0', transition: 'all 0.15s',
-                cursor: 'pointer',
+                cursor: 'pointer', fontFamily: 'inherit',
               }}
             >
               <FileTextIcon size={13} />
               {seg.label.replace(/^⬇\s*/, '')}
-            </a>
+            </button>
           )
         }
         // nav
@@ -496,13 +497,14 @@ function ToolActivity({ tools, live, pt }: { tools: string[]; live: boolean; pt:
 // ── Message component ─────────────────────────────────────────────────────────
 
 function Message({
-  msg, isLiveStreaming, currentTools, onRun, onNavigate, pt,
+  msg, isLiveStreaming, currentTools, onRun, onNavigate, onPdfExport, pt,
 }: {
   msg: ChatMessage
   isLiveStreaming?: boolean
   currentTools?: string[]
   onRun: (cmd: string) => void
   onNavigate: (path: string) => void
+  onPdfExport?: (range: string) => void
   pt: boolean
 }) {
   const isUser = msg.role === 'user'
@@ -616,7 +618,7 @@ function Message({
           fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.58, wordBreak: 'break-word',
         }}>
           {msg.content
-            ? renderContent(msg.content, onRun, onNavigate)
+            ? renderContent(msg.content, onRun, onNavigate, onPdfExport)
             : isLiveStreaming
               ? <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-tertiary)', fontSize: 12 }}>
                   <Loader size={11} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
@@ -770,6 +772,7 @@ interface TtyChatProps {
   onDetachClaude?: () => void
   claudeDetached?: boolean
   onReattachClaude?: () => void
+  onPdfExport?: (range: string) => void
   claudeSharedState?: {
     projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
     sessionId: string | null; messages: ClaudeChatMessage[]; model?: ChatModelId
@@ -808,7 +811,7 @@ interface PendingNavigation {
   newProjects: string[]
 }
 
-export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters, setFilters, isMobile, onDetachClaude, claudeDetached, onReattachClaude, claudeSharedState, onClaudeStateChange }: TtyChatProps) {
+export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters, setFilters, isMobile, onDetachClaude, claudeDetached, onReattachClaude, onPdfExport, claudeSharedState, onClaudeStateChange }: TtyChatProps) {
   const navigate = useNavigate()
   const [pendingNav, setPendingNav] = useState<PendingNavigation | null>(null)
 
@@ -1869,6 +1872,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                   currentTools={isLast && streaming ? currentTools : undefined}
                   onRun={execCmd}
                   onNavigate={handleNavigate}
+                  onPdfExport={onPdfExport}
                   pt={pt}
                 />
               )
@@ -2370,6 +2374,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
                   currentTools={isLast && streaming ? currentTools : undefined}
                   onRun={execCmd}
                   onNavigate={handleNavigate}
+                  onPdfExport={onPdfExport}
                   pt={pt}
                 />
               )
