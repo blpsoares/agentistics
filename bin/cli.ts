@@ -15,16 +15,19 @@ Commands:
   server      Start the web dashboard + background daemon
   tui         Start the live terminal dashboard (standalone)
   watch       Start the background metrics daemon only
+  upgrade     Upgrade agentop to the latest version
 
 Options:
-  --help, -h    Show this help message
-  --port <n>    Port for the web server (default: 47291)  [server only]
+  --help, -h       Show this help message
+  --version, -v    Show current version
+  --port <n>       Port for the web server (default: 47291)  [server only]
 
 Examples:
   agentop server
   agentop server --port 4000
   agentop tui
   agentop watch
+  agentop upgrade
 `.trim()
 
 // ---------------------------------------------------------------------------
@@ -56,14 +59,7 @@ async function checkVersionAndWarn(): Promise<void> {
       `  ${_D}Latest: ${_R} ${_GR}${_B}v${info.latest}${_R}\n` +
       `${sep}\n` +
       `\n` +
-      `  ${_B}How to update:${_R}\n\n` +
-      `  ${_D}Option 1 — Download pre-built binary${_R}\n` +
-      `  ${_CY}https://github.com/blpsoares/agentistics/releases/latest${_R}\n` +
-      `  Download ${_AM}agentop${_R}, replace your current binary and run it.\n\n` +
-      `  ${_D}Option 2 — Build from source${_R}\n` +
-      `  ${_WH}git pull origin main${_R}\n` +
-      `  ${_WH}bun run build:binary${_R}\n` +
-      `  The new binary will be at ${_AM}./release/agentop${_R}\n` +
+      `  ${_B}Run ${_AM}agentop upgrade${_R}${_B} to update automatically.${_R}\n` +
       `${sep}\n\n`,
     )
   } catch {
@@ -75,6 +71,25 @@ async function checkVersionAndWarn(): Promise<void> {
 
 if (!command || command === '--help' || command === '-h') {
   console.log(HELP)
+  process.exit(0)
+}
+
+if (command === '--version' || command === '-v') {
+  const { CURRENT_VERSION, getVersionInfo } = await import('../server/version.ts')
+  process.stdout.write(`agentop v${CURRENT_VERSION}\n`)
+  const info = await getVersionInfo()
+  if (info.hasUpdate) {
+    process.stdout.write(
+      `${_Y}${_B}⚡ New version available: v${info.latest}${_R}\n` +
+      `  Run ${_AM}agentop upgrade${_R} to update.\n`,
+    )
+  }
+  process.exit(0)
+}
+
+if (command === 'upgrade' || command === 'update') {
+  const { runUpgrade } = await import('../server/upgrade.ts')
+  await runUpgrade()
   process.exit(0)
 }
 
