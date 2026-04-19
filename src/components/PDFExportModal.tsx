@@ -12,7 +12,7 @@ import { useDerivedStats, blendedCostPerToken } from '../hooks/useData'
 
 type PDFTheme = 'light' | 'dark'
 
-const SECTION_IDS = ['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools', 'sessions', 'highlights', 'agents'] as const
+const SECTION_IDS = ['summary', 'activity', 'heatmap', 'calendar', 'hours', 'models', 'projects', 'tools', 'sessions', 'highlights', 'agents'] as const
 type SectionId = typeof SECTION_IDS[number]
 
 interface Colors {
@@ -57,6 +57,7 @@ const SECTIONS: { id: SectionId; labelPt: string; labelEn: string; Icon: React.E
   { id: 'summary',    labelPt: 'Resumo',       labelEn: 'Summary',    Icon: BarChart2   },
   { id: 'activity',   labelPt: 'Atividade',    labelEn: 'Activity',   Icon: TrendingUp  },
   { id: 'heatmap',    labelPt: 'Mapa calor',   labelEn: 'Heatmap',    Icon: LayoutGrid  },
+  { id: 'calendar',   labelPt: 'Calendário',   labelEn: 'Calendar',   Icon: Calendar    },
   { id: 'hours',      labelPt: 'Por hora',     labelEn: 'By hour',    Icon: Clock       },
   { id: 'models',     labelPt: 'Modelos',      labelEn: 'Models',     Icon: Cpu         },
   { id: 'projects',   labelPt: 'Projetos',     labelEn: 'Projects',   Icon: FolderOpen  },
@@ -341,6 +342,98 @@ function MiniHeatmap({ data, c }: { data: HeatmapDay[]; c: Colors }) {
       {monthLabels.map(({ x, label }) => (
         <text key={label + x} x={x} y={svgH - 3} fontSize={8} fill={c.textTer}>{label}</text>
       ))}
+    </svg>
+  )
+}
+
+function MiniCalendarGrid({
+  data, sessions, c, pt, currency, brlRate,
+}: {
+  data: HeatmapDay[]
+  sessions: SessionMeta[]
+  c: Colors
+  pt: boolean
+  currency: 'USD' | 'BRL'
+  brlRate: number
+}) {
+  // Build daily session counts from heatmapData
+  const dayMap = new Map(data.map(d => [d.date, d.sessions]))
+  const maxSessions = Math.max(...data.map(d => d.sessions), 1)
+
+  // Determine which months to show: the last 2 months that appear in data (or current month)
+  const allMonths = Array.from(
+    new Set(data.map(d => d.date.slice(0, 7))).values(),
+  ).sort()
+  const monthsToShow = allMonths.length >= 2
+    ? allMonths.slice(-2)
+    : allMonths.length === 1
+      ? allMonths
+      : [format(new Date(), 'yyyy-MM')]
+
+  const CELL = 34, GAP = 2, SLOT = CELL + GAP
+  const MONTH_W = 7 * SLOT - GAP
+  const TITLE_H = 16, HEADER_H = 14
+  const ROWS = 6
+  const MONTH_H = TITLE_H + HEADER_H + ROWS * SLOT
+  const TOTAL_W = monthsToShow.length * MONTH_W + (monthsToShow.length - 1) * 20
+  const WD = pt ? ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'] : ['S', 'M', 'T', 'W', 'T', 'F', 'S']
+  const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
+  return (
+    <svg width={TOTAL_W} height={MONTH_H} style={{ display: 'block' }}>
+      {monthsToShow.map((ym, mi) => {
+        const [yr, mo] = ym.split('-').map(Number) as [number, number]
+        const firstDay = new Date(yr, mo - 1, 1)
+        const daysInMonth = new Date(yr, mo, 0).getDate()
+        const startDow = firstDay.getDay() // 0=Sun
+        const offsetX = mi * (MONTH_W + 20)
+        const monthLabel = `${MONTH_NAMES[mo - 1]} ${yr}`
+
+        return (
+          <g key={ym} transform={`translate(${offsetX}, 0)`}>
+            {/* Month title */}
+            <text x={MONTH_W / 2} y={11} fontSize={10} fontWeight={700} fill={c.text} textAnchor="middle">
+              {monthLabel}
+            </text>
+
+            {/* Weekday headers */}
+            {WD.map((wd, i) => (
+              <text key={i} x={i * SLOT + CELL / 2} y={TITLE_H + 10} fontSize={7} fontWeight={600} fill={c.textTer} textAnchor="middle">
+                {wd}
+              </text>
+            ))}
+
+            {/* Day cells */}
+            {Array.from({ length: daysInMonth }, (_, d) => {
+              const dayNum = d + 1
+              const totalOffset = startDow + d
+              const col = totalOffset % 7
+              const row = Math.floor(totalOffset / 7)
+              const dateStr = `${ym}-${String(dayNum).padStart(2, '0')}`
+              const sessions = dayMap.get(dateStr) ?? 0
+              const intensity = sessions > 0 ? 0.2 + (sessions / maxSessions) * 0.8 : 0
+
+              return (
+                <g key={dayNum} transform={`translate(${col * SLOT}, ${TITLE_H + HEADER_H + row * SLOT})`}>
+                  <rect
+                    width={CELL} height={CELL} rx={3}
+                    fill={sessions > 0 ? c.orange : c.bgElevated}
+                    opacity={sessions > 0 ? intensity : 1}
+                  />
+                  <text x={CELL / 2} y={CELL / 2 + 3} fontSize={8} fill={sessions > 0 ? '#fff' : c.textTer} textAnchor="middle" opacity={sessions > 0 ? 0.9 : 0.7}>
+                    {dayNum}
+                  </text>
+                  {sessions > 0 && (
+                    <text x={CELL / 2} y={CELL - 3} fontSize={6} fill="#fff" textAnchor="middle" opacity={0.75}>
+                      {sessions}s
+                    </text>
+                  )}
+                </g>
+              )
+            })}
+          </g>
+        )
+      })}
     </svg>
   )
 }
@@ -739,6 +832,12 @@ function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currenc
             <div key="heatmap" style={{ marginBottom: 28 }}>
               <SectionTitle title={pt ? 'Mapa de calor (26 semanas)' : 'Activity heatmap (26 weeks)'} c={c} />
               <MiniHeatmap data={derived.heatmapData} c={c} />
+            </div>
+          )
+          case 'calendar': return (
+            <div key="calendar" style={{ marginBottom: 28 }}>
+              <SectionTitle title={pt ? 'Calendário mensal' : 'Monthly calendar'} c={c} />
+              <MiniCalendarGrid data={derived.heatmapData} sessions={derived.filteredSessions} c={c} pt={pt} currency={currency} brlRate={brlRate} />
             </div>
           )
           case 'hours': return (

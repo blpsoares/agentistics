@@ -26,6 +26,7 @@ import { ToolMetricsPanel } from '../components/ToolMetricsPanel'
 import { AgentMetricsPanel } from '../components/AgentMetricsPanel'
 import { RecentSessions } from '../components/RecentSessions'
 import { StreakBreakdownButton } from '../components/StreakBreakdownButton'
+import { CalendarView } from '../components/CalendarView'
 
 type CardId = 'messages' | 'sessions' | 'tool-calls' | 'input-tokens' | 'output-tokens' | 'cost' | 'streak' | 'longest-session' | 'commits' | 'files'
 
@@ -152,6 +153,18 @@ export default function HomePage() {
           <ActivityHeatmap data={derived.heatmapData} />
         </Section>
       </div>
+
+      {/* Monthly calendar */}
+      <Section flashId="calendar" title={<><Calendar size={14} /> {lang === 'pt' ? 'Calendário mensal' : 'Monthly calendar'}</>} onExpand={() => setExpandedChart('calendar')}>
+        <CalendarView
+          heatmapData={derived.heatmapData}
+          sessions={derived.filteredSessions}
+          streakDayBreakdown={derived.streakDayBreakdown}
+          lang={lang}
+          currency={currency}
+          brlRate={brlRate}
+        />
+      </Section>
 
       {/* Hour distribution */}
       <Section flashId="hours" title={lang === 'pt' ? 'Uso por hora do dia' : 'Usage by hour'} onExpand={() => setExpandedChart('hours')}>

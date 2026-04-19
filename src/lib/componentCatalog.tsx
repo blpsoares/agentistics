@@ -22,6 +22,7 @@ import { TagCloud } from '../components/TagCloud'
 import { ToolMetricsPanel } from '../components/ToolMetricsPanel'
 import { AgentMetricsPanel } from '../components/AgentMetricsPanel'
 import { RecentSessions } from '../components/RecentSessions'
+import { CalendarView } from '../components/CalendarView'
 import { Section } from '../components/Section'
 
 /**
@@ -289,6 +290,22 @@ export const CATALOG: CatalogItem[] = [
     render: ({ derived, lang }) => (
       <Section title={<><CalendarDays size={14} /> {lang === 'pt' ? 'Heatmap de atividade' : 'Activity heatmap'}</>}>
         <ActivityHeatmap data={derived.heatmapData} />
+      </Section>
+    ),
+  },
+  {
+    id: 'activity.calendar', labelPt: 'Calendário mensal', labelEn: 'Monthly calendar', category: 'activity',
+    icon: CalendarDays, defaultW: 6, defaultH: 8, minW: 4, minH: 6,
+    render: ({ derived, lang, currency, brlRate }) => (
+      <Section title={<><CalendarDays size={14} /> {lang === 'pt' ? 'Calendário mensal' : 'Monthly calendar'}</>}>
+        <CalendarView
+          heatmapData={derived.heatmapData}
+          sessions={derived.filteredSessions}
+          streakDayBreakdown={derived.streakDayBreakdown}
+          lang={lang}
+          currency={currency}
+          brlRate={brlRate}
+        />
       </Section>
     ),
   },
