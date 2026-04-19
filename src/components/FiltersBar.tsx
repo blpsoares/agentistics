@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import type { Filters, DateRange, Project, Lang } from '../lib/types'
-import { formatModel } from '../lib/types'
+import { formatModel, formatProjectName } from '../lib/types'
 import { Layers, Cpu, RotateCcw, ChevronDown, X, CalendarDays, Check } from 'lucide-react'
 import { ProjectsModal } from './ProjectsModal'
 import { DatePicker } from './DatePicker'
@@ -334,6 +334,54 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
           </button>
         )}
       </div>
+
+      {/* Selected project chips */}
+      {hasProjects && (
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', padding: compact ? '0 12px 8px' : '0 0 4px' }}>
+          {filters.projects.map(path => (
+            <span
+              key={path}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                fontSize: 11,
+                fontWeight: 500,
+                color: 'var(--anthropic-orange)',
+                background: 'var(--anthropic-orange-dim)',
+                border: '1px solid rgba(217,119,6,0.3)',
+                borderRadius: 5,
+                padding: '2px 6px 2px 8px',
+                maxWidth: 260,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }} title={path}>
+                {formatProjectName(path)}
+              </span>
+              <button
+                onClick={() => onChange({ ...filters, projects: filters.projects.filter(p => p !== path), models: [] })}
+                title={lang === 'pt' ? 'Remover projeto' : 'Remove project'}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  color: 'var(--anthropic-orange)',
+                  opacity: 0.7,
+                  flexShrink: 0,
+                }}
+              >
+                <X size={10} strokeWidth={2.5} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
 
       {showProjectsModal && (
         <ProjectsModal
