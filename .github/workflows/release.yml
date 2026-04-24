@@ -111,7 +111,7 @@ jobs:
           echo "▶ $CURRENT → $NEXT  (bump: $BUMP, $COMMIT_COUNT commits)"
 
       - name: Bump version in package.json
-        if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        if: github.ref == 'refs/heads/main' && steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
         run: |
           VERSION="${{ steps.version.outputs.next }}"
           bun -e "
@@ -152,7 +152,7 @@ jobs:
         run: ./release/agentop --help
 
       - name: Generate changelog
-        if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        if: github.ref == 'refs/heads/main' && steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
         id: changelog
         run: |
           RANGE="${{ steps.version.outputs.range }}"
@@ -191,7 +191,7 @@ jobs:
           cat /tmp/release-notes.md
 
       - name: Commit version bump and create tag
-        if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        if: github.ref == 'refs/heads/main' && steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -206,7 +206,7 @@ jobs:
           git push origin main "$TAG"
 
       - name: Publish versioned release + update latest
-        if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        if: github.ref == 'refs/heads/main' && steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -294,7 +294,7 @@ jobs:
           retention-days: 7
 
       - name: Attach installers to GitHub Release
-        if: needs.build.outputs.tag != ''
+        if: github.ref == 'refs/heads/main' && needs.build.outputs.tag != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
@@ -306,7 +306,7 @@ jobs:
             --clobber || true
 
       - name: Attach installers to latest release
-        if: needs.build.outputs.tag != ''
+        if: github.ref == 'refs/heads/main' && needs.build.outputs.tag != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
