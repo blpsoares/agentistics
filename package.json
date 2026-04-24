@@ -18,6 +18,7 @@
   },
   "license": "MIT",
   "type": "module",
+  "workspaces": ["packages/*"],
   "scripts": {
     "dev:api": "bun run server/index.ts",
     "dev:ui": "vite --logLevel warn",
@@ -25,6 +26,8 @@
     "build": "vite build",
     "build:assets": "bun run scripts/embed-dist.ts",
     "build:binary": "vite build && bun run scripts/embed-dist.ts && bun build --compile bin/cli.ts --outfile ./release/agentop",
+    "build:binary:windows": "vite build && bun run scripts/embed-dist.ts && bun build --compile --target=bun-windows-x64 bin/cli.ts --outfile ./release/agentop.exe",
+    "build:desktop": "bun run build:binary:windows && cd packages/desktop && cargo tauri build",
     "preview": "vite preview",
     "watch": "bun run server/otel-watcher.ts",
     "watch:cli": "bun run src/tui/index.ts",

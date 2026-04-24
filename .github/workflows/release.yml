@@ -11,6 +11,11 @@ jobs:
   build:
     name: Build binary (Linux x64)
     runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.skip_check.outputs.skip }}
+      version_skip: ${{ steps.version.outputs.skip }}
+      tag: ${{ steps.version.outputs.tag }}
+      next: ${{ steps.version.outputs.next }}
 
     steps:
       - name: Checkout
@@ -130,6 +135,18 @@ jobs:
           mkdir -p release
           bun build --compile bin/cli.ts --outfile ./release/agentop
 
+      - name: Compile Windows binary (cross-compile)
+        if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        run: bun build --compile --target=bun-windows-x64 bin/cli.ts --outfile ./release/agentop.exe
+
+      - name: Upload Windows binary artifact
+        if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentop-windows-x64
+          path: release/agentop.exe
+          retention-days: 1
+
       - name: Smoke test
         if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
         run: ./release/agentop --help
@@ -196,11 +213,12 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           VERSION="${{ steps.version.outputs.next }}"
 
-          # Create the versioned release
+          # Create the versioned release (Linux binary only; Windows installer added by build-desktop job)
           gh release create "$TAG" \
             --title "v${VERSION}" \
             --notes-file /tmp/release-notes.md \
-            ./release/agentop
+            ./release/agentop \
+            ./release/agentop.exe
 
           # Update the rolling latest pointer
           gh release delete latest --yes 2>/dev/null || true
@@ -212,4 +230,88 @@ jobs:
           gh release create latest \
             --title "Latest build ($(date -u +'%Y-%m-%d %H:%M UTC'))" \
             --notes-file /tmp/release-notes.md \
-            ./release/agentop
+            ./release/agentop \
+            ./release/agentop.exe
+
+  build-desktop:
+    name: Build Tauri Desktop (Windows)
+    runs-on: windows-latest
+    needs: build
+    if: needs.build.outputs.skip != 'true' && needs.build.outputs.version_skip != 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop
+
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install desktop dependencies
+        run: bun install --frozen-lockfile --cwd packages/desktop
+
+      - name: Download agentop.exe artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: agentop-windows-x64
+          path: packages/desktop/binaries/
+
+      - name: Rename to Tauri sidecar convention
+        shell: bash
+        run: |
+          mv packages/desktop/binaries/agentop.exe \
+             packages/desktop/binaries/agentop-x86_64-pc-windows-msvc.exe
+
+      - name: Copy logo for loading screen
+        shell: bash
+        run: cp public/minimalistLogo.png packages/desktop/ui/logo.png
+
+      - name: Build Tauri app
+        working-directory: packages/desktop
+        run: bunx tauri build --target x86_64-pc-windows-msvc
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentistics-windows-installer
+          path: |
+            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          retention-days: 7
+
+      - name: Attach installers to GitHub Release
+        if: needs.build.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${{ needs.build.outputs.tag }}"
+          gh release upload "$TAG" \
+            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi \
+            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe \
+            --clobber || true
+
+      - name: Attach installers to latest release
+        if: needs.build.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release upload latest \
+            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi \
+            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe \
+            --clobber || true
