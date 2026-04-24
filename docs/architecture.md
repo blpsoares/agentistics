@@ -1,73 +1,92 @@
 # Architecture
 
-## Repository layout
+## Monorepo layout
 
 ```
 agentistics/
-├── bin/
-│   └── cli.ts                    # Binary entry: agentop server | tui | watch
-├── mcp/
-│   └── agentistics-mcp.ts        # MCP server (stdio transport, 12 tools)
-├── server/
-│   ├── index.ts                  # Bun HTTP server — thin entry, delegates to modules
-│   ├── config.ts                 # Path constants + PORT (reads .env.config)
-│   ├── env-config.ts             # .env.config read/write/backup/restore
-│   ├── utils.ts                  # Shared FS helpers (createLimiter, safeRead*)
-│   ├── git.ts                    # Git stats via git log --numstat
-│   ├── jsonl.ts                  # JSONL session parser
-│   ├── health.ts                 # Health checks + warnings
-│   ├── rates.ts                  # Pricing scraper + BRL rate cache
-│   ├── sse.ts                    # SSE clients, chokidar watcher, serveStatic
-│   ├── data.ts                   # Main orchestrator (buildApiResponse)
-│   ├── agent-metrics.ts          # Agent tool_use metrics parser
-│   ├── chat-tty.ts               # Nay chat: ensureNayChat, streamViaClaude, execCommand
-│   └── otel-watcher.ts           # Chokidar + OTLP metrics export daemon
-├── src/
-│   ├── App.tsx                   # Router, global state, header
-│   ├── pages/
-│   │   ├── HomePage.tsx          # Main dashboard (KPIs, charts, sessions)
-│   │   ├── CustomPage.tsx        # Custom layout builder (/custom)
-│   │   ├── CostsPage.tsx         # Cost deep-dive
-│   │   ├── ProjectsPage.tsx      # Projects overview
-│   │   └── ToolsPage.tsx         # Tool metrics breakdown
-│   ├── hooks/
-│   │   ├── useData.ts            # Fetches /api/data + SSE + useDerivedStats()
-│   │   └── useCustomLayout.ts    # Layout state + persistence to /api/preferences
-│   ├── components/               # UI components (charts, cards, modals)
-│   │   ├── TtyChat.tsx           # Nay chat panel (FAB + floating panel)
-│   │   ├── DevConfigPanel.tsx    # </> dev config modal (PORT, VITE_PORT)
-│   │   └── ...
-│   ├── lib/
-│   │   ├── types.ts              # All shared types + MODEL_PRICING + calcCost()
-│   │   ├── app-context.ts        # AppContext interface (React context shape)
-│   │   ├── componentCatalog.tsx  # Catalog of custom layout components
-│   │   ├── chatModels.ts         # CHAT_MODELS, DEFAULT_CHAT_MODEL
-│   │   ├── chatUtils.ts          # formatToolName, fmtTime, extractNavLinks
-│   │   ├── format.ts             # fmt(), fmtCost(), fmtDuration()
-│   │   ├── i18n.ts               # PT/EN translations
-│   │   └── otel.ts               # OpenTelemetry metric definitions
-│   └── tui/
-│       └── index.ts              # Terminal TUI (standalone, no browser)
-├── scripts/
-│   └── embed-dist.ts             # Embeds dist/ into src/embedded-dist.generated.ts
-├── docs/                         # Extended documentation
-├── grafana/                      # Pre-built Grafana dashboard JSON
-├── .env.config                   # Committed port defaults (PORT, VITE_PORT)
-├── package.json
-├── tsconfig.json
-└── vite.config.ts
+├── packages/
+│   ├── core/                         # @agentistics/core — shared, publishable
+│   │   └── src/
+│   │       ├── types.ts              # All shared types + MODEL_PRICING + calcCost()
+│   │       ├── format.ts             # fmt(), fmtCost(), fmtDuration(), fmtFull()
+│   │       ├── chatUtils.ts          # formatToolName, TOOL_LABELS, extractNavLinks
+│   │       ├── i18n.ts               # PT/EN translations, t()
+│   │       ├── otel.ts               # OpenTelemetry metric definitions
+│   │       └── index.ts              # Barrel re-export
+│   │
+│   ├── server/                       # @agentistics/server — CLI + HTTP server
+│   │   ├── bin/
+│   │   │   └── cli.ts                # Binary entry: agentop server | tui | watch
+│   │   ├── server/
+│   │   │   ├── index.ts              # Bun HTTP server — thin entry, delegates to modules
+│   │   │   ├── config.ts             # Path constants + PORT (reads .env.config)
+│   │   │   ├── env-config.ts         # .env.config read/write/backup/restore
+│   │   │   ├── utils.ts              # Shared FS helpers (createLimiter, safeRead*)
+│   │   │   ├── git.ts                # Git stats via git log --numstat
+│   │   │   ├── jsonl.ts              # JSONL session parser
+│   │   │   ├── health.ts             # Health checks + warnings
+│   │   │   ├── rates.ts              # Pricing scraper + BRL rate cache
+│   │   │   ├── sse.ts                # SSE clients, chokidar watcher, serveStatic
+│   │   │   ├── data.ts               # Main orchestrator (buildApiResponse)
+│   │   │   ├── agent-metrics.ts      # Agent tool_use metrics parser
+│   │   │   ├── chat-tty.ts           # Nay chat: ensureNayChat, streamViaClaude
+│   │   │   └── otel-watcher.ts       # Chokidar + OTLP metrics export daemon
+│   │   └── scripts/
+│   │       ├── embed-dist.ts         # Embeds packages/web/dist/ → embedded-dist.generated.ts
+│   │       └── ensure-type-stub.ts   # Creates type stub for CI (before full build)
+│   │
+│   ├── web/                          # @agentistics/web — React + Vite frontend
+│   │   ├── src/
+│   │   │   ├── App.tsx               # Router, global state, header
+│   │   │   ├── pages/
+│   │   │   │   ├── HomePage.tsx      # Main dashboard (KPIs, charts, sessions)
+│   │   │   │   ├── CustomPage.tsx    # Custom layout builder (/custom)
+│   │   │   │   ├── CostsPage.tsx     # Cost deep-dive
+│   │   │   │   ├── ProjectsPage.tsx  # Projects overview
+│   │   │   │   └── ToolsPage.tsx     # Tool metrics breakdown
+│   │   │   ├── hooks/
+│   │   │   │   ├── useData.ts        # Fetches /api/data + SSE + useDerivedStats()
+│   │   │   │   └── useCustomLayout.ts # Layout state + persistence
+│   │   │   ├── components/           # UI components (charts, cards, modals)
+│   │   │   │   ├── TtyChat.tsx       # Nay chat panel (FAB + floating panel)
+│   │   │   │   └── ...
+│   │   │   ├── lib/
+│   │   │   │   ├── app-context.ts    # AppContext interface (React context shape)
+│   │   │   │   ├── componentCatalog.tsx # Catalog of custom layout components
+│   │   │   │   └── chatModels.ts     # CHAT_MODELS, DEFAULT_CHAT_MODEL
+│   │   │   └── tui/
+│   │   │       └── index.ts          # Terminal TUI (standalone, no browser)
+│   │   ├── public/                   # Static assets (logo, favicon)
+│   │   ├── index.html
+│   │   └── vite.config.ts
+│   │
+│   ├── mcp/                          # @agentistics/mcp — MCP server, publishable to npm
+│   │   └── agentistics-mcp.ts        # stdio transport, 12 tools, imports @agentistics/core
+│   │
+│   └── desktop/                      # Tauri v2 Windows installer
+│       ├── src/main.rs               # Spawns agentop.exe sidecar, polls health, onboarding
+│       ├── ui/index.html             # Loading screen + first-run onboarding UI
+│       ├── capabilities/default.json # Tauri v2 permission declarations
+│       ├── tauri.conf.json           # Window config, CSP, sidecar declaration
+│       └── Cargo.toml
+│
+├── docs/                             # Extended documentation
+├── grafana/                          # Pre-built Grafana dashboard JSON
+├── .env.config                       # Committed port defaults (PORT, VITE_PORT)
+├── package.json                      # Root: workspaces + orchestration scripts
+└── tsconfig.json                     # Root: paths alias for @agentistics/core
 ```
 
 ## Request lifecycle
 
 ```
 Browser → GET /api/data
-  → server/index.ts (Bun.serve)
+  → packages/server/server/index.ts (Bun.serve)
     → server/data.ts (buildApiResponse)
-      ├── server/jsonl.ts      (parse raw JSONL sessions)
+      ├── server/jsonl.ts       (parse raw JSONL sessions)
       ├── server/agent-metrics.ts (extract agent invocations)
-      ├── server/git.ts        (git stats per project)
-      └── server/health.ts     (warnings)
+      ├── server/git.ts         (git stats per project)
+      └── server/health.ts      (warnings)
     → JSON response
 
 Browser → GET /api/events  (SSE)
@@ -86,14 +105,26 @@ Browser → POST /api/chat-tty  (Nay)
 ## Binary build pipeline
 
 ```
-bun run build           →  dist/          (Vite compiles React app)
-bun run build:assets    →  src/embedded-dist.generated.ts  (assets as TS strings/base64)
-bun build --compile     →  release/agentop  (self-contained binary, ~100 MB)
+bun run build           →  packages/web/dist/                              (Vite)
+bun run build:assets    →  packages/server/server/embedded-dist.generated.ts
+bun build --compile     →  release/agentop                                 (self-contained binary)
 ```
 
-The binary embeds the full Bun runtime + all JS/TS code + frontend assets. No external dependencies needed on the target machine — `agentop server` serves both the API and the frontend on port 47291.
+The binary embeds the full Bun runtime + all JS/TS code + frontend assets. No external dependencies needed — `agentop server` serves both API and frontend on port 47291.
 
 In dev mode, the API runs on port 47291 and Vite serves the frontend with hot reload on port 47292.
+
+## Windows desktop app
+
+The Tauri app (`packages/desktop/`) is a native Windows wrapper:
+
+1. On launch, reads config from `%APPDATA%\Agentistics\config.json`
+2. If not configured: shows onboarding screen — auto-detects `%USERPROFILE%\.claude` and WSL paths via `\\wsl.localhost\{distro}\home\*\.claude`
+3. Once configured: spawns `agentop.exe` as a sidecar with `CLAUDE_DIR` env var
+4. Polls `http://localhost:47291/api/health` every 250ms (up to 30s), then navigates the WebView to the dashboard
+5. On window close: kills the sidecar process
+
+CI builds the installer on `windows-latest` after the Linux runner cross-compiles `agentop.exe`.
 
 ## Port configuration
 
@@ -104,35 +135,35 @@ PORT=47291      # API server + embedded frontend (binary mode)
 VITE_PORT=47292 # Vite dev server (dev mode only)
 ```
 
-These values are loaded at server startup before `process.env` fallbacks. Edit via the `</>` button in the header or directly in the file (restart required).
+Edit via the `</>` button in the header or directly in the file (restart required).
 
 ## Calculation functions — single source of truth
 
-| Function | Location | Used by |
-|----------|----------|---------|
-| `MODEL_PRICING` | `src/lib/types.ts:183` | All layers |
-| `getModelPrice(modelId)` | `src/lib/types.ts:198` | All layers |
-| `calcCost(usage, modelId)` | `src/lib/types.ts:206` | All layers |
-| `blendedCostPerToken(modelUsage)` | `src/hooks/useData.ts` | Project/model filter views, PDF export |
+All layers import from `@agentistics/core` (`packages/core/src/types.ts`). Never inline pricing calculations.
 
-Never inline pricing calculations. Always import from `src/lib/types.ts`.
+| Function | Usage |
+|----------|-------|
+| `MODEL_PRICING` | Pricing table, USD per 1M tokens |
+| `getModelPrice(modelId)` | Resolves price by model ID (exact then partial match) |
+| `calcCost(usage, modelId)` | Total cost from a `ModelUsage` record |
+| `blendedCostPerToken(modelUsage)` | Weighted average rate — used in `useData.ts` for filtered views and PDF export |
 
 ## Tech stack
 
-### Frontend
+### Frontend (`packages/web/`)
 
 | Library | Version | Usage |
 |---------|---------|-------|
 | React | 19.2 | UI |
 | Vite | 8.0 | Build tool + dev server |
-| TypeScript | 5 | Strict typing (`noUncheckedIndexedAccess`) |
+| TypeScript | 5 | Strict typing |
 | Recharts | 3.8 | Area charts, bar charts |
 | react-markdown | 10.x | Markdown rendering in Nay chat |
 | lucide-react | 1.7 | SVG icons |
 | date-fns | 4.1 | Date manipulation |
 | html2canvas + jspdf | 1.4 / 4.2 | PDF export |
 
-### Backend
+### Backend (`packages/server/`)
 
 | Technology | Usage |
 |-----------|-------|
@@ -141,14 +172,25 @@ Never inline pricing calculations. Always import from `src/lib/types.ts`.
 | @modelcontextprotocol/sdk | MCP server implementation |
 | @opentelemetry/* | Metrics export (optional) |
 
+### Desktop (`packages/desktop/`)
+
+| Technology | Usage |
+|-----------|-------|
+| Tauri v2 | Native window + WebView wrapper |
+| Rust | Sidecar spawn, health polling, config management |
+| tauri-plugin-shell | Sidecar process lifecycle |
+| reqwest | HTTP health check in Rust async |
+
 ## Key design decisions
 
-**No database** — all data is read directly from Claude Code's local files. This means zero setup, zero schema migrations, and the data is always as fresh as the last session.
+**No database** — all data read directly from Claude Code's local files. Zero setup, zero schema migrations, always fresh.
 
-**Single API endpoint** — `/api/data` returns everything in one call. The frontend derives all views from this response using `useDerivedStats()`. This makes filtering, aggregation, and computed stats purely client-side.
+**Single API endpoint** — `/api/data` returns everything in one call. The frontend derives all views from this response using `useDerivedStats()`. Filtering is purely client-side.
 
-**`stats-cache.json` for aggregates, JSONL for details** — the stats cache is fast (pre-computed by Claude Code) but has no project granularity. Project breakdowns are computed by agentistics from session records.
+**`stats-cache.json` for aggregates, JSONL for details** — the stats cache is fast (pre-computed by Claude Code) but has no project granularity. Project breakdowns are computed from individual session records.
 
-**Nay runs as a subprocess** — `claude --print` is spawned by the server, not called via API. This means Nay inherits the full Claude Code CLI environment (MCP registrations, permissions, CLAUDE.md files) without any extra integration work.
+**Nay runs as a subprocess** — `claude --print` is spawned by the server, not called via API. Nay inherits the full Claude Code CLI environment without extra integration work.
 
-**Binary embeds the frontend** — `agentop server` serves both API and UI from a single process on a single port. No Nginx, no static file server needed.
+**Binary embeds the frontend** — `agentop server` serves both API and UI from a single process on a single port. No Nginx needed.
+
+**`@agentistics/core` as shared package** — types, pricing functions, and formatters live in one place. Server, web, and MCP all import from `@agentistics/core`. Nothing is duplicated.

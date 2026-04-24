@@ -1,18 +1,33 @@
 {
   "name": "@agentistics/mcp",
   "version": "1.3.3",
-  "description": "Agentistics MCP server — Claude Code analytics for Claude Desktop",
+  "description": "Agentistics MCP server — Claude Code analytics for Claude Desktop and Claude Code",
   "type": "module",
+  "main": "./dist/agentistics-mcp.js",
   "bin": {
-    "agentistics-mcp": "./agentistics-mcp.ts"
+    "agentistics-mcp": "./dist/agentistics-mcp.js"
   },
+  "files": [
+    "dist/",
+    "README.md"
+  ],
   "scripts": {
-    "start": "bun run agentistics-mcp.ts"
+    "build": "bun build agentistics-mcp.ts --outfile dist/agentistics-mcp.js --external @modelcontextprotocol/sdk --target node",
+    "prepublishOnly": "bun run build"
   },
   "dependencies": {
-    "@agentistics/core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
-  "keywords": ["mcp", "claude", "claude-code", "analytics"],
-  "license": "MIT"
+  "engines": {
+    "node": ">=18",
+    "bun": ">=1.0"
+  },
+  "keywords": ["mcp", "claude", "claude-code", "analytics", "agentistics"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/blpsoares/agentistics.git",
+    "directory": "packages/mcp"
+  },
+  "homepage": "https://github.com/blpsoares/agentistics"
 }
