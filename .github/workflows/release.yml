@@ -278,7 +278,7 @@ jobs:
 
       - name: Copy logo for loading screen
         shell: bash
-        run: cp public/minimalistLogo.png packages/desktop/ui/logo.png
+        run: cp packages/web/public/minimalistLogo.png packages/desktop/ui/logo.png
 
       - name: Build Tauri app
         working-directory: packages/desktop
