@@ -9,46 +9,210 @@
 
     body {
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
-      height: 100vh;
+      min-height: 100vh;
       background: #0f0f12;
       color: #e8e8f0;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      gap: 1.5rem;
       user-select: none;
     }
 
-    .logo {
-      width: 64px;
-      height: 64px;
-      opacity: 0.9;
-    }
+    .screen { display: none; flex-direction: column; align-items: center; gap: 1.25rem; max-width: 480px; width: 100%; padding: 2rem; }
+    .screen.active { display: flex; }
 
+    .logo { width: 56px; height: 56px; opacity: 0.9; }
+
+    /* ── Loading ── */
     .spinner {
-      width: 36px;
-      height: 36px;
-      border: 3px solid rgba(255, 255, 255, 0.1);
+      width: 36px; height: 36px;
+      border: 3px solid rgba(255,255,255,0.1);
       border-top-color: #f97316;
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
     }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #status { font-size: 0.85rem; color: #8888a0; letter-spacing: 0.03em; }
 
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
+    /* ── Onboarding ── */
+    h1 { font-size: 1.35rem; font-weight: 600; color: #f0f0f8; }
+    .subtitle { font-size: 0.875rem; color: #8888a0; text-align: center; line-height: 1.6; }
+    .subtitle code { color: #f97316; font-size: 0.85em; }
 
-    #status {
-      font-size: 0.85rem;
-      color: #8888a0;
-      letter-spacing: 0.03em;
+    .sources { display: flex; flex-direction: column; gap: 0.5rem; width: 100%; margin-top: 0.25rem; }
+
+    .source-item {
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0.75rem 1rem;
+      background: #18181f; border: 1.5px solid #2a2a38; border-radius: 8px;
+      cursor: pointer; transition: border-color 0.15s;
     }
+    .source-item:hover { border-color: #555570; }
+    .source-item.selected { border-color: #f97316; background: #1c1710; }
+    .source-item input[type=radio] { display: none; }
+
+    .badge {
+      font-size: 0.62rem; font-weight: 700; letter-spacing: 0.06em;
+      padding: 2px 6px; border-radius: 4px; text-transform: uppercase; flex-shrink: 0;
+    }
+    .badge-windows { background: #1a3a6b; color: #60a5fa; }
+    .badge-wsl     { background: #1a3d2e; color: #4ade80; }
+
+    .source-text { display: flex; flex-direction: column; gap: 1px; overflow: hidden; min-width: 0; }
+    .source-name { font-size: 0.875rem; color: #d0d0e0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .source-path { font-size: 0.75rem; color: #6666a0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: monospace; }
+
+    .no-sources { font-size: 0.85rem; color: #8888a0; text-align: center; line-height: 1.6; }
+
+    .manual-wrap { width: 100%; }
+    .manual-wrap label { font-size: 0.8rem; color: #8888a0; display: block; margin-bottom: 0.4rem; }
+    .manual-wrap input {
+      width: 100%; padding: 0.6rem 0.75rem;
+      background: #18181f; border: 1.5px solid #2a2a38; border-radius: 8px;
+      color: #e8e8f0; font-size: 0.875rem; font-family: monospace; outline: none;
+      transition: border-color 0.15s;
+    }
+    .manual-wrap input:focus { border-color: #f97316; }
+
+    .btn {
+      width: 100%; padding: 0.7rem;
+      background: #f97316; border: none; border-radius: 8px;
+      color: #fff; font-size: 0.9rem; font-weight: 600;
+      cursor: pointer; transition: opacity 0.15s; margin-top: 0.25rem;
+    }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn:not(:disabled):hover { opacity: 0.88; }
+
+    .error-msg { font-size: 0.8rem; color: #f87171; text-align: center; display: none; }
   </style>
 </head>
 <body>
-  <img class="logo" src="logo.png" alt="Agentistics" onerror="this.style.display='none'" />
-  <div class="spinner"></div>
-  <p id="status">Starting server…</p>
+
+  <!-- Loading / server starting -->
+  <div id="loading" class="screen active">
+    <img class="logo" src="logo.png" alt="" onerror="this.style.display='none'" />
+    <div class="spinner"></div>
+    <p id="status">Starting server…</p>
+  </div>
+
+  <!-- First-run onboarding -->
+  <div id="onboarding" class="screen">
+    <img class="logo" src="logo.png" alt="" onerror="this.style.display='none'" />
+    <h1>Welcome to Agentistics</h1>
+    <p class="subtitle">
+      Select where your Claude Code data lives.<br>
+      We'll read from that <code>~/.claude</code> folder.
+    </p>
+
+    <div id="sources" class="sources"></div>
+
+    <div class="manual-wrap">
+      <label for="manual">Or enter a custom path</label>
+      <input id="manual" type="text" placeholder="C:\Users\you\.claude" spellcheck="false" autocomplete="off" />
+    </div>
+
+    <button id="continue" class="btn" disabled>Continue</button>
+    <p id="error" class="error-msg"></p>
+  </div>
+
+  <script>
+    // Tauri v2 exposes invoke via window.__TAURI__.core.invoke
+    function getInvoke() {
+      return window.__TAURI__?.core?.invoke ?? window.__TAURI_INVOKE__;
+    }
+
+    let selectedPath = null;
+
+    function show(id) {
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+      document.getElementById(id).classList.add('active');
+    }
+
+    function setSelected(path) {
+      selectedPath = path || null;
+      document.getElementById('continue').disabled = !selectedPath;
+    }
+
+    function buildSources(sources) {
+      const container = document.getElementById('sources');
+      container.innerHTML = '';
+
+      if (!sources.length) {
+        container.innerHTML =
+          '<p class="no-sources">No Claude Code data found automatically.<br>Enter the path manually below.</p>';
+        return;
+      }
+
+      sources.forEach((src, i) => {
+        const [namePart] = src.label.split(' — ');
+        const item = document.createElement('label');
+        item.className = 'source-item' + (i === 0 ? ' selected' : '');
+        item.innerHTML = `
+          <input type="radio" name="src" value="${src.path}" ${i === 0 ? 'checked' : ''} />
+          <span class="badge ${src.kind === 'wsl' ? 'badge-wsl' : 'badge-windows'}">${src.kind === 'wsl' ? 'WSL' : 'Win'}</span>
+          <span class="source-text">
+            <span class="source-name">${namePart}</span>
+            <span class="source-path">${src.path}</span>
+          </span>
+        `;
+        item.addEventListener('click', () => {
+          document.querySelectorAll('.source-item').forEach(el => el.classList.remove('selected'));
+          item.classList.add('selected');
+          document.getElementById('manual').value = '';
+          setSelected(src.path);
+        });
+        container.appendChild(item);
+        if (i === 0) setSelected(src.path);
+      });
+    }
+
+    document.getElementById('manual').addEventListener('input', e => {
+      const val = e.target.value.trim();
+      document.querySelectorAll('.source-item').forEach(el => el.classList.remove('selected'));
+      setSelected(val || null);
+    });
+
+    document.getElementById('continue').addEventListener('click', async () => {
+      if (!selectedPath) return;
+      const btn = document.getElementById('continue');
+      const err = document.getElementById('error');
+      btn.disabled = true;
+      btn.textContent = 'Starting…';
+      err.style.display = 'none';
+
+      try {
+        const invoke = getInvoke();
+        await invoke('launch_with_config', { claudeDir: selectedPath });
+        show('loading');
+      } catch (e) {
+        err.textContent = String(e);
+        err.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Continue';
+      }
+    });
+
+    async function init() {
+      const invoke = getInvoke();
+      if (!invoke) {
+        // Tauri bridge not ready yet — retry
+        setTimeout(init, 100);
+        return;
+      }
+      try {
+        const state = await invoke('get_setup_state');
+        if (state.configured) {
+          show('loading');
+        } else {
+          buildSources(state.sources);
+          show('onboarding');
+        }
+      } catch (e) {
+        setTimeout(init, 200);
+      }
+    }
+
+    init();
+  </script>
 </body>
 </html>
