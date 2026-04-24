@@ -1,0 +1,15 @@
+{
+  "name": "@agentistics/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run server/index.ts",
+    "watch": "bun run server/otel-watcher.ts",
+    "build:binary": "bun build --compile bin/cli.ts --outfile ../../release/agentop",
+    "build:binary:windows": "bun build --compile --target=bun-windows-x64 bin/cli.ts --outfile ../../release/agentop.exe"
+  },
+  "dependencies": {
+    "@agentistics/core": "workspace:*"
+  }
+}

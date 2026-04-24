@@ -133,11 +133,11 @@ jobs:
         if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
         run: |
           mkdir -p release
-          bun build --compile bin/cli.ts --outfile ./release/agentop
+          bun build --compile packages/server/bin/cli.ts --outfile ./release/agentop
 
       - name: Compile Windows binary (cross-compile)
         if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
-        run: bun build --compile --target=bun-windows-x64 bin/cli.ts --outfile ./release/agentop.exe
+        run: bun build --compile --target=bun-windows-x64 packages/server/bin/cli.ts --outfile ./release/agentop.exe
 
       - name: Upload Windows binary artifact
         if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
