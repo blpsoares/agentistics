@@ -289,8 +289,8 @@ jobs:
         with:
           name: agentistics-windows-installer
           path: |
-            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
-            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+            packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
           retention-days: 7
 
       - name: Attach installers to GitHub Release
