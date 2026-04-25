@@ -217,11 +217,22 @@ fn spawn_sidecar(
     child_handle: &Arc<Mutex<Option<CommandChild>>>,
     claude_dir: &str,
 ) {
-    // Log resource dir so we can diagnose sidecar path issues
+    // Log resource dir and enumerate contents for sidecar diagnosis
     if let Ok(res) = app.path().resource_dir() {
         log_error(&format!("resource_dir: {}", res.display()));
         let candidate = res.join("binaries").join("agentop-x86_64-pc-windows-msvc.exe");
         log_error(&format!("sidecar candidate: {} exists={}", candidate.display(), candidate.exists()));
+        // List all files in resource_dir to find where the binary actually landed
+        fn list_dir(dir: &std::path::Path, depth: u8, log: &dyn Fn(&str)) {
+            if depth > 2 { return; }
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for e in entries.flatten() {
+                    log(&format!("  dir[{}]: {}", depth, e.path().display()));
+                    if e.path().is_dir() { list_dir(&e.path(), depth + 1, log); }
+                }
+            }
+        }
+        list_dir(&res, 0, &|s| log_error(s));
     }
 
     let cmd = match app.shell().sidecar("binaries/agentop") {
