@@ -8,6 +8,66 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
+// ── Error reporting ───────────────────────────────────────────────────────────
+
+#[cfg(windows)]
+fn show_error_dialog(title: &str, message: &str) {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK, HWND};
+
+    let title_w: Vec<u16> = OsStr::new(title).encode_wide().chain(Some(0)).collect();
+    let msg_w: Vec<u16> = OsStr::new(message).encode_wide().chain(Some(0)).collect();
+    unsafe {
+        MessageBoxW(
+            HWND(std::ptr::null_mut()),
+            windows::core::PCWSTR(msg_w.as_ptr()),
+            windows::core::PCWSTR(title_w.as_ptr()),
+            MB_ICONERROR | MB_OK,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn show_error_dialog(_title: &str, message: &str) {
+    eprintln!("{message}");
+}
+
+fn log_path() -> PathBuf {
+    let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(base).join("Agentistics").join("agentistics.log")
+}
+
+fn log_error(msg: &str) {
+    let path = log_path();
+    if let Some(p) = path.parent() {
+        let _ = std::fs::create_dir_all(p);
+    }
+    let line = format!("[{}] {}\n", chrono_now(), msg);
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
+fn chrono_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    format!("{secs}")
+}
+
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("Agentistics crashed: {info}");
+        log_error(&msg);
+        let log = log_path();
+        show_error_dialog(
+            "Agentistics — Fatal Error",
+            &format!("{msg}\n\nDetails written to:\n{}", log.display()),
+        );
+    }));
+}
+
 const HEALTH_URL: &str = "http://127.0.0.1:47291/api/health";
 const DASHBOARD_URL: &str = "http://127.0.0.1:47291";
 
@@ -159,13 +219,19 @@ fn spawn_sidecar(
     let cmd = match app.shell().sidecar("binaries/agentop") {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[agentistics] sidecar not found: {e}");
+            let msg = format!("sidecar binary not found: {e}");
+            log_error(&msg);
+            show_error_dialog("Agentistics — Sidecar Error", &msg);
             return;
         }
     };
     match cmd.args(["server"]).env("CLAUDE_DIR", claude_dir).spawn() {
         Ok((_rx, child)) => *child_handle.lock().unwrap() = Some(child),
-        Err(e) => eprintln!("[agentistics] failed to spawn sidecar: {e}"),
+        Err(e) => {
+            let msg = format!("failed to spawn server: {e}");
+            log_error(&msg);
+            show_error_dialog("Agentistics — Launch Error", &msg);
+        }
     }
 }
 
@@ -233,6 +299,8 @@ fn reset_config(state: State<AppState>) -> Result<(), String> {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() {
+    install_panic_hook();
+
     let child_handle: Arc<Mutex<Option<CommandChild>>> = Arc::new(Mutex::new(None));
     let child_exit = child_handle.clone();
 
@@ -265,5 +333,9 @@ fn main() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("error while running Agentistics desktop");
+        .unwrap_or_else(|e| {
+            let msg = format!("Agentistics failed to start: {e}");
+            log_error(&msg);
+            show_error_dialog("Agentistics — Fatal Error", &msg);
+        });
 }

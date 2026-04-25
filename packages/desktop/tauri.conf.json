@@ -34,7 +34,17 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/agentop"]
+    "externalBin": ["binaries/agentop"],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": false
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "shortcutName": "Agentistics"
+      }
+    }
   },
   "plugins": {
     "shell": {
