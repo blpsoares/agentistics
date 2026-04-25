@@ -39,11 +39,11 @@
       "webviewInstallMode": {
         "type": "downloadBootstrapper",
         "silent": false
-      },
-      "nsis": {
-        "installMode": "currentUser",
-        "shortcutName": "Agentistics"
       }
+    },
+    "nsis": {
+      "installMode": "currentUser",
+      "shortcutName": "Agentistics"
     }
   },
   "plugins": {
