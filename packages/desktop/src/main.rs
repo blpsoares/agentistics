@@ -216,13 +216,12 @@ fn spawn_sidecar(
     app: &AppHandle,
     child_handle: &Arc<Mutex<Option<CommandChild>>>,
     claude_dir: &str,
-) {
+) -> Result<(), String> {
     // Log resource dir and enumerate contents for sidecar diagnosis
     if let Ok(res) = app.path().resource_dir() {
         log_error(&format!("resource_dir: {}", res.display()));
         let candidate = res.join("binaries").join("agentop-x86_64-pc-windows-msvc.exe");
         log_error(&format!("sidecar candidate: {} exists={}", candidate.display(), candidate.exists()));
-        // List all files in resource_dir to find where the binary actually landed
         fn list_dir(dir: &std::path::Path, depth: u8, log: &dyn Fn(&str)) {
             if depth > 2 { return; }
             if let Ok(entries) = std::fs::read_dir(dir) {
@@ -235,36 +234,36 @@ fn spawn_sidecar(
         list_dir(&res, 0, &|s| log_error(s));
     }
 
-    let cmd = match app.shell().sidecar("binaries/agentop") {
-        Ok(c) => c,
-        Err(e) => {
-            let msg = format!("sidecar binary not found: {e}");
-            log_error(&msg);
-            show_error_dialog("Agentistics — Sidecar Error", &msg);
-            return;
-        }
-    };
-    match cmd.args(["server"]).env("CLAUDE_DIR", claude_dir).spawn() {
-        Ok((_rx, child)) => *child_handle.lock().unwrap() = Some(child),
-        Err(e) => {
-            let msg = format!("failed to spawn server: {e}");
-            log_error(&msg);
-            show_error_dialog("Agentistics — Launch Error", &msg);
-        }
-    }
+    let cmd = app.shell().sidecar("binaries/agentop")
+        .map_err(|e| format!("sidecar binary not found: {e}"))?;
+
+    let (_rx, child) = cmd.args(["server"]).env("CLAUDE_DIR", claude_dir).spawn()
+        .map_err(|e| format!("failed to start server: {e}"))?;
+
+    *child_handle.lock().unwrap() = Some(child);
+    Ok(())
 }
 
-fn navigate_after_ready(app: AppHandle) {
+fn navigate_after_ready(app: AppHandle, config_path: PathBuf) {
     tauri::async_runtime::spawn(async move {
         let ready = wait_for_server().await;
         if let Some(win) = app.get_webview_window("main") {
             if ready {
                 let _ = win.navigate(DASHBOARD_URL.parse().unwrap());
             } else {
-                let _ = win.eval(
-                    "document.getElementById('status').textContent = \
-                     'Server failed to start. Please restart the app.'",
-                );
+                // Delete config so next launch shows onboarding again
+                let _ = std::fs::remove_file(&config_path);
+                let sources = serde_json::to_string(&detect_sources()).unwrap_or_default();
+                let _ = win.eval(&format!(
+                    "window.__agentisticsError = 'Server failed to start. Check the selected path and try again.';
+                     window.__agentisticsSources = {sources};
+                     if (typeof buildSources === 'function') {{
+                         buildSources(window.__agentisticsSources);
+                         document.getElementById('error').textContent = window.__agentisticsError;
+                         document.getElementById('error').style.display = 'block';
+                         show('onboarding');
+                     }}"
+                ));
             }
         }
     });
@@ -301,9 +300,9 @@ async fn launch_with_config(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
+    spawn_sidecar(&app, &state.child_handle, &claude_dir)?;
     write_config(&state.config_path, &Config { claude_dir: claude_dir.clone() })?;
-    spawn_sidecar(&app, &state.child_handle, &claude_dir);
-    navigate_after_ready(app);
+    navigate_after_ready(app, state.config_path.clone());
     Ok(())
 }
 
@@ -400,9 +399,14 @@ fn main() {
             });
 
             // If already configured, start the sidecar right away.
-            if let Some(config) = read_config(&config_path()) {
-                spawn_sidecar(&handle, &child_handle, &config.claude_dir);
-                navigate_after_ready(handle);
+            let cfg_path = config_path();
+            if let Some(config) = read_config(&cfg_path) {
+                if spawn_sidecar(&handle, &child_handle, &config.claude_dir).is_ok() {
+                    navigate_after_ready(handle, cfg_path);
+                } else {
+                    // Sidecar failed — clear config so onboarding shows on next launch
+                    let _ = std::fs::remove_file(&cfg_path);
+                }
             }
             // Otherwise the JS onboarding calls launch_with_config.
             Ok(())
