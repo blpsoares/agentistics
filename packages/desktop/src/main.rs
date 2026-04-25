@@ -217,6 +217,13 @@ fn spawn_sidecar(
     child_handle: &Arc<Mutex<Option<CommandChild>>>,
     claude_dir: &str,
 ) {
+    // Log resource dir so we can diagnose sidecar path issues
+    if let Ok(res) = app.path().resource_dir() {
+        log_error(&format!("resource_dir: {}", res.display()));
+        let candidate = res.join("binaries").join("agentop-x86_64-pc-windows-msvc.exe");
+        log_error(&format!("sidecar candidate: {} exists={}", candidate.display(), candidate.exists()));
+    }
+
     let cmd = match app.shell().sidecar("binaries/agentop") {
         Ok(c) => c,
         Err(e) => {
