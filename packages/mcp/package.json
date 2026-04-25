@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./dist/agentistics-mcp.js",
   "bin": {
-    "agentistics-mcp": "./dist/agentistics-mcp.js"
+    "agentistics-mcp": "dist/agentistics-mcp.js"
   },
   "files": [
     "dist/",
@@ -32,7 +32,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/blpsoares/agentistics.git",
+    "url": "git+https://github.com/blpsoares/agentistics.git",
     "directory": "packages/mcp"
   },
   "homepage": "https://github.com/blpsoares/agentistics"
