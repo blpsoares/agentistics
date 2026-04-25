@@ -9,7 +9,7 @@
 
     body {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
       min-height: 100vh;
       background: #0f0f12;
@@ -18,21 +18,40 @@
       user-select: none;
     }
 
-    .screen { display: none; flex-direction: column; align-items: center; gap: 1.25rem; max-width: 480px; width: 100%; padding: 2rem; }
+    .screen { display: none; flex-direction: column; align-items: center; gap: 1.25rem; width: 100%; padding: 2rem; }
     .screen.active { display: flex; }
+    /* Onboarding stays centered */
+    #onboarding { align-items: center; justify-content: center; min-height: 100vh; max-width: 480px; margin: 0 auto; }
 
     .logo { width: 56px; height: 56px; opacity: 0.9; }
 
-    /* ── Loading ── */
-    .spinner {
-      width: 36px; height: 36px;
-      border: 3px solid rgba(255,255,255,0.1);
-      border-top-color: #f97316;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
+    /* ── Loading skeleton ── */
+    .skeleton-wrap {
+      width: 100%; max-width: 720px; padding: 0 1.5rem;
+      display: flex; flex-direction: column; gap: 1.25rem;
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    #status { font-size: 0.85rem; color: #8888a0; letter-spacing: 0.03em; }
+    .skeleton-row { display: flex; gap: 0.75rem; }
+    .sk {
+      background: #18181f;
+      border-radius: 10px;
+      overflow: hidden;
+      position: relative;
+    }
+    .sk::after {
+      content: '';
+      position: absolute; inset: 0;
+      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.04) 50%, transparent 100%);
+      animation: shimmer 1.6s ease-in-out infinite;
+    }
+    @keyframes shimmer {
+      0%   { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+    .sk-card { flex: 1; height: 88px; }
+    .sk-chart { width: 100%; height: 180px; }
+    .sk-bar-row { display: flex; gap: 0.75rem; align-items: flex-end; height: 80px; padding: 1rem; }
+    .sk-bar { flex: 1; border-radius: 4px 4px 0 0; background: #222230; }
+    #status { font-size: 0.78rem; color: #55556a; letter-spacing: 0.04em; text-align: center; margin-top: 0.25rem; }
 
     /* ── Onboarding ── */
     h1 { font-size: 1.35rem; font-weight: 600; color: #f0f0f8; }
@@ -89,9 +108,38 @@
 <body>
 
   <!-- Loading / server starting -->
-  <div id="loading" class="screen active">
-    <img class="logo" src="logo.png" alt="" onerror="this.style.display='none'" />
-    <div class="spinner"></div>
+  <div id="loading" class="screen active" style="align-items:flex-start; padding-top: 3rem;">
+    <div class="skeleton-wrap">
+      <!-- KPI row -->
+      <div class="skeleton-row">
+        <div class="sk sk-card"></div>
+        <div class="sk sk-card"></div>
+        <div class="sk sk-card"></div>
+        <div class="sk sk-card"></div>
+      </div>
+      <!-- Chart -->
+      <div class="sk sk-chart">
+        <div class="sk-bar-row">
+          <div class="sk-bar" style="height:35%"></div>
+          <div class="sk-bar" style="height:60%"></div>
+          <div class="sk-bar" style="height:45%"></div>
+          <div class="sk-bar" style="height:80%"></div>
+          <div class="sk-bar" style="height:55%"></div>
+          <div class="sk-bar" style="height:70%"></div>
+          <div class="sk-bar" style="height:40%"></div>
+          <div class="sk-bar" style="height:90%"></div>
+          <div class="sk-bar" style="height:65%"></div>
+          <div class="sk-bar" style="height:50%"></div>
+          <div class="sk-bar" style="height:75%"></div>
+          <div class="sk-bar" style="height:85%"></div>
+        </div>
+      </div>
+      <!-- Second row -->
+      <div class="skeleton-row">
+        <div class="sk" style="flex:2; height:64px;"></div>
+        <div class="sk" style="flex:1; height:64px;"></div>
+      </div>
+    </div>
     <p id="status">Starting server…</p>
   </div>
 
