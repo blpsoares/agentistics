@@ -193,7 +193,7 @@ async fn wait_for_server() -> bool {
     else {
         return false;
     };
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
     while std::time::Instant::now() < deadline {
         if client
             .get(HEALTH_URL)
@@ -241,10 +241,17 @@ fn spawn_sidecar(
 
     log_error(&format!("spawning: {}", binary.display()));
 
-    let child = std::process::Command::new(&binary)
-        .arg("server")
-        .env("CLAUDE_DIR", claude_dir)
-        .spawn()
+    let mut cmd = std::process::Command::new(&binary);
+    cmd.arg("server").env("CLAUDE_DIR", claude_dir);
+
+    // Suppress the console window that would otherwise flash on Windows
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let child = cmd.spawn()
         .map_err(|e| format!("failed to start server: {e}"))?;
 
     *child_handle.lock().unwrap() = Some(child);
