@@ -12,7 +12,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun build agentistics-mcp.ts --outfile dist/agentistics-mcp.js --external @modelcontextprotocol/sdk --target node",
+    "build": "bun build agentistics-mcp.ts --outfile dist/agentistics-mcp.js --external @modelcontextprotocol/sdk --target node && chmod +x dist/agentistics-mcp.js",
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
