@@ -116,9 +116,18 @@ jobs:
           VERSION="${{ steps.version.outputs.next }}"
           bun -e "
             const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = '$VERSION';
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+            const targets = [
+              'package.json',
+              'packages/core/package.json',
+              'packages/server/package.json',
+              'packages/web/package.json',
+              'packages/mcp/package.json',
+            ];
+            for (const f of targets) {
+              const pkg = JSON.parse(fs.readFileSync(f, 'utf8'));
+              pkg.version = '$VERSION';
+              fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + '\n');
+            }
           "
 
       - name: Build frontend (Vite)
@@ -200,7 +209,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package.json
+          git add package.json packages/core/package.json packages/server/package.json packages/web/package.json packages/mcp/package.json
           git commit -m "chore: bump version to ${VERSION} [skip ci]"
           git tag "$TAG"
           git push origin main "$TAG"

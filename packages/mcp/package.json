@@ -22,7 +22,13 @@
     "node": ">=18",
     "bun": ">=1.0"
   },
-  "keywords": ["mcp", "claude", "claude-code", "analytics", "agentistics"],
+  "keywords": [
+    "mcp",
+    "claude",
+    "claude-code",
+    "analytics",
+    "agentistics"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
