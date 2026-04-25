@@ -9,49 +9,91 @@
 
     body {
       display: flex;
-      align-items: flex-start;
+      align-items: center;
       justify-content: center;
       min-height: 100vh;
       background: #0f0f12;
-      color: #e8e8f0;
+      color: #f0f0f8;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       user-select: none;
     }
 
-    .screen { display: none; flex-direction: column; align-items: center; gap: 1.25rem; width: 100%; padding: 2rem; }
+    .screen { display: none; flex-direction: column; align-items: center; gap: 28px; width: 100%; padding: 2rem; }
     .screen.active { display: flex; }
-    /* Onboarding stays centered */
-    #onboarding { align-items: center; justify-content: center; min-height: 100vh; max-width: 480px; margin: 0 auto; }
+    #onboarding { max-width: 480px; margin: 0 auto; }
 
-    .logo { width: 56px; height: 56px; opacity: 0.9; }
-
-    /* ── Loading skeleton ── */
-    .skeleton-wrap {
-      width: 100%; max-width: 720px; padding: 0 1.5rem;
-      display: flex; flex-direction: column; gap: 1.25rem;
+    /* ── Loading screen — matches React LoadingScreen exactly ── */
+    @keyframes loadShimmer {
+      0%   { background-position: 200% center; }
+      100% { background-position: -200% center; }
     }
-    .skeleton-row { display: flex; gap: 0.75rem; }
-    .sk {
-      background: #18181f;
-      border-radius: 10px;
-      overflow: hidden;
-      position: relative;
-    }
-    .sk::after {
-      content: '';
-      position: absolute; inset: 0;
-      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.04) 50%, transparent 100%);
-      animation: shimmer 1.6s ease-in-out infinite;
-    }
-    @keyframes shimmer {
+    @keyframes loadIndeterminate {
       0%   { transform: translateX(-100%); }
-      100% { transform: translateX(100%); }
+      100% { transform: translateX(400%); }
     }
-    .sk-card { flex: 1; height: 88px; }
-    .sk-chart { width: 100%; height: 180px; }
-    .sk-bar-row { display: flex; gap: 0.75rem; align-items: flex-end; height: 80px; padding: 1rem; }
-    .sk-bar { flex: 1; border-radius: 4px 4px 0 0; background: #222230; }
-    #status { font-size: 0.78rem; color: #55556a; letter-spacing: 0.04em; text-align: center; margin-top: 0.25rem; }
+    @keyframes loadFadeUp {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes loadIconGlow {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(217,119,6,0), 0 0 10px 2px rgba(217,119,6,0.2); }
+      50%       { box-shadow: 0 0 0 6px rgba(217,119,6,0), 0 0 20px 5px rgba(217,119,6,0.35); }
+    }
+
+    .load-icon-wrap {
+      animation: loadFadeUp 0.35s ease-out both;
+    }
+    .load-icon {
+      width: 48px; height: 48px;
+      background: rgba(249,115,22,0.12);
+      border-radius: 14px;
+      display: flex; align-items: center; justify-content: center;
+      animation: loadIconGlow 2.2s ease-in-out infinite;
+    }
+    .load-icon svg { color: #f97316; }
+
+    .load-titles {
+      text-align: center;
+      animation: loadFadeUp 0.35s ease-out 0.08s both;
+    }
+    .load-title   { font-size: 14px; font-weight: 700; color: #f0f0f8; margin-bottom: 5px; letter-spacing: -0.01em; }
+    .load-subtitle { font-size: 12px; color: #808090; }
+
+    .load-stages {
+      width: 340px;
+      display: flex; flex-direction: column; gap: 12px;
+      animation: loadFadeUp 0.35s ease-out 0.16s both;
+    }
+    .stage-phase-label {
+      font-size: 10px; color: #808090; letter-spacing: 0.06em;
+      text-transform: uppercase; margin-bottom: 2px;
+    }
+    .stage-row {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 6px;
+    }
+    .stage-label {
+      display: flex; align-items: center; gap: 7px;
+      color: #c0c0d0; font-size: 12px; font-weight: 500;
+    }
+    .stage-label svg { opacity: 0.8; }
+    .stage-pct { font-size: 11px; font-weight: 600; color: #808090; min-width: 34px; text-align: right; }
+    .stage-track {
+      height: 4px; background: #1a1a24; border-radius: 2px;
+      overflow: hidden; position: relative;
+    }
+    .stage-bar-indeterminate {
+      position: absolute; top: 0; bottom: 0;
+      width: 35%; border-radius: 2px;
+      background: linear-gradient(90deg, transparent, rgba(217,119,6,0.55), transparent);
+      animation: loadIndeterminate 1.6s ease-in-out infinite;
+    }
+    /* stagger delays so bars don't all move in sync */
+    .stage:nth-child(1) .stage-bar-indeterminate { animation-delay: 0s; }
+    .stage:nth-child(2) .stage-bar-indeterminate { animation-delay: 0.32s; }
+    .stage:nth-child(3) .stage-bar-indeterminate { animation-delay: 0.64s; }
+    .stage:nth-child(4) .stage-bar-indeterminate { animation-delay: 0.18s; }
+    .stage:nth-child(5) .stage-bar-indeterminate { animation-delay: 0.48s; }
 
     /* ── Onboarding ── */
     h1 { font-size: 1.35rem; font-weight: 600; color: #f0f0f8; }
@@ -107,45 +149,114 @@
 </head>
 <body>
 
-  <!-- Loading / server starting -->
-  <div id="loading" class="screen active" style="align-items:flex-start; padding-top: 3rem;">
-    <div class="skeleton-wrap">
-      <!-- KPI row -->
-      <div class="skeleton-row">
-        <div class="sk sk-card"></div>
-        <div class="sk sk-card"></div>
-        <div class="sk sk-card"></div>
-        <div class="sk sk-card"></div>
-      </div>
-      <!-- Chart -->
-      <div class="sk sk-chart">
-        <div class="sk-bar-row">
-          <div class="sk-bar" style="height:35%"></div>
-          <div class="sk-bar" style="height:60%"></div>
-          <div class="sk-bar" style="height:45%"></div>
-          <div class="sk-bar" style="height:80%"></div>
-          <div class="sk-bar" style="height:55%"></div>
-          <div class="sk-bar" style="height:70%"></div>
-          <div class="sk-bar" style="height:40%"></div>
-          <div class="sk-bar" style="height:90%"></div>
-          <div class="sk-bar" style="height:65%"></div>
-          <div class="sk-bar" style="height:50%"></div>
-          <div class="sk-bar" style="height:75%"></div>
-          <div class="sk-bar" style="height:85%"></div>
-        </div>
-      </div>
-      <!-- Second row -->
-      <div class="skeleton-row">
-        <div class="sk" style="flex:2; height:64px;"></div>
-        <div class="sk" style="flex:1; height:64px;"></div>
+  <!-- Loading — replicates the React LoadingScreen component -->
+  <div id="loading" class="screen active">
+    <div class="load-icon-wrap">
+      <div class="load-icon">
+        <!-- BarChart2 (lucide) -->
+        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"
+             fill="none" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="20" x2="18" y2="10"/>
+          <line x1="12" y1="20" x2="12" y2="4"/>
+          <line x1="6"  y1="20" x2="6"  y2="14"/>
+        </svg>
       </div>
     </div>
-    <p id="status">Starting server…</p>
+
+    <div class="load-titles">
+      <div class="load-title">agentistics</div>
+      <div class="load-subtitle">Loading your data...</div>
+    </div>
+
+    <div class="load-stages">
+      <div class="stage-phase-label">⇉ Parallel</div>
+
+      <div class="stage">
+        <div class="stage-row">
+          <div class="stage-label">
+            <!-- Database -->
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <ellipse cx="12" cy="5" rx="9" ry="3"/>
+              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+            </svg>
+            Stats cache
+          </div>
+          <span class="stage-pct">…</span>
+        </div>
+        <div class="stage-track"><div class="stage-bar-indeterminate"></div></div>
+      </div>
+
+      <div class="stage">
+        <div class="stage-row">
+          <div class="stage-label">
+            <!-- FileText -->
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+            Session data
+          </div>
+          <span class="stage-pct">…</span>
+        </div>
+        <div class="stage-track"><div class="stage-bar-indeterminate"></div></div>
+      </div>
+
+      <div class="stage">
+        <div class="stage-row">
+          <div class="stage-label">
+            <!-- Shield -->
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            Health checks
+          </div>
+          <span class="stage-pct">…</span>
+        </div>
+        <div class="stage-track"><div class="stage-bar-indeterminate"></div></div>
+      </div>
+
+      <div class="stage">
+        <div class="stage-row">
+          <div class="stage-label">
+            <!-- FolderOpen -->
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+            Project scan
+          </div>
+          <span class="stage-pct">…</span>
+        </div>
+        <div class="stage-track"><div class="stage-bar-indeterminate"></div></div>
+      </div>
+
+      <div class="stage">
+        <div class="stage-row">
+          <div class="stage-label">
+            <!-- Zap -->
+            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+            </svg>
+            Counting tokens
+          </div>
+          <span class="stage-pct">…</span>
+        </div>
+        <div class="stage-track"><div class="stage-bar-indeterminate"></div></div>
+      </div>
+    </div>
   </div>
 
   <!-- First-run onboarding -->
   <div id="onboarding" class="screen">
-    <img class="logo" src="logo.png" alt="" onerror="this.style.display='none'" />
+    <img class="logo" src="logo.png" alt="" onerror="this.style.display='none'"
+         style="width:56px;height:56px;opacity:0.9;" />
     <h1>Welcome to Agentistics</h1>
     <p class="subtitle">
       Select where your Claude Code data lives.<br>
@@ -164,7 +275,6 @@
   </div>
 
   <script>
-    // Tauri v2 exposes invoke via window.__TAURI__.core.invoke
     function getInvoke() {
       return window.__TAURI__?.core?.invoke ?? window.__TAURI_INVOKE__;
     }
@@ -242,11 +352,7 @@
 
     async function init() {
       const invoke = getInvoke();
-      if (!invoke) {
-        // Tauri bridge not ready yet — retry
-        setTimeout(init, 100);
-        return;
-      }
+      if (!invoke) { setTimeout(init, 100); return; }
       try {
         const state = await invoke('get_setup_state');
         if (state.configured) {
