@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
-import { version } from '../package.json'
+import { version } from '../../../package.json'
 import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, RefreshCw, FileCode, TrendingUp, BarChart2,

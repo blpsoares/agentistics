@@ -1,4 +1,4 @@
-import { version as CURRENT_VERSION } from '../package.json'
+import { version as CURRENT_VERSION } from '../../../package.json'
 
 export { CURRENT_VERSION }
 
