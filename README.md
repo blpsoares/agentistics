@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/logo.png" alt="agentistics" width="180" />
+  <img src="packages/web/public/logo.png" alt="agentistics" width="180" />
 </p>
 
 <h1 align="center">agentistics</h1>
@@ -19,7 +19,7 @@
   <a href="LICENSE">
     <img src="https://img.shields.io/github/license/blpsoares/agentistics?color=green" alt="MIT License" />
   </a>
-  <img src="https://img.shields.io/badge/platform-Linux%20x86__64-lightgrey" alt="Platform: Linux x86_64" />
+  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey" alt="Platform: Linux | Windows" />
   <img src="https://img.shields.io/badge/Bun-runtime-f9f1e1?logo=bun" alt="Bun" />
 </p>
 
@@ -57,7 +57,19 @@ agentistics is a **local analytics dashboard** for Claude Code. It reads the dat
 
 <a name="install"></a>
 
-### Option 1 — Pre-built binary (Linux x86_64)
+### Option 1 — Windows installer
+
+Download the latest `.msi` or `.exe` (NSIS) from the [Releases page](https://github.com/blpsoares/agentistics/releases/latest).
+
+- Double-click to install — no terminal required
+- On first launch, agentistics detects your Claude Code data path automatically (Windows native or WSL)
+- The dashboard opens at **http://localhost:47291** inside a native window
+
+> **SmartScreen warning?** Click "More info → Run anyway". The binary is not code-signed yet.
+
+---
+
+### Option 2 — Pre-built binary (Linux / WSL)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/blpsoares/agentistics/main/install.sh | bash
@@ -87,7 +99,7 @@ Open **http://localhost:47291** in your browser.
 
 ---
 
-### Option 2 — From source (any OS with Bun)
+### Option 3 — From source (any OS with Bun)
 
 **Requires:** [Bun](https://bun.sh)
 

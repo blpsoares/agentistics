@@ -1,0 +1,55 @@
+{
+  "productName": "Agentistics",
+  "version": "../../package.json",
+  "identifier": "com.agentistics.desktop",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Agentistics",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "center": true,
+        "url": "index.html"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' http://localhost:47291; connect-src 'self' http://localhost:47291 ws://localhost:47291; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZGMTU0QTlCOUFBNDlGQUIKUldTcm42U2FtMG9WYjlSSlpCMzQwdWE5blkzUUQ0b0x3Zkc5SDNJY2cweGQ5VUNwRURIZ2NncWgK",
+      "endpoints": [
+        "https://github.com/blpsoares/agentistics/releases/latest/download/latest.json"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "binaries/agentop.exe": "agentop.exe"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": false
+      }
+    }
+  }
+}
