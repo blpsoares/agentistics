@@ -42,7 +42,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/agentop"],
+    "resources": {
+      "binaries/agentop.exe": "agentop.exe"
+    },
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper",

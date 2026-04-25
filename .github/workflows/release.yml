@@ -270,12 +270,6 @@ jobs:
           name: agentop-windows-x64
           path: packages/desktop/binaries/
 
-      - name: Rename to Tauri sidecar convention
-        shell: bash
-        run: |
-          mv packages/desktop/binaries/agentop.exe \
-             packages/desktop/binaries/agentop-x86_64-pc-windows-msvc.exe
-
       - name: Copy logo for loading screen
         shell: bash
         run: cp packages/web/public/minimalistLogo.png packages/desktop/ui/logo.png

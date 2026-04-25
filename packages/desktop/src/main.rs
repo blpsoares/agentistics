@@ -2,11 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::process::Child;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
-use tauri_plugin_shell::process::CommandChild;
-use tauri_plugin_shell::ShellExt;
 
 // ── Error reporting ───────────────────────────────────────────────────────────
 
@@ -212,32 +211,40 @@ async fn wait_for_server() -> bool {
 
 // ── Sidecar ───────────────────────────────────────────────────────────────────
 
+fn find_agentop(app: &AppHandle) -> Option<PathBuf> {
+    // NSIS places agentop.exe in the same directory as the main exe (resource_dir).
+    // Tauri sidecar convention (binaries/ + target triple) is a fallback.
+    let res = app.path().resource_dir().ok()?;
+    log_error(&format!("resource_dir: {}", res.display()));
+
+    let candidates = [
+        res.join("agentop.exe"),
+        res.join("binaries").join("agentop-x86_64-pc-windows-msvc.exe"),
+        res.join("binaries").join("agentop.exe"),
+    ];
+    for c in &candidates {
+        log_error(&format!("candidate: {} exists={}", c.display(), c.exists()));
+        if c.exists() {
+            return Some(c.clone());
+        }
+    }
+    None
+}
+
 fn spawn_sidecar(
     app: &AppHandle,
-    child_handle: &Arc<Mutex<Option<CommandChild>>>,
+    child_handle: &Arc<Mutex<Option<Child>>>,
     claude_dir: &str,
 ) -> Result<(), String> {
-    // Log resource dir and enumerate contents for sidecar diagnosis
-    if let Ok(res) = app.path().resource_dir() {
-        log_error(&format!("resource_dir: {}", res.display()));
-        let candidate = res.join("binaries").join("agentop-x86_64-pc-windows-msvc.exe");
-        log_error(&format!("sidecar candidate: {} exists={}", candidate.display(), candidate.exists()));
-        fn list_dir(dir: &std::path::Path, depth: u8, log: &dyn Fn(&str)) {
-            if depth > 2 { return; }
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for e in entries.flatten() {
-                    log(&format!("  dir[{}]: {}", depth, e.path().display()));
-                    if e.path().is_dir() { list_dir(&e.path(), depth + 1, log); }
-                }
-            }
-        }
-        list_dir(&res, 0, &|s| log_error(s));
-    }
+    let binary = find_agentop(app)
+        .ok_or_else(|| "agentop.exe not found in install directory".to_string())?;
 
-    let cmd = app.shell().sidecar("binaries/agentop")
-        .map_err(|e| format!("sidecar binary not found: {e}"))?;
+    log_error(&format!("spawning: {}", binary.display()));
 
-    let (_rx, child) = cmd.args(["server"]).env("CLAUDE_DIR", claude_dir).spawn()
+    let child = std::process::Command::new(&binary)
+        .arg("server")
+        .env("CLAUDE_DIR", claude_dir)
+        .spawn()
         .map_err(|e| format!("failed to start server: {e}"))?;
 
     *child_handle.lock().unwrap() = Some(child);
@@ -279,7 +286,7 @@ struct SetupState {
 }
 
 struct AppState {
-    child_handle: Arc<Mutex<Option<CommandChild>>>,
+    child_handle: Arc<Mutex<Option<Child>>>,
     config_path: PathBuf,
 }
 
@@ -374,12 +381,11 @@ async fn check_for_update(app: AppHandle) {
 fn main() {
     install_panic_hook();
 
-    let child_handle: Arc<Mutex<Option<CommandChild>>> = Arc::new(Mutex::new(None));
+    let child_handle: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
     let child_exit = child_handle.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_shell::init())
         .manage(AppState {
             child_handle: child_handle.clone(),
             config_path: config_path(),
