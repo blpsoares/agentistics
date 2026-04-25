@@ -419,7 +419,7 @@ fn main() {
         })
         .on_window_event(move |_win, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                if let Some(child) = child_exit.lock().unwrap().take() {
+                if let Some(mut child) = child_exit.lock().unwrap().take() {
                     let _ = child.kill();
                 }
             }
