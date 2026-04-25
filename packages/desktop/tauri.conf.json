@@ -41,17 +41,5 @@
         "silent": false
       }
     }
-  },
-  "plugins": {
-    "shell": {
-      "sidecar": true,
-      "scope": [
-        {
-          "name": "binaries/agentop",
-          "sidecar": true,
-          "args": ["server"]
-        }
-      ]
-    }
   }
 }
