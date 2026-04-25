@@ -14,13 +14,14 @@ use tauri_plugin_shell::ShellExt;
 fn show_error_dialog(title: &str, message: &str) {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK, HWND};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
     let title_w: Vec<u16> = OsStr::new(title).encode_wide().chain(Some(0)).collect();
     let msg_w: Vec<u16> = OsStr::new(message).encode_wide().chain(Some(0)).collect();
     unsafe {
         MessageBoxW(
-            HWND(std::ptr::null_mut()),
+            HWND::default(),
             windows::core::PCWSTR(msg_w.as_ptr()),
             windows::core::PCWSTR(title_w.as_ptr()),
             MB_ICONERROR | MB_OK,
