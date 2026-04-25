@@ -40,10 +40,6 @@
         "type": "downloadBootstrapper",
         "silent": false
       }
-    },
-    "nsis": {
-      "installMode": "currentUser",
-      "shortcutName": "Agentistics"
     }
   },
   "plugins": {
