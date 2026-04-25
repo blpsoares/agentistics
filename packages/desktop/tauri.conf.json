@@ -24,6 +24,14 @@
       "csp": "default-src 'self' http://localhost:47291; connect-src 'self' http://localhost:47291 ws://localhost:47291; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZGMTU0QTlCOUFBNDlGQUIKUldTcm42U2FtMG9WYjlSSlpCMzQwdWE5blkzUUQ0b0x3Zkc5SDNJY2cweGQ5VUNwRURIZ2NncWgK",
+      "endpoints": [
+        "https://github.com/blpsoares/agentistics/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["msi", "nsis"],

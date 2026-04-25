@@ -282,15 +282,45 @@ jobs:
 
       - name: Build Tauri app
         working-directory: packages/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: bunx tauri build --target x86_64-pc-windows-msvc
+
+      - name: Generate latest.json for auto-updater
+        if: github.ref == 'refs/heads/main' && needs.build.outputs.tag != ''
+        shell: bash
+        run: |
+          BUNDLE=packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis
+          EXE=$(ls $BUNDLE/*.exe | grep -v '.sig' | head -1)
+          SIG=$(cat ${EXE}.sig)
+          VERSION="${{ needs.build.outputs.next }}"
+          TAG="${{ needs.build.outputs.tag }}"
+          REPO="${{ github.repository }}"
+          FILENAME=$(basename "$EXE")
+          DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          cat > /tmp/latest.json <<EOF
+          {
+            "version": "${VERSION}",
+            "notes": "See https://github.com/${REPO}/releases/tag/${TAG} for full changelog.",
+            "pub_date": "${DATE}",
+            "platforms": {
+              "windows-x86_64": {
+                "signature": "${SIG}",
+                "url": "https://github.com/${REPO}/releases/download/${TAG}/${FILENAME}"
+              }
+            }
+          }
+          EOF
 
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
         with:
           name: agentistics-windows-installer
           path: |
-            packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe.sig
           retention-days: 7
 
       - name: Attach installers to GitHub Release
@@ -300,9 +330,11 @@ jobs:
         shell: bash
         run: |
           TAG="${{ needs.build.outputs.tag }}"
+          BUNDLE=packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis
           gh release upload "$TAG" \
-            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi \
-            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe \
+            $BUNDLE/*.exe \
+            $BUNDLE/*.exe.sig \
+            /tmp/latest.json \
             --clobber || true
 
       - name: Attach installers to latest release
@@ -311,7 +343,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
+          BUNDLE=packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis
           gh release upload latest \
-            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi \
-            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe \
+            $BUNDLE/*.exe \
+            $BUNDLE/*.exe.sig \
+            /tmp/latest.json \
             --clobber || true

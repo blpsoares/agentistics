@@ -304,6 +304,61 @@ fn reset_config(state: State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
+// ── Auto-update ───────────────────────────────────────────────────────────────
+
+async fn check_for_update(app: AppHandle) {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(_) => return,
+    };
+
+    let update = match updater.check().await {
+        Ok(Some(u)) => u,
+        _ => return,
+    };
+
+    let version = update.version.clone();
+    let msg = format!(
+        "Agentistics {} is available (you have {}).\n\nInstall now?",
+        version,
+        update.current_version
+    );
+
+    #[cfg(windows)]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            MessageBoxW, IDYES, MB_ICONINFORMATION, MB_YESNO,
+        };
+
+        let title_w: Vec<u16> = OsStr::new("Agentistics — Update Available")
+            .encode_wide().chain(Some(0)).collect();
+        let msg_w: Vec<u16> = OsStr::new(&msg).encode_wide().chain(Some(0)).collect();
+
+        let result = unsafe {
+            MessageBoxW(
+                HWND::default(),
+                windows::core::PCWSTR(msg_w.as_ptr()),
+                windows::core::PCWSTR(title_w.as_ptr()),
+                MB_ICONINFORMATION | MB_YESNO,
+            )
+        };
+
+        if result == IDYES {
+            let _ = update
+                .download_and_install(|_, _| {}, || {})
+                .await;
+            app.restart();
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (update, msg);
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() {
@@ -313,6 +368,7 @@ fn main() {
     let child_exit = child_handle.clone();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .manage(AppState {
             child_handle: child_handle.clone(),
@@ -325,6 +381,13 @@ fn main() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+
+            // Check for updates in background
+            let update_handle = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                check_for_update(update_handle).await;
+            });
+
             // If already configured, start the sidecar right away.
             if let Some(config) = read_config(&config_path()) {
                 spawn_sidecar(&handle, &child_handle, &config.claude_dir);
