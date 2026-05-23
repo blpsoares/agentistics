@@ -791,6 +791,12 @@ export default function AppLayout() {
   })
   const [showPrefsModal, setShowPrefsModal] = useState(false)
   const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string } | null>(null)
+  const [pwaPrompt, setPwaPrompt] = useState<Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> } | null>(null)
+  useEffect(() => {
+    const handler = (e: Event) => { e.preventDefault(); setPwaPrompt(e as any) }
+    window.addEventListener('beforeinstallprompt', handler)
+    return () => window.removeEventListener('beforeinstallprompt', handler)
+  }, [])
   const [showDevConfig, setShowDevConfig] = useState(false)
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
@@ -1304,6 +1310,41 @@ export default function AppLayout() {
               title={theme === 'dark' ? (lang === 'pt' ? 'Tema claro' : 'Light theme') : (lang === 'pt' ? 'Tema escuro' : 'Dark theme')}
             >
               {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+            </button>}
+
+            {/* Install as App — shown only when browser offers PWA install */}
+            {pwaPrompt && !isMobile && <button
+              onClick={async () => {
+                await (pwaPrompt as any).prompt()
+                const { outcome } = await (pwaPrompt as any).userChoice
+                if (outcome === 'accepted') setPwaPrompt(null)
+              }}
+              style={{
+                height: 32,
+                padding: '0 12px',
+                display: 'flex', alignItems: 'center', gap: 6,
+                borderRadius: 8,
+                border: '1px solid var(--border)',
+                background: 'transparent',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontFamily: 'inherit',
+                fontWeight: 500,
+                transition: 'all 0.15s',
+              }}
+              onMouseEnter={e => {
+                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
+                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--text-tertiary)'
+              }}
+              onMouseLeave={e => {
+                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)'
+                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
+              }}
+              title={lang === 'pt' ? 'Instalar como app' : 'Install as app'}
+            >
+              <Upload size={13} />
+              {lang === 'pt' ? 'Instalar' : 'Install'}
             </button>}
 
             {/* Export report — hidden on mobile */}
