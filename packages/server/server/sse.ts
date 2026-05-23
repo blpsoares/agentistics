@@ -103,8 +103,14 @@ export function serveStatic(pathname: string): Response | null {
     asset.encoding === 'base64'
       ? Buffer.from(asset.content, 'base64')
       : asset.content
+  // Service worker and manifest must not be cached aggressively
+  const isSwOrManifest = pathname === '/sw.js' || pathname === '/manifest.webmanifest' || pathname === '/registerSW.js'
+  const cacheControl = isSwOrManifest ? 'no-cache, no-store, must-revalidate' : 'public, max-age=31536000'
+  const extraHeaders: Record<string, string> = pathname === '/sw.js'
+    ? { 'Service-Worker-Allowed': '/' }
+    : {}
   return new Response(body, {
     status: 200,
-    headers: { 'Content-Type': asset.contentType, 'Cache-Control': 'public, max-age=31536000' },
+    headers: { 'Content-Type': asset.contentType, 'Cache-Control': cacheControl, ...extraHeaders },
   })
 }
