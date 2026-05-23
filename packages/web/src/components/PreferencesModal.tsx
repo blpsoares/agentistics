@@ -53,7 +53,7 @@ const BADGE_COLORS: Record<string, string> = {
   Powerful: 'var(--accent-purple)',
 }
 
-export type SettingsTab = 'preferences' | 'live' | 'environment'
+export type SettingsTab = 'preferences' | 'live' | 'install' | 'environment'
 
 interface Props {
   initial: PrefsDraft
@@ -160,26 +160,13 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
 
 // ── Tab: Preferences ──────────────────────────────────────────────────────
 
-function PreferencesTab({
-  draft, set, pt,
-  pwaPrompt, onPwaInstalled, onClose,
-}: {
+function PreferencesTab({ draft, set, pt }: {
   draft: PrefsDraft
   set: <K extends keyof PrefsDraft>(k: K, v: PrefsDraft[K]) => void
   pt: boolean
-  pwaPrompt?: PwaPrompt | null
-  onPwaInstalled?: () => void
-  onClose: () => void
 }) {
   const dragRef = useRef<string | null>(null)
   const [dragOver, setDragOver] = useState<string | null>(null)
-  const btnBase: React.CSSProperties = {
-    display: 'flex', alignItems: 'center', gap: 5,
-    padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600,
-    border: '1px solid var(--border)', background: 'transparent',
-    color: 'var(--text-tertiary)', cursor: 'pointer', fontFamily: 'inherit',
-    transition: 'all 0.15s',
-  }
 
   function handleDragStart(id: string) { dragRef.current = id }
   function handleDragOver(e: React.DragEvent, id: string) {
@@ -207,44 +194,43 @@ function PreferencesTab({
 
   return (
     <>
-      {/* ── Display ── */}
+      {/* ── Display — 2-column grid ── */}
       <SectionHeader label={pt ? 'Exibição' : 'Display'} />
-
-      <PrefRow label={pt ? 'Tema' : 'Theme'}>
-        <TabSelect
-          options={[{ value: 'dark' as Theme, label: pt ? 'Escuro' : 'Dark' }, { value: 'light' as Theme, label: pt ? 'Claro' : 'Light' }]}
-          value={draft.theme} onChange={v => set('theme', v)}
-        />
-      </PrefRow>
-      <PrefRow label={pt ? 'Idioma' : 'Language'}>
-        <TabSelect
-          options={[{ value: 'en' as Lang, label: 'English' }, { value: 'pt' as Lang, label: 'Português' }]}
-          value={draft.lang} onChange={v => set('lang', v)}
-        />
-      </PrefRow>
-      <PrefRow label={pt ? 'Moeda' : 'Currency'}>
-        <TabSelect
-          options={[{ value: 'USD' as 'USD' | 'BRL', label: 'USD $' }, { value: 'BRL' as 'USD' | 'BRL', label: 'BRL R$' }]}
-          value={draft.currency} onChange={v => set('currency', v)}
-        />
-      </PrefRow>
-      <PrefRow label={pt ? 'Números' : 'Numbers'}>
-        <TabSelect
-          options={[{ value: 'abbr', label: '1.2M' }, { value: 'full', label: '1.234.567' }]}
-          value={numFormat} onChange={v => setAllNumbers(v === 'full')}
-        />
-      </PrefRow>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px', marginBottom: 16 }}>
+        {([
+          { label: pt ? 'Tema' : 'Theme', opts: [{ value: 'dark' as Theme, label: pt ? 'Escuro' : 'Dark' }, { value: 'light' as Theme, label: pt ? 'Claro' : 'Light' }], key: 'theme' as const },
+          { label: pt ? 'Idioma' : 'Language', opts: [{ value: 'en' as Lang, label: 'English' }, { value: 'pt' as Lang, label: 'Português' }], key: 'lang' as const },
+          { label: pt ? 'Moeda' : 'Currency', opts: [{ value: 'USD' as 'USD'|'BRL', label: 'USD $' }, { value: 'BRL' as 'USD'|'BRL', label: 'BRL R$' }], key: 'currency' as const },
+          { label: pt ? 'Números' : 'Numbers', opts: [{ value: 'abbr', label: '1.2M' }, { value: 'full', label: '1.234.567' }], key: '_numbers' as const },
+        ] as const).map(row => (
+          <div key={row.label}>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, marginBottom: 6, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{row.label}</div>
+            {row.key === '_numbers'
+              ? <TabSelect options={row.opts as any} value={numFormat} onChange={v => setAllNumbers(v === 'full')} />
+              : <TabSelect options={row.opts as any} value={(draft as any)[row.key]} onChange={(v: any) => set(row.key as any, v)} />}
+          </div>
+        ))}
+      </div>
 
       <Divider />
 
       {/* ── Card order ── */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-        <SectionHeader label={pt ? 'Ordem dos cards (home)' : 'Card order (home)'} />
-        <button onClick={() => set('cardOrder', [...DEFAULT_CARD_ORDER])} style={{ ...btnBase, marginTop: -14 }}>
-          <RotateCcw size={10} />{pt ? 'Resetar' : 'Reset'}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <SectionHeader label={pt ? 'Ordem dos cards' : 'Card order'} />
+        <button
+          onClick={() => set('cardOrder', [...DEFAULT_CARD_ORDER])}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 4, marginTop: -14,
+            padding: '3px 8px', borderRadius: 5, fontSize: 11, fontWeight: 600,
+            border: '1px solid var(--border)', background: 'transparent',
+            color: 'var(--text-tertiary)', cursor: 'pointer', fontFamily: 'inherit',
+          }}
+        >
+          <RotateCcw size={9} />{pt ? 'Resetar' : 'Reset'}
         </button>
       </div>
-      <div style={{ marginBottom: 4 }}>
+      {/* 2-column drag grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, marginBottom: 4 }}>
         {draft.cardOrder.map(id => (
           <div key={id} draggable
             onDragStart={() => handleDragStart(id)}
@@ -252,14 +238,14 @@ function PreferencesTab({
             onDrop={() => handleDrop(id)}
             onDragEnd={handleDragEnd}
             style={{
-              display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8,
+              display: 'flex', alignItems: 'center', gap: 7, padding: '5px 8px', borderRadius: 6,
               background: dragOver === id ? 'var(--bg-elevated)' : 'transparent',
               border: dragOver === id ? '1px dashed var(--anthropic-orange)' : '1px solid transparent',
-              cursor: 'grab', marginBottom: 2, transition: 'background 0.1s, border-color 0.1s', userSelect: 'none',
+              cursor: 'grab', transition: 'background 0.1s, border-color 0.1s', userSelect: 'none',
             }}
           >
-            <GripVertical size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
-            <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{CARD_LABELS[id]?.[draft.lang] ?? id}</span>
+            <GripVertical size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+            <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>{CARD_LABELS[id]?.[draft.lang] ?? id}</span>
           </div>
         ))}
       </div>
@@ -270,80 +256,113 @@ function PreferencesTab({
       <SectionHeader label="Chat" />
       <PrefRow
         label={pt ? 'Som de notificação' : 'Notification sound'}
-        sub={pt ? 'Toca quando uma resposta chega com o chat minimizado' : 'Plays when a reply arrives while the chat is minimized'}
+        sub={pt ? 'Toca quando uma resposta chega com o chat minimizado' : 'Plays when a reply arrives while chat is minimized'}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {draft.chatSoundEnabled ? <Volume2 size={14} color="var(--anthropic-orange)" /> : <VolumeX size={14} color="var(--text-tertiary)" />}
           <Toggle on={draft.chatSoundEnabled} onToggle={() => set('chatSoundEnabled', !draft.chatSoundEnabled)} />
         </div>
       </PrefRow>
-      <div style={{ marginBottom: 4 }}>
-        <div style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 500, marginBottom: 10 }}>
-          {pt ? 'Modelo do chat' : 'Chat model'}
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {CHAT_MODELS.map(m => {
-            const active = (draft.chatModel ?? DEFAULT_CHAT_MODEL) === m.id
-            const badgeColor = BADGE_COLORS[m.badge] ?? 'var(--text-tertiary)'
-            return (
-              <button key={m.id} onClick={() => set('chatModel', m.id)} style={{
-                display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 8,
-                border: active ? '1.5px solid var(--anthropic-orange)' : '1px solid var(--border)',
-                background: active ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
-                cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s', fontFamily: 'inherit',
-              }}>
-                <div style={{
-                  width: 32, height: 32, borderRadius: 8, flexShrink: 0,
-                  background: active ? 'var(--anthropic-orange-dim)' : 'var(--bg-card)',
-                  border: `1px solid ${active ? 'var(--anthropic-orange)40' : 'var(--border)'}`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  <Bot size={15} color={active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)'} />
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 2 }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: active ? 'var(--anthropic-orange)' : 'var(--text-primary)' }}>{m.label}</span>
-                    <span style={{
-                      fontSize: 10, fontWeight: 700, color: badgeColor,
-                      background: `color-mix(in srgb, ${badgeColor} 12%, transparent)`,
-                      border: `1px solid color-mix(in srgb, ${badgeColor} 30%, transparent)`,
-                      padding: '1px 6px', borderRadius: 4,
-                    }}>{m.badge}</span>
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{m.desc}</div>
-                </div>
-                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textAlign: 'right', flexShrink: 0 }}>
-                  <div>${m.inputPer1M}</div><div>${m.outputPer1M}</div>
-                </div>
-                {active && <Zap size={13} color="var(--anthropic-orange)" style={{ flexShrink: 0 }} />}
-              </button>
-            )
-          })}
-        </div>
-        <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 7 }}>
-          {pt ? 'USD por 1M tokens (entrada / saída)' : 'USD per 1M tokens (input / output)'}
-        </div>
+      <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500, marginBottom: 8 }}>
+        {pt ? 'Modelo do chat' : 'Chat model'}
       </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        {CHAT_MODELS.map(m => {
+          const active = (draft.chatModel ?? DEFAULT_CHAT_MODEL) === m.id
+          const badgeColor = BADGE_COLORS[m.badge] ?? 'var(--text-tertiary)'
+          return (
+            <button key={m.id} onClick={() => set('chatModel', m.id)} style={{
+              display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 7,
+              border: active ? '1.5px solid var(--anthropic-orange)' : '1px solid var(--border)',
+              background: active ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+              cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s', fontFamily: 'inherit',
+            }}>
+              <Bot size={14} color={active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)'} style={{ flexShrink: 0 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: active ? 'var(--anthropic-orange)' : 'var(--text-primary)' }}>{m.label}</span>
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, color: badgeColor,
+                    background: `color-mix(in srgb, ${badgeColor} 12%, transparent)`,
+                    border: `1px solid color-mix(in srgb, ${badgeColor} 30%, transparent)`,
+                    padding: '1px 5px', borderRadius: 4,
+                  }}>{m.badge}</span>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 1 }}>{m.desc}</div>
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textAlign: 'right', flexShrink: 0, lineHeight: 1.6 }}>
+                <div>${m.inputPer1M}</div><div>${m.outputPer1M}</div>
+              </div>
+              {active && <Zap size={12} color="var(--anthropic-orange)" style={{ flexShrink: 0 }} />}
+            </button>
+          )
+        })}
+      </div>
+      <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 6 }}>
+        {pt ? 'USD por 1M tokens (entrada / saída)' : 'USD per 1M tokens (input / output)'}
+      </div>
+    </>
+  )
+}
 
-      <Divider />
+// ── Tab: Install ──────────────────────────────────────────────────────────
 
-      {/* ── Install ── */}
-      <SectionHeader label={pt ? 'Instalação' : 'Installation'} />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <div>
-            <div style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 7 }}>
-              <Globe size={13} color={pwaPrompt ? 'var(--anthropic-orange)' : 'var(--text-tertiary)'} />
-              {pt ? 'App Web (PWA)' : 'Web App (PWA)'}
+function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose }: {
+  pt: boolean
+  pwaPrompt?: PwaPrompt | null
+  onPwaInstalled?: () => void
+  onClose: () => void
+}) {
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+  const isDevPort = window.location.port === '47292'
+
+  const pwaStatus = pwaPrompt
+    ? 'available'
+    : isStandalone ? 'installed' : isDevPort ? 'dev' : 'waiting'
+
+  const pwaHint: Record<string, string> = {
+    available: pt ? 'Instale pelo navegador, sem download necessário.' : 'Install via browser — no download needed.',
+    installed:  pt ? 'Você já está usando o App Web instalado.' : 'You are already using the installed Web App.',
+    dev:        pt ? 'Não disponível no servidor de dev. Abra via porta 47291.' : 'Not available in dev mode. Open via port 47291.',
+    waiting:    pt ? 'Recarregue a página para habilitar a instalação.' : 'Reload the page to enable installation.',
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Web App card */}
+      <div style={{
+        padding: '16px 18px', borderRadius: 10,
+        border: pwaPrompt ? '1.5px solid var(--anthropic-orange)' : '1px solid var(--border)',
+        background: pwaPrompt ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flex: 1, minWidth: 0 }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: 9, flexShrink: 0, marginTop: 1,
+              background: pwaPrompt ? 'color-mix(in srgb, var(--anthropic-orange) 15%, transparent)' : 'var(--bg-card)',
+              border: `1px solid ${pwaPrompt ? 'color-mix(in srgb, var(--anthropic-orange) 30%, transparent)' : 'var(--border)'}`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Globe size={16} color={pwaPrompt ? 'var(--anthropic-orange)' : 'var(--text-tertiary)'} />
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
-              {pwaPrompt
-                ? (pt ? 'Instale pelo navegador, sem download' : 'Install via browser, no download needed')
-                : window.matchMedia('(display-mode: standalone)').matches
-                  ? (pt ? '✓ Já está rodando como app instalado' : '✓ Already running as installed app')
-                  : window.location.port === '47292'
-                    ? (pt ? 'Não disponível no servidor de dev — use a porta 47291' : 'Not available in dev mode — use port 47291')
-                    : (pt ? 'Aguardando o navegador liberar a instalação (recarregue a página)' : 'Waiting for browser to allow install (try reloading)')}
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+                  {pt ? 'App Web (PWA)' : 'Web App (PWA)'}
+                </span>
+                <span style={{
+                  fontSize: 10, fontWeight: 700,
+                  color: 'var(--anthropic-orange)',
+                  background: 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
+                  border: '1px solid color-mix(in srgb, var(--anthropic-orange) 25%, transparent)',
+                  padding: '1px 6px', borderRadius: 4,
+                }}>
+                  {pt ? 'Recomendado' : 'Recommended'}
+                </span>
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+                {pwaHint[pwaStatus]}
+              </div>
             </div>
           </div>
           <button
@@ -357,46 +376,70 @@ function PreferencesTab({
             }}
             disabled={!pwaPrompt}
             style={{
-              padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+              padding: '6px 14px', borderRadius: 7, fontSize: 12, fontWeight: 600, flexShrink: 0,
               border: pwaPrompt ? '1px solid var(--anthropic-orange)' : '1px solid var(--border)',
-              background: pwaPrompt ? 'var(--anthropic-orange-dim)' : 'transparent',
+              background: pwaPrompt ? 'color-mix(in srgb, var(--anthropic-orange) 20%, transparent)' : 'transparent',
               color: pwaPrompt ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
               cursor: pwaPrompt ? 'pointer' : 'default',
-              fontFamily: 'inherit', whiteSpace: 'nowrap', flexShrink: 0,
-              opacity: pwaPrompt ? 1 : 0.5,
+              fontFamily: 'inherit', opacity: pwaPrompt ? 1 : 0.5,
             }}
           >
-            {pt ? 'Instalar' : 'Install'}
+            {pwaStatus === 'installed' ? (pt ? 'Instalado' : 'Installed') : (pt ? 'Instalar' : 'Install')}
           </button>
         </div>
+      </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <div>
-            <div style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 7 }}>
-              <Monitor size={13} color="var(--text-secondary)" />
-              {pt ? 'App Desktop (Windows)' : 'Desktop App (Windows)'}
+      {/* Desktop App card */}
+      <div style={{
+        padding: '16px 18px', borderRadius: 10,
+        border: '1px solid var(--border)', background: 'var(--bg-elevated)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flex: 1, minWidth: 0 }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: 9, flexShrink: 0, marginTop: 1,
+              background: 'var(--bg-card)', border: '1px solid var(--border)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Monitor size={16} color="var(--text-secondary)" />
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
-              {pt ? 'Instalador com atualizações automáticas' : 'Installer with auto-updates'}
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
+                {pt ? 'App Desktop (Windows)' : 'Desktop App (Windows)'}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+                {pt ? 'Instalador NSIS com atualizações automáticas via Tauri.' : 'NSIS installer with auto-updates via Tauri.'}
+              </div>
             </div>
           </div>
           <button
             onClick={() => window.open('https://github.com/blpsoares/agentistics/releases/latest', '_blank', 'noopener')}
             style={{
               display: 'flex', alignItems: 'center', gap: 5,
-              padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+              padding: '6px 14px', borderRadius: 7, fontSize: 12, fontWeight: 600, flexShrink: 0,
               border: '1px solid var(--border)', background: 'transparent',
               color: 'var(--text-secondary)', cursor: 'pointer',
-              fontFamily: 'inherit', whiteSpace: 'nowrap', flexShrink: 0, transition: 'all 0.15s',
+              fontFamily: 'inherit', transition: 'all 0.15s',
             }}
             onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-primary)'; e.currentTarget.style.borderColor = 'var(--text-tertiary)' }}
             onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.borderColor = 'var(--border)' }}
           >
-            <Download size={11} />{pt ? 'Baixar' : 'Download'}
+            <Download size={12} />{pt ? 'Baixar' : 'Download'}
           </button>
         </div>
       </div>
-    </>
+
+      {/* Info footer */}
+      <div style={{
+        padding: '12px 14px', borderRadius: 8,
+        background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+        fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.6,
+      }}>
+        💡 {pt
+          ? 'O App Web é mais rápido de instalar e funciona em qualquer plataforma. O App Desktop oferece integração nativa no Windows com ícone na barra de tarefas.'
+          : 'The Web App is faster to install and works on any platform. The Desktop App offers native Windows integration with a taskbar icon.'}
+      </div>
+    </div>
   )
 }
 
@@ -638,6 +681,7 @@ function EnvironmentTab({ pt }: { pt: boolean }) {
 const TABS: { id: SettingsTab; icon: React.ReactNode; labelEn: string; labelPt: string }[] = [
   { id: 'preferences', icon: <SlidersHorizontal size={13} />, labelEn: 'Preferences', labelPt: 'Preferências' },
   { id: 'live',        icon: <Activity size={13} />,          labelEn: 'Live',         labelPt: 'Live' },
+  { id: 'install',     icon: <Download size={13} />,          labelEn: 'Install',      labelPt: 'Instalar' },
   { id: 'environment', icon: <Code2 size={13} />,             labelEn: 'Environment',  labelPt: 'Ambiente' },
 ]
 
@@ -683,7 +727,7 @@ export function PreferencesModal({
           background: 'var(--bg-surface)',
           border: '1px solid var(--border)',
           borderRadius: 'var(--radius-lg)',
-          width: 480,
+          width: 560,
           height: 'min(680px, 90vh)',
           display: 'flex',
           flexDirection: 'column',
@@ -744,10 +788,7 @@ export function PreferencesModal({
         {/* Scrollable body */}
         <div style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
           {activeTab === 'preferences' && (
-            <PreferencesTab
-              draft={draft} set={set} pt={pt}
-              pwaPrompt={pwaPrompt} onPwaInstalled={onPwaInstalled} onClose={onClose}
-            />
+            <PreferencesTab draft={draft} set={set} pt={pt} />
           )}
           {activeTab === 'live' && (
             <LiveTab
@@ -756,6 +797,12 @@ export function PreferencesModal({
               updateInterval={updateInterval} setUpdateInterval={setUpdateInterval}
               riskyMode={riskyMode} setRiskyMode={setRiskyMode}
               highlightUpdates={highlightUpdates} setHighlightUpdates={setHighlightUpdates}
+            />
+          )}
+          {activeTab === 'install' && (
+            <InstallTab
+              pt={pt}
+              pwaPrompt={pwaPrompt} onPwaInstalled={onPwaInstalled} onClose={onClose}
             />
           )}
           {activeTab === 'environment' && <EnvironmentTab pt={pt} />}

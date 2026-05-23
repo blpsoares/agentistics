@@ -1120,27 +1120,47 @@ export default function AppLayout() {
       },
       {
         label: pt ? 'Commits' : 'Commits',
-        source: pt
-          ? '~/.claude/projects/**/*.jsonl → comandos git commit/push nas chamadas Bash'
-          : '~/.claude/projects/**/*.jsonl → git commit/push commands in Bash tool calls',
-        formula: pt
-          ? 'Σ git_commits das sessões no período\nΣ git_pushes das sessões no período'
-          : 'Σ git_commits for sessions in the period\nΣ git_pushes for sessions in the period',
-        note: pt
-          ? 'Conta apenas commits e pushes executados pelo Claude via ferramenta Bash. Commits feitos manualmente no terminal não são capturados. Para histórico completo do repositório, use git log diretamente.'
-          : 'Counts only commits and pushes executed by Claude via the Bash tool. Commits made manually in the terminal are not captured. For full repository history, use git log directly.',
+        source: projectFiltered
+          ? pt
+            ? 'git log (projeto) → todos os commits desde a primeira sessão'
+            : 'git log (project) → all commits since the first session'
+          : pt
+            ? '~/.claude/projects/**/*.jsonl → comandos git commit/push nas chamadas Bash'
+            : '~/.claude/projects/**/*.jsonl → git commit/push commands in Bash tool calls',
+        formula: projectFiltered
+          ? pt
+            ? 'Σ commits do projeto (git log --numstat) para cada projeto filtrado\nΣ git_pushes das sessões (via Bash)'
+            : 'Σ project commits (git log --numstat) for each filtered project\nΣ git_pushes from sessions (via Bash)'
+          : pt
+            ? 'Σ git_commits das sessões no período\nΣ git_pushes das sessões no período'
+            : 'Σ git_commits for sessions in the period\nΣ git_pushes for sessions in the period',
+        note: projectFiltered
+          ? pt
+            ? 'Com filtro de projeto ativo, usa git log --numstat diretamente no repositório — inclui todos os commits, mesmo os feitos fora do Claude. Sem filtro de projeto, conta apenas commits executados pelo Claude via ferramenta Bash.'
+            : 'With project filter active, reads git log --numstat directly from the repository — includes all commits, even those made outside Claude. Without project filter, only counts commits run by Claude via the Bash tool.'
+          : pt
+            ? 'Conta apenas commits e pushes executados pelo Claude via ferramenta Bash. Commits feitos manualmente no terminal não são capturados. Ative o filtro de projeto para ver o histórico completo do repositório.'
+            : 'Counts only commits and pushes executed by Claude via the Bash tool. Commits made manually in the terminal are not captured. Activate the project filter to see the full repository history.',
       },
       {
         label: pt ? 'Arquivos modificados' : 'Files modified',
-        source: pt
-          ? '~/.claude/projects/**/*.jsonl → git log --numstat por sessão'
-          : '~/.claude/projects/**/*.jsonl → git log --numstat per session',
+        source: projectFiltered
+          ? pt
+            ? 'git log --numstat (projeto) → todos os arquivos alterados desde a primeira sessão'
+            : 'git log --numstat (project) → all files changed since the first session'
+          : pt
+            ? '~/.claude/projects/**/*.jsonl → git log --numstat por sessão'
+            : '~/.claude/projects/**/*.jsonl → git log --numstat per session',
         formula: pt
           ? 'Σ files_modified das sessões filtradas\nΣ lines_added  |  Σ lines_removed'
           : 'Σ files_modified for filtered sessions\nΣ lines_added  |  Σ lines_removed',
-        note: pt
-          ? 'Calculado via git log --numstat no intervalo de tempo de cada sessão. Requer que o projeto seja um repositório git e que git esteja instalado.'
-          : 'Calculated via git log --numstat over each session\'s time window. Requires the project to be a git repository and git to be installed.',
+        note: projectFiltered
+          ? pt
+            ? 'Com filtro de projeto ativo, usa git log --numstat diretamente no repositório. Arquivos binários são excluídos (git numstat mostra "-" para binários). Requer que o projeto seja um repositório git.'
+            : 'With project filter active, reads git log --numstat directly from the repository. Binary files are excluded (git numstat shows "-" for binaries). Requires the project to be a git repository.'
+          : pt
+            ? 'Calculado via git log --numstat no intervalo de tempo de cada sessão. Requer que o projeto seja um repositório git e que git esteja instalado.'
+            : 'Calculated via git log --numstat over each session\'s time window. Requires the project to be a git repository and git to be installed.',
       },
       {
         label: pt ? 'Tokens de entrada' : 'Input tokens',

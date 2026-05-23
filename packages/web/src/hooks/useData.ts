@@ -507,26 +507,49 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     }
 
     // ── Git / Files ──
-    // When exactly one project is selected, use project-level git stats from the git repo
-    // (more accurate than session-based — captures commits made from other cwds)
-    const singleProjectGitStats = projects.length === 1
-      ? data.projects.find(p => p.path === projects[0])?.git_stats
-      : undefined
+    // When a project filter is active, prefer project-level git stats from data.projects
+    // (computed via `git log --numstat` — captures ALL commits, not just those run through
+    // Claude's Bash tool).  Session-level git_commits only counts commits that Claude
+    // explicitly ran via the Bash tool, so projects where the user commits from the
+    // terminal would always show 0 in the session-based path.
+    //
+    // For multi-project filters we sum the stats across all selected projects that have
+    // git_stats.  We fall back to session-based aggregation only when no project in the
+    // filter has git_stats (e.g. the project is not a git repo).
+    let projectLevelGitStats: { commits: number; linesAdded: number; linesRemoved: number; filesModified: number } | undefined
 
-    const gitCommits = singleProjectGitStats
-      ? singleProjectGitStats.commits
+    if (projectFiltered) {
+      const matched = projects
+        .map(path => data.projects.find(p => p.path === path)?.git_stats)
+        .filter((gs): gs is NonNullable<typeof gs> => gs !== undefined)
+
+      if (matched.length > 0) {
+        projectLevelGitStats = matched.reduce(
+          (acc, gs) => ({
+            commits: acc.commits + gs.commits,
+            linesAdded: acc.linesAdded + gs.lines_added,
+            linesRemoved: acc.linesRemoved + gs.lines_removed,
+            filesModified: acc.filesModified + gs.files_modified,
+          }),
+          { commits: 0, linesAdded: 0, linesRemoved: 0, filesModified: 0 },
+        )
+      }
+    }
+
+    const gitCommits = projectLevelGitStats
+      ? projectLevelGitStats.commits
       : filteredSessions.reduce((s, sess) => s + (sess.git_commits ?? 0), 0)
-    const gitPushes = singleProjectGitStats
+    const gitPushes = projectLevelGitStats
       ? 0  // not tracked at project level
       : filteredSessions.reduce((s, sess) => s + (sess.git_pushes ?? 0), 0)
-    const linesAdded = singleProjectGitStats
-      ? singleProjectGitStats.lines_added
+    const linesAdded = projectLevelGitStats
+      ? projectLevelGitStats.linesAdded
       : filteredSessions.reduce((s, sess) => s + (sess.lines_added ?? 0), 0)
-    const linesRemoved = singleProjectGitStats
-      ? singleProjectGitStats.lines_removed
+    const linesRemoved = projectLevelGitStats
+      ? projectLevelGitStats.linesRemoved
       : filteredSessions.reduce((s, sess) => s + (sess.lines_removed ?? 0), 0)
-    const filesModified = singleProjectGitStats
-      ? singleProjectGitStats.files_modified
+    const filesModified = projectLevelGitStats
+      ? projectLevelGitStats.filesModified
       : filteredSessions.reduce((s, sess) => s + (sess.files_modified ?? 0), 0)
 
     // ── Tokens from sessions ──
