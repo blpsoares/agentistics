@@ -34,7 +34,6 @@ import { CacheHitRatePanel } from './components/CacheHitRatePanel'
 import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
 import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
-import { DevConfigPanel } from './components/DevConfigPanel'
 import { TtyChat } from './components/TtyChat'
 import { ClaudeChat } from './components/ClaudeChat'
 import { UpdateModal } from './components/UpdateModal'
@@ -713,7 +712,6 @@ export default function AppLayout() {
   const isMobile = useIsMobile()
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
-  const [showLiveSettings, setShowLiveSettings] = useState(false)
   const [lang, setLangState] = useState<Lang>('en')
   const [theme, setThemeState] = useState<Theme>('dark')
   const [currency, setCurrencyState] = useState<'USD' | 'BRL'>('USD')
@@ -822,7 +820,6 @@ export default function AppLayout() {
     installModalShownRef.current = true
     setShowInstallModal(true)
   }, [data, loading, pwaInstalled])
-  const [showDevConfig, setShowDevConfig] = useState(false)
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
   const [claudeDetached, setClaudeDetached] = useState(false)
@@ -1370,7 +1367,7 @@ export default function AppLayout() {
               {lang === 'pt' ? 'Exportar' : 'Export'}
             </button>}
 
-            {/* Preferences */}
+            {/* Settings — unified modal (Preferences + Live + Environment) */}
             <button
               onClick={() => setShowPrefsModal(true)}
               style={{
@@ -1391,24 +1388,10 @@ export default function AppLayout() {
                 ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)'
                 ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
               }}
-              title={lang === 'pt' ? 'Preferências' : 'Preferences'}
+              title={lang === 'pt' ? 'Configurações' : 'Settings'}
             >
               <SlidersHorizontal size={14} />
             </button>
-
-            {/* Dev config — hidden on mobile */}
-            {!isMobile && <button
-              onClick={() => setShowDevConfig(true)}
-              style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRadius: 8, border: '1px solid var(--border)', background: 'transparent',
-                color: 'var(--text-secondary)', cursor: 'pointer', transition: 'all 0.15s',
-                fontFamily: 'monospace', fontSize: 13, fontWeight: 600 }}
-              onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-primary)'; e.currentTarget.style.borderColor = 'var(--text-tertiary)' }}
-              onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.borderColor = 'var(--border)' }}
-              title="Dev config"
-            >
-              {'</>'}
-            </button>}
 
             {/* Health warnings */}
             {data?.healthIssues && data.healthIssues.length > 0 && (
@@ -1457,29 +1440,6 @@ export default function AppLayout() {
                 </span>
               )}
 
-              {/* Settings gear — desktop only */}
-              {!isMobile && <button
-                onClick={() => setShowLiveSettings(true)}
-                title="Live update settings"
-                style={{
-                  width: 26, height: 26,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: 'transparent', border: 'none', cursor: 'pointer',
-                  color: 'var(--text-tertiary)', borderRadius: 6,
-                  transition: 'color 0.15s, background 0.15s',
-                  flexShrink: 0,
-                }}
-                onMouseEnter={e => {
-                  ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
-                  ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-elevated)'
-                }}
-                onMouseLeave={e => {
-                  ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'
-                  ;(e.currentTarget as HTMLButtonElement).style.background = 'transparent'
-                }}
-              >
-                <Settings size={12} />
-              </button>}
             </div>
 
             {/* Refresh */}
@@ -1573,23 +1533,7 @@ export default function AppLayout() {
         }} />
       </main>
 
-      {/* Live settings modal */}
-      {showLiveSettings && (
-        <LiveSettingsModal
-          lang={lang}
-          liveUpdates={liveUpdates}
-          setLiveUpdates={setLiveUpdates}
-          updateInterval={updateInterval}
-          setUpdateInterval={setUpdateInterval}
-          riskyMode={riskyMode}
-          setRiskyMode={setRiskyMode}
-          highlightUpdates={highlightUpdates}
-          setHighlightUpdates={v => { setHighlightUpdates(v); highlightUpdatesRef.current = v }}
-          onClose={() => setShowLiveSettings(false)}
-        />
-      )}
-
-      {/* Preferences modal */}
+      {/* Unified Settings modal (Preferences + Live + Environment) */}
       {showPrefsModal && (
         <PreferencesModal
           initial={{ lang, theme, currency, cardOrder, cardPrecision, chatModel, chatSoundEnabled }}
@@ -1619,6 +1563,14 @@ export default function AppLayout() {
           onClose={() => setShowPrefsModal(false)}
           pwaPrompt={pwaPrompt}
           onPwaInstalled={() => { setPwaInstalled(true); setPwaPrompt(null) }}
+          liveUpdates={liveUpdates}
+          setLiveUpdates={setLiveUpdates}
+          updateInterval={updateInterval}
+          setUpdateInterval={setUpdateInterval}
+          riskyMode={riskyMode}
+          setRiskyMode={setRiskyMode}
+          highlightUpdates={highlightUpdates}
+          setHighlightUpdates={setHighlightUpdates}
         />
       )}
 
@@ -1636,9 +1588,6 @@ export default function AppLayout() {
           onPwaInstalled={() => { setPwaInstalled(true); setPwaPrompt(null) }}
         />
       )}
-
-      {/* Dev Config Panel */}
-      {showDevConfig && <DevConfigPanel onClose={() => setShowDevConfig(false)} />}
 
       {/* Update available modal */}
       {updateInfo && (
