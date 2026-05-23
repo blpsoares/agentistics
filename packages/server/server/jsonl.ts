@@ -120,6 +120,7 @@ export async function parseSessionJsonl(
   let gitCommits = 0, gitPushes = 0
   let toolErrors = 0, userInterruptions = 0
   let hasMcp = false
+  const claudeFilesModified = new Set<string>()
   const toolCounts: Record<string, number> = {}
   const toolOutputTokens: Record<string, number> = {}
   const agentFileReads: Record<string, number> = {}
@@ -234,6 +235,11 @@ export async function parseSessionJsonl(
                 const lang = EXT_TO_LANG[ext]
                 if (lang) languageSet.add(lang)
 
+                // Count files Claude directly wrote or edited (not git-based)
+                if (['Edit', 'Write', 'MultiEdit'].includes(toolName)) {
+                  claudeFilesModified.add(fp)
+                }
+
                 // Detect agent instruction file reads (Read tool only — Glob/Grep/Search
                 // operate on patterns/queries rather than file paths, so they are excluded
                 // to avoid false positives)
@@ -270,6 +276,8 @@ export async function parseSessionJsonl(
   const gitFileStats = gitCommits > 0
     ? await getGitFileStats(projectPath, startTime, lastTime)
     : { linesAdded: 0, linesRemoved: 0, filesModified: 0 }
+  // Use whichever count is higher: git-tracked files changed or files Claude directly edited
+  const filesModifiedCount = Math.max(gitFileStats.filesModified, claudeFilesModified.size)
 
   // Extract agent metrics if this session used the Agent tool
   const agentMetrics = toolCounts['Agent']
@@ -305,7 +313,7 @@ export async function parseSessionJsonl(
     uses_web_fetch: 'WebFetch' in toolCounts,
     lines_added: gitFileStats.linesAdded,
     lines_removed: gitFileStats.linesRemoved,
-    files_modified: gitFileStats.filesModified,
+    files_modified: filesModifiedCount,
     message_hours: messageHours,
     user_message_timestamps: userMessageTimestamps,
     model: modelId || undefined,

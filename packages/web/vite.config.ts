@@ -9,7 +9,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      devOptions: { enabled: false },
+      devOptions: { enabled: true, suppressWarnings: true, type: 'module' },
       includeAssets: ['favicon.ico', 'minimalistLogo.png', 'icons/*.png'],
       manifest: {
         name: 'Agentistics',

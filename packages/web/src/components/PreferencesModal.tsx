@@ -6,6 +6,7 @@ import {
 import type { Lang, Theme } from '@agentistics/core'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
 import { LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from '../hooks/useData'
+import { CHAT_SOUNDS, DEFAULT_CHAT_SOUND_ID, findChatSound } from '../lib/chatSounds'
 
 type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
 
@@ -17,6 +18,7 @@ export interface PrefsDraft {
   cardPrecision: Record<string, boolean>
   chatModel: ChatModelId | null
   chatSoundEnabled: boolean
+  chatSoundId: string
 }
 
 interface ConfigField { key: string; default: string; description: string }
@@ -160,10 +162,11 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
 
 // ── Tab: Preferences ──────────────────────────────────────────────────────
 
-function PreferencesTab({ draft, set, pt }: {
+function PreferencesTab({ draft, set, pt, previewSound }: {
   draft: PrefsDraft
   set: <K extends keyof PrefsDraft>(k: K, v: PrefsDraft[K]) => void
   pt: boolean
+  previewSound: (id: string) => void
 }) {
   const dragRef = useRef<string | null>(null)
   const [dragOver, setDragOver] = useState<string | null>(null)
@@ -194,22 +197,45 @@ function PreferencesTab({ draft, set, pt }: {
 
   return (
     <>
-      {/* ── Display — 2-column grid ── */}
+      {/* ── Display ── */}
       <SectionHeader label={pt ? 'Exibição' : 'Display'} />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px', marginBottom: 16 }}>
-        {([
-          { label: pt ? 'Tema' : 'Theme', opts: [{ value: 'dark' as Theme, label: pt ? 'Escuro' : 'Dark' }, { value: 'light' as Theme, label: pt ? 'Claro' : 'Light' }], key: 'theme' as const },
-          { label: pt ? 'Idioma' : 'Language', opts: [{ value: 'en' as Lang, label: 'English' }, { value: 'pt' as Lang, label: 'Português' }], key: 'lang' as const },
-          { label: pt ? 'Moeda' : 'Currency', opts: [{ value: 'USD' as 'USD'|'BRL', label: 'USD $' }, { value: 'BRL' as 'USD'|'BRL', label: 'BRL R$' }], key: 'currency' as const },
-          { label: pt ? 'Números' : 'Numbers', opts: [{ value: 'abbr', label: '1.2M' }, { value: 'full', label: '1.234.567' }], key: '_numbers' as const },
-        ] as const).map(row => (
-          <div key={row.label}>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, marginBottom: 6, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{row.label}</div>
-            {row.key === '_numbers'
-              ? <TabSelect options={row.opts as any} value={numFormat} onChange={v => setAllNumbers(v === 'full')} />
-              : <TabSelect options={row.opts as any} value={(draft as any)[row.key]} onChange={(v: any) => set(row.key as any, v)} />}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, marginBottom: 5, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{pt ? 'Tema' : 'Theme'}</div>
+            <TabSelect
+              options={[{ value: 'dark' as Theme, label: pt ? 'Escuro' : 'Dark' }, { value: 'light' as Theme, label: pt ? 'Claro' : 'Light' }]}
+              value={draft.theme}
+              onChange={v => set('theme', v)}
+            />
           </div>
-        ))}
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, marginBottom: 5, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{pt ? 'Idioma' : 'Language'}</div>
+            <TabSelect
+              options={[{ value: 'en' as Lang, label: 'English' }, { value: 'pt' as Lang, label: 'Português' }]}
+              value={draft.lang}
+              onChange={v => set('lang', v)}
+            />
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, marginBottom: 5, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{pt ? 'Moeda' : 'Currency'}</div>
+            <TabSelect
+              options={[{ value: 'USD' as 'USD'|'BRL', label: 'USD $' }, { value: 'BRL' as 'USD'|'BRL', label: 'BRL R$' }]}
+              value={draft.currency}
+              onChange={v => set('currency', v)}
+            />
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, marginBottom: 5, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{pt ? 'Números' : 'Numbers'}</div>
+            <TabSelect
+              options={[{ value: 'abbr', label: '1.2M' }, { value: 'full', label: '1,234,567' }]}
+              value={numFormat}
+              onChange={v => setAllNumbers(v === 'full')}
+            />
+          </div>
+        </div>
       </div>
 
       <Divider />
@@ -260,9 +286,40 @@ function PreferencesTab({ draft, set, pt }: {
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {draft.chatSoundEnabled ? <Volume2 size={14} color="var(--anthropic-orange)" /> : <VolumeX size={14} color="var(--text-tertiary)" />}
-          <Toggle on={draft.chatSoundEnabled} onToggle={() => set('chatSoundEnabled', !draft.chatSoundEnabled)} />
+          <Toggle
+            on={draft.chatSoundEnabled}
+            onToggle={() => {
+              const next = !draft.chatSoundEnabled
+              set('chatSoundEnabled', next)
+              if (next) previewSound(draft.chatSoundId)
+            }}
+          />
         </div>
       </PrefRow>
+
+      {/* Sound picker — only visible when sound is enabled */}
+      {draft.chatSoundEnabled && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+          {CHAT_SOUNDS.map(s => {
+            const active = draft.chatSoundId === s.id
+            return (
+              <button
+                key={s.id}
+                onClick={() => { set('chatSoundId', s.id); previewSound(s.id) }}
+                style={{
+                  padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: active ? 700 : 500,
+                  border: active ? '1.5px solid var(--anthropic-orange)' : '1px solid var(--border)',
+                  background: active ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+                  color: active ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+                  cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s',
+                }}
+              >
+                {s.label[pt ? 'pt' : 'en']}
+              </button>
+            )
+          })}
+        </div>
+      )}
       <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500, marginBottom: 8 }}>
         {pt ? 'Modelo do chat' : 'Chat model'}
       </div>
@@ -315,6 +372,7 @@ function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose }: {
 }) {
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches
   const isDevPort = window.location.port === '47292'
+  const [uninstallHint, setUninstallHint] = useState(false)
 
   const pwaStatus = pwaPrompt
     ? 'available'
@@ -365,28 +423,53 @@ function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose }: {
               </div>
             </div>
           </div>
-          <button
-            onClick={async () => {
-              if (!pwaPrompt || !onPwaInstalled) return
-              try {
-                await pwaPrompt.prompt()
-                const { outcome } = await pwaPrompt.userChoice
-                if (outcome === 'accepted') { onPwaInstalled(); onClose() }
-              } catch {}
-            }}
-            disabled={!pwaPrompt}
-            style={{
-              padding: '6px 14px', borderRadius: 7, fontSize: 12, fontWeight: 600, flexShrink: 0,
-              border: pwaPrompt ? '1px solid var(--anthropic-orange)' : '1px solid var(--border)',
-              background: pwaPrompt ? 'color-mix(in srgb, var(--anthropic-orange) 20%, transparent)' : 'transparent',
-              color: pwaPrompt ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-              cursor: pwaPrompt ? 'pointer' : 'default',
-              fontFamily: 'inherit', opacity: pwaPrompt ? 1 : 0.5,
-            }}
-          >
-            {pwaStatus === 'installed' ? (pt ? 'Instalado' : 'Installed') : (pt ? 'Instalar' : 'Install')}
-          </button>
+          {pwaStatus === 'installed' ? (
+            <button
+              onClick={() => setUninstallHint(h => !h)}
+              style={{
+                padding: '6px 14px', borderRadius: 7, fontSize: 12, fontWeight: 600, flexShrink: 0,
+                border: '1px solid rgba(239,68,68,0.4)',
+                background: uninstallHint ? 'rgba(239,68,68,0.12)' : 'transparent',
+                color: '#ef4444', cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s',
+              }}
+            >
+              {pt ? 'Desinstalar' : 'Uninstall'}
+            </button>
+          ) : (
+            <button
+              onClick={async () => {
+                if (!pwaPrompt || !onPwaInstalled) return
+                try {
+                  await pwaPrompt.prompt()
+                  const { outcome } = await pwaPrompt.userChoice
+                  if (outcome === 'accepted') { onPwaInstalled(); onClose() }
+                } catch {}
+              }}
+              disabled={!pwaPrompt}
+              style={{
+                padding: '6px 14px', borderRadius: 7, fontSize: 12, fontWeight: 600, flexShrink: 0,
+                border: pwaPrompt ? '1px solid var(--anthropic-orange)' : '1px solid var(--border)',
+                background: pwaPrompt ? 'color-mix(in srgb, var(--anthropic-orange) 20%, transparent)' : 'transparent',
+                color: pwaPrompt ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                cursor: pwaPrompt ? 'pointer' : 'default',
+                fontFamily: 'inherit', opacity: pwaPrompt ? 1 : 0.5,
+              }}
+            >
+              {pt ? 'Instalar' : 'Install'}
+            </button>
+          )}
         </div>
+        {uninstallHint && (
+          <div style={{
+            marginTop: 12, padding: '8px 12px', borderRadius: 7,
+            background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+            fontSize: 12, color: '#ef4444', lineHeight: 1.5,
+          }}>
+            {pt
+              ? 'Para desinstalar: clique no menu ⋮ no canto superior direito da janela do app → "Desinstalar Agentistics".'
+              : 'To uninstall: click the ⋮ menu in the top-right corner of the app window → "Uninstall Agentistics".'}
+          </div>
+        )}
       </div>
 
       {/* Desktop App card */}
@@ -699,8 +782,17 @@ export function PreferencesModal({
     cardPrecision: { ...initial.cardPrecision },
     chatModel: initial.chatModel ?? null,
     chatSoundEnabled: initial.chatSoundEnabled ?? true,
+    chatSoundId: initial.chatSoundId ?? DEFAULT_CHAT_SOUND_ID,
   })
   const pt = draft.lang === 'pt'
+  const previewCtxRef = useRef<AudioContext | null>(null)
+
+  const previewSound = useCallback((id: string) => {
+    if (!previewCtxRef.current) {
+      try { previewCtxRef.current = new AudioContext() } catch { return }
+    }
+    findChatSound(id).play(previewCtxRef.current)
+  }, [])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -788,7 +880,7 @@ export function PreferencesModal({
         {/* Scrollable body */}
         <div style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
           {activeTab === 'preferences' && (
-            <PreferencesTab draft={draft} set={set} pt={pt} />
+            <PreferencesTab draft={draft} set={set} pt={pt} previewSound={previewSound} />
           )}
           {activeTab === 'live' && (
             <LiveTab

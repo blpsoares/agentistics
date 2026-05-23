@@ -1,6 +1,6 @@
 # Metrics and Calculations
 
-All cost and token calculations use a single source of truth: `src/lib/types.ts`. No layer duplicates the pricing logic.
+All cost and token calculations use a single source of truth: `packages/core/src/types.ts` (imported as `@agentistics/core`). No layer duplicates the pricing logic.
 
 ## Pricing table
 
@@ -15,7 +15,7 @@ All prices are in USD per **1 million tokens**:
 | Claude Haiku 3.5 | $0.80 | $4.00 | $0.08 | $1.00 |
 | Claude Haiku 3.0 | $0.25 | $1.25 | $0.03 | $0.30 |
 
-> Prices are updated in `src/lib/types.ts → MODEL_PRICING`. If Anthropic changes pricing, update only that table — all layers pick it up automatically.
+> Prices are updated in `packages/core/src/types.ts → MODEL_PRICING`. If Anthropic changes pricing, update only that table — all layers pick it up automatically.
 
 The `/api/rates` endpoint also fetches the current Anthropic pricing page and caches it. The dashboard shows a "pricing source" indicator when live prices differ from the local table.
 
@@ -30,7 +30,7 @@ Total Cost = Σ per model [
 ]
 ```
 
-Implemented in `calcCost(usage, modelId)` at `src/lib/types.ts`.
+Implemented in `calcCost(usage, modelId)` at `packages/core/src/types.ts`.
 
 ## Blended rate (per-session cost estimate)
 
@@ -94,11 +94,11 @@ Minimum duration is 0 (single-turn sessions).
 
 ## Git commits and pushes
 
-Detected by analyzing `Bash` tool inputs at JSONL parse time:
+Detected by analyzing `Bash` tool inputs at JSONL parse time. Each command is split on `&&`, `||`, `;`, and newlines before matching:
 
 ```
-/^git commit\b/  → gitCommits++
-/^git push\b/    → gitPushes++
+/^(cd\s+\S+\s+&&\s+)?git\s+commit\b/  → gitCommits++
+/^(cd\s+\S+\s+&&\s+)?git\s+push\b/    → gitPushes++
 ```
 
 Lines changed and files modified are retrieved from git:
@@ -106,6 +106,8 @@ Lines changed and files modified are retrieved from git:
 ```bash
 git -C <project_path> log --numstat --after="<start>" --before="<end>"
 ```
+
+`files_modified` is the higher of git-tracked files and files Claude directly edited (Edit/Write/MultiEdit tool calls). See [data-sources.md](./data-sources.md#files_modified-counting) for details.
 
 ## Tool token attribution
 

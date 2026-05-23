@@ -4,7 +4,7 @@ MCP server that exposes your [Claude Code](https://claude.ai/code) analytics as 
 
 ## What it does
 
-Reads data from `~/.claude/` (the same data [agentistics](https://github.com/blpsoares/agentistics) visualizes) and exposes it as 12 structured MCP tools.
+Reads data from `~/.claude/` (the same data [agentistics](https://github.com/blpsoares/agentistics) visualizes) and exposes it as 13 structured MCP tools.
 
 ## Usage
 
@@ -48,6 +48,7 @@ The `AGENTISTICS_API` env var must point to a running agentistics server.
 | `agentistics_create_layout` | Create a new empty layout |
 | `agentistics_set_active_layout` | Switch the active /custom layout |
 | `agentistics_delete_layout` | Delete a layout permanently |
+| `agentistics_export_pdf` | Generate a PDF report download link for a date range |
 
 ## Requirements
 

@@ -536,6 +536,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       }
     }
 
+    // COMMITS: prefer project-level git stats (counts all commits, not just Claude bash ones)
     const gitCommits = projectLevelGitStats
       ? projectLevelGitStats.commits
       : filteredSessions.reduce((s, sess) => s + (sess.git_commits ?? 0), 0)
@@ -548,9 +549,12 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const linesRemoved = projectLevelGitStats
       ? projectLevelGitStats.linesRemoved
       : filteredSessions.reduce((s, sess) => s + (sess.lines_removed ?? 0), 0)
-    const filesModified = projectLevelGitStats
-      ? projectLevelGitStats.filesModified
-      : filteredSessions.reduce((s, sess) => s + (sess.files_modified ?? 0), 0)
+    // FILES: always use session-level count (Edit/Write/MultiEdit calls) — this captures files
+    // Claude created in non-git directories, which project-level git stats cannot see.
+    const sessionFilesModified = filteredSessions.reduce((s, sess) => s + (sess.files_modified ?? 0), 0)
+    const filesModified = sessionFilesModified > 0
+      ? sessionFilesModified
+      : (projectLevelGitStats?.filesModified ?? 0)
 
     // ── Tokens from sessions ──
     const inputTokens = filteredSessions.reduce((s, sess) => s + (sess.input_tokens ?? 0), 0)

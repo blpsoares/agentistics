@@ -1,5 +1,7 @@
 import { exec } from 'child_process'
 import { promisify } from 'util'
+import { readdir } from 'fs/promises'
+import { join } from 'path'
 import type { ProjectGitStats } from '@agentistics/core'
 
 const execAsync = promisify(exec)
@@ -61,7 +63,7 @@ export async function getGitFileStats(
   }
 }
 
-export async function getProjectGitStats(projectPath: string, sinceIso?: string): Promise<ProjectGitStats | undefined> {
+async function getGitStatsForSingleRepo(projectPath: string, sinceIso?: string): Promise<ProjectGitStats | undefined> {
   const gitEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' }
   const cmd = gitCmd(projectPath)
   try {
@@ -97,4 +99,38 @@ export async function getProjectGitStats(projectPath: string, sinceIso?: string)
   } catch {
     return undefined
   }
+}
+
+export async function getProjectGitStats(projectPath: string, sinceIso?: string): Promise<ProjectGitStats | undefined> {
+  // Try projectPath itself first (the common case: a single git repo)
+  const direct = await getGitStatsForSingleRepo(projectPath, sinceIso)
+  if (direct) return direct
+
+  // Fallback: projectPath may be a workspace folder containing multiple git repos.
+  // Scan one level of subdirectories and aggregate stats across all git repos found.
+  let entries: { name: string; isDirectory(): boolean }[] = []
+  try {
+    entries = await readdir(projectPath, { withFileTypes: true })
+  } catch {
+    return undefined
+  }
+
+  const subdirs = entries.filter(e => e.isDirectory() && !e.name.startsWith('.')).map(e => join(projectPath, e.name))
+  let combined: ProjectGitStats | undefined
+  for (const sub of subdirs) {
+    // No sinceIso filter for workspace subdirs — these are often bootstrapped repos
+    // with early commits that predate any Claude sessions.
+    const stats = await getGitStatsForSingleRepo(sub, undefined)
+    if (!stats) continue
+    if (!combined) {
+      combined = { ...stats }
+    } else {
+      combined.commits += stats.commits
+      combined.lines_added += stats.lines_added
+      combined.lines_removed += stats.lines_removed
+      combined.files_modified += stats.files_modified
+      if (stats.since && (!combined.since || stats.since < combined.since)) combined.since = stats.since
+    }
+  }
+  return combined
 }

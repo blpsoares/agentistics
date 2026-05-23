@@ -53,10 +53,11 @@ When session-meta is absent, `server/jsonl.ts` parses each `.jsonl` file line by
   ├── Detects commits: regex /^git commit\b/ in Bash inputs
   ├── Detects pushes: regex /^git push\b/ in Bash inputs
   ├── Detects languages by file extension (Read, Edit, Write tool paths)
+  ├── Counts files Claude directly modified (unique paths from Edit/Write/MultiEdit calls)
   ├── Counts tool errors (tool_result.is_error = true)
   ├── Captures first prompt (first 200 chars)
   ├── Records message hours (array 0–23)
-  └── Returns SessionMeta object
+  └── Returns SessionMeta object (files_modified = max(git-based, claude-direct-edits))
 ```
 
 ## SessionMeta structure
@@ -132,3 +133,13 @@ git -C <project_path> log --numstat --after="<session_start>" --before="<session
 This produces: commits count, files modified, lines added, lines removed.
 
 Git stats are only available for sessions whose `project_path` is an accessible git repository at query time.
+
+### Workspace folder fallback
+
+`getProjectGitStats` in `server/git.ts` first tries the project path as a single git repo. If that fails (the path is not itself a git repo), it falls back to scanning one level of subdirectories and aggregating stats across all git repos found there. This handles workspace folders (e.g. `~/zuke`) that contain multiple sub-repos.
+
+### files_modified counting
+
+`server/jsonl.ts` tracks a `claudeFilesModified` Set of unique file paths from Edit, Write, and MultiEdit tool calls. The final `files_modified` value is `Math.max(gitFileStats.filesModified, claudeFilesModified.size)`, whichever is higher. This ensures files Claude edited in non-git directories are still counted.
+
+The FILES KPI in `useData.ts` always prefers session-level `files_modified` (which captures direct Claude edits). It only falls back to project-level `git_stats.files_modified` when sessions show 0.

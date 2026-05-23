@@ -22,7 +22,7 @@ agentistics/
 │   │   │   ├── config.ts             # Path constants + PORT (reads .env.config)
 │   │   │   ├── env-config.ts         # .env.config read/write/backup/restore
 │   │   │   ├── utils.ts              # Shared FS helpers (createLimiter, safeRead*)
-│   │   │   ├── git.ts                # Git stats via git log --numstat
+│   │   │   ├── git.ts                # Git stats via git log --numstat; workspace fallback scans subdirectories
 │   │   │   ├── jsonl.ts              # JSONL session parser
 │   │   │   ├── health.ts             # Health checks + warnings
 │   │   │   ├── rates.ts              # Pricing scraper + BRL rate cache
@@ -49,16 +49,20 @@ agentistics/
 │   │   │   │   └── useCustomLayout.ts # Layout state + persistence
 │   │   │   ├── components/           # UI components (charts, cards, modals)
 │   │   │   │   ├── TtyChat.tsx       # Nay chat panel (FAB + floating panel)
+│   │   │   │   ├── PreferencesModal.tsx # Unified Settings modal (Preferences/Live/Install/Environment tabs)
 │   │   │   │   └── ...
 │   │   │   ├── lib/
 │   │   │   │   ├── app-context.ts    # AppContext interface (React context shape)
 │   │   │   │   ├── componentCatalog.tsx # Catalog of custom layout components
-│   │   │   │   └── chatModels.ts     # CHAT_MODELS, DEFAULT_CHAT_MODEL
+│   │   │   │   ├── chatModels.ts     # CHAT_MODELS, DEFAULT_CHAT_MODEL
+│   │   │   │   └── chatSounds.ts     # CHAT_SOUNDS — 5 Web Audio API notification sounds
 │   │   │   └── tui/
 │   │   │       └── index.ts          # Terminal TUI (standalone, no browser)
-│   │   ├── public/                   # Static assets (logo, favicon)
+│   │   ├── public/
+│   │   │   ├── icons/                # PWA icons (icon-192.png, icon-512.png)
+│   │   │   └── ...                   # logo, favicon, etc.
 │   │   ├── index.html
-│   │   └── vite.config.ts
+│   │   └── vite.config.ts            # Vite config with vite-plugin-pwa (devOptions.enabled: true)
 │   │
 │   ├── mcp/                          # @agentistics/mcp — MCP server, publishable to npm
 │   │   └── agentistics-mcp.ts        # stdio transport, 12 tools, imports @agentistics/core
@@ -194,3 +198,11 @@ All layers import from `@agentistics/core` (`packages/core/src/types.ts`). Never
 **Binary embeds the frontend** — `agentop server` serves both API and UI from a single process on a single port. No Nginx needed.
 
 **`@agentistics/core` as shared package** — types, pricing functions, and formatters live in one place. Server, web, and MCP all import from `@agentistics/core`. Nothing is duplicated.
+
+**PWA installable** — `vite-plugin-pwa` makes the web app installable as a PWA (enabled even in dev mode via `devOptions: { enabled: true }`). API calls are always `NetworkOnly`; static assets are cached. Icons live at `packages/web/public/icons/`.
+
+**Unified Settings modal** — `PreferencesModal.tsx` replaced 3 separate modals with a single tabbed interface: Preferences (lang/theme/currency/sounds), Live (update interval), Install (web PWA + desktop download), and Environment (port config).
+
+**`files_modified` takes max of two sources** — `server/jsonl.ts` tracks unique file paths from Edit/Write/MultiEdit tool calls, then takes `Math.max(gitFileStats.filesModified, claudeFilesModified.size)`. The FILES KPI in `useData.ts` prefers the session-level count and only falls back to project-level git stats if sessions show 0.
+
+**`getProjectGitStats` handles workspace folders** — if a project path is not itself a git repo, `server/git.ts` scans one level of subdirectories and aggregates stats from all git repos found there. This covers workspace folders like `~/zuke` that contain multiple repos.

@@ -822,6 +822,7 @@ export default function AppLayout() {
   }, [data, loading, pwaInstalled])
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
+  const [chatSoundId, setChatSoundId] = useState('ping')
   const [claudeDetached, setClaudeDetached] = useState(false)
   // Lifted Claude Chat state so project/session is preserved when toggling detach/attach
   const [claudeSharedState, setClaudeSharedState] = useState<{
@@ -865,6 +866,7 @@ export default function AppLayout() {
         if (prefs.cardOrder) setCardOrder(mergeCardOrder(prefs.cardOrder))
         if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
         if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
+        if ((prefs as Record<string, unknown>).chatSoundId) setChatSoundId((prefs as Record<string, unknown>).chatSoundId as string)
       })
       .catch(() => {})
   }, [])
@@ -1556,7 +1558,7 @@ export default function AppLayout() {
       {/* Unified Settings modal (Preferences + Live + Environment) */}
       {showPrefsModal && (
         <PreferencesModal
-          initial={{ lang, theme, currency, cardOrder, cardPrecision, chatModel, chatSoundEnabled }}
+          initial={{ lang, theme, currency, cardOrder, cardPrecision, chatModel, chatSoundEnabled, chatSoundId }}
           onSave={(draft: PrefsDraft) => {
             setLangState(draft.lang)
             setThemeState(draft.theme)
@@ -1565,6 +1567,7 @@ export default function AppLayout() {
             setCardPrecisionState(draft.cardPrecision)
             if (draft.chatModel) setChatModel(draft.chatModel)
             setChatSoundEnabled(draft.chatSoundEnabled)
+            setChatSoundId(draft.chatSoundId)
             fetch('/api/preferences', {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
@@ -1576,6 +1579,7 @@ export default function AppLayout() {
                 cardPrecision: draft.cardPrecision,
                 chatModel: draft.chatModel,
                 chatSoundEnabled: draft.chatSoundEnabled,
+                chatSoundId: draft.chatSoundId,
               }),
             }).catch(() => {})
             setShowPrefsModal(false)
@@ -1716,6 +1720,7 @@ export default function AppLayout() {
         lang={lang}
         chatModel={chatModel}
         chatSoundEnabled={chatSoundEnabled}
+        chatSoundId={chatSoundId}
         filters={filters}
         setFilters={setFilters}
         onPdfExport={(range) => setPdfDirectExportRange(range)}

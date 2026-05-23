@@ -16,6 +16,9 @@ release/
 src/embedded-dist.generated.ts
 packages/server/server/embedded-dist.generated.ts
 
+# vite-plugin-pwa dev SW output
+packages/web/dev-dist/
+
 # code coverage
 coverage
 *.lcov

@@ -50,6 +50,7 @@ agentistics is a **local analytics dashboard** for Claude Code. It reads the dat
 - **MCP server** — exposes your analytics as tools for Claude Code and other agents
 - OpenTelemetry export for Grafana, Datadog, and any OTLP-compatible collector
 - PDF export, themes, PT/BR + EN languages
+- Installable as a PWA (web) or native Windows desktop app (Tauri)
 
 ---
 
@@ -134,7 +135,7 @@ Nay is a floating chat panel (bottom-right corner) that connects to your usage d
 
 > **Uses your Claude subscription quota.** Every Nay message runs `claude --print` under the hood, which counts against your Claude Max / Pro session limit (or API credits if you use an API key). Prefer **Haiku 4.5** for quick data lookups to minimize cost.
 
-Nay sets up its workspace at `~/.agentistics/nay-chat/` on first server start — a `CLAUDE.md` with strict behavior rules and a `settings.json` that grants access to all 12 agentistics MCP tools without prompting.
+Nay sets up its workspace at `~/.agentistics/nay-chat/` on first server start — a `CLAUDE.md` with strict behavior rules and a `settings.json` that grants access to all 13 agentistics MCP tools without prompting.
 
 → **Full documentation:** [docs/nay.md](docs/nay.md)
 
@@ -164,6 +165,7 @@ claude mcp list   # verify: should show "agentistics"
 | `agentistics_create_layout` | Create a new empty layout |
 | `agentistics_set_active_layout` | Switch the active /custom layout |
 | `agentistics_delete_layout` | Delete a layout permanently |
+| `agentistics_export_pdf` | Generate a PDF report download link for a date range |
 
 Once registered, you can use these tools from **any Claude Code session** — not just Nay.
 
