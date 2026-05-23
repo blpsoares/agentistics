@@ -2,7 +2,7 @@ name: Build & Release
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/desktop]
 
 permissions:
   contents: write
@@ -11,6 +11,12 @@ jobs:
   build:
     name: Build binary (Linux x64)
     runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.skip_check.outputs.skip }}
+      version_skip: ${{ steps.version.outputs.skip }}
+      tag: ${{ steps.version.outputs.tag }}
+      next: ${{ steps.version.outputs.next }}
+      mcp_changed: ${{ steps.version.outputs.mcp_changed }}
 
     steps:
       - name: Checkout
@@ -105,15 +111,33 @@ jobs:
           echo "skip=false"          >> $GITHUB_OUTPUT
           echo "▶ $CURRENT → $NEXT  (bump: $BUMP, $COMMIT_COUNT commits)"
 
+          # Detect if packages/mcp changed (excluding package.json version bumps)
+          if git diff --name-only "$RANGE" -- packages/mcp/ | grep -qv 'packages/mcp/package.json'; then
+            echo "mcp_changed=true"  >> $GITHUB_OUTPUT
+            echo "  MCP package has changes — will publish to npm"
+          else
+            echo "mcp_changed=false" >> $GITHUB_OUTPUT
+            echo "  MCP package unchanged — skipping npm publish"
+          fi
+
       - name: Bump version in package.json
-        if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        if: github.ref == 'refs/heads/main' && steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
         run: |
           VERSION="${{ steps.version.outputs.next }}"
           bun -e "
             const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = '$VERSION';
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+            const targets = [
+              'package.json',
+              'packages/core/package.json',
+              'packages/server/package.json',
+              'packages/web/package.json',
+              'packages/mcp/package.json',
+            ];
+            for (const f of targets) {
+              const pkg = JSON.parse(fs.readFileSync(f, 'utf8'));
+              pkg.version = '$VERSION';
+              fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + '\n');
+            }
           "
 
       - name: Build frontend (Vite)
@@ -128,14 +152,26 @@ jobs:
         if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
         run: |
           mkdir -p release
-          bun build --compile bin/cli.ts --outfile ./release/agentop
+          bun build --compile packages/server/bin/cli.ts --outfile ./release/agentop
+
+      - name: Compile Windows binary (cross-compile)
+        if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        run: bun build --compile --target=bun-windows-x64 packages/server/bin/cli.ts --outfile ./release/agentop.exe
+
+      - name: Upload Windows binary artifact
+        if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentop-windows-x64
+          path: release/agentop.exe
+          retention-days: 1
 
       - name: Smoke test
         if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
         run: ./release/agentop --help
 
       - name: Generate changelog
-        if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        if: github.ref == 'refs/heads/main' && steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
         id: changelog
         run: |
           RANGE="${{ steps.version.outputs.range }}"
@@ -174,7 +210,7 @@ jobs:
           cat /tmp/release-notes.md
 
       - name: Commit version bump and create tag
-        if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        if: github.ref == 'refs/heads/main' && steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -183,24 +219,25 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package.json
+          git add package.json packages/core/package.json packages/server/package.json packages/web/package.json packages/mcp/package.json
           git commit -m "chore: bump version to ${VERSION} [skip ci]"
           git tag "$TAG"
           git push origin main "$TAG"
 
       - name: Publish versioned release + update latest
-        if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        if: github.ref == 'refs/heads/main' && steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.version.outputs.tag }}"
           VERSION="${{ steps.version.outputs.next }}"
 
-          # Create the versioned release
+          # Create the versioned release (Linux binary only; Windows installer added by build-desktop job)
           gh release create "$TAG" \
             --title "v${VERSION}" \
             --notes-file /tmp/release-notes.md \
-            ./release/agentop
+            ./release/agentop \
+            ./release/agentop.exe
 
           # Update the rolling latest pointer
           gh release delete latest --yes 2>/dev/null || true
@@ -212,4 +249,157 @@ jobs:
           gh release create latest \
             --title "Latest build ($(date -u +'%Y-%m-%d %H:%M UTC'))" \
             --notes-file /tmp/release-notes.md \
-            ./release/agentop
+            ./release/agentop \
+            ./release/agentop.exe
+
+  build-desktop:
+    name: Build Tauri Desktop (Windows)
+    runs-on: windows-latest
+    needs: build
+    if: needs.build.outputs.skip != 'true' && needs.build.outputs.version_skip != 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop
+
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install desktop dependencies
+        run: bun install --frozen-lockfile --cwd packages/desktop
+
+      - name: Download agentop.exe artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: agentop-windows-x64
+          path: packages/desktop/binaries/
+
+      - name: Copy logo for loading screen
+        shell: bash
+        run: cp packages/web/public/minimalistLogo.png packages/desktop/ui/logo.png
+
+      - name: Build Tauri app
+        working-directory: packages/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: bunx tauri build --target x86_64-pc-windows-msvc
+
+      - name: Generate latest.json for auto-updater
+        if: github.ref == 'refs/heads/main' && needs.build.outputs.tag != ''
+        shell: bash
+        run: |
+          BUNDLE=packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis
+          EXE=$(ls $BUNDLE/*.exe | grep -v '.sig' | head -1)
+          SIG=$(cat ${EXE}.sig)
+          VERSION="${{ needs.build.outputs.next }}"
+          TAG="${{ needs.build.outputs.tag }}"
+          REPO="${{ github.repository }}"
+          FILENAME=$(basename "$EXE")
+          DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          cat > /tmp/latest.json <<EOF
+          {
+            "version": "${VERSION}",
+            "notes": "See https://github.com/${REPO}/releases/tag/${TAG} for full changelog.",
+            "pub_date": "${DATE}",
+            "platforms": {
+              "windows-x86_64": {
+                "signature": "${SIG}",
+                "url": "https://github.com/${REPO}/releases/download/${TAG}/${FILENAME}"
+              }
+            }
+          }
+          EOF
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentistics-windows-installer
+          path: |
+            packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe.sig
+          retention-days: 7
+
+      - name: Attach installers to GitHub Release
+        if: github.ref == 'refs/heads/main' && needs.build.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${{ needs.build.outputs.tag }}"
+          BUNDLE=packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis
+          gh release upload "$TAG" \
+            $BUNDLE/*.exe \
+            $BUNDLE/*.exe.sig \
+            /tmp/latest.json \
+            --clobber || true
+
+      - name: Attach installers to latest release
+        if: github.ref == 'refs/heads/main' && needs.build.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          BUNDLE=packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis
+          gh release upload latest \
+            $BUNDLE/*.exe \
+            $BUNDLE/*.exe.sig \
+            /tmp/latest.json \
+            --clobber || true
+
+  publish-mcp:
+    name: Publish @agentistics/mcp to npm
+    runs-on: ubuntu-latest
+    needs: build
+    if: |
+      github.ref == 'refs/heads/main' &&
+      needs.build.outputs.skip != 'true' &&
+      needs.build.outputs.version_skip != 'true' &&
+      needs.build.outputs.mcp_changed == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Set version
+        run: |
+          VERSION="${{ needs.build.outputs.next }}"
+          bun -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('packages/mcp/package.json', 'utf8'));
+            pkg.version = '$VERSION';
+            fs.writeFileSync('packages/mcp/package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Publish to npm
+        working-directory: packages/mcp
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          bun run build
+          npm publish --access public
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
