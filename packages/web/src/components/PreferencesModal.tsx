@@ -333,13 +333,17 @@ function PreferencesTab({
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <div>
             <div style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 7 }}>
-              <Globe size={13} color="var(--anthropic-orange)" />
+              <Globe size={13} color={pwaPrompt ? 'var(--anthropic-orange)' : 'var(--text-tertiary)'} />
               {pt ? 'App Web (PWA)' : 'Web App (PWA)'}
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
               {pwaPrompt
                 ? (pt ? 'Instale pelo navegador, sem download' : 'Install via browser, no download needed')
-                : (pt ? 'Já instalado ou não disponível neste navegador' : 'Already installed or not available in this browser')}
+                : window.matchMedia('(display-mode: standalone)').matches
+                  ? (pt ? '✓ Já está rodando como app instalado' : '✓ Already running as installed app')
+                  : window.location.port === '47292'
+                    ? (pt ? 'Não disponível no servidor de dev — use a porta 47291' : 'Not available in dev mode — use port 47291')
+                    : (pt ? 'Aguardando o navegador liberar a instalação (recarregue a página)' : 'Waiting for browser to allow install (try reloading)')}
             </div>
           </div>
           <button
@@ -680,7 +684,7 @@ export function PreferencesModal({
           border: '1px solid var(--border)',
           borderRadius: 'var(--radius-lg)',
           width: 480,
-          maxHeight: '88vh',
+          height: 'min(680px, 90vh)',
           display: 'flex',
           flexDirection: 'column',
           boxShadow: '0 20px 60px rgba(0,0,0,0.35)',

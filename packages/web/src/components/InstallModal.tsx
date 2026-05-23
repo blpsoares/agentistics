@@ -155,7 +155,11 @@ export function InstallModal({ lang, pwaPrompt, onClose, onPwaInstalled }: Props
                 </span>
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-                {t('webDesc', lang)}
+                {pwaPrompt
+                  ? t('webDesc', lang)
+                  : window.location.port === '47292'
+                    ? (lang === 'pt' ? 'Não disponível no servidor de dev — abra via porta 47291' : 'Not available in dev mode — open via port 47291')
+                    : (lang === 'pt' ? 'Recarregue a página para habilitar' : 'Reload the page to enable')}
               </div>
             </div>
           </button>
