@@ -1,6 +1,6 @@
 {
   "name": "agentistics",
-  "version": "1.3.3",
+  "version": "1.4.0",
   "description": "Local analytics dashboard for AI coding assistants — tracks tokens, cost, sessions, and activity from ~/.claude/",
   "keywords": [
     "claude",
@@ -18,7 +18,9 @@
   },
   "license": "MIT",
   "type": "module",
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev:api": "bun run --cwd packages/server server/index.ts",
     "dev:ui": "bun run --cwd packages/web dev",
