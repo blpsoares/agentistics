@@ -4,7 +4,7 @@ import { version } from '../../../package.json'
 import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, RefreshCw, FileCode, TrendingUp, BarChart2,
-  Sun, Moon, Globe, AlertTriangle, Download, Upload,
+  Sun, Moon, Globe, AlertTriangle, Download,
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers, Code2,
@@ -38,6 +38,7 @@ import { DevConfigPanel } from './components/DevConfigPanel'
 import { TtyChat } from './components/TtyChat'
 import { ClaudeChat } from './components/ClaudeChat'
 import { UpdateModal } from './components/UpdateModal'
+import { InstallModal } from './components/InstallModal'
 import { type ChatModelId } from './lib/chatModels'
 import { format, parseISO, parse } from 'date-fns'
 
@@ -791,12 +792,36 @@ export default function AppLayout() {
   })
   const [showPrefsModal, setShowPrefsModal] = useState(false)
   const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string } | null>(null)
-  const [pwaPrompt, setPwaPrompt] = useState<Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> } | null>(null)
+
+  type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
+  const [pwaPrompt, setPwaPrompt] = useState<PwaPrompt | null>(null)
+  const [pwaInstalled, setPwaInstalled] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(display-mode: standalone)').matches
+  )
   useEffect(() => {
-    const handler = (e: Event) => { e.preventDefault(); setPwaPrompt(e as any) }
+    const handler = (e: Event) => { e.preventDefault(); setPwaPrompt(e as PwaPrompt) }
     window.addEventListener('beforeinstallprompt', handler)
-    return () => window.removeEventListener('beforeinstallprompt', handler)
+    // If the user installs, the appinstalled event fires
+    const onInstalled = () => { setPwaInstalled(true); setPwaPrompt(null) }
+    window.addEventListener('appinstalled', onInstalled)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handler)
+      window.removeEventListener('appinstalled', onInstalled)
+    }
   }, [])
+
+  const INSTALL_DISMISSED_KEY = 'agentistics-install-dismissed'
+  const [showInstallModal, setShowInstallModal] = useState(false)
+  const installModalShownRef = React.useRef(false)
+  // Show install modal once after first data load, unless dismissed or already installed
+  useEffect(() => {
+    if (installModalShownRef.current) return
+    if (!data || loading) return
+    if (pwaInstalled) return
+    try { if (localStorage.getItem(INSTALL_DISMISSED_KEY) === 'true') return } catch {}
+    installModalShownRef.current = true
+    setShowInstallModal(true)
+  }, [data, loading, pwaInstalled])
   const [showDevConfig, setShowDevConfig] = useState(false)
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
@@ -1312,41 +1337,6 @@ export default function AppLayout() {
               {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
             </button>}
 
-            {/* Install as App — shown only when browser offers PWA install */}
-            {pwaPrompt && !isMobile && <button
-              onClick={async () => {
-                await (pwaPrompt as any).prompt()
-                const { outcome } = await (pwaPrompt as any).userChoice
-                if (outcome === 'accepted') setPwaPrompt(null)
-              }}
-              style={{
-                height: 32,
-                padding: '0 12px',
-                display: 'flex', alignItems: 'center', gap: 6,
-                borderRadius: 8,
-                border: '1px solid var(--border)',
-                background: 'transparent',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                fontSize: 12,
-                fontFamily: 'inherit',
-                fontWeight: 500,
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--text-tertiary)'
-              }}
-              onMouseLeave={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
-              }}
-              title={lang === 'pt' ? 'Instalar como app' : 'Install as app'}
-            >
-              <Upload size={13} />
-              {lang === 'pt' ? 'Instalar' : 'Install'}
-            </button>}
-
             {/* Export report — hidden on mobile */}
             {!isMobile && <button
               onClick={() => setShowExportModal(true)}
@@ -1627,6 +1617,23 @@ export default function AppLayout() {
             setShowPrefsModal(false)
           }}
           onClose={() => setShowPrefsModal(false)}
+          pwaPrompt={pwaPrompt}
+          onPwaInstalled={() => { setPwaInstalled(true); setPwaPrompt(null) }}
+        />
+      )}
+
+      {/* Install Modal — shown once after first data load */}
+      {showInstallModal && (
+        <InstallModal
+          lang={lang}
+          pwaPrompt={pwaPrompt}
+          onClose={(dontShowAgain) => {
+            setShowInstallModal(false)
+            if (dontShowAgain) {
+              try { localStorage.setItem(INSTALL_DISMISSED_KEY, 'true') } catch {}
+            }
+          }}
+          onPwaInstalled={() => { setPwaInstalled(true); setPwaPrompt(null) }}
         />
       )}
 

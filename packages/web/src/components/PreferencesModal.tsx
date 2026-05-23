@@ -1,7 +1,9 @@
 import React, { useRef, useState } from 'react'
-import { X, GripVertical, RotateCcw, Save, Volume2, VolumeX, Zap, Bot } from 'lucide-react'
+import { X, GripVertical, RotateCcw, Save, Volume2, VolumeX, Zap, Bot, Globe, Monitor, Download } from 'lucide-react'
 import type { Lang, Theme } from '@agentistics/core'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
+
+type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
 
 export interface PrefsDraft {
   lang: Lang
@@ -17,6 +19,8 @@ interface Props {
   initial: PrefsDraft
   onSave: (draft: PrefsDraft) => void
   onClose: () => void
+  pwaPrompt?: PwaPrompt | null
+  onPwaInstalled?: () => void
 }
 
 const CARD_LABELS: Record<string, { en: string; pt: string }> = {
@@ -128,7 +132,7 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   )
 }
 
-export function PreferencesModal({ initial, onSave, onClose }: Props) {
+export function PreferencesModal({ initial, onSave, onClose, pwaPrompt, onPwaInstalled }: Props) {
   const [draft, setDraft] = useState<PrefsDraft>({
     ...initial,
     cardOrder: [...initial.cardOrder],
@@ -396,6 +400,81 @@ export function PreferencesModal({ initial, onSave, onClose }: Props) {
             </div>
             <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 7 }}>
               {pt ? 'USD por 1M tokens (entrada / saída)' : 'USD per 1M tokens (input / output)'}
+            </div>
+          </div>
+
+          <Divider />
+
+          {/* ── Install ───────────────────────────────────────── */}
+          <SectionHeader label={pt ? 'Instalação' : 'Installation'} />
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {/* Web App install */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <Globe size={13} color="var(--anthropic-orange)" />
+                  {pt ? 'App Web (PWA)' : 'Web App (PWA)'}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                  {pwaPrompt
+                    ? (pt ? 'Instale pelo navegador, sem download' : 'Install via browser, no download needed')
+                    : (pt ? 'Já instalado ou não disponível neste navegador' : 'Already installed or not available in this browser')}
+                </div>
+              </div>
+              <button
+                onClick={async () => {
+                  if (!pwaPrompt || !onPwaInstalled) return
+                  try {
+                    await pwaPrompt.prompt()
+                    const { outcome } = await pwaPrompt.userChoice
+                    if (outcome === 'accepted') { onPwaInstalled(); onClose() }
+                  } catch {}
+                }}
+                disabled={!pwaPrompt}
+                style={{
+                  padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                  border: pwaPrompt ? '1px solid var(--anthropic-orange)' : '1px solid var(--border)',
+                  background: pwaPrompt ? 'var(--anthropic-orange-dim)' : 'transparent',
+                  color: pwaPrompt ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                  cursor: pwaPrompt ? 'pointer' : 'default',
+                  fontFamily: 'inherit', whiteSpace: 'nowrap', flexShrink: 0,
+                  opacity: pwaPrompt ? 1 : 0.5,
+                }}
+              >
+                {pt ? 'Instalar' : 'Install'}
+              </button>
+            </div>
+
+            {/* Desktop App download */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <Monitor size={13} color="var(--text-secondary)" />
+                  {pt ? 'App Desktop (Windows)' : 'Desktop App (Windows)'}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                  {pt ? 'Instalador com atualizações automáticas' : 'Installer with auto-updates'}
+                </div>
+              </div>
+              <button
+                onClick={() => window.open('https://github.com/blpsoares/agentistics/releases/latest', '_blank', 'noopener')}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                  border: '1px solid var(--border)',
+                  background: 'transparent',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  fontFamily: 'inherit', whiteSpace: 'nowrap', flexShrink: 0,
+                  transition: 'all 0.15s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-primary)'; e.currentTarget.style.borderColor = 'var(--text-tertiary)' }}
+                onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.borderColor = 'var(--border)' }}
+              >
+                <Download size={11} />
+                {pt ? 'Baixar' : 'Download'}
+              </button>
             </div>
           </div>
         </div>
