@@ -32,6 +32,7 @@ function getContentType(filename: string): string {
   if (filename.endsWith('.js') || filename.endsWith('.mjs')) return 'application/javascript'
   if (filename.endsWith('.css')) return 'text/css'
   if (filename.endsWith('.json')) return 'application/json'
+  if (filename.endsWith('.webmanifest')) return 'application/manifest+json'
   if (filename.endsWith('.svg')) return 'image/svg+xml'
   if (filename.endsWith('.png')) return 'image/png'
   if (filename.endsWith('.jpg') || filename.endsWith('.jpeg')) return 'image/jpeg'

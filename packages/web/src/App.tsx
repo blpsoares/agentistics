@@ -4,7 +4,7 @@ import { version } from '../../../package.json'
 import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, RefreshCw, FileCode, TrendingUp, BarChart2,
-  Sun, Moon, Globe, AlertTriangle, Download, Upload,
+  Sun, Moon, Globe, AlertTriangle, Download,
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers, Code2,
@@ -34,10 +34,10 @@ import { CacheHitRatePanel } from './components/CacheHitRatePanel'
 import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
 import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
-import { DevConfigPanel } from './components/DevConfigPanel'
 import { TtyChat } from './components/TtyChat'
 import { ClaudeChat } from './components/ClaudeChat'
 import { UpdateModal } from './components/UpdateModal'
+import { InstallModal } from './components/InstallModal'
 import { type ChatModelId } from './lib/chatModels'
 import { format, parseISO, parse } from 'date-fns'
 
@@ -712,7 +712,6 @@ export default function AppLayout() {
   const isMobile = useIsMobile()
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
-  const [showLiveSettings, setShowLiveSettings] = useState(false)
   const [lang, setLangState] = useState<Lang>('en')
   const [theme, setThemeState] = useState<Theme>('dark')
   const [currency, setCurrencyState] = useState<'USD' | 'BRL'>('USD')
@@ -791,9 +790,39 @@ export default function AppLayout() {
   })
   const [showPrefsModal, setShowPrefsModal] = useState(false)
   const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string } | null>(null)
-  const [showDevConfig, setShowDevConfig] = useState(false)
+
+  type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
+  const [pwaPrompt, setPwaPrompt] = useState<PwaPrompt | null>(null)
+  const [pwaInstalled, setPwaInstalled] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(display-mode: standalone)').matches
+  )
+  useEffect(() => {
+    const handler = (e: Event) => { e.preventDefault(); setPwaPrompt(e as PwaPrompt) }
+    window.addEventListener('beforeinstallprompt', handler)
+    // If the user installs, the appinstalled event fires
+    const onInstalled = () => { setPwaInstalled(true); setPwaPrompt(null) }
+    window.addEventListener('appinstalled', onInstalled)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handler)
+      window.removeEventListener('appinstalled', onInstalled)
+    }
+  }, [])
+
+  const INSTALL_DISMISSED_KEY = 'agentistics-install-dismissed'
+  const [showInstallModal, setShowInstallModal] = useState(false)
+  const installModalShownRef = React.useRef(false)
+  // Show install modal once after first data load, unless dismissed or already installed
+  useEffect(() => {
+    if (installModalShownRef.current) return
+    if (!data || loading) return
+    if (pwaInstalled) return
+    try { if (localStorage.getItem(INSTALL_DISMISSED_KEY) === 'true') return } catch {}
+    installModalShownRef.current = true
+    setShowInstallModal(true)
+  }, [data, loading, pwaInstalled])
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
+  const [chatSoundId, setChatSoundId] = useState('ping')
   const [claudeDetached, setClaudeDetached] = useState(false)
   // Lifted Claude Chat state so project/session is preserved when toggling detach/attach
   const [claudeSharedState, setClaudeSharedState] = useState<{
@@ -837,6 +866,7 @@ export default function AppLayout() {
         if (prefs.cardOrder) setCardOrder(mergeCardOrder(prefs.cardOrder))
         if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
         if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
+        if ((prefs as Record<string, unknown>).chatSoundId) setChatSoundId((prefs as Record<string, unknown>).chatSoundId as string)
       })
       .catch(() => {})
   }, [])
@@ -1092,27 +1122,47 @@ export default function AppLayout() {
       },
       {
         label: pt ? 'Commits' : 'Commits',
-        source: pt
-          ? '~/.claude/projects/**/*.jsonl → comandos git commit/push nas chamadas Bash'
-          : '~/.claude/projects/**/*.jsonl → git commit/push commands in Bash tool calls',
-        formula: pt
-          ? 'Σ git_commits das sessões no período\nΣ git_pushes das sessões no período'
-          : 'Σ git_commits for sessions in the period\nΣ git_pushes for sessions in the period',
-        note: pt
-          ? 'Conta apenas commits e pushes executados pelo Claude via ferramenta Bash. Commits feitos manualmente no terminal não são capturados. Para histórico completo do repositório, use git log diretamente.'
-          : 'Counts only commits and pushes executed by Claude via the Bash tool. Commits made manually in the terminal are not captured. For full repository history, use git log directly.',
+        source: projectFiltered
+          ? pt
+            ? 'git log (projeto) → todos os commits desde a primeira sessão'
+            : 'git log (project) → all commits since the first session'
+          : pt
+            ? '~/.claude/projects/**/*.jsonl → comandos git commit/push nas chamadas Bash'
+            : '~/.claude/projects/**/*.jsonl → git commit/push commands in Bash tool calls',
+        formula: projectFiltered
+          ? pt
+            ? 'Σ commits do projeto (git log --numstat) para cada projeto filtrado\nΣ git_pushes das sessões (via Bash)'
+            : 'Σ project commits (git log --numstat) for each filtered project\nΣ git_pushes from sessions (via Bash)'
+          : pt
+            ? 'Σ git_commits das sessões no período\nΣ git_pushes das sessões no período'
+            : 'Σ git_commits for sessions in the period\nΣ git_pushes for sessions in the period',
+        note: projectFiltered
+          ? pt
+            ? 'Com filtro de projeto ativo, usa git log --numstat diretamente no repositório — inclui todos os commits, mesmo os feitos fora do Claude. Sem filtro de projeto, conta apenas commits executados pelo Claude via ferramenta Bash.'
+            : 'With project filter active, reads git log --numstat directly from the repository — includes all commits, even those made outside Claude. Without project filter, only counts commits run by Claude via the Bash tool.'
+          : pt
+            ? 'Conta apenas commits e pushes executados pelo Claude via ferramenta Bash. Commits feitos manualmente no terminal não são capturados. Ative o filtro de projeto para ver o histórico completo do repositório.'
+            : 'Counts only commits and pushes executed by Claude via the Bash tool. Commits made manually in the terminal are not captured. Activate the project filter to see the full repository history.',
       },
       {
         label: pt ? 'Arquivos modificados' : 'Files modified',
-        source: pt
-          ? '~/.claude/projects/**/*.jsonl → git log --numstat por sessão'
-          : '~/.claude/projects/**/*.jsonl → git log --numstat per session',
+        source: projectFiltered
+          ? pt
+            ? 'git log --numstat (projeto) → todos os arquivos alterados desde a primeira sessão'
+            : 'git log --numstat (project) → all files changed since the first session'
+          : pt
+            ? '~/.claude/projects/**/*.jsonl → git log --numstat por sessão'
+            : '~/.claude/projects/**/*.jsonl → git log --numstat per session',
         formula: pt
           ? 'Σ files_modified das sessões filtradas\nΣ lines_added  |  Σ lines_removed'
           : 'Σ files_modified for filtered sessions\nΣ lines_added  |  Σ lines_removed',
-        note: pt
-          ? 'Calculado via git log --numstat no intervalo de tempo de cada sessão. Requer que o projeto seja um repositório git e que git esteja instalado.'
-          : 'Calculated via git log --numstat over each session\'s time window. Requires the project to be a git repository and git to be installed.',
+        note: projectFiltered
+          ? pt
+            ? 'Com filtro de projeto ativo, usa git log --numstat diretamente no repositório. Arquivos binários são excluídos (git numstat mostra "-" para binários). Requer que o projeto seja um repositório git.'
+            : 'With project filter active, reads git log --numstat directly from the repository. Binary files are excluded (git numstat shows "-" for binaries). Requires the project to be a git repository.'
+          : pt
+            ? 'Calculado via git log --numstat no intervalo de tempo de cada sessão. Requer que o projeto seja um repositório git e que git esteja instalado.'
+            : 'Calculated via git log --numstat over each session\'s time window. Requires the project to be a git repository and git to be installed.',
       },
       {
         label: pt ? 'Tokens de entrada' : 'Input tokens',
@@ -1339,7 +1389,7 @@ export default function AppLayout() {
               {lang === 'pt' ? 'Exportar' : 'Export'}
             </button>}
 
-            {/* Preferences */}
+            {/* Settings — unified modal (Preferences + Live + Environment) */}
             <button
               onClick={() => setShowPrefsModal(true)}
               style={{
@@ -1360,24 +1410,10 @@ export default function AppLayout() {
                 ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)'
                 ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
               }}
-              title={lang === 'pt' ? 'Preferências' : 'Preferences'}
+              title={lang === 'pt' ? 'Configurações' : 'Settings'}
             >
               <SlidersHorizontal size={14} />
             </button>
-
-            {/* Dev config — hidden on mobile */}
-            {!isMobile && <button
-              onClick={() => setShowDevConfig(true)}
-              style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRadius: 8, border: '1px solid var(--border)', background: 'transparent',
-                color: 'var(--text-secondary)', cursor: 'pointer', transition: 'all 0.15s',
-                fontFamily: 'monospace', fontSize: 13, fontWeight: 600 }}
-              onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-primary)'; e.currentTarget.style.borderColor = 'var(--text-tertiary)' }}
-              onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.borderColor = 'var(--border)' }}
-              title="Dev config"
-            >
-              {'</>'}
-            </button>}
 
             {/* Health warnings */}
             {data?.healthIssues && data.healthIssues.length > 0 && (
@@ -1426,29 +1462,6 @@ export default function AppLayout() {
                 </span>
               )}
 
-              {/* Settings gear — desktop only */}
-              {!isMobile && <button
-                onClick={() => setShowLiveSettings(true)}
-                title="Live update settings"
-                style={{
-                  width: 26, height: 26,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: 'transparent', border: 'none', cursor: 'pointer',
-                  color: 'var(--text-tertiary)', borderRadius: 6,
-                  transition: 'color 0.15s, background 0.15s',
-                  flexShrink: 0,
-                }}
-                onMouseEnter={e => {
-                  ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
-                  ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-elevated)'
-                }}
-                onMouseLeave={e => {
-                  ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'
-                  ;(e.currentTarget as HTMLButtonElement).style.background = 'transparent'
-                }}
-              >
-                <Settings size={12} />
-              </button>}
             </div>
 
             {/* Refresh */}
@@ -1542,26 +1555,10 @@ export default function AppLayout() {
         }} />
       </main>
 
-      {/* Live settings modal */}
-      {showLiveSettings && (
-        <LiveSettingsModal
-          lang={lang}
-          liveUpdates={liveUpdates}
-          setLiveUpdates={setLiveUpdates}
-          updateInterval={updateInterval}
-          setUpdateInterval={setUpdateInterval}
-          riskyMode={riskyMode}
-          setRiskyMode={setRiskyMode}
-          highlightUpdates={highlightUpdates}
-          setHighlightUpdates={v => { setHighlightUpdates(v); highlightUpdatesRef.current = v }}
-          onClose={() => setShowLiveSettings(false)}
-        />
-      )}
-
-      {/* Preferences modal */}
+      {/* Unified Settings modal (Preferences + Live + Environment) */}
       {showPrefsModal && (
         <PreferencesModal
-          initial={{ lang, theme, currency, cardOrder, cardPrecision, chatModel, chatSoundEnabled }}
+          initial={{ lang, theme, currency, cardOrder, cardPrecision, chatModel, chatSoundEnabled, chatSoundId }}
           onSave={(draft: PrefsDraft) => {
             setLangState(draft.lang)
             setThemeState(draft.theme)
@@ -1570,6 +1567,7 @@ export default function AppLayout() {
             setCardPrecisionState(draft.cardPrecision)
             if (draft.chatModel) setChatModel(draft.chatModel)
             setChatSoundEnabled(draft.chatSoundEnabled)
+            setChatSoundId(draft.chatSoundId)
             fetch('/api/preferences', {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
@@ -1581,16 +1579,39 @@ export default function AppLayout() {
                 cardPrecision: draft.cardPrecision,
                 chatModel: draft.chatModel,
                 chatSoundEnabled: draft.chatSoundEnabled,
+                chatSoundId: draft.chatSoundId,
               }),
             }).catch(() => {})
             setShowPrefsModal(false)
           }}
           onClose={() => setShowPrefsModal(false)}
+          pwaPrompt={pwaPrompt}
+          onPwaInstalled={() => { setPwaInstalled(true); setPwaPrompt(null) }}
+          liveUpdates={liveUpdates}
+          setLiveUpdates={setLiveUpdates}
+          updateInterval={updateInterval}
+          setUpdateInterval={setUpdateInterval}
+          riskyMode={riskyMode}
+          setRiskyMode={setRiskyMode}
+          highlightUpdates={highlightUpdates}
+          setHighlightUpdates={setHighlightUpdates}
         />
       )}
 
-      {/* Dev Config Panel */}
-      {showDevConfig && <DevConfigPanel onClose={() => setShowDevConfig(false)} />}
+      {/* Install Modal — shown once after first data load */}
+      {showInstallModal && (
+        <InstallModal
+          lang={lang}
+          pwaPrompt={pwaPrompt}
+          onClose={(dontShowAgain) => {
+            setShowInstallModal(false)
+            if (dontShowAgain) {
+              try { localStorage.setItem(INSTALL_DISMISSED_KEY, 'true') } catch {}
+            }
+          }}
+          onPwaInstalled={() => { setPwaInstalled(true); setPwaPrompt(null) }}
+        />
+      )}
 
       {/* Update available modal */}
       {updateInfo && (
@@ -1699,6 +1720,7 @@ export default function AppLayout() {
         lang={lang}
         chatModel={chatModel}
         chatSoundEnabled={chatSoundEnabled}
+        chatSoundId={chatSoundId}
         filters={filters}
         setFilters={setFilters}
         onPdfExport={(range) => setPdfDirectExportRange(range)}

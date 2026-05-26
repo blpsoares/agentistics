@@ -44,7 +44,8 @@ packages/web/src/ (React + Vite, port 47292 in dev)
   ├── lib/
   │   ├── app-context.ts        → AppContext interface (React context type shared by all pages)
   │   ├── componentCatalog.tsx  → catalog of all components available in the custom layout builder
-  │   └── chatModels.ts         → web-only model list
+  │   ├── chatModels.ts         → web-only model list
+  │   └── chatSounds.ts         → 5 synthesized notification sounds via Web Audio API (Ping, Chime, Soft, Bell, Pop)
   ├── hooks/
   │   ├── useData.ts            → fetches /api/data + SSE subscription + useDerivedStats()
   │   └── useCustomLayout.ts    → custom layout state: named layouts, pinned projects, persistence
@@ -57,6 +58,7 @@ packages/web/src/ (React + Vite, port 47292 in dev)
   ├── tui/
   │   └── index.ts              → terminal TUI (live stats in the terminal, no browser needed)
   └── components/               → UI (charts, cards, heatmap, modals, PDF export)
+      └── PreferencesModal.tsx  → unified Settings modal with tabs: Preferences / Live / Install / Environment
 
 packages/core/src/              — shared across server + web + mcp (import as @agentistics/core)
   ├── types.ts              → all shared types + pricing functions (single source of truth)
@@ -189,6 +191,12 @@ Agent metrics are extracted from raw JSONL files by `server/agent-metrics.ts`. T
 - **`componentCatalog.tsx`** is the single source of truth for what can be placed on the custom page — every component has a `render(ctx: AppContext)` function; to add a new component, add it there
 - **`app-context.ts`** defines `AppContext` — the shape of the outlet context passed from `App.tsx` to all pages via `useOutletContext<AppContext>()`. Add new global state here when it must be accessible from any page or from custom layout components
 - **`format.ts`** contains shared display helpers (`fmt`, `fmtCost`, `fmtDuration`, `fmtFull`) — never duplicate these inline
+- **`chatSounds.ts`** (`packages/web/src/lib/chatSounds.ts`) defines `CHAT_SOUNDS` (5 sounds: ping, chime, soft, bell, pop), all synthesized via Web Audio API — no audio files needed. `chatSoundId` preference is wired through App.tsx → TtyChat.tsx
+- **`PreferencesModal.tsx`** is the single Settings modal — it replaced 3 separate modals with one tabbed interface (Preferences / Live / Install / Environment tabs). Do not add separate settings modals.
+- **PWA**: `vite-plugin-pwa` is configured in `packages/web/vite.config.ts` with `devOptions: { enabled: true }`. Icons are in `packages/web/public/icons/`. The Install tab in PreferencesModal handles both web PWA install and desktop app download.
+- **`files_modified` counting** (`packages/server/server/jsonl.ts`): tracks unique file paths from Edit/Write/MultiEdit tool calls (`claudeFilesModified` Set), then takes `Math.max(gitFileStats.filesModified, claudeFilesModified.size)` — whichever is higher. This captures files Claude edited in non-git directories.
+- **`getProjectGitStats`** (`packages/server/server/git.ts`): first tries the project path as a single git repo; if that fails (not a git repo), falls back to scanning one level of subdirectories and aggregating stats across all git repos found there (handles workspace folders like `~/zuke`).
+- **FILES KPI** (`packages/web/src/hooks/useData.ts`): always uses session-level `files_modified` count first (Edit/Write/MultiEdit calls); falls back to project-level `git_stats.files_modified` only if sessions show 0. This is different from commits/lines which prefer project-level git stats when a project filter is active.
 
 ## Development
 

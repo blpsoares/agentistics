@@ -1,5 +1,7 @@
 import { exec } from 'child_process'
 import { promisify } from 'util'
+import { readdir } from 'fs/promises'
+import { join } from 'path'
 import type { ProjectGitStats } from '@agentistics/core'
 
 const execAsync = promisify(exec)
@@ -18,6 +20,18 @@ export function decodeProjectDir(dirName: string): string {
   return '/' + dirName.replace(/-/g, '/')
 }
 
+/**
+ * Builds the git command prefix. On Windows, POSIX paths (starting with '/')
+ * are Linux/WSL paths and must be run via `wsl git`; Windows-native paths
+ * (e.g. C:\...) use the regular `git` binary directly.
+ */
+function gitCmd(projectPath: string): string {
+  if (process.platform === 'win32' && projectPath.startsWith('/')) {
+    return 'wsl git'
+  }
+  return 'git'
+}
+
 export async function getGitFileStats(
   projectPath: string,
   afterIso: string,
@@ -30,7 +44,7 @@ export async function getGitFileStats(
     const after = new Date(new Date(afterIso).getTime() - 60_000).toISOString()
     const before = new Date(new Date(beforeIso).getTime() + 60_000).toISOString()
     const { stdout } = await execAsync(
-      `git -C "${projectPath}" log --numstat --after="${after}" --before="${before}" --format=""`,
+      `${gitCmd(projectPath)} -C "${projectPath}" log --numstat --after="${after}" --before="${before}" --format=""`,
       { timeout: 5000 }
     )
     let linesAdded = 0, linesRemoved = 0
@@ -49,17 +63,18 @@ export async function getGitFileStats(
   }
 }
 
-export async function getProjectGitStats(projectPath: string, sinceIso?: string): Promise<ProjectGitStats | undefined> {
+async function getGitStatsForSingleRepo(projectPath: string, sinceIso?: string): Promise<ProjectGitStats | undefined> {
   const gitEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' }
+  const cmd = gitCmd(projectPath)
   try {
-    await execAsync(`git -C "${projectPath}" rev-parse --git-dir`, { timeout: 3000, env: gitEnv })
+    await execAsync(`${cmd} -C "${projectPath}" rev-parse --git-dir`, { timeout: 3000, env: gitEnv })
   } catch {
     return undefined
   }
   try {
     const sinceArg = sinceIso ? ` --since="${sinceIso}"` : ''
     const { stdout } = await execAsync(
-      `git -C "${projectPath}" log --numstat --format="COMMIT %H %ai"${sinceArg} HEAD`,
+      `${cmd} -C "${projectPath}" log --numstat --format="COMMIT %H %ai"${sinceArg} HEAD`,
       { timeout: 10000, env: gitEnv }
     )
     let commits = 0, linesAdded = 0, linesRemoved = 0
@@ -84,4 +99,38 @@ export async function getProjectGitStats(projectPath: string, sinceIso?: string)
   } catch {
     return undefined
   }
+}
+
+export async function getProjectGitStats(projectPath: string, sinceIso?: string): Promise<ProjectGitStats | undefined> {
+  // Try projectPath itself first (the common case: a single git repo)
+  const direct = await getGitStatsForSingleRepo(projectPath, sinceIso)
+  if (direct) return direct
+
+  // Fallback: projectPath may be a workspace folder containing multiple git repos.
+  // Scan one level of subdirectories and aggregate stats across all git repos found.
+  let entries: { name: string; isDirectory(): boolean }[] = []
+  try {
+    entries = await readdir(projectPath, { withFileTypes: true })
+  } catch {
+    return undefined
+  }
+
+  const subdirs = entries.filter(e => e.isDirectory() && !e.name.startsWith('.')).map(e => join(projectPath, e.name))
+  let combined: ProjectGitStats | undefined
+  for (const sub of subdirs) {
+    // No sinceIso filter for workspace subdirs — these are often bootstrapped repos
+    // with early commits that predate any Claude sessions.
+    const stats = await getGitStatsForSingleRepo(sub, undefined)
+    if (!stats) continue
+    if (!combined) {
+      combined = { ...stats }
+    } else {
+      combined.commits += stats.commits
+      combined.lines_added += stats.lines_added
+      combined.lines_removed += stats.lines_removed
+      combined.files_modified += stats.files_modified
+      if (stats.since && (!combined.since || stats.since < combined.since)) combined.since = stats.since
+    }
+  }
+  return combined
 }

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
+import { findChatSound } from '../lib/chatSounds'
 import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -765,6 +766,7 @@ interface TtyChatProps {
   lang: Lang
   chatModel: ChatModelId | null
   chatSoundEnabled: boolean
+  chatSoundId?: string
   onModelSet: (model: ChatModelId) => void
   filters: Filters
   setFilters: React.Dispatch<React.SetStateAction<Filters>>
@@ -811,7 +813,7 @@ interface PendingNavigation {
   newProjects: string[]
 }
 
-export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters, setFilters, isMobile, onDetachClaude, claudeDetached, onReattachClaude, onPdfExport, claudeSharedState, onClaudeStateChange }: TtyChatProps) {
+export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping', onModelSet, filters, setFilters, isMobile, onDetachClaude, claudeDetached, onReattachClaude, onPdfExport, claudeSharedState, onClaudeStateChange }: TtyChatProps) {
   const navigate = useNavigate()
   const [pendingNav, setPendingNav] = useState<PendingNavigation | null>(null)
 
@@ -887,13 +889,18 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, onModelSet, filters
   const abortRef = useRef<AbortController | null>(null)
   const openRef = useRef(open)
   const soundRef = useRef(chatSoundEnabled)
+  const soundIdRef = useRef(chatSoundId)
   const audioCtxRef = useRef<AudioContext | null>(null)
 
-  // playNotification uses the stored AudioContext
-  const playNotification = useCallback(createPlayFn(audioCtxRef), [])
+  const playNotification = useCallback(() => {
+    const ctx = audioCtxRef.current
+    if (!ctx) return
+    findChatSound(soundIdRef.current).play(ctx)
+  }, [])
 
   useEffect(() => { openRef.current = open }, [open])
   useEffect(() => { soundRef.current = chatSoundEnabled }, [chatSoundEnabled])
+  useEffect(() => { soundIdRef.current = chatSoundId }, [chatSoundId])
   useEffect(() => { if (nayDetached) setActiveTab('claude') }, [nayDetached])
   useEffect(() => { if (claudeDetached) setActiveTab('nay') }, [claudeDetached])
   useEffect(() => { if (claudeSharedState?.model) setClaudeCurrentModel(claudeSharedState.model) }, [claudeSharedState?.model])
