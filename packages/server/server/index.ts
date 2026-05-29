@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { PORT } from './config'
 import { getRates } from './rates'
 import { getVersionInfo } from './version'
-import { buildApiResponse, buildApiResponseStream } from './data'
+import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
 import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, type ChatMessage, type ChatModelId, type ChatAttachment } from './chat-tty'
 import { listMcpServers, removeMcpServer } from './mcp-list'
@@ -28,6 +28,8 @@ import {
   serveStatic,
   SERVE_STATIC,
 } from './sse'
+import { fullSync } from './archive'
+import { getArchiveMode } from './preferences'
 
 // ---------------------------------------------------------------------------
 // Reads the first `cwd` field found in a JSONL session file.
@@ -51,6 +53,19 @@ async function readCwdFromJsonl(filePath: string): Promise<string | null> {
 // ---------------------------------------------------------------------------
 // Start file watching and optionally spawn the OTel watcher daemon
 // ---------------------------------------------------------------------------
+
+// Preserve history before Claude's next cleanup (transcripts > cleanupPeriodDays,
+// default 30 days). 'full' mirrors raw files; both modes warm a build that persists
+// the consolidated per-session metrics store.
+void (async () => {
+  const mode = await getArchiveMode()
+  if (mode === 'full') {
+    fullSync().catch(err => console.warn('[archive] startup sync failed:', String(err)))
+  }
+  if (mode && mode !== 'off') {
+    buildApiResponse().catch(err => console.warn('[archive] startup consolidation failed:', String(err)))
+  }
+})()
 
 setupFileWatcher()
 maybeSpawnWatcher()
@@ -205,6 +220,18 @@ Bun.serve({
       try {
         const body = await req.json() as Preferences
         await writePreferences(body)
+        // On an archive-mode change, refresh the cache and immediately persist:
+        // 'full' also mirrors raw files; any non-off mode warms a build that
+        // writes the consolidated metrics store.
+        if (body.archiveMode !== undefined) {
+          invalidateCache()
+          if (body.archiveMode === 'full') {
+            fullSync().catch(err => console.warn('[archive] post-consent sync failed:', String(err)))
+          }
+          if (body.archiveMode !== 'off') {
+            buildApiResponse().catch(err => console.warn('[archive] post-consent consolidation failed:', String(err)))
+          }
+        }
         const updated = await readPreferences()
         return new Response(JSON.stringify(updated), {
           status: 200,

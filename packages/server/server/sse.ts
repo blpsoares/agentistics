@@ -1,8 +1,9 @@
 import { join } from 'path'
 import { spawn } from 'child_process'
 import chokidar from 'chokidar'
-import { SESSION_META_DIR, PROJECTS_DIR, PORT } from './config'
+import { SESSION_META_DIR, PROJECTS_DIR, STATS_CACHE_FILE, PORT } from './config'
 import { invalidateCache } from './data'
+import { mirrorFile } from './archive'
 
 export type SseController = ReadableStreamDefaultController<Uint8Array>
 
@@ -34,7 +35,14 @@ export function setupFileWatcher() {
       persistent: true,
       ignoreInitial: true,
     })
-    watcher.on('all', triggerSseNotification)
+    watcher.on('all', (event: string, path: string) => {
+      // Mirror new/changed source files into the archive before notifying clients,
+      // so deleted-by-cleanup history is preserved as it is written.
+      if (typeof path === 'string' && (event === 'add' || event === 'change')) {
+        void mirrorFile(path)
+      }
+      triggerSseNotification()
+    })
     watcher.on('error', (err: unknown) => {
       console.warn(`[watcher] Could not watch ${dir}:`, String(err))
     })
@@ -42,6 +50,7 @@ export function setupFileWatcher() {
   }
   watch(SESSION_META_DIR)
   watch(PROJECTS_DIR)
+  watch(STATS_CACHE_FILE)
 }
 
 export function maybeSpawnWatcher() {

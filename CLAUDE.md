@@ -36,6 +36,8 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── health.ts            → runHealthChecks, analyzeToolHealthIssues
   ├── rates.ts             → pricing scraper + BRL rate cache
   ├── sse.ts               → SSE clients, chokidar watcher, serveStatic, maybeSpawnWatcher
+  ├── archive.ts           → mirrorFile, fullSync, snapshotStatsCache ('full' mode: raw transcript mirror → ~/.agentistics/archive)
+  ├── consolidate.ts       → writeConsolidated, loadConsolidated ('consolidate' mode: per-session metrics → ~/.agentistics/sessions/<id>.json)
   ├── data.ts              → loadSessionMetas, scanProjects, buildApiResponse (main orchestrator)
   ├── agent-metrics.ts     → extractAgentMetrics (parses Agent tool_use from JSONL)
   └── otel-watcher.ts      → chokidar file watcher + OTLP metrics export daemon
@@ -173,6 +175,18 @@ Agent metrics are extracted from raw JSONL files by `server/agent-metrics.ts`. T
          ↓
     /api/data → useData() → useDerivedStats() → React components
 ```
+
+## Archive mirror (survives Claude's 30-day cleanup)
+
+Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older than `cleanupPeriodDays` (default 30) on every startup, taking per-session detail + agent metrics + chat content with them (the `stats-cache.json` aggregates survive). Official docs: https://code.claude.com/docs/en/settings.
+
+**Three modes**, persisted as `preferences.archiveMode` (`undefined` = not chosen → the consent gate blocks the app). `resolveArchiveMode()` / `getArchiveMode()` in `preferences.ts` migrate the legacy `archiveSessions` boolean (true→'full', false→'off'):
+- **`consolidate`** *(recommended default)*: `data.ts` persists each computed `SessionMeta` (+agentMetrics) to `~/.agentistics/sessions/<id>.json` (~KB each, skip-if-identical), then on read **gap-fills** — sessions/projects no longer present live are revived from the store. No raw files duplicated. Trade-off: loses the raw chat text of deleted sessions and future recompute.
+- **`full`** *(opt-in "archivist")*: additionally `archive.ts` mirrors raw transcripts into `~/.agentistics/archive/` (copy-if-newer; `archiveEnabled()` = mode==='full') and `data.ts` reads the union live+archive roots + `applyArchivedStats()` (per-date fill + per-field `max`, never additive). Heavy + grows unbounded; preserves everything incl. raw chat.
+- **`off`**: nothing — uses `~/.claude` exclusively.
+
+- **Consent gate**: `ArchiveConsentModal.tsx` blocks first load (links the official doc) — primary Yes(consolidate)/No(off) + an "Advanced" expander revealing full-copy. `App.tsx` early-returns the modal when `archiveChoice === null`; `chooseArchive(mode)` PUTs `archiveMode`. Env `AGENTISTICS_ARCHIVE=0` hard-disables everything; `AGENTISTICS_ARCHIVE_DIR` overrides the archive path.
+- **No false metrics**: dedup by `session_id` (live always wins) + the `supplementStatsCache` guard (`day <= lastComputedDate` skip) mean revived old sessions show in lists/agent-metrics but never inflate aggregate totals. Boot + the PUT `/api/preferences` handler warm a build (persists the store) and `full` also runs `fullSync()`.
 
 ## Important rules
 

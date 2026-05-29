@@ -24,6 +24,29 @@ export interface Preferences {
   cardPrecision?: Record<string, boolean>
   chatModel?: string
   chatSoundEnabled?: boolean
+  /** How the app preserves session history past Claude's 30-day cleanup.
+   *  `undefined` = not chosen yet (the blocking consent gate is shown).
+   *    - 'consolidate' = store computed per-session metrics only (~KB, recommended)
+   *    - 'full'        = mirror raw transcripts too (heavy, lets you re-read chats)
+   *    - 'off'         = do nothing, use Claude's default folder */
+  archiveMode?: 'off' | 'consolidate' | 'full'
+  /** @deprecated legacy boolean — read by resolveArchiveMode for migration only */
+  archiveSessions?: boolean
+}
+
+export type ArchiveMode = 'off' | 'consolidate' | 'full'
+
+/** Resolve the effective mode, migrating the legacy `archiveSessions` boolean.
+ *  Returns undefined when the user has never chosen (gate must be shown). */
+export function resolveArchiveMode(p: Preferences): ArchiveMode | undefined {
+  if (p.archiveMode) return p.archiveMode
+  if (p.archiveSessions === true) return 'full'
+  if (p.archiveSessions === false) return 'off'
+  return undefined
+}
+
+export async function getArchiveMode(): Promise<ArchiveMode | undefined> {
+  return resolveArchiveMode(await readPreferences())
 }
 
 const DEFAULT_PREFS: Preferences = {

@@ -38,6 +38,7 @@ import { TtyChat } from './components/TtyChat'
 import { ClaudeChat } from './components/ClaudeChat'
 import { UpdateModal } from './components/UpdateModal'
 import { InstallModal } from './components/InstallModal'
+import { ArchiveConsentModal, type ArchiveMode } from './components/ArchiveConsentModal'
 import { type ChatModelId } from './lib/chatModels'
 import { format, parseISO, parse } from 'date-fns'
 
@@ -790,6 +791,19 @@ export default function AppLayout() {
   })
   const [showPrefsModal, setShowPrefsModal] = useState(false)
   const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string } | null>(null)
+  // First-run archive consent gate: undefined = prefs not loaded, null = loaded but
+  // not yet chosen (blocks the app), ArchiveMode = chosen.
+  const [archiveChoice, setArchiveChoice] = useState<ArchiveMode | null | undefined>(undefined)
+  const chooseArchive = useCallback((mode: ArchiveMode) => {
+    setArchiveChoice(mode)
+    fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ archiveMode: mode }),
+    })
+      .then(() => refetch())
+      .catch(() => {})
+  }, [refetch])
 
   type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
   const [pwaPrompt, setPwaPrompt] = useState<PwaPrompt | null>(null)
@@ -857,8 +871,8 @@ export default function AppLayout() {
   useEffect(() => {
     fetch('/api/preferences')
       .then(r => r.ok ? r.json() : null)
-      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean } | null) => {
-        if (!prefs) return
+      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean } | null) => {
+        if (!prefs) { setArchiveChoice(null); return }
         if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
         if (prefs.lang) setLangState(prefs.lang)
         if (prefs.theme) setThemeState(prefs.theme)
@@ -867,8 +881,12 @@ export default function AppLayout() {
         if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
         if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
         if ((prefs as Record<string, unknown>).chatSoundId) setChatSoundId((prefs as Record<string, unknown>).chatSoundId as string)
+        // Resolve the archive mode, migrating the legacy archiveSessions boolean.
+        const mode: ArchiveMode | undefined =
+          prefs.archiveMode ?? (prefs.archiveSessions === true ? 'full' : prefs.archiveSessions === false ? 'off' : undefined)
+        setArchiveChoice(mode ?? null)
       })
-      .catch(() => {})
+      .catch(() => setArchiveChoice(null))
   }, [])
 
   useEffect(() => {
@@ -1248,6 +1266,28 @@ export default function AppLayout() {
   const totalOutputTokens = Object.keys(derived.modelUsage).length > 0
     ? Object.values(derived.modelUsage).reduce((s, u) => s + u.outputTokens, 0)
     : derived.outputTokens
+
+  // Block the app until the user makes the first-run archive choice. While prefs
+  // are still loading (undefined) render a neutral background to avoid a flash.
+  if (archiveChoice === undefined) {
+    return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
+  }
+  if (archiveChoice === null) {
+    return (
+      <ArchiveConsentModal
+        lang={lang}
+        onChoose={chooseArchive}
+        onLangChange={(l) => {
+          setLang(l)
+          fetch('/api/preferences', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lang: l }),
+          }).catch(() => {})
+        }}
+      />
+    )
+  }
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
