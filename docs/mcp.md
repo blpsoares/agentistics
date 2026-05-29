@@ -17,7 +17,7 @@ agentop server
 # Then register the MCP (done automatically on first server start, but you can do it manually):
 claude mcp add -s user agentistics \
   -e AGENTISTICS_API=http://localhost:47291 \
-  -- bun run /path/to/agentistics/mcp/agentistics-mcp.ts
+  -- bun run /path/to/agentistics/packages/mcp/agentistics-mcp.ts
 ```
 
 The agentistics server registers the MCP automatically at startup via `claude mcp add -s user`. If the registration already exists with the correct URL, it is skipped.
@@ -332,7 +332,7 @@ const response = await client.beta.messages.create({
 
 ## MCP server implementation
 
-The server lives at `mcp/agentistics-mcp.ts`. It uses the `@modelcontextprotocol/sdk` to expose tools over stdio, fetching data from the agentistics HTTP API (`AGENTISTICS_API`).
+The server lives at `packages/mcp/agentistics-mcp.ts`. It uses the `@modelcontextprotocol/sdk` to expose tools over stdio, fetching data from the agentistics HTTP API (`AGENTISTICS_API`).
 
 Key design decisions:
 - **No direct file access** — all data goes through the agentistics API so the same parsing/aggregation logic applies everywhere

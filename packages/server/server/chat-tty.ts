@@ -2,7 +2,7 @@ import path from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { HOME_DIR } from './config'
 
-const AGENTISTICS_ROOT = path.resolve(import.meta.dir, '..')
+const AGENTISTICS_ROOT = path.resolve(import.meta.dir, '..', '..', '..')
 export const NAY_CHAT_DIR = path.join(HOME_DIR, '.agentistics', 'nay-chat')
 export const CLAUDE_CHAT_DIR = path.join(HOME_DIR, '.agentistics', 'claude-chat')
 
@@ -162,7 +162,7 @@ export function buildNaySettings(port: number) {
     mcpServers: {
       agentistics: {
         command: 'bun',
-        args: ['run', 'mcp/agentistics-mcp.ts'],
+        args: ['run', 'packages/mcp/agentistics-mcp.ts'],
         cwd: AGENTISTICS_ROOT,
         env: { AGENTISTICS_API: `http://localhost:${port}` },
       },
@@ -215,7 +215,7 @@ export async function ensureNayChat(port: number): Promise<void> {
 // Safe to call on every restart — skips if already registered with the same port.
 async function registerMcpGlobally(port: number): Promise<void> {
   const apiUrl = `http://localhost:${port}`
-  const mcpScript = path.join(AGENTISTICS_ROOT, 'mcp', 'agentistics-mcp.ts')
+  const mcpScript = path.join(AGENTISTICS_ROOT, 'packages', 'mcp', 'agentistics-mcp.ts')
 
   // Check if already registered with the correct URL
   try {

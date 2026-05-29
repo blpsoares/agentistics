@@ -13,7 +13,7 @@ describe('buildNaySettings', () => {
   it('uses bun to run the MCP server', () => {
     const settings = buildNaySettings(47291)
     expect(settings.mcpServers.agentistics.command).toBe('bun')
-    expect(settings.mcpServers.agentistics.args).toContain('mcp/agentistics-mcp.ts')
+    expect(settings.mcpServers.agentistics.args).toContain('packages/mcp/agentistics-mcp.ts')
   })
 
   it('includes all 13 agentistics MCP tools in permissions.allow', () => {
