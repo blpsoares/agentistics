@@ -217,14 +217,17 @@ async function registerMcpGlobally(port: number): Promise<void> {
   const apiUrl = `http://localhost:${port}`
   const mcpScript = path.join(AGENTISTICS_ROOT, 'packages', 'mcp', 'agentistics-mcp.ts')
 
-  // Check if already registered with the correct URL
+  // Check if already registered with the correct URL *and* script path —
+  // a stale path with a matching URL must still trigger re-registration.
   try {
     const dotClaudeJson = path.join(HOME_DIR, '.claude.json')
     const raw = await Bun.file(dotClaudeJson).text()
     const json = JSON.parse(raw) as Record<string, unknown>
-    const servers = json['mcpServers'] as Record<string, { env?: Record<string, string> }> | undefined
+    const servers = json['mcpServers'] as Record<string, { env?: Record<string, string>; args?: string[] }> | undefined
     const existing = servers?.['agentistics']
-    if (existing?.env?.['AGENTISTICS_API'] === apiUrl) return // already up to date
+    const urlOk = existing?.env?.['AGENTISTICS_API'] === apiUrl
+    const pathOk = Array.isArray(existing?.args) && existing.args.some(a => a.includes(mcpScript))
+    if (urlOk && pathOk) return // already up to date
   } catch { /* read or parse failed — proceed with registration */ }
 
   // Use the official CLI to register at user scope
