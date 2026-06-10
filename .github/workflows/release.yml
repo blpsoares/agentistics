@@ -300,8 +300,21 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: bunx tauri build --target x86_64-pc-windows-msvc
 
+      - name: Check for updater signature
+        id: check_sig
+        shell: bash
+        run: |
+          BUNDLE=packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis
+          SIG_FILE=$(ls $BUNDLE/*.exe.sig 2>/dev/null | head -1)
+          if [ -n "$SIG_FILE" ]; then
+            echo "has_sig=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_sig=false" >> $GITHUB_OUTPUT
+            echo "No .sig file — TAURI_SIGNING_PRIVATE_KEY is not set. Auto-updater disabled for this build."
+          fi
+
       - name: Generate latest.json for auto-updater
-        if: github.ref == 'refs/heads/main' && needs.build.outputs.tag != ''
+        if: github.ref == 'refs/heads/main' && needs.build.outputs.tag != '' && steps.check_sig.outputs.has_sig == 'true'
         shell: bash
         run: |
           BUNDLE=packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis
@@ -344,10 +357,12 @@ jobs:
         run: |
           TAG="${{ needs.build.outputs.tag }}"
           BUNDLE=packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis
+          SIG_FILES=$(ls $BUNDLE/*.exe.sig 2>/dev/null || true)
+          LATEST_JSON=$([ -f /tmp/latest.json ] && echo /tmp/latest.json || true)
           gh release upload "$TAG" \
             $BUNDLE/*.exe \
-            $BUNDLE/*.exe.sig \
-            /tmp/latest.json \
+            $SIG_FILES \
+            $LATEST_JSON \
             --clobber || true
 
       - name: Attach installers to latest release
@@ -357,10 +372,12 @@ jobs:
         shell: bash
         run: |
           BUNDLE=packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis
+          SIG_FILES=$(ls $BUNDLE/*.exe.sig 2>/dev/null || true)
+          LATEST_JSON=$([ -f /tmp/latest.json ] && echo /tmp/latest.json || true)
           gh release upload latest \
             $BUNDLE/*.exe \
-            $BUNDLE/*.exe.sig \
-            /tmp/latest.json \
+            $SIG_FILES \
+            $LATEST_JSON \
             --clobber || true
 
   publish-mcp:
