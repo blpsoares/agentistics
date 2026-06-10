@@ -40,13 +40,22 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── consolidate.ts       → writeConsolidated, loadConsolidated ('consolidate' mode: per-session metrics → ~/.agentistics/sessions/<id>.json)
   ├── data.ts              → loadSessionMetas, scanProjects, buildApiResponse (main orchestrator)
   ├── agent-metrics.ts     → extractAgentMetrics (parses Agent tool_use from JSONL)
-  └── otel-watcher.ts      → chokidar file watcher + OTLP metrics export daemon
+  ├── otel-watcher.ts      → chokidar file watcher + OTLP metrics export daemon
+  ├── chat-tty.ts          → Nay + Claude chat: ensureNayChat(), ensureClaudeChat(), streamViaClaude(), CHAT_MODELS, buildNaySettings()
+  ├── nay-sessions.ts      → listNaySessions(), getNaySessionMessages() — reads ~/.agentistics/nay-chat/ JSONL
+  ├── claude-sessions.ts   → listClaudeSessions(), reads ~/.agentistics/claude-chat/ JSONL
+  ├── mcp-list.ts          → reads user/project MCP configs, exposes /api/mcp-list
+  ├── version.ts           → getVersionInfo(), compareVersions() — checks latest release on GitHub (1h cache)
+  ├── upgrade.ts           → runUpgrade() — self-update: downloads latest agentop binary from GitHub releases
+  ├── env-config.ts        → loadEnvConfig(), readEnvConfig() — reads/writes .env.config for runtime overrides
+  └── preferences.ts       → getPreferences(), savePreferences(), archiveMode migration (legacy archiveSessions boolean → 'full'/'off')
 
 packages/web/src/ (React + Vite, port 47292 in dev)
+  ├── AppRouter.tsx             → route definitions (/, /costs, /projects, /tools, /custom)
   ├── lib/
   │   ├── app-context.ts        → AppContext interface (React context type shared by all pages)
   │   ├── componentCatalog.tsx  → catalog of all components available in the custom layout builder
-  │   ├── chatModels.ts         → web-only model list
+  │   ├── chatModels.ts         → CHAT_MODELS list (Haiku/Sonnet/Opus) with pricing for UI display
   │   └── chatSounds.ts         → 5 synthesized notification sounds via Web Audio API (Ping, Chime, Soft, Bell, Pop)
   ├── hooks/
   │   ├── useData.ts            → fetches /api/data + SSE subscription + useDerivedStats()
@@ -60,7 +69,11 @@ packages/web/src/ (React + Vite, port 47292 in dev)
   ├── tui/
   │   └── index.ts              → terminal TUI (live stats in the terminal, no browser needed)
   └── components/               → UI (charts, cards, heatmap, modals, PDF export)
-      └── PreferencesModal.tsx  → unified Settings modal with tabs: Preferences / Live / Install / Environment
+      ├── TtyChat.tsx           → Nay chat panel (sidebar + floating): Claude subprocess via /api/chat/stream, session list, markdown rendering, tool call display
+      ├── ClaudeChat.tsx        → Claude chat floating window (detached mode): same streaming API, draggable, attachment support
+      ├── PreferencesModal.tsx  → unified Settings modal with tabs: Preferences / Live / Install / Environment
+      ├── UpdateModal.tsx       → new-version banner shown when getVersionInfo() returns hasUpdate=true
+      └── HealthWarnings.tsx    → dismissible warning bar for issues surfaced by runHealthChecks()
 
 packages/core/src/              — shared across server + web + mcp (import as @agentistics/core)
   ├── types.ts              → all shared types + pricing functions (single source of truth)
@@ -176,6 +189,31 @@ Agent metrics are extracted from raw JSONL files by `server/agent-metrics.ts`. T
     /api/data → useData() → useDerivedStats() → React components
 ```
 
+## Nay — built-in analytics assistant
+
+Nay is a Claude-powered chat assistant embedded in the dashboard, with direct access to agentistics data via MCP tools.
+
+**Two chat surfaces** rendered inside `App.tsx`:
+- **`TtyChat.tsx`** — sidebar panel (tab-based) + optional floating window. This is the primary Nay surface.
+- **`ClaudeChat.tsx`** — separate floating, draggable window used when detached from the TtyChat tab. Same streaming API.
+
+**Server-side setup** (`chat-tty.ts`):
+- `ensureNayChat(port)` — called on every server start. Creates `~/.agentistics/nay-chat/` as a Claude Code project directory, writes a `CLAUDE.md` with Nay's identity + instructions, and registers the agentistics MCP server globally via `~/.claude/settings.json`.
+- `ensureClaudeChat()` — similar setup for the separate claude-chat workspace at `~/.agentistics/claude-chat/`.
+- `buildNaySettings(port)` — generates the MCP server config injected into global Claude settings.
+- `streamViaClaude(opts)` — spawns `claude` as a subprocess with `--output-format stream-json`, streams the response back as SSE, and handles tool calls, thinking blocks, and attachments.
+
+**Chat models** (`CHAT_MODELS` in `chat-tty.ts` / `chatModels.ts`):
+- Haiku 4.5 — fast, for quick questions
+- Sonnet 4.6 — balanced
+- Opus 4.7 — most capable
+
+**Session persistence**: Nay sessions are stored as JSONL files inside `~/.agentistics/nay-chat/<project-uuid>/` by Claude Code itself. `nay-sessions.ts` reads them to power `/api/nay/sessions` and `/api/nay/sessions/:id`.
+
+**Preferences**: `chatModel`, `chatSoundEnabled`, `chatSoundId` are stored in preferences and wired through `App.tsx` → `TtyChat.tsx`.
+
+---
+
 ## Archive mirror (survives Claude's 30-day cleanup)
 
 Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older than `cleanupPeriodDays` (default 30) on every startup, taking per-session detail + agent metrics + chat content with them (the `stats-cache.json` aggregates survive). Official docs: https://code.claude.com/docs/en/settings.
@@ -185,7 +223,7 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
 - **`full`** *(opt-in "archivist")*: additionally `archive.ts` mirrors raw transcripts into `~/.agentistics/archive/` (copy-if-newer; `archiveEnabled()` = mode==='full') and `data.ts` reads the union live+archive roots + `applyArchivedStats()` (per-date fill + per-field `max`, never additive). Heavy + grows unbounded; preserves everything incl. raw chat.
 - **`off`**: nothing — uses `~/.claude` exclusively.
 
-- **Consent gate**: `ArchiveConsentModal.tsx` blocks first load (links the official doc) — primary Yes(consolidate)/No(off) + an "Advanced" expander revealing full-copy. `App.tsx` early-returns the modal when `archiveChoice === null`; `chooseArchive(mode)` PUTs `archiveMode`. Env `AGENTISTICS_ARCHIVE=0` hard-disables everything; `AGENTISTICS_ARCHIVE_DIR` overrides the archive path.
+- **Consent gate**: `ArchiveConsentModal.tsx` blocks first load (links the official doc) — primary Yes(consolidate)/No(off) + an "Advanced" expander revealing full-copy. `archiveChoice` in `App.tsx` has three states: `undefined` (preferences not loaded yet → loading screen), `null` (loaded but user hasn't chosen → modal blocks), `ArchiveMode` (chosen → app proceeds). `chooseArchive(mode)` PUTs `archiveMode`. Env `AGENTISTICS_ARCHIVE=0` hard-disables everything; `AGENTISTICS_ARCHIVE_DIR` overrides the archive path.
 - **No false metrics**: dedup by `session_id` (live always wins) + the `supplementStatsCache` guard (`day <= lastComputedDate` skip) mean revived old sessions show in lists/agent-metrics but never inflate aggregate totals. Boot + the PUT `/api/preferences` handler warm a build (persists the store) and `full` also runs `fullSync()`.
 
 ## Important rules
@@ -211,6 +249,12 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
 - **`files_modified` counting** (`packages/server/server/jsonl.ts`): tracks unique file paths from Edit/Write/MultiEdit tool calls (`claudeFilesModified` Set), then takes `Math.max(gitFileStats.filesModified, claudeFilesModified.size)` — whichever is higher. This captures files Claude edited in non-git directories.
 - **`getProjectGitStats`** (`packages/server/server/git.ts`): first tries the project path as a single git repo; if that fails (not a git repo), falls back to scanning one level of subdirectories and aggregating stats across all git repos found there (handles workspace folders like `~/zuke`).
 - **FILES KPI** (`packages/web/src/hooks/useData.ts`): always uses session-level `files_modified` count first (Edit/Write/MultiEdit calls); falls back to project-level `git_stats.files_modified` only if sessions show 0. This is different from commits/lines which prefer project-level git stats when a project filter is active.
+- **`TtyChat.tsx` and `ClaudeChat.tsx`** are the two largest components (117k and 94k respectively). Both stream from `/api/chat/stream` via `streamViaClaude()` in `chat-tty.ts`. Do not add a third chat component — extend these.
+- **`UpdateModal.tsx`** is shown by `App.tsx` when `getVersionInfo()` returns `hasUpdate=true`. It displays current vs. latest version and install instructions.
+- **`HealthWarnings.tsx`** renders a dismissible warning bar at the top of the layout for issues returned by `/api/health`. Dismissals are persisted in `localStorage` under `claude-stats-dismissed-health`.
+- **`version.ts`** caches the latest GitHub release for 1 hour. `upgrade.ts` (`agentop upgrade`) downloads the latest binary and replaces the running executable in-place.
+- **`mcp-list.ts`** reads `~/.claude/settings.json` and project-level `.claude/settings.json` to expose installed MCP servers via `/api/mcp-list`.
+- **`env-config.ts`** manages a `.env.config` file at the server root for persistent runtime overrides (PORT, VITE_PORT, etc.), exposed via `/api/env-config`.
 
 ## Development
 
