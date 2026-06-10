@@ -305,7 +305,7 @@ jobs:
         shell: bash
         run: |
           BUNDLE=packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis
-          SIG_FILE=$(ls $BUNDLE/*.exe.sig 2>/dev/null | head -1)
+          SIG_FILE=$(find "$BUNDLE" -maxdepth 1 -name "*.exe.sig" 2>/dev/null | head -1)
           if [ -n "$SIG_FILE" ]; then
             echo "has_sig=true" >> $GITHUB_OUTPUT
           else
@@ -318,7 +318,7 @@ jobs:
         shell: bash
         run: |
           BUNDLE=packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis
-          EXE=$(ls $BUNDLE/*.exe | grep -v '.sig' | head -1)
+          EXE=$(find "$BUNDLE" -maxdepth 1 -name "*.exe" ! -name "*.sig" | head -1)
           SIG=$(cat ${EXE}.sig)
           VERSION="${{ needs.build.outputs.next }}"
           TAG="${{ needs.build.outputs.tag }}"
@@ -357,7 +357,7 @@ jobs:
         run: |
           TAG="${{ needs.build.outputs.tag }}"
           BUNDLE=packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis
-          SIG_FILES=$(ls $BUNDLE/*.exe.sig 2>/dev/null || true)
+          SIG_FILES=$(find "$BUNDLE" -maxdepth 1 -name "*.exe.sig" 2>/dev/null || true)
           LATEST_JSON=$([ -f /tmp/latest.json ] && echo /tmp/latest.json || true)
           gh release upload "$TAG" \
             $BUNDLE/*.exe \
@@ -372,7 +372,7 @@ jobs:
         shell: bash
         run: |
           BUNDLE=packages/desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis
-          SIG_FILES=$(ls $BUNDLE/*.exe.sig 2>/dev/null || true)
+          SIG_FILES=$(find "$BUNDLE" -maxdepth 1 -name "*.exe.sig" 2>/dev/null || true)
           LATEST_JSON=$([ -f /tmp/latest.json ] && echo /tmp/latest.json || true)
           gh release upload latest \
             $BUNDLE/*.exe \
