@@ -1,7 +1,5 @@
 import type { SessionMeta } from '@agentistics/core'
 
-const TOOL_EVENT_TYPES = new Set(['workspace-write', 'search', 'path', 'open_page', 'web_search_call'])
-
 /** Pure: parse a Codex rollout JSONL string into a normalized SessionMeta.
  *  Returns null when the content has no usable lines. */
 export function parseCodexRollout(content: string, fallbackId: string): SessionMeta | null {
@@ -24,23 +22,25 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
   for (const raw of lines) {
     let e: any
     try { e = JSON.parse(raw) } catch { continue }
-    const type = e.type as string | undefined
-    const payload = e.payload ?? e
+    const outer = e.type as string | undefined
+    const data = (e.payload && typeof e.payload === 'object') ? e.payload : e
+    const wrapped = outer === 'event_msg' || outer === 'response_item'
+    const type = wrapped ? (data.type as string | undefined) : outer
 
     if (type === 'session_meta') {
-      sessionId = payload.id ?? sessionId
-      cwd = payload.cwd ?? cwd
-      startTime = payload.timestamp ?? startTime
+      sessionId = data.id ?? sessionId
+      cwd = data.cwd ?? cwd
+      startTime = data.timestamp ?? startTime
     } else if (type === 'turn_context') {
-      if (typeof e.model === 'string') model = e.model
-      else if (typeof payload.model === 'string') model = payload.model
+      if (typeof data.model === 'string') model = data.model
     } else if (type === 'token_count') {
-      const u = payload.total_token_usage ?? payload.info?.total_token_usage
+      const u = data.info?.total_token_usage ?? data.total_token_usage
       if (u) {
-        // cumulative — last wins
-        inputTokens = u.input_tokens ?? inputTokens
+        const cached = u.cached_input_tokens ?? 0
+        const totalInput = u.input_tokens ?? 0
+        inputTokens = Math.max(0, totalInput - cached)
+        cacheRead = cached
         outputTokens = u.output_tokens ?? outputTokens
-        cacheRead = u.cached_input_tokens ?? cacheRead
       }
     } else if (type === 'user_message') {
       userMessages++
@@ -48,7 +48,7 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
       assistantMessages++
     }
 
-    if (type && TOOL_EVENT_TYPES.has(type)) {
+    if (type && type.endsWith('_call')) {
       toolCounts[type] = (toolCounts[type] ?? 0) + 1
       if (type === 'web_search_call') usesWebSearch = true
     }
