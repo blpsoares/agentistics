@@ -256,17 +256,29 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     ]
 
     // ── All-time total sessions (no date/project filter) — used by the header ──
-    // Mirrors extendedDailyActivity logic but without any date restriction.
-    const allDailyDates = new Set((data.statsCache.dailyActivity ?? []).map(d => d.date))
-    const allTimeSupplementByDay: Record<string, number> = {}
-    for (const s of harnessSessions) {
-      if (!s.start_time) continue
-      const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
-      if (!allDailyDates.has(day)) allTimeSupplementByDay[day] = (allTimeSupplementByDay[day] ?? 0) + 1
+    // statsCache.dailyActivity is CLAUDE-ONLY. So:
+    //  - non-Claude harness selected → pure per-session count of that harness
+    //  - Claude harness selected → Claude statsCache history + Claude sessions on gap days
+    //  - unified (no harness filter) → Claude history+gap PLUS all non-Claude sessions
+    let allTimeTotalSessions: number
+    if (nonClaudeHarness) {
+      allTimeTotalSessions = harnessSessions.length
+    } else {
+      const allDailyDates = new Set((data.statsCache.dailyActivity ?? []).map(d => d.date))
+      const claudeBase = (data.statsCache.dailyActivity ?? []).reduce((s, d) => s + d.sessionCount, 0)
+      let claudeGap = 0
+      for (const s of harnessSessions) {
+        if ((s.harness ?? 'claude') !== 'claude') continue
+        if (!s.start_time) continue
+        const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
+        if (!allDailyDates.has(day)) claudeGap += 1
+      }
+      // Unified view adds ALL non-Claude sessions (statsCache contains none of them).
+      const nonClaudeCount = harnessActive
+        ? 0
+        : harnessSessions.filter(s => (s.harness ?? 'claude') !== 'claude').length
+      allTimeTotalSessions = claudeBase + claudeGap + nonClaudeCount
     }
-    const allTimeTotalSessions =
-      (data.statsCache.dailyActivity ?? []).reduce((s, d) => s + d.sessionCount, 0)
-      + Object.values(allTimeSupplementByDay).reduce((s, c) => s + c, 0)
 
     // ── Aggregate stats ──
     // Use filteredSessions when project/model/non-claude-harness filter is active
