@@ -130,21 +130,31 @@ Add to `Filters`:
   harness?: HarnessId
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Stamp `harness: 'claude'` on ALL existing SessionMeta construction sites (same commit)**
+
+`harness` is REQUIRED, so every place that builds a `SessionMeta` must set it in this same commit, or `bun tsc --noEmit` (run by the pre-commit hook over the whole repo) fails. There are exactly three sites — add `harness: 'claude',` next to the existing `_source:` field in each:
+
+1. `packages/server/server/data.ts:83` — the `const meta: SessionMeta = { … _source: 'meta' }` literal. Add `harness: 'claude',`.
+2. `packages/server/server/jsonl.ts` — inside `makeEmptySession` (the literal ending around line 99 with `_source: source`). Add `harness: 'claude',`.
+3. `packages/server/server/jsonl.ts:320` — the second literal ending with `_source: source`. Add `harness: 'claude',`.
+
+(Verified: there are no `SessionMeta` literals in `packages/web/src`. Test files use `as any` casts and are unaffected.)
+
+- [ ] **Step 5: Run test to verify it passes**
 
 Run: `bun test packages/core/src/types.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Verify types compile**
+- [ ] **Step 6: Verify the whole repo type-checks**
 
 Run: `bun tsc --noEmit`
-Expected: errors only about missing `harness` on `SessionMeta` literals elsewhere (those are fixed in later tasks). If `tsc` blocks the commit, make `harness` required but ensure Task 7/8 set it; for this commit only, temporarily confirm core package compiles in isolation: `cd packages/core && bun tsc --noEmit` (Expected: PASS), then return to repo root.
+Expected: PASS with zero errors (all three literals now set `harness`).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add packages/core/src/types.ts packages/core/src/types.test.ts
-git commit -m "feat(core): add HarnessId, capabilities map, and harness field"
+git add packages/core/src/types.ts packages/core/src/types.test.ts packages/server/server/data.ts packages/server/server/jsonl.ts
+git commit -m "feat(core): add HarnessId, capabilities map, and required harness field"
 ```
 
 ---
@@ -642,9 +652,9 @@ export const claudeAdapter: HarnessAdapter = {
 
 > If `scanProjects`'s current signature differs (it returns `{ projects, extraSessions }` and may require args), match it exactly — read `data.ts:286` before writing. Do not change its behavior; only consume it.
 
-- [ ] **Step 4: Ensure existing Claude session construction sets `harness`**
+- [ ] **Step 4: Confirm harness stamping is complete (done in Task 1)**
 
-In `packages/server/server/data.ts`, every place that builds a `SessionMeta` literal (in `loadSessionMetas`, `parseSessionJsonl` consumers, and `scanProjects`) must include `harness: 'claude'`. Add `harness: 'claude'` to each constructed object. For sessions coming from `parseSessionJsonl` (in `jsonl.ts`), stamp it at the call site in `data.ts` rather than editing the parser, e.g. `extraSessions.push({ ...parsed, harness: 'claude' })`.
+Task 1 already stamped `harness: 'claude'` on the three server `SessionMeta` construction sites (`data.ts:83`, `jsonl.ts` `makeEmptySession`, `jsonl.ts:320`). The adapter's `.map(s => (s.harness ? s : { ...s, harness: 'claude' }))` is a defensive fallback for any session sourced from consolidated/archived files that predate the field. Verify no new construction site was introduced; do NOT edit the parser.
 
 - [ ] **Step 5: Run test + typecheck**
 
