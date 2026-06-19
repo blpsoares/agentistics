@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, calcLongestStreak, getDateRangeFilter } from './useData'
+import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness } from './useData'
 import { format, subDays } from 'date-fns'
 
 // ── calcStreak ────────────────────────────────────────────────────────────────
@@ -135,5 +135,30 @@ describe('getDateRangeFilter', () => {
       const { start, end } = getDateRangeFilter(range)
       expect(start.getTime()).toBeLessThan(end.getTime())
     }
+  })
+})
+
+// ── filterByHarness ───────────────────────────────────────────────────────────
+
+describe('filterByHarness', () => {
+  const sessions = [
+    { session_id: '1', harness: 'claude' },
+    { session_id: '2', harness: 'codex' },
+  ] as any
+
+  test('filterByHarness keeps only the chosen harness', () => {
+    expect(filterByHarness(sessions, 'codex').map((s: any) => s.session_id)).toEqual(['2'])
+  })
+
+  test('filterByHarness with undefined returns all sessions', () => {
+    expect(filterByHarness(sessions, undefined).length).toBe(2)
+  })
+
+  test('filterByHarness defaults missing harness to claude', () => {
+    const mixed = [
+      { session_id: 'a', harness: undefined },
+      { session_id: 'b', harness: 'codex' },
+    ] as any
+    expect(filterByHarness(mixed, 'claude').map((s: any) => s.session_id)).toEqual(['a'])
   })
 })

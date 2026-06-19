@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import type { AppData, Filters, DateRange, AgentInvocation } from '@agentistics/core'
+import type { AppData, Filters, DateRange, AgentInvocation, HarnessId } from '@agentistics/core'
 import { calcCost, getModelPrice, MODEL_PRICING } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays } from 'date-fns'
 
@@ -189,6 +189,11 @@ export function blendedCostPerToken(modelUsage: Record<string, { inputTokens: nu
   }
 }
 
+export function filterByHarness<T extends { harness?: HarnessId }>(sessions: T[], harness?: HarnessId): T[] {
+  if (!harness) return sessions
+  return sessions.filter(s => (s.harness ?? 'claude') === harness)
+}
+
 export function useDerivedStats(data: AppData | null, filters: Filters) {
   return useMemo(() => {
     if (!data) return null
@@ -199,6 +204,9 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const projectSet = new Set(projects)
     const modelSet = filters.models && filters.models.length > 0 ? new Set(filters.models) : null
 
+    // ── Harness filter — applied first so all downstream filters compose on top ──
+    const harnessSessions = filterByHarness(data.sessions, filters.harness)
+
     // ── Filter daily activity (date-range only — no project granularity in statsCache) ──
     const filteredDailyActivity = (data.statsCache.dailyActivity ?? []).filter(d =>
       inRange(parseISO(d.date), start, end)
@@ -208,7 +216,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     )
 
     // ── Filter sessions (date + projects + model) ──
-    const filteredSessions = data.sessions.filter(s => {
+    const filteredSessions = harnessSessions.filter(s => {
       if (!s.start_time) return false
       if (!inRange(parseISO(s.start_time), start, end)) return false
       if (projectFiltered && !projectSet.has(s.project_path)) return false
@@ -239,7 +247,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // Mirrors extendedDailyActivity logic but without any date restriction.
     const allDailyDates = new Set((data.statsCache.dailyActivity ?? []).map(d => d.date))
     const allTimeSupplementByDay: Record<string, number> = {}
-    for (const s of data.sessions) {
+    for (const s of harnessSessions) {
       if (!s.start_time) continue
       const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
       if (!allDailyDates.has(day)) allTimeSupplementByDay[day] = (allTimeSupplementByDay[day] ?? 0) + 1
@@ -288,7 +296,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
         })()
       : new Set([
           ...(data.statsCache.dailyActivity ?? []).map(d => d.date),
-          ...(data.sessions ?? []).filter(s => s.start_time).map(s => format(parseISO(s.start_time), 'yyyy-MM-dd')),
+          ...(harnessSessions ?? []).filter(s => s.start_time).map(s => format(parseISO(s.start_time), 'yyyy-MM-dd')),
         ])
     const streak = calcStreak(activeDates)
     const streakLastActiveDate = streak === 0 && activeDates.size > 0
@@ -301,7 +309,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // Model filter is preserved when active so per-project streaks remain consistent.
     // Project filter IS applied so the breakdown only shows projects in the active filter.
     const projectDateMap: Record<string, Set<string>> = {}
-    for (const sess of data.sessions) {
+    for (const sess of harnessSessions) {
       if (!sess.project_path || !sess.start_time) continue
       if (projectFiltered && !projectSet.has(sess.project_path)) continue
       if (modelSet && (!sess.model || !modelSet.has(sess.model))) continue
@@ -334,7 +342,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const allTimeActiveDates = (() => {
       const set = new Set<string>()
       if (projectFiltered || modelSet !== null) {
-        for (const s of data.sessions) {
+        for (const s of harnessSessions) {
           if (!s.start_time) continue
           if (projectFiltered && !projectSet.has(s.project_path)) continue
           if (modelSet && (!s.model || !modelSet.has(s.model))) continue
@@ -349,7 +357,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
         }
       } else {
         for (const d of data.statsCache.dailyActivity ?? []) set.add(d.date)
-        for (const s of data.sessions) {
+        for (const s of harnessSessions) {
           if (s.start_time) set.add(format(parseISO(s.start_time), 'yyyy-MM-dd'))
         }
       }
