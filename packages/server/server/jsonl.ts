@@ -96,6 +96,7 @@ export function makeEmptySession(
     files_modified: 0,
     message_hours: [],
     user_message_timestamps: [],
+    harness: 'claude',
     _source: source,
   }
 }
@@ -317,6 +318,7 @@ export async function parseSessionJsonl(
     message_hours: messageHours,
     user_message_timestamps: userMessageTimestamps,
     model: modelId || undefined,
+    harness: 'claude',
     _source: source,
     agentMetrics,
   }

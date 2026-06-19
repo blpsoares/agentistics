@@ -117,6 +117,7 @@ export async function loadSessionMetas(roots: string[] = [SESSION_META_DIR]): Pr
               return (data.message_hours as number[]) ?? []
             })(),
             user_message_timestamps: (data.user_message_timestamps as string[]) ?? [],
+            harness: 'claude',
             _source: 'meta',
           }
 

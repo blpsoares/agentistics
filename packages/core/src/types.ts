@@ -40,6 +40,27 @@ export interface StatsCache {
   totalSpeculationTimeSavedMs: number
 }
 
+export type HarnessId = 'claude' | 'codex' | 'gemini' | 'copilot'
+
+export interface HarnessCapabilities {
+  tokens: boolean
+  cost: boolean
+  model: boolean
+  tools: boolean
+  agents: boolean
+  gitLines: boolean
+}
+
+/** Single source of truth for which metrics each harness can produce.
+ *  Drives "N/A vs real 0" rendering and what the unified view aggregates.
+ *  gemini flips tokens/cost/model to true once Phase 3 OTel ingestion is active. */
+export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
+  claude:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: true,  gitLines: true },
+  codex:   { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false },
+  gemini:  { tokens: false, cost: false, model: false, tools: false, agents: false, gitLines: false },
+  copilot: { tokens: false, cost: false, model: false, tools: false, agents: false, gitLines: false },
+}
+
 export interface SessionMeta {
   session_id: string
   project_path: string
@@ -74,6 +95,7 @@ export interface SessionMeta {
   message_hours: number[]
   user_message_timestamps: string[]
   model?: string
+  harness: HarnessId
   _source?: 'meta' | 'jsonl' | 'subdir'
   agentMetrics?: SessionAgentMetrics
 }
@@ -169,6 +191,7 @@ export interface AppData {
   allSessions: SessionIndex[]
   healthIssues?: HealthIssue[]
   homeDir?: string
+  harnesses: HarnessId[]
 }
 
 export type DateRange = '7d' | '30d' | '90d' | 'all'
@@ -179,6 +202,7 @@ export interface Filters {
   customEnd: string
   projects: string[]   // empty = all projects
   models: string[]     // empty = all models
+  harness?: HarnessId
 }
 
 export type Lang = 'pt' | 'en'

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcCost, getModelPrice, formatModel, getModelColor, formatProjectName, setHomeDir } from './types'
+import { calcCost, getModelPrice, formatModel, getModelColor, formatProjectName, setHomeDir, HARNESS_CAPABILITIES } from './types'
 import type { ModelUsage } from './types'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -165,4 +165,19 @@ describe('formatProjectName', () => {
     setHomeDir('/home/user')
     expect(formatProjectName('/opt/apps/servidor')).toBe('/opt/apps/servidor')
   })
+})
+
+// ── HARNESS_CAPABILITIES ──────────────────────────────────────────────────────
+
+test('HARNESS_CAPABILITIES declares all four harnesses', () => {
+  expect(Object.keys(HARNESS_CAPABILITIES).sort()).toEqual(['claude', 'codex', 'copilot', 'gemini'])
+})
+
+test('claude is fully capable, copilot has no tokens', () => {
+  expect(HARNESS_CAPABILITIES.claude.tokens).toBe(true)
+  expect(HARNESS_CAPABILITIES.claude.agents).toBe(true)
+  expect(HARNESS_CAPABILITIES.codex.tokens).toBe(true)
+  expect(HARNESS_CAPABILITIES.codex.agents).toBe(false)
+  expect(HARNESS_CAPABILITIES.copilot.tokens).toBe(false)
+  expect(HARNESS_CAPABILITIES.gemini.tokens).toBe(false)
 })
