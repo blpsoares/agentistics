@@ -15,3 +15,21 @@ export interface HarnessAdapter {
 export function harnessEnabled(id: HarnessId): boolean {
   return process.env[`AGENTISTICS_HARNESS_${id.toUpperCase()}`] !== '0'
 }
+
+/** Lazily-resolved adapter list to avoid circular import issues (claude/codex import from types). */
+let _adapters: HarnessAdapter[] | null = null
+
+async function getAllAdapters(): Promise<HarnessAdapter[]> {
+  if (_adapters) return _adapters
+  const [{ claudeAdapter }, { codexAdapter }] = await Promise.all([
+    import('./claude'),
+    import('./codex'),
+  ])
+  _adapters = [claudeAdapter, codexAdapter]
+  return _adapters
+}
+
+/** Adapters whose data is present and not disabled via env. */
+export async function getEnabledAdapters(): Promise<HarnessAdapter[]> {
+  return (await getAllAdapters()).filter(a => a.isAvailable())
+}

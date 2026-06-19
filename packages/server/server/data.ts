@@ -1,6 +1,6 @@
 import { join } from 'path'
 import { readFile } from 'fs/promises'
-import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue } from '@agentistics/core'
+import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue, HarnessId } from '@agentistics/core'
 import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR } from './config'
 import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
@@ -45,6 +45,7 @@ export interface ApiResponse {
   sessions: SessionMeta[]
   healthIssues: HealthIssue[]
   homeDir: string
+  harnesses: HarnessId[]
 }
 
 export interface ScanResult {
@@ -619,10 +620,36 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     // Supplement the cache with sessions newer than lastComputedDate so UI totals stay accurate
     supplementStatsCache(statsCache, sessions)
 
+    // --- Other harnesses (Codex, …): append their normalized sessions ---
+    // MUST run AFTER supplementStatsCache so non-Claude sessions never corrupt Claude totals.
+    const { getEnabledAdapters } = await import('./adapters/types')
+    const harnessSet = new Set<HarnessId>(['claude'])
+    for (const adapter of await getEnabledAdapters()) {
+      if (adapter.id === 'claude') continue // already loaded above
+      const extra = await adapter.loadSessions().catch(() => [] as SessionMeta[])
+      for (const s of extra) {
+        // Key by (harness, session_id) so IDs never collide across harnesses
+        sessions.push(s)
+        harnessSet.add(s.harness)
+        // surface as a project too
+        const existing = projects.find(p => p.path === s.project_path && p.path)
+        if (existing) {
+          existing.sessions.push({ sessionId: s.session_id, created: s.start_time })
+        } else if (s.project_path) {
+          projects.push({
+            path: s.project_path,
+            name: s.project_path.split('/').filter(Boolean).pop() ?? s.project_path,
+            sessions: [{ sessionId: s.session_id, created: s.start_time }],
+          })
+        }
+      }
+    }
+    sessions.sort((a, b) => b.start_time.localeCompare(a.start_time))
+
     const totalTokens = sessions.reduce((sum, s) => sum + (s.input_tokens ?? 0) + (s.output_tokens ?? 0), 0)
     onProgress('finalizing', 1, String(totalTokens))
 
-    return { statsCache, projects, allSessions: [] as [], sessions, healthIssues, homeDir: HOME_DIR }
+    return { statsCache, projects, allSessions: [] as [], sessions, healthIssues, homeDir: HOME_DIR, harnesses: Array.from(harnessSet) }
   }
 
   return Promise.race([
