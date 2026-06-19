@@ -167,6 +167,26 @@ describe('formatProjectName', () => {
   })
 })
 
+// ── OpenAI/Codex pricing ────────────────────────────────────────────────────────
+
+test('gpt-5.5 resolves to a non-fallback price', () => {
+  const price = getModelPrice('gpt-5.5')
+  // Must differ from the Sonnet 4.6 fallback ($3 in / $15 out)
+  expect(price.input === 3 && price.output === 15).toBe(false)
+})
+
+test('calcCost works for a codex usage record', () => {
+  const cost = calcCost(
+    { inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 },
+    'gpt-5.5',
+  )
+  expect(cost).toBeGreaterThan(0)
+})
+
+test('formatModel renders gpt-5.5 readably', () => {
+  expect(formatModel('gpt-5.5')).toBe('GPT-5.5')
+})
+
 // ── HARNESS_CAPABILITIES ──────────────────────────────────────────────────────
 
 test('HARNESS_CAPABILITIES declares all four harnesses', () => {

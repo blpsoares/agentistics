@@ -222,6 +222,11 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; cach
   'claude-sonnet-4-20250514':   { input: 3,    output: 15,   cacheRead: 0.30, cacheWrite: 3.75  },
   'claude-haiku-3-5-20241022':  { input: 0.80, output: 4,    cacheRead: 0.08, cacheWrite: 1.00  },
   'claude-3-haiku-20240307':    { input: 0.25, output: 1.25, cacheRead: 0.03, cacheWrite: 0.30  },
+  // OpenAI (Codex CLI) — confirm against OpenAI pricing before merge
+  'gpt-5.5':        { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 1.25 },
+  'gpt-5.1':        { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 1.25 },
+  'gpt-5':          { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 1.25 },
+  'gpt-5-mini':     { input: 0.25, output: 2,  cacheRead: 0.025, cacheWrite: 0.25 },
 }
 
 export function getModelPrice(modelId: string) {
@@ -250,6 +255,10 @@ export function formatModel(modelId: string): string {
     'claude-sonnet-4-6': 'Sonnet 4.6',
     'claude-sonnet-4-5-20250929': 'Sonnet 4.5',
     'claude-haiku-4-5-20251001': 'Haiku 4.5',
+    'gpt-5.5': 'GPT-5.5',
+    'gpt-5.1': 'GPT-5.1',
+    'gpt-5': 'GPT-5',
+    'gpt-5-mini': 'GPT-5 mini',
   }
   return map[modelId] ?? modelId
 }
@@ -274,5 +283,6 @@ export function getModelColor(modelId: string): string {
   if (modelId.includes('opus')) return '#D97706'
   if (modelId.includes('sonnet')) return '#6366f1'
   if (modelId.includes('haiku')) return '#10b981'
+  if (modelId.startsWith('gpt-')) return '#10a37f' // OpenAI green
   return '#8b5cf6'
 }
