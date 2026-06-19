@@ -23,3 +23,10 @@ export const ARCHIVE_SESSION_META_DIR = join(ARCHIVE_DIR, 'usage-data', 'session
 export const ARCHIVE_STATS_DIR = join(ARCHIVE_DIR, 'stats-cache')
 // Consolidated per-session metrics (mode 'consolidate'): ~/.agentistics/sessions/<id>.json
 export const CONSOLIDATED_DIR = join(HOME_DIR, '.agentistics', 'sessions')
+
+// ---------------------------------------------------------------------------
+// Other harnesses (Phase 1: Codex). Each adapter checks its own root.
+// Override with CODEX_DIR; disable with AGENTISTICS_HARNESS_CODEX=0.
+// ---------------------------------------------------------------------------
+export const CODEX_DIR = process.env.CODEX_DIR ?? join(HOME_DIR, '.codex')
+export const CODEX_SESSIONS_DIR = join(CODEX_DIR, 'sessions')
