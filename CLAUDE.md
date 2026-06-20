@@ -37,10 +37,14 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── rates.ts             → pricing scraper + BRL rate cache
   ├── sse.ts               → SSE clients, chokidar watcher, serveStatic, maybeSpawnWatcher
   ├── archive.ts           → mirrorFile, fullSync, snapshotStatsCache ('full' mode: raw transcript mirror → ~/.agentistics/archive)
-  ├── consolidate.ts       → writeConsolidated, loadConsolidated ('consolidate' mode: per-session metrics → ~/.agentistics/sessions/<id>.json)
+  ├── consolidate.ts       → writeConsolidated, loadConsolidated ('consolidate' mode: per-session metrics → ~/.agentistics/sessions/<harness>/<id>.json; legacy flat files load as claude)
   ├── data.ts              → loadSessionMetas, scanProjects, buildApiResponse (main orchestrator)
   ├── agent-metrics.ts     → extractAgentMetrics (parses Agent tool_use from JSONL)
-  └── otel-watcher.ts      → chokidar file watcher + OTLP metrics export daemon
+  ├── otel-watcher.ts      → chokidar file watcher + OTLP metrics export daemon
+  ├── adapters/types.ts    → HarnessAdapter contract + getEnabledAdapters() (async, memoized) registry + harnessEnabled(id)
+  ├── adapters/claude.ts   → wraps the existing Claude pipeline behind the HarnessAdapter contract (zero behavior change)
+  ├── adapters/codex.ts    → Codex CLI reader (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl)
+  └── adapters/codex-parse.ts → pure parser for the Codex envelope format → SessionMeta (harness: 'codex')
 
 packages/web/src/ (React + Vite, port 47292 in dev)
   ├── lib/
@@ -56,7 +60,8 @@ packages/web/src/ (React + Vite, port 47292 in dev)
   │   ├── CustomPage.tsx        → custom layout builder (/custom route)
   │   ├── CostsPage.tsx         → cost deep-dive page
   │   ├── ProjectsPage.tsx      → projects overview page
-  │   └── ToolsPage.tsx         → tools breakdown page
+  │   ├── ToolsPage.tsx         → tools breakdown page
+  │   └── CodexPage.tsx         → dedicated Codex harness page (/codex route)
   ├── tui/
   │   └── index.ts              → terminal TUI (live stats in the terminal, no browser needed)
   └── components/               → UI (charts, cards, heatmap, modals, PDF export)
@@ -75,6 +80,41 @@ packages/server/scripts/embed-dist.ts
       packages/server/server/embedded-dist.generated.ts
       (assets embedded as strings/base64 for the compiled binary)
 ```
+
+## Multi-harness tracking
+
+Agentistics tracks sessions from multiple AI coding assistants (harnesses), not just Claude Code.
+
+### Harness model
+
+- `SessionMeta.harness: HarnessId` tags every session with its origin (`'claude' | 'codex' | 'gemini' | 'copilot'`). Missing/legacy sessions default to `'claude'`.
+- `AppData.harnesses: HarnessId[]` lists which harnesses have data present, used by the frontend to decide whether to show the harness selector in the nav (shown only when >1 harness is active). Selecting "All" yields the unified view.
+- Each harness is implemented as a `HarnessAdapter` module under `server/adapters/` — never a separate package. `getEnabledAdapters()` lazily resolves and memoizes available adapters; individual adapters can be disabled via `AGENTISTICS_HARNESS_<ID>=0`.
+
+### N/A vs real 0 — `HARNESS_CAPABILITIES`
+
+`HARNESS_CAPABILITIES` in `@agentistics/core` (`packages/core/src/types.ts`) is the single source of truth for which metrics each harness can produce. When a capability flag is `false`, the frontend renders "N/A" via the `NAtag` component + `capable(harness, metric)` helper, rather than showing a misleading 0. Current limitations: Codex does not produce agent metrics or git line counts (those capabilities are `false` for the `'codex'` harness).
+
+### Aggregation — stats-cache.json is Claude-only
+
+`stats-cache.json`, `dailyModelTokens`, and `modelUsage` inside it are populated exclusively by Claude Code and must never be used to aggregate non-Claude data. In `useDerivedStats`, a non-Claude harness is aggregated purely from per-session data. The unified view = Claude statsCache totals + per-session sums of non-Claude sessions. Non-Claude sessions are merged in `data.ts` **after** `supplementStatsCache` runs so Claude totals are never corrupted.
+
+### Codex envelope format
+
+Codex JSONL files wrap events in `event_msg` / `response_item` envelopes; the semantic event type lives at `payload.type`. Token usage is at `payload.info.total_token_usage` (cumulative — last seen wins). Codex `input_tokens` includes the cached portion, so the parser stores non-cached input (`totalInput - cached`) in `input_tokens` and the cached portion in `cache_read_input_tokens` separately.
+
+### Consolidate store namespacing
+
+The consolidate store is namespaced by harness: `~/.agentistics/sessions/<harness>/<id>.json`. Legacy flat files at the root are read and treated as `claude`.
+
+### Future phases
+
+- **Phase 2** (planned): Gemini CLI + Copilot local adapters; full-archive raw-mirror namespacing.
+- **Phase 3** (planned): Gemini OTel integration.
+
+See `docs/superpowers/specs/2026-06-19-multi-harness-tracking-design.md` for the full design.
+
+---
 
 ## Calculation functions — single source of truth
 
@@ -190,6 +230,8 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
 
 ## Important rules
 
+- **`stats-cache.json` is Claude-only** — never aggregate non-Claude harness metrics from it; use per-session sums for all other harnesses (see "Multi-harness tracking" above)
+- **Harness adapters are modules, not packages** — all adapters live under `packages/server/server/adapters/`; never create a separate package per harness
 - **`stats-cache.json`** has no project-level granularity — project filters are computed by summing individual sessions
 - **Tokens per model/day**: `dailyModelTokens` only stores totals; input/output split uses global statsCache proportions as an approximation when filtering by date
 - **Sessions have an optional `model` field** — extracted from the JSONL file by `server/data.ts` when not already present in session-meta. Use `blendedCostPerToken` as fallback when `model` is unknown (e.g. per-session cost column in PDF export)
