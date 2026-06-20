@@ -1,8 +1,10 @@
 import React, { useState } from 'react'
 import { CheckCircle, XCircle, ChevronDown, ChevronUp, Bot } from 'lucide-react'
-import type { AgentInvocation } from '@agentistics/core'
+import type { AgentInvocation, HarnessId } from '@agentistics/core'
 import type { Lang } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { capable } from '../lib/harness'
+import { NAtag } from './NAtag'
 
 interface AgentMetricsPanelProps {
   invocations: AgentInvocation[]
@@ -14,6 +16,8 @@ interface AgentMetricsPanelProps {
   currency: 'USD' | 'BRL'
   brlRate: number
   lang: Lang
+  /** When set, gates the panel — renders N/A if the harness cannot produce agent metrics. */
+  harness?: HarnessId
 }
 
 function fmtTokens(n: number): string {
@@ -97,10 +101,15 @@ export function AgentMetricsPanel({
   currency,
   brlRate,
   lang,
+  harness,
 }: AgentMetricsPanelProps) {
   const [showAll, setShowAll] = useState(false)
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
+
+  if (harness && !capable(harness, 'agents')) {
+    return <NAtag harness={harness} label="Agent metrics" />
+  }
 
   if (totalInvocations === 0) {
     return (

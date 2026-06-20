@@ -25,6 +25,7 @@ import { TagCloud } from '../components/TagCloud'
 import { ToolMetricsPanel } from '../components/ToolMetricsPanel'
 import { AgentMetricsPanel } from '../components/AgentMetricsPanel'
 import { RecentSessions } from '../components/RecentSessions'
+import { capable } from '../lib/harness'
 import { StreakBreakdownButton } from '../components/StreakBreakdownButton'
 
 type CardId = 'messages' | 'sessions' | 'tool-calls' | 'input-tokens' | 'output-tokens' | 'cost' | 'streak' | 'longest-session' | 'commits' | 'files'
@@ -95,7 +96,13 @@ export default function HomePage() {
     } else if (id === 'commits') {
       card = <StatCard label={lang === 'pt' ? 'Commits' : 'Commits'} value={d.gitCommits} sub={d.gitPushes > 0 ? `${d.gitPushes} ${lang === 'pt' ? 'pushes via Claude' : 'pushes via Claude'}` : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls'} icon={<GitCommit size={15} />} accent="var(--accent-cyan)" info={infoItems[6]} onInfoClick={() => setInfoModalIndex(6)} />
     } else if (id === 'files') {
-      card = <StatCard label={lang === 'pt' ? 'Arquivos' : 'Files'} value={d.filesModified} sub={d.linesAdded + d.linesRemoved > 0 ? `+${fmt(d.linesAdded)} / -${fmt(d.linesRemoved)} linhas` : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls'} icon={<FileCode size={15} />} accent="var(--accent-green)" info={infoItems[7]} onInfoClick={() => setInfoModalIndex(7)} />
+      const canGitLines = !filters.harness || capable(filters.harness, 'gitLines')
+      const filesSub = canGitLines && d.linesAdded + d.linesRemoved > 0
+        ? `+${fmt(d.linesAdded)} / -${fmt(d.linesRemoved)} linhas`
+        : canGitLines
+          ? (lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls')
+          : (lang === 'pt' ? 'linhas adicionadas/removidas não disponíveis' : 'lines added/removed not available')
+      card = <StatCard label={lang === 'pt' ? 'Arquivos' : 'Files'} value={d.filesModified} sub={filesSub} icon={<FileCode size={15} />} accent="var(--accent-green)" info={infoItems[7]} onInfoClick={() => setInfoModalIndex(7)} />
     }
 
     return (
@@ -210,7 +217,7 @@ export default function HomePage() {
 
       {/* Agent metrics */}
       <Section flashId="agents" title={<><Bot size={14} /> {lang === 'pt' ? 'Métricas de agentes' : 'Agent metrics'}</>}>
-        <AgentMetricsPanel invocations={derived.agentInvocations} agentTypeBreakdown={derived.agentTypeBreakdown} totalInvocations={derived.totalAgentInvocations} totalTokens={derived.totalAgentTokens} totalCostUSD={derived.totalAgentCostUSD} totalDurationMs={derived.totalAgentDurationMs} currency={currency} brlRate={brlRate} lang={lang} />
+        <AgentMetricsPanel invocations={derived.agentInvocations} agentTypeBreakdown={derived.agentTypeBreakdown} totalInvocations={derived.totalAgentInvocations} totalTokens={derived.totalAgentTokens} totalCostUSD={derived.totalAgentCostUSD} totalDurationMs={derived.totalAgentDurationMs} currency={currency} brlRate={brlRate} lang={lang} harness={filters.harness} />
       </Section>
 
       {/* Recent sessions */}

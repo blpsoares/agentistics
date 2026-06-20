@@ -8,7 +8,7 @@ import { AgentMetricsPanel } from '../components/AgentMetricsPanel'
 
 export default function ToolsPage() {
   const ctx = useOutletContext<AppContext>()
-  const { derived, lang, currency, brlRate } = ctx
+  const { derived, lang, currency, brlRate, filters } = ctx
 
   return (
     <>
@@ -25,7 +25,7 @@ export default function ToolsPage() {
       </Section>
 
       <Section flashId="agents" title={<><Bot size={14} /> {lang === 'pt' ? 'Métricas de agentes' : 'Agent metrics'}</>}>
-        <AgentMetricsPanel invocations={derived.agentInvocations} agentTypeBreakdown={derived.agentTypeBreakdown} totalInvocations={derived.totalAgentInvocations} totalTokens={derived.totalAgentTokens} totalCostUSD={derived.totalAgentCostUSD} totalDurationMs={derived.totalAgentDurationMs} currency={currency} brlRate={brlRate} lang={lang} />
+        <AgentMetricsPanel invocations={derived.agentInvocations} agentTypeBreakdown={derived.agentTypeBreakdown} totalInvocations={derived.totalAgentInvocations} totalTokens={derived.totalAgentTokens} totalCostUSD={derived.totalAgentCostUSD} totalDurationMs={derived.totalAgentDurationMs} currency={currency} brlRate={brlRate} lang={lang} harness={filters.harness} />
       </Section>
     </>
   )
