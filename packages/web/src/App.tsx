@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
-import { Outlet, NavLink, useLocation } from 'react-router-dom'
+import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { version } from '../../../package.json'
 import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
@@ -12,7 +12,7 @@ import {
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
-import type { Filters } from '@agentistics/core'
+import type { Filters, HarnessId } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
 import { formatProjectName, setHomeDir, MODEL_PRICING } from '@agentistics/core'
 import { StatCard } from './components/StatCard'
@@ -40,6 +40,7 @@ import { UpdateModal } from './components/UpdateModal'
 import { InstallModal } from './components/InstallModal'
 import { ArchiveConsentModal, type ArchiveMode } from './components/ArchiveConsentModal'
 import { type ChatModelId } from './lib/chatModels'
+import { HARNESS_LABELS, HARNESS_COLORS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
@@ -645,6 +646,86 @@ function MobileBottomNav({ lang }: { lang: Lang }) {
         )
       })}
     </nav>
+  )
+}
+
+function HarnessSelector({ harnesses, lang }: { harnesses: HarnessId[]; lang: Lang }) {
+  const location = useLocation()
+  const navigate = useNavigate()
+
+  // Only render when there is more than one harness present in the data
+  if (harnesses.length <= 1) return null
+
+  const currentHarness: HarnessId | null = location.pathname === '/codex' ? 'codex' : null
+
+  const handleSelect = (harness: HarnessId | null) => {
+    if (harness === null) {
+      navigate('/')
+    } else {
+      navigate(`/${harness}`)
+    }
+  }
+
+  const allOption = { id: null as HarnessId | null, label: lang === 'pt' ? 'Todos' : 'All' }
+  const options = [
+    allOption,
+    ...harnesses.map(h => ({ id: h as HarnessId | null, label: HARNESS_LABELS[h] })),
+  ]
+
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 4,
+      marginLeft: 12,
+      padding: '0 12px',
+      borderLeft: '1px solid var(--border)',
+    }}>
+      {options.map(opt => {
+        const active = opt.id === currentHarness
+        const color = opt.id ? HARNESS_COLORS[opt.id] : undefined
+        return (
+          <button
+            key={opt.id ?? '__all__'}
+            onClick={() => handleSelect(opt.id)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '5px 10px',
+              borderRadius: 7,
+              border: active
+                ? `1px solid ${color ? `${color}50` : 'var(--anthropic-orange)30'}`
+                : '1px solid transparent',
+              background: active
+                ? color ? `${color}18` : 'var(--anthropic-orange-dim)'
+                : 'transparent',
+              color: active
+                ? color ?? 'var(--anthropic-orange)'
+                : 'var(--text-tertiary)',
+              fontSize: 12,
+              fontWeight: active ? 700 : 500,
+              fontFamily: 'inherit',
+              cursor: 'pointer',
+              transition: 'all 0.15s',
+              whiteSpace: 'nowrap',
+            }}
+            onMouseEnter={e => {
+              if (!active) {
+                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
+                ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-elevated)'
+              }
+            }}
+            onMouseLeave={e => {
+              if (!active) {
+                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'
+                ;(e.currentTarget as HTMLButtonElement).style.background = 'transparent'
+              }
+            }}
+          >
+            {opt.label}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
@@ -1564,8 +1645,11 @@ export default function AppLayout() {
             padding: '0 32px',
             width: '100%',
             boxSizing: 'border-box',
+            display: 'flex',
+            alignItems: 'center',
           }}>
             <NavTabs lang={lang} />
+            <HarnessSelector harnesses={data.harnesses} lang={lang} />
           </div>
         )}
       </header>

@@ -7,6 +7,7 @@ const CostsPage = lazy(() => import('./pages/CostsPage'))
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage'))
 const ToolsPage = lazy(() => import('./pages/ToolsPage'))
 const CustomPage = lazy(() => import('./pages/CustomPage'))
+const CodexPage = lazy(() => import('./pages/CodexPage'))
 
 function PageFallback() {
   return (
@@ -29,6 +30,7 @@ export default function AppRouter() {
           <Route path="projects" element={<Suspense fallback={<PageFallback />}><ProjectsPage /></Suspense>} />
           <Route path="tools" element={<Suspense fallback={<PageFallback />}><ToolsPage /></Suspense>} />
           <Route path="custom" element={<Suspense fallback={<PageFallback />}><CustomPage /></Suspense>} />
+          <Route path="codex" element={<Suspense fallback={<PageFallback />}><CodexPage /></Suspense>} />
         </Route>
       </Routes>
     </BrowserRouter>
