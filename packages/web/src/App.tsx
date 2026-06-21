@@ -7,7 +7,7 @@ import {
   Sun, Moon, Globe, AlertTriangle, Download,
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
-  Target, Home, DollarSign, Layers, Code2, GitCompare,
+  Target, Home, DollarSign, Layers, Code2, GitCompare, Info,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -39,6 +39,7 @@ import { ClaudeChat } from './components/ClaudeChat'
 import { UpdateModal } from './components/UpdateModal'
 import { InstallModal } from './components/InstallModal'
 import { ArchiveConsentModal, type ArchiveMode } from './components/ArchiveConsentModal'
+import { HarnessInfoModal } from './components/HarnessInfoModal'
 import { type ChatModelId } from './lib/chatModels'
 import { HARNESS_LABELS, HARNESS_COLORS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
@@ -652,6 +653,7 @@ function MobileBottomNav({ lang }: { lang: Lang }) {
 function HarnessSelector({ harnesses, lang }: { harnesses: HarnessId[]; lang: Lang }) {
   const location = useLocation()
   const navigate = useNavigate()
+  const [infoHarness, setInfoHarness] = useState<HarnessId | null>(null)
 
   // Only render when there is more than one harness present in the data
   if (harnesses.length <= 1) return null
@@ -676,59 +678,92 @@ function HarnessSelector({ harnesses, lang }: { harnesses: HarnessId[]; lang: La
   ]
 
   return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: 4,
-      marginLeft: 12,
-      padding: '0 12px',
-      borderLeft: '1px solid var(--border)',
-    }}>
-      {options.map(opt => {
-        const active = opt.id === currentHarness
-        const color = opt.id ? HARNESS_COLORS[opt.id] : undefined
-        return (
-          <button
-            key={opt.id ?? '__all__'}
-            onClick={() => handleSelect(opt.id)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 5,
-              padding: '5px 10px',
-              borderRadius: 7,
-              border: active
-                ? `1px solid ${color ? `${color}50` : 'var(--anthropic-orange)30'}`
-                : '1px solid transparent',
-              background: active
-                ? color ? `${color}18` : 'var(--anthropic-orange-dim)'
-                : 'transparent',
-              color: active
-                ? color ?? 'var(--anthropic-orange)'
-                : 'var(--text-tertiary)',
-              fontSize: 12,
-              fontWeight: active ? 700 : 500,
-              fontFamily: 'inherit',
-              cursor: 'pointer',
-              transition: 'all 0.15s',
-              whiteSpace: 'nowrap',
-            }}
-            onMouseEnter={e => {
-              if (!active) {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
-                ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-elevated)'
-              }
-            }}
-            onMouseLeave={e => {
-              if (!active) {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'
-                ;(e.currentTarget as HTMLButtonElement).style.background = 'transparent'
-              }
-            }}
-          >
-            {opt.label}
-          </button>
-        )
-      })}
-    </div>
+    <>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 4,
+        marginLeft: 12,
+        padding: '0 12px',
+        borderLeft: '1px solid var(--border)',
+      }}>
+        {options.map(opt => {
+          const active = opt.id === currentHarness
+          const color = opt.id ? HARNESS_COLORS[opt.id] : undefined
+          return (
+            <div key={opt.id ?? '__all__'} style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <button
+                onClick={() => handleSelect(opt.id)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '5px 10px',
+                  borderRadius: 7,
+                  border: active
+                    ? `1px solid ${color ? `${color}50` : 'var(--anthropic-orange)30'}`
+                    : '1px solid transparent',
+                  background: active
+                    ? color ? `${color}18` : 'var(--anthropic-orange-dim)'
+                    : 'transparent',
+                  color: active
+                    ? color ?? 'var(--anthropic-orange)'
+                    : 'var(--text-tertiary)',
+                  fontSize: 12,
+                  fontWeight: active ? 700 : 500,
+                  fontFamily: 'inherit',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s',
+                  whiteSpace: 'nowrap',
+                }}
+                onMouseEnter={e => {
+                  if (!active) {
+                    ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
+                    ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-elevated)'
+                  }
+                }}
+                onMouseLeave={e => {
+                  if (!active) {
+                    ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'
+                    ;(e.currentTarget as HTMLButtonElement).style.background = 'transparent'
+                  }
+                }}
+              >
+                {opt.label}
+              </button>
+              {opt.id !== null && (
+                <button
+                  onClick={e => { e.stopPropagation(); setInfoHarness(opt.id as HarnessId) }}
+                  title={`About ${HARNESS_LABELS[opt.id]} data`}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    width: 18, height: 18,
+                    background: 'transparent',
+                    border: 'none',
+                    borderRadius: 4,
+                    color: 'var(--text-tertiary)',
+                    cursor: 'pointer',
+                    padding: 0,
+                    opacity: 0.6,
+                  }}
+                  onMouseEnter={e => {
+                    ;(e.currentTarget as HTMLButtonElement).style.opacity = '1'
+                    ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
+                  }}
+                  onMouseLeave={e => {
+                    ;(e.currentTarget as HTMLButtonElement).style.opacity = '0.6'
+                    ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'
+                  }}
+                >
+                  <Info size={11} />
+                </button>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      {infoHarness && (
+        <HarnessInfoModal harness={infoHarness} onClose={() => setInfoHarness(null)} />
+      )}
+    </>
   )
 }
 
