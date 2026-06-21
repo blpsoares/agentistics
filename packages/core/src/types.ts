@@ -222,11 +222,14 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; cach
   'claude-sonnet-4-20250514':   { input: 3,    output: 15,   cacheRead: 0.30, cacheWrite: 3.75  },
   'claude-haiku-3-5-20241022':  { input: 0.80, output: 4,    cacheRead: 0.08, cacheWrite: 1.00  },
   'claude-3-haiku-20240307':    { input: 0.25, output: 1.25, cacheRead: 0.03, cacheWrite: 0.30  },
-  // OpenAI (Codex CLI) — confirm against OpenAI pricing before merge
-  'gpt-5.5':        { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 1.25 },
-  'gpt-5.1':        { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 1.25 },
-  'gpt-5':          { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 1.25 },
+  // OpenAI (Codex CLI) — verified from OpenAI API pricing page, 2026-06-20.
+  // OpenAI has no separate cache-write charge; cacheWrite is set to the input rate
+  // and is unused in practice (the Codex parser always sets cache_creation tokens to 0).
+  'gpt-5.5':        { input: 5,    output: 30, cacheRead: 0.50,  cacheWrite: 5    },
+  'gpt-5.4-mini':   { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0.75 },
+  'gpt-5.4':        { input: 2.5,  output: 15, cacheRead: 0.25,  cacheWrite: 2.5  },
   'gpt-5-mini':     { input: 0.25, output: 2,  cacheRead: 0.025, cacheWrite: 0.25 },
+  'gpt-5':          { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 1.25 },
 }
 
 export function getModelPrice(modelId: string) {
@@ -256,7 +259,8 @@ export function formatModel(modelId: string): string {
     'claude-sonnet-4-5-20250929': 'Sonnet 4.5',
     'claude-haiku-4-5-20251001': 'Haiku 4.5',
     'gpt-5.5': 'GPT-5.5',
-    'gpt-5.1': 'GPT-5.1',
+    'gpt-5.4': 'GPT-5.4',
+    'gpt-5.4-mini': 'GPT-5.4 mini',
     'gpt-5': 'GPT-5',
     'gpt-5-mini': 'GPT-5 mini',
   }
