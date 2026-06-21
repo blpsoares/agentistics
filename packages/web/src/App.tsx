@@ -7,7 +7,7 @@ import {
   Sun, Moon, Globe, AlertTriangle, Download,
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
-  Target, Home, DollarSign, Layers, Code2,
+  Target, Home, DollarSign, Layers, Code2, GitCompare,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -656,13 +656,16 @@ function HarnessSelector({ harnesses, lang }: { harnesses: HarnessId[]; lang: La
   // Only render when there is more than one harness present in the data
   if (harnesses.length <= 1) return null
 
-  const currentHarness: HarnessId | null = location.pathname === '/codex' ? 'codex' : null
+  const harnessMatch = location.pathname.match(/^\/h\/([^/]+)$/)
+  const currentHarness: HarnessId | null = harnessMatch
+    ? (harnessMatch[1] as HarnessId)
+    : null
 
   const handleSelect = (harness: HarnessId | null) => {
     if (harness === null) {
       navigate('/')
     } else {
-      navigate(`/${harness}`)
+      navigate(`/h/${harness}`)
     }
   }
 
@@ -729,7 +732,7 @@ function HarnessSelector({ harnesses, lang }: { harnesses: HarnessId[]; lang: La
   )
 }
 
-function NavTabs({ lang }: { lang: Lang }) {
+function NavTabs({ lang, harnesses }: { lang: Lang; harnesses?: HarnessId[] }) {
   const location = useLocation()
   const pt = lang === 'pt'
 
@@ -739,6 +742,9 @@ function NavTabs({ lang }: { lang: Lang }) {
     { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={12} /> },
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={12} /> },
     { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={12} /> },
+    ...(harnesses && harnesses.length > 1
+      ? [{ to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={12} /> }]
+      : []),
   ]
 
   return (
@@ -1648,7 +1654,7 @@ export default function AppLayout() {
             display: 'flex',
             alignItems: 'center',
           }}>
-            <NavTabs lang={lang} />
+            <NavTabs lang={lang} harnesses={data.harnesses} />
             <HarnessSelector harnesses={data.harnesses} lang={lang} />
           </div>
         )}
