@@ -93,6 +93,48 @@ test('parses legacy Gemini JSON format', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Bootstrap injection filtering
+// ---------------------------------------------------------------------------
+
+const BOOTSTRAP_ONLY_JSONL = [
+  JSON.stringify({ sessionId: 'sess1', startTime: '2026-06-18T10:00:00.000Z', lastUpdated: '2026-06-18T10:00:01.000Z', kind: 'main' }),
+  JSON.stringify({ $set: { messages: [
+    { id: 'b1', timestamp: '2026-06-18T10:00:00.500Z', type: 'user', content: [{ text: '<session_context>\nsome context\n</session_context>' }] },
+  ] } }),
+].join('\n')
+
+test('returns null when the only user message is an injected <session_context> bootstrap', () => {
+  const result = parseGeminiChat(BOOTSTRAP_ONLY_JSONL, 'bootstrap-only', '/proj')
+  expect(result).toBeNull()
+})
+
+test('returns null when the only user message is an injected <environment_context> bootstrap', () => {
+  const envBootstrap = [
+    JSON.stringify({ sessionId: 'sess2', startTime: '2026-06-18T10:00:00.000Z', lastUpdated: '2026-06-18T10:00:01.000Z', kind: 'main' }),
+    JSON.stringify({ $set: { messages: [
+      { id: 'e1', timestamp: '2026-06-18T10:00:00.500Z', type: 'user', content: [{ text: '<environment_context>\nenv info\n</environment_context>' }] },
+    ] } }),
+  ].join('\n')
+  expect(parseGeminiChat(envBootstrap, 'env-bootstrap', '/proj')).toBeNull()
+})
+
+test('returns a SessionMeta with correct counts when a genuine user message and model response are present (bootstrap ignored)', () => {
+  const mixed = [
+    JSON.stringify({ sessionId: 'sess3', startTime: '2026-06-18T10:00:00.000Z', lastUpdated: '2026-06-18T10:02:00.000Z', kind: 'main' }),
+    JSON.stringify({ $set: { messages: [
+      { id: 'b1', timestamp: '2026-06-18T10:00:00.100Z', type: 'user', content: [{ text: '<session_context>\nctx\n</session_context>' }] },
+      { id: 'u1', timestamp: '2026-06-18T10:00:10.000Z', type: 'user', content: [{ text: 'what is 2+2?' }] },
+      { id: 'm1', timestamp: '2026-06-18T10:00:15.000Z', type: 'model', content: [{ text: '4' }] },
+    ] } }),
+  ].join('\n')
+  const s = parseGeminiChat(mixed, 'mixed-id', '/proj')
+  expect(s).not.toBeNull()
+  // Only genuine user message is counted (bootstrap excluded)
+  expect(s!.user_message_count).toBe(1)
+  expect(s!.assistant_message_count).toBe(1)
+})
+
+// ---------------------------------------------------------------------------
 // Edge cases
 // ---------------------------------------------------------------------------
 

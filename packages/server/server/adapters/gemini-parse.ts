@@ -53,7 +53,7 @@ function parseJsonl(content: string, fallbackId: string, projectPath: string): S
 
   // Accumulate unique messages by id across all $set snapshots
   const seenIds = new Set<string>()
-  const allMessages: Array<{ type: string; timestamp?: string }> = []
+  const allMessages: Array<{ type: string; timestamp?: string; text?: string }> = []
 
   for (const raw of lines) {
     let parsed: any
@@ -76,14 +76,15 @@ function parseJsonl(content: string, fallbackId: string, projectPath: string): S
     if (Array.isArray(messages)) {
       for (const msg of messages) {
         const id = msg.id as string | undefined
+        const text = extractMessageText(msg)
         if (id) {
           if (!seenIds.has(id)) {
             seenIds.add(id)
-            allMessages.push({ type: msg.type as string, timestamp: msg.timestamp as string | undefined })
+            allMessages.push({ type: msg.type as string, timestamp: msg.timestamp as string | undefined, text })
           }
         } else {
           // No id: always include (rare case)
-          allMessages.push({ type: msg.type as string, timestamp: msg.timestamp as string | undefined })
+          allMessages.push({ type: msg.type as string, timestamp: msg.timestamp as string | undefined, text })
         }
       }
     }
@@ -109,11 +110,11 @@ function parseLegacyJson(content: string, fallbackId: string, projectPath: strin
 
   const startTime = (parsed.startTime as string | undefined) ?? ''
   const lastUpdated = (parsed.lastUpdated as string | undefined) ?? ''
-  const messages: Array<{ type: string; timestamp?: string }> = []
+  const messages: Array<{ type: string; timestamp?: string; text?: string }> = []
 
   if (Array.isArray(parsed.messages)) {
     for (const msg of parsed.messages) {
-      messages.push({ type: msg.type as string, timestamp: msg.timestamp as string | undefined })
+      messages.push({ type: msg.type as string, timestamp: msg.timestamp as string | undefined, text: extractMessageText(msg) })
     }
   }
 
@@ -131,12 +132,34 @@ function parseLegacyJson(content: string, fallbackId: string, projectPath: strin
 // Shared builder
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Extract the text content from a message object (handles both array and string forms). */
+function extractMessageText(msg: any): string {
+  const content = msg.content
+  if (Array.isArray(content)) {
+    return content.map((c: any) => (typeof c === 'object' && c !== null ? c.text ?? '' : '')).join('')
+  }
+  if (typeof content === 'string') return content
+  return ''
+}
+
+/** Returns true when a user message is a genuine user message (not a bootstrap injection). */
+function isGenuineUserMessage(text: string): boolean {
+  if (!text || text.trim() === '') return false
+  if (text.includes('<session_context>')) return false
+  if (text.includes('<environment_context>')) return false
+  return true
+}
+
 interface ParsedData {
   sessionId: string
   projectPath: string
   startTime: string
   endTime: string
-  messages: Array<{ type: string; timestamp?: string }>
+  messages: Array<{ type: string; timestamp?: string; text?: string }>
   fallbackId: string
 }
 
@@ -148,15 +171,25 @@ function buildSessionMeta(data: ParsedData): SessionMeta | null {
   const messageHours: number[] = []
   const userMessageTimestamps: string[] = []
 
+  // Determine whether this chat has genuine content:
+  // - at least one model/gemini (assistant) response, OR
+  // - at least one genuine user message (non-empty, non-injected bootstrap)
+  let hasGenuineContent = false
+
   for (const msg of messages) {
     const isUser = msg.type === 'user'
     const isAssistant = msg.type === 'model' || msg.type === 'gemini'
 
-    if (isUser) {
-      userMessages++
-      if (msg.timestamp) userMessageTimestamps.push(msg.timestamp)
-    } else if (isAssistant) {
+    if (isAssistant) {
+      hasGenuineContent = true
       assistantMessages++
+    } else if (isUser) {
+      const genuine = isGenuineUserMessage(msg.text ?? '')
+      if (genuine) {
+        hasGenuineContent = true
+        userMessages++
+        if (msg.timestamp) userMessageTimestamps.push(msg.timestamp)
+      }
     }
 
     if (msg.timestamp) {
@@ -164,6 +197,9 @@ function buildSessionMeta(data: ParsedData): SessionMeta | null {
       if (!isNaN(h)) messageHours.push(h)
     }
   }
+
+  // Drop bootstrap-only chats — they are not real sessions
+  if (!hasGenuineContent) return null
 
   const durationMinutes = startTime && endTime
     ? Math.max(0, (new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000)
