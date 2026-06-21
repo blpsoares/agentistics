@@ -90,7 +90,7 @@ function parseJsonl(content: string, fallbackId: string, projectPath: string): S
   }
 
   return buildSessionMeta({
-    sessionId: sessionId || fallbackId,
+    sessionId: fallbackId,
     projectPath,
     startTime,
     endTime: lastUpdated,
@@ -107,7 +107,6 @@ function parseLegacyJson(content: string, fallbackId: string, projectPath: strin
   let parsed: any
   try { parsed = JSON.parse(content) } catch { return null }
 
-  const sessionId = (parsed.sessionId as string | undefined) || fallbackId
   const startTime = (parsed.startTime as string | undefined) ?? ''
   const lastUpdated = (parsed.lastUpdated as string | undefined) ?? ''
   const messages: Array<{ type: string; timestamp?: string }> = []
@@ -119,7 +118,7 @@ function parseLegacyJson(content: string, fallbackId: string, projectPath: strin
   }
 
   return buildSessionMeta({
-    sessionId,
+    sessionId: fallbackId,
     projectPath,
     startTime,
     endTime: lastUpdated,

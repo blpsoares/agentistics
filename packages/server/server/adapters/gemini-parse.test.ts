@@ -33,7 +33,7 @@ test('parses Gemini JSONL streaming format into a SessionMeta', () => {
   expect(s).not.toBeNull()
   expect(s!.harness).toBe('gemini')
   expect(s!._source).toBe('jsonl')
-  expect(s!.session_id).toBe('a2a-server')
+  expect(s!.session_id).toBe('fallback-id')
   expect(s!.project_path).toBe('/home/user/myproject')
   expect(s!.start_time).toBe('2026-06-18T16:31:11.084Z')
   expect(s!.end_time).toBe('2026-06-18T16:33:00.000Z')
@@ -81,7 +81,7 @@ test('parses legacy Gemini JSON format', () => {
   expect(s).not.toBeNull()
   expect(s!.harness).toBe('gemini')
   expect(s!._source).toBe('jsonl')
-  expect(s!.session_id).toBe('6fa861f9-c282-4aef-a436-25f97419462b')
+  expect(s!.session_id).toBe('fallback')
   expect(s!.project_path).toBe('/home/user/prontuario')
   expect(s!.start_time).toBe('2026-02-22T23:59:21.807Z')
   expect(s!.end_time).toBe('2026-02-23T00:04:37.280Z')
@@ -106,6 +106,24 @@ test('falls back to fallbackId when sessionId is missing', () => {
   const line1 = JSON.stringify({ $set: { messages: [{ id: 'x1', timestamp: '2026-01-01T00:00:05.000Z', type: 'user', content: [{ text: 'hi' }] }] } })
   const s = parseGeminiChat([line0, line1].join('\n'), 'my-fallback-id', '/proj')
   expect(s!.session_id).toBe('my-fallback-id')
+})
+
+test('two files with identical header sessionId produce DIFFERENT session_ids when fallbackId differs', () => {
+  // Both files have header sessionId: 'a2a-server' (the shared generic label)
+  // but are different files → different fallbackIds → different session_ids
+  const makeContent = (extra: string) => [
+    JSON.stringify({ sessionId: 'a2a-server', startTime: '2026-06-18T10:00:00.000Z', lastUpdated: '2026-06-18T10:01:00.000Z', kind: 'main' }),
+    JSON.stringify({ $set: { messages: [{ id: `msg-${extra}`, timestamp: '2026-06-18T10:00:05.000Z', type: 'user', content: [{ text: extra }] }] } }),
+  ].join('\n')
+
+  const s1 = parseGeminiChat(makeContent('hello'), 'project-A/chat-001', '/home/user/project-a')
+  const s2 = parseGeminiChat(makeContent('world'), 'project-B/chat-001', '/home/user/project-b')
+
+  expect(s1).not.toBeNull()
+  expect(s2).not.toBeNull()
+  expect(s1!.session_id).toBe('project-A/chat-001')
+  expect(s2!.session_id).toBe('project-B/chat-001')
+  expect(s1!.session_id).not.toBe(s2!.session_id)
 })
 
 test('handles $set messages without id field (no dedup crash)', () => {
