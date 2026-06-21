@@ -102,6 +102,90 @@ function MetricRow({ label, values, format: formatFn, colors }: MetricRowProps) 
   )
 }
 
+const DOW_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function MiniBarChart({ values, color, peakIndex: peak, height = 40 }: {
+  values: number[]
+  color: string
+  peakIndex: number | null
+  height?: number
+}) {
+  const max = Math.max(...values, 1)
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 1, height }}>
+      {values.map((v, i) => {
+        const pct = Math.round((v / max) * 100)
+        const isPeak = i === peak
+        return (
+          <div
+            key={i}
+            title={`${v}`}
+            style={{
+              flex: 1,
+              height: `${Math.max(pct, v > 0 ? 4 : 0)}%`,
+              background: isPeak ? color : `${color}55`,
+              borderRadius: '2px 2px 0 0',
+              minWidth: 2,
+              transition: 'height 0.3s ease-out',
+            }}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+function SparklineChart({ data, color, height = 32 }: {
+  data: { date: string; sessions: number }[]
+  color: string
+  height?: number
+}) {
+  if (data.length === 0) {
+    return (
+      <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>No data</span>
+      </div>
+    )
+  }
+  const max = Math.max(...data.map(d => d.sessions), 1)
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 1, height, overflow: 'hidden' }}>
+      {data.map((d, i) => {
+        const pct = Math.round((d.sessions / max) * 100)
+        return (
+          <div
+            key={i}
+            title={`${d.date}: ${d.sessions} sessions`}
+            style={{
+              flex: 1,
+              height: `${Math.max(pct, d.sessions > 0 ? 4 : 0)}%`,
+              background: `${color}99`,
+              borderRadius: '1px 1px 0 0',
+              minWidth: 1,
+            }}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{
+      background: 'var(--bg-card)',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius-lg)',
+      padding: '20px 22px',
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 16 }}>
+        {title}
+      </div>
+      {children}
+    </div>
+  )
+}
+
 export default function ComparePage() {
   const { data, currency, brlRate } = useOutletContext<AppContext>()
 
@@ -361,6 +445,240 @@ export default function ComparePage() {
           })}
         </div>
       </div>
+
+      {/* Section 1: Usage by hour of day */}
+      <SectionCard title="Usage by hour of day">
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: `repeat(${aggs.length}, 1fr)`,
+          gap: 16,
+        }}>
+          {aggs.map(a => {
+            const s = summaries[a.harness]
+            const totalMsgs = s?.hourCounts.reduce((acc, v) => acc + v, 0) ?? 0
+            return (
+              <div key={a.harness}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: colors[a.harness], marginBottom: 8 }}>
+                  {HARNESS_LABELS[a.harness]}
+                </div>
+                {totalMsgs === 0 ? (
+                  <div style={{ height: 40, display: 'flex', alignItems: 'center' }}>
+                    <NACell />
+                  </div>
+                ) : (
+                  <>
+                    <MiniBarChart
+                      values={s?.hourCounts ?? Array(24).fill(0)}
+                      color={colors[a.harness]}
+                      peakIndex={s?.peakHour ?? null}
+                      height={40}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                      <span style={{ fontSize: 9, color: 'var(--text-tertiary)' }}>0h</span>
+                      <span style={{ fontSize: 10, color: colors[a.harness], fontWeight: 600 }}>
+                        {s?.peakHour !== null && s?.peakHour !== undefined
+                          ? `Peak ${String(s.peakHour).padStart(2, '0')}:00`
+                          : ''}
+                      </span>
+                      <span style={{ fontSize: 9, color: 'var(--text-tertiary)' }}>23h</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </SectionCard>
+
+      {/* Section 2: Busiest day of week */}
+      <SectionCard title="Busiest day of week">
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: `repeat(${aggs.length}, 1fr)`,
+          gap: 16,
+        }}>
+          {aggs.map(a => {
+            const s = summaries[a.harness]
+            const hasData = s && s.dowCounts.some(v => v > 0)
+            return (
+              <div key={a.harness}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: colors[a.harness], marginBottom: 8 }}>
+                  {HARNESS_LABELS[a.harness]}
+                </div>
+                {!hasData ? (
+                  <div style={{ height: 40, display: 'flex', alignItems: 'center' }}>
+                    <NACell />
+                  </div>
+                ) : (
+                  <>
+                    <MiniBarChart
+                      values={s.dowCounts}
+                      color={colors[a.harness]}
+                      peakIndex={s.peakDow}
+                      height={40}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                      {DOW_LABELS.map((label, i) => (
+                        <span
+                          key={label}
+                          style={{
+                            fontSize: 9,
+                            color: i === s.peakDow ? colors[a.harness] : 'var(--text-tertiary)',
+                            fontWeight: i === s.peakDow ? 700 : 400,
+                            flex: 1,
+                            textAlign: 'center',
+                          }}
+                        >
+                          {label.slice(0, 1)}
+                        </span>
+                      ))}
+                    </div>
+                    {s.peakDow !== null && (
+                      <div style={{ fontSize: 11, color: colors[a.harness], fontWeight: 600, marginTop: 6 }}>
+                        Peak: {DOW_LABELS[s.peakDow]}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </SectionCard>
+
+      {/* Section 3: Activity over time */}
+      <SectionCard title="Activity over time">
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: `repeat(${aggs.length}, 1fr)`,
+          gap: 16,
+        }}>
+          {aggs.map(a => {
+            const s = summaries[a.harness]
+            return (
+              <div key={a.harness}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: colors[a.harness], marginBottom: 8 }}>
+                  {HARNESS_LABELS[a.harness]}
+                </div>
+                <SparklineChart
+                  data={s?.dailyActivity ?? []}
+                  color={colors[a.harness]}
+                  height={40}
+                />
+                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 4 }}>
+                  {s && s.dailyActivity.length > 0
+                    ? `${s.dailyActivity[0]!.date.slice(0, 10)} – ${s.dailyActivity[s.dailyActivity.length - 1]!.date.slice(0, 10)}`
+                    : 'No data'}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </SectionCard>
+
+      {/* Section 4: Peaks (token day + session cost) */}
+      <SectionCard title="Peaks">
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={{
+                padding: '0 16px 10px 0',
+                textAlign: 'left',
+                fontSize: 11,
+                fontWeight: 600,
+                color: 'var(--text-tertiary)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.06em',
+                borderBottom: '1px solid var(--border)',
+              }}>
+                Metric
+              </th>
+              {aggs.map(a => (
+                <th key={a.harness} style={{
+                  padding: '0 16px 10px',
+                  textAlign: 'left',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: colors[a.harness],
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em',
+                  borderBottom: `2px solid ${colors[a.harness]}`,
+                  whiteSpace: 'nowrap',
+                }}>
+                  {HARNESS_LABELS[a.harness]}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style={{
+                padding: '12px 16px 12px 0',
+                fontSize: 12,
+                fontWeight: 600,
+                color: 'var(--text-secondary)',
+                whiteSpace: 'nowrap',
+                borderBottom: '1px solid var(--border)',
+              }}>
+                Busiest token day
+              </td>
+              {aggs.map(a => {
+                const s = summaries[a.harness]
+                const ptd = capable(a.harness, 'tokens') ? s?.peakTokenDay : null
+                return (
+                  <td key={a.harness} style={{
+                    padding: '12px 16px',
+                    borderBottom: '1px solid var(--border)',
+                  }}>
+                    {!capable(a.harness, 'tokens') ? (
+                      <NACell />
+                    ) : ptd ? (
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
+                          {fmt(ptd.tokens)}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                          {ptd.date}
+                        </div>
+                      </div>
+                    ) : (
+                      <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>—</span>
+                    )}
+                  </td>
+                )
+              })}
+            </tr>
+            <tr>
+              <td style={{
+                padding: '12px 16px 12px 0',
+                fontSize: 12,
+                fontWeight: 600,
+                color: 'var(--text-secondary)',
+                whiteSpace: 'nowrap',
+              }}>
+                Peak session cost
+              </td>
+              {aggs.map(a => {
+                const s = summaries[a.harness]
+                const psc = capable(a.harness, 'cost') ? s?.peakSessionCost : null
+                return (
+                  <td key={a.harness} style={{ padding: '12px 16px' }}>
+                    {!capable(a.harness, 'cost') ? (
+                      <NACell />
+                    ) : psc !== null && psc !== undefined ? (
+                      <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
+                        {fmtCost(psc, currency, brlRate)}
+                      </div>
+                    ) : (
+                      <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>—</span>
+                    )}
+                  </td>
+                )
+              })}
+            </tr>
+          </tbody>
+        </table>
+      </SectionCard>
 
       {infoHarness && (
         <HarnessInfoModal harness={infoHarness} onClose={() => setInfoHarness(null)} />
