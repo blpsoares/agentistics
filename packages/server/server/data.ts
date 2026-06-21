@@ -585,6 +585,10 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     // (consolidate mode) revive sessions that already vanished from disk. Gap-fill
     // adds only ids no longer present live — never double-counts existing sessions.
     if (mode !== 'off') {
+      // NOTE: this persists the Claude-only `sessions` array; non-Claude harness
+      // sessions are merged in below, AFTER this call, and are intentionally NOT
+      // written to the consolidate store yet. If you move this call below the merge,
+      // you MUST keep the (harness, session_id) dedup at the end or codex double-counts.
       await writeConsolidated(sessions)
     }
     if (mode === 'consolidate') {
@@ -646,10 +650,21 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     }
     sessions.sort((a, b) => b.start_time.localeCompare(a.start_time))
 
-    const totalTokens = sessions.reduce((sum, s) => sum + (s.input_tokens ?? 0) + (s.output_tokens ?? 0), 0)
+    // Final safety net: dedup by (harness, session_id). A no-op today (each session
+    // is pushed once), but guarantees no double-count if non-Claude sessions ever get
+    // revived from the consolidate store in addition to the live adapter merge.
+    const seenHarnessKeys = new Set<string>()
+    const dedupedSessions = sessions.filter(s => {
+      const key = `${s.harness ?? 'claude'}:${s.session_id}`
+      if (seenHarnessKeys.has(key)) return false
+      seenHarnessKeys.add(key)
+      return true
+    })
+
+    const totalTokens = dedupedSessions.reduce((sum, s) => sum + (s.input_tokens ?? 0) + (s.output_tokens ?? 0), 0)
     onProgress('finalizing', 1, String(totalTokens))
 
-    return { statsCache, projects, allSessions: [] as [], sessions, healthIssues, homeDir: HOME_DIR, harnesses: Array.from(harnessSet) }
+    return { statsCache, projects, allSessions: [] as [], sessions: dedupedSessions, healthIssues, homeDir: HOME_DIR, harnesses: Array.from(harnessSet) }
   }
 
   return Promise.race([
