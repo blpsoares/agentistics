@@ -30,3 +30,14 @@ export const CONSOLIDATED_DIR = join(HOME_DIR, '.agentistics', 'sessions')
 // ---------------------------------------------------------------------------
 export const CODEX_DIR = process.env.CODEX_DIR ?? join(HOME_DIR, '.codex')
 export const CODEX_SESSIONS_DIR = join(CODEX_DIR, 'sessions')
+
+// ---------------------------------------------------------------------------
+// Gemini CLI harness. Override with GEMINI_DIR; disable with AGENTISTICS_HARNESS_GEMINI=0.
+// ---------------------------------------------------------------------------
+export const GEMINI_DIR = process.env.GEMINI_DIR ?? join(HOME_DIR, '.gemini')
+
+// ---------------------------------------------------------------------------
+// GitHub Copilot CLI harness. Override with COPILOT_DIR; disable with
+// AGENTISTICS_HARNESS_COPILOT=0.
+// ---------------------------------------------------------------------------
+export const COPILOT_DIR = process.env.COPILOT_DIR ?? join(HOME_DIR, '.copilot')

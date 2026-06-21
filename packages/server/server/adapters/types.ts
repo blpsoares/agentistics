@@ -21,11 +21,13 @@ let _adapters: HarnessAdapter[] | null = null
 
 async function getAllAdapters(): Promise<HarnessAdapter[]> {
   if (_adapters) return _adapters
-  const [{ claudeAdapter }, { codexAdapter }] = await Promise.all([
+  const [{ claudeAdapter }, { codexAdapter }, { geminiAdapter }, { copilotAdapter }] = await Promise.all([
     import('./claude'),
     import('./codex'),
+    import('./gemini'),
+    import('./copilot'),
   ])
-  _adapters = [claudeAdapter, codexAdapter]
+  _adapters = [claudeAdapter, codexAdapter, geminiAdapter, copilotAdapter]
   return _adapters
 }
 
