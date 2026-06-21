@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness } from './useData'
+import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries } from './useData'
 import { format, subDays } from 'date-fns'
 
 // ── calcStreak ────────────────────────────────────────────────────────────────
@@ -160,5 +160,228 @@ describe('filterByHarness', () => {
       { session_id: 'b', harness: 'codex' },
     ] as any
     expect(filterByHarness(mixed, 'claude').map((s: any) => s.session_id)).toEqual(['a'])
+  })
+})
+
+
+// ── computeHarnessSummaries ───────────────────────────────────────────────────
+
+describe('computeHarnessSummaries', () => {
+  function makeAppData(overrides: Partial<import('@agentistics/core').AppData> = {}): import('@agentistics/core').AppData {
+    return {
+      statsCache: {
+        version: 1,
+        lastComputedDate: '2026-06-10',
+        dailyActivity: [
+          { date: '2026-06-08', sessionCount: 5, messageCount: 20, toolCallCount: 30 },
+          { date: '2026-06-09', sessionCount: 3, messageCount: 12, toolCallCount: 15 },
+        ],
+        dailyModelTokens: [],
+        modelUsage: {
+          'claude-sonnet-4-5': {
+            inputTokens: 100_000,
+            outputTokens: 20_000,
+            cacheReadInputTokens: 5_000,
+            cacheCreationInputTokens: 2_000,
+            webSearchRequests: 0,
+            costUSD: 0,
+          },
+        },
+        totalSessions: 8,
+        totalMessages: 32,
+        longestSession: { sessionId: 'x', duration: 60, messageCount: 10, timestamp: '2026-06-09T10:00:00Z' },
+        firstSessionDate: '2026-06-08',
+        hourCounts: {},
+        totalSpeculationTimeSavedMs: 0,
+      },
+      sessions: [
+        // Claude session on a day ALREADY in statsCache — should NOT count as gap
+        {
+          session_id: 'c1',
+          harness: 'claude',
+          start_time: '2026-06-09T10:00:00Z',
+          user_message_count: 3,
+          assistant_message_count: 3,
+          input_tokens: 500,
+          output_tokens: 200,
+          project_path: '/p',
+          duration_minutes: 5,
+          tool_counts: {},
+          tool_output_tokens: {},
+          agent_file_reads: {},
+          languages: [],
+          git_commits: 0,
+          git_pushes: 0,
+          first_prompt: '',
+          user_interruptions: 0,
+          user_response_times: [],
+          tool_errors: 0,
+          tool_error_categories: {},
+          uses_task_agent: false,
+          uses_mcp: false,
+          uses_web_search: false,
+          uses_web_fetch: false,
+          lines_added: 0,
+          lines_removed: 0,
+          files_modified: 0,
+          message_hours: [],
+          user_message_timestamps: [],
+        },
+        // Claude session on a GAP day (not in statsCache) — should count
+        {
+          session_id: 'c2',
+          harness: 'claude',
+          start_time: '2026-06-10T10:00:00Z',
+          user_message_count: 4,
+          assistant_message_count: 4,
+          input_tokens: 800,
+          output_tokens: 300,
+          project_path: '/p',
+          duration_minutes: 7,
+          tool_counts: {},
+          tool_output_tokens: {},
+          agent_file_reads: {},
+          languages: [],
+          git_commits: 0,
+          git_pushes: 0,
+          first_prompt: '',
+          user_interruptions: 0,
+          user_response_times: [],
+          tool_errors: 0,
+          tool_error_categories: {},
+          uses_task_agent: false,
+          uses_mcp: false,
+          uses_web_search: false,
+          uses_web_fetch: false,
+          lines_added: 0,
+          lines_removed: 0,
+          files_modified: 0,
+          message_hours: [],
+          user_message_timestamps: [],
+        },
+        // Codex sessions
+        {
+          session_id: 'x1',
+          harness: 'codex',
+          start_time: '2026-06-10T08:00:00Z',
+          user_message_count: 2,
+          assistant_message_count: 2,
+          input_tokens: 1000,
+          output_tokens: 400,
+          model: 'gpt-4o',
+          project_path: '/q',
+          duration_minutes: 3,
+          tool_counts: {},
+          tool_output_tokens: {},
+          agent_file_reads: {},
+          languages: [],
+          git_commits: 0,
+          git_pushes: 0,
+          first_prompt: '',
+          user_interruptions: 0,
+          user_response_times: [],
+          tool_errors: 0,
+          tool_error_categories: {},
+          uses_task_agent: false,
+          uses_mcp: false,
+          uses_web_search: false,
+          uses_web_fetch: false,
+          lines_added: 0,
+          lines_removed: 0,
+          files_modified: 0,
+          message_hours: [],
+          user_message_timestamps: [],
+        },
+        {
+          session_id: 'x2',
+          harness: 'codex',
+          start_time: '2026-06-11T09:00:00Z',
+          user_message_count: 1,
+          assistant_message_count: 1,
+          input_tokens: 500,
+          output_tokens: 200,
+          model: 'gpt-4o',
+          project_path: '/q',
+          duration_minutes: 2,
+          tool_counts: {},
+          tool_output_tokens: {},
+          agent_file_reads: {},
+          languages: [],
+          git_commits: 0,
+          git_pushes: 0,
+          first_prompt: '',
+          user_interruptions: 0,
+          user_response_times: [],
+          tool_errors: 0,
+          tool_error_categories: {},
+          uses_task_agent: false,
+          uses_mcp: false,
+          uses_web_search: false,
+          uses_web_fetch: false,
+          lines_added: 0,
+          lines_removed: 0,
+          files_modified: 0,
+          message_hours: [],
+          user_message_timestamps: [],
+        },
+      ] as import('@agentistics/core').SessionMeta[],
+      projects: [],
+      allSessions: [],
+      harnesses: ['claude', 'codex'],
+      ...overrides,
+    }
+  }
+
+  test('claude sessions come from statsCache sum + gap days (not raw session count)', () => {
+    const data = makeAppData()
+    const summaries = computeHarnessSummaries(data)
+
+    // statsCache has 5+3=8 sessions. Gap day (2026-06-10) adds 1 more.
+    // Raw data.sessions has 2 claude sessions — must NOT use that number.
+    expect(summaries['claude'].sessions).toBe(9)
+  })
+
+  test('claude sessions does not double-count statsCache days', () => {
+    const data = makeAppData()
+    const summaries = computeHarnessSummaries(data)
+
+    // Session c1 is on 2026-06-09, which IS in statsCache — should not add 1
+    // Session c2 is on 2026-06-10, which is NOT in statsCache — should add 1
+    // So: 8 (statsCache base) + 1 (gap) = 9
+    expect(summaries['claude'].sessions).toBe(9)
+  })
+
+  test('codex sessions uses per-session count', () => {
+    const data = makeAppData()
+    const summaries = computeHarnessSummaries(data)
+    expect(summaries['codex'].sessions).toBe(2)
+  })
+
+  test('codex messages are summed correctly', () => {
+    const data = makeAppData()
+    const summaries = computeHarnessSummaries(data)
+    // x1: 2+2=4, x2: 1+1=2 → total 6
+    expect(summaries['codex'].messages).toBe(6)
+  })
+
+  test('claude tokens come from statsCache.modelUsage', () => {
+    const data = makeAppData()
+    const summaries = computeHarnessSummaries(data)
+    expect(summaries['claude'].inputTokens).toBe(100_000)
+    expect(summaries['claude'].outputTokens).toBe(20_000)
+  })
+
+  test('only harnesses in data.harnesses appear in result', () => {
+    const data = makeAppData({ harnesses: ['claude'] })
+    const summaries = computeHarnessSummaries(data)
+    expect('claude' in summaries).toBe(true)
+    expect('codex' in summaries).toBe(false)
+  })
+
+  test('claude costUSD uses calcCost on statsCache.modelUsage (no inline math)', () => {
+    const data = makeAppData()
+    const summaries = computeHarnessSummaries(data)
+    // Just assert it's a positive number — the exact value depends on model pricing
+    expect(summaries['claude'].costUSD).toBeGreaterThan(0)
   })
 })

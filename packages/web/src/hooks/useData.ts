@@ -194,6 +194,88 @@ export function filterByHarness<T extends { harness?: HarnessId }>(sessions: T[]
   return sessions.filter(s => (s.harness ?? 'claude') === harness)
 }
 
+/**
+ * Compute per-harness summary totals — pure function, no hooks.
+ *
+ * For 'claude': sessions = statsCache.dailyActivity sum + gap days (days with Claude
+ * sessions in data.sessions whose date is NOT already covered by statsCache.dailyActivity).
+ * This mirrors the `allTimeTotalSessions` claude branch in useDerivedStats exactly so the
+ * Compare page always matches the main dashboard SESSIONS KPI.
+ *
+ * For non-claude harnesses: pure per-session sums (statsCache has no data for them).
+ *
+ * Only harnesses present in data.harnesses are included in the output.
+ */
+export function computeHarnessSummaries(
+  data: import('@agentistics/core').AppData,
+): Record<HarnessId, { sessions: number; messages: number; inputTokens: number; outputTokens: number; costUSD: number }> {
+  const result = {} as Record<HarnessId, { sessions: number; messages: number; inputTokens: number; outputTokens: number; costUSD: number }>
+
+  for (const harness of data.harnesses) {
+    if (harness === 'claude') {
+      // ── Claude: use statsCache as canonical source (survives 30-day cleanup) ──
+      const allDailyDates = new Set((data.statsCache.dailyActivity ?? []).map(d => d.date))
+      const claudeBase = (data.statsCache.dailyActivity ?? []).reduce((s, d) => s + d.sessionCount, 0)
+      const messageBase = (data.statsCache.dailyActivity ?? []).reduce((s, d) => s + d.messageCount, 0)
+
+      // Gap days: Claude sessions in data.sessions whose date is NOT in statsCache.dailyActivity
+      let claudeGapSessions = 0
+      let claudeGapMessages = 0
+      for (const s of data.sessions) {
+        if ((s.harness ?? 'claude') !== 'claude') continue
+        if (!s.start_time) continue
+        const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
+        if (!allDailyDates.has(day)) {
+          claudeGapSessions += 1
+          claudeGapMessages += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
+        }
+      }
+
+      // Tokens and cost from statsCache.modelUsage (all-time Claude totals)
+      const modelUsage = data.statsCache.modelUsage ?? {}
+      const inputTokens = Object.values(modelUsage).reduce((s, u) => s + (u.inputTokens ?? 0), 0)
+      const outputTokens = Object.values(modelUsage).reduce((s, u) => s + (u.outputTokens ?? 0), 0)
+      const costUSD = Object.entries(modelUsage).reduce((s, [modelId, u]) => s + calcCost(u, modelId), 0)
+
+      result['claude'] = {
+        sessions: claudeBase + claudeGapSessions,
+        messages: messageBase + claudeGapMessages,
+        inputTokens,
+        outputTokens,
+        costUSD,
+      }
+    } else {
+      // ── Non-Claude: pure per-session sums (no statsCache data for these harnesses) ──
+      const harnessSessions = data.sessions.filter(s => s.harness === harness)
+      let sessions = harnessSessions.length
+      let messages = 0
+      let inputTokens = 0
+      let outputTokens = 0
+      let costUSD = 0
+
+      for (const s of harnessSessions) {
+        messages += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
+        inputTokens += s.input_tokens ?? 0
+        outputTokens += s.output_tokens ?? 0
+        if (s.model) {
+          costUSD += calcCost({
+            inputTokens: s.input_tokens ?? 0,
+            outputTokens: s.output_tokens ?? 0,
+            cacheReadInputTokens: s.cache_read_input_tokens ?? 0,
+            cacheCreationInputTokens: s.cache_creation_input_tokens ?? 0,
+            webSearchRequests: 0,
+            costUSD: 0,
+          }, s.model)
+        }
+      }
+
+      result[harness] = { sessions, messages, inputTokens, outputTokens, costUSD }
+    }
+  }
+
+  return result
+}
+
 export function useDerivedStats(data: AppData | null, filters: Filters) {
   return useMemo(() => {
     if (!data) return null

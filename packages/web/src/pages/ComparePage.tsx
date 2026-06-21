@@ -3,8 +3,9 @@ import { useOutletContext } from 'react-router-dom'
 import { GitCompare } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import type { HarnessId } from '@agentistics/core'
-import { calcCost, fmt, fmtCost } from '@agentistics/core'
+import { fmt, fmtCost } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
+import { computeHarnessSummaries } from '../hooks/useData'
 
 interface HarnessAgg {
   harness: HarnessId
@@ -103,41 +104,29 @@ function MetricRow({ label, values, format: formatFn, colors }: MetricRowProps) 
 export default function ComparePage() {
   const { data, currency, brlRate } = useOutletContext<AppContext>()
 
+  const summaries = useMemo(() => computeHarnessSummaries(data), [data])
+
   const aggs = useMemo<HarnessAgg[]>(() => {
     return data.harnesses.map(harness => {
-      const sessions = data.sessions.filter(s => s.harness === harness)
-      let inputTokens = 0
-      let outputTokens = 0
-      let costUSD = 0
-      let messages = 0
-      let lastActive: string | null = null
-
-      for (const s of sessions) {
-        messages += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
-        if (capable(harness, 'tokens')) {
-          inputTokens += s.input_tokens ?? 0
-          outputTokens += s.output_tokens ?? 0
-        }
-        if (capable(harness, 'cost') && s.model) {
-          costUSD += calcCost(
-            {
-              inputTokens: s.input_tokens ?? 0,
-              outputTokens: s.output_tokens ?? 0,
-              cacheReadInputTokens: s.cache_read_input_tokens ?? 0,
-              cacheCreationInputTokens: s.cache_creation_input_tokens ?? 0,
-              webSearchRequests: 0,
-              costUSD: 0,
-            },
-            s.model,
-          )
-        }
-        const t = s.end_time ?? s.start_time
-        if (t && (!lastActive || t > lastActive)) lastActive = t
+      const s = summaries[harness] ?? { sessions: 0, messages: 0, inputTokens: 0, outputTokens: 0, costUSD: 0 }
+      // lastActive is still derived from raw sessions (per-session field, no statsCache equivalent)
+      const lastActive = data.sessions
+        .filter(sess => (sess.harness ?? 'claude') === harness)
+        .reduce<string | null>((best, sess) => {
+          const t = sess.end_time ?? sess.start_time
+          return t && (!best || t > best) ? t : best
+        }, null)
+      return {
+        harness,
+        sessions: s.sessions,
+        messages: s.messages,
+        inputTokens: capable(harness, 'tokens') ? s.inputTokens : 0,
+        outputTokens: capable(harness, 'tokens') ? s.outputTokens : 0,
+        costUSD: capable(harness, 'cost') ? s.costUSD : 0,
+        lastActive,
       }
-
-      return { harness, sessions: sessions.length, messages, inputTokens, outputTokens, costUSD, lastActive }
     })
-  }, [data.sessions, data.harnesses])
+  }, [data, summaries])
 
   const colors = HARNESS_COLORS
 
