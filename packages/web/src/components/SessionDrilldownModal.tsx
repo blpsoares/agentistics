@@ -55,8 +55,8 @@ function fmtAgentDuration(ms: number): string {
   return rem > 0 ? `${m}m ${rem}s` : `${m}m`
 }
 
-function sessionCost(session: SessionMeta, globalModelUsage: Props['globalModelUsage']): number {
-  // If the session has an explicit model, use exact pricing; else fallback to blended input/output
+function sessionCost(session: SessionMeta, globalModelUsage: Props['globalModelUsage']): number | null {
+  // If the session has an explicit model, use exact pricing for any harness.
   if (session.model) {
     return calcCost(
       {
@@ -70,6 +70,11 @@ function sessionCost(session: SessionMeta, globalModelUsage: Props['globalModelU
       session.model,
     )
   }
+  // No model on this session.
+  // For Claude, fall back to the statsCache blended rate (it's Claude-only data, so safe to use).
+  // For any other harness, the Claude blended rate would be misleading — return null (N/A).
+  const harness = session.harness ?? 'claude'
+  if (harness !== 'claude') return null
   const blended = blendedCostPerToken(globalModelUsage)
   return ((session.input_tokens ?? 0) / 1_000_000) * blended.input
        + ((session.output_tokens ?? 0) / 1_000_000) * blended.output
@@ -276,7 +281,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
               <Kpi
                 icon={<span style={{ fontSize: 10, fontWeight: 800 }}>$</span>}
                 label={pt ? 'Custo' : 'Cost'}
-                value={fmtCost(cost, currency, brlRate)}
+                value={cost !== null ? fmtCost(cost, currency, brlRate) : 'N/A'}
                 accent="var(--anthropic-orange)"
               />
             </div>

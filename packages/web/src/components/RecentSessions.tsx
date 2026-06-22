@@ -117,6 +117,35 @@ function Chip({
   )
 }
 
+function HarnessBadge({ harness }: { harness?: string }) {
+  // Only show badge for non-Claude harnesses — Claude is the default and needs no label
+  if (!harness || harness === 'claude') return null
+  const color = (HARNESS_COLORS as Record<string, string>)[harness] ?? '#888'
+  const label = (HARNESS_LABELS as Record<string, string>)[harness] ?? harness
+  return (
+    <span
+      title={label}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        padding: '1px 5px',
+        borderRadius: 999,
+        fontSize: 9,
+        fontWeight: 600,
+        letterSpacing: 0.3,
+        lineHeight: 1.6,
+        background: `${color}22`,
+        color,
+        border: `1px solid ${color}55`,
+        flexShrink: 0,
+        textTransform: 'uppercase',
+      }}
+    >
+      {label}
+    </span>
+  )
+}
+
 function SourceDot({ source }: { source?: 'meta' | 'jsonl' | 'subdir' }) {
   if (!source) return null
   const colors: Record<string, string> = {
@@ -444,6 +473,7 @@ export function RecentSessions({ sessions, lang, onSelect }: Props) {
                       }}
                     >
                       <SourceDot source={s._source} />
+                      <HarnessBadge harness={s.harness} />
                       <span
                         style={{
                           overflow: 'hidden',
