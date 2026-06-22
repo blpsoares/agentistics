@@ -147,7 +147,7 @@ export default function HomePage() {
 
       {/* Highlights */}
       <Section flashId="highlights" title={<><Trophy size={14} /> {lang === 'pt' ? 'Recordes' : 'Highlights'}</>}>
-        <HighlightsBoard sessions={derived.filteredSessions} projects={data.projects as any} lang={lang} />
+        <HighlightsBoard sessions={derived.filteredSessions} projects={data.projects as any} lang={lang} harness={filters.harness} />
       </Section>
 
       {/* Activity + Heatmap */}
@@ -186,12 +186,12 @@ export default function HomePage() {
 
       {/* Budget */}
       <Section flashId="budget" title={<><Target size={14} /> {lang === 'pt' ? 'Orçamento & projeção' : 'Budget & forecast'}</>}>
-        <BudgetPanel statsCache={statsCache} budgetUSD={monthlyBudgetUSD} onBudgetChange={updateBudget} currency={currency} brlRate={brlRate} lang={lang} />
+        <BudgetPanel statsCache={statsCache} budgetUSD={monthlyBudgetUSD} onBudgetChange={updateBudget} currency={currency} brlRate={brlRate} lang={lang} harness={filters.harness} />
       </Section>
 
       {/* Cache — full width */}
       <Section flashId="cache" title={<><Zap size={14} /> {lang === 'pt' ? 'Eficiência de cache' : 'Cache efficiency'}</>}>
-        <CacheHitRatePanel hitRate={derived.cacheHitRate} cacheTotals={derived.cacheTotals} grossSavedUSD={derived.cacheGrossSavedUSD} writeOverheadUSD={derived.cacheWriteOverheadUSD} netSavedUSD={derived.cacheNetSavedUSD} perModel={derived.cachePerModel} currency={currency} brlRate={brlRate} lang={lang} />
+        <CacheHitRatePanel hitRate={derived.cacheHitRate} cacheTotals={derived.cacheTotals} grossSavedUSD={derived.cacheGrossSavedUSD} writeOverheadUSD={derived.cacheWriteOverheadUSD} netSavedUSD={derived.cacheNetSavedUSD} perModel={derived.cachePerModel} currency={currency} brlRate={brlRate} lang={lang} harness={filters.harness} />
       </Section>
 
       {/* Projects + Languages */}
