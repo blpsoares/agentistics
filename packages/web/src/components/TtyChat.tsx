@@ -19,7 +19,7 @@ type NayAttachment = {
   isImage: boolean
   preview?: string
 }
-import { ClaudeChat } from './ClaudeChat'
+import { HarnessChat } from './HarnessChat'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
 import type { HarnessId } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
@@ -762,7 +762,6 @@ function saveNaySize(size: { w: number; h: number }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-import type { ChatMessage as ClaudeChatMessage } from './ClaudeChat'
 
 interface TtyChatProps {
   lang: Lang
@@ -779,11 +778,11 @@ interface TtyChatProps {
   onPdfExport?: (range: string) => void
   claudeSharedState?: {
     projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
-    sessionId: string | null; messages: ClaudeChatMessage[]; model?: ChatModelId
+    sessionId: string | null; messages: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[]; images?: string[]; files?: string[] }>; model?: ChatModelId
   }
   onClaudeStateChange?: (s: {
     projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
-    sessionId: string | null; messages: ClaudeChatMessage[]; model?: ChatModelId
+    sessionId: string | null; messages: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[]; images?: string[]; files?: string[] }>; model?: ChatModelId
   }) => void
 }
 
@@ -855,6 +854,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
   const [nayThinking, setNayThinking] = useState<ThinkingBudget>(false)
   const [showNayModelPicker, setShowNayModelPicker] = useState(false)
   const [claudeCurrentModel, setClaudeCurrentModel] = useState<ChatModelId>(DEFAULT_CHAT_MODEL)
+  const [pendingHarnessSessionId, setPendingHarnessSessionId] = useState<string | null>(null)
   // Track which historical Nay session is being viewed (for live polling)
   const [viewedNaySessionId, setViewedNaySessionId] = useState<string | null>(null)
 
@@ -956,56 +956,18 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
             .finally(() => setHistoryLoading(false))
         }
       } else if (tab === 'claude' && project) {
-        if (targetSessionId) {
-          // Fetch messages FIRST, then switch tab so ClaudeChat mounts with data ready
-          fetch(`/api/claude-sessions/${targetSessionId}?encodedDir=${encodeURIComponent(project.encodedDir)}`)
-            .then(r => r.ok ? r.json() : [])
-            .then((msgs: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[] }>) => {
-              onClaudeStateChange?.({
-                projectPath: project.path,
-                projectName: project.name,
-                projectEncodedDir: project.encodedDir,
-                sessionId: targetSessionId,
-                messages: msgs,
-              })
-              setClaudeResetKey(k => k + 1)
-              setActiveTab('claude')
-            })
-            .catch(() => {
-              onClaudeStateChange?.({
-                projectPath: project.path,
-                projectName: project.name,
-                projectEncodedDir: project.encodedDir,
-                sessionId: targetSessionId,
-                messages: [],
-              })
-              setClaudeResetKey(k => k + 1)
-              setActiveTab('claude')
-            })
-        } else {
-          onClaudeStateChange?.({
-            projectPath: project.path,
-            projectName: project.name,
-            projectEncodedDir: project.encodedDir,
-            sessionId: null,
-            messages: [],
-          })
-          setClaudeResetKey(k => k + 1)
-          setActiveTab('claude')
-        }
+        onClaudeStateChange?.({
+          projectPath: project.path,
+          projectName: project.name,
+          projectEncodedDir: project.encodedDir,
+          sessionId: targetSessionId ?? null,
+          messages: [],
+        })
+        setClaudeResetKey(k => k + 1)
+        setActiveTab('claude')
       } else if (tab !== 'claude' && targetSessionId) {
-        // codex / gemini / copilot — fetch from per-harness endpoint
-        setError(null)
-        setHistoryLoading(true)
-        fetch(`/api/${tab}-sessions/${encodeURIComponent(targetSessionId)}`)
-          .then(r => r.ok ? r.json() : [])
-          .then((msgs: RawSessionMessage[]) => {
-            setMessages(expandHistoryBlob(msgs))
-            setSessionId(targetSessionId)
-            setActiveTab(tab)
-          })
-          .catch(() => {})
-          .finally(() => setHistoryLoading(false))
+        setPendingHarnessSessionId(targetSessionId)
+        setActiveTab(tab)
       }
     }
     window.addEventListener('agentistics:open-chat', handler)
@@ -2102,53 +2064,35 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
           </>}
 
           {!claudeDetached && activeTab === 'claude' && (
-            <ClaudeChat
+            <HarnessChat
               key={claudeResetKey}
-              embedded
+              harness="claude"
               lang={lang}
-              onDetach={() => { onDetachClaude?.(); setActiveTab('nay') }}
               initialProject={claudeSharedState?.projectPath ? {
                 path: claudeSharedState.projectPath,
                 name: claudeSharedState.projectName ?? '',
                 encodedDir: claudeSharedState.projectEncodedDir ?? '',
               } : null}
               initialSessionId={claudeSharedState?.sessionId ?? null}
-              initialMessages={claudeSharedState?.messages ?? []}
-              onStateChange={(s) => { if (s.model) setClaudeCurrentModel(s.model); onClaudeStateChange?.(s) }}
+              onStateChange={(s) => {
+                onClaudeStateChange?.({
+                  projectPath: s.projectPath,
+                  projectName: s.projectName,
+                  projectEncodedDir: s.projectEncodedDir,
+                  sessionId: s.sessionId,
+                  messages: [],
+                })
+              }}
             />
           )}
 
           {activeTab !== 'nay' && activeTab !== 'claude' && (
-            <div ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 14px 6px' }}>
-              {historyLoading && (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-tertiary)' }}>
-                  <Loader size={16} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
-                </div>
-              )}
-              {!historyLoading && messages.length === 0 && (
-                <div style={{
-                  height: '100%', display: 'flex', flexDirection: 'column',
-                  alignItems: 'center', justifyContent: 'center',
-                  gap: 10, color: 'var(--text-tertiary)', textAlign: 'center', padding: '0 20px',
-                }}>
-                  <div style={{ width: 36, height: 36, borderRadius: '50%', background: HARNESS_COLORS[activeTab as HarnessId] + '33', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <div style={{ width: 16, height: 16, borderRadius: '50%', background: HARNESS_COLORS[activeTab as HarnessId] }} />
-                  </div>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{HARNESS_LABELS[activeTab as HarnessId]}</div>
-                  <div style={{ fontSize: 11, opacity: 0.7 }}>{pt ? 'Nenhuma mensagem' : 'No messages'}</div>
-                </div>
-              )}
-              {!historyLoading && messages.map((msg, i) => (
-                <Message
-                  key={i}
-                  msg={msg}
-                  onRun={execCmd}
-                  onNavigate={handleNavigate}
-                  onPdfExport={onPdfExport}
-                  pt={pt}
-                />
-              ))}
-            </div>
+            <HarnessChat
+              key={activeTab + '-' + (pendingHarnessSessionId ?? '')}
+              harness={activeTab as HarnessId}
+              lang={lang}
+              initialSessionId={pendingHarnessSessionId}
+            />
           )}
 
         </div>
