@@ -61,12 +61,6 @@ function computeMonthCost(statsCache: StatsCache, monthStart: Date, now: Date): 
 }
 
 export function BudgetPanel({ statsCache, budgetUSD, onBudgetChange, currency, brlRate, lang, harness }: Props) {
-  // BudgetPanel reads the Claude stats-cache (Claude-only aggregate data).
-  // Showing it for a non-claude harness would mislead the user into thinking
-  // they're seeing that harness's spend. Show N/A for any non-claude harness.
-  if (harness && harness !== 'claude') {
-    return <NAtag harness={harness} label="Budget & forecast" />
-  }
   const pt = lang === 'pt'
   const [editing, setEditing] = useState(false)
   const displayBudget = budgetUSD !== null
@@ -90,6 +84,13 @@ export function BudgetPanel({ statsCache, budgetUSD, onBudgetChange, currency, b
       monthLabel: formatter.format(now),
     }
   }, [statsCache, pt])
+
+  // BudgetPanel reads the Claude stats-cache (Claude-only aggregate data).
+  // Showing it for a non-claude harness would mislead the user into thinking
+  // they're seeing that harness's spend. Show N/A for any non-claude harness.
+  if (harness && harness !== 'claude') {
+    return <NAtag harness={harness} label="Budget & forecast" />
+  }
 
   function save() {
     const v = parseFloat(draft.replace(',', '.'))
