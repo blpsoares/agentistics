@@ -1,11 +1,10 @@
-import React, { useMemo, useState } from 'react'
+import React, { useMemo } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { GitCompare, Info } from 'lucide-react'
+import { GitCompare } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import type { HarnessId } from '@agentistics/core'
 import { fmt, fmtCost } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
-import { HarnessInfoModal } from '../components/HarnessInfoModal'
 import { computeHarnessSummaries } from '../hooks/useData'
 
 interface HarnessAgg {
@@ -214,7 +213,6 @@ export default function ComparePage() {
   }, [data, summaries])
 
   const colors = HARNESS_COLORS
-  const [infoHarness, setInfoHarness] = useState<HarnessId | null>(null)
 
   const tokensValues = aggs.map(a => ({
     harness: a.harness,
@@ -259,37 +257,18 @@ export default function ComparePage() {
             padding: '16px 18px',
             borderTop: `3px solid ${colors[a.harness]}`,
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{
-                  display: 'inline-block',
-                  width: 10,
-                  height: 10,
-                  borderRadius: '50%',
-                  background: colors[a.harness],
-                  flexShrink: 0,
-                }} />
-                <span style={{ fontSize: 13, fontWeight: 700, color: colors[a.harness] }}>
-                  {HARNESS_LABELS[a.harness]}
-                </span>
-              </div>
-              <button
-                onClick={e => { e.stopPropagation(); setInfoHarness(a.harness) }}
-                title={`About ${HARNESS_LABELS[a.harness]} data`}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  width: 22, height: 22,
-                  background: 'transparent',
-                  border: '1px solid var(--border)',
-                  borderRadius: 5,
-                  color: 'var(--text-tertiary)',
-                  cursor: 'pointer',
-                  flexShrink: 0,
-                  padding: 0,
-                }}
-              >
-                <Info size={11} />
-              </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <span style={{
+                display: 'inline-block',
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                background: colors[a.harness],
+                flexShrink: 0,
+              }} />
+              <span style={{ fontSize: 13, fontWeight: 700, color: colors[a.harness] }}>
+                {HARNESS_LABELS[a.harness]}
+              </span>
             </div>
             <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
               {a.sessions.toLocaleString()}
@@ -679,10 +658,6 @@ export default function ComparePage() {
           </tbody>
         </table>
       </SectionCard>
-
-      {infoHarness && (
-        <HarnessInfoModal harness={infoHarness} onClose={() => setInfoHarness(null)} />
-      )}
     </>
   )
 }
