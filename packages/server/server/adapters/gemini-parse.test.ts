@@ -2,6 +2,147 @@ import { test, expect } from 'bun:test'
 import { parseGeminiChat } from './gemini-parse'
 
 // ---------------------------------------------------------------------------
+// Rich JSON format — the real format used by Gemini CLI for actual conversations.
+// Top-level object with messages[] array; each 'gemini' message carries tokens/model.
+// ---------------------------------------------------------------------------
+
+const RICH_JSON_SAMPLE = JSON.stringify({
+  sessionId: '6fa861f9-c282-4aef-a436-25f97419462b',
+  projectHash: '77a9ebd06022bf0a99faf27b9827fa74aca9cad82e5c90a97d10e623ea36d2bd',
+  startTime: '2026-02-22T23:59:21.807Z',
+  lastUpdated: '2026-02-23T00:04:37.280Z',
+  messages: [
+    {
+      id: 'msg-u1',
+      timestamp: '2026-02-22T23:59:21.807Z',
+      type: 'user',
+      content: [
+        { text: 'fix the typing error in security.middleware.test.ts' },
+        { text: '\n--- Content from referenced files ---' },
+      ],
+      displayContent: [
+        { text: 'fix the typing error in security.middleware.test.ts' },
+      ],
+    },
+    {
+      id: 'msg-g1',
+      timestamp: '2026-02-22T23:59:34.417Z',
+      type: 'gemini',
+      content: 'I will start by investigating the reported typing error.',
+      thoughts: [{ subject: 'Inspecting', description: 'Looking at the error.', timestamp: '2026-02-22T23:59:24.468Z' }],
+      tokens: { input: 9651, output: 84, cached: 3190, thoughts: 478, tool: 0, total: 10213 },
+      model: 'gemini-3-flash-preview',
+      toolCalls: [
+        { id: 'tc-1', name: 'run_shell_command', args: { command: 'bun test ...' }, status: 'success', timestamp: '2026-02-22T23:59:37.713Z' },
+      ],
+    },
+    {
+      id: 'msg-g2',
+      timestamp: '2026-02-22T23:59:42.282Z',
+      type: 'gemini',
+      content: "I'll examine the security middleware.",
+      thoughts: [],
+      tokens: { input: 11058, output: 53, cached: 9495, thoughts: 119, tool: 0, total: 11230 },
+      model: 'gemini-3-flash-preview',
+      toolCalls: [
+        { id: 'tc-2', name: 'read_file', args: {}, status: 'success', timestamp: '2026-02-22T23:59:50.000Z' },
+        { id: 'tc-3', name: 'run_shell_command', args: {}, status: 'success', timestamp: '2026-02-22T23:59:55.000Z' },
+      ],
+    },
+    {
+      id: 'msg-info1',
+      timestamp: '2026-02-23T00:00:00.000Z',
+      type: 'info',
+      content: 'Tool result',
+    },
+    {
+      id: 'msg-u2',
+      timestamp: '2026-02-23T00:04:37.280Z',
+      type: 'user',
+      content: [{ text: 'thanks, that fixed it!' }],
+      displayContent: [{ text: 'thanks, that fixed it!' }],
+    },
+  ],
+})
+
+test('parses rich Gemini JSON format with tokens and model', () => {
+  const s = parseGeminiChat(RICH_JSON_SAMPLE, 'fallback-rich', '/home/user/prontuario')
+  expect(s).not.toBeNull()
+  expect(s!.harness).toBe('gemini')
+  expect(s!._source).toBe('jsonl')
+  expect(s!.session_id).toBe('fallback-rich')
+  expect(s!.project_path).toBe('/home/user/prontuario')
+  expect(s!.start_time).toBe('2026-02-22T23:59:21.807Z')
+  expect(s!.end_time).toBe('2026-02-23T00:04:37.280Z')
+  // 2 genuine user messages, 2 gemini responses, 1 info (skipped)
+  expect(s!.user_message_count).toBe(2)
+  expect(s!.assistant_message_count).toBe(2)
+  // Token sums across all gemini messages: input=9651+11058=20709, output=84+53=137, cached=3190+9495=12685
+  expect(s!.input_tokens).toBe(20709)
+  expect(s!.output_tokens).toBe(137)
+  expect(s!.cache_read_input_tokens).toBe(12685)
+  // Model from gemini messages
+  expect(s!.model).toBe('gemini-3-flash-preview')
+  // first_prompt from displayContent of first user message
+  expect(s!.first_prompt).toBe('fix the typing error in security.middleware.test.ts')
+  // message_hours: user1 + gemini1 + gemini2 + user2 = 4 entries (info excluded)
+  expect(s!.message_hours.length).toBe(4)
+  // user_message_timestamps: 2 user messages
+  expect(s!.user_message_timestamps.length).toBe(2)
+  // tool_counts: run_shell_command x2, read_file x1
+  expect(s!.tool_counts['run_shell_command']).toBe(2)
+  expect(s!.tool_counts['read_file']).toBe(1)
+})
+
+test('rich JSON format: bootstrap-only info messages return null', () => {
+  const bootstrapOnly = JSON.stringify({
+    sessionId: 'auth-session',
+    startTime: '2026-02-22T23:55:53.342Z',
+    lastUpdated: '2026-02-22T23:56:34.853Z',
+    messages: [
+      { id: 'i1', timestamp: '2026-02-22T23:55:53.342Z', type: 'info', content: 'Code Assist login required.' },
+      { id: 'i2', timestamp: '2026-02-22T23:55:53.367Z', type: 'info', content: 'Waiting for authentication...' },
+      { id: 'i3', timestamp: '2026-02-22T23:56:22.684Z', type: 'info', content: 'Code Assist login required.' },
+    ],
+  })
+  expect(parseGeminiChat(bootstrapOnly, 'bootstrap-only', '/proj')).toBeNull()
+})
+
+test('rich JSON format: injected session_context user message returns null (no gemini responses)', () => {
+  const injectedOnly = JSON.stringify({
+    sessionId: 'injected-session',
+    startTime: '2026-06-18T10:00:00.000Z',
+    lastUpdated: '2026-06-18T10:00:01.000Z',
+    messages: [
+      {
+        id: 'u1',
+        timestamp: '2026-06-18T10:00:00.500Z',
+        type: 'user',
+        content: [{ text: '<session_context>\nsome context\n</session_context>' }],
+        displayContent: [{ text: '<session_context>\nsome context\n</session_context>' }],
+      },
+    ],
+  })
+  expect(parseGeminiChat(injectedOnly, 'injected-only', '/proj')).toBeNull()
+})
+
+test('rich JSON format: zero-token gemini message still counted as assistant message', () => {
+  const zeroToken = JSON.stringify({
+    sessionId: 'zero-token',
+    startTime: '2026-06-18T10:00:00.000Z',
+    lastUpdated: '2026-06-18T10:00:05.000Z',
+    messages: [
+      { id: 'g1', timestamp: '2026-06-18T10:00:05.000Z', type: 'gemini', content: 'Hello!', tokens: { input: 0, output: 0, cached: 0, thoughts: 0, tool: 0, total: 0 }, model: 'gemini-3-flash-preview' },
+    ],
+  })
+  const s = parseGeminiChat(zeroToken, 'zero-token', '/proj')
+  expect(s).not.toBeNull()
+  expect(s!.assistant_message_count).toBe(1)
+  expect(s!.input_tokens).toBe(0)
+  expect(s!.model).toBe('gemini-3-flash-preview')
+})
+
+// ---------------------------------------------------------------------------
 // JSONL streaming format sample — mirrors the real Gemini CLI file structure.
 // Headers repeat before each $set (MongoDB-style state update).
 // Messages array is a snapshot; unique messages are accumulated across all $set lines.
