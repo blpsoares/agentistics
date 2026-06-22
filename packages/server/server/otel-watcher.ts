@@ -42,6 +42,7 @@ import type { ModelUsage, HarnessId, SessionMeta } from '@agentistics/core'
 import type { OtelSnapshot } from '@agentistics/core'
 import { HOME_DIR, CLAUDE_DIR, PROJECTS_DIR, SESSION_META_DIR, STATS_CACHE_FILE, CONSOLIDATED_DIR } from './config'
 import { createLimiter, safeReadJson, safeReadDir, safeStat } from './utils'
+import { getEnabledAdapters } from './adapters/types'
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -88,15 +89,17 @@ export interface HarnessSnapshot {
   totalCostUsd: number
 }
 
-const ALL_HARNESSES: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
-
 /** Aggregate per-harness totals from the ~/.agentistics/sessions/<harness>/ store.
+ *  Only includes harnesses that are currently enabled (respects AGENTISTICS_HARNESS_<ID>=0).
  *  Uses per-session token fields and calcCost() — no inline math. */
 async function buildHarnessSnapshots(): Promise<HarnessSnapshot[]> {
   const limit = createLimiter(40)
   const results: HarnessSnapshot[] = []
 
-  for (const harness of ALL_HARNESSES) {
+  const enabledAdapters = await getEnabledAdapters()
+  const enabledHarnesses: HarnessId[] = enabledAdapters.map(a => a.id as HarnessId)
+
+  for (const harness of enabledHarnesses) {
     const dir = `${CONSOLIDATED_DIR}/${harness}`
     const files = (await safeReadDir(dir)).filter(f => f.endsWith('.json'))
 

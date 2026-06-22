@@ -93,24 +93,27 @@ export async function runHealthChecks(): Promise<HealthIssue[]> {
           })
         }
       }
+    }
 
-      // 3. Auto-fix: stats-cache.json corrupt (Claude-only file)
-      const cacheStat = await safeStat(STATS_CACHE_FILE)
-      if (cacheStat !== null) {
-        const cacheData = await safeReadJson<Record<string, unknown>>(STATS_CACHE_FILE)
-        if (cacheData === null) {
-          try {
-            await unlink(STATS_CACHE_FILE)
-            console.log('[health] Deleted corrupt stats-cache.json')
-            issues.push({
-              id: 'stats-cache-reset',
-              severity: 'info',
-              title: 'Stats cache was corrupt — auto-fixed',
-              description: 'stats-cache.json was corrupt and has been automatically removed. Token counts and model breakdowns will be recalculated on the next Claude Code session.',
-              auto_fixed: true,
-            })
-          } catch { /* ignore */ }
-        }
+    // 3. Auto-fix: stats-cache.json corrupt (Claude-only file).
+    // Runs unconditionally when Claude is enabled — even when projects dir is
+    // missing, a corrupt cache file should still be removed so Claude Code can
+    // rebuild it on its next startup.
+    const cacheStat = await safeStat(STATS_CACHE_FILE)
+    if (cacheStat !== null) {
+      const cacheData = await safeReadJson<Record<string, unknown>>(STATS_CACHE_FILE)
+      if (cacheData === null) {
+        try {
+          await unlink(STATS_CACHE_FILE)
+          console.log('[health] Deleted corrupt stats-cache.json')
+          issues.push({
+            id: 'stats-cache-reset',
+            severity: 'info',
+            title: 'Stats cache was corrupt — auto-fixed',
+            description: 'stats-cache.json was corrupt and has been automatically removed. Token counts and model breakdowns will be recalculated on the next Claude Code session.',
+            auto_fixed: true,
+          })
+        } catch { /* ignore */ }
       }
     }
   }
