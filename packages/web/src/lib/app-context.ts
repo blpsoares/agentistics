@@ -1,4 +1,4 @@
-import type { Filters, Lang, Theme, SessionMeta, AppData, StatsCache } from '@agentistics/core'
+import type { Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId } from '@agentistics/core'
 import type { useDerivedStats } from '../hooks/useData'
 
 type DerivedStats = NonNullable<ReturnType<typeof useDerivedStats>>
@@ -54,5 +54,6 @@ export interface AppContext {
   // filter bar data (needed to render FiltersBar outside the header, e.g. in CustomPage)
   sessionCountByProject: Record<string, number>
   models: string[]
+  modelGroups: { harness: HarnessId; models: string[] }[]
   modelsInProject: Set<string> | null
 }

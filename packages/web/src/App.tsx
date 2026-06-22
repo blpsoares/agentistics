@@ -1101,6 +1101,22 @@ export default function AppLayout() {
     return used
   }, [data, filters.projects])
 
+  // Models grouped by the harness that actually used them (NOT by prefix — Copilot
+  // also uses gpt-* models). When a harness filter is active, only that harness's
+  // models are offered; in the unified view all harnesses are shown as sections.
+  const modelGroups = useMemo<{ harness: HarnessId; models: string[] }[]>(() => {
+    if (!data) return []
+    const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
+    const byH: Partial<Record<HarnessId, Set<string>>> = {}
+    const add = (h: HarnessId, m?: string) => { if (!m) return; (byH[h] ??= new Set<string>()).add(m) }
+    for (const id of Object.keys(data.statsCache.modelUsage ?? {})) add('claude', id)
+    for (const s of data.sessions) add((s.harness ?? 'claude') as HarnessId, s.model)
+    const harnesses = filters.harness ? [filters.harness] : order
+    return harnesses
+      .filter(h => byH[h] && byH[h]!.size > 0)
+      .map(h => ({ harness: h, models: Array.from(byH[h]!).sort() }))
+  }, [data, filters.harness])
+
   // Live update highlight detection
   useEffect(() => {
     if (!liveUpdates || !derived) return
@@ -1645,6 +1661,7 @@ export default function AppLayout() {
               projects={data.projects}
               sessionCountByProject={sessionCountByProject}
               models={models}
+              modelGroups={modelGroups}
               modelsInProject={modelsInProject}
               lang={lang}
             />
@@ -1690,7 +1707,7 @@ export default function AppLayout() {
           infoItems,
           cardOrder, setCardOrder: setCardOrder as (o: string[]) => void,
           cardPrecision, setCardPrecision,
-          sessionCountByProject, models, modelsInProject,
+          sessionCountByProject, models, modelGroups, modelsInProject,
         }} />
       </main>
 

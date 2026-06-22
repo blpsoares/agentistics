@@ -1042,6 +1042,7 @@ export default function CustomPage() {
               projects={data.projects}
               sessionCountByProject={ctx.sessionCountByProject}
               models={ctx.models}
+              modelGroups={ctx.modelGroups}
               modelsInProject={ctx.modelsInProject}
               lang={lang}
               compact

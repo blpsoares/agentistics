@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react'
-import type { Filters, DateRange, Project, Lang } from '@agentistics/core'
+import type { Filters, DateRange, Project, Lang, HarnessId } from '@agentistics/core'
 import { formatModel, formatProjectName } from '@agentistics/core'
 import { Layers, Cpu, RotateCcw, ChevronDown, X, CalendarDays, Check } from 'lucide-react'
+import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { ProjectsModal } from './ProjectsModal'
 import { DatePicker } from './DatePicker'
 import { format } from 'date-fns'
@@ -12,6 +13,9 @@ interface Props {
   projects: Project[]
   sessionCountByProject: Record<string, number>
   models: string[]
+  /** Models grouped by the harness that used them. Shown as sections in the
+   *  unified view; a single group when a harness filter is active. */
+  modelGroups?: { harness: HarnessId; models: string[] }[]
   modelsInProject?: Set<string> | null
   lang: Lang
   compact?: boolean
@@ -39,7 +43,13 @@ const CTL: React.CSSProperties = {
   alignItems: 'center',
 }
 
-export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelsInProject, lang, compact }: Props) {
+export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, lang, compact }: Props) {
+  // Fall back to a single unlabeled group when modelGroups isn't provided.
+  const groups: { harness: HarnessId | null; models: string[] }[] =
+    modelGroups && modelGroups.length > 0
+      ? modelGroups
+      : [{ harness: null, models }]
+  const showGroupHeaders = groups.length > 1
   const [showProjectsModal, setShowProjectsModal] = useState(false)
   const [showModelDropdown, setShowModelDropdown] = useState(false)
   const modelDropdownRef = useRef<HTMLDivElement>(null)
@@ -245,57 +255,76 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               minWidth: 190,
               padding: '4px 0',
             }}>
-              {models.map(m => {
-                const disabled = modelsInProject ? !modelsInProject.has(m) : false
-                const selected = selectedModels.includes(m)
-                return (
-                  <button
-                    key={m}
-                    disabled={disabled}
-                    onClick={() => toggleModel(m)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      width: '100%',
-                      padding: '7px 12px',
-                      background: selected ? 'var(--anthropic-orange-dim)' : 'transparent',
-                      border: 'none',
-                      cursor: disabled ? 'not-allowed' : 'pointer',
-                      color: disabled ? 'var(--text-tertiary)' : selected ? 'var(--anthropic-orange)' : 'var(--text-primary)',
-                      fontSize: 12,
-                      fontFamily: 'inherit',
-                      textAlign: 'left',
-                      opacity: disabled ? 0.45 : 1,
-                      transition: 'background 0.1s',
-                    }}
-                  >
+              {groups.map(group => (
+                <div key={group.harness ?? '__all__'}>
+                  {showGroupHeaders && group.harness && (
                     <div style={{
-                      width: 14,
-                      height: 14,
-                      borderRadius: 3,
-                      border: selected
-                        ? '1.5px solid var(--anthropic-orange)'
-                        : disabled
-                          ? '1.5px solid var(--border)'
-                          : '1.5px solid var(--text-tertiary)',
-                      background: selected ? 'var(--anthropic-orange)' : 'transparent',
-                      flexShrink: 0,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '7px 12px 3px',
+                      fontSize: 10, fontWeight: 700,
+                      textTransform: 'uppercase', letterSpacing: '0.06em',
+                      color: HARNESS_COLORS[group.harness],
                     }}>
-                      {selected && <Check size={9} color="white" strokeWidth={3} />}
+                      <span style={{
+                        width: 7, height: 7, borderRadius: '50%',
+                        background: HARNESS_COLORS[group.harness], flexShrink: 0,
+                      }} />
+                      {HARNESS_LABELS[group.harness]}
                     </div>
-                    <span style={{ flex: 1 }}>{formatModel(m)}</span>
-                    {disabled && (
-                      <span style={{ fontSize: 10, opacity: 0.7 }}>
-                        {lang === 'pt' ? 'sem uso' : 'unused'}
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
+                  )}
+                  {group.models.map(m => {
+                    const disabled = modelsInProject ? !modelsInProject.has(m) : false
+                    const selected = selectedModels.includes(m)
+                    return (
+                      <button
+                        key={`${group.harness ?? ''}:${m}`}
+                        disabled={disabled}
+                        onClick={() => toggleModel(m)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          width: '100%',
+                          padding: '7px 12px',
+                          background: selected ? 'var(--anthropic-orange-dim)' : 'transparent',
+                          border: 'none',
+                          cursor: disabled ? 'not-allowed' : 'pointer',
+                          color: disabled ? 'var(--text-tertiary)' : selected ? 'var(--anthropic-orange)' : 'var(--text-primary)',
+                          fontSize: 12,
+                          fontFamily: 'inherit',
+                          textAlign: 'left',
+                          opacity: disabled ? 0.45 : 1,
+                          transition: 'background 0.1s',
+                        }}
+                      >
+                        <div style={{
+                          width: 14,
+                          height: 14,
+                          borderRadius: 3,
+                          border: selected
+                            ? '1.5px solid var(--anthropic-orange)'
+                            : disabled
+                              ? '1.5px solid var(--border)'
+                              : '1.5px solid var(--text-tertiary)',
+                          background: selected ? 'var(--anthropic-orange)' : 'transparent',
+                          flexShrink: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}>
+                          {selected && <Check size={9} color="white" strokeWidth={3} />}
+                        </div>
+                        <span style={{ flex: 1 }}>{formatModel(m)}</span>
+                        {disabled && (
+                          <span style={{ fontSize: 10, opacity: 0.7 }}>
+                            {lang === 'pt' ? 'sem uso' : 'unused'}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              ))}
               {hasModelFilter && (
                 <>
                   <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
