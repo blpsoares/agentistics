@@ -19,7 +19,7 @@ export type CopilotSessionSummary = {
 export type CopilotSessionMessage = {
   role: 'user' | 'assistant'
   content: string
-  timestamp?: string
+  timestamp: number
 }
 
 /** List all Copilot sessions that have an events.jsonl file. */
@@ -117,7 +117,8 @@ export async function getCopilotSessionMessages(id: string): Promise<CopilotSess
 
     const type = e.type as string | undefined
     const data = (e.data && typeof e.data === 'object') ? e.data : {}
-    const ts: string | undefined = typeof e.timestamp === 'string' ? e.timestamp : undefined
+    const tsRaw: string | undefined = typeof e.timestamp === 'string' ? e.timestamp : undefined
+    const ts: number = tsRaw ? (new Date(tsRaw).getTime() || Date.now()) : Date.now()
 
     if (type === 'user.message') {
       const content = typeof data.content === 'string' ? data.content.trim() : ''

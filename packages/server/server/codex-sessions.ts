@@ -16,7 +16,7 @@ export type CodexSessionSummary = {
 export type CodexSessionMessage = {
   role: 'user' | 'assistant'
   content: string
-  timestamp?: string
+  timestamp: number
 }
 
 /** Recursively collect rollout-*.jsonl paths under the given directory. */
@@ -135,7 +135,7 @@ export async function getCodexSessionMessages(id: string): Promise<CodexSessionM
     const data = e.payload
     if (!data || typeof data !== 'object') continue
     const type = data.type as string | undefined
-    const lineTs: string | undefined = typeof e.timestamp === 'string' ? e.timestamp : undefined
+    const lineTs: number = typeof e.timestamp === 'string' ? (new Date(e.timestamp).getTime() || Date.now()) : Date.now()
 
     if (type === 'user_message') {
       const msg = typeof data.message === 'string' ? data.message.trim() : ''

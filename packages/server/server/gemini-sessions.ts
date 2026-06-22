@@ -34,7 +34,7 @@ export type GeminiSessionSummary = {
 export type GeminiSessionMessage = {
   role: 'user' | 'assistant'
   content: string
-  timestamp?: string
+  timestamp: number
 }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +276,8 @@ function extractRichJsonMessages(messages: Record<string, unknown>[]): GeminiSes
 
   for (const msg of messages) {
     const msgType = msg.type as string | undefined
-    const timestamp = msg.timestamp as string | undefined
+    const tsRaw = msg.timestamp as string | undefined
+    const timestamp: number = tsRaw ? (new Date(tsRaw).getTime() || Date.now()) : Date.now()
 
     if (msgType === 'user') {
       const text = extractMessageText(msg)
@@ -285,13 +286,13 @@ function extractRichJsonMessages(messages: Record<string, unknown>[]): GeminiSes
       // Prefer displayContent (injected file context stripped out)
       const displayText = extractDisplayText(msg)
       const content = displayText || text
-      out.push({ role: 'user', content, ...(timestamp ? { timestamp } : {}) })
+      out.push({ role: 'user', content, timestamp })
 
     } else if (msgType === 'gemini') {
       const text = extractMessageText(msg)
       if (!text && !msg.toolCalls) continue  // skip empty assistant messages
       if (text) {
-        out.push({ role: 'assistant', content: text, ...(timestamp ? { timestamp } : {}) })
+        out.push({ role: 'assistant', content: text, timestamp })
       }
     }
     // 'info' messages are skipped
@@ -320,15 +321,16 @@ function extractJsonlMessages(content: string): GeminiSessionMessage[] {
       }
 
       const msgType = msg.type as string | undefined
-      const timestamp = msg.timestamp as string | undefined
+      const tsRaw = msg.timestamp as string | undefined
+      const timestamp: number = tsRaw ? (new Date(tsRaw).getTime() || Date.now()) : Date.now()
       const text = extractMessageText(msg)
 
       if (msgType === 'user') {
         if (!isGenuineUserMessage(text)) continue
-        out.push({ role: 'user', content: text, ...(timestamp ? { timestamp } : {}) })
+        out.push({ role: 'user', content: text, timestamp })
       } else if (msgType === 'model' || msgType === 'gemini') {
         if (!text) continue
-        out.push({ role: 'assistant', content: text, ...(timestamp ? { timestamp } : {}) })
+        out.push({ role: 'assistant', content: text, timestamp })
       }
     }
   }
