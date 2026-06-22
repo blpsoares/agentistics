@@ -180,19 +180,22 @@ function buildSessionMeta(data: ParsedData): SessionMeta | null {
     const isUser = msg.type === 'user'
     const isAssistant = msg.type === 'model' || msg.type === 'gemini'
 
+    // Only genuine turns (a real user message or a model response) count toward
+    // activity — injected bootstrap context messages are ignored everywhere,
+    // including the hour histogram.
+    let counted = false
     if (isAssistant) {
       hasGenuineContent = true
       assistantMessages++
-    } else if (isUser) {
-      const genuine = isGenuineUserMessage(msg.text ?? '')
-      if (genuine) {
-        hasGenuineContent = true
-        userMessages++
-        if (msg.timestamp) userMessageTimestamps.push(msg.timestamp)
-      }
+      counted = true
+    } else if (isUser && isGenuineUserMessage(msg.text ?? '')) {
+      hasGenuineContent = true
+      userMessages++
+      if (msg.timestamp) userMessageTimestamps.push(msg.timestamp)
+      counted = true
     }
 
-    if (msg.timestamp) {
+    if (counted && msg.timestamp) {
       const h = new Date(msg.timestamp).getUTCHours()
       if (!isNaN(h)) messageHours.push(h)
     }

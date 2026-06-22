@@ -134,30 +134,62 @@ function MiniBarChart({ values, color, peakIndex: peak, height = 40 }: {
   )
 }
 
-function SparklineChart({ data, color, height = 32 }: {
-  data: { date: string; sessions: number }[]
+const SPARK_BUCKETS = 60
+
+/** Map a harness's active-day list onto a fixed number of buckets across a
+ *  SHARED [minMs, maxMs] time axis, summing sessions per bucket. This lets every
+ *  harness's sparkline share the same timeline, so a harness with only one or two
+ *  active days renders as isolated thin bars instead of one giant block. */
+function bucketize(
+  daily: { date: string; sessions: number }[],
+  minMs: number,
+  maxMs: number,
+  n: number,
+): number[] {
+  const buckets = new Array<number>(n).fill(0)
+  if (daily.length === 0 || maxMs <= minMs) {
+    // Degenerate range (no data, or all activity on a single day): drop each
+    // active day into the first bucket so it's still represented.
+    for (const d of daily) buckets[0] = (buckets[0] ?? 0) + d.sessions
+    return buckets
+  }
+  const span = maxMs - minMs
+  for (const d of daily) {
+    const t = new Date(d.date).getTime()
+    if (Number.isNaN(t)) continue
+    let idx = Math.floor(((t - minMs) / span) * n)
+    if (idx < 0) idx = 0
+    if (idx >= n) idx = n - 1
+    buckets[idx] = (buckets[idx] ?? 0) + d.sessions
+  }
+  return buckets
+}
+
+function SparklineChart({ buckets, color, height = 32 }: {
+  buckets: number[]
   color: string
   height?: number
 }) {
-  if (data.length === 0) {
+  const total = buckets.reduce((a, b) => a + b, 0)
+  if (total === 0) {
     return (
       <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>No data</span>
       </div>
     )
   }
-  const max = Math.max(...data.map(d => d.sessions), 1)
+  const max = Math.max(...buckets, 1)
   return (
     <div style={{ display: 'flex', alignItems: 'flex-end', gap: 1, height, overflow: 'hidden' }}>
-      {data.map((d, i) => {
-        const pct = Math.round((d.sessions / max) * 100)
+      {buckets.map((v, i) => {
+        const pct = (v / max) * 100
         return (
           <div
             key={i}
-            title={`${d.date}: ${d.sessions} sessions`}
+            title={`${v} sessions`}
             style={{
               flex: 1,
-              height: `${Math.max(pct, d.sessions > 0 ? 4 : 0)}%`,
+              height: `${v > 0 ? Math.max(pct, 8) : 0}%`,
               background: `${color}99`,
               borderRadius: '1px 1px 0 0',
               minWidth: 1,
@@ -213,6 +245,21 @@ export default function ComparePage() {
   }, [data, summaries])
 
   const colors = HARNESS_COLORS
+
+  // Shared time axis for the "Activity over time" sparklines, spanning the
+  // earliest→latest active day across ALL harnesses so they are comparable.
+  const { minMs, maxMs } = useMemo(() => {
+    let mn = Infinity, mx = -Infinity
+    for (const h of data.harnesses) {
+      for (const d of summaries[h]?.dailyActivity ?? []) {
+        const t = new Date(d.date).getTime()
+        if (Number.isNaN(t)) continue
+        if (t < mn) mn = t
+        if (t > mx) mx = t
+      }
+    }
+    return { minMs: mn === Infinity ? 0 : mn, maxMs: mx === -Infinity ? 0 : mx }
+  }, [data.harnesses, summaries])
 
   const tokensValues = aggs.map(a => ({
     harness: a.harness,
@@ -540,7 +587,7 @@ export default function ComparePage() {
                   {HARNESS_LABELS[a.harness]}
                 </div>
                 <SparklineChart
-                  data={s?.dailyActivity ?? []}
+                  buckets={bucketize(s?.dailyActivity ?? [], minMs, maxMs, SPARK_BUCKETS)}
                   color={colors[a.harness]}
                   height={40}
                 />
