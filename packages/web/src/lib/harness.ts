@@ -65,21 +65,24 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
   },
   gemini: {
     source: [
-      '~/.gemini/tmp/<project>/chats/*.jsonl',
+      '~/.gemini/tmp/<project>/chats/*.json (rich session format)',
       '~/.gemini/projects.json (project names)',
     ],
     contains: [
       'Sessions',
       'Projects',
       'Messages',
-      'Activity (when a chat has real content)',
+      'Tokens (input, output, cache)',
+      'Cost (USD)',
+      'Model per session',
+      'Tool usage',
+      'Activity (real-content sessions only)',
     ],
     missing: [
-      { item: 'Tokens', why: 'Not stored in local Gemini chat files.' },
-      { item: 'Cost', why: 'No token data locally, so cost cannot be computed.' },
-      { item: 'Model', why: 'Not recorded in local chat files.' },
+      { item: 'Sub-agent metrics', why: 'Gemini CLI does not record per-subagent breakdowns.' },
+      { item: 'Git line counts', why: 'Not present in Gemini session files.' },
     ],
-    note: 'Gemini CLI often writes bootstrap-only stub files (just the injected session context) with no real conversation. Only chats containing a genuine user message or a model response are counted. Real token/cost data would require enabling Gemini OpenTelemetry (a planned future integration).',
+    note: 'Many local Gemini files are bootstrap-only stubs with no real conversation — only sessions containing genuine user messages are counted. Token/cost/model data comes from the rich ~/.gemini/tmp/<project>/chats/*.json format. Agent metrics and git line counts are N/A.',
   },
   copilot: {
     source: [
@@ -91,14 +94,17 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
       'Project / repository / branch',
       'Messages',
       'Assistant turns',
+      'Tokens (input, output)',
+      'Cost (USD)',
+      'Model per session',
+      'Git line counts',
       'MCP usage',
       'Activity',
     ],
     missing: [
-      { item: 'Tokens', why: 'Not present in Copilot local event logs.' },
-      { item: 'Cost', why: 'No token data locally.' },
-      { item: 'Model', why: 'Not recorded in local events.' },
+      { item: 'Tool usage', why: 'Copilot CLI does not record per-tool call breakdowns.' },
+      { item: 'Sub-agent metrics', why: 'Not available in Copilot local event logs.' },
     ],
-    note: 'Copilot CLI does not persist token/model data locally; only session activity and project context are available.',
+    note: 'Token/cost/model/git-lines data is emitted in the session.shutdown event on clean exit only — sessions that crashed will show 0 for those fields.',
   },
 }
