@@ -9,7 +9,9 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      devOptions: { enabled: true, suppressWarnings: true, type: 'module' },
+      // Service worker disabled in dev: it cached stale bundles during iteration,
+      // making code changes appear not to take effect. Still enabled for prod builds.
+      devOptions: { enabled: false, suppressWarnings: true, type: 'module' },
       includeAssets: ['favicon.ico', 'minimalistLogo.png', 'icons/*.png'],
       manifest: {
         name: 'Agentistics',
