@@ -39,6 +39,7 @@ async function collectChatFiles(dir: string): Promise<string[]> {
 
 export const geminiAdapter: HarnessAdapter = {
   id: 'gemini',
+  dataRoot: GEMINI_DIR,
   isAvailable() {
     return harnessEnabled('gemini') && existsSync(GEMINI_TMP_DIR)
   },

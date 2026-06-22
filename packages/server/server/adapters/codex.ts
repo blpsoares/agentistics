@@ -5,7 +5,7 @@ import { existsSync } from 'fs'
 import type { SessionMeta } from '@agentistics/core'
 import type { HarnessAdapter } from './types'
 import { harnessEnabled } from './types'
-import { CODEX_SESSIONS_DIR } from '../config'
+import { CODEX_DIR, CODEX_SESSIONS_DIR } from '../config'
 import { createLimiter, safeReadDir } from '../utils'
 
 /** Recursively collect rollout-*.jsonl paths under ~/.codex/sessions/YYYY/MM/DD/. */
@@ -26,6 +26,7 @@ async function collectRolloutFiles(dir: string): Promise<string[]> {
 
 export const codexAdapter: HarnessAdapter = {
   id: 'codex',
+  dataRoot: CODEX_DIR,
   isAvailable() {
     return harnessEnabled('codex') && existsSync(CODEX_SESSIONS_DIR)
   },

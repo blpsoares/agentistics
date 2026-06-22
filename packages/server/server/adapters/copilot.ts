@@ -13,6 +13,7 @@ const COPILOT_SESSION_STATE_DIR = join(COPILOT_DIR, 'session-state')
 
 export const copilotAdapter: HarnessAdapter = {
   id: 'copilot',
+  dataRoot: COPILOT_DIR,
   isAvailable() {
     return harnessEnabled('copilot') && existsSync(COPILOT_SESSION_STATE_DIR)
   },

@@ -365,11 +365,11 @@ export function computeHarnessSummaries(
         .map(([date, sessions]) => ({ date, sessions }))
         .sort((a, b) => a.date.localeCompare(b.date))
 
-      // peak token day
+      // peak token day (only set when there is actual token data > 0)
       let peakTokenDay: { date: string; tokens: number } | null = null
       if (hasTokens) {
         for (const [date, tokens] of Object.entries(tokensByDay)) {
-          if (!peakTokenDay || tokens > peakTokenDay.tokens) {
+          if (tokens > 0 && (!peakTokenDay || tokens > peakTokenDay.tokens)) {
             peakTokenDay = { date, tokens }
           }
         }

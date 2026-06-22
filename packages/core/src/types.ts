@@ -52,13 +52,12 @@ export interface HarnessCapabilities {
 }
 
 /** Single source of truth for which metrics each harness can produce.
- *  Drives "N/A vs real 0" rendering and what the unified view aggregates.
- *  gemini flips tokens/cost/model to true once Phase 3 OTel ingestion is active. */
+ *  Drives "N/A vs real 0" rendering and what the unified view aggregates. */
 export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   claude:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: true,  gitLines: true },
   codex:   { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false },
-  gemini:  { tokens: false, cost: false, model: false, tools: false, agents: false, gitLines: false },
-  copilot: { tokens: false, cost: false, model: false, tools: false, agents: false, gitLines: false },
+  gemini:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false },
+  copilot: { tokens: true,  cost: true,  model: true,  tools: false, agents: false, gitLines: true },
 }
 
 export interface SessionMeta {

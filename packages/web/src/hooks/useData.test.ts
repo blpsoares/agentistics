@@ -658,12 +658,13 @@ describe('computeHarnessSummaries — peakTokenDay and peakSessionCost', () => {
     expect(summaries['codex']!.peakTokenDay?.tokens).toBe(2100)
   })
 
-  test('gemini: peakTokenDay is null (no token capability)', () => {
+  test('gemini: peakTokenDay is null when sessions have 0 tokens (capability enabled but no data)', () => {
     const sessions = [
       { ...makeSession('s1', '2026-06-10T08:00:00Z', 0, 0), harness: 'gemini' as const, model: undefined },
     ]
     const data = { ...makeData([]), sessions, harnesses: ['gemini'] as import('@agentistics/core').HarnessId[] }
     const summaries = computeHarnessSummaries(data)
+    // gemini has tokens=true but the fixture has 0 tokens — peakTokenDay requires tokens > 0
     expect(summaries['gemini']!.peakTokenDay).toBeNull()
   })
 
@@ -683,12 +684,13 @@ describe('computeHarnessSummaries — peakTokenDay and peakSessionCost', () => {
     expect(summaries['codex']!.peakSessionCost).toBeGreaterThan(s2Cost)
   })
 
-  test('gemini: peakSessionCost is null (no cost capability)', () => {
+  test('gemini: peakSessionCost is null when sessions have no model (capability enabled but model unknown)', () => {
     const sessions = [
       { ...makeSession('s1', '2026-06-10T08:00:00Z', 0, 0), harness: 'gemini' as const, model: undefined },
     ]
     const data = { ...makeData([]), sessions, harnesses: ['gemini'] as import('@agentistics/core').HarnessId[] }
     const summaries = computeHarnessSummaries(data)
+    // gemini has cost=true but cost is only computed when s.model is set; no model → null
     expect(summaries['gemini']!.peakSessionCost).toBeNull()
   })
 

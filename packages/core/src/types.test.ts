@@ -193,11 +193,23 @@ test('HARNESS_CAPABILITIES declares all four harnesses', () => {
   expect(Object.keys(HARNESS_CAPABILITIES).sort()).toEqual(['claude', 'codex', 'copilot', 'gemini'])
 })
 
-test('claude is fully capable, copilot has no tokens', () => {
+test('claude is fully capable; gemini and copilot have tokens/cost/model', () => {
   expect(HARNESS_CAPABILITIES.claude.tokens).toBe(true)
   expect(HARNESS_CAPABILITIES.claude.agents).toBe(true)
   expect(HARNESS_CAPABILITIES.codex.tokens).toBe(true)
   expect(HARNESS_CAPABILITIES.codex.agents).toBe(false)
-  expect(HARNESS_CAPABILITIES.copilot.tokens).toBe(false)
-  expect(HARNESS_CAPABILITIES.gemini.tokens).toBe(false)
+  // gemini: tokens/cost/model/tools enabled; agents and gitLines not yet supported
+  expect(HARNESS_CAPABILITIES.gemini.tokens).toBe(true)
+  expect(HARNESS_CAPABILITIES.gemini.cost).toBe(true)
+  expect(HARNESS_CAPABILITIES.gemini.model).toBe(true)
+  expect(HARNESS_CAPABILITIES.gemini.tools).toBe(true)
+  expect(HARNESS_CAPABILITIES.gemini.agents).toBe(false)
+  expect(HARNESS_CAPABILITIES.gemini.gitLines).toBe(false)
+  // copilot: tokens/cost/model/gitLines enabled; tools and agents not supported
+  expect(HARNESS_CAPABILITIES.copilot.tokens).toBe(true)
+  expect(HARNESS_CAPABILITIES.copilot.cost).toBe(true)
+  expect(HARNESS_CAPABILITIES.copilot.model).toBe(true)
+  expect(HARNESS_CAPABILITIES.copilot.tools).toBe(false)
+  expect(HARNESS_CAPABILITIES.copilot.agents).toBe(false)
+  expect(HARNESS_CAPABILITIES.copilot.gitLines).toBe(true)
 })

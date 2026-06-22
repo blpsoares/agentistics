@@ -3,6 +3,8 @@ import type { ServerProject } from '../data'
 
 export interface HarnessAdapter {
   id: HarnessId
+  /** On-disk root directory this harness reads from (used by the SSE file watcher). */
+  dataRoot: string
   /** True when this harness's data directory exists on disk. */
   isAvailable(): boolean
   /** Normalized sessions with `harness` already set. Missing fields stay 0/undefined. */

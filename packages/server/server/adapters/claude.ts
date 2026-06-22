@@ -7,6 +7,7 @@ import { loadSessionMetas, scanProjects } from '../data'
 
 export const claudeAdapter: HarnessAdapter = {
   id: 'claude',
+  dataRoot: CLAUDE_DIR,
   isAvailable() {
     return harnessEnabled('claude') && existsSync(CLAUDE_DIR)
   },
