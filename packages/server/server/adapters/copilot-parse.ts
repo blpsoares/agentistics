@@ -14,6 +14,18 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
   let assistantTurns = 0
   let toolErrors = 0
   let usesMcp = false
+  let firstPrompt = ''
+
+  // Enriched fields from session.shutdown (clean-exit only)
+  let inputTokens = 0
+  let outputTokens = 0
+  let cacheReadTokens = 0
+  let cacheWriteTokens = 0
+  let model: string | undefined = undefined
+  let linesAdded = 0
+  let linesRemoved = 0
+  let filesModified = 0
+
   const userMessageTimestamps: string[] = []
   const messageHours: number[] = []
 
@@ -44,12 +56,42 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
         userMessageTimestamps.push(ts)
         messageHours.push(new Date(ts).getUTCHours())
       }
+      // Capture first user prompt
+      if (!firstPrompt && typeof data.content === 'string') {
+        firstPrompt = data.content.trim().slice(0, 500)
+      }
     } else if (type === 'assistant.turn_start') {
       assistantTurns++
     } else if (type === 'session.info') {
       if (data.infoType === 'mcp') usesMcp = true
     } else if (type === 'session.error') {
       toolErrors++
+    } else if (type === 'session.shutdown') {
+      // Extract per-model token metrics — sum across all models present
+      const modelMetrics = data.modelMetrics
+      if (modelMetrics && typeof modelMetrics === 'object') {
+        for (const [, metrics] of Object.entries(modelMetrics) as [string, any][]) {
+          const usage = metrics?.usage
+          if (usage && typeof usage === 'object') {
+            inputTokens += (usage.inputTokens as number | undefined) ?? 0
+            outputTokens += (usage.outputTokens as number | undefined) ?? 0
+            cacheReadTokens += (usage.cacheReadTokens as number | undefined) ?? 0
+            cacheWriteTokens += (usage.cacheWriteTokens as number | undefined) ?? 0
+          }
+        }
+      }
+      // Current model at shutdown
+      if (typeof data.currentModel === 'string') {
+        model = data.currentModel
+      }
+      // Code changes
+      const cc = data.codeChanges
+      if (cc && typeof cc === 'object') {
+        linesAdded = (cc.linesAdded as number | undefined) ?? 0
+        linesRemoved = (cc.linesRemoved as number | undefined) ?? 0
+        const fm = cc.filesModified
+        filesModified = Array.isArray(fm) ? fm.length : ((fm as number | undefined) ?? 0)
+      }
     }
   }
 
@@ -71,11 +113,11 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
     languages: [],
     git_commits: 0,
     git_pushes: 0,
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_read_input_tokens: 0,
-    cache_creation_input_tokens: 0,
-    first_prompt: '',
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    cache_read_input_tokens: cacheReadTokens,
+    cache_creation_input_tokens: cacheWriteTokens,
+    first_prompt: firstPrompt,
     user_interruptions: 0,
     user_response_times: [],
     tool_errors: toolErrors,
@@ -84,12 +126,12 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
     uses_mcp: usesMcp,
     uses_web_search: false,
     uses_web_fetch: false,
-    lines_added: 0,
-    lines_removed: 0,
-    files_modified: 0,
+    lines_added: linesAdded,
+    lines_removed: linesRemoved,
+    files_modified: filesModified,
     message_hours: messageHours,
     user_message_timestamps: userMessageTimestamps,
-    model: undefined,
+    model,
     harness: 'copilot',
     _source: 'jsonl',
   }
