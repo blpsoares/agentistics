@@ -35,7 +35,6 @@ import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
 import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
 import { TtyChat } from './components/TtyChat'
-import { ClaudeChat } from './components/ClaudeChat'
 import { UpdateModal } from './components/UpdateModal'
 import { InstallModal } from './components/InstallModal'
 import { ArchiveConsentModal, type ArchiveMode } from './components/ArchiveConsentModal'
@@ -924,11 +923,10 @@ export default function AppLayout() {
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
   const [chatSoundId, setChatSoundId] = useState('ping')
-  const [claudeDetached, setClaudeDetached] = useState(false)
-  // Lifted Claude Chat state so project/session is preserved when toggling detach/attach
+  // Claude tab state — lifted so TtyChat can preserve project/session across re-renders
   const [claudeSharedState, setClaudeSharedState] = useState<{
     projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
-    sessionId: string | null; messages: import('./components/ClaudeChat').ChatMessage[]
+    sessionId: string | null; messages: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[] }>
     model?: import('./lib/chatModels').ChatModelId
   }>({ projectPath: null, projectName: null, projectEncodedDir: null, sessionId: null, messages: [] })
 
@@ -1881,9 +1879,6 @@ export default function AppLayout() {
         setFilters={setFilters}
         onPdfExport={(range) => setPdfDirectExportRange(range)}
         isMobile={isMobile}
-        onDetachClaude={() => setClaudeDetached(true)}
-        claudeDetached={claudeDetached}
-        onReattachClaude={() => setClaudeDetached(false)}
         onModelSet={(model) => {
           setChatModel(model)
           fetch('/api/preferences', {
@@ -1895,22 +1890,6 @@ export default function AppLayout() {
         claudeSharedState={claudeSharedState}
         onClaudeStateChange={setClaudeSharedState}
       />
-
-      {/* Claude Chat — floating draggable window (only when detached from TtyChat tab) */}
-      {claudeDetached && (
-        <ClaudeChat
-          lang={lang}
-          onAttach={() => setClaudeDetached(false)}
-          initialProject={claudeSharedState.projectPath ? {
-            path: claudeSharedState.projectPath,
-            name: claudeSharedState.projectName ?? '',
-            encodedDir: claudeSharedState.projectEncodedDir ?? '',
-          } : null}
-          initialSessionId={claudeSharedState.sessionId}
-          initialMessages={claudeSharedState.messages}
-          onStateChange={setClaudeSharedState}
-        />
-      )}
 
       {/* Footer */}
       <footer style={{
