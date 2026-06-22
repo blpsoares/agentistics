@@ -44,16 +44,21 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── adapters/types.ts    → HarnessAdapter contract + getEnabledAdapters() (async, memoized) registry + harnessEnabled(id)
   ├── adapters/claude.ts   → wraps the existing Claude pipeline behind the HarnessAdapter contract (zero behavior change)
   ├── adapters/codex.ts    → Codex CLI reader (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl)
-  └── adapters/codex-parse.ts → pure parser for the Codex envelope format → SessionMeta (harness: 'codex')
+  ├── adapters/codex-parse.ts → pure parser for the Codex envelope format → SessionMeta (harness: 'codex')
+  ├── adapters/gemini.ts   → Gemini CLI reader (~/.gemini/tmp/<project>/chats/*.jsonl + projects.json)
+  ├── adapters/gemini-parse.ts → pure parser; only counts chats with genuine content (a real user message or model response), dropping bootstrap-only stub files; session_id is unique per chat file
+  ├── adapters/copilot.ts  → Copilot CLI reader (~/.copilot/session-state/<id>/events.jsonl + workspace.yaml)
+  └── adapters/copilot-parse.ts → pure parser (session.start context, user.message, assistant turns, MCP, activity hours)
 
 packages/web/src/ (React + Vite, port 47292 in dev)
   ├── lib/
   │   ├── app-context.ts        → AppContext interface (React context type shared by all pages)
   │   ├── componentCatalog.tsx  → catalog of all components available in the custom layout builder
   │   ├── chatModels.ts         → web-only model list
-  │   └── chatSounds.ts         → 5 synthesized notification sounds via Web Audio API (Ping, Chime, Soft, Bell, Pop)
+  │   ├── chatSounds.ts         → 5 synthesized notification sounds via Web Audio API (Ping, Chime, Soft, Bell, Pop)
+  │   └── harness.ts            → HARNESS_LABELS, HARNESS_COLORS, capable(harness, metric), HARNESS_INFO (data-source/contains/missing/note metadata for HarnessInfoPanel)
   ├── hooks/
-  │   ├── useData.ts            → fetches /api/data + SSE subscription + useDerivedStats()
+  │   ├── useData.ts            → fetches /api/data + SSE subscription + useDerivedStats() + computeHarnessSummaries()
   │   └── useCustomLayout.ts    → custom layout state: named layouts, pinned projects, persistence
   ├── pages/
   │   ├── HomePage.tsx          → main dashboard (KPIs, charts, sessions)
@@ -61,10 +66,12 @@ packages/web/src/ (React + Vite, port 47292 in dev)
   │   ├── CostsPage.tsx         → cost deep-dive page
   │   ├── ProjectsPage.tsx      → projects overview page
   │   ├── ToolsPage.tsx         → tools breakdown page
-  │   └── CodexPage.tsx         → dedicated Codex harness page (/codex route)
+  │   ├── HarnessPage.tsx       → generic per-harness dashboard at /h/:harness (validates param; sets harness filter; tab bar: "Overview" = dashboard, "Data & sources" = HarnessInfoPanel); replaced the old hardcoded CodexPage
+  │   └── ComparePage.tsx       → unified side-by-side comparison at /compare (per-harness colors; N/A for incapable metrics; sessions/messages/tokens/cost + comparatives: usage-by-hour with peak hour, busiest day-of-week, activity-over-time sparkline, peak token day / peak session cost)
   ├── tui/
   │   └── index.ts              → terminal TUI (live stats in the terminal, no browser needed)
   └── components/               → UI (charts, cards, heatmap, modals, PDF export)
+      ├── HarnessInfoPanel.tsx  → inline panel explaining each harness's data sources / what's captured / what's missing (and why) / caveats; driven by HARNESS_INFO in lib/harness.ts
       └── PreferencesModal.tsx  → unified Settings modal with tabs: Preferences / Live / Install / Environment
 
 packages/core/src/              — shared across server + web + mcp (import as @agentistics/core)
@@ -93,7 +100,7 @@ Agentistics tracks sessions from multiple AI coding assistants (harnesses), not 
 
 ### N/A vs real 0 — `HARNESS_CAPABILITIES`
 
-`HARNESS_CAPABILITIES` in `@agentistics/core` (`packages/core/src/types.ts`) is the single source of truth for which metrics each harness can produce. When a capability flag is `false`, the frontend renders "N/A" via the `NAtag` component + `capable(harness, metric)` helper, rather than showing a misleading 0. Current limitations: Codex does not produce agent metrics or git line counts (those capabilities are `false` for the `'codex'` harness).
+`HARNESS_CAPABILITIES` in `@agentistics/core` (`packages/core/src/types.ts`) is the single source of truth for which metrics each harness can produce. When a capability flag is `false`, the frontend renders "N/A" via the `NAtag` component + `capable(harness, metric)` helper (re-exported from `lib/harness.ts`), rather than showing a misleading 0. Current limitations: Codex, Gemini, and Copilot do not produce agent metrics or git line counts (those capabilities are `false` for non-Claude harnesses).
 
 ### Aggregation — stats-cache.json is Claude-only
 
@@ -103,14 +110,21 @@ Agentistics tracks sessions from multiple AI coding assistants (harnesses), not 
 
 Codex JSONL files wrap events in `event_msg` / `response_item` envelopes; the semantic event type lives at `payload.type`. Token usage is at `payload.info.total_token_usage` (cumulative — last seen wins). Codex `input_tokens` includes the cached portion, so the parser stores non-cached input (`totalInput - cached`) in `input_tokens` and the cached portion in `cache_read_input_tokens` separately.
 
+### Gemini caveat — bootstrap stubs vs. real sessions
+
+Gemini CLI writes `~/.gemini/tmp/<project>/chats/*.jsonl` files but many are bootstrap-only stubs with no real conversation content. The Gemini parser (`adapters/gemini-parse.ts`) filters these out — only chats containing a genuine user message or model response are counted. Gemini's local files do not carry token/cost data; real Gemini token metrics would require OTel integration (Phase 3).
+
+### Compare page — `computeHarnessSummaries`
+
+`computeHarnessSummaries(data)` is an exported pure function in `hooks/useData.ts` that computes per-harness totals and comparatives (usage-by-hour, busiest day-of-week, activity-over-time, peak token day, peak session cost). Claude totals come from `statsCache` (full history); non-Claude totals are computed from per-session sums — so Compare page Claude numbers always match the main dashboard.
+
 ### Consolidate store namespacing
 
 The consolidate store is namespaced by harness: `~/.agentistics/sessions/<harness>/<id>.json`. Legacy flat files at the root are read and treated as `claude`.
 
 ### Future phases
 
-- **Phase 2** (planned): Gemini CLI + Copilot local adapters; full-archive raw-mirror namespacing.
-- **Phase 3** (planned): Gemini OTel integration.
+- **Phase 3** (planned): Gemini OTel integration for real token/cost data.
 
 See `docs/superpowers/specs/2026-06-19-multi-harness-tracking-design.md` for the full design.
 
@@ -249,6 +263,8 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
 - **`format.ts`** contains shared display helpers (`fmt`, `fmtCost`, `fmtDuration`, `fmtFull`) — never duplicate these inline
 - **`chatSounds.ts`** (`packages/web/src/lib/chatSounds.ts`) defines `CHAT_SOUNDS` (5 sounds: ping, chime, soft, bell, pop), all synthesized via Web Audio API — no audio files needed. `chatSoundId` preference is wired through App.tsx → TtyChat.tsx
 - **`PreferencesModal.tsx`** is the single Settings modal — it replaced 3 separate modals with one tabbed interface (Preferences / Live / Install / Environment tabs). Do not add separate settings modals.
+- **Per-harness pages live at `/h/:harness`** via the generic `HarnessPage` — never create one page per harness. Harness data-source info is shown via the page's "Data & sources" tab (powered by `HarnessInfoPanel` + `HARNESS_INFO` in `lib/harness.ts`); do not add per-harness info icons or modals elsewhere.
+- **A harness appears in the selector and Compare page** only when `AppData.harnesses` includes it (i.e., it contributes at least one real session). Gemini bootstrap-only stub files do not count.
 - **PWA**: `vite-plugin-pwa` is configured in `packages/web/vite.config.ts` with `devOptions: { enabled: true }`. Icons are in `packages/web/public/icons/`. The Install tab in PreferencesModal handles both web PWA install and desktop app download.
 - **`files_modified` counting** (`packages/server/server/jsonl.ts`): tracks unique file paths from Edit/Write/MultiEdit tool calls (`claudeFilesModified` Set), then takes `Math.max(gitFileStats.filesModified, claudeFilesModified.size)` — whichever is higher. This captures files Claude edited in non-git directories.
 - **`getProjectGitStats`** (`packages/server/server/git.ts`): first tries the project path as a single git repo; if that fails (not a git repo), falls back to scanning one level of subdirectories and aggregating stats across all git repos found there (handles workspace folders like `~/zuke`).
