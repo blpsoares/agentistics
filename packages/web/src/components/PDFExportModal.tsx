@@ -649,7 +649,8 @@ function MiniHighlightsSection({ sessions, c, lang }: {
 
 // ── Standalone PDF generation (used by PDFDirectExporter and PDFExportModal) ──
 
-export async function runPDFCapture(el: HTMLElement, pdfTheme: PDFTheme): Promise<void> {
+export async function runPDFCapture(el: HTMLElement, pdfTheme: PDFTheme, filename?: string): Promise<void> {
+  const resolvedFilename = filename ?? `claude-stats-${format(new Date(), 'yyyy-MM-dd')}.pdf`
   const html2canvas = (await import('html2canvas')).default
   const { jsPDF } = await import('jspdf')
 
@@ -674,7 +675,7 @@ export async function runPDFCapture(el: HTMLElement, pdfTheme: PDFTheme): Promis
   if (totalH_mm <= A4_H) {
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [A4_W, totalH_mm] })
     pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, A4_W, totalH_mm)
-    pdf.save(`claude-stats-${format(new Date(), 'yyyy-MM-dd')}.pdf`)
+    pdf.save(resolvedFilename)
   } else {
     const pageH_px = Math.round(A4_H * pxPerMm)
     const totalPages = Math.ceil(canvas.height / pageH_px)
@@ -704,7 +705,7 @@ export async function runPDFCapture(el: HTMLElement, pdfTheme: PDFTheme): Promis
         pdf.addImage(slice.toDataURL('image/png'), 'PNG', 0, 0, A4_W, sliceH_mm)
       }
     }
-    pdf.save(`claude-stats-${format(new Date(), 'yyyy-MM-dd')}.pdf`)
+    pdf.save(resolvedFilename)
   }
 }
 
@@ -729,7 +730,17 @@ export function PDFDirectExporter({ data, range, currentFilters, lang, currency,
   }
   const pdfTheme: PDFTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   const derived = useDerivedStats(data, pdfFilters)
-  const blendedRates = useMemo(() => blendedCostPerToken(data.statsCache.modelUsage ?? {}), [data])
+  const blendedRates = useMemo(
+    () => blendedCostPerToken(derived?.modelUsage ?? data.statsCache.modelUsage ?? {}),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [derived?.modelUsage, data.statsCache.modelUsage],
+  )
+  const pdfFilename = useMemo(() => {
+    const h = currentFilters.harness
+    const dateStr = format(new Date(), 'yyyy-MM-dd')
+    if (h && h !== 'claude') return `${h}-stats-${dateStr}.pdf`
+    return `claude-stats-${dateStr}.pdf`
+  }, [currentFilters.harness])
   const contentRef = useRef<HTMLDivElement>(null)
   const [logoDataUri, setLogoDataUri] = useState<string>('/logo.png')
   const triggered = useRef(false)
@@ -749,7 +760,7 @@ export function PDFDirectExporter({ data, range, currentFilters, lang, currency,
   useEffect(() => {
     if (!contentRef.current || !derived || triggered.current) return
     triggered.current = true
-    runPDFCapture(contentRef.current, pdfTheme)
+    runPDFCapture(contentRef.current, pdfTheme, pdfFilename)
       .catch(err => console.error('PDF direct export failed:', err))
       .finally(onDone)
   }, [derived, logoDataUri])
@@ -1044,7 +1055,13 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
   // Derive stats using the LOCAL PDF filters (not the app's filters)
   const derived = useDerivedStats(data, pdfFilters)
 
-  const availableModels = useMemo(() => Object.keys(data.statsCache.modelUsage ?? {}), [data])
+  // For non-Claude harnesses statsCache.modelUsage is Claude-only, so derive from sessions instead.
+  const availableModels = useMemo(() => {
+    if (derived?.modelUsage && Object.keys(derived.modelUsage).length > 0) {
+      return Object.keys(derived.modelUsage)
+    }
+    return Object.keys(data.statsCache.modelUsage ?? {})
+  }, [derived?.modelUsage, data.statsCache.modelUsage])
 
   const sortedProjects = useMemo(() =>
     [...data.projects].sort((a, b) => b.sessions.length - a.sessions.length),
@@ -1074,16 +1091,25 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
     else setSectionOrder([...SECTION_IDS])
   }
 
+  // For non-Claude harnesses statsCache.modelUsage is Claude-only; use derived.modelUsage instead.
   const blendedRates = useMemo(
-    () => blendedCostPerToken(data.statsCache.modelUsage ?? {}),
-    [data.statsCache.modelUsage]
+    () => blendedCostPerToken(derived?.modelUsage ?? data.statsCache.modelUsage ?? {}),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [derived?.modelUsage, data.statsCache.modelUsage],
   )
+
+  const pdfFilename = useMemo(() => {
+    const h = filters.harness
+    const dateStr = format(new Date(), 'yyyy-MM-dd')
+    if (h && h !== 'claude') return `${h}-stats-${dateStr}.pdf`
+    return `claude-stats-${dateStr}.pdf`
+  }, [filters.harness])
 
   const handleExport = async () => {
     if (!contentRef.current || exporting) return
     setExporting(true)
     try {
-      await runPDFCapture(contentRef.current, pdfTheme)
+      await runPDFCapture(contentRef.current, pdfTheme, pdfFilename)
       setExportSuccess(true)
       setTimeout(() => setExportSuccess(false), 2500)
     } catch (err) {
