@@ -477,7 +477,16 @@ function MiniSessionsTable({ sessions, c, lang, currency, brlRate, blendedRates 
       {sessions.slice(0, 12).map((s, i) => {
         const msgs = (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
         const tools = Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
-        const costUSD = ((s.input_tokens ?? 0) / 1_000_000) * blendedRates.input + ((s.output_tokens ?? 0) / 1_000_000) * blendedRates.output
+        const costUSD = s.model
+          ? calcCost({
+              inputTokens: s.input_tokens ?? 0,
+              outputTokens: s.output_tokens ?? 0,
+              cacheReadInputTokens: s.cache_read_input_tokens ?? 0,
+              cacheCreationInputTokens: s.cache_creation_input_tokens ?? 0,
+              webSearchRequests: 0,
+              costUSD: 0,
+            }, s.model)
+          : ((s.input_tokens ?? 0) / 1_000_000) * blendedRates.input + ((s.output_tokens ?? 0) / 1_000_000) * blendedRates.output
         return (
           <div key={i} style={{ display: 'grid', gridTemplateColumns: cols, gap: 6, padding: '4px 0', borderBottom: `1px solid ${c.border}40`, alignItems: 'center' }}>
             <div style={{ color: c.textSec }}>{s.start_time ? format(parseISO(s.start_time), 'MM/dd HH:mm') : '—'}</div>
@@ -1017,12 +1026,14 @@ export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose
   const pt = lang === 'pt'
 
   // Local filter state — independent from the app, initialized from current app filters
+  // Include harness so useDerivedStats runs against the same harness the app is viewing.
   const [pdfFilters, setPdfFilters] = useState<Filters>({
     dateRange: filters.dateRange,
     customStart: filters.customStart,
     customEnd: filters.customEnd,
     projects: filters.projects,
     models: filters.models,
+    harness: filters.harness,
   })
 
   const [pdfTheme, setPdfTheme] = useState<PDFTheme>(
