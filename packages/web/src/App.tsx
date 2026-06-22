@@ -1407,16 +1407,25 @@ export default function AppLayout() {
             />
             {!isMobile && <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
               {lang === 'pt' ? 'Atualizado em' : 'Updated'}{' '}
-              {statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : lang === 'pt' ? 'hoje' : 'today'}
+              {filters.harness && filters.harness !== 'claude'
+                ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : lang === 'pt' ? 'hoje' : 'today')
+                : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : lang === 'pt' ? 'hoje' : 'today')}
             </div>}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 10 }}>
-            {!isMobile && statsCache.firstSessionDate && (
+            {!isMobile && (filters.harness ? derived.firstSessionDate : statsCache.firstSessionDate) && (
               <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'right' }}>
-                <div>{lang === 'pt' ? 'Desde' : 'Since'} {format(parseISO(statsCache.firstSessionDate), 'MMM d, yyyy')}</div>
+                <div>
+                  {lang === 'pt' ? 'Desde' : 'Since'}{' '}
+                  {format(
+                    filters.harness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!),
+                    'MMM d, yyyy'
+                  )}
+                </div>
                 <div style={{ color: 'var(--text-secondary)' }}>
                   {derived.allTimeTotalSessions.toLocaleString()} {lang === 'pt' ? 'sessões' : 'sessions'}
+                  {filters.harness ? ` · ${HARNESS_LABELS[filters.harness]}` : ''}
                 </div>
               </div>
             )}

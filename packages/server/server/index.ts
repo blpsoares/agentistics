@@ -16,6 +16,7 @@ import { listCopilotSessions, getCopilotSessionMessages, type CopilotSessionSumm
 import { PROJECTS_DIR } from './config'
 import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
+import { getEnabledAdapters } from './adapters/types'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -70,7 +71,7 @@ void (async () => {
   }
 })()
 
-setupFileWatcher()
+void setupFileWatcher()
 maybeSpawnWatcher()
 ensureNayChat(PORT).catch(err => console.error('[nay-chat] failed to initialize:', err))
 ensureClaudeChat().catch(err => console.error('[claude-chat] failed to initialize:', err))
@@ -267,6 +268,30 @@ Bun.serve({
           const name = projectPath.split('/').filter(Boolean).pop() ?? dir
           entries.push({ name, path: projectPath, encodedDir: dir, sessionCount: jsonlFiles.length })
         }))
+        // Collect project paths from all non-Claude harness adapters via their sessions.
+        // Avoids touching statsCache (Claude-only) and reuses the already-loaded session data.
+        const seenPaths = new Set(entries.map(e => e.path))
+        const adapters = await getEnabledAdapters()
+        await Promise.all(
+          adapters
+            .filter(a => a.id !== 'claude')
+            .map(async a => {
+              const sessions = await a.loadSessions()
+              const byPath = new Map<string, number>()
+              for (const s of sessions) {
+                if (s.project_path) {
+                  byPath.set(s.project_path, (byPath.get(s.project_path) ?? 0) + 1)
+                }
+              }
+              for (const [projectPath, sessionCount] of byPath) {
+                if (seenPaths.has(projectPath)) continue
+                seenPaths.add(projectPath)
+                const name = projectPath.split('/').filter(Boolean).pop() ?? projectPath
+                entries.push({ name, path: projectPath, encodedDir: '', sessionCount })
+              }
+            })
+        )
+
         entries.sort((a, b) => b.sessionCount - a.sessionCount)
         return new Response(JSON.stringify(entries), {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },

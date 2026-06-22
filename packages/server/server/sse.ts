@@ -1,9 +1,11 @@
 import { join } from 'path'
 import { spawn } from 'child_process'
+import { stat } from 'fs/promises'
 import chokidar from 'chokidar'
 import { SESSION_META_DIR, PROJECTS_DIR, STATS_CACHE_FILE, PORT } from './config'
 import { invalidateCache } from './data'
 import { mirrorFile } from './archive'
+import { getEnabledAdapters } from './adapters/types'
 
 export type SseController = ReadableStreamDefaultController<Uint8Array>
 
@@ -29,7 +31,7 @@ export function triggerSseNotification() {
   sseDebounce = setTimeout(notifySseClients, 2000)
 }
 
-export function setupFileWatcher() {
+export async function setupFileWatcher() {
   const watch = (dir: string) => {
     const watcher = chokidar.watch(dir, {
       persistent: true,
@@ -48,9 +50,34 @@ export function setupFileWatcher() {
     })
     console.log(`[watcher] Watching ${dir}`)
   }
+
+  // Claude core paths
   watch(SESSION_META_DIR)
   watch(PROJECTS_DIR)
   watch(STATS_CACHE_FILE)
+
+  // Additional harness data roots (Codex, Gemini, Copilot, …)
+  // Dedupe paths and skip roots that don't exist yet.
+  const coreWatched = new Set([SESSION_META_DIR, PROJECTS_DIR, STATS_CACHE_FILE])
+  try {
+    const adapters = await getEnabledAdapters()
+    const seen = new Set<string>(coreWatched)
+    for (const adapter of adapters) {
+      const root = adapter.dataRoot
+      if (seen.has(root)) continue
+      seen.add(root)
+      try {
+        await stat(root)
+        watch(root)
+      } catch {
+        // Directory doesn't exist yet — skip silently; SSE will pick up changes
+        // once the harness creates files (data.ts re-scans on every request).
+        console.log(`[watcher] Skipping ${root} (not found)`)
+      }
+    }
+  } catch (err) {
+    console.warn('[watcher] Could not resolve harness adapters:', String(err))
+  }
 }
 
 export function maybeSpawnWatcher() {
