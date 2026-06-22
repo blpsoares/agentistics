@@ -181,7 +181,7 @@ export const CATALOG: CatalogItem[] = [
         label={lang === 'pt' ? 'Commits' : 'Commits'}
         value={derived.gitCommits}
         sub={derived.gitPushes > 0
-          ? `${derived.gitPushes} ${lang === 'pt' ? 'pushes' : 'pushes'}`
+          ? `${derived.gitPushes} pushes`
           : lang === 'pt' ? 'via chamadas Bash' : 'via Bash calls'}
         icon={<GitCommit size={15} />}
         accent="var(--accent-cyan)"
