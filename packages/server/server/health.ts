@@ -5,87 +5,132 @@ import { promisify } from 'util'
 import type { HealthIssue, SessionMeta, StatsCache } from '@agentistics/core'
 import { PROJECTS_DIR, STATS_CACHE_FILE } from './config'
 import { safeReadDir, safeStat, safeReadJson } from './utils'
+import { getEnabledAdapters } from './adapters/types'
 
 const execAsync = promisify(exec)
 
 export async function runHealthChecks(): Promise<HealthIssue[]> {
   const issues: HealthIssue[] = []
 
-  // 1. Check projects dir
-  const projDirStat = await safeStat(PROJECTS_DIR)
-  if (!projDirStat?.isDirectory()) {
-    issues.push({
-      id: 'projects-dir-missing',
-      severity: 'error',
-      title: 'Projects directory not found',
-      description: `~/.claude/projects/ was not found (looked at: ${PROJECTS_DIR}).`,
-      guide: [
-        'Make sure Claude Code is installed:',
-        '  npm install -g @anthropic-ai/claude-code',
-        '',
-        'Then use it at least once inside a project directory.',
-        'Also verify that the HOME environment variable is set correctly.',
-      ].join('\n'),
-    })
-    return issues
-  }
+  // Determine which harnesses are active so Claude-specific checks can be
+  // skipped when only non-Claude harnesses are present.
+  const enabledAdapters = await getEnabledAdapters()
+  const enabledIds = new Set(enabledAdapters.map(a => a.id))
+  const claudeEnabled = enabledIds.has('claude')
 
-  // 2. Check for any JSONL sessions and sample one for format checks
-  const projectDirs = await safeReadDir(PROJECTS_DIR)
-  let totalJsonl = 0
-  let sampleJsonlPath: string | null = null
+  // 1a. Claude-specific: projects directory
+  if (claudeEnabled) {
+    const projDirStat = await safeStat(PROJECTS_DIR)
+    if (!projDirStat?.isDirectory()) {
+      issues.push({
+        id: 'projects-dir-missing',
+        severity: 'error',
+        title: 'Claude projects directory not found',
+        description: `~/.claude/projects/ was not found (looked at: ${PROJECTS_DIR}).`,
+        guide: [
+          'Make sure Claude Code is installed:',
+          '  npm install -g @anthropic-ai/claude-code',
+          '',
+          'Then use it at least once inside a project directory.',
+          'Also verify that the HOME environment variable is set correctly.',
+        ].join('\n'),
+      })
+      // Only bail out early if Claude is the sole harness; other harnesses may
+      // still have data worth reporting.
+      if (enabledIds.size === 1) return issues
+    } else {
+      // 1b. Check for any JSONL sessions and sample one for format checks
+      const projectDirs = await safeReadDir(PROJECTS_DIR)
+      let totalJsonl = 0
+      let sampleJsonlPath: string | null = null
 
-  for (const dir of projectDirs) {
-    const entries = await safeReadDir(join(PROJECTS_DIR, dir))
-    for (const entry of entries) {
-      if (entry.endsWith('.jsonl')) {
-        totalJsonl++
-        if (!sampleJsonlPath) sampleJsonlPath = join(PROJECTS_DIR, dir, entry)
+      for (const dir of projectDirs) {
+        const entries = await safeReadDir(join(PROJECTS_DIR, dir))
+        for (const entry of entries) {
+          if (entry.endsWith('.jsonl')) {
+            totalJsonl++
+            if (!sampleJsonlPath) sampleJsonlPath = join(PROJECTS_DIR, dir, entry)
+          }
+        }
+        if (totalJsonl >= 5 && sampleJsonlPath) break
+      }
+
+      if (totalJsonl === 0) {
+        issues.push({
+          id: 'no-sessions',
+          severity: 'warning',
+          title: 'No Claude session files found',
+          description: 'No JSONL session files were found in ~/.claude/projects/.',
+          guide: [
+            'Open a project in VS Code or a terminal and start a Claude Code session.',
+            'Session files are created automatically when you first use Claude Code.',
+          ].join('\n'),
+        })
+      }
+
+      // 2. Check JSONL timestamp presence (old Claude Code versions didn't include it)
+      if (sampleJsonlPath) {
+        let hasTimestamp = false
+        try {
+          const content = await readFile(sampleJsonlPath, 'utf-8')
+          for (const line of content.split('\n').slice(0, 30)) {
+            const t = line.trim()
+            if (!t) continue
+            try {
+              const obj = JSON.parse(t) as Record<string, unknown>
+              if (obj.timestamp) { hasTimestamp = true; break }
+            } catch { continue }
+          }
+        } catch { /* ignore */ }
+
+        if (!hasTimestamp) {
+          issues.push({
+            id: 'jsonl-no-timestamps',
+            severity: 'warning',
+            title: 'Claude session files missing timestamps',
+            description: 'JSONL files do not contain the "timestamp" field. Duration, hourly activity, and response-time metrics will be unavailable.',
+            guide: 'Update Claude Code to the latest version:\n  npm install -g @anthropic-ai/claude-code',
+          })
+        }
+      }
+
+      // 3. Auto-fix: stats-cache.json corrupt (Claude-only file)
+      const cacheStat = await safeStat(STATS_CACHE_FILE)
+      if (cacheStat !== null) {
+        const cacheData = await safeReadJson<Record<string, unknown>>(STATS_CACHE_FILE)
+        if (cacheData === null) {
+          try {
+            await unlink(STATS_CACHE_FILE)
+            console.log('[health] Deleted corrupt stats-cache.json')
+            issues.push({
+              id: 'stats-cache-reset',
+              severity: 'info',
+              title: 'Stats cache was corrupt — auto-fixed',
+              description: 'stats-cache.json was corrupt and has been automatically removed. Token counts and model breakdowns will be recalculated on the next Claude Code session.',
+              auto_fixed: true,
+            })
+          } catch { /* ignore */ }
+        }
       }
     }
-    if (totalJsonl >= 5 && sampleJsonlPath) break
   }
 
-  if (totalJsonl === 0) {
-    issues.push({
-      id: 'no-sessions',
-      severity: 'warning',
-      title: 'No session files found',
-      description: 'No JSONL session files were found in ~/.claude/projects/.',
-      guide: [
-        'Open a project in VS Code or a terminal and start a Claude Code session.',
-        'Session files are created automatically when you first use Claude Code.',
-      ].join('\n'),
-    })
-  }
-
-  // 3. Check JSONL timestamp presence (old Claude Code versions didn't include it)
-  if (sampleJsonlPath) {
-    let hasTimestamp = false
-    try {
-      const content = await readFile(sampleJsonlPath, 'utf-8')
-      for (const line of content.split('\n').slice(0, 30)) {
-        const t = line.trim()
-        if (!t) continue
-        try {
-          const obj = JSON.parse(t) as Record<string, unknown>
-          if (obj.timestamp) { hasTimestamp = true; break }
-        } catch { continue }
-      }
-    } catch { /* ignore */ }
-
-    if (!hasTimestamp) {
+  // 4. Light data-root check for each non-Claude enabled adapter
+  for (const adapter of enabledAdapters) {
+    if (adapter.id === 'claude') continue
+    const rootStat = await safeStat(adapter.dataRoot)
+    if (!rootStat?.isDirectory()) {
       issues.push({
-        id: 'jsonl-no-timestamps',
-        severity: 'warning',
-        title: 'Session files missing timestamps',
-        description: 'JSONL files do not contain the "timestamp" field. Duration, hourly activity, and response-time metrics will be unavailable.',
-        guide: 'Update Claude Code to the latest version:\n  npm install -g @anthropic-ai/claude-code',
+        id: `harness-dir-missing-${adapter.id}`,
+        severity: 'info',
+        title: `${adapter.id} data directory not found`,
+        description: `The ${adapter.id} harness is enabled but its data directory does not exist yet (${adapter.dataRoot}).`,
+        guide: `Use ${adapter.id} at least once to generate session data, or disable the harness with AGENTISTICS_HARNESS_${adapter.id.toUpperCase()}=0.`,
       })
     }
   }
 
-  // 4. Check git availability
+  // 5. Check git availability
   try {
     await execAsync('git --version', { timeout: 3000 })
   } catch {
@@ -98,31 +143,13 @@ export async function runHealthChecks(): Promise<HealthIssue[]> {
     })
   }
 
-  // 5. Auto-fix: stats-cache.json corrupt
-  const cacheStat = await safeStat(STATS_CACHE_FILE)
-  if (cacheStat !== null) {
-    const cacheData = await safeReadJson<Record<string, unknown>>(STATS_CACHE_FILE)
-    if (cacheData === null) {
-      try {
-        await unlink(STATS_CACHE_FILE)
-        console.log('[health] Deleted corrupt stats-cache.json')
-        issues.push({
-          id: 'stats-cache-reset',
-          severity: 'info',
-          title: 'Stats cache was corrupt — auto-fixed',
-          description: 'stats-cache.json was corrupt and has been automatically removed. Token counts and model breakdowns will be recalculated on the next Claude Code session.',
-          auto_fixed: true,
-        })
-      } catch { /* ignore */ }
-    }
-  }
-
   return issues
 }
 
 /** Warn when ~/.claude/stats-cache.json is outdated relative to the most recent JSONL session.
  *  Claude Code normally refreshes this cache; when it lags, agentistics supplements from
- *  JSONL (see `supplementStatsCache` in server/data.ts) but the user should still be informed. */
+ *  JSONL (see `supplementStatsCache` in server/data.ts) but the user should still be informed.
+ *  Only Claude sessions are compared — statsCache is Claude-only. */
 export function analyzeCacheStaleness(
   statsCache: StatsCache,
   sessions: SessionMeta[],
@@ -131,8 +158,13 @@ export function analyzeCacheStaleness(
   const lastComputed = statsCache.lastComputedDate
   if (!lastComputed || sessions.length === 0) return
 
+  // Filter to Claude sessions only — statsCache is Claude-only and comparing
+  // non-Claude session dates against it would produce false staleness warnings.
+  const claudeSessions = sessions.filter(s => !s.harness || s.harness === 'claude')
+  if (claudeSessions.length === 0) return
+
   let mostRecentDay = ''
-  for (const s of sessions) {
+  for (const s of claudeSessions) {
     if (!s.start_time) continue
     const day = s.start_time.slice(0, 10)
     if (day > mostRecentDay) mostRecentDay = day
