@@ -10,6 +10,9 @@ import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_C
 import { listMcpServers, removeMcpServer } from './mcp-list'
 import { listNaySessions, getNaySessionMessages } from './nay-sessions'
 import { listClaudeSessions, getClaudeSessionMessages, type ClaudeSessionSummary, type ClaudeSessionMessage } from './claude-sessions'
+import { listCodexSessions, getCodexSessionMessages, type CodexSessionSummary, type CodexSessionMessage } from './codex-sessions'
+import { listGeminiSessions, getGeminiSessionMessages, type GeminiSessionSummary, type GeminiSessionMessage } from './gemini-sessions'
+import { listCopilotSessions, getCopilotSessionMessages, type CopilotSessionSummary, type CopilotSessionMessage } from './copilot-sessions'
 import { PROJECTS_DIR } from './config'
 import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
@@ -315,6 +318,72 @@ Bun.serve({
         })
       }
       const msgs: ClaudeSessionMessage[] = await getClaudeSessionMessages(encodedDir, id)
+      return new Response(JSON.stringify(msgs), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // GET /api/codex-sessions → list all Codex sessions
+    // GET /api/codex-sessions/:id → messages for a Codex session
+    if (url.pathname === '/api/codex-sessions' && req.method === 'GET') {
+      const sessions: CodexSessionSummary[] = await listCodexSessions()
+      return new Response(JSON.stringify(sessions), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (url.pathname.startsWith('/api/codex-sessions/') && req.method === 'GET') {
+      const id = url.pathname.slice('/api/codex-sessions/'.length)
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'id required' }), {
+          status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const msgs: CodexSessionMessage[] = await getCodexSessionMessages(id)
+      return new Response(JSON.stringify(msgs), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // GET /api/gemini-sessions → list all Gemini sessions
+    // GET /api/gemini-sessions/:id → messages for a Gemini session
+    if (url.pathname === '/api/gemini-sessions' && req.method === 'GET') {
+      const sessions: GeminiSessionSummary[] = await listGeminiSessions()
+      return new Response(JSON.stringify(sessions), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (url.pathname.startsWith('/api/gemini-sessions/') && req.method === 'GET') {
+      const id = url.pathname.slice('/api/gemini-sessions/'.length)
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'id required' }), {
+          status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const msgs: GeminiSessionMessage[] = await getGeminiSessionMessages(id)
+      return new Response(JSON.stringify(msgs), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // GET /api/copilot-sessions → list all Copilot sessions
+    // GET /api/copilot-sessions/:id → messages for a Copilot session
+    if (url.pathname === '/api/copilot-sessions' && req.method === 'GET') {
+      const sessions: CopilotSessionSummary[] = await listCopilotSessions()
+      return new Response(JSON.stringify(sessions), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (url.pathname.startsWith('/api/copilot-sessions/') && req.method === 'GET') {
+      const id = url.pathname.slice('/api/copilot-sessions/'.length)
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'id required' }), {
+          status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const msgs: CopilotSessionMessage[] = await getCopilotSessionMessages(id)
       return new Response(JSON.stringify(msgs), {
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
