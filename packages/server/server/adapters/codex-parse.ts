@@ -17,6 +17,9 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
   let userMessages = 0
   let assistantMessages = 0
   let usesWebSearch = false
+  let firstPrompt = ''
+  const messageHours: number[] = []
+  const userMessageTimestamps: string[] = []
   const toolCounts: Record<string, number> = {}
 
   for (const raw of lines) {
@@ -26,6 +29,7 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
     const data = (e.payload && typeof e.payload === 'object') ? e.payload : e
     const wrapped = outer === 'event_msg' || outer === 'response_item'
     const type = wrapped ? (data.type as string | undefined) : outer
+    const lineTs: string | undefined = typeof e.timestamp === 'string' ? e.timestamp : undefined
 
     if (type === 'session_meta') {
       sessionId = data.id ?? sessionId
@@ -44,15 +48,26 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
       }
     } else if (type === 'user_message') {
       userMessages++
+      const text = typeof data.message === 'string' ? data.message : ''
+      if (!firstPrompt && text) {
+        firstPrompt = text.slice(0, 200)
+      }
+      if (lineTs) {
+        userMessageTimestamps.push(lineTs)
+        messageHours.push(new Date(lineTs).getUTCHours())
+      }
     } else if (type === 'agent_message') {
       assistantMessages++
+      if (lineTs) {
+        messageHours.push(new Date(lineTs).getUTCHours())
+      }
     }
 
     if (type && type.endsWith('_call')) {
       toolCounts[type] = (toolCounts[type] ?? 0) + 1
       if (type === 'web_search_call') usesWebSearch = true
     }
-    if (typeof e.timestamp === 'string') endTime = e.timestamp
+    if (lineTs) endTime = lineTs
   }
 
   if (!startTime && lines[0] !== undefined) {
@@ -82,7 +97,7 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
     output_tokens: outputTokens,
     cache_read_input_tokens: cacheRead,
     cache_creation_input_tokens: 0,
-    first_prompt: '',
+    first_prompt: firstPrompt,
     user_interruptions: 0,
     user_response_times: [],
     tool_errors: 0,
@@ -94,8 +109,8 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
     lines_added: 0,
     lines_removed: 0,
     files_modified: 0,
-    message_hours: [],
-    user_message_timestamps: [],
+    message_hours: messageHours,
+    user_message_timestamps: userMessageTimestamps,
     model,
     harness: 'codex',
     _source: 'jsonl',

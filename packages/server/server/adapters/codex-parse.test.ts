@@ -28,6 +28,12 @@ test('parses a codex rollout (real envelope format) into a SessionMeta', () => {
   expect(s!.tool_counts['web_search_call']).toBe(1)
   expect(s!.start_time).toBe('2026-05-25T18:25:50.087Z')
   expect(s!._source).toBe('jsonl')
+  // first_prompt = text of the first user_message
+  expect(s!.first_prompt).toBe('hi')
+  // message_hours: user_message at 18:25:53Z (hour=18) + agent_message at 18:25:55Z (hour=18)
+  expect(s!.message_hours).toEqual([18, 18])
+  // user_message_timestamps: only the user_message line
+  expect(s!.user_message_timestamps).toEqual(['2026-05-25T18:25:53.000Z'])
 })
 
 test('falls back to fallbackId and returns null on empty', () => {
