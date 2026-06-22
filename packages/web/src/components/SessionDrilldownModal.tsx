@@ -8,6 +8,7 @@ import type { SessionMeta, Lang } from '@agentistics/core'
 import { formatProjectName, formatModel, calcCost, getModelColor } from '@agentistics/core'
 import { blendedCostPerToken } from '../hooks/useData'
 import { fmtFull } from '@agentistics/core'
+import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { PrecisionToggle } from './PrecisionToggle'
 
 interface Props {
@@ -197,25 +198,36 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
             <button
               onClick={() => {
                 const isNay = session.project_path.includes('.agentistics/nay-chat')
-                const encodedDir = session.project_path.replace(/\//g, '-')
-                window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
-                  detail: isNay
-                    ? { tab: 'nay', sessionId: session.session_id }
-                    : { tab: 'claude', sessionId: session.session_id, project: { path: session.project_path, name: session.project_path.split('/').pop() ?? session.project_path, encodedDir } },
-                }))
+                if (isNay) {
+                  window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
+                    detail: { tab: 'nay', sessionId: session.session_id },
+                  }))
+                } else {
+                  const harness = session.harness ?? 'claude'
+                  if (harness === 'claude') {
+                    const encodedDir = session.project_path.replace(/\//g, '-')
+                    window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
+                      detail: { tab: 'claude', sessionId: session.session_id, project: { path: session.project_path, name: session.project_path.split('/').pop() ?? session.project_path, encodedDir } },
+                    }))
+                  } else {
+                    window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
+                      detail: { tab: harness, sessionId: session.session_id },
+                    }))
+                  }
+                }
               }}
-              title={session.project_path.includes('.agentistics/nay-chat') ? 'Open in Nay Chat' : 'Open in Claude'}
+              title={session.project_path.includes('.agentistics/nay-chat') ? 'Open in Nay Chat' : 'Open in ' + HARNESS_LABELS[session.harness ?? 'claude']}
               style={{
                 height: 30, padding: '0 10px',
                 display: 'flex', alignItems: 'center', gap: 5,
                 border: '1px solid var(--border)', borderRadius: 8,
                 background: 'transparent',
-                color: session.project_path.includes('.agentistics/nay-chat') ? 'var(--anthropic-orange)' : 'var(--accent-purple, #a855f7)',
+                color: session.project_path.includes('.agentistics/nay-chat') ? 'var(--anthropic-orange)' : HARNESS_COLORS[session.harness ?? 'claude'],
                 cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 500,
               }}
             >
               <ExternalLink size={12} />
-              {session.project_path.includes('.agentistics/nay-chat') ? 'Nay' : 'Claude'}
+              {session.project_path.includes('.agentistics/nay-chat') ? 'Nay' : HARNESS_LABELS[session.harness ?? 'claude']}
             </button>
             <button
               onClick={onClose}

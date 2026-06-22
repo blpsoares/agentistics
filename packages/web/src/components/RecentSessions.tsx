@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import type { SessionMeta } from '@agentistics/core'
 import { formatProjectName } from '@agentistics/core'
+import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { format, parseISO } from 'date-fns'
 import {
   ChevronLeft,
@@ -226,14 +227,21 @@ function openSession(s: SessionMeta, e: React.MouseEvent) {
       detail: { tab: 'nay', sessionId: s.session_id },
     }))
   } else {
-    const encodedDir = encodeProjectDir(s.project_path)
-    window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
-      detail: {
-        tab: 'claude',
-        sessionId: s.session_id,
-        project: { path: s.project_path, name: s.project_path.split('/').pop() ?? s.project_path, encodedDir },
-      },
-    }))
+    const harness = s.harness ?? 'claude'
+    if (harness === 'claude') {
+      const encodedDir = encodeProjectDir(s.project_path)
+      window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
+        detail: {
+          tab: 'claude',
+          sessionId: s.session_id,
+          project: { path: s.project_path, name: s.project_path.split('/').pop() ?? s.project_path, encodedDir },
+        },
+      }))
+    } else {
+      window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
+        detail: { tab: harness, sessionId: s.session_id },
+      }))
+    }
   }
 }
 
@@ -475,7 +483,7 @@ export function RecentSessions({ sessions, lang, onSelect }: Props) {
                     </span>
                     <button
                       onClick={(e) => openSession(s, e)}
-                      title={isNayChatSession(s.project_path) ? 'Open in Nay Chat' : 'Open in Claude'}
+                      title={isNayChatSession(s.project_path) ? 'Open in Nay Chat' : 'Open in ' + HARNESS_LABELS[s.harness ?? 'claude']}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -493,8 +501,11 @@ export function RecentSessions({ sessions, lang, onSelect }: Props) {
                       }}
                       onMouseEnter={e => {
                         const btn = e.currentTarget
-                        btn.style.borderColor = isNayChatSession(s.project_path) ? 'var(--anthropic-orange)' : 'var(--accent-purple, #a855f7)'
-                        btn.style.color = isNayChatSession(s.project_path) ? 'var(--anthropic-orange)' : 'var(--accent-purple, #a855f7)'
+                        const hoverColor = isNayChatSession(s.project_path)
+                          ? 'var(--anthropic-orange)'
+                          : HARNESS_COLORS[s.harness ?? 'claude']
+                        btn.style.borderColor = hoverColor
+                        btn.style.color = hoverColor
                       }}
                       onMouseLeave={e => {
                         const btn = e.currentTarget
@@ -503,7 +514,7 @@ export function RecentSessions({ sessions, lang, onSelect }: Props) {
                       }}
                     >
                       <ExternalLink size={9} />
-                      {isNayChatSession(s.project_path) ? 'Nay' : 'Claude'}
+                      {isNayChatSession(s.project_path) ? 'Nay' : HARNESS_LABELS[s.harness ?? 'claude']}
                     </button>
                   </div>
                 </div>
