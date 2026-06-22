@@ -1082,10 +1082,10 @@ export default function AppLayout() {
     if (!data) return []
     const set = new Set<string>()
     for (const id of Object.keys(data.statsCache.modelUsage ?? {})) {
-      if (id.startsWith('claude-')) set.add(id)
+      set.add(id)
     }
     for (const s of data.sessions) {
-      if (s.model && s.model.startsWith('claude-')) set.add(s.model)
+      if (s.model) set.add(s.model)
     }
     return Array.from(set)
   }, [data])
