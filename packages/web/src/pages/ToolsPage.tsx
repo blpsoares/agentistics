@@ -16,8 +16,8 @@ export default function ToolsPage() {
         icon={<Wrench size={16} />}
         title={lang === 'pt' ? 'Ferramentas & agentes' : 'Tools & agents'}
         subtitle={lang === 'pt'
-          ? 'Quais ferramentas o Claude está usando mais e performance dos agentes delegados.'
-          : 'Which tools Claude is using the most and the performance of delegated agents.'}
+          ? 'Quais ferramentas estão sendo mais usadas e a performance dos agentes delegados.'
+          : 'Which tools are used most across all harnesses and the performance of delegated agents.'}
       />
 
       <Section flashId="tools" title={<><Wrench size={14} /> {lang === 'pt' ? 'Métricas de ferramentas' : 'Tool metrics'}</>}>

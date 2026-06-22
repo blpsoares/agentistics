@@ -12,6 +12,14 @@ export const TOOL_LABELS: Record<string, string> = {
   agentistics_build_layout:      'Building layout',
   agentistics_component_catalog: 'Reading catalog',
   agentistics_export_pdf:        'Generating PDF',
+
+  // Codex tool types
+  web_search_call:               'Web search',
+  exec_command_call:             'Run command',
+  exec_command:                  'Run command',
+  apply_patch_call:              'Apply patch',
+  local_shell_call:              'Shell command',
+  custom_tool_call:              'Custom tool',
 }
 
 export function formatToolName(raw: string): string {

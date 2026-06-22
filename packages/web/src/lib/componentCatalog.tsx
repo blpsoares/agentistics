@@ -181,8 +181,8 @@ export const CATALOG: CatalogItem[] = [
         label={lang === 'pt' ? 'Commits' : 'Commits'}
         value={derived.gitCommits}
         sub={derived.gitPushes > 0
-          ? `${derived.gitPushes} ${lang === 'pt' ? 'pushes via Claude' : 'pushes via Claude'}`
-          : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls'}
+          ? `${derived.gitPushes} ${lang === 'pt' ? 'pushes' : 'pushes'}`
+          : lang === 'pt' ? 'via chamadas Bash' : 'via Bash calls'}
         icon={<GitCommit size={15} />}
         accent="var(--accent-cyan)"
       />
@@ -197,7 +197,7 @@ export const CATALOG: CatalogItem[] = [
         value={derived.filesModified}
         sub={derived.linesAdded + derived.linesRemoved > 0
           ? `+${fmt(derived.linesAdded)} / -${fmt(derived.linesRemoved)} linhas`
-          : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls'}
+          : lang === 'pt' ? 'via chamadas Bash' : 'via Bash calls'}
         icon={<FileCode size={15} />}
         accent="var(--accent-green)"
       />
