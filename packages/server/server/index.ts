@@ -333,7 +333,7 @@ Bun.serve({
     }
 
     if (url.pathname.startsWith('/api/codex-sessions/') && req.method === 'GET') {
-      const id = url.pathname.slice('/api/codex-sessions/'.length)
+      const id = decodeURIComponent(url.pathname.slice('/api/codex-sessions/'.length))
       if (!id) {
         return new Response(JSON.stringify({ error: 'id required' }), {
           status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -355,7 +355,7 @@ Bun.serve({
     }
 
     if (url.pathname.startsWith('/api/gemini-sessions/') && req.method === 'GET') {
-      const id = url.pathname.slice('/api/gemini-sessions/'.length)
+      const id = decodeURIComponent(url.pathname.slice('/api/gemini-sessions/'.length))
       if (!id) {
         return new Response(JSON.stringify({ error: 'id required' }), {
           status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -377,7 +377,7 @@ Bun.serve({
     }
 
     if (url.pathname.startsWith('/api/copilot-sessions/') && req.method === 'GET') {
-      const id = url.pathname.slice('/api/copilot-sessions/'.length)
+      const id = decodeURIComponent(url.pathname.slice('/api/copilot-sessions/'.length))
       if (!id) {
         return new Response(JSON.stringify({ error: 'id required' }), {
           status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
