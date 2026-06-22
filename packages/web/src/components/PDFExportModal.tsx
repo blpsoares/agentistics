@@ -7,6 +7,7 @@ import { format, parseISO, subDays } from 'date-fns'
 import type { AppData, Filters, Lang, ModelUsage, SessionMeta } from '@agentistics/core'
 import { formatModel, formatProjectName, calcCost } from '@agentistics/core'
 import { useDerivedStats, blendedCostPerToken } from '../hooks/useData'
+import { HARNESS_LABELS } from '../lib/harness'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -830,6 +831,12 @@ function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currenc
     ? pdfFilters.models.length === 1 ? formatModel(pdfFilters.models[0]!) : `${pdfFilters.models.length} models`
     : null
 
+  // Harness-aware title: use the harness label when filtered to a specific harness,
+  // otherwise fall back to the neutral 'agentistics' brand name.
+  const harnessTitle = pdfFilters.harness
+    ? HARNESS_LABELS[pdfFilters.harness]
+    : 'agentistics'
+
   return (
     <div style={{
       width: 794, background: c.bg,
@@ -845,7 +852,7 @@ function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currenc
             style={{ width: 36, height: 36, borderRadius: 10, flexShrink: 0, objectFit: 'contain' }}
           />
           <div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: c.text, lineHeight: 1 }}>Claude Stats</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: c.text, lineHeight: 1 }}>{harnessTitle}</div>
             <div style={{ fontSize: 11, color: c.textSec, marginTop: 3 }}>
               {pt ? 'Relatório de uso' : 'Usage Report'} · {periodLabel}
               {modelLabel && ` · ${modelLabel}`}
@@ -873,7 +880,7 @@ function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currenc
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
                 <KPICard label={pt ? 'Sequência' : 'Streak'} value={`${derived.streak}d`} sub={pt ? 'dias consec.' : 'consecutive'} accent={c.red} c={c} />
                 <KPICard label={pt ? 'Sessão mais longa' : 'Longest session'} value={derived.longestSession?.duration_minutes ? fmtDur(derived.longestSession.duration_minutes) : '—'} sub="" accent={c.purple} c={c} />
-                <KPICard label="Commits" value={String(derived.gitCommits)} sub={derived.gitPushes > 0 ? `${derived.gitPushes} pushes` : pt ? 'via Claude' : 'via Claude'} accent={c.cyan} c={c} />
+                <KPICard label="Commits" value={String(derived.gitCommits)} sub={derived.gitPushes > 0 ? `${derived.gitPushes} pushes` : `via ${harnessTitle}`} accent={c.cyan} c={c} />
                 <KPICard label={pt ? 'Arquivos' : 'Files'} value={String(derived.filesModified)} sub={`+${fmtN(derived.linesAdded)} / -${fmtN(derived.linesRemoved)}`} accent={c.green} c={c} />
               </div>
             </div>
@@ -1011,7 +1018,7 @@ function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currenc
       })}
 
       <div style={{ marginTop: 24, paddingTop: 14, borderTop: `1px solid ${c.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ fontSize: 8, color: c.textTer }}>Claude Stats · Gerado automaticamente</div>
+        <div style={{ fontSize: 8, color: c.textTer }}>{harnessTitle} · {pt ? 'Gerado automaticamente' : 'Auto-generated'}</div>
         <div style={{ fontSize: 8, color: c.textTer }}>
           {derived.totalSessions.toLocaleString()} {pt ? 'sessões analisadas' : 'sessions analyzed'}
         </div>
