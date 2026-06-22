@@ -21,6 +21,8 @@ type NayAttachment = {
 }
 import { ClaudeChat } from './ClaudeChat'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
+import type { HarnessId } from '@agentistics/core'
+import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { formatToolName, fmtTime, NAV_LINK_RE, PDF_LINK_RE } from '@agentistics/core'
 import { t } from '@agentistics/core'
 import type { Filters } from '@agentistics/core'
@@ -837,7 +839,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
 
   const [open, setOpen] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
-  const [activeTab, setActiveTab] = useState<'nay' | 'claude'>('nay')
+  const [activeTab, setActiveTab] = useState<'nay' | HarnessId>('nay')
   // Incremented to force ClaudeChat to remount with fresh initial props
   const [claudeResetKey, setClaudeResetKey] = useState(0)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -931,7 +933,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
   useEffect(() => {
     const handler = (e: Event) => {
       const { tab, project, sessionId: targetSessionId } = (e as CustomEvent<{
-        tab: 'nay' | 'claude'
+        tab: 'nay' | HarnessId
         sessionId?: string
         project?: { path: string; name: string; encodedDir: string }
       }>).detail
@@ -991,6 +993,19 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
           setClaudeResetKey(k => k + 1)
           setActiveTab('claude')
         }
+      } else if (tab !== 'claude' && targetSessionId) {
+        // codex / gemini / copilot — fetch from per-harness endpoint
+        setError(null)
+        setHistoryLoading(true)
+        fetch(`/api/${tab}-sessions/${encodeURIComponent(targetSessionId)}`)
+          .then(r => r.ok ? r.json() : [])
+          .then((msgs: RawSessionMessage[]) => {
+            setMessages(expandHistoryBlob(msgs))
+            setSessionId(targetSessionId)
+            setActiveTab(tab)
+          })
+          .catch(() => {})
+          .finally(() => setHistoryLoading(false))
       }
     }
     window.addEventListener('agentistics:open-chat', handler)
@@ -1533,15 +1548,17 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                 background: 'var(--bg-elevated)', border: '1px solid var(--border)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                <img
-                  src={activeTab === 'claude' ? '/claudeLogo.png' : '/minimalistLogo.png'}
-                  alt={activeTab === 'claude' ? 'Claude' : 'Nay'}
-                  style={{ width: 22, height: 22, objectFit: 'contain' }}
-                />
+                {activeTab === 'nay' ? (
+                  <img src="/minimalistLogo.png" alt="Nay" style={{ width: 22, height: 22, objectFit: 'contain' }} />
+                ) : activeTab === 'claude' ? (
+                  <img src="/claudeLogo.png" alt="Claude" style={{ width: 22, height: 22, objectFit: 'contain' }} />
+                ) : (
+                  <div style={{ width: 12, height: 12, borderRadius: '50%', background: HARNESS_COLORS[activeTab as HarnessId] }} />
+                )}
               </div>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
-                  {activeTab === 'claude' ? 'Claude' : 'Nay'}
+                  {activeTab === 'nay' ? 'Nay' : HARNESS_LABELS[activeTab as HarnessId]}
                 </div>
                 {(() => {
                   if (activeTab === 'nay') {
@@ -1570,6 +1587,14 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                             )}
                           </>
                         )}
+                      </div>
+                    )
+                  }
+                  if (activeTab !== 'claude') {
+                    // codex / gemini / copilot — simple colored label
+                    return (
+                      <div style={{ fontSize: 10, color: HARNESS_COLORS[activeTab as HarnessId] }}>
+                        {HARNESS_LABELS[activeTab as HarnessId]}
                       </div>
                     )
                   }
@@ -1694,29 +1719,45 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
             display: 'flex', borderBottom: '1px solid var(--border)',
             background: 'var(--bg-card)', flexShrink: 0,
           }}>
-            {(['nay', 'claude'] as const).filter(tab => !(tab === 'nay' && nayDetached) && !(tab === 'claude' && claudeDetached)).map(tab => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                style={{
-                  flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                  padding: '7px 0', border: 'none', background: 'transparent',
-                  cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: activeTab === tab ? 700 : 400,
-                  color: activeTab === tab ? (tab === 'nay' ? 'var(--accent-purple)' : 'var(--anthropic-orange)') : 'var(--text-tertiary)',
-                  borderBottom: activeTab === tab
-                    ? `2px solid ${tab === 'nay' ? 'var(--accent-purple)' : 'var(--anthropic-orange)'}`
-                    : '2px solid transparent',
-                  transition: 'all 0.15s',
-                }}
-              >
-                <img
-                  src={tab === 'nay' ? '/minimalistLogo.png' : '/claudeLogo.png'}
-                  alt={tab}
-                  style={{ width: 14, height: 14, objectFit: 'contain' }}
-                />
-                {tab === 'nay' ? 'Nay' : 'Claude'}
-              </button>
-            ))}
+            {(() => {
+              // Build list of tabs: always nay + claude; add active non-claude/non-nay harness if present
+              const baseTabs: ('nay' | HarnessId)[] = ['nay', 'claude']
+              if (activeTab !== 'nay' && activeTab !== 'claude') {
+                baseTabs.push(activeTab)
+              }
+              return baseTabs
+                .filter(tab => !(tab === 'nay' && nayDetached) && !(tab === 'claude' && claudeDetached))
+                .map(tab => {
+                  const tabColor = tab === 'nay'
+                    ? 'var(--accent-purple)'
+                    : tab === 'claude'
+                      ? 'var(--anthropic-orange)'
+                      : HARNESS_COLORS[tab as HarnessId]
+                  return (
+                    <button
+                      key={tab}
+                      onClick={() => setActiveTab(tab)}
+                      style={{
+                        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                        padding: '7px 0', border: 'none', background: 'transparent',
+                        cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: activeTab === tab ? 700 : 400,
+                        color: activeTab === tab ? tabColor : 'var(--text-tertiary)',
+                        borderBottom: activeTab === tab ? `2px solid ${tabColor}` : '2px solid transparent',
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      {tab === 'nay' ? (
+                        <img src="/minimalistLogo.png" alt="Nay" style={{ width: 14, height: 14, objectFit: 'contain' }} />
+                      ) : tab === 'claude' ? (
+                        <img src="/claudeLogo.png" alt="Claude" style={{ width: 14, height: 14, objectFit: 'contain' }} />
+                      ) : (
+                        <div style={{ width: 8, height: 8, borderRadius: '50%', background: HARNESS_COLORS[tab as HarnessId] }} />
+                      )}
+                      {tab === 'nay' ? 'Nay' : HARNESS_LABELS[tab as HarnessId]}
+                    </button>
+                  )
+                })
+            })()}
           </div>}
 
           {!nayDetached && activeTab === 'nay' && <>
@@ -2075,6 +2116,39 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
               initialMessages={claudeSharedState?.messages ?? []}
               onStateChange={(s) => { if (s.model) setClaudeCurrentModel(s.model); onClaudeStateChange?.(s) }}
             />
+          )}
+
+          {activeTab !== 'nay' && activeTab !== 'claude' && (
+            <div ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 14px 6px' }}>
+              {historyLoading && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-tertiary)' }}>
+                  <Loader size={16} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
+                </div>
+              )}
+              {!historyLoading && messages.length === 0 && (
+                <div style={{
+                  height: '100%', display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center',
+                  gap: 10, color: 'var(--text-tertiary)', textAlign: 'center', padding: '0 20px',
+                }}>
+                  <div style={{ width: 36, height: 36, borderRadius: '50%', background: HARNESS_COLORS[activeTab as HarnessId] + '33', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ width: 16, height: 16, borderRadius: '50%', background: HARNESS_COLORS[activeTab as HarnessId] }} />
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{HARNESS_LABELS[activeTab as HarnessId]}</div>
+                  <div style={{ fontSize: 11, opacity: 0.7 }}>{pt ? 'Nenhuma mensagem' : 'No messages'}</div>
+                </div>
+              )}
+              {!historyLoading && messages.map((msg, i) => (
+                <Message
+                  key={i}
+                  msg={msg}
+                  onRun={execCmd}
+                  onNavigate={handleNavigate}
+                  onPdfExport={onPdfExport}
+                  pt={pt}
+                />
+              ))}
+            </div>
           )}
 
         </div>
