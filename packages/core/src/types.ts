@@ -221,6 +221,14 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; cach
   'claude-sonnet-4-20250514':   { input: 3,    output: 15,   cacheRead: 0.30, cacheWrite: 3.75  },
   'claude-haiku-3-5-20241022':  { input: 0.80, output: 4,    cacheRead: 0.08, cacheWrite: 1.00  },
   'claude-3-haiku-20240307':    { input: 0.25, output: 1.25, cacheRead: 0.03, cacheWrite: 0.30  },
+  // Google (Gemini CLI) — verified from ai.google.dev/gemini-api/docs/pricing, 2026-06-22.
+  // Gemini has no separate cache-write charge; cacheWrite is set to the input rate
+  // and is unused in practice.
+  'gemini-3.5-flash':       { input: 1.5, output: 9,   cacheRead: 0.15, cacheWrite: 1.5  },
+  'gemini-3.1-pro':         { input: 2,   output: 12,  cacheRead: 0.20, cacheWrite: 2    },
+  'gemini-3-flash-preview': { input: 0.5, output: 3,   cacheRead: 0.05, cacheWrite: 0.5  },
+  'gemini-3-flash':         { input: 0.5, output: 3,   cacheRead: 0.05, cacheWrite: 0.5  },
+  'gemini-2.5-flash':       { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0.3  },
   // OpenAI (Codex CLI) — verified from OpenAI API pricing page, 2026-06-20.
   // OpenAI has no separate cache-write charge; cacheWrite is set to the input rate
   // and is unused in practice (the Codex parser always sets cache_creation tokens to 0).
@@ -262,6 +270,11 @@ export function formatModel(modelId: string): string {
     'gpt-5.4-mini': 'GPT-5.4 mini',
     'gpt-5': 'GPT-5',
     'gpt-5-mini': 'GPT-5 mini',
+    'gemini-3.5-flash': 'Gemini 3.5 Flash',
+    'gemini-3.1-pro': 'Gemini 3.1 Pro',
+    'gemini-3-flash-preview': 'Gemini 3 Flash',
+    'gemini-3-flash': 'Gemini 3 Flash',
+    'gemini-2.5-flash': 'Gemini 2.5 Flash',
   }
   return map[modelId] ?? modelId
 }
@@ -287,5 +300,6 @@ export function getModelColor(modelId: string): string {
   if (modelId.includes('sonnet')) return '#6366f1'
   if (modelId.includes('haiku')) return '#10b981'
   if (modelId.startsWith('gpt-')) return '#10a37f' // OpenAI green
+  if (modelId.startsWith('gemini')) return '#4285f4' // Google blue
   return '#8b5cf6'
 }

@@ -187,6 +187,32 @@ test('formatModel renders gpt-5.5 readably', () => {
   expect(formatModel('gpt-5.5')).toBe('GPT-5.5')
 })
 
+// ── Google/Gemini pricing ────────────────────────────────────────────────────────
+
+test('gemini-3-flash-preview resolves to a non-fallback price', () => {
+  const price = getModelPrice('gemini-3-flash-preview')
+  // Must NOT fall back to the Sonnet 4.6 rates ($3 in / $15 out)
+  expect(price.input === 3 && price.output === 15).toBe(false)
+  expect(price.input).toBe(0.5)
+  expect(price.output).toBe(3)
+  expect(price.cacheRead).toBe(0.05)
+})
+
+test('formatModel renders gemini-3-flash-preview as "Gemini 3 Flash"', () => {
+  expect(formatModel('gemini-3-flash-preview')).toBe('Gemini 3 Flash')
+})
+
+test('getModelColor returns Google blue for gemini models', () => {
+  expect(getModelColor('gemini-3-flash-preview')).toBe('#4285f4')
+  expect(getModelColor('gemini-2.5-flash')).toBe('#4285f4')
+})
+
+test('gemini-2.5-flash resolves to correct price', () => {
+  const price = getModelPrice('gemini-2.5-flash')
+  expect(price.input).toBe(0.3)
+  expect(price.output).toBe(2.5)
+})
+
 // ── HARNESS_CAPABILITIES ──────────────────────────────────────────────────────
 
 test('HARNESS_CAPABILITIES declares all four harnesses', () => {
