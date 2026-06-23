@@ -167,13 +167,25 @@ export function HarnessChat({ harness, lang, initialProject, initialSessionId, o
           .catch(() => { setView('transcript') })
           .finally(() => setLoading(false))
       } else if (harness !== 'claude') {
-        // Fetch transcript directly for non-claude harnesses
+        // For non-claude deep-links: fetch transcript + full session list in parallel so
+        // back-nav ("← Sessions") lands on the correct project's session list.
         setLoading(true)
-        fetch(`/api/${harness}-sessions/${encodeURIComponent(initialSessionId)}`)
-          .then(r => r.ok ? r.json() : [])
-          .then((msgs: TranscriptMessage[]) => {
+        Promise.all([
+          fetch(`/api/${harness}-sessions/${encodeURIComponent(initialSessionId)}`).then(r => r.ok ? r.json() : []),
+          fetch(`/api/${harness}-sessions`).then(r => r.ok ? r.json() : []),
+        ])
+          .then(([msgs, allSess]: [TranscriptMessage[], SessionItem[]]) => {
             setTranscript(msgs)
-            setSelectedSession({ id: initialSessionId, title: initialSessionId, messageCount: msgs.length })
+            setAllSessions(allSess)
+            // Resolve the project for this session so back-nav can filter
+            const match = allSess.find(s => s.id === initialSessionId)
+            const projectKey = match?.project ?? null
+            if (projectKey) {
+              const proj: ProjectItem = { name: projectKey, path: projectKey, encodedDir: projectKey }
+              setSelectedProject(proj)
+              setSessions(allSess.filter(s => (s.project ?? '(unknown)') === projectKey))
+            }
+            setSelectedSession({ id: initialSessionId, title: match?.title ?? initialSessionId, messageCount: msgs.length })
             setView('transcript')
           })
           .catch(() => { setView('transcript') })
