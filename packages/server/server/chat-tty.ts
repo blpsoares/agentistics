@@ -213,7 +213,7 @@ export async function ensureNayChat(port: number): Promise<void> {
 // Registers the agentistics MCP via `claude mcp add -s user` so that
 // claude --print mode (which reads ~/.claude.json user scope) can find the tools.
 // Safe to call on every restart — skips if already registered with the same port.
-async function registerMcpGlobally(port: number): Promise<void> {
+export async function registerMcpGlobally(port: number): Promise<void> {
   const apiUrl = `http://localhost:${port}`
   const mcpScript = path.join(AGENTISTICS_ROOT, 'packages', 'mcp', 'agentistics-mcp.ts')
 
