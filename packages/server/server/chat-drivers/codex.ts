@@ -28,7 +28,8 @@ import { HOME_DIR } from '../config'
 import type { ChatDriver } from './types'
 import type { ChatMessage } from '../chat-tty'
 
-const AGENTISTICS_ROOT = path.resolve(import.meta.dir, '..', '..', '..')
+// chat-drivers/ is one level deeper than chat-tty.ts, so 4 levels up to reach the repo root
+const AGENTISTICS_ROOT = path.resolve(import.meta.dir, '..', '..', '..', '..')
 const CODEX_CONFIG_PATH = path.join(HOME_DIR, '.codex', 'config.toml')
 const MCP_SERVER_NAME = 'agentistics'
 
