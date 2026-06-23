@@ -7,6 +7,7 @@ import { getVersionInfo } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
 import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, type ChatMessage, type ChatModelId, type ChatAttachment } from './chat-tty'
+import { getChatDriver, availableChatDrivers } from './chat-drivers/index'
 import { listMcpServers, removeMcpServer } from './mcp-list'
 import { listNaySessions, getNaySessionMessages } from './nay-sessions'
 import { listClaudeSessions, getClaudeSessionMessages, type ClaudeSessionSummary, type ClaudeSessionMessage } from './claude-sessions'
@@ -443,33 +444,49 @@ Bun.serve({
       }
     }
 
+    if (url.pathname === '/api/chat-harnesses' && req.method === 'GET') {
+      return new Response(JSON.stringify(availableChatDrivers()), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (url.pathname === '/api/chat-tty' && req.method === 'POST') {
       try {
-        const body = await req.json() as { message: string; history?: ChatMessage[]; model?: ChatModelId; sessionId?: string | null; thinkingBudget?: number; attachments?: ChatAttachment[] }
-        const { message, history = [], model = 'claude-sonnet-4-6', sessionId = null, thinkingBudget, attachments } = body
+        const body = await req.json() as { message: string; history?: ChatMessage[]; model?: ChatModelId; sessionId?: string | null; thinkingBudget?: number; attachments?: ChatAttachment[]; harness?: string }
+        const { message, history = [], model = 'claude-sonnet-4-6', sessionId = null, thinkingBudget, attachments, harness } = body
+
+        // Resolve the requested driver; fall back to claude if missing or unavailable
+        const requestedDriver = harness ? getChatDriver(harness as import('@agentistics/core').HarnessId) : undefined
+        const driver = (requestedDriver?.isAvailable() ? requestedDriver : undefined) ?? getChatDriver('claude')!
+
+        // Ensure MCP is registered for the selected driver
+        await driver.ensureMcp(PORT)
+
         const enc = new TextEncoder()
         const stream = new ReadableStream<Uint8Array>({
           start(ctrl) {
-            streamViaClaude(
+            void driver.stream(
               message,
               history,
               model,
-              (text) => {
-                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ text })}\n\n`))
-              },
-              (tool) => {
-                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ tool })}\n\n`))
-              },
-              () => {
-                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ done: true })}\n\n`))
-                ctrl.close()
-              },
-              (err) => {
-                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ error: err })}\n\n`))
-                ctrl.close()
-              },
-              (id) => {
-                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ sessionId: id })}\n\n`))
+              {
+                onChunk(text) {
+                  ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ text })}\n\n`))
+                },
+                onTool(tool) {
+                  ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ tool })}\n\n`))
+                },
+                onDone() {
+                  ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ done: true })}\n\n`))
+                  ctrl.close()
+                },
+                onError(err) {
+                  ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ error: err })}\n\n`))
+                  ctrl.close()
+                },
+                onSessionId(id) {
+                  ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ sessionId: id })}\n\n`))
+                },
               },
               sessionId,
               { thinkingBudget, attachments, signal: req.signal },
