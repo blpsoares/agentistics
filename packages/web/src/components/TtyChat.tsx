@@ -728,6 +728,25 @@ function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) =
   )
 }
 
+// ── Nay backend harness types + localStorage helpers ─────────────────────────
+
+type NayChatHarness = {
+  id: string
+  label: string
+  models: Array<{ id: string; label: string; badge?: string }>
+  defaultModel: string
+}
+
+const NAY_HARNESS_KEY = 'agentistics-nay-backend-harness'
+
+function loadNayHarnessId(): string | null {
+  try { return localStorage.getItem(NAY_HARNESS_KEY) } catch { return null }
+}
+
+function saveNayHarnessId(id: string) {
+  try { localStorage.setItem(NAY_HARNESS_KEY, id) } catch { /* ignore */ }
+}
+
 // ── Nay floating window localStorage helpers ──────────────────────────────────
 
 const NAY_POS_KEY  = 'agentistics-nay-chat-pos'
@@ -852,6 +871,9 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
   const [showNayModelPicker, setShowNayModelPicker] = useState(false)
   const [claudeCurrentModel, setClaudeCurrentModel] = useState<ChatModelId>(DEFAULT_CHAT_MODEL)
   const [pendingHarnessSessionId, setPendingHarnessSessionId] = useState<string | null>(null)
+  const [nayBackendHarnesses, setNayBackendHarnesses] = useState<NayChatHarness[]>([])
+  const [nayBackendHarnessId, setNayBackendHarnessId] = useState<string>(() => loadNayHarnessId() ?? 'claude')
+  const [showNayHarnessPicker, setShowNayHarnessPicker] = useState(false)
   // Track which historical Nay session is being viewed (for live polling)
   const [viewedNaySessionId, setViewedNaySessionId] = useState<string | null>(null)
 
@@ -901,6 +923,22 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
   useEffect(() => { soundRef.current = chatSoundEnabled }, [chatSoundEnabled])
   useEffect(() => { soundIdRef.current = chatSoundId }, [chatSoundId])
   useEffect(() => { if (nayDetached) setActiveTab('claude') }, [nayDetached])
+
+  // Fetch available Nay backend harnesses on mount
+  useEffect(() => {
+    fetch('/api/chat-harnesses')
+      .then(r => r.ok ? r.json() as Promise<NayChatHarness[]> : [])
+      .then(list => {
+        if (!Array.isArray(list) || list.length === 0) return
+        setNayBackendHarnesses(list)
+        // Validate stored preference against actual available harnesses
+        const savedId = loadNayHarnessId()
+        const valid = savedId && list.some(h => h.id === savedId)
+        const chosenId = valid ? savedId! : (list.some(h => h.id === 'claude') ? 'claude' : list[0]!.id)
+        setNayBackendHarnessId(chosenId)
+      })
+      .catch(() => { /* ignore — falls back to 'claude' */ })
+  }, [])
   useEffect(() => { if (claudeSharedState?.model) setClaudeCurrentModel(claudeSharedState.model) }, [claudeSharedState?.model])
   useEffect(() => { nayPosRef.current = nayPos }, [nayPos])
   useEffect(() => { naySizeRef.current = naySize }, [naySize])
@@ -1280,7 +1318,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
     const pendingAttachments = nayAttachments
     setNayAttachments([])
 
-    const model = chatModel ?? DEFAULT_CHAT_MODEL
+    // Resolve effective model for the chosen backend harness
+    const currentHarness = nayBackendHarnesses.find(h => h.id === nayBackendHarnessId)
+    const harnessModels = currentHarness?.models ?? []
+    const model = (chatModel && harnessModels.some(m => m.id === chatModel))
+      ? chatModel
+      : (currentHarness?.defaultModel ?? chatModel ?? DEFAULT_CHAT_MODEL)
     const userMsg: ChatMessage = {
       role: 'user', content: text, timestamp: Date.now(),
       images: pendingAttachments.filter(a => a.isImage).map(a => a.preview!),
@@ -1307,6 +1350,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
         signal: abortCtrl.signal,
         body: JSON.stringify({
           message: text, history, model, sessionId,
+          harness: nayBackendHarnessId !== 'claude' ? nayBackendHarnessId : undefined,
           thinkingBudget: nayThinking || undefined,
           attachments: pendingAttachments.length > 0
             ? pendingAttachments.map(a => ({ name: a.name, mimeType: a.mimeType, data: a.data, isImage: a.isImage }))
@@ -1374,7 +1418,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
       setStreaming(false)
       setCurrentTools([])
     }
-  }, [input, streaming, messages, chatModel, sessionId, execCmd, playNotification, nayAttachments]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [input, streaming, messages, chatModel, sessionId, execCmd, playNotification, nayAttachments, nayBackendHarnessId, nayBackendHarnesses]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Mobile: Enter = newline, send button sends. Desktop: Enter sends, Shift+Enter = newline.
@@ -1402,6 +1446,13 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
   const pt = lang === 'pt'
   const effectiveModel = chatModel ?? DEFAULT_CHAT_MODEL
   const modelInfo = CHAT_MODELS.find(m => m.id === effectiveModel)
+
+  // Nay backend harness helpers
+  const nayBackendHarness = nayBackendHarnesses.find(h => h.id === nayBackendHarnessId) ?? null
+  // When harness info is loaded, use its models; otherwise fall back to CHAT_MODELS (claude)
+  const nayHarnessModels = nayBackendHarness?.models ?? CHAT_MODELS.map(m => ({ id: m.id, label: m.label, badge: m.badge }))
+  const nayEffectiveModel = (chatModel && nayHarnessModels.some(m => m.id === chatModel)) ? chatModel : (nayBackendHarness?.defaultModel ?? effectiveModel)
+  const nayModelInfo = nayHarnessModels.find(m => m.id === nayEffectiveModel) ?? CHAT_MODELS.find(m => m.id === nayEffectiveModel)
 
   const panelStyle: React.CSSProperties = isMobile
     ? { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, width: 'auto', height: 'auto' }
@@ -1531,16 +1582,24 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                           </span>
                         ) : (
                           <>
-                            <span>{modelInfo?.label ?? effectiveModel}</span>
-                            {modelInfo && (
+                            {nayBackendHarnesses.length > 1 && nayBackendHarness && (
+                              <span style={{
+                                fontSize: 9, color: nayBackendHarnessId !== 'claude' ? HARNESS_COLORS[nayBackendHarnessId as HarnessId] ?? 'var(--text-tertiary)' : 'var(--anthropic-orange)',
+                                fontWeight: 700,
+                              }}>
+                                {nayBackendHarness.label}·
+                              </span>
+                            )}
+                            <span>{nayModelInfo?.label ?? nayEffectiveModel}</span>
+                            {nayModelInfo?.badge && (
                               <span style={{
                                 fontSize: 9, fontWeight: 700,
-                                color: BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)',
-                                background: `color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
-                                border: `1px solid color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
+                                color: BADGE_COLORS[nayModelInfo.badge] ?? 'var(--text-tertiary)',
+                                background: `color-mix(in srgb, ${BADGE_COLORS[nayModelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
+                                border: `1px solid color-mix(in srgb, ${BADGE_COLORS[nayModelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
                                 padding: '0px 4px', borderRadius: 3,
                               }}>
-                                {modelInfo.badge}
+                                {nayModelInfo.badge}
                               </span>
                             )}
                           </>
@@ -1879,7 +1938,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
             )}
             <input ref={nayFileInputRef} type="file" multiple accept="image/*,text/*,.md,.json,.ts,.js,.py,.txt,.csv" onChange={handleNayFileSelect} style={{ display: 'none' }} />
 
-          {/* Nay toolbar: thinking + model picker */}
+          {/* Nay toolbar: thinking + harness selector + model picker */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 12px 0', justifyContent: 'flex-end' }}>
             {/* Thinking toggle */}
             <button
@@ -1898,15 +1957,62 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
               {nayThinking && <span style={{ fontSize: 9, fontWeight: 700 }}>{thinkingLabel(nayThinking)}</span>}
             </button>
 
+            {/* Harness selector — only shown when >1 backend is available */}
+            {nayBackendHarnesses.length > 1 && (
+              <div style={{ position: 'relative' }}>
+                <button
+                  className="tty-icon-btn"
+                  onClick={() => { setShowNayHarnessPicker(v => !v); setShowNayModelPicker(false) }}
+                  title="Change backend"
+                  style={{ ...iconBtnStyle, width: 'auto', padding: '0 6px', gap: 4, fontSize: 10,
+                    color: nayBackendHarnessId !== 'claude' ? HARNESS_COLORS[nayBackendHarnessId as HarnessId] ?? 'var(--text-secondary)' : 'var(--text-secondary)' }}
+                >
+                  <span>{nayBackendHarness?.label ?? nayBackendHarnessId}</span>
+                  <ChevronDown size={9} />
+                </button>
+                {showNayHarnessPicker && (
+                  <div style={{
+                    position: 'absolute', bottom: 'calc(100% + 4px)', right: 0, zIndex: 10, minWidth: 140,
+                    background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10,
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden',
+                  }}>
+                    {nayBackendHarnesses.map(h => {
+                      const active = nayBackendHarnessId === h.id
+                      const hColor = h.id === 'claude' ? 'var(--anthropic-orange)' : (HARNESS_COLORS[h.id as HarnessId] ?? 'var(--text-secondary)')
+                      return (
+                        <button key={h.id} className="tty-icon-btn"
+                          onClick={() => {
+                            setNayBackendHarnessId(h.id)
+                            saveNayHarnessId(h.id)
+                            onModelSet(h.defaultModel as ChatModelId)
+                            setShowNayHarnessPicker(false)
+                          }}
+                          style={{
+                            width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+                            background: active ? 'var(--bg-elevated)' : 'transparent', border: 'none',
+                            cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                            borderBottom: '1px solid var(--border)', transition: 'background 0.1s',
+                            borderRadius: 0,
+                          }}>
+                          <span style={{ width: 7, height: 7, borderRadius: '50%', background: hColor, flexShrink: 0 }} />
+                          <span style={{ flex: 1, fontSize: 12, fontWeight: active ? 700 : 400, color: active ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{h.label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Model picker */}
             <div style={{ position: 'relative' }}>
               <button
                 className="tty-icon-btn"
-                onClick={() => setShowNayModelPicker(v => !v)}
+                onClick={() => { setShowNayModelPicker(v => !v); setShowNayHarnessPicker(false) }}
                 title="Change model"
                 style={{ ...iconBtnStyle, width: 'auto', padding: '0 6px', gap: 4, fontSize: 10 }}
               >
-                <span>{modelInfo?.label ?? effectiveModel}</span>
+                <span>{nayModelInfo?.label ?? nayEffectiveModel}</span>
                 <ChevronDown size={9} />
               </button>
               {showNayModelPicker && (
@@ -1915,12 +2021,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                   background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10,
                   boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden',
                 }}>
-                  {CHAT_MODELS.map(m => {
-                    const active = effectiveModel === m.id
-                    const badgeColor = BADGE_COLORS[m.badge] ?? 'var(--text-tertiary)'
+                  {nayHarnessModels.map(m => {
+                    const active = nayEffectiveModel === m.id
+                    const badgeColor = m.badge ? (BADGE_COLORS[m.badge] ?? 'var(--text-tertiary)') : 'var(--text-tertiary)'
                     return (
                       <button key={m.id} className="tty-icon-btn"
-                        onClick={() => { onModelSet(m.id); setShowNayModelPicker(false) }}
+                        onClick={() => { onModelSet(m.id as ChatModelId); setShowNayModelPicker(false) }}
                         style={{
                           width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
                           background: active ? 'var(--bg-elevated)' : 'transparent', border: 'none',
@@ -1929,10 +2035,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                           borderRadius: 0,
                         }}>
                         <span style={{ flex: 1, fontSize: 12, fontWeight: active ? 700 : 400, color: active ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{m.label}</span>
-                        <span style={{ fontSize: 9, fontWeight: 700, color: badgeColor,
-                          background: `color-mix(in srgb, ${badgeColor} 12%, transparent)`,
-                          border: `1px solid color-mix(in srgb, ${badgeColor} 30%, transparent)`,
-                          padding: '1px 5px', borderRadius: 3 }}>{m.badge}</span>
+                        {m.badge && (
+                          <span style={{ fontSize: 9, fontWeight: 700, color: badgeColor,
+                            background: `color-mix(in srgb, ${badgeColor} 12%, transparent)`,
+                            border: `1px solid color-mix(in srgb, ${badgeColor} 30%, transparent)`,
+                            padding: '1px 5px', borderRadius: 3 }}>{m.badge}</span>
+                        )}
                       </button>
                     )
                   })}
@@ -2127,16 +2235,24 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                     </span>
                   ) : (
                     <>
-                      <span>{modelInfo?.label ?? effectiveModel}</span>
-                      {modelInfo && (
+                      {nayBackendHarnesses.length > 1 && nayBackendHarness && (
+                        <span style={{
+                          fontSize: 9, color: nayBackendHarnessId !== 'claude' ? HARNESS_COLORS[nayBackendHarnessId as HarnessId] ?? 'var(--text-tertiary)' : 'var(--anthropic-orange)',
+                          fontWeight: 700,
+                        }}>
+                          {nayBackendHarness.label}·
+                        </span>
+                      )}
+                      <span>{nayModelInfo?.label ?? nayEffectiveModel}</span>
+                      {nayModelInfo?.badge && (
                         <span style={{
                           fontSize: 9, fontWeight: 700,
-                          color: BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)',
-                          background: `color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
-                          border: `1px solid color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
+                          color: BADGE_COLORS[nayModelInfo.badge] ?? 'var(--text-tertiary)',
+                          background: `color-mix(in srgb, ${BADGE_COLORS[nayModelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
+                          border: `1px solid color-mix(in srgb, ${BADGE_COLORS[nayModelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
                           padding: '0px 4px', borderRadius: 3,
                         }}>
-                          {modelInfo.badge}
+                          {nayModelInfo.badge}
                         </span>
                       )}
                     </>
