@@ -199,6 +199,9 @@ export const codexDriver: ChatDriver = {
       let lineBuffer = ''
       let gotCompletion = false
       const seenTools = new Set<string>()
+      // Track whether any delta was emitted for the current turn.
+      // If deltas arrived, item.completed's full text is a duplicate — skip it.
+      let turnHadDeltas = false
 
       for await (const raw of proc.stdout as unknown as AsyncIterable<Uint8Array>) {
         if (opts?.signal?.aborted) break
@@ -227,7 +230,11 @@ export const codexDriver: ChatDriver = {
               const ev = event as CodexItemCompletedEvent
               const item = ev.item
               if (item.type === 'agent_message' && typeof item.text === 'string' && item.text) {
-                cb.onChunk(item.text)
+                // Only use the full text when no streaming deltas were emitted for this
+                // turn — otherwise the content was already streamed and this would duplicate it.
+                if (!turnHadDeltas) {
+                  cb.onChunk(item.text)
+                }
               } else if (
                 (item.type === 'mcp_tool_call_begin' || item.type === 'exec_command_begin') &&
                 typeof item.name === 'string'
@@ -241,9 +248,11 @@ export const codexDriver: ChatDriver = {
             }
 
             case 'agent_message_delta': {
-              // Incremental text chunk — emitted when Codex streams long responses
+              // Incremental text chunk — emitted when Codex streams long responses.
+              // Mark this turn as having deltas so item.completed full text is skipped.
               const ev = event as CodexMessageDeltaEvent
               if (typeof ev.delta === 'string' && ev.delta) {
+                turnHadDeltas = true
                 cb.onChunk(ev.delta)
               }
               break
@@ -251,6 +260,8 @@ export const codexDriver: ChatDriver = {
 
             case 'turn.completed': {
               gotCompletion = true
+              // Reset delta flag for the next turn
+              turnHadDeltas = false
               break
             }
 
