@@ -772,9 +772,6 @@ interface TtyChatProps {
   filters: Filters
   setFilters: React.Dispatch<React.SetStateAction<Filters>>
   isMobile?: boolean
-  onDetachClaude?: () => void
-  claudeDetached?: boolean
-  onReattachClaude?: () => void
   onPdfExport?: (range: string) => void
   claudeSharedState?: {
     projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
@@ -814,7 +811,7 @@ interface PendingNavigation {
   newProjects: string[]
 }
 
-export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping', onModelSet, filters, setFilters, isMobile, onDetachClaude, claudeDetached, onReattachClaude, onPdfExport, claudeSharedState, onClaudeStateChange }: TtyChatProps) {
+export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping', onModelSet, filters, setFilters, isMobile, onPdfExport, claudeSharedState, onClaudeStateChange }: TtyChatProps) {
   const navigate = useNavigate()
   const [pendingNav, setPendingNav] = useState<PendingNavigation | null>(null)
 
@@ -839,7 +836,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
   const [open, setOpen] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   const [activeTab, setActiveTab] = useState<'nay' | HarnessId>('nay')
-  // Incremented to force ClaudeChat to remount with fresh initial props
+  // Incremented to force HarnessChat to remount with fresh initial props
   const [claudeResetKey, setClaudeResetKey] = useState(0)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
@@ -904,7 +901,6 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
   useEffect(() => { soundRef.current = chatSoundEnabled }, [chatSoundEnabled])
   useEffect(() => { soundIdRef.current = chatSoundId }, [chatSoundId])
   useEffect(() => { if (nayDetached) setActiveTab('claude') }, [nayDetached])
-  useEffect(() => { if (claudeDetached) setActiveTab('nay') }, [claudeDetached])
   useEffect(() => { if (claudeSharedState?.model) setClaudeCurrentModel(claudeSharedState.model) }, [claudeSharedState?.model])
   useEffect(() => { nayPosRef.current = nayPos }, [nayPos])
   useEffect(() => { naySizeRef.current = naySize }, [naySize])
@@ -1601,16 +1597,6 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                   <ExternalLink size={12} />
                 </button>
               )}
-              {activeTab === 'claude' && !claudeDetached && !isMobile && (
-                <button
-                  className="tty-icon-btn"
-                  onClick={() => { onDetachClaude?.(); setActiveTab('nay') }}
-                  title={pt ? 'Destacar janela Claude' : 'Detach Claude window'}
-                  style={iconBtnStyle}
-                >
-                  <ExternalLink size={12} />
-                </button>
-              )}
               {activeTab === 'nay' && (
                 <button
                   className="tty-icon-btn"
@@ -1635,49 +1621,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
             </div>
           </div>
 
-          {/* Both detached — show re-attach panel instead of tabs */}
-          {nayDetached && claudeDetached && (
-            <div style={{
-              flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-              gap: 16, padding: '32px 24px', color: 'var(--text-tertiary)', textAlign: 'center',
-            }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
-                {pt ? 'Ambos os chats estão flutuando' : 'Both chats are floating'}
-              </div>
-              <div style={{ fontSize: 11, lineHeight: 1.7, opacity: 0.8 }}>
-                {pt ? 'Clique em um dos botões abaixo para acoplar o chat de volta ao painel.' : 'Click one of the buttons below to re-attach a chat to this panel.'}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: 220 }}>
-                <button
-                  onClick={() => { setNayDetached(false); setNayMinimized(false); setActiveTab('nay') }}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                    padding: '9px 14px', borderRadius: 8, border: '1px solid color-mix(in srgb, var(--accent-purple) 40%, transparent)',
-                    background: 'color-mix(in srgb, var(--accent-purple) 10%, transparent)',
-                    color: 'var(--accent-purple)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
-                  }}
-                >
-                  <img src="/minimalistLogo.png" alt="Nay" style={{ width: 14, height: 14, objectFit: 'contain' }} />
-                  {pt ? 'Acoplar Nay' : 'Re-attach Nay'}
-                </button>
-                <button
-                  onClick={() => { onReattachClaude?.(); setActiveTab('claude') }}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                    padding: '9px 14px', borderRadius: 8, border: '1px solid color-mix(in srgb, var(--anthropic-orange) 40%, transparent)',
-                    background: 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)',
-                    color: 'var(--anthropic-orange)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
-                  }}
-                >
-                  <img src="/claudeLogo.png" alt="Claude" style={{ width: 14, height: 14, objectFit: 'contain' }} />
-                  {pt ? 'Acoplar Claude' : 'Re-attach Claude'}
-                </button>
-              </div>
-            </div>
-          )}
-
           {/* Tab bar */}
-          {!(nayDetached && claudeDetached) && <div style={{
+          <div style={{
             display: 'flex', borderBottom: '1px solid var(--border)',
             background: 'var(--bg-card)', flexShrink: 0,
           }}>
@@ -1688,7 +1633,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                 baseTabs.push(activeTab)
               }
               return baseTabs
-                .filter(tab => !(tab === 'nay' && nayDetached) && !(tab === 'claude' && claudeDetached))
+                .filter(tab => !(tab === 'nay' && nayDetached))
                 .map(tab => {
                   const tabColor = tab === 'nay'
                     ? 'var(--accent-purple)'
@@ -1720,7 +1665,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                   )
                 })
             })()}
-          </div>}
+          </div>
 
           {!nayDetached && activeTab === 'nay' && <>
 
@@ -2063,7 +2008,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
 
           </>}
 
-          {!claudeDetached && activeTab === 'claude' && (
+          {activeTab === 'claude' && (
             <HarnessChat
               key={claudeResetKey}
               harness="claude"
