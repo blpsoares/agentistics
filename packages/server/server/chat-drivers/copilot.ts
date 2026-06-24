@@ -11,7 +11,7 @@
  */
 
 import path from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { HOME_DIR } from '../config'
 import type { ChatDriver, ChatDriverModel } from './types'
@@ -100,16 +100,21 @@ async function ensureCopilotMcp(port: number): Promise<void> {
 const COPILOT_CONFIG = path.join(HOME_DIR, '.copilot', 'config.json')
 
 /**
- * Returns true only if ~/.copilot/config.json exists and contains a non-empty
- * `loggedInUsers` array — the reliable signal that the user has authenticated.
- * Returns false on missing file, parse error, or empty array.
+ * Best-effort auth check from ~/.copilot/config.json. The file is JSONC (it has
+ * leading `//` comment lines) so we strip line comments before parsing. We treat
+ * the user as authenticated if `loggedInUsers` is a non-empty array OR
+ * `lastLoggedInUser.login` is set. Returns false on missing file / parse error.
  */
 function copilotAuthReady(): boolean {
   try {
-    const raw = Bun.file(COPILOT_CONFIG).toString()
-    const cfg = JSON.parse(raw) as Record<string, unknown>
+    const raw = readFileSync(COPILOT_CONFIG, 'utf-8')
+    // Strip whole-line `//` comments (the file is JSONC).
+    const stripped = raw.replace(/^\s*\/\/.*$/gm, '')
+    const cfg = JSON.parse(stripped) as Record<string, unknown>
     const users = cfg['loggedInUsers']
-    return Array.isArray(users) && users.length > 0
+    if (Array.isArray(users) && users.length > 0) return true
+    const last = cfg['lastLoggedInUser'] as { login?: unknown } | undefined
+    return typeof last?.login === 'string' && last.login.length > 0
   } catch {
     return false
   }
