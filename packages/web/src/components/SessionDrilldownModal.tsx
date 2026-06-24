@@ -204,24 +204,18 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
               onClick={() => {
                 const isNay = session.project_path.includes('.agentistics/nay-chat')
                 if (isNay) {
-                  window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
-                    detail: { tab: 'nay', sessionId: session.session_id },
+                  window.dispatchEvent(new CustomEvent('agentistics:open-nay-chat', {
+                    detail: { sessionId: session.session_id },
                   }))
                 } else {
                   const harness = session.harness ?? 'claude'
-                  if (harness === 'claude') {
-                    const encodedDir = session.project_path.replace(/\//g, '-')
-                    window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
-                      detail: { tab: 'claude', sessionId: session.session_id, project: { path: session.project_path, name: session.project_path.split('/').pop() ?? session.project_path, encodedDir } },
-                    }))
-                  } else {
-                    window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
-                      detail: { tab: harness, sessionId: session.session_id },
-                    }))
-                  }
+                  const encodedDir = session.project_path.replace(/\//g, '-')
+                  window.dispatchEvent(new CustomEvent('agentistics:open-transcript', {
+                    detail: { harness, sessionId: session.session_id, project: { path: session.project_path, name: session.project_path.split('/').pop() ?? session.project_path, encodedDir } },
+                  }))
                 }
               }}
-              title={session.project_path.includes('.agentistics/nay-chat') ? 'Open in Nay Chat' : 'Open in ' + HARNESS_LABELS[session.harness ?? 'claude']}
+              title={session.project_path.includes('.agentistics/nay-chat') ? 'Open in Nay Chat' : 'View transcript'}
               style={{
                 height: 30, padding: '0 10px',
                 display: 'flex', alignItems: 'center', gap: 5,

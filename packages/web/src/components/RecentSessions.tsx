@@ -252,25 +252,19 @@ function encodeProjectDir(projectPath: string): string {
 function openSession(s: SessionMeta, e: React.MouseEvent) {
   e.stopPropagation()
   if (isNayChatSession(s.project_path)) {
-    window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
-      detail: { tab: 'nay', sessionId: s.session_id },
+    window.dispatchEvent(new CustomEvent('agentistics:open-nay-chat', {
+      detail: { sessionId: s.session_id },
     }))
   } else {
     const harness = s.harness ?? 'claude'
-    if (harness === 'claude') {
-      const encodedDir = encodeProjectDir(s.project_path)
-      window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
-        detail: {
-          tab: 'claude',
-          sessionId: s.session_id,
-          project: { path: s.project_path, name: s.project_path.split('/').pop() ?? s.project_path, encodedDir },
-        },
-      }))
-    } else {
-      window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
-        detail: { tab: harness, sessionId: s.session_id },
-      }))
-    }
+    const encodedDir = encodeProjectDir(s.project_path)
+    window.dispatchEvent(new CustomEvent('agentistics:open-transcript', {
+      detail: {
+        harness,
+        sessionId: s.session_id,
+        project: { path: s.project_path, name: s.project_path.split('/').pop() ?? s.project_path, encodedDir },
+      },
+    }))
   }
 }
 
@@ -513,7 +507,7 @@ export function RecentSessions({ sessions, lang, onSelect }: Props) {
                     </span>
                     <button
                       onClick={(e) => openSession(s, e)}
-                      title={isNayChatSession(s.project_path) ? 'Open in Nay Chat' : 'Open in ' + HARNESS_LABELS[s.harness ?? 'claude']}
+                      title={isNayChatSession(s.project_path) ? 'Open in Nay Chat' : 'View transcript'}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
