@@ -8,6 +8,7 @@ import {
   Maximize2, Minimize2, Terminal, Play, ChevronRight,
   Wrench, ChevronDown, ChevronUp, ArrowRight, Filter, History, Plus,
   ShieldAlert, Check, ExternalLink, Paperclip, FileText as FileTextIcon, Minus, Brain,
+  AlertTriangle, Copy,
 } from 'lucide-react'
 
 // ── Attachment type (Nay only handles images + text files) ────────────────────
@@ -25,6 +26,7 @@ import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { formatToolName, fmtTime, NAV_LINK_RE, PDF_LINK_RE } from '@agentistics/core'
 import { t } from '@agentistics/core'
 import type { Filters } from '@agentistics/core'
+import { useChatHarnesses, type HarnessChatStatus } from '../hooks/useChatHarnesses'
 
 type Lang = 'pt' | 'en'
 
@@ -727,20 +729,139 @@ function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) =
   )
 }
 
-// ── Nay backend harness types + localStorage helpers ─────────────────────────
+// ── Harness setup guidance panel ─────────────────────────────────────────────
 
-type NayChatHarness = {
-  id: string
-  label: string
-  models: Array<{ id: string; label: string; badge?: string }>
-  defaultModel: string
+function CopyableCode({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }).catch(() => { /* ignore */ })
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 3 }}>
+      <code style={{
+        flex: 1, fontSize: 10, background: 'var(--bg-base)', border: '1px solid var(--border)',
+        borderRadius: 4, padding: '2px 6px', fontFamily: 'monospace', color: 'var(--text-secondary)',
+        whiteSpace: 'pre', overflow: 'hidden', textOverflow: 'ellipsis',
+      }}>{text}</code>
+      <button
+        onClick={copy}
+        title="Copy"
+        style={{
+          flexShrink: 0, width: 20, height: 20, borderRadius: 4,
+          border: '1px solid var(--border)', background: 'transparent',
+          cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: copied ? 'var(--accent-green)' : 'var(--text-tertiary)',
+          transition: 'color 0.15s',
+        }}
+      >
+        {copied ? <Check size={9} /> : <Copy size={9} />}
+      </button>
+    </div>
+  )
 }
+
+function HarnessSetupPanel({ harness }: { harness: HarnessChatStatus }) {
+  const { setup, installed, authReady } = harness
+  const reason = !installed ? 'not-installed' : !authReady ? 'not-authed' : null
+  if (!reason) return null
+  return (
+    <div style={{
+      marginTop: 6, padding: '8px 10px', borderRadius: 8,
+      background: 'color-mix(in srgb, var(--accent-orange) 8%, transparent)',
+      border: '1px solid color-mix(in srgb, var(--accent-orange) 30%, transparent)',
+      fontSize: 11, color: 'var(--text-secondary)',
+      animation: 'ttyChatFadeIn 0.15s ease-out',
+    }}>
+      <div style={{ fontWeight: 700, color: 'var(--accent-orange)', marginBottom: 5, fontSize: 11 }}>
+        {reason === 'not-installed' ? `${harness.label} is not installed` : `${harness.label} is not authenticated`}
+      </div>
+      {reason === 'not-installed' && setup.installCmd && (
+        <div>
+          <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 2 }}>Install:</div>
+          <CopyableCode text={setup.installCmd} />
+        </div>
+      )}
+      {reason === 'not-authed' && setup.loginCmd && (
+        <div>
+          <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 2 }}>Login:</div>
+          <CopyableCode text={setup.loginCmd} />
+        </div>
+      )}
+      {setup.note && (
+        <div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+          {setup.note}
+        </div>
+      )}
+      {setup.docUrl && (
+        <a href={setup.docUrl} target="_blank" rel="noopener noreferrer"
+          style={{
+            marginTop: 5, display: 'inline-flex', alignItems: 'center', gap: 3,
+            fontSize: 10, color: 'var(--accent-purple)', textDecoration: 'none',
+          }}
+        >
+          <ExternalLink size={9} /> Learn more
+        </a>
+      )}
+    </div>
+  )
+}
+
+/** Small inline "How to fix" panel shown inside the error display when a backend errors at runtime */
+function HarnessErrorHelp({ harness }: { harness: HarnessChatStatus }) {
+  const { setup } = harness
+  const hasHelp = setup.installCmd || setup.loginCmd || setup.docUrl || setup.note
+  if (!hasHelp) return null
+  return (
+    <div style={{
+      marginTop: 8, padding: '8px 10px', borderRadius: 7,
+      background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.18)',
+      fontSize: 11,
+    }}>
+      <div style={{ fontWeight: 700, color: '#ef4444', marginBottom: 5, fontSize: 11 }}>
+        How to fix ({harness.label})
+      </div>
+      {setup.installCmd && (
+        <div style={{ marginBottom: 4 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 2 }}>Install:</div>
+          <CopyableCode text={setup.installCmd} />
+        </div>
+      )}
+      {setup.loginCmd && (
+        <div style={{ marginBottom: 4 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 2 }}>Login:</div>
+          <CopyableCode text={setup.loginCmd} />
+        </div>
+      )}
+      {setup.note && (
+        <div style={{ fontSize: 10, color: 'var(--text-tertiary)', lineHeight: 1.5, marginTop: 3 }}>
+          {setup.note}
+        </div>
+      )}
+      {setup.docUrl && (
+        <a href={setup.docUrl} target="_blank" rel="noopener noreferrer"
+          style={{
+            marginTop: 5, display: 'inline-flex', alignItems: 'center', gap: 3,
+            fontSize: 10, color: 'var(--accent-purple)', textDecoration: 'none',
+          }}
+        >
+          <ExternalLink size={9} /> Learn more
+        </a>
+      )}
+    </div>
+  )
+}
+
+// ── Nay backend harness types + localStorage helpers ─────────────────────────
 
 const NAY_HARNESS_KEY = 'agentistics-nay-backend-harness'
 
 function loadNayHarnessId(): string | null {
   try { return localStorage.getItem(NAY_HARNESS_KEY) } catch { return null }
 }
+
 
 function saveNayHarnessId(id: string) {
   try { localStorage.setItem(NAY_HARNESS_KEY, id) } catch { /* ignore */ }
@@ -857,9 +978,11 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [nayThinking, setNayThinking] = useState<ThinkingBudget>(false)
   const [showNayModelPicker, setShowNayModelPicker] = useState(false)
-  const [nayBackendHarnesses, setNayBackendHarnesses] = useState<NayChatHarness[]>([])
+  const { harnesses: nayBackendHarnesses, loading: nayHarnessesLoading } = useChatHarnesses()
   const [nayBackendHarnessId, setNayBackendHarnessId] = useState<string>(() => loadNayHarnessId() ?? 'claude')
   const [showNayHarnessPicker, setShowNayHarnessPicker] = useState(false)
+  // Track which harness picker item is hovered for setup panel preview
+  const [hoveredHarnessId, setHoveredHarnessId] = useState<string | null>(null)
   // Track which historical Nay session is being viewed (for live polling)
   const [viewedNaySessionId, setViewedNaySessionId] = useState<string | null>(null)
 
@@ -908,21 +1031,23 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
   useEffect(() => { openRef.current = open }, [open])
   useEffect(() => { soundRef.current = chatSoundEnabled }, [chatSoundEnabled])
   useEffect(() => { soundIdRef.current = chatSoundId }, [chatSoundId])
-  // Fetch available Nay backend harnesses on mount
+  // When harness list loads, default to the best READY harness (prefer claude, else first ready)
   useEffect(() => {
-    fetch('/api/chat-harnesses')
-      .then(r => r.ok ? r.json() as Promise<NayChatHarness[]> : [])
-      .then(list => {
-        if (!Array.isArray(list) || list.length === 0) return
-        setNayBackendHarnesses(list)
-        // Validate stored preference against actual available harnesses
-        const savedId = loadNayHarnessId()
-        const valid = savedId && list.some(h => h.id === savedId)
-        const chosenId = valid ? savedId! : (list.some(h => h.id === 'claude') ? 'claude' : list[0]!.id)
-        setNayBackendHarnessId(chosenId)
-      })
-      .catch(() => { /* ignore — falls back to 'claude' */ })
-  }, [])
+    if (nayHarnessesLoading || nayBackendHarnesses.length === 0) return
+    const savedId = loadNayHarnessId()
+    const savedEntry = savedId ? nayBackendHarnesses.find(h => h.id === savedId) : null
+    // If saved preference exists and is ready, keep it; otherwise pick best ready harness
+    if (savedEntry && savedEntry.ready) {
+      setNayBackendHarnessId(savedId!)
+      return
+    }
+    const readyHarnesses = nayBackendHarnesses.filter(h => h.ready)
+    const preferred = readyHarnesses.find(h => h.id === 'claude') ?? readyHarnesses[0]
+    if (preferred) {
+      setNayBackendHarnessId(preferred.id)
+      saveNayHarnessId(preferred.id)
+    }
+  }, [nayHarnessesLoading, nayBackendHarnesses])
   useEffect(() => { nayPosRef.current = nayPos }, [nayPos])
   useEffect(() => { naySizeRef.current = naySize }, [naySize])
   useEffect(() => { nayFabPosRef.current = nayFabPos }, [nayFabPos])
@@ -1411,11 +1536,15 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
   const modelInfo = CHAT_MODELS.find(m => m.id === effectiveModel)
 
   // Nay backend harness helpers
-  const nayBackendHarness = nayBackendHarnesses.find(h => h.id === nayBackendHarnessId) ?? null
+  const nayBackendHarness: HarnessChatStatus | null = nayBackendHarnesses.find(h => h.id === nayBackendHarnessId) ?? null
   // When harness info is loaded, use its models; otherwise fall back to CHAT_MODELS (claude)
   const nayHarnessModels = nayBackendHarness?.models ?? CHAT_MODELS.map(m => ({ id: m.id, label: m.label, badge: m.badge }))
   const nayEffectiveModel = (chatModel && nayHarnessModels.some(m => m.id === chatModel)) ? chatModel : (nayBackendHarness?.defaultModel ?? effectiveModel)
   const nayModelInfo = nayHarnessModels.find(m => m.id === nayEffectiveModel) ?? CHAT_MODELS.find(m => m.id === nayEffectiveModel)
+  // Total harnesses count (all, not just ready) — show selector when >1 known harness
+  const totalHarnessCount = nayBackendHarnesses.length
+  // For the error panel: active harness's setup info (for runtime-error "How to fix" guidance)
+  const activeHarnessForError: HarnessChatStatus | null = nayBackendHarness
 
   const panelStyle: React.CSSProperties = isMobile
     ? { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, width: 'auto', height: 'auto' }
@@ -1779,13 +1908,17 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
 
             {error && (
               <div style={{
-                display: 'flex', alignItems: 'flex-start', gap: 8,
                 padding: '10px 12px', borderRadius: 8, marginBottom: 8,
                 background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
                 fontSize: 12, color: '#ef4444',
               }}>
-                <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
-                <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{error}</span>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{error}</span>
+                </div>
+                {activeHarnessForError && (
+                  <HarnessErrorHelp harness={activeHarnessForError} />
+                )}
               </div>
             )}
           </div>
@@ -1834,8 +1967,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
               {nayThinking && <span style={{ fontSize: 9, fontWeight: 700 }}>{thinkingLabel(nayThinking)}</span>}
             </button>
 
-            {/* Harness selector — only shown when >1 backend is available */}
-            {nayBackendHarnesses.length > 1 && (
+            {/* Harness selector — shown when >1 harness known (including not-ready ones) */}
+            {totalHarnessCount > 1 && (
               <div style={{ position: 'relative' }}>
                 <button
                   className="tty-icon-btn"
@@ -1844,36 +1977,59 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                   style={{ ...iconBtnStyle, width: 'auto', padding: '0 6px', gap: 4, fontSize: 10,
                     color: nayBackendHarnessId !== 'claude' ? HARNESS_COLORS[nayBackendHarnessId as HarnessId] ?? 'var(--text-secondary)' : 'var(--text-secondary)' }}
                 >
+                  {nayBackendHarness && !nayBackendHarness.ready && (
+                    <AlertTriangle size={9} style={{ color: 'var(--accent-orange)' }} />
+                  )}
                   <span>{nayBackendHarness?.label ?? nayBackendHarnessId}</span>
                   <ChevronDown size={9} />
                 </button>
                 {showNayHarnessPicker && (
                   <div style={{
-                    position: 'absolute', bottom: 'calc(100% + 4px)', right: 0, zIndex: 10, minWidth: 140,
+                    position: 'absolute', bottom: 'calc(100% + 4px)', right: 0, zIndex: 10, minWidth: 200,
                     background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10,
                     boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden',
                   }}>
                     {nayBackendHarnesses.map(h => {
                       const active = nayBackendHarnessId === h.id
                       const hColor = h.id === 'claude' ? 'var(--anthropic-orange)' : (HARNESS_COLORS[h.id as HarnessId] ?? 'var(--text-secondary)')
+                      const isHovered = hoveredHarnessId === h.id
                       return (
-                        <button key={h.id} className="tty-icon-btn"
-                          onClick={() => {
-                            setNayBackendHarnessId(h.id)
-                            saveNayHarnessId(h.id)
-                            onModelSet(h.defaultModel as ChatModelId)
-                            setShowNayHarnessPicker(false)
-                          }}
-                          style={{
-                            width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
-                            background: active ? 'var(--bg-elevated)' : 'transparent', border: 'none',
-                            cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
-                            borderBottom: '1px solid var(--border)', transition: 'background 0.1s',
-                            borderRadius: 0,
-                          }}>
-                          <span style={{ width: 7, height: 7, borderRadius: '50%', background: hColor, flexShrink: 0 }} />
-                          <span style={{ flex: 1, fontSize: 12, fontWeight: active ? 700 : 400, color: active ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{h.label}</span>
-                        </button>
+                        <div key={h.id}>
+                          <button className="tty-icon-btn"
+                            onClick={() => {
+                              setNayBackendHarnessId(h.id)
+                              saveNayHarnessId(h.id)
+                              if (h.ready) onModelSet(h.defaultModel as ChatModelId)
+                              setShowNayHarnessPicker(false)
+                            }}
+                            onMouseEnter={() => setHoveredHarnessId(h.id)}
+                            onMouseLeave={() => setHoveredHarnessId(null)}
+                            style={{
+                              width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+                              background: active ? 'var(--bg-elevated)' : 'transparent', border: 'none',
+                              cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                              borderBottom: isHovered && !h.ready ? 'none' : '1px solid var(--border)',
+                              transition: 'background 0.1s',
+                              borderRadius: 0,
+                            }}>
+                            {h.ready
+                              ? <span style={{ width: 7, height: 7, borderRadius: '50%', background: hColor, flexShrink: 0 }} />
+                              : <AlertTriangle size={9} style={{ color: 'var(--accent-orange)', flexShrink: 0 }} />
+                            }
+                            <span style={{ flex: 1, fontSize: 12, fontWeight: active ? 700 : 400, color: active ? 'var(--text-primary)' : h.ready ? 'var(--text-secondary)' : 'var(--text-tertiary)' }}>{h.label}</span>
+                            {!h.ready && (
+                              <span style={{ fontSize: 9, color: 'var(--accent-orange)', flexShrink: 0 }}>
+                                {!h.installed ? 'not installed' : 'not authed'}
+                              </span>
+                            )}
+                          </button>
+                          {/* Setup guidance shown when hovered and not ready */}
+                          {isHovered && !h.ready && (
+                            <div style={{ padding: '0 10px 8px', borderBottom: '1px solid var(--border)' }}>
+                              <HarnessSetupPanel harness={h} />
+                            </div>
+                          )}
+                        </div>
                       )
                     })}
                   </div>
@@ -2318,13 +2474,17 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
             )}
             {error && (
               <div style={{
-                display: 'flex', alignItems: 'flex-start', gap: 8,
                 padding: '10px 12px', borderRadius: 8, marginBottom: 8,
                 background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
                 fontSize: 12, color: '#ef4444',
               }}>
-                <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
-                <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{error}</span>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{error}</span>
+                </div>
+                {activeHarnessForError && (
+                  <HarnessErrorHelp harness={activeHarnessForError} />
+                )}
               </div>
             )}
           </div>
