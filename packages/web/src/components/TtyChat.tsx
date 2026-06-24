@@ -2082,6 +2082,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
             </div>
           </div>
 
+          {/* Show setup panel inline when selected backend is not installed */}
+          {nayBackendHarness && !nayBackendHarness.installed && (
+            <div style={{ padding: '0 12px 8px' }}>
+              <HarnessSetupPanel harness={nayBackendHarness} />
+            </div>
+          )}
           <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
             <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30, alignSelf: 'flex-end', marginBottom: 1 }}>
               <Paperclip size={12} />
@@ -2094,7 +2100,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
               onPaste={handleNayPaste}
               placeholder={pt ? 'Pergunte algo...' : 'Ask something...'}
               rows={1}
-              disabled={streaming || chatModel === null}
+              disabled={streaming || chatModel === null || nayBackendHarness?.installed === false}
               style={{
                 flex: 1, resize: 'none',
                 background: 'var(--bg-elevated)', border: '1px solid var(--border)',
@@ -2129,7 +2135,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
               <button
                 className="tty-send-btn"
                 onClick={() => sendMessage()}
-                disabled={(!input.trim() && nayAttachments.length === 0) || chatModel === null}
+                disabled={(!input.trim() && nayAttachments.length === 0) || chatModel === null || nayBackendHarness?.installed === false}
                 title={pt ? 'Enviar (Enter)' : 'Send (Enter)'}
                 style={{
                   width: 34, height: 34, borderRadius: 8, flexShrink: 0,
@@ -2511,6 +2517,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                 ))}
               </div>
             )}
+            {/* Show setup panel inline when selected backend is not installed */}
+            {nayBackendHarness && !nayBackendHarness.installed && (
+              <div style={{ padding: '0 12px 8px' }}>
+                <HarnessSetupPanel harness={nayBackendHarness} />
+              </div>
+            )}
             <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
               <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30, alignSelf: 'flex-end', marginBottom: 1 }}>
                 <Paperclip size={12} />
@@ -2523,7 +2535,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                 onPaste={handleNayPaste}
                 placeholder={pt ? 'Pergunte algo...' : 'Ask something...'}
                 rows={1}
-                disabled={streaming || chatModel === null}
+                disabled={streaming || chatModel === null || nayBackendHarness?.installed === false}
                 style={{
                   flex: 1, resize: 'none',
                   background: 'var(--bg-elevated)', border: '1px solid var(--border)',
@@ -2558,7 +2570,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                 <button
                   className="tty-send-btn"
                   onClick={() => sendMessage()}
-                  disabled={(!input.trim() && nayAttachments.length === 0) || chatModel === null}
+                  disabled={(!input.trim() && nayAttachments.length === 0) || chatModel === null || nayBackendHarness?.installed === false}
                   title={pt ? 'Enviar (Enter)' : 'Send (Enter)'}
                   style={{
                     width: 34, height: 34, borderRadius: 8, flexShrink: 0,
