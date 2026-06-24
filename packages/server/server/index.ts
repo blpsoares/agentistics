@@ -452,12 +452,19 @@ Bun.serve({
 
     if (url.pathname === '/api/chat-tty' && req.method === 'POST') {
       try {
-        const body = await req.json() as { message: string; history?: ChatMessage[]; model?: ChatModelId; sessionId?: string | null; thinkingBudget?: number; attachments?: ChatAttachment[]; harness?: string }
-        const { message, history = [], model = 'claude-sonnet-4-6', sessionId = null, thinkingBudget, attachments, harness } = body
+        const body = await req.json() as { message: string; history?: ChatMessage[]; model?: string; sessionId?: string | null; thinkingBudget?: number; attachments?: ChatAttachment[]; harness?: string }
+        const { message, history = [], model: requestedModel, sessionId = null, thinkingBudget, attachments, harness } = body
 
         // Resolve the requested driver; fall back to claude if missing or unavailable
         const requestedDriver = harness ? getChatDriver(harness as import('@agentistics/core').HarnessId) : undefined
         const driver = (requestedDriver?.isAvailable() ? requestedDriver : undefined) ?? getChatDriver('claude')!
+
+        // The model MUST belong to the resolved driver — a model from another
+        // harness (or none) would be rejected by that CLI. Fall back to the
+        // driver's defaultModel when the requested model isn't one of its own.
+        const model = (requestedModel && driver.models.some(m => m.id === requestedModel))
+          ? requestedModel
+          : driver.defaultModel
 
         // Ensure MCP is registered for the selected driver
         await driver.ensureMcp(PORT)

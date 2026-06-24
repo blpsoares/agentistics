@@ -21,33 +21,29 @@ const AGENTISTICS_ROOT = path.resolve(import.meta.dir, '..', '..', '..', '..')
 // MCP config file path for copilot
 const COPILOT_MCP_CONFIG = path.join(HOME_DIR, '.copilot', 'mcp-config.json')
 
-// Models known to be available through Copilot CLI
-// The default (no --model flag) resolves to claude-haiku-4.5 on this account,
-// but Copilot supports multiple models — we expose a useful subset.
+// Copilot's concrete model availability is plan-dependent, and explicit
+// --model ids (claude-haiku-4.5, gpt-4.1, ...) are frequently REJECTED by the
+// CLI ("Model ... is not available"). 'auto' (no --model flag) always works and
+// lets Copilot pick — so it is the default and listed first. The explicit ids
+// are kept as best-effort options that may or may not resolve per subscription.
 export const COPILOT_MODELS: ChatDriverModel[] = [
-  {
-    id: 'claude-haiku-4.5',
-    label: 'Claude Haiku 4.5',
-    badge: 'Fast',
-    desc: 'Fastest Copilot responses via GitHub proxy',
-  },
-  {
-    id: 'gpt-4.1',
-    label: 'GPT-4.1',
-    badge: 'OpenAI',
-    desc: 'OpenAI GPT-4.1 via GitHub Copilot',
-  },
-  {
-    id: 'gpt-4.1-mini',
-    label: 'GPT-4.1 Mini',
-    badge: 'Fast',
-    desc: 'Fast OpenAI model via GitHub Copilot',
-  },
   {
     id: 'auto',
     label: 'Auto (Copilot picks)',
     badge: 'Auto',
-    desc: "Let Copilot choose the best model automatically",
+    desc: "Let Copilot choose the best available model",
+  },
+  {
+    id: 'gpt-5.4',
+    label: 'GPT-5.4',
+    badge: 'OpenAI',
+    desc: 'OpenAI GPT-5.4 via Copilot (if your plan allows)',
+  },
+  {
+    id: 'claude-haiku-4.5',
+    label: 'Claude Haiku 4.5',
+    badge: 'Fast',
+    desc: 'Claude Haiku via Copilot (if your plan allows)',
   },
 ]
 
@@ -112,7 +108,7 @@ export const copilotDriver: ChatDriver = {
 
   models: COPILOT_MODELS,
 
-  defaultModel: 'claude-haiku-4.5',
+  defaultModel: 'auto',
 
   async ensureMcp(port: number) {
     await ensureCopilotMcp(port)
