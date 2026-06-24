@@ -97,6 +97,8 @@ async function ensureCopilotMcp(port: number): Promise<void> {
   await writeFile(COPILOT_MCP_CONFIG, JSON.stringify(config, null, 2))
 }
 
+const COPILOT_DIR = path.join(HOME_DIR, '.copilot')
+
 export const copilotDriver: ChatDriver = {
   id: 'copilot',
 
@@ -104,6 +106,18 @@ export const copilotDriver: ChatDriver = {
 
   isAvailable() {
     return copilotIsAvailable()
+  },
+
+  authReady() {
+    // ~/.copilot dir is created when copilot is set up / logged in
+    return existsSync(COPILOT_DIR)
+  },
+
+  setup: {
+    installCmd: 'npm i -g @github/copilot-cli',
+    loginCmd: 'gh auth login',
+    docUrl: 'https://docs.github.com/en/copilot/using-github-copilot/using-github-copilot-in-the-command-line',
+    note: 'Requires a GitHub Copilot subscription. After installing the CLI, run "gh auth login" to authenticate.',
   },
 
   models: COPILOT_MODELS,

@@ -22,6 +22,16 @@ export const claudeDriver: ChatDriver = {
     return claudeIsAvailable()
   },
 
+  // Claude is the host CLI — auth is ready whenever the binary is present.
+  authReady() {
+    return claudeIsAvailable()
+  },
+
+  setup: {
+    installCmd: 'npm i -g @anthropic-ai/claude-code',
+    docUrl: 'https://docs.anthropic.com/en/docs/claude-code',
+  },
+
   // Expose all Claude models defined in chat-tty (mutable copy for the interface)
   models: CHAT_MODELS.map(m => ({ ...m })),
 

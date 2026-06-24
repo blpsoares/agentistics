@@ -31,6 +31,7 @@ import type { ChatMessage } from '../chat-tty'
 // chat-drivers/ is one level deeper than chat-tty.ts, so 4 levels up to reach the repo root
 const AGENTISTICS_ROOT = path.resolve(import.meta.dir, '..', '..', '..', '..')
 const CODEX_CONFIG_PATH = path.join(HOME_DIR, '.codex', 'config.toml')
+const CODEX_AUTH_PATH = path.join(HOME_DIR, '.codex', 'auth.json')
 const MCP_SERVER_NAME = 'agentistics'
 
 // Models available to ChatGPT-authenticated Codex accounts.
@@ -156,6 +157,16 @@ export const codexDriver: ChatDriver = {
 
   isAvailable() {
     return codexIsAvailable()
+  },
+
+  authReady() {
+    return existsSync(CODEX_AUTH_PATH)
+  },
+
+  setup: {
+    installCmd: 'npm i -g @openai/codex',
+    loginCmd: 'codex login',
+    docUrl: 'https://github.com/openai/codex',
   },
 
   models: CODEX_MODELS.map(m => ({ ...m })),

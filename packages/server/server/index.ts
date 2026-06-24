@@ -7,7 +7,7 @@ import { getVersionInfo } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
 import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, type ChatMessage, type ChatModelId, type ChatAttachment } from './chat-tty'
-import { getChatDriver, availableChatDrivers } from './chat-drivers/index'
+import { getChatDriver, availableChatDrivers, chatHarnessStatus } from './chat-drivers/index'
 import { listMcpServers, removeMcpServer } from './mcp-list'
 import { listNaySessions, getNaySessionMessages } from './nay-sessions'
 import { listClaudeSessions, getClaudeSessionMessages, type ClaudeSessionSummary, type ClaudeSessionMessage } from './claude-sessions'
@@ -445,7 +445,7 @@ Bun.serve({
     }
 
     if (url.pathname === '/api/chat-harnesses' && req.method === 'GET') {
-      return new Response(JSON.stringify(availableChatDrivers()), {
+      return new Response(JSON.stringify(chatHarnessStatus()), {
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
     }

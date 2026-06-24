@@ -23,6 +23,7 @@ import type { ChatMessage } from '../chat-tty'
 // chat-drivers/ is one level deeper than chat-tty.ts, so 4 levels up to reach the repo root
 const AGENTISTICS_ROOT = path.resolve(import.meta.dir, '..', '..', '..', '..')
 const GEMINI_SETTINGS_PATH = path.join(HOME_DIR, '.gemini', 'settings.json')
+const GEMINI_OAUTH_PATH = path.join(HOME_DIR, '.gemini', 'oauth_creds.json')
 const MCP_SERVER_NAME = 'agentistics'
 
 const GEMINI_MODELS = [
@@ -149,6 +150,17 @@ export const geminiDriver: ChatDriver = {
 
   isAvailable() {
     return geminiIsAvailable()
+  },
+
+  authReady() {
+    return existsSync(GEMINI_OAUTH_PATH)
+  },
+
+  setup: {
+    installCmd: 'npm i -g @google/gemini-cli',
+    loginCmd: 'gemini',
+    docUrl: 'https://goo.gle/gemini-cli',
+    note: 'Free-tier access has been discontinued for some accounts and migrated to Antigravity (https://antigravity.google). If you receive an IneligibleTierError at runtime, visit the Antigravity link to check your account eligibility.',
   },
 
   models: GEMINI_MODELS.map(m => ({ ...m })),
