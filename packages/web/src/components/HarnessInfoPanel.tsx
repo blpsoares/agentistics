@@ -1,6 +1,7 @@
 import { Check } from 'lucide-react'
 import type { HarnessId } from '@agentistics/core'
 import { HARNESS_INFO, HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
+import { useChatHarnesses } from '../hooks/useChatHarnesses'
 
 interface Props {
   harness: HarnessId
@@ -13,6 +14,8 @@ export function HarnessInfoPanel({ harness }: Props) {
   const info = HARNESS_INFO[harness]
   const label = HARNESS_LABELS[harness]
   const color = HARNESS_COLORS[harness]
+  const { harnesses: chatHarnesses, loading: chatLoading } = useChatHarnesses()
+  const chatStatus = chatHarnesses.find(h => h.id === harness)
 
   return (
     <div
@@ -125,6 +128,105 @@ export function HarnessInfoPanel({ harness }: Props) {
           }}>
             {info.note}
           </p>
+        </section>
+      )}
+
+      {/* Nay backend status */}
+      {!chatLoading && chatStatus && (
+        <section style={{
+          background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+          borderRadius: 7, padding: '10px 12px',
+        }}>
+          <div style={{
+            fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)',
+            letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 8,
+          }}>
+            Nay backend
+          </div>
+
+          {chatStatus.ready ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Check size={12} style={{ color: 'var(--accent-green)', flexShrink: 0 }} />
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                Ready as a Nay backend
+              </span>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {/* Status badges */}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <span style={{
+                  fontSize: 10, fontWeight: 600,
+                  color: chatStatus.installed ? 'var(--accent-green)' : 'var(--text-tertiary)',
+                  background: chatStatus.installed ? 'color-mix(in srgb, var(--accent-green) 12%, transparent)' : 'var(--bg-surface)',
+                  border: `1px solid ${chatStatus.installed ? 'color-mix(in srgb, var(--accent-green) 30%, transparent)' : 'var(--border)'}`,
+                  borderRadius: 4, padding: '2px 7px',
+                }}>
+                  {chatStatus.installed ? 'installed' : 'not installed'}
+                </span>
+                <span style={{
+                  fontSize: 10, fontWeight: 600,
+                  color: chatStatus.authReady ? 'var(--accent-green)' : 'var(--text-tertiary)',
+                  background: chatStatus.authReady ? 'color-mix(in srgb, var(--accent-green) 12%, transparent)' : 'var(--bg-surface)',
+                  border: `1px solid ${chatStatus.authReady ? 'color-mix(in srgb, var(--accent-green) 30%, transparent)' : 'var(--border)'}`,
+                  borderRadius: 4, padding: '2px 7px',
+                }}>
+                  {chatStatus.authReady ? 'authenticated' : 'not authenticated'}
+                </span>
+              </div>
+
+              {/* Setup guidance */}
+              {chatStatus.setup.installCmd && !chatStatus.installed && (
+                <div>
+                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 3 }}>Install</div>
+                  <div style={{
+                    fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)',
+                    background: 'var(--bg-surface)', border: '1px solid var(--border)',
+                    borderRadius: 5, padding: '4px 8px',
+                  }}>
+                    {chatStatus.setup.installCmd}
+                  </div>
+                </div>
+              )}
+
+              {chatStatus.setup.loginCmd && chatStatus.installed && !chatStatus.authReady && (
+                <div>
+                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 3 }}>Login</div>
+                  <div style={{
+                    fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)',
+                    background: 'var(--bg-surface)', border: '1px solid var(--border)',
+                    borderRadius: 5, padding: '4px 8px',
+                  }}>
+                    {chatStatus.setup.loginCmd}
+                  </div>
+                </div>
+              )}
+
+              {chatStatus.setup.note && (
+                <p style={{
+                  fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic',
+                  lineHeight: 1.5, margin: 0,
+                }}>
+                  {chatStatus.setup.note}
+                </p>
+              )}
+
+              {chatStatus.setup.docUrl && (
+                <a
+                  href={chatStatus.setup.docUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    fontSize: 11, color: 'var(--accent-blue)',
+                    textDecoration: 'none',
+                    display: 'inline-block',
+                  }}
+                >
+                  Setup guide &rarr;
+                </a>
+              )}
+            </div>
+          )}
         </section>
       )}
     </div>
