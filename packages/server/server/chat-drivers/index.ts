@@ -14,13 +14,6 @@ export function getChatDriver(harness: HarnessId): ChatDriver | undefined {
   return ALL_DRIVERS.find(d => d.id === harness)
 }
 
-/** Returns only available (installed) drivers — used internally for routing. */
-export function availableChatDrivers(): { id: HarnessId; label: string; models: ChatDriver['models']; defaultModel: string }[] {
-  return ALL_DRIVERS
-    .filter(d => d.isAvailable())
-    .map(d => ({ id: d.id, label: d.label, models: d.models, defaultModel: d.defaultModel }))
-}
-
 /**
  * Returns status for ALL known drivers (installed or not), with per-field
  * install/auth/ready flags and setup guidance. Used by GET /api/chat-harnesses.

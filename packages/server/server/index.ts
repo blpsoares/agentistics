@@ -7,7 +7,7 @@ import { getVersionInfo } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
 import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, type ChatMessage, type ChatModelId, type ChatAttachment } from './chat-tty'
-import { getChatDriver, availableChatDrivers, chatHarnessStatus } from './chat-drivers/index'
+import { getChatDriver, chatHarnessStatus } from './chat-drivers/index'
 import { listMcpServers, removeMcpServer } from './mcp-list'
 import { listNaySessions, getNaySessionMessages } from './nay-sessions'
 import { listClaudeSessions, getClaudeSessionMessages, type ClaudeSessionSummary, type ClaudeSessionMessage } from './claude-sessions'
@@ -455,8 +455,28 @@ Bun.serve({
         const body = await req.json() as { message: string; history?: ChatMessage[]; model?: string; sessionId?: string | null; thinkingBudget?: number; attachments?: ChatAttachment[]; harness?: string }
         const { message, history = [], model: requestedModel, sessionId = null, thinkingBudget, attachments, harness } = body
 
-        // Resolve the requested driver; fall back to claude if missing or unavailable
+        // Resolve the requested driver.
+        // - If harness explicitly provided but not installed → stream an error (no silent Claude fallback)
+        // - If harness not provided → default to claude
+        // - Installed-but-not-authed harnesses still route to their driver
         const requestedDriver = harness ? getChatDriver(harness as import('@agentistics/core').HarnessId) : undefined
+        if (harness && requestedDriver && !requestedDriver.isAvailable()) {
+          const label = requestedDriver.label
+          const errBody = new TextEncoder().encode(`data: ${JSON.stringify({ error: `${label} is not installed. Install it to use it as a Nay backend.` })}
+
+`)
+          return new Response(new ReadableStream({
+            start(ctrl) { ctrl.enqueue(errBody); ctrl.close() },
+          }), {
+            status: 200,
+            headers: {
+              ...CORS_HEADERS,
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              'X-Accel-Buffering': 'no',
+            },
+          })
+        }
         const driver = (requestedDriver?.isAvailable() ? requestedDriver : undefined) ?? getChatDriver('claude')!
 
         // The model MUST belong to the resolved driver — a model from another

@@ -1,5 +1,10 @@
 import { useState, useEffect } from 'react'
 
+// NOTE: The types below (ChatDriverSetup, ChatDriverModel, HarnessChatStatus) mirror
+// packages/server/server/chat-drivers/types.ts, which is the source of truth.
+// They are redeclared here because the web layer cannot import server-side modules
+// (Vite would attempt to bundle them and fail on Node/Bun APIs). Keep in sync manually.
+
 /** Static guidance for install / login shown when a harness is not ready. */
 export interface ChatDriverSetup {
   /** Shell command to install the CLI (e.g. 'npm i -g @openai/codex'). */

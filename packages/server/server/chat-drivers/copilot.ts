@@ -97,7 +97,23 @@ async function ensureCopilotMcp(port: number): Promise<void> {
   await writeFile(COPILOT_MCP_CONFIG, JSON.stringify(config, null, 2))
 }
 
-const COPILOT_DIR = path.join(HOME_DIR, '.copilot')
+const COPILOT_CONFIG = path.join(HOME_DIR, '.copilot', 'config.json')
+
+/**
+ * Returns true only if ~/.copilot/config.json exists and contains a non-empty
+ * `loggedInUsers` array — the reliable signal that the user has authenticated.
+ * Returns false on missing file, parse error, or empty array.
+ */
+function copilotAuthReady(): boolean {
+  try {
+    const raw = Bun.file(COPILOT_CONFIG).toString()
+    const cfg = JSON.parse(raw) as Record<string, unknown>
+    const users = cfg['loggedInUsers']
+    return Array.isArray(users) && users.length > 0
+  } catch {
+    return false
+  }
+}
 
 export const copilotDriver: ChatDriver = {
   id: 'copilot',
@@ -109,8 +125,7 @@ export const copilotDriver: ChatDriver = {
   },
 
   authReady() {
-    // ~/.copilot dir is created when copilot is set up / logged in
-    return existsSync(COPILOT_DIR)
+    return copilotAuthReady()
   },
 
   setup: {
