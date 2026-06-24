@@ -33,6 +33,7 @@ import { AgentMetricsPanel } from './components/AgentMetricsPanel'
 import { CacheHitRatePanel } from './components/CacheHitRatePanel'
 import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
+import { TranscriptModal } from './components/TranscriptModal'
 import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
 import { TtyChat } from './components/TtyChat'
 import { UpdateModal } from './components/UpdateModal'
@@ -923,12 +924,6 @@ export default function AppLayout() {
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
   const [chatSoundId, setChatSoundId] = useState('ping')
-  // Claude tab state — lifted so TtyChat can preserve project/session across re-renders
-  const [claudeSharedState, setClaudeSharedState] = useState<{
-    projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
-    sessionId: string | null; messages: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[] }>
-    model?: import('./lib/chatModels').ChatModelId
-  }>({ projectPath: null, projectName: null, projectEncodedDir: null, sessionId: null, messages: [] })
 
   const [cardPrecision, setCardPrecisionState] = useState<Record<string, boolean>>({})
   const precisionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1841,6 +1836,8 @@ export default function AppLayout() {
         />
       )}
 
+      <TranscriptModal lang={lang} />
+
       {/* PDF Export Modal */}
       {showExportModal && (
         <PDFExportModal
@@ -1887,8 +1884,6 @@ export default function AppLayout() {
             body: JSON.stringify({ chatModel: model }),
           }).catch(() => {})
         }}
-        claudeSharedState={claudeSharedState}
-        onClaudeStateChange={setClaudeSharedState}
       />
 
       {/* Footer */}
