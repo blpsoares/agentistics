@@ -650,7 +650,7 @@ export default function ExportPage() {
 
           {/* PDF theme */}
           <div>
-            <ConfigLabel text={pt ? 'Tema do PDF' : 'PDF theme'} />
+            <ConfigLabel text={t('export.pdf.theme', lang)} />
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               {(['light', 'dark'] as PDFTheme[]).map(thm => {
                 const sel = pdfTheme === thm
@@ -665,7 +665,7 @@ export default function ExportPage() {
                     transition: 'all 0.12s',
                   }}>
                     {thm === 'light' ? <Sun size={13} color="#6b7280" /> : <Moon size={13} color="#94a3b8" />}
-                    {thm === 'light' ? (pt ? 'Claro' : 'Light') : (pt ? 'Escuro' : 'Dark')}
+                    {thm === 'light' ? t('nav.light', lang) : t('nav.dark', lang)}
                     {sel && <Check size={11} color="var(--anthropic-orange)" />}
                   </button>
                 )
@@ -678,7 +678,7 @@ export default function ExportPage() {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
                 <Calendar size={11} color="var(--text-tertiary)" />
-                <ConfigLabel text={pt ? 'Período' : 'Period'} />
+                <ConfigLabel text={t('filter.period', lang)} />
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
                 {DATE_OPTIONS.map(opt => {
@@ -699,7 +699,7 @@ export default function ExportPage() {
               </div>
               {derived && (
                 <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 6 }}>
-                  {fmtN(derived.totalMessages)} {pt ? 'mensagens' : 'msgs'} · {fmtN(derived.totalSessions)} {pt ? 'sessões' : 'sessions'}
+                  {fmtN(derived.totalMessages)} {t('export.msgs', lang)} · {fmtN(derived.totalSessions)} {t('compare.sessionsLower', lang)}
                 </div>
               )}
             </div>
@@ -710,7 +710,7 @@ export default function ExportPage() {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
                 <Cpu size={11} color="var(--text-tertiary)" />
-                <ConfigLabel text={pt ? 'Modelo' : 'Model'} />
+                <ConfigLabel text={t('filter.model', lang)} />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 200, overflowY: 'auto' }}>
                 {modelGroups.map(group => (
@@ -754,7 +754,7 @@ export default function ExportPage() {
                     fontSize: 10, color: 'var(--text-tertiary)', background: 'transparent',
                     border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: '3px 0', textAlign: 'left',
                   }}>
-                    {pt ? 'Limpar seleção' : 'Clear selection'}
+                    {t('export.clearSelection', lang)}
                   </button>
                 )}
               </div>
@@ -767,12 +767,12 @@ export default function ExportPage() {
               <div style={{ height: 1, background: 'var(--border)' }} />
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <ConfigLabel text={pt ? 'Seções do PDF' : 'PDF sections'} />
+                  <ConfigLabel text={t('export.pdf.sections', lang)} />
                   <button onClick={toggleAll} style={{
                     background: 'transparent', border: 'none', cursor: 'pointer',
                     fontSize: 10, color: 'var(--text-tertiary)', fontFamily: 'inherit', padding: 0, marginTop: -8,
                   }}>
-                    {allSelected ? (pt ? 'Desmarcar tudo' : 'Deselect all') : (pt ? 'Selecionar tudo' : 'Select all')}
+                    {allSelected ? t('export.deselectAll', lang) : t('export.selectAll', lang)}
                   </button>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
@@ -802,9 +802,9 @@ export default function ExportPage() {
                 <>
                   <div style={{ height: 1, background: 'var(--border)' }} />
                   <div>
-                    <ConfigLabel text={pt ? 'Gráfico de atividade' : 'Activity chart'} />
+                    <ConfigLabel text={t('export.activityChart', lang)} />
                     <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 5 }}>
-                      {pt ? 'Linha principal' : 'Primary line'}
+                      {t('export.primaryLine', lang)}
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5, marginBottom: 12 }}>
                       {(['messages', 'sessions', 'tools'] as ChartMetric[]).map(m => {
@@ -836,7 +836,7 @@ export default function ExportPage() {
                       })}
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 5 }}>
-                      {pt ? 'Overlay (opcional)' : 'Overlay (optional)'}
+                      {t('export.overlay', lang)}
                     </div>
                     <button onClick={() => { setChartOverlayAll(v => !v); setChartOverlay(null) }} style={{
                       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
@@ -847,7 +847,7 @@ export default function ExportPage() {
                       color: chartOverlayAll ? '#a78bfa' : 'var(--text-secondary)',
                       transition: 'all 0.12s',
                     }}>
-                      {pt ? '⊞ Overlay todas as linhas' : '⊞ Overlay all lines'}
+                      {t('export.overlayAll', lang)}
                     </button>
                     {!chartOverlayAll && (
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5 }}>
@@ -881,7 +881,7 @@ export default function ExportPage() {
                                     <div style={{ width: 6, height: 6, borderRadius: '50%', background: dotColors[m]!, flexShrink: 0 }} />
                                     {pt ? labels[m]!.pt : labels[m]!.en}
                                   </>
-                                ) : (pt ? 'Nenhum' : 'None')}
+                                ) : t('export.none', lang)}
                               </button>
                             )
                           })}
