@@ -189,6 +189,19 @@ export const translations: Record<Lang, Record<string, string>> = {
     'compare.dow.thu': 'Qui',
     'compare.dow.fri': 'Sex',
     'compare.dow.sat': 'Sáb',
+
+    // Export page
+    'export.title': 'Exportar PDF',
+    'export.subtitle': 'Configure e visualize antes de exportar',
+    'export.scope': 'Escopo',
+    'export.scope.all': 'Todos',
+    'export.scope.compare': 'Comparar',
+    'export.generating': 'Gerando PDF...',
+    'export.download': 'Baixar PDF',
+    'export.saved': 'PDF salvo!',
+    'export.noSections': 'Selecione pelo menos uma seção',
+    'export.preview': 'Prévia em tempo real · 794px (A4)',
+    'export.sections': 'seção(ões)',
   },
 
   en: {
@@ -378,6 +391,19 @@ export const translations: Record<Lang, Record<string, string>> = {
     'compare.dow.thu': 'Thu',
     'compare.dow.fri': 'Fri',
     'compare.dow.sat': 'Sat',
+
+    // Export page
+    'export.title': 'Export PDF',
+    'export.subtitle': 'Configure and preview before exporting',
+    'export.scope': 'Scope',
+    'export.scope.all': 'All',
+    'export.scope.compare': 'Compare',
+    'export.generating': 'Generating PDF...',
+    'export.download': 'Download PDF',
+    'export.saved': 'PDF saved!',
+    'export.noSections': 'Select at least one section',
+    'export.preview': 'Live preview · 794px (A4)',
+    'export.sections': 'section(s)',
   },
 };
 

@@ -4,7 +4,7 @@ import { version } from '../../../package.json'
 import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, RefreshCw, FileCode, TrendingUp, BarChart2,
-  Sun, Moon, Globe, AlertTriangle, Download,
+  Sun, Moon, Globe, AlertTriangle, Download, FileDown,
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers, Code2, GitCompare,
@@ -26,7 +26,7 @@ import { FiltersBar } from './components/FiltersBar'
 import { RecentSessions } from './components/RecentSessions'
 import { HighlightsBoard } from './components/HighlightsBoard'
 import { InfoModal } from './components/InfoModal'
-import { PDFExportModal, PDFDirectExporter } from './components/PDFExportModal'
+import { PDFDirectExporter } from './components/PDFExportModal'
 import { HealthWarnings } from './components/HealthWarnings'
 import { ToolMetricsPanel } from './components/ToolMetricsPanel'
 import { AgentMetricsPanel } from './components/AgentMetricsPanel'
@@ -742,6 +742,7 @@ function NavTabs({ lang, harnesses }: { lang: Lang; harnesses?: HarnessId[] }) {
     { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={12} /> },
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={12} /> },
     { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={12} /> },
+    { to: '/export',    labelPt: 'Exportar',     labelEn: 'Export',       icon: <FileDown size={12} /> },
     ...(harnesses && harnesses.length > 1
       ? [{ to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={12} /> }]
       : []),
@@ -796,6 +797,7 @@ function NavTabs({ lang, harnesses }: { lang: Lang; harnesses?: HarnessId[] }) {
 
 export default function AppLayout() {
   const location = useLocation()
+  const navigate = useNavigate()
   const isCustomPage = location.pathname === '/custom'
   const isMobile = useIsMobile()
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
@@ -816,9 +818,6 @@ export default function AppLayout() {
     models: [],
   })
   const [infoModalIndex, setInfoModalIndex] = useState<number | null>(null)
-  const [showExportModal, setShowExportModal] = useState(
-    () => new URLSearchParams(window.location.search).has('export')
-  )
   const [pdfDirectExportRange, setPdfDirectExportRange] = useState<string | null>(null)
   const [expandedChart, setExpandedChart] = useState<string | null>(null)
   const [selectedSession, setSelectedSession] = useState<import('@agentistics/core').SessionMeta | null>(null)
@@ -1501,9 +1500,9 @@ export default function AppLayout() {
               {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
             </button>}
 
-            {/* Export report — hidden on mobile */}
+            {/* Export report — hidden on mobile; navigates to /export page */}
             {!isMobile && <button
-              onClick={() => setShowExportModal(true)}
+              onClick={() => navigate('/export')}
               style={{
                 height: 32,
                 padding: '0 12px',
@@ -1837,18 +1836,6 @@ export default function AppLayout() {
       )}
 
       <TranscriptModal lang={lang} />
-
-      {/* PDF Export Modal */}
-      {showExportModal && (
-        <PDFExportModal
-          data={data}
-          filters={filters}
-          lang={lang}
-          currency={currency}
-          brlRate={brlRate}
-          onClose={() => setShowExportModal(false)}
-        />
-      )}
 
       {/* PDF Direct Export — triggered from chat, no modal */}
       {pdfDirectExportRange !== null && (

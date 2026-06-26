@@ -11,10 +11,10 @@ import { HARNESS_LABELS } from '../lib/harness'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type PDFTheme = 'light' | 'dark'
+export type PDFTheme = 'light' | 'dark'
 
-const SECTION_IDS = ['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools', 'sessions', 'highlights', 'agents'] as const
-type SectionId = typeof SECTION_IDS[number]
+export const SECTION_IDS = ['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools', 'sessions', 'highlights', 'agents'] as const
+export type SectionId = typeof SECTION_IDS[number]
 
 interface Colors {
   bg: string; bgCard: string; bgElevated: string; border: string
@@ -35,7 +35,7 @@ interface PDFExportModalProps {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const COLORS: Record<PDFTheme, Colors> = {
+export const COLORS: Record<PDFTheme, Colors> = {
   light: {
     bg: '#ffffff', bgCard: '#f9fafb', bgElevated: '#f3f4f6', border: '#e5e7eb',
     text: '#111827', textSec: '#6b7280', textTer: '#9ca3af',
@@ -54,7 +54,7 @@ const UI_THEME_BTNS: Record<PDFTheme, { bg: string; text: string; icon: string }
   dark:  { bg: '#181b24', text: '#e8eaf0', icon: '#94a3b8' },
 }
 
-const SECTIONS: { id: SectionId; labelPt: string; labelEn: string; Icon: React.ElementType }[] = [
+export const SECTIONS: { id: SectionId; labelPt: string; labelEn: string; Icon: React.ElementType }[] = [
   { id: 'summary',    labelPt: 'Resumo',       labelEn: 'Summary',    Icon: BarChart2   },
   { id: 'activity',   labelPt: 'Atividade',    labelEn: 'Activity',   Icon: TrendingUp  },
   { id: 'heatmap',    labelPt: 'Mapa calor',   labelEn: 'Heatmap',    Icon: LayoutGrid  },
@@ -67,7 +67,7 @@ const SECTIONS: { id: SectionId; labelPt: string; labelEn: string; Icon: React.E
   { id: 'agents',     labelPt: 'Agentes',      labelEn: 'Agents',     Icon: Bot         },
 ]
 
-const DATE_OPTIONS = [
+export const DATE_OPTIONS = [
   { value: 'all',  labelPt: 'Tudo',      labelEn: 'All' },
   { value: '7d',   labelPt: '7 dias',    labelEn: '7 days' },
   { value: '30d',  labelPt: '30 dias',   labelEn: '30 days' },
@@ -126,7 +126,7 @@ function KPICard({ label, value, sub, accent, c }: {
   )
 }
 
-type ChartMetric = 'messages' | 'sessions' | 'tools'
+export type ChartMetric = 'messages' | 'sessions' | 'tools'
 
 const METRIC_META: Record<ChartMetric, { label: string; getVal: (d: HeatmapDay) => number; colorKey: keyof Colors }> = {
   messages: { label: 'Messages', getVal: d => d.value,    colorKey: 'orange' },
@@ -799,7 +799,7 @@ export function PDFDirectExporter({ data, range, currentFilters, lang, currency,
 
 // ── PDF Content (the exportable A4 page, 794px wide) ─────────────────────────
 
-interface PDFContentProps {
+export interface PDFContentProps {
   pdfTheme: PDFTheme
   sectionOrder: SectionId[]
   derived: ReturnType<typeof useDerivedStats>
@@ -814,7 +814,7 @@ interface PDFContentProps {
   logoDataUri: string
 }
 
-function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currency, brlRate, blendedRates, chartMetric, chartOverlay, chartOverlayAll, logoDataUri }: PDFContentProps) {
+export function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currency, brlRate, blendedRates, chartMetric, chartOverlay, chartOverlayAll, logoDataUri }: PDFContentProps) {
   if (!derived) return null
   const c = COLORS[pdfTheme]
   const pt = lang === 'pt'
