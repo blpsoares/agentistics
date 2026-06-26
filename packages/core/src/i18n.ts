@@ -136,6 +136,10 @@ export const translations: Record<Lang, Record<string, string>> = {
     'project.tools_count': 'ferramentas',
     'project.click_filter': 'Clique para filtrar',
 
+    // Cost card sub-label
+    'card.est_cost_sub_generic': 'preços de API · não é assinatura',
+    'card.est_cost_sub_with_provider': 'preços da API {provider} · não é assinatura',
+
     // Cost
     'cost.blended_note': 'Custo calculado com base em preços médios ponderados',
     'cost.no_data': 'Sem dados de custo disponíveis',
@@ -337,6 +341,10 @@ export const translations: Record<Lang, Record<string, string>> = {
     'project.messages_count': 'messages',
     'project.tools_count': 'tools',
     'project.click_filter': 'Click to filter',
+
+    // Cost card sub-label
+    'card.est_cost_sub_generic': 'API pricing · not a subscription',
+    'card.est_cost_sub_with_provider': '{provider} API pricing · not a subscription',
 
     // Cost
     'cost.blended_note': 'Cost calculated based on weighted average prices',
