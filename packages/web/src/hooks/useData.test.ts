@@ -884,14 +884,24 @@ describe('computeHarnessSummaries — models[] and costPerMTokens', () => {
     expect(models[0]!.costUSD).toBeGreaterThanOrEqual(models[1]!.costUSD)
   })
 
-  test('codex: sessions without model land under "unknown" with 0 cost', () => {
-    const sessions = [{ ...makeSession('s1', 1000, 400), model: undefined }]
+  test('codex: sessions without model are excluded from models[] but aggregate totals are unchanged', () => {
+    const sessions = [
+      { ...makeSession('s1', 1000, 400), model: undefined },  // no model — excluded from models[]
+      makeSession('s2', 500, 200, 'gpt-4o'),                  // known model — included
+    ]
     const summaries = computeHarnessSummaries(makeData(sessions))
-    const models = summaries['codex']!.models
-    expect(models.length).toBe(1)
-    expect(models[0]!.model).toBe('unknown')
-    expect(models[0]!.inputTokens).toBe(1000)
-    expect(models[0]!.costUSD).toBe(0)
+    const s = summaries['codex']!
+
+    // models[] must not contain empty or 'unknown' entries
+    expect(s.models.every(m => m.model && m.model !== 'unknown')).toBe(true)
+    // only the session with a known model appears
+    expect(s.models.length).toBe(1)
+    expect(s.models[0]!.model).toBe('gpt-4o')
+
+    // aggregate totals include BOTH sessions (unknown-model session still counts)
+    expect(s.sessions).toBe(2)
+    expect(s.inputTokens).toBe(1500)
+    expect(s.outputTokens).toBe(600)
   })
 
   test('codex: costPerMTokens equals costUSD / ((input+output)/1e6)', () => {

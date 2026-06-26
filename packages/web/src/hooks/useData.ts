@@ -269,7 +269,9 @@ export function computeHarnessSummaries(
       const costUSD = Object.entries(modelUsage).reduce((s, [modelId, u]) => s + calcCost(u, modelId), 0)
 
       // ── Claude: per-model breakdown from statsCache.modelUsage ──
+      // Skip entries with empty or 'unknown' model keys — they cannot be priced.
       const claudeModels = Object.entries(modelUsage)
+        .filter(([model]) => model && model !== 'unknown')
         .map(([model, u]) => ({
           model,
           inputTokens: u.inputTokens ?? 0,
@@ -341,7 +343,6 @@ export function computeHarnessSummaries(
 
       const hasCost = HARNESS_CAPABILITIES[harness].cost
       const hasTokens = HARNESS_CAPABILITIES[harness].tokens
-      const UNKNOWN_MODEL = 'unknown'
 
       for (const s of harnessSessions) {
         messages += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
@@ -366,9 +367,9 @@ export function computeHarnessSummaries(
           }
         }
 
-        // per-model token accumulation (group by session.model; missing → 'unknown')
-        if (hasTokens) {
-          const key = s.model ?? UNKNOWN_MODEL
+        // per-model token accumulation — skip sessions with no/empty model (cannot be priced)
+        if (hasTokens && s.model) {
+          const key = s.model
           const entry = modelMap[key] ?? (modelMap[key] = {
             inputTokens: 0, outputTokens: 0,
             cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
@@ -412,13 +413,14 @@ export function computeHarnessSummaries(
         }
       }
 
-      // per-model breakdown — cost via calcCost (never inline). 'unknown' model → 0 cost.
+      // per-model breakdown — cost via calcCost (never inline).
+      // modelMap only contains sessions that had a real model, so every entry is priceable.
       const models = Object.entries(modelMap)
         .map(([model, u]) => ({
           model,
           inputTokens: u.inputTokens,
           outputTokens: u.outputTokens,
-          costUSD: hasCost && model !== UNKNOWN_MODEL ? calcCost(u, model) : 0,
+          costUSD: hasCost ? calcCost(u, model) : 0,
         }))
         .sort((a, b) => b.costUSD - a.costUSD)
 
