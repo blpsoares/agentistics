@@ -791,3 +791,151 @@ describe('computeHarnessSummaries — dailyActivity', () => {
     expect(daily[2]!.sessions).toBe(1)
   })
 })
+
+// ── computeHarnessSummaries — models[] and costPerMTokens ─────────────────────
+
+describe('computeHarnessSummaries — models[] and costPerMTokens', () => {
+  function makeSession(
+    id: string,
+    input: number,
+    output: number,
+    model: string | undefined = 'gpt-4o',
+  ): import('@agentistics/core').SessionMeta {
+    return {
+      session_id: id,
+      harness: 'codex',
+      project_path: '/p',
+      start_time: '2026-06-10T08:00:00Z',
+      duration_minutes: 5,
+      user_message_count: 1,
+      assistant_message_count: 1,
+      tool_counts: {},
+      tool_output_tokens: {},
+      agent_file_reads: {},
+      languages: [],
+      git_commits: 0,
+      git_pushes: 0,
+      input_tokens: input,
+      output_tokens: output,
+      first_prompt: '',
+      user_interruptions: 0,
+      user_response_times: [],
+      tool_errors: 0,
+      tool_error_categories: {},
+      uses_task_agent: false,
+      uses_mcp: false,
+      uses_web_search: false,
+      uses_web_fetch: false,
+      lines_added: 0,
+      lines_removed: 0,
+      files_modified: 0,
+      message_hours: [],
+      user_message_timestamps: [],
+      model,
+    }
+  }
+
+  function makeData(sessions: import('@agentistics/core').SessionMeta[]): import('@agentistics/core').AppData {
+    return {
+      statsCache: {
+        version: 1,
+        lastComputedDate: '2026-06-14',
+        dailyActivity: [],
+        dailyModelTokens: [],
+        modelUsage: {},
+        totalSessions: 0,
+        totalMessages: 0,
+        longestSession: { sessionId: 'x', duration: 0, messageCount: 0, timestamp: '2026-06-10T00:00:00Z' },
+        firstSessionDate: '2026-06-10',
+        hourCounts: {},
+        totalSpeculationTimeSavedMs: 0,
+      },
+      sessions,
+      projects: [],
+      allSessions: [],
+      harnesses: ['codex'],
+    }
+  }
+
+  test('codex: models[] groups sessions by model and sums tokens', () => {
+    const sessions = [
+      makeSession('s1', 1000, 400, 'gpt-4o'),
+      makeSession('s2', 500, 200, 'gpt-4o'),
+    ]
+    const summaries = computeHarnessSummaries(makeData(sessions))
+    const models = summaries['codex']!.models
+    expect(models.length).toBe(1)
+    expect(models[0]!.model).toBe('gpt-4o')
+    expect(models[0]!.inputTokens).toBe(1500)
+    expect(models[0]!.outputTokens).toBe(600)
+    expect(models[0]!.costUSD).toBeGreaterThan(0)
+  })
+
+  test('codex: models[] sorted by costUSD descending', () => {
+    const sessions = [
+      makeSession('s1', 100, 50, 'gpt-4o-mini'),
+      makeSession('s2', 100_000, 50_000, 'gpt-4o'),
+    ]
+    const summaries = computeHarnessSummaries(makeData(sessions))
+    const models = summaries['codex']!.models
+    expect(models.length).toBe(2)
+    // gpt-4o has far more tokens → higher cost → first
+    expect(models[0]!.model).toBe('gpt-4o')
+    expect(models[0]!.costUSD).toBeGreaterThanOrEqual(models[1]!.costUSD)
+  })
+
+  test('codex: sessions without model land under "unknown" with 0 cost', () => {
+    const sessions = [{ ...makeSession('s1', 1000, 400), model: undefined }]
+    const summaries = computeHarnessSummaries(makeData(sessions))
+    const models = summaries['codex']!.models
+    expect(models.length).toBe(1)
+    expect(models[0]!.model).toBe('unknown')
+    expect(models[0]!.inputTokens).toBe(1000)
+    expect(models[0]!.costUSD).toBe(0)
+  })
+
+  test('codex: costPerMTokens equals costUSD / ((input+output)/1e6)', () => {
+    const sessions = [makeSession('s1', 1_000_000, 0, 'gpt-4o')]
+    const summaries = computeHarnessSummaries(makeData(sessions))
+    const s = summaries['codex']!
+    const expected = s.costUSD / ((s.inputTokens + s.outputTokens) / 1e6)
+    expect(s.costPerMTokens).toBeCloseTo(expected, 6)
+  })
+
+  test('codex: costPerMTokens is null when there are 0 tokens', () => {
+    const sessions = [makeSession('s1', 0, 0, 'gpt-4o')]
+    const summaries = computeHarnessSummaries(makeData(sessions))
+    expect(summaries['codex']!.costPerMTokens).toBeNull()
+  })
+
+  test('claude: models[] derived from statsCache.modelUsage via calcCost', () => {
+    const data: import('@agentistics/core').AppData = {
+      statsCache: {
+        version: 1,
+        lastComputedDate: '2026-06-10',
+        dailyActivity: [{ date: '2026-06-10', sessionCount: 1, messageCount: 2, toolCallCount: 0 }],
+        dailyModelTokens: [],
+        modelUsage: {
+          'claude-sonnet-4-5': { inputTokens: 100_000, outputTokens: 20_000, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 },
+        },
+        totalSessions: 1,
+        totalMessages: 2,
+        longestSession: { sessionId: 'x', duration: 0, messageCount: 0, timestamp: '2026-06-10T00:00:00Z' },
+        firstSessionDate: '2026-06-10',
+        hourCounts: {},
+        totalSpeculationTimeSavedMs: 0,
+      },
+      sessions: [],
+      projects: [],
+      allSessions: [],
+      harnesses: ['claude'],
+    }
+    const summaries = computeHarnessSummaries(data)
+    const c = summaries['claude']!
+    expect(c.models.length).toBe(1)
+    expect(c.models[0]!.model).toBe('claude-sonnet-4-5')
+    expect(c.models[0]!.inputTokens).toBe(100_000)
+    expect(c.models[0]!.costUSD).toBeGreaterThan(0)
+    expect(c.costPerMTokens).toBeGreaterThan(0)
+  })
+})

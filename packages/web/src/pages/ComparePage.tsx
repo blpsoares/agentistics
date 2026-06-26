@@ -1,9 +1,11 @@
 import React, { useMemo } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { GitCompare } from 'lucide-react'
+import { format as formatDate } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
 import type { AppContext } from '../lib/app-context'
-import type { HarnessId } from '@agentistics/core'
-import { fmt, fmtCost } from '@agentistics/core'
+import type { HarnessId, Lang } from '@agentistics/core'
+import { fmt, fmtCost, formatModel, t } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
 import { computeHarnessSummaries } from '../hooks/useData'
 
@@ -17,7 +19,17 @@ interface HarnessAgg {
   lastActive: string | null
 }
 
-function NACell() {
+/** Format a raw date string (ISO or yyyy-MM-dd), localized by language. Returns '—' when invalid. */
+function fmtDateLocalized(raw: string | null | undefined, lang: Lang): string {
+  if (!raw) return '—'
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return '—'
+  return lang === 'pt'
+    ? formatDate(d, 'dd MMM yyyy', { locale: ptBR })
+    : formatDate(d, 'MMM d, yyyy')
+}
+
+function NACell({ lang }: { lang: Lang }) {
   return (
     <span style={{
       display: 'inline-flex',
@@ -31,7 +43,7 @@ function NACell() {
       color: 'var(--text-tertiary)',
       letterSpacing: '0.03em',
     }}>
-      N/A
+      {t('compare.na', lang)}
     </span>
   )
 }
@@ -57,9 +69,10 @@ interface MetricRowProps {
   values: { harness: HarnessId; value: number | null }[]
   format: (v: number) => string
   colors: Record<HarnessId, string>
+  lang: Lang
 }
 
-function MetricRow({ label, values, format: formatFn, colors }: MetricRowProps) {
+function MetricRow({ label, values, format: formatFn, colors, lang }: MetricRowProps) {
   const maxVal = Math.max(...values.map(v => v.value ?? 0))
   return (
     <tr>
@@ -81,7 +94,7 @@ function MetricRow({ label, values, format: formatFn, colors }: MetricRowProps) 
           verticalAlign: 'top',
         }}>
           {value === null ? (
-            <NACell />
+            <NACell lang={lang} />
           ) : (
             <>
               <div style={{
@@ -100,8 +113,6 @@ function MetricRow({ label, values, format: formatFn, colors }: MetricRowProps) 
     </tr>
   )
 }
-
-const DOW_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 function MiniBarChart({ values, color, peakIndex: peak, height = 40 }: {
   values: number[]
@@ -165,16 +176,17 @@ function bucketize(
   return buckets
 }
 
-function SparklineChart({ buckets, color, height = 32 }: {
+function SparklineChart({ buckets, color, height = 32, noDataLabel }: {
   buckets: number[]
   color: string
   height?: number
+  noDataLabel: string
 }) {
   const total = buckets.reduce((a, b) => a + b, 0)
   if (total === 0) {
     return (
       <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>No data</span>
+        <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>{noDataLabel}</span>
       </div>
     )
   }
@@ -218,9 +230,20 @@ function SectionCard({ title, children }: { title: string; children: React.React
 }
 
 export default function ComparePage() {
-  const { data, currency, brlRate } = useOutletContext<AppContext>()
+  const { data, currency, brlRate, lang } = useOutletContext<AppContext>()
 
   const summaries = useMemo(() => computeHarnessSummaries(data), [data])
+
+  // Localized short day-of-week labels (Sunday-first to match getDay()).
+  const dowLabels = useMemo(() => [
+    t('compare.dow.sun', lang),
+    t('compare.dow.mon', lang),
+    t('compare.dow.tue', lang),
+    t('compare.dow.wed', lang),
+    t('compare.dow.thu', lang),
+    t('compare.dow.fri', lang),
+    t('compare.dow.sat', lang),
+  ], [lang])
 
   const aggs = useMemo<HarnessAgg[]>(() => {
     return data.harnesses.map(harness => {
@@ -272,9 +295,30 @@ export default function ComparePage() {
   const sessionValues = aggs.map(a => ({ harness: a.harness, value: a.sessions }))
   const messageValues = aggs.map(a => ({ harness: a.harness, value: a.messages }))
 
+  // Cost per 1M tokens (blended) — null where not applicable. Used to highlight the cheapest.
+  const costPerMValues = aggs.map(a => ({
+    harness: a.harness,
+    value: capable(a.harness, 'cost') && capable(a.harness, 'tokens')
+      ? (summaries[a.harness]?.costPerMTokens ?? null)
+      : null,
+  }))
+  const cheapestHarness = useMemo<HarnessId | null>(() => {
+    let best: HarnessId | null = null
+    let bestVal = Infinity
+    for (const { harness, value } of costPerMValues) {
+      if (value !== null && value > 0 && value < bestVal) {
+        bestVal = value
+        best = harness
+      }
+    }
+    return best
+  }, [costPerMValues])
+
   const fmtTokens = (v: number) => fmt(v)
   const fmtCostFn = (v: number) => fmtCost(v, currency, brlRate)
   const fmtCount = (v: number) => v.toLocaleString()
+  const modelLabel = (model: string) =>
+    model === 'unknown' ? t('compare.unknownModel', lang) : formatModel(model)
 
   return (
     <>
@@ -282,11 +326,10 @@ export default function ComparePage() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 4 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>
           <span style={{ color: 'var(--anthropic-orange)' }}><GitCompare size={16} /></span>
-          Compare harnesses
+          {t('compare.title', lang)}
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
-          Side-by-side metrics for all AI coding assistants detected in your data.
-          N/A means the harness does not report that metric.
+          {t('compare.subtitle', lang)}
         </div>
       </div>
 
@@ -321,11 +364,11 @@ export default function ComparePage() {
               {a.sessions.toLocaleString()}
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
-              sessions
+              {t('compare.sessionsLower', lang)}
             </div>
             {a.lastActive && (
               <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 8 }}>
-                Last active: {a.lastActive.slice(0, 10)}
+                {t('compare.lastActive', lang)}: {fmtDateLocalized(a.lastActive, lang)}
               </div>
             )}
           </div>
@@ -353,7 +396,7 @@ export default function ComparePage() {
                 letterSpacing: '0.06em',
                 borderBottom: '1px solid var(--border)',
               }}>
-                Metric
+                {t('compare.metric', lang)}
               </th>
               {aggs.map(a => (
                 <th key={a.harness} style={{
@@ -373,51 +416,141 @@ export default function ComparePage() {
             </tr>
           </thead>
           <tbody>
+            <MetricRow label={t('compare.sessions', lang)} values={sessionValues} format={fmtCount} colors={colors} lang={lang} />
+            <MetricRow label={t('compare.messages', lang)} values={messageValues} format={fmtCount} colors={colors} lang={lang} />
+            <MetricRow label={t('compare.totalTokens', lang)} values={tokensValues} format={fmtTokens} colors={colors} lang={lang} />
             <MetricRow
-              label="Sessions"
-              values={sessionValues}
-              format={fmtCount}
-              colors={colors}
-            />
-            <MetricRow
-              label="Messages"
-              values={messageValues}
-              format={fmtCount}
-              colors={colors}
-            />
-            <MetricRow
-              label="Total tokens"
-              values={tokensValues}
-              format={fmtTokens}
-              colors={colors}
-            />
-            <MetricRow
-              label="Input tokens"
+              label={t('compare.inputTokens', lang)}
               values={aggs.map(a => ({
                 harness: a.harness,
                 value: capable(a.harness, 'tokens') ? a.inputTokens : null,
               }))}
               format={fmtTokens}
               colors={colors}
+              lang={lang}
             />
             <MetricRow
-              label="Output tokens"
+              label={t('compare.outputTokens', lang)}
               values={aggs.map(a => ({
                 harness: a.harness,
                 value: capable(a.harness, 'tokens') ? a.outputTokens : null,
               }))}
               format={fmtTokens}
               colors={colors}
+              lang={lang}
             />
-            <MetricRow
-              label="Estimated cost"
-              values={costValues}
-              format={fmtCostFn}
-              colors={colors}
-            />
+            <MetricRow label={t('compare.cost', lang)} values={costValues} format={fmtCostFn} colors={colors} lang={lang} />
           </tbody>
         </table>
       </div>
+
+      {/* Cost per 1M tokens (blended) — highlights the cheapest harness */}
+      <SectionCard title={t('compare.costPerMTokens', lang)}>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: `repeat(${aggs.length}, 1fr)`,
+          gap: 12,
+        }}>
+          {costPerMValues.map(({ harness, value }) => {
+            const isCheapest = harness === cheapestHarness && value !== null
+            return (
+              <div key={harness} style={{
+                background: 'var(--bg-elevated)',
+                border: isCheapest ? `1px solid ${colors[harness]}` : '1px solid var(--border)',
+                borderRadius: 'var(--radius-md, 8px)',
+                padding: '14px 16px',
+              }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: colors[harness], marginBottom: 8 }}>
+                  {HARNESS_LABELS[harness]}
+                </div>
+                {value === null ? (
+                  <NACell lang={lang} />
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
+                      {fmtCost(value, currency, brlRate)}
+                    </span>
+                    {isCheapest && (
+                      <span style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        color: colors[harness],
+                        background: `${colors[harness]}22`,
+                        borderRadius: 4,
+                        padding: '2px 6px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                      }}>
+                        {t('compare.cheapest', lang)}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </SectionCard>
+
+      {/* Cost by model — per harness, listing each model's tokens + cost */}
+      <SectionCard title={t('compare.costByModel', lang)}>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: `repeat(${aggs.length}, 1fr)`,
+          gap: 16,
+        }}>
+          {aggs.map(a => {
+            const s = summaries[a.harness]
+            const showModels = capable(a.harness, 'cost') && capable(a.harness, 'model')
+            const models = showModels ? (s?.models ?? []) : []
+            return (
+              <div key={a.harness}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: colors[a.harness], marginBottom: 8 }}>
+                  {HARNESS_LABELS[a.harness]}
+                </div>
+                {!showModels ? (
+                  <NACell lang={lang} />
+                ) : models.length === 0 ? (
+                  <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{t('compare.noData', lang)}</span>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {models.map(m => {
+                      const totalTok = m.inputTokens + m.outputTokens
+                      const perM = totalTok > 0 ? m.costUSD / (totalTok / 1e6) : null
+                      return (
+                        <div key={m.model} style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 2,
+                          paddingBottom: 8,
+                          borderBottom: '1px solid var(--border)',
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
+                              {modelLabel(m.model)}
+                            </span>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                              {fmtCost(m.costUSD, currency, brlRate)}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                            <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
+                              {fmt(totalTok)} {t('compare.totalTokens', lang).toLowerCase()}
+                            </span>
+                            <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
+                              {perM !== null ? `${fmtCost(perM, currency, brlRate)} / 1M` : '—'}
+                            </span>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </SectionCard>
 
       {/* Per-harness activity bar */}
       <div style={{
@@ -427,7 +560,7 @@ export default function ComparePage() {
         padding: '20px 22px',
       }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 16 }}>
-          Session share
+          {t('compare.sessionShare', lang)}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {aggs.map(a => {
@@ -450,7 +583,7 @@ export default function ComparePage() {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
-                      {a.sessions.toLocaleString()} sessions
+                      {a.sessions.toLocaleString()} {t('compare.sessionsLower', lang)}
                     </span>
                     <span style={{ fontSize: 12, fontWeight: 700, color: colors[a.harness], minWidth: 36, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                       {pct}%
@@ -473,7 +606,7 @@ export default function ComparePage() {
       </div>
 
       {/* Section 1: Usage by hour of day */}
-      <SectionCard title="Usage by hour of day">
+      <SectionCard title={t('compare.usageByHourOfDay', lang)}>
         <div style={{
           display: 'grid',
           gridTemplateColumns: `repeat(${aggs.length}, 1fr)`,
@@ -489,7 +622,7 @@ export default function ComparePage() {
                 </div>
                 {totalMsgs === 0 ? (
                   <div style={{ height: 40, display: 'flex', alignItems: 'center' }}>
-                    <NACell />
+                    <NACell lang={lang} />
                   </div>
                 ) : (
                   <>
@@ -503,7 +636,7 @@ export default function ComparePage() {
                       <span style={{ fontSize: 9, color: 'var(--text-tertiary)' }}>0h</span>
                       <span style={{ fontSize: 10, color: colors[a.harness], fontWeight: 600 }}>
                         {s?.peakHour !== null && s?.peakHour !== undefined
-                          ? `Peak ${String(s.peakHour).padStart(2, '0')}:00`
+                          ? `${t('compare.peak', lang)} ${String(s.peakHour).padStart(2, '0')}:00`
                           : ''}
                       </span>
                       <span style={{ fontSize: 9, color: 'var(--text-tertiary)' }}>23h</span>
@@ -517,7 +650,7 @@ export default function ComparePage() {
       </SectionCard>
 
       {/* Section 2: Busiest day of week */}
-      <SectionCard title="Busiest day of week">
+      <SectionCard title={t('compare.busiestDayOfWeek', lang)}>
         <div style={{
           display: 'grid',
           gridTemplateColumns: `repeat(${aggs.length}, 1fr)`,
@@ -533,7 +666,7 @@ export default function ComparePage() {
                 </div>
                 {!hasData ? (
                   <div style={{ height: 40, display: 'flex', alignItems: 'center' }}>
-                    <NACell />
+                    <NACell lang={lang} />
                   </div>
                 ) : (
                   <>
@@ -544,9 +677,9 @@ export default function ComparePage() {
                       height={40}
                     />
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-                      {DOW_LABELS.map((label, i) => (
+                      {dowLabels.map((label, i) => (
                         <span
-                          key={label}
+                          key={i}
                           style={{
                             fontSize: 9,
                             color: i === s.peakDow ? colors[a.harness] : 'var(--text-tertiary)',
@@ -561,7 +694,7 @@ export default function ComparePage() {
                     </div>
                     {s.peakDow !== null && (
                       <div style={{ fontSize: 11, color: colors[a.harness], fontWeight: 600, marginTop: 6 }}>
-                        Peak: {DOW_LABELS[s.peakDow]}
+                        {t('compare.peak', lang)}: {dowLabels[s.peakDow]}
                       </div>
                     )}
                   </>
@@ -573,7 +706,7 @@ export default function ComparePage() {
       </SectionCard>
 
       {/* Section 3: Activity over time */}
-      <SectionCard title="Activity over time">
+      <SectionCard title={t('compare.activityOverTime', lang)}>
         <div style={{
           display: 'grid',
           gridTemplateColumns: `repeat(${aggs.length}, 1fr)`,
@@ -590,11 +723,12 @@ export default function ComparePage() {
                   buckets={bucketize(s?.dailyActivity ?? [], minMs, maxMs, SPARK_BUCKETS)}
                   color={colors[a.harness]}
                   height={40}
+                  noDataLabel={t('compare.noData', lang)}
                 />
                 <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 4 }}>
                   {s && s.dailyActivity.length > 0
-                    ? `${s.dailyActivity[0]!.date.slice(0, 10)} – ${s.dailyActivity[s.dailyActivity.length - 1]!.date.slice(0, 10)}`
-                    : 'No data'}
+                    ? `${fmtDateLocalized(s.dailyActivity[0]!.date, lang)} – ${fmtDateLocalized(s.dailyActivity[s.dailyActivity.length - 1]!.date, lang)}`
+                    : t('compare.noData', lang)}
                 </div>
               </div>
             )
@@ -603,7 +737,7 @@ export default function ComparePage() {
       </SectionCard>
 
       {/* Section 4: Peaks (token day + session cost) */}
-      <SectionCard title="Peaks">
+      <SectionCard title={t('compare.peaks', lang)}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
@@ -617,7 +751,7 @@ export default function ComparePage() {
                 letterSpacing: '0.06em',
                 borderBottom: '1px solid var(--border)',
               }}>
-                Metric
+                {t('compare.metric', lang)}
               </th>
               {aggs.map(a => (
                 <th key={a.harness} style={{
@@ -646,7 +780,7 @@ export default function ComparePage() {
                 whiteSpace: 'nowrap',
                 borderBottom: '1px solid var(--border)',
               }}>
-                Busiest token day
+                {t('compare.peakTokenDay', lang)}
               </td>
               {aggs.map(a => {
                 const s = summaries[a.harness]
@@ -657,14 +791,14 @@ export default function ComparePage() {
                     borderBottom: '1px solid var(--border)',
                   }}>
                     {!capable(a.harness, 'tokens') ? (
-                      <NACell />
+                      <NACell lang={lang} />
                     ) : ptd ? (
                       <div>
                         <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
                           {fmt(ptd.tokens)}
                         </div>
                         <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
-                          {ptd.date}
+                          {fmtDateLocalized(ptd.date, lang)}
                         </div>
                       </div>
                     ) : (
@@ -682,7 +816,7 @@ export default function ComparePage() {
                 color: 'var(--text-secondary)',
                 whiteSpace: 'nowrap',
               }}>
-                Peak session cost
+                {t('compare.peakSessionCost', lang)}
               </td>
               {aggs.map(a => {
                 const s = summaries[a.harness]
@@ -690,7 +824,7 @@ export default function ComparePage() {
                 return (
                   <td key={a.harness} style={{ padding: '12px 16px' }}>
                     {!capable(a.harness, 'cost') ? (
-                      <NACell />
+                      <NACell lang={lang} />
                     ) : psc !== null && psc !== undefined ? (
                       <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
                         {fmtCost(psc, currency, brlRate)}

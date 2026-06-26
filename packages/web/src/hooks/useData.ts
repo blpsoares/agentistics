@@ -207,6 +207,10 @@ export interface HarnessSummary {
   dailyActivity: { date: string; sessions: number }[]  // sorted ascending
   peakTokenDay: { date: string; tokens: number } | null  // null if no token data
   peakSessionCost: number | null  // null if no cost data / claude
+  /** Per-model token + cost breakdown, sorted by costUSD desc. Empty when no model data. */
+  models: { model: string; inputTokens: number; outputTokens: number; costUSD: number }[]
+  /** Blended cost per 1M tokens (input+output). null when tokens are 0 or harness lacks cost capability. */
+  costPerMTokens: number | null
 }
 
 function peakIndex(arr: number[]): number | null {
@@ -264,6 +268,20 @@ export function computeHarnessSummaries(
       const outputTokens = Object.values(modelUsage).reduce((s, u) => s + (u.outputTokens ?? 0), 0)
       const costUSD = Object.entries(modelUsage).reduce((s, [modelId, u]) => s + calcCost(u, modelId), 0)
 
+      // ── Claude: per-model breakdown from statsCache.modelUsage ──
+      const claudeModels = Object.entries(modelUsage)
+        .map(([model, u]) => ({
+          model,
+          inputTokens: u.inputTokens ?? 0,
+          outputTokens: u.outputTokens ?? 0,
+          costUSD: calcCost(u, model),
+        }))
+        .sort((a, b) => b.costUSD - a.costUSD)
+
+      // ── Claude: blended cost per 1M tokens (input + output) ──
+      const claudeTokensM = (inputTokens + outputTokens) / 1e6
+      const claudeCostPerMTokens = claudeTokensM > 0 ? costUSD / claudeTokensM : null
+
       // ── Claude: hour-of-day from statsCache.hourCounts ──
       const claudeHourCounts = Array.from({ length: 24 }, (_, i) => data.statsCache.hourCounts?.[String(i)] ?? 0)
 
@@ -301,6 +319,8 @@ export function computeHarnessSummaries(
         dailyActivity: claudeDailyActivity,
         peakTokenDay: claudePeakTokenDay,
         peakSessionCost: null,  // statsCache has no per-session cost breakdown
+        models: claudeModels,
+        costPerMTokens: claudeCostPerMTokens,
       }
     } else {
       // ── Non-Claude: pure per-session sums ──
@@ -316,9 +336,12 @@ export function computeHarnessSummaries(
       const dailyMap: Record<string, number> = {}
       const tokensByDay: Record<string, number> = {}
       let peakSessionCost: number | null = null
+      // Per-model token accumulation; cost computed via calcCost after the loop.
+      const modelMap: Record<string, import('@agentistics/core').ModelUsage> = {}
 
       const hasCost = HARNESS_CAPABILITIES[harness].cost
       const hasTokens = HARNESS_CAPABILITIES[harness].tokens
+      const UNKNOWN_MODEL = 'unknown'
 
       for (const s of harnessSessions) {
         messages += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
@@ -341,6 +364,20 @@ export function computeHarnessSummaries(
             const sessionTokens = (s.input_tokens ?? 0) + (s.output_tokens ?? 0)
             tokensByDay[day] = (tokensByDay[day] ?? 0) + sessionTokens
           }
+        }
+
+        // per-model token accumulation (group by session.model; missing → 'unknown')
+        if (hasTokens) {
+          const key = s.model ?? UNKNOWN_MODEL
+          const entry = modelMap[key] ?? (modelMap[key] = {
+            inputTokens: 0, outputTokens: 0,
+            cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            webSearchRequests: 0, costUSD: 0,
+          })
+          entry.inputTokens += s.input_tokens ?? 0
+          entry.outputTokens += s.output_tokens ?? 0
+          entry.cacheReadInputTokens += s.cache_read_input_tokens ?? 0
+          entry.cacheCreationInputTokens += s.cache_creation_input_tokens ?? 0
         }
 
         // cost
@@ -375,6 +412,20 @@ export function computeHarnessSummaries(
         }
       }
 
+      // per-model breakdown — cost via calcCost (never inline). 'unknown' model → 0 cost.
+      const models = Object.entries(modelMap)
+        .map(([model, u]) => ({
+          model,
+          inputTokens: u.inputTokens,
+          outputTokens: u.outputTokens,
+          costUSD: hasCost && model !== UNKNOWN_MODEL ? calcCost(u, model) : 0,
+        }))
+        .sort((a, b) => b.costUSD - a.costUSD)
+
+      // blended cost per 1M tokens (input + output)
+      const tokensM = (inputTokens + outputTokens) / 1e6
+      const costPerMTokens = hasCost && tokensM > 0 ? costUSD / tokensM : null
+
       result[harness] = {
         sessions,
         messages,
@@ -388,6 +439,8 @@ export function computeHarnessSummaries(
         dailyActivity,
         peakTokenDay,
         peakSessionCost: hasCost ? peakSessionCost : null,
+        models,
+        costPerMTokens,
       }
     }
   }

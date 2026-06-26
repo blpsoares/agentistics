@@ -24,10 +24,19 @@ export interface HarnessInfo {
   contains: string[]
   missing: { item: string; why: string }[]
   note?: string
+  /** Short description of the on-disk format agentistics parses. */
+  format?: string
+  /** How long the data sticks around (cleanup/retention behavior). */
+  retention?: string
+  /** One-line summary of the harness shown at the top of the panel. */
+  blurb?: string
 }
 
 export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
   claude: {
+    blurb: 'The richest source — full token, cost, model, tool, sub-agent and git data, with aggregate history that outlives transcript cleanup.',
+    format: 'JSONL transcripts (one event per line) plus a pre-aggregated stats-cache.json and per-session meta files.',
+    retention: 'Transcripts are deleted after the cleanup window (default 30 days), but stats-cache.json keeps the aggregate totals indefinitely.',
     source: [
       '~/.claude/stats-cache.json (aggregate history)',
       '~/.claude/projects/**/*.jsonl (transcripts)',
@@ -46,6 +55,9 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
     note: 'The stats cache retains aggregate totals even after Claude Code deletes transcripts older than its cleanup window (default 30 days), so historical session/token/cost totals survive.',
   },
   codex: {
+    blurb: 'Near-parity with Claude — real tokens, cost, model and tool usage from full rollout transcripts.',
+    format: 'Envelope JSONL rollouts (event_msg / response_item wrappers); token usage at payload.info.total_token_usage (cumulative).',
+    retention: 'Codex prunes old rollouts over time; agentistics consolidates per-session metrics so they survive cleanup.',
     source: [
       '~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl',
     ],
@@ -64,6 +76,9 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
     note: 'Codex reports input_tokens including the cached portion; agentistics stores the non-cached input separately from cache reads so cost is not double-counted.',
   },
   gemini: {
+    blurb: 'Real token/cost/model data from the rich local chat format — but only genuine sessions count (most local files are bootstrap stubs).',
+    format: 'Rich JSON chat files with per-message tokens{input,output,cached} and model; legacy JSONL stubs are filtered out.',
+    retention: 'Gemini CLI applies a session retention window (~30 days) similar to Claude.',
     source: [
       '~/.gemini/tmp/<project>/chats/*.json (rich session format)',
       '~/.gemini/projects.json (project names)',
@@ -85,6 +100,9 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
     note: 'Many local Gemini files are bootstrap-only stubs with no real conversation — only sessions containing genuine user messages are counted. Token/cost/model data comes from the rich ~/.gemini/tmp/<project>/chats/*.json format. Agent metrics and git line counts are N/A.',
   },
   copilot: {
+    blurb: 'Sessions, project/branch, messages and assistant turns — plus tokens/cost/model/git-lines on a clean exit.',
+    format: 'events.jsonl (session.start, user.message, assistant.message/turns, session.shutdown with per-model metrics).',
+    retention: 'Local session-state persists per session; token/cost/model/line data is only present when the session shut down cleanly.',
     source: [
       '~/.copilot/session-state/<id>/events.jsonl',
       '~/.copilot/session-state/<id>/workspace.yaml',
