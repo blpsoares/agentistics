@@ -204,6 +204,34 @@ export function HarnessInfoPanel({ harness }: Props) {
         </div>
       </div>
 
+      {/* ── Cost basis (full-width) ─────────────────────────────────────── */}
+      <section style={{
+        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+        borderRadius: 7, padding: '10px 12px',
+      }}>
+        <SectionLabel>Cost basis</SectionLabel>
+        {capable(harness, 'cost') ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+              Costs are computed via{' '}
+              <code style={{ fontFamily: MONO, fontSize: 11 }}>calcCost()</code>{' '}
+              using each model's published API pricing from the{' '}
+              <code style={{ fontFamily: MONO, fontSize: 11 }}>MODEL_PRICING</code>{' '}
+              table in{' '}
+              <code style={{ fontFamily: MONO, fontSize: 11 }}>@agentistics/core</code>
+              {' '}— sourced from the provider's official pricing page. BRL display uses a live
+              exchange rate fetched from{' '}
+              <code style={{ fontFamily: MONO, fontSize: 11 }}>/api/rates</code>
+              {' '}with a fixed fallback when the rate is unavailable.
+            </p>
+          </div>
+        ) : (
+          <p style={{ margin: 0, fontSize: 12, color: 'var(--text-tertiary)', fontStyle: 'italic', lineHeight: 1.55 }}>
+            Cost: N/A for this harness — no token or pricing data is available in its local files.
+          </p>
+        )}
+      </section>
+
       {/* ── Nay backend status (full-width) ────────────────────────────── */}
       {!chatLoading && chatStatus && (
         <section style={{
