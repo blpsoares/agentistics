@@ -17,7 +17,7 @@ import { PrecisionToggle } from './PrecisionToggle'
 // into individual bubbles so the transcript renders correctly.
 
 /** Pattern that matches a newline immediately followed by a conversation label. */
-const SPLIT_LABEL_RE = /\n(?=(User|Assistant|Gemini|Copilot):)/
+const SPLIT_LABEL_RE = /\n(?=(?:User|Assistant|Gemini|Copilot):)/
 
 export function splitInlinedHistory(
   role: 'user' | 'assistant',

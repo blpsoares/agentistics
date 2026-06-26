@@ -808,10 +808,10 @@ export default function ExportPage() {
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5, marginBottom: 12 }}>
                       {(['messages', 'sessions', 'tools'] as ChartMetric[]).map(m => {
-                        const labels: Record<ChartMetric, { en: string; pt: string }> = {
-                          messages: { en: 'Messages', pt: 'Msgs' },
-                          sessions: { en: 'Sessions', pt: 'Sessões' },
-                          tools: { en: 'Tools', pt: 'Tools' },
+                        const chartLabels: Record<ChartMetric, string> = {
+                          messages: t('export.chart.messages', lang),
+                          sessions: t('export.chart.sessions', lang),
+                          tools: t('export.chart.tools', lang),
                         }
                         const dotColors: Record<ChartMetric, string> = {
                           messages: 'var(--anthropic-orange)',
@@ -830,7 +830,7 @@ export default function ExportPage() {
                             transition: 'all 0.12s',
                           }}>
                             <div style={{ width: 6, height: 6, borderRadius: '50%', background: dotColors[m], flexShrink: 0 }} />
-                            {pt ? labels[m].pt : labels[m].en}
+                            {chartLabels[m]}
                           </button>
                         )
                       })}
@@ -854,10 +854,10 @@ export default function ExportPage() {
                         {([null, 'messages', 'sessions', 'tools'] as (ChartMetric | null)[])
                           .filter(m => m !== chartMetric)
                           .map(m => {
-                            const labels: Record<string, { en: string; pt: string }> = {
-                              messages: { en: 'Msgs', pt: 'Msgs' },
-                              sessions: { en: 'Sess.', pt: 'Sess.' },
-                              tools: { en: 'Tools', pt: 'Tools' },
+                            const chartLabels: Record<string, string> = {
+                              messages: t('export.chart.messages_abbr', lang),
+                              sessions: t('export.chart.sessions_abbr', lang),
+                              tools: t('export.chart.tools_abbr', lang),
                             }
                             const dotColors: Record<string, string> = {
                               messages: 'var(--anthropic-orange)',
@@ -879,7 +879,7 @@ export default function ExportPage() {
                                 {m ? (
                                   <>
                                     <div style={{ width: 6, height: 6, borderRadius: '50%', background: dotColors[m]!, flexShrink: 0 }} />
-                                    {pt ? labels[m]!.pt : labels[m]!.en}
+                                    {chartLabels[m]}
                                   </>
                                 ) : t('export.none', lang)}
                               </button>

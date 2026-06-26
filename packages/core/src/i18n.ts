@@ -37,7 +37,6 @@ export const translations: Record<Lang, Record<string, string>> = {
     'card.streak_sub': 'dias consecutivos',
     'card.longest_session': 'Sessão mais longa',
     'card.est_cost': 'Custo estimado',
-    'card.est_cost_sub': 'baseado em tokens',
     'card.commits': 'Commits',
     'card.files_modified': 'Arquivos modificados',
 
@@ -217,6 +216,12 @@ export const translations: Record<Lang, Record<string, string>> = {
     'export.overlay': 'Overlay (opcional)',
     'export.overlayAll': '⊞ Overlay todas as linhas',
     'export.none': 'Nenhum',
+    'export.chart.messages': 'Msgs',
+    'export.chart.sessions': 'Sessões',
+    'export.chart.tools': 'Tools',
+    'export.chart.messages_abbr': 'Msgs',
+    'export.chart.sessions_abbr': 'Sess.',
+    'export.chart.tools_abbr': 'Tools',
 
     // HarnessInfoPanel — UI labels
     'harness.panel.data_label': 'dados',
@@ -285,7 +290,6 @@ export const translations: Record<Lang, Record<string, string>> = {
     'card.streak_sub': 'consecutive days',
     'card.longest_session': 'Longest session',
     'card.est_cost': 'Estimated cost',
-    'card.est_cost_sub': 'token-based',
     'card.commits': 'Commits',
     'card.files_modified': 'Files modified',
 
@@ -465,6 +469,12 @@ export const translations: Record<Lang, Record<string, string>> = {
     'export.overlay': 'Overlay (optional)',
     'export.overlayAll': '⊞ Overlay all lines',
     'export.none': 'None',
+    'export.chart.messages': 'Messages',
+    'export.chart.sessions': 'Sessions',
+    'export.chart.tools': 'Tools',
+    'export.chart.messages_abbr': 'Msgs',
+    'export.chart.sessions_abbr': 'Sess.',
+    'export.chart.tools_abbr': 'Tools',
 
     // HarnessInfoPanel — UI labels
     'harness.panel.data_label': 'data',

@@ -27,7 +27,7 @@ import { TagCloud } from '../components/TagCloud'
 import { ToolMetricsPanel } from '../components/ToolMetricsPanel'
 import { AgentMetricsPanel } from '../components/AgentMetricsPanel'
 import { RecentSessions } from '../components/RecentSessions'
-import { capable } from '../lib/harness'
+import { capable, HARNESS_PROVIDERS } from '../lib/harness'
 import { StreakBreakdownButton } from '../components/StreakBreakdownButton'
 
 type CardId = 'messages' | 'sessions' | 'tool-calls' | 'input-tokens' | 'output-tokens' | 'cost' | 'streak' | 'longest-session' | 'commits' | 'files'
@@ -46,16 +46,9 @@ export default function HomePage() {
   const d = derived
   const isMobile = useIsMobile()
 
-  const HARNESS_PROVIDER: Record<HarnessId, string> = {
-    claude: 'Anthropic',
-    codex: 'OpenAI',
-    gemini: 'Google',
-    copilot: 'GitHub Copilot',
-  }
-
   function costCardSub(activeLang: Lang, harness: HarnessId | undefined): string {
     if (!harness) return t('card.est_cost_sub_generic', activeLang)
-    const provider = HARNESS_PROVIDER[harness] ?? 'Anthropic'
+    const provider = HARNESS_PROVIDERS[harness] ?? 'Anthropic'
     return t('card.est_cost_sub_with_provider', activeLang).replace('{provider}', provider)
   }
 
