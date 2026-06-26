@@ -252,11 +252,24 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               borderRadius: 8,
               boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
               zIndex: 1000,
-              minWidth: 190,
-              padding: '4px 0',
+              maxWidth: '80vw',
+              maxHeight: '70vh',
+              overflowY: 'auto',
+              padding: 6,
             }}>
-              {groups.map(group => (
-                <div key={group.harness ?? '__all__'}>
+              {/* Harness groups laid out as side-by-side columns (a grid), so the
+                  list doesn't become one giant vertical column. */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: `repeat(${Math.min(groups.length, 4)}, minmax(150px, 1fr))`,
+                gap: 2,
+                alignItems: 'start',
+              }}>
+              {groups.map((group, gi) => (
+                <div key={group.harness ?? '__all__'} style={{
+                  borderLeft: gi > 0 ? '1px solid var(--border)' : 'none',
+                  paddingLeft: gi > 0 ? 6 : 0,
+                }}>
                   {showGroupHeaders && group.harness && (
                     <div style={{
                       display: 'flex', alignItems: 'center', gap: 6,
@@ -325,6 +338,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                   })}
                 </div>
               ))}
+              </div>
               {hasModelFilter && (
                 <>
                   <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
