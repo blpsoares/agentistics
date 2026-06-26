@@ -246,7 +246,10 @@ function isNayChatSession(projectPath: string): boolean {
 }
 
 function encodeProjectDir(projectPath: string): string {
-  return projectPath.replace(/[/.]/g, '-')
+  // Claude encodes the project folder by replacing every non-alphanumeric char
+  // (slash, dot, underscore, etc.) with a dash — e.g. ".../bridge-cse_01H" →
+  // "...-bridge-cse-01H". Matching this exactly is required to locate the JSONL.
+  return projectPath.replace(/[^a-zA-Z0-9-]/g, '-')
 }
 
 function openSession(s: SessionMeta, e: React.MouseEvent) {

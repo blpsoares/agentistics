@@ -242,7 +242,8 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
                   }))
                 } else {
                   const harness = session.harness ?? 'claude'
-                  const encodedDir = session.project_path.replace(/[/.]/g, '-')
+                  // Match Claude's folder encoding: every non-alphanumeric char → '-'
+                  const encodedDir = session.project_path.replace(/[^a-zA-Z0-9-]/g, '-')
                   window.dispatchEvent(new CustomEvent('agentistics:open-transcript', {
                     detail: { harness, sessionId: session.session_id, project: { path: session.project_path, name: session.project_path.split('/').pop() ?? session.project_path, encodedDir } },
                   }))
