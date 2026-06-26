@@ -11,6 +11,39 @@ import { fmtFull } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { PrecisionToggle } from './PrecisionToggle'
 
+// ─── splitInlinedHistory ──────────────────────────────────────────────────────
+// Non-Claude harnesses sometimes concatenate a whole conversation into a single
+// user-turn (e.g. "User: hi\nAssistant: hello"). This helper splits such blocks
+// into individual bubbles so the transcript renders correctly.
+
+/** Pattern that matches a newline immediately followed by a conversation label. */
+const SPLIT_LABEL_RE = /\n(?=(User|Assistant|Gemini|Copilot):)/
+
+export function splitInlinedHistory(
+  role: 'user' | 'assistant',
+  content: string
+): { role: 'user' | 'assistant'; content: string }[] {
+  if (role !== 'user' || !SPLIT_LABEL_RE.test(content)) {
+    return [{ role, content }]
+  }
+  const segments = content.split(SPLIT_LABEL_RE).filter(Boolean)
+  const result: { role: 'user' | 'assistant'; content: string }[] = []
+  for (const seg of segments) {
+    const match = seg.match(/^(User|Assistant|Gemini|Copilot):\s*/)
+    if (match) {
+      const label = match[1]!
+      const text = seg.slice(match[0].length).trim()
+      if (!text) continue
+      result.push({ role: label === 'User' ? 'user' : 'assistant', content: text })
+    } else {
+      const text = seg.trim()
+      if (text) result.push({ role, content: text })
+    }
+  }
+  return result.length > 0 ? result : [{ role, content }]
+}
+
+
 interface Props {
   session: SessionMeta
   globalModelUsage: Record<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }>
@@ -209,7 +242,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
                   }))
                 } else {
                   const harness = session.harness ?? 'claude'
-                  const encodedDir = session.project_path.replace(/\//g, '-')
+                  const encodedDir = session.project_path.replace(/[/.]/g, '-')
                   window.dispatchEvent(new CustomEvent('agentistics:open-transcript', {
                     detail: { harness, sessionId: session.session_id, project: { path: session.project_path, name: session.project_path.split('/').pop() ?? session.project_path, encodedDir } },
                   }))

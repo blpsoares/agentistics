@@ -118,8 +118,8 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
       },
     ],
     note: {
-      en: 'Codex reports input_tokens including the cached portion; agentistics stores the non-cached input separately from cache reads so cost is not double-counted.',
-      pt: 'O Codex reporta input_tokens incluindo a parcela em cache; o agentistics armazena a entrada não cacheada separadamente das leituras de cache para evitar dupla contagem nos custos.',
+      en: 'Codex reports input_tokens including the cached portion; agentistics stores the non-cached input separately from cache reads so cost is not double-counted. Sessions are listed in the Sessions tab above.',
+      pt: 'O Codex reporta input_tokens incluindo a parcela em cache; o agentistics armazena a entrada não cacheada separadamente das leituras de cache para evitar dupla contagem nos custos. As sessões estão listadas na aba Sessões acima.',
     },
     pricingUrl: 'https://platform.openai.com/docs/pricing',
   },
@@ -161,8 +161,8 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
       },
     ],
     note: {
-      en: 'Many local Gemini files are bootstrap-only stubs with no real conversation — only sessions containing genuine user messages are counted. Token/cost/model data comes from the rich ~/.gemini/tmp/<project>/chats/*.json format. Agent metrics and git line counts are N/A.',
-      pt: 'Muitos arquivos locais do Gemini são stubs somente de bootstrap sem conversa real — apenas sessões com mensagens genuínas de usuário são contadas. Dados de tokens/custo/modelo vêm do formato rico ~/.gemini/tmp/<projeto>/chats/*.json. Métricas de agentes e contagem de linhas Git são N/A.',
+      en: 'Many local Gemini files are bootstrap-only stubs with no real conversation — only sessions containing genuine user messages are counted. Token/cost/model data comes from the rich ~/.gemini/tmp/<project>/chats/*.json format. Agent metrics and git line counts are N/A. Sessions are listed in the Sessions tab above.',
+      pt: 'Muitos arquivos locais do Gemini são stubs somente de bootstrap sem conversa real — apenas sessões com mensagens genuínas de usuário são contadas. Dados de tokens/custo/modelo vêm do formato rico ~/.gemini/tmp/<projeto>/chats/*.json. Métricas de agentes e contagem de linhas Git são N/A. As sessões estão listadas na aba Sessões acima.',
     },
     pricingUrl: 'https://ai.google.dev/gemini-api/docs/pricing',
   },

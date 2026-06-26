@@ -4,11 +4,12 @@ import type { HarnessId } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { HarnessInfoPanel } from '../components/HarnessInfoPanel'
+import { RecentSessions } from '../components/RecentSessions'
 import HomePage from './HomePage'
 
 const VALID_HARNESS_IDS: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
 
-type Tab = 'overview' | 'about'
+type Tab = 'overview' | 'sessions' | 'about'
 
 export default function HarnessPage() {
   const { harness } = useParams<{ harness: string }>()
@@ -38,6 +39,7 @@ export default function HarnessPage() {
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'overview', label: lang === 'pt' ? 'Visão geral' : 'Overview' },
+    { id: 'sessions', label: lang === 'pt' ? 'Sessões' : 'Sessions' },
     { id: 'about', label: lang === 'pt' ? 'Dados & fontes' : 'Data & sources' },
   ]
   const accent = HARNESS_COLORS[validHarness]
@@ -78,7 +80,15 @@ export default function HarnessPage() {
         })}
       </div>
 
-      {tab === 'overview' ? <HomePage /> : <HarnessInfoPanel harness={validHarness} />}
+      {tab === 'overview' && <HomePage />}
+      {tab === 'sessions' && (
+        <RecentSessions
+          sessions={(ctx.data.sessions ?? []).filter(s => s.harness === validHarness)}
+          lang={lang}
+          onSelect={s => ctx.setSelectedSession(s)}
+        />
+      )}
+      {tab === 'about' && <HarnessInfoPanel harness={validHarness} />}
     </div>
   )
 }

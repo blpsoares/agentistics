@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import { Loader, ChevronLeft, ChevronDown, ChevronUp } from 'lucide-react'
 import type { HarnessId } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
+import { splitInlinedHistory } from './SessionDrilldownModal'
 
 interface HarnessChatProps {
   harness: HarnessId
@@ -488,9 +489,16 @@ export function HarnessChat({ harness, lang, initialProject, initialSessionId, o
             {pt ? 'Nenhuma mensagem' : 'No messages'}
           </div>
         )}
-        {transcript.map((msg, i) => (
-          <MessageBubble key={i} msg={msg} harness={harness} pt={pt} />
-        ))}
+        {transcript.flatMap((msg, i) =>
+          splitInlinedHistory(msg.role, msg.content).map((split, j) => (
+            <MessageBubble
+              key={i + '-' + j}
+              msg={{ ...msg, role: split.role, content: split.content }}
+              harness={harness}
+              pt={pt}
+            />
+          ))
+        )}
       </div>
     </div>
   )

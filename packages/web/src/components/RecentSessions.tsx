@@ -246,7 +246,7 @@ function isNayChatSession(projectPath: string): boolean {
 }
 
 function encodeProjectDir(projectPath: string): string {
-  return projectPath.replace(/\//g, '-')
+  return projectPath.replace(/[/.]/g, '-')
 }
 
 function openSession(s: SessionMeta, e: React.MouseEvent) {

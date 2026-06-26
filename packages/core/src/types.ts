@@ -97,6 +97,10 @@ export interface SessionMeta {
   harness: HarnessId
   _source?: 'meta' | 'jsonl' | 'subdir'
   agentMetrics?: SessionAgentMetrics
+  /** Number of MCP tool calls recorded in this session (Copilot adapter). */
+  mcp_tool_call_count?: number
+  /** Unique MCP tool names called in this session (Copilot adapter). */
+  mcp_tool_names?: string[]
 }
 
 export interface AgentInvocation {

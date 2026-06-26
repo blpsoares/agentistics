@@ -15,6 +15,8 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
   let toolErrors = 0
   let usesMcp = false
   let firstPrompt = ''
+  let mcpToolCallCount = 0
+  const mcpToolNamesSet = new Set<string>()
 
   // Enriched fields from session.shutdown (clean-exit only)
   let inputTokens = 0
@@ -66,6 +68,11 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
       if (data.infoType === 'mcp') usesMcp = true
     } else if (type === 'session.error') {
       toolErrors++
+    } else if (type === 'mcp.tool_call') {
+      mcpToolCallCount++
+      if (typeof data.toolName === 'string' && data.toolName) {
+        mcpToolNamesSet.add(data.toolName)
+      }
     } else if (type === 'session.shutdown') {
       // Extract per-model token metrics — sum across all models present
       const modelMetrics = data.modelMetrics
@@ -134,5 +141,7 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
     model,
     harness: 'copilot',
     _source: 'jsonl',
+    mcp_tool_call_count: mcpToolCallCount,
+    mcp_tool_names: mcpToolNamesSet.size > 0 ? Array.from(mcpToolNamesSet) : undefined,
   }
 }
