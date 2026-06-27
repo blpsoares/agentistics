@@ -132,6 +132,11 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
           color: var(--text-secondary);
           font-style: italic;
         }
+        @media (max-width: 767px) {
+          .hl-card { padding: 12px 13px 11px; border-radius: var(--radius-md); }
+          .hl-value { font-size: 24px; }
+          .hl-prompt { font-size: 11px; }
+        }
       `}</style>
 
       {/* Number of cards: 5 always + 1 conditional (topProjectEntry) */}
@@ -254,6 +259,8 @@ function HighlightCard({
   style?: React.CSSProperties
 }) {
   const [hovered, setHovered] = useState(false)
+  const isMobile = useIsMobile()
+  const gap = isMobile ? 8 : 14
 
   return (
     <div
@@ -280,10 +287,10 @@ function HighlightCard({
       {/* Label + icon */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 7,
-        marginBottom: 14,
+        marginBottom: gap,
       }}>
         <span style={{
-          width: 26, height: 26, borderRadius: 7,
+          width: isMobile ? 22 : 26, height: isMobile ? 22 : 26, borderRadius: 7,
           background: `${accent}20`,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           color: accent, flexShrink: 0,
@@ -320,15 +327,15 @@ function HighlightCard({
           border: `1px solid ${accent}30`,
           borderRadius: 20,
           padding: '2px 8px',
-          marginBottom: 14,
+          marginBottom: gap,
         }}>
           {comparison}
         </div>
       )}
-      {!comparison && <div style={{ marginBottom: 14 }} />}
+      {!comparison && <div style={{ marginBottom: gap }} />}
 
       {/* Divider */}
-      <div style={{ height: 1, background: 'var(--border)', marginBottom: 12 }} />
+      <div style={{ height: 1, background: 'var(--border)', marginBottom: isMobile ? 8 : 12 }} />
 
       {/* Prompt */}
       {prompt && (

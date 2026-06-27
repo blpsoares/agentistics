@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Search, X, Check } from 'lucide-react'
 import { formatProjectName } from '@agentistics/core'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 interface Props {
   projects: { path: string; sessions: { sessionId: string; created: string }[] }[]
@@ -46,6 +47,7 @@ const PER_PAGE_OPTIONS = [15, 25, 50]
 
 export function ProjectsModal({ projects, sessionCountByProject, selected, onApply, onClose, lang }: Props) {
   const t = T[lang]
+  const isMobile = useIsMobile()
   const searchRef = useRef<HTMLInputElement>(null)
 
   const [query, setQuery] = useState('')
@@ -126,21 +128,22 @@ export function ProjectsModal({ projects, sessionCountByProject, selected, onApp
     WebkitBackdropFilter: 'blur(4px)',
     zIndex: 500,
     display: 'flex',
-    alignItems: 'center',
+    alignItems: isMobile ? 'stretch' : 'center',
     justifyContent: 'center',
-    padding: '16px',
+    padding: isMobile ? 0 : '16px',
   }
 
   const modalStyle: React.CSSProperties = {
     background: 'var(--bg-card)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-lg, 12px)',
+    border: isMobile ? 'none' : '1px solid var(--border)',
+    borderRadius: isMobile ? 0 : 'var(--radius-lg, 12px)',
     width: '100%',
-    maxWidth: 560,
-    maxHeight: '80vh',
+    maxWidth: isMobile ? '100%' : 560,
+    height: isMobile ? '100%' : undefined,
+    maxHeight: isMobile ? '100%' : '80vh',
     display: 'flex',
     flexDirection: 'column',
-    boxShadow: '0 24px 64px rgba(0,0,0,0.5)',
+    boxShadow: isMobile ? 'none' : '0 24px 64px rgba(0,0,0,0.5)',
     overflow: 'hidden',
   }
 
