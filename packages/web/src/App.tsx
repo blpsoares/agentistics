@@ -1730,7 +1730,8 @@ export default function AppLayout() {
             padding: isMobile ? '0 16px' : '0 32px',
             width: '100%',
             boxSizing: 'border-box',
-            overflowX: isMobile ? 'auto' : undefined,
+            // No overflowX here: FiltersBar wraps its controls (flexWrap), and an
+            // overflow context would clip the model-filter popover on mobile.
           }}>
             <FiltersBar
               filters={filters}
