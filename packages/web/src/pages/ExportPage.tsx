@@ -6,6 +6,7 @@ import type { AppContext } from '../lib/app-context'
 import type { HarnessId, Filters, Lang } from '@agentistics/core'
 import { t, formatModel } from '@agentistics/core'
 import { useDerivedStats, blendedCostPerToken, computeHarnessSummaries } from '../hooks/useData'
+import { useIsMobile } from '../hooks/useIsMobile'
 import {
   runPDFCapture, PDFContent, COLORS, SECTIONS, SECTION_IDS, DATE_OPTIONS,
 } from '../components/PDFExportModal'
@@ -457,6 +458,7 @@ function ConfigLabel({ text }: { text: string }) {
 export default function ExportPage() {
   const { data, lang, currency, brlRate, filters: appFilters } = useOutletContext<AppContext>()
   const pt = lang === 'pt'
+  const isMobile = useIsMobile()
 
   // Scope: 'all', a specific HarnessId, or 'compare'
   const [scope, setScope] = useState<ExportScope>('all')
@@ -590,17 +592,17 @@ export default function ExportPage() {
         </div>
       </div>
 
-      {/* Two-column layout: options sidebar + live preview */}
-      <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+      {/* Two-column layout: options sidebar + live preview (stacked on mobile) */}
+      <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 20, alignItems: 'flex-start' }}>
 
-        {/* ── Left sidebar: options ───────────────────────────────────────────── */}
+        {/* ── Left sidebar (top on mobile): options ───────────────────────────── */}
         <div style={{
-          width: 280, flexShrink: 0,
+          width: isMobile ? '100%' : 280, flexShrink: 0,
           display: 'flex', flexDirection: 'column', gap: 18,
           background: 'var(--bg-card)', border: '1px solid var(--border)',
           borderRadius: 'var(--radius-lg)', padding: '18px 16px',
-          position: 'sticky', top: 80,
-          maxHeight: 'calc(100vh - 120px)', overflowY: 'auto',
+          ...(isMobile ? {} : { position: 'sticky', top: 80, maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }),
+          boxSizing: 'border-box',
         }}>
 
           {/* Scope selector */}
@@ -680,7 +682,7 @@ export default function ExportPage() {
                 <Calendar size={11} color="var(--text-tertiary)" />
                 <ConfigLabel text={t('filter.period', lang)} />
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(auto-fill, minmax(60px, 1fr))' : 'repeat(4, 1fr)', gap: 5 }}>
                 {DATE_OPTIONS.map(opt => {
                   const sel = dateRange === opt.value
                   return (
@@ -928,13 +930,14 @@ export default function ExportPage() {
         {/* ── Right area: live preview ─────────────────────────────────────────── */}
         <div style={{
           flex: 1,
+          minWidth: 0,
           background: 'var(--bg-base)',
           border: '1px solid var(--border)',
           borderRadius: 'var(--radius-lg)',
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
-          minHeight: 600,
+          minHeight: isMobile ? 400 : 600,
         }}>
           {/* Preview bar */}
           <div style={{
@@ -952,8 +955,8 @@ export default function ExportPage() {
             )}
           </div>
 
-          {/* Preview content */}
-          <div style={{ padding: 24, display: 'flex', justifyContent: 'center', overflowY: 'auto', flex: 1 }}>
+          {/* Preview content — horizontally scrollable on mobile for A4 width */}
+          <div style={{ padding: isMobile ? 12 : 24, display: 'flex', justifyContent: 'center', overflowX: 'auto', overflowY: 'auto', flex: 1 }}>
             <div
               ref={contentRef}
               style={{

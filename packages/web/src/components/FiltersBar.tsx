@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import type { Filters, DateRange, Project, Lang, HarnessId } from '@agentistics/core'
 import { formatModel, formatProjectName } from '@agentistics/core'
 import { Layers, Cpu, RotateCcw, ChevronDown, X, CalendarDays, Check } from 'lucide-react'
@@ -6,6 +6,7 @@ import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { ProjectsModal } from './ProjectsModal'
 import { DatePicker } from './DatePicker'
 import { format } from 'date-fns'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 interface Props {
   filters: Filters
@@ -50,9 +51,11 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
       ? modelGroups
       : [{ harness: null, models }]
   const showGroupHeaders = groups.length > 1
+  const isMobile = useIsMobile()
   const [showProjectsModal, setShowProjectsModal] = useState(false)
   const [showModelDropdown, setShowModelDropdown] = useState(false)
   const modelDropdownRef = useRef<HTMLDivElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
   const today = format(new Date(), 'yyyy-MM-dd')
   const hasCustomDates = !!(filters.customStart || filters.customEnd)
 
@@ -94,6 +97,22 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showModelDropdown])
+
+  // Clamp the popover so it never overflows the right (or left) edge of the viewport.
+  useLayoutEffect(() => {
+    if (!showModelDropdown || !popoverRef.current || !modelDropdownRef.current) return
+    const container = modelDropdownRef.current.getBoundingClientRect()
+    const popover = popoverRef.current
+    // Reset any previous adjustment before measuring.
+    popover.style.left = '0'
+    popover.style.right = 'auto'
+    const popoverWidth = popover.offsetWidth
+    const rightEdge = container.left + popoverWidth
+    const overflow = rightEdge - window.innerWidth + 8 // 8px safe margin
+    if (overflow > 0) {
+      popover.style.left = `-${Math.min(overflow, container.left)}px`
+    }
   }, [showModelDropdown])
 
   return (
@@ -243,7 +262,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
           </button>
 
           {showModelDropdown && (
-            <div style={{
+            <div ref={popoverRef} style={{
               position: 'absolute',
               top: 'calc(100% + 4px)',
               left: 0,
@@ -252,16 +271,22 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               borderRadius: 8,
               boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
               zIndex: 1000,
-              maxWidth: '80vw',
+              // On mobile, cap to 92vw so it never exceeds the viewport;
+              // on desktop, 80vw keeps the existing generous maximum.
+              width: isMobile ? 'min(92vw, 360px)' : undefined,
+              maxWidth: isMobile ? undefined : '80vw',
               maxHeight: '70vh',
               overflowY: 'auto',
               padding: 6,
             }}>
               {/* Harness groups laid out as side-by-side columns (a grid), so the
-                  list doesn't become one giant vertical column. */}
+                  list doesn't become one giant vertical column.
+                  On mobile collapse to 1 column; desktop allows up to 4. */}
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: `repeat(${Math.min(groups.length, 4)}, minmax(150px, 1fr))`,
+                gridTemplateColumns: isMobile
+                  ? `repeat(${Math.min(groups.length, 2)}, minmax(0, 1fr))`
+                  : `repeat(${Math.min(groups.length, 4)}, minmax(150px, 1fr))`,
                 gap: 2,
                 alignItems: 'start',
               }}>
