@@ -11,6 +11,7 @@ import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatMo
 import { LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from '../hooks/useData'
 import { CHAT_SOUNDS, DEFAULT_CHAT_SOUND_ID, findChatSound } from '../lib/chatSounds'
 import { useChatHarnesses, type HarnessChatStatus } from '../hooks/useChatHarnesses'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
 
@@ -1122,6 +1123,7 @@ export function PreferencesModal({
   riskyMode, setRiskyMode, highlightUpdates, setHighlightUpdates,
   defaultTab = 'preferences',
 }: Props) {
+  const isMobile = useIsMobile()
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab)
   const [draft, setDraft] = useState<PrefsDraft>({
     ...initial,
@@ -1164,18 +1166,19 @@ export function PreferencesModal({
       <div
         style={{
           background: 'var(--bg-surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-lg)',
-          width: 560,
-          height: 'min(680px, 90vh)',
+          border: isMobile ? 'none' : '1px solid var(--border)',
+          borderRadius: isMobile ? 0 : 'var(--radius-lg)',
+          width: isMobile ? '100%' : 560,
+          maxWidth: '100%',
+          height: isMobile ? '100%' : 'min(680px, 90vh)',
           display: 'flex',
           flexDirection: 'column',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
+          boxShadow: isMobile ? 'none' : '0 20px 60px rgba(0,0,0,0.35)',
         }}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div style={{ padding: '20px 24px 0' }}>
+        <div style={{ padding: isMobile ? '16px 16px 0' : '20px 24px 0' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
             <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
               {pt ? 'Configurações' : 'Settings'}
@@ -1192,8 +1195,12 @@ export function PreferencesModal({
             </button>
           </div>
 
-          {/* Tab bar */}
-          <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border)', marginBottom: 0 }}>
+          {/* Tab bar — scrolls horizontally on mobile so tabs never overflow */}
+          <div style={{
+            display: 'flex', gap: 2, borderBottom: '1px solid var(--border)', marginBottom: 0,
+            overflowX: isMobile ? 'auto' : undefined,
+            ...(isMobile ? { scrollbarWidth: 'none' as const } : {}),
+          }}>
             {TABS.map(tab => {
               const active = activeTab === tab.id
               const label = pt ? tab.labelPt : tab.labelEn
@@ -1203,7 +1210,7 @@ export function PreferencesModal({
                   onClick={() => setActiveTab(tab.id)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 6,
-                    padding: '8px 14px',
+                    padding: isMobile ? '8px 12px' : '8px 14px',
                     fontSize: 12, fontWeight: active ? 700 : 500,
                     color: active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
                     background: 'transparent',
@@ -1214,6 +1221,7 @@ export function PreferencesModal({
                     fontFamily: 'inherit',
                     transition: 'color 0.15s',
                     whiteSpace: 'nowrap',
+                    flexShrink: 0,
                   }}
                 >
                   <span style={{ opacity: active ? 1 : 0.6 }}>{tab.icon}</span>
@@ -1225,7 +1233,7 @@ export function PreferencesModal({
         </div>
 
         {/* Scrollable body */}
-        <div style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
+        <div style={{ overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '18px 16px' : '20px 24px', flex: 1 }}>
           {activeTab === 'preferences' && (
             <PreferencesTab draft={draft} set={set} pt={pt} previewSound={previewSound} />
           )}
@@ -1253,10 +1261,10 @@ export function PreferencesModal({
         {activeTab === 'preferences' && (
           <div style={{
             display: 'flex', justifyContent: 'flex-end', gap: 8,
-            padding: '16px 24px',
+            padding: isMobile ? '14px 16px' : '16px 24px',
             borderTop: '1px solid var(--border)',
             background: 'var(--bg-surface)',
-            borderRadius: '0 0 var(--radius-lg) var(--radius-lg)',
+            borderRadius: isMobile ? 0 : '0 0 var(--radius-lg) var(--radius-lg)',
             flexShrink: 0,
           }}>
             <button
