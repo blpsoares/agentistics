@@ -7,7 +7,7 @@ import {
   Sun, Moon, Globe, AlertTriangle, Download, FileDown,
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
-  Target, Home, DollarSign, Layers, Code2, GitCompare, ChevronDown, MoreHorizontal,
+  Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -728,7 +728,6 @@ function MobileBottomNav({ lang, harnesses }: { lang: Lang; harnesses?: HarnessI
 function HarnessSelector({ harnesses, lang, isMobile }: { harnesses: HarnessId[]; lang: Lang; isMobile?: boolean }) {
   const location = useLocation()
   const navigate = useNavigate()
-  const [mobileOpen, setMobileOpen] = useState(false)
 
   // Only render when there is more than one harness present in the data
   if (harnesses.length <= 1) return null
@@ -739,7 +738,6 @@ function HarnessSelector({ harnesses, lang, isMobile }: { harnesses: HarnessId[]
     : null
 
   const handleSelect = (harness: HarnessId | null) => {
-    setMobileOpen(false)
     if (harness === null) {
       navigate('/')
     } else {
@@ -753,74 +751,36 @@ function HarnessSelector({ harnesses, lang, isMobile }: { harnesses: HarnessId[]
     ...harnesses.map(h => ({ id: h as HarnessId | null, label: HARNESS_LABELS[h] })),
   ]
 
-  // Mobile: compact dropdown button in the top bar
+  // Mobile: always-visible chips/pills — one tap to switch harness, no dropdown.
   if (isMobile) {
-    const currentOpt = currentHarness ? options.find(o => o.id === currentHarness) : allOption
-    const currentColor = currentHarness ? HARNESS_COLORS[currentHarness] : undefined
     return (
-      <div style={{ position: 'relative' }}>
-        <button
-          onClick={() => setMobileOpen(v => !v)}
-          style={{
-            height: 32, padding: '0 8px',
-            display: 'flex', alignItems: 'center', gap: 4,
-            borderRadius: 8, border: '1px solid var(--border)',
-            background: mobileOpen ? 'var(--bg-elevated)' : 'transparent',
-            cursor: 'pointer',
-            color: currentColor ?? 'var(--text-secondary)',
-            fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
-            transition: 'all 0.15s',
-          }}
-        >
-          {currentHarness && (
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: currentColor, flexShrink: 0, display: 'inline-block' }} />
-          )}
-          <span style={{ maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {currentOpt?.label ?? 'All'}
-          </span>
-          <ChevronDown size={10} />
-        </button>
-        {mobileOpen && (
-          <>
-            {/* Backdrop */}
-            <div
-              onClick={() => setMobileOpen(false)}
-              style={{ position: 'fixed', inset: 0, zIndex: 150 }}
-            />
-            {/* Dropdown */}
-            <div style={{
-              position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 200,
-              background: 'var(--bg-card)', border: '1px solid var(--border)',
-              borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
-              overflow: 'hidden', minWidth: 150,
-            }}>
-              {options.map(opt => {
-                const active = opt.id === currentHarness
-                const color = opt.id ? HARNESS_COLORS[opt.id] : undefined
-                return (
-                  <button
-                    key={opt.id ?? '__all__'}
-                    onClick={() => handleSelect(opt.id)}
-                    style={{
-                      width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '10px 14px',
-                      background: active ? 'var(--bg-elevated)' : 'transparent',
-                      border: 'none', borderBottom: '1px solid var(--border)',
-                      cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
-                      color: active ? (color ?? 'var(--anthropic-orange)') : 'var(--text-secondary)',
-                      fontSize: 13, fontWeight: active ? 700 : 400,
-                    }}
-                  >
-                    {opt.id && (
-                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
-                    )}
-                    {opt.label}
-                  </button>
-                )
-              })}
-            </div>
-          </>
-        )}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        {options.map(opt => {
+          const active = opt.id === currentHarness
+          const color = opt.id ? HARNESS_COLORS[opt.id] : 'var(--anthropic-orange)'
+          return (
+            <button
+              key={opt.id ?? '__all__'}
+              onClick={() => handleSelect(opt.id)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                padding: '5px 11px', borderRadius: 999,
+                border: active ? `1px solid ${color}` : '1px solid var(--border)',
+                background: active
+                  ? (opt.id ? `${color}22` : 'var(--anthropic-orange-dim)')
+                  : 'var(--bg-elevated)',
+                color: active ? color : 'var(--text-secondary)',
+                fontSize: 12, fontWeight: active ? 700 : 500, fontFamily: 'inherit',
+                cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all 0.15s',
+              }}
+            >
+              {opt.id && (
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
+              )}
+              {opt.label}
+            </button>
+          )
+        })}
       </div>
     )
   }
@@ -1799,9 +1759,9 @@ export default function AppLayout() {
             // No overflowX here: FiltersBar wraps its controls (flexWrap), and an
             // overflow context would clip the model-filter popover on mobile.
           }}>
-            {/* Harness selector lives in the filters row on mobile (desktop has it in the nav row). */}
+            {/* Harness selector lives in the filters row on mobile as one-tap chips. */}
             {isMobile && data.harnesses && data.harnesses.length > 1 && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 10 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 7, paddingTop: 10 }}>
                 <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                   {lang === 'pt' ? 'Visão' : 'View'}
                 </span>
