@@ -11,6 +11,22 @@ export interface StageProgress {
 
 export type LoadProgress = Record<string, StageProgress>
 
+// Persisted snapshot of the last successful /api/data so reopening the app
+// (especially as an installed PWA) renders instantly from cache while a fresh
+// copy is fetched in the background — no full loading screen on every reopen.
+const DATA_CACHE_KEY = 'agentistics-data-cache-v1'
+
+function readDataCache(): AppData | null {
+  try {
+    const raw = localStorage.getItem(DATA_CACHE_KEY)
+    return raw ? (JSON.parse(raw) as AppData) : null
+  } catch { return null }
+}
+
+function writeDataCache(data: AppData): void {
+  try { localStorage.setItem(DATA_CACHE_KEY, JSON.stringify(data)) } catch { /* quota/disabled — skip */ }
+}
+
 export const LIVE_INTERVAL_OPTIONS = [
   { label: '10s', value: 10 },
   { label: '30s', value: 30 },
@@ -25,8 +41,10 @@ export const LIVE_INTERVAL_OPTIONS_RISKY = [
 ]
 
 export function useData() {
-  const [data, setData] = useState<AppData | null>(null)
-  const [loading, setLoading] = useState(true)
+  // Seed from the local cache so a reopen paints immediately instead of the
+  // loading screen; a background refresh then replaces it with fresh data.
+  const [data, setData] = useState<AppData | null>(() => readDataCache())
+  const [loading, setLoading] = useState(() => readDataCache() === null)
   const [loadProgress, setLoadProgress] = useState<LoadProgress>({})
   const [error, setError] = useState<string | null>(null)
   const [liveUpdates, setLiveUpdates] = useState(true)
@@ -38,7 +56,9 @@ export function useData() {
     try {
       const res = await fetch('/api/data')
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      setData(await res.json())
+      const fresh = (await res.json()) as AppData
+      setData(fresh)
+      writeDataCache(fresh)
     } catch { /* ignore silent update errors */ }
   }, [])
 
@@ -62,7 +82,9 @@ export function useData() {
       try {
         const res = await fetch('/api/data')
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        setData(await res.json())
+        const fresh = (await res.json()) as AppData
+        setData(fresh)
+        writeDataCache(fresh)
         if (isError) setError(null)
       } catch (err) {
         setError(String(err))
@@ -88,9 +110,17 @@ export function useData() {
   }, [])
 
   useEffect(() => {
-    startStreamLoad()
+    // If we painted from cache, refresh quietly (no loading screen). Otherwise
+    // run the streamed first load with progress.
+    if (readDataCache()) {
+      void fetchData()
+    } else {
+      startStreamLoad()
+    }
     return () => { streamRef.current?.close() }
-  }, [startStreamLoad])
+    // Run once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Subscribe to server-sent change events so the dashboard updates automatically
   // when Claude writes new session data to ~/.claude/.

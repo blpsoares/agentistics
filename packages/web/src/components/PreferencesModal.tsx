@@ -375,19 +375,24 @@ function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose }: {
   onPwaInstalled?: () => void
   onClose: () => void
 }) {
+  // iOS Safari has no beforeinstallprompt — install is always Share → "Add to Home Screen".
+  const isIOS = /ipad|iphone|ipod/i.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+    || (navigator as unknown as { standalone?: boolean }).standalone === true
   const isDevPort = window.location.port === '47292'
   const [uninstallHint, setUninstallHint] = useState(false)
 
   const pwaStatus = pwaPrompt
     ? 'available'
-    : isStandalone ? 'installed' : isDevPort ? 'dev' : 'waiting'
+    : isStandalone ? 'installed' : isIOS ? 'ios' : isDevPort ? 'dev' : 'waiting'
 
   const pwaHint: Record<string, string> = {
     available: pt ? 'Instale pelo navegador, sem download necessário.' : 'Install via browser — no download needed.',
     installed:  pt ? 'Você já está usando o App Web instalado.' : 'You are already using the installed Web App.',
     dev:        pt ? 'Não disponível no servidor de dev. Abra via porta 47291.' : 'Not available in dev mode. Open via port 47291.',
     waiting:    pt ? 'Recarregue a página para habilitar a instalação.' : 'Reload the page to enable installation.',
+    ios:        pt ? 'No iPhone/iPad: toque em Compartilhar e em “Adicionar à Tela de Início”.' : 'On iPhone/iPad: tap Share, then “Add to Home Screen”.',
   }
 
   return (
@@ -428,7 +433,7 @@ function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose }: {
               </div>
             </div>
           </div>
-          {pwaStatus === 'installed' ? (
+          {pwaStatus === 'ios' ? null : pwaStatus === 'installed' ? (
             <button
               onClick={() => setUninstallHint(h => !h)}
               style={{
@@ -473,6 +478,31 @@ function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose }: {
             {pt
               ? 'Para desinstalar: clique no menu ⋮ no canto superior direito da janela do app → "Desinstalar Agentistics".'
               : 'To uninstall: click the ⋮ menu in the top-right corner of the app window → "Uninstall Agentistics".'}
+          </div>
+        )}
+        {pwaStatus === 'ios' && (
+          <div style={{
+            marginTop: 12, padding: '10px 12px', borderRadius: 8,
+            background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+            fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7,
+          }}>
+            <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
+              {pt ? 'Instalar no iPhone / iPad' : 'Install on iPhone / iPad'}
+            </div>
+            {pt ? (
+              <>1. Toque no botão <strong>Compartilhar</strong> (o quadrado com a seta) na barra do Safari.<br />
+              2. Role e toque em <strong>“Adicionar à Tela de Início”</strong>.<br />
+              3. Toque em <strong>Adicionar</strong>. O app abre em tela cheia, como um app nativo.</>
+            ) : (
+              <>1. Tap the <strong>Share</strong> button (square with an arrow) in the Safari bar.<br />
+              2. Scroll and tap <strong>“Add to Home Screen”</strong>.<br />
+              3. Tap <strong>Add</strong>. The app opens full-screen, like a native app.</>
+            )}
+            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>
+              {pt
+                ? 'O iOS não permite instalação com um clique — esse é o fluxo oficial da Apple.'
+                : 'iOS does not allow one-click install — this is Apple’s official flow.'}
+            </div>
           </div>
         )}
       </div>
