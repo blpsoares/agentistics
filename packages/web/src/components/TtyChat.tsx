@@ -1949,7 +1949,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
             <input ref={nayFileInputRef} type="file" multiple accept="image/*,text/*,.md,.json,.ts,.js,.py,.txt,.csv" onChange={handleNayFileSelect} style={{ display: 'none' }} />
 
           {/* Nay toolbar: thinking + harness selector + model picker */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 12px 0', justifyContent: 'flex-end' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 12px 0', justifyContent: 'flex-end', flexWrap: 'wrap', overflow: 'hidden' }}>
             {/* Thinking toggle */}
             <button
               className="tty-icon-btn"
@@ -1980,7 +1980,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                   {nayBackendHarness && !nayBackendHarness.ready && (
                     <AlertTriangle size={9} style={{ color: 'var(--accent-orange)' }} />
                   )}
-                  <span>{nayBackendHarness?.label ?? nayBackendHarnessId}</span>
+                  <span style={{ maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nayBackendHarness?.label ?? nayBackendHarnessId}</span>
                   <ChevronDown size={9} />
                 </button>
                 {showNayHarnessPicker && (
@@ -2043,9 +2043,9 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                 className="tty-icon-btn"
                 onClick={() => { setShowNayModelPicker(v => !v); setShowNayHarnessPicker(false) }}
                 title="Change model"
-                style={{ ...iconBtnStyle, width: 'auto', padding: '0 6px', gap: 4, fontSize: 10 }}
+                style={{ ...iconBtnStyle, width: 'auto', padding: '0 6px', gap: 4, fontSize: 10, maxWidth: isMobile ? 140 : 'none' }}
               >
-                <span>{nayModelInfo?.label ?? nayEffectiveModel}</span>
+                <span style={{ maxWidth: isMobile ? 110 : 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nayModelInfo?.label ?? nayEffectiveModel}</span>
                 <ChevronDown size={9} />
               </button>
               {showNayModelPicker && (

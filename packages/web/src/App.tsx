@@ -7,7 +7,7 @@ import {
   Sun, Moon, Globe, AlertTriangle, Download, FileDown,
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
-  Target, Home, DollarSign, Layers, Code2, GitCompare,
+  Target, Home, DollarSign, Layers, Code2, GitCompare, ChevronDown,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -595,8 +595,9 @@ function MobileBottomNav({ lang }: { lang: Lang }) {
     { to: '/',         labelPt: 'Home',       labelEn: 'Home',      icon: Home },
     { to: '/costs',    labelPt: 'Custos',     labelEn: 'Costs',     icon: DollarSign },
     { to: '/projects', labelPt: 'Projetos',   labelEn: 'Projects',  icon: FolderOpen },
-    { to: '/tools',    labelPt: 'Ferramentas',labelEn: 'Tools',     icon: Wrench },
+    { to: '/tools',    labelPt: 'Tools',      labelEn: 'Tools',     icon: Wrench },
     { to: '/custom',   labelPt: 'Custom',     labelEn: 'Custom',    icon: Layers },
+    { to: '/export',   labelPt: 'Exportar',   labelEn: 'Export',    icon: FileDown },
   ] as const
 
   return (
@@ -627,6 +628,7 @@ function MobileBottomNav({ lang }: { lang: Lang }) {
             end={tab.to === '/'}
             style={{
               flex: 1,
+              minWidth: 0,
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
@@ -637,11 +639,14 @@ function MobileBottomNav({ lang }: { lang: Lang }) {
               fontSize: 10,
               fontWeight: active ? 700 : 500,
               transition: 'color 0.15s',
-              padding: '6px 0',
+              padding: '6px 2px',
+              overflow: 'hidden',
             }}
           >
             <Icon size={18} />
-            <span>{pt ? tab.labelPt : tab.labelEn}</span>
+            <span style={{ width: '100%', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {pt ? tab.labelPt : tab.labelEn}
+            </span>
           </NavLink>
         )
       })}
@@ -649,9 +654,10 @@ function MobileBottomNav({ lang }: { lang: Lang }) {
   )
 }
 
-function HarnessSelector({ harnesses, lang }: { harnesses: HarnessId[]; lang: Lang }) {
+function HarnessSelector({ harnesses, lang, isMobile }: { harnesses: HarnessId[]; lang: Lang; isMobile?: boolean }) {
   const location = useLocation()
   const navigate = useNavigate()
+  const [mobileOpen, setMobileOpen] = useState(false)
 
   // Only render when there is more than one harness present in the data
   if (harnesses.length <= 1) return null
@@ -662,6 +668,7 @@ function HarnessSelector({ harnesses, lang }: { harnesses: HarnessId[]; lang: La
     : null
 
   const handleSelect = (harness: HarnessId | null) => {
+    setMobileOpen(false)
     if (harness === null) {
       navigate('/')
     } else {
@@ -675,6 +682,79 @@ function HarnessSelector({ harnesses, lang }: { harnesses: HarnessId[]; lang: La
     ...harnesses.map(h => ({ id: h as HarnessId | null, label: HARNESS_LABELS[h] })),
   ]
 
+  // Mobile: compact dropdown button in the top bar
+  if (isMobile) {
+    const currentOpt = currentHarness ? options.find(o => o.id === currentHarness) : allOption
+    const currentColor = currentHarness ? HARNESS_COLORS[currentHarness] : undefined
+    return (
+      <div style={{ position: 'relative' }}>
+        <button
+          onClick={() => setMobileOpen(v => !v)}
+          style={{
+            height: 32, padding: '0 8px',
+            display: 'flex', alignItems: 'center', gap: 4,
+            borderRadius: 8, border: '1px solid var(--border)',
+            background: mobileOpen ? 'var(--bg-elevated)' : 'transparent',
+            cursor: 'pointer',
+            color: currentColor ?? 'var(--text-secondary)',
+            fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
+            transition: 'all 0.15s',
+          }}
+        >
+          {currentHarness && (
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: currentColor, flexShrink: 0, display: 'inline-block' }} />
+          )}
+          <span style={{ maxWidth: 52, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {currentOpt?.label ?? 'All'}
+          </span>
+          <ChevronDown size={10} />
+        </button>
+        {mobileOpen && (
+          <>
+            {/* Backdrop */}
+            <div
+              onClick={() => setMobileOpen(false)}
+              style={{ position: 'fixed', inset: 0, zIndex: 150 }}
+            />
+            {/* Dropdown */}
+            <div style={{
+              position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 200,
+              background: 'var(--bg-card)', border: '1px solid var(--border)',
+              borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+              overflow: 'hidden', minWidth: 130,
+            }}>
+              {options.map(opt => {
+                const active = opt.id === currentHarness
+                const color = opt.id ? HARNESS_COLORS[opt.id] : undefined
+                return (
+                  <button
+                    key={opt.id ?? '__all__'}
+                    onClick={() => handleSelect(opt.id)}
+                    style={{
+                      width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '10px 14px',
+                      background: active ? 'var(--bg-elevated)' : 'transparent',
+                      border: 'none', borderBottom: '1px solid var(--border)',
+                      cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                      color: active ? (color ?? 'var(--anthropic-orange)') : 'var(--text-secondary)',
+                      fontSize: 13, fontWeight: active ? 700 : 400,
+                    }}
+                  >
+                    {opt.id && (
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
+                    )}
+                    {opt.label}
+                  </button>
+                )
+              })}
+            </div>
+          </>
+        )}
+      </div>
+    )
+  }
+
+  // Desktop: horizontal pills in the nav bar
   return (
     <div style={{
       display: 'flex',
@@ -1532,6 +1612,11 @@ export default function AppLayout() {
               <Download size={13} />
               {lang === 'pt' ? 'Exportar' : 'Export'}
             </button>}
+
+            {/* Harness selector — mobile only, shown when >1 harness present */}
+            {isMobile && data.harnesses && data.harnesses.length > 1 && (
+              <HarnessSelector harnesses={data.harnesses} lang={lang} isMobile />
+            )}
 
             {/* Settings — unified modal (Preferences + Live + Environment) */}
             <button
