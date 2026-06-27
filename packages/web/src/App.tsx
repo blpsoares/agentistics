@@ -7,7 +7,7 @@ import {
   Sun, Moon, Globe, AlertTriangle, Download, FileDown,
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
-  Target, Home, DollarSign, Layers, Code2, GitCompare, ChevronDown,
+  Target, Home, DollarSign, Layers, Code2, GitCompare, ChevronDown, MoreHorizontal,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -587,70 +587,141 @@ function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): st
   return `USD ${usd.toFixed(6)}`
 }
 
-function MobileBottomNav({ lang }: { lang: Lang }) {
+function MobileBottomNav({ lang, harnesses }: { lang: Lang; harnesses?: HarnessId[] }) {
   const location = useLocation()
+  const navigate = useNavigate()
   const pt = lang === 'pt'
+  const [moreOpen, setMoreOpen] = useState(false)
 
-  const tabs = [
+  // Primary destinations live in the bar; the rest go behind a "More" sheet so
+  // the bar never crams more than 5 slots on a narrow phone.
+  const primary = [
     { to: '/',         labelPt: 'Home',       labelEn: 'Home',      icon: Home },
     { to: '/costs',    labelPt: 'Custos',     labelEn: 'Costs',     icon: DollarSign },
     { to: '/projects', labelPt: 'Projetos',   labelEn: 'Projects',  icon: FolderOpen },
     { to: '/tools',    labelPt: 'Tools',      labelEn: 'Tools',     icon: Wrench },
-    { to: '/custom',   labelPt: 'Custom',     labelEn: 'Custom',    icon: Layers },
-    { to: '/export',   labelPt: 'Exportar',   labelEn: 'Export',    icon: FileDown },
   ] as const
 
+  const more = [
+    { to: '/custom',   labelPt: 'Personalizado', labelEn: 'Custom',  icon: Layers },
+    { to: '/export',   labelPt: 'Exportar',      labelEn: 'Export',  icon: FileDown },
+    ...(harnesses && harnesses.length > 1
+      ? [{ to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: GitCompare }]
+      : []),
+  ] as const
+
+  const moreActive = more.some(t => location.pathname.startsWith(t.to))
+
+  const itemStyle = (active: boolean): React.CSSProperties => ({
+    flex: 1,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    textDecoration: 'none',
+    color: active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+    fontSize: 10,
+    fontWeight: active ? 700 : 500,
+    transition: 'color 0.15s',
+    padding: '6px 2px',
+    overflow: 'hidden',
+    background: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  })
+
+  const labelStyle: React.CSSProperties = {
+    width: '100%', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  }
+
   return (
-    <nav
-      className="mobile-bottom-nav"
-      style={{
-        position: 'fixed',
-        bottom: 0,
-        left: 0,
-        right: 0,
-        zIndex: 200,
-        background: 'var(--bg-surface)',
-        borderTop: '1px solid var(--border)',
-        display: 'flex',
-        alignItems: 'stretch',
-        height: 56,
-      }}
-    >
-      {tabs.map(tab => {
-        const active = tab.to === '/'
-          ? location.pathname === '/'
-          : location.pathname.startsWith(tab.to)
-        const Icon = tab.icon
-        return (
-          <NavLink
-            key={tab.to}
-            to={tab.to}
-            end={tab.to === '/'}
-            style={{
-              flex: 1,
-              minWidth: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 3,
-              textDecoration: 'none',
-              color: active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-              fontSize: 10,
-              fontWeight: active ? 700 : 500,
-              transition: 'color 0.15s',
-              padding: '6px 2px',
-              overflow: 'hidden',
-            }}
-          >
-            <Icon size={18} />
-            <span style={{ width: '100%', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {pt ? tab.labelPt : tab.labelEn}
-            </span>
-          </NavLink>
-        )
-      })}
-    </nav>
+    <>
+      {/* "More" bottom sheet */}
+      {moreOpen && (
+        <>
+          <div
+            onClick={() => setMoreOpen(false)}
+            style={{ position: 'fixed', inset: 0, zIndex: 210, background: 'rgba(0,0,0,0.45)' }}
+          />
+          <div style={{
+            position: 'fixed', left: 0, right: 0, bottom: 56, zIndex: 220,
+            background: 'var(--bg-surface)', borderTop: '1px solid var(--border)',
+            borderRadius: '14px 14px 0 0', boxShadow: '0 -8px 30px rgba(0,0,0,0.35)',
+            padding: '8px 8px 12px',
+          }}>
+            <div style={{
+              width: 36, height: 4, borderRadius: 2, background: 'var(--border)',
+              margin: '4px auto 10px',
+            }} />
+            {more.map(tab => {
+              const active = location.pathname.startsWith(tab.to)
+              const Icon = tab.icon
+              return (
+                <button
+                  key={tab.to}
+                  onClick={() => { setMoreOpen(false); navigate(tab.to) }}
+                  style={{
+                    width: '100%', display: 'flex', alignItems: 'center', gap: 12,
+                    padding: '13px 16px', borderRadius: 10,
+                    background: active ? 'var(--anthropic-orange-dim)' : 'transparent',
+                    border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                    color: active ? 'var(--anthropic-orange)' : 'var(--text-primary)',
+                    fontSize: 15, fontWeight: active ? 700 : 500,
+                  }}
+                >
+                  <Icon size={19} style={{ flexShrink: 0 }} />
+                  {pt ? tab.labelPt : tab.labelEn}
+                </button>
+              )
+            })}
+          </div>
+        </>
+      )}
+
+      <nav
+        className="mobile-bottom-nav"
+        style={{
+          position: 'fixed',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          zIndex: 230,
+          background: 'var(--bg-surface)',
+          borderTop: '1px solid var(--border)',
+          display: 'flex',
+          alignItems: 'stretch',
+          height: 56,
+        }}
+      >
+        {primary.map(tab => {
+          const active = tab.to === '/'
+            ? location.pathname === '/'
+            : location.pathname.startsWith(tab.to)
+          const Icon = tab.icon
+          return (
+            <NavLink
+              key={tab.to}
+              to={tab.to}
+              end={tab.to === '/'}
+              onClick={() => setMoreOpen(false)}
+              style={itemStyle(active)}
+            >
+              <Icon size={18} />
+              <span style={labelStyle}>{pt ? tab.labelPt : tab.labelEn}</span>
+            </NavLink>
+          )
+        })}
+        {more.length > 0 && (
+          <button onClick={() => setMoreOpen(v => !v)} style={itemStyle(moreActive || moreOpen)}>
+            <MoreHorizontal size={18} />
+            <span style={labelStyle}>{pt ? 'Mais' : 'More'}</span>
+          </button>
+        )}
+      </nav>
+    </>
   )
 }
 
@@ -704,7 +775,7 @@ function HarnessSelector({ harnesses, lang, isMobile }: { harnesses: HarnessId[]
           {currentHarness && (
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: currentColor, flexShrink: 0, display: 'inline-block' }} />
           )}
-          <span style={{ maxWidth: 52, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {currentOpt?.label ?? 'All'}
           </span>
           <ChevronDown size={10} />
@@ -718,10 +789,10 @@ function HarnessSelector({ harnesses, lang, isMobile }: { harnesses: HarnessId[]
             />
             {/* Dropdown */}
             <div style={{
-              position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 200,
+              position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 200,
               background: 'var(--bg-card)', border: '1px solid var(--border)',
               borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
-              overflow: 'hidden', minWidth: 130,
+              overflow: 'hidden', minWidth: 150,
             }}>
               {options.map(opt => {
                 const active = opt.id === currentHarness
@@ -1613,11 +1684,6 @@ export default function AppLayout() {
               {lang === 'pt' ? 'Exportar' : 'Export'}
             </button>}
 
-            {/* Harness selector — mobile only, shown when >1 harness present */}
-            {isMobile && data.harnesses && data.harnesses.length > 1 && (
-              <HarnessSelector harnesses={data.harnesses} lang={lang} isMobile />
-            )}
-
             {/* Settings — unified modal (Preferences + Live + Environment) */}
             <button
               onClick={() => setShowPrefsModal(true)}
@@ -1733,6 +1799,15 @@ export default function AppLayout() {
             // No overflowX here: FiltersBar wraps its controls (flexWrap), and an
             // overflow context would clip the model-filter popover on mobile.
           }}>
+            {/* Harness selector lives in the filters row on mobile (desktop has it in the nav row). */}
+            {isMobile && data.harnesses && data.harnesses.length > 1 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 10 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  {lang === 'pt' ? 'Visão' : 'View'}
+                </span>
+                <HarnessSelector harnesses={data.harnesses} lang={lang} isMobile />
+              </div>
+            )}
             <FiltersBar
               filters={filters}
               onChange={setFilters}
@@ -1937,7 +2012,7 @@ export default function AppLayout() {
       )}
 
       {/* Mobile bottom navigation bar */}
-      {isMobile && <MobileBottomNav lang={lang} />}
+      {isMobile && <MobileBottomNav lang={lang} harnesses={data.harnesses} />}
 
       {/* TTY Chat — floating button + panel, globally available */}
       <TtyChat
