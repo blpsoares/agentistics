@@ -5,6 +5,7 @@ import { Loader, ChevronLeft, ChevronDown, ChevronUp } from 'lucide-react'
 import type { HarnessId } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { splitInlinedHistory } from './SessionDrilldownModal'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 interface HarnessChatProps {
   harness: HarnessId
@@ -88,6 +89,7 @@ function MessageBubble({ msg, harness, pt }: { msg: TranscriptMessage; harness: 
       </div>
       <div style={{
         maxWidth: '92%',
+        minWidth: 0,
         padding: '8px 12px',
         borderRadius: isUser ? '12px 12px 4px 12px' : '12px 12px 12px 4px',
         background: isUser ? 'color-mix(in srgb, var(--accent-blue, #3b82f6) 15%, var(--bg-card))' : 'var(--bg-card)',
@@ -96,7 +98,9 @@ function MessageBubble({ msg, harness, pt }: { msg: TranscriptMessage; harness: 
         color: 'var(--text-primary)',
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-word',
+        overflowWrap: 'anywhere',
         lineHeight: 1.55,
+        overflow: 'hidden',
       }}>
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
@@ -105,8 +109,8 @@ function MessageBubble({ msg, harness, pt }: { msg: TranscriptMessage; harness: 
             code: ({ children, className }) => {
               const isBlock = !!className
               return isBlock
-                ? <pre style={{ background: 'var(--bg-surface)', padding: '8px 10px', borderRadius: 6, overflow: 'auto', margin: '6px 0', fontSize: 12 }}><code>{children}</code></pre>
-                : <code style={{ background: 'var(--bg-surface)', padding: '1px 4px', borderRadius: 3, fontSize: 12 }}>{children}</code>
+                ? <pre style={{ background: 'var(--bg-surface)', padding: '8px 10px', borderRadius: 6, overflowX: 'auto', margin: '6px 0', fontSize: 12, maxWidth: '100%' }}><code style={{ whiteSpace: 'pre', display: 'block' }}>{children}</code></pre>
+                : <code style={{ background: 'var(--bg-surface)', padding: '1px 4px', borderRadius: 3, fontSize: 12, wordBreak: 'break-all' }}>{children}</code>
             },
             pre: ({ children }) => <>{children}</>,
           }}
@@ -131,6 +135,7 @@ function MessageBubble({ msg, harness, pt }: { msg: TranscriptMessage; harness: 
 export function HarnessChat({ harness, lang, initialProject, initialSessionId, onStateChange }: HarnessChatProps) {
   const pt = lang === 'pt'
   const color = HARNESS_COLORS[harness]
+  const isMobile = useIsMobile()
 
   type View = 'projects' | 'sessions' | 'transcript'
   const [view, setView] = useState<View>('projects')
@@ -321,15 +326,22 @@ export function HarnessChat({ harness, lang, initialProject, initialSessionId, o
 
   const headerStyle: React.CSSProperties = {
     display: 'flex', alignItems: 'center', gap: 8,
-    padding: '8px 12px', borderBottom: '1px solid var(--border)',
-    background: 'var(--bg-card)', flexShrink: 0, minHeight: 40,
+    padding: isMobile ? '10px 14px' : '8px 12px',
+    borderBottom: '1px solid var(--border)',
+    background: 'var(--bg-card)', flexShrink: 0,
+    minHeight: isMobile ? 48 : 40,
+    overflow: 'hidden',
   }
 
   const backBtnStyle: React.CSSProperties = {
     display: 'flex', alignItems: 'center', gap: 3,
-    padding: '3px 8px', borderRadius: 6, border: '1px solid var(--border)',
+    padding: isMobile ? '6px 10px' : '3px 8px',
+    borderRadius: 6, border: '1px solid var(--border)',
     background: 'transparent', color: 'var(--text-secondary)',
-    cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, fontWeight: 500,
+    cursor: 'pointer', fontFamily: 'inherit',
+    fontSize: isMobile ? 13 : 11, fontWeight: 500,
+    flexShrink: 0,
+    whiteSpace: 'nowrap',
   }
 
   if (loading && view === 'projects' && projects.length === 0) {
@@ -379,14 +391,15 @@ export function HarnessChat({ harness, lang, initialProject, initialSessionId, o
               onClick={() => openProject(proj)}
               style={{
                 width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                padding: '7px 10px', borderRadius: 8, border: '1px solid transparent',
+                padding: isMobile ? '10px 12px' : '7px 10px',
+                borderRadius: 8, border: '1px solid transparent',
                 background: 'transparent', cursor: 'pointer', fontFamily: 'inherit',
-                marginBottom: 3,
+                marginBottom: 3, gap: 8,
               }}
               onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-card)'; (e.currentTarget as HTMLButtonElement).style.border = `1px solid color-mix(in srgb, ${color} 20%, var(--border))` }}
               onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; (e.currentTarget as HTMLButtonElement).style.border = '1px solid transparent' }}
             >
-              <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '80%' }}>
+              <span style={{ fontSize: isMobile ? 14 : 12, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
                 {proj.name}
               </span>
               {proj.sessionCount != null && (
@@ -432,13 +445,14 @@ export function HarnessChat({ harness, lang, initialProject, initialSessionId, o
                 onClick={() => openSession(sess)}
                 style={{
                   width: '100%', textAlign: 'left', display: 'flex', flexDirection: 'column',
-                  padding: '7px 10px', borderRadius: 8, border: '1px solid transparent',
+                  padding: isMobile ? '10px 12px' : '7px 10px',
+                  borderRadius: 8, border: '1px solid transparent',
                   background: 'transparent', cursor: 'pointer', fontFamily: 'inherit', marginBottom: 3,
                 }}
                 onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-card)'; (e.currentTarget as HTMLButtonElement).style.border = `1px solid color-mix(in srgb, ${color} 20%, var(--border))` }}
                 onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; (e.currentTarget as HTMLButtonElement).style.border = '1px solid transparent' }}
               >
-                <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
+                <span style={{ fontSize: isMobile ? 14 : 12, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
                   {sess.title || sess.id}
                 </span>
                 <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
@@ -478,7 +492,7 @@ export function HarnessChat({ harness, lang, initialProject, initialSessionId, o
           </span>
         )}
       </div>
-      <div ref={transcriptRef} style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
+      <div ref={transcriptRef} style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '10px 10px' : '12px 14px', overflowX: 'hidden' }}>
         {loading && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
             <Loader size={14} style={{ animation: 'ttyChatSpin 1s linear infinite', color }} />

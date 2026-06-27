@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import type { HarnessId } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { HarnessChat } from './HarnessChat'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 interface TranscriptTarget {
   harness: HarnessId
@@ -11,6 +12,7 @@ interface TranscriptTarget {
 }
 
 export function TranscriptModal({ lang }: { lang: 'pt' | 'en' }) {
+  const isMobile = useIsMobile()
   const [target, setTarget] = useState<TranscriptTarget | null>(null)
 
   useEffect(() => {
@@ -40,18 +42,20 @@ export function TranscriptModal({ lang }: { lang: 'pt' | 'en' }) {
         position: 'fixed', inset: 0, zIndex: 600,
         background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 24,
+        padding: isMobile ? 0 : 24,
         animation: 'ttyChatFadeIn 0.15s ease-out',
       }}
-      onClick={(e) => { if (e.target === e.currentTarget) setTarget(null) }}
+      onClick={(e) => { if (!isMobile && e.target === e.currentTarget) setTarget(null) }}
     >
       <div
         style={{
-          width: '100%', maxWidth: 780, height: '80vh',
+          width: '100%',
+          maxWidth: isMobile ? '100%' : 780,
+          height: isMobile ? '100%' : '80vh',
           background: 'var(--bg-surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 14,
-          boxShadow: '0 10px 48px rgba(0,0,0,0.45)',
+          border: isMobile ? 'none' : '1px solid var(--border)',
+          borderRadius: isMobile ? 0 : 14,
+          boxShadow: isMobile ? 'none' : '0 10px 48px rgba(0,0,0,0.45)',
           display: 'flex', flexDirection: 'column',
           overflow: 'hidden',
           animation: 'ttyChatSlideIn 0.18s ease-out',
@@ -60,7 +64,8 @@ export function TranscriptModal({ lang }: { lang: 'pt' | 'en' }) {
         {/* Header */}
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '10px 14px', borderBottom: '1px solid var(--border)',
+          padding: isMobile ? '12px 16px' : '10px 14px',
+          borderBottom: '1px solid var(--border)',
           background: 'var(--bg-card)', flexShrink: 0,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
@@ -70,7 +75,7 @@ export function TranscriptModal({ lang }: { lang: 'pt' | 'en' }) {
               opacity: 0.85,
             }} />
             <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
+              <div style={{ fontSize: isMobile ? 15 : 13, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
                 {harnessLabel}
               </div>
               <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
@@ -81,13 +86,21 @@ export function TranscriptModal({ lang }: { lang: 'pt' | 'en' }) {
           <button
             onClick={() => setTarget(null)}
             style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              color: 'var(--text-secondary)', padding: 4, borderRadius: 6,
+              background: 'none', border: '1px solid var(--border)', cursor: 'pointer',
+              color: 'var(--text-secondary)',
+              padding: isMobile ? '8px 12px' : 4,
+              borderRadius: isMobile ? 8 : 6,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
+              gap: isMobile ? 4 : 0,
             }}
             title={lang === 'pt' ? 'Fechar' : 'Close'}
           >
-            <X size={16} />
+            <X size={isMobile ? 18 : 16} />
+            {isMobile && (
+              <span style={{ fontSize: 13, fontWeight: 500 }}>
+                {lang === 'pt' ? 'Fechar' : 'Close'}
+              </span>
+            )}
           </button>
         </div>
 
