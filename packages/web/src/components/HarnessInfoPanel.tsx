@@ -4,6 +4,7 @@ import { t } from '@agentistics/core'
 import type { HarnessId, HarnessCapabilities } from '@agentistics/core'
 import { HARNESS_INFO, HARNESS_LABELS, HARNESS_COLORS, HARNESS_PROVIDERS, capable } from '../lib/harness'
 import { useChatHarnesses } from '../hooks/useChatHarnesses'
+import { useIsMobile } from '../hooks/useIsMobile'
 import type { AppContext } from '../lib/app-context'
 
 /** Polished mono font stack — used only for paths and shell commands. */
@@ -38,6 +39,7 @@ interface Props {
  *  page's "Data & sources" tab. */
 export function HarnessInfoPanel({ harness }: Props) {
   const { lang } = useOutletContext<AppContext>()
+  const isMobile = useIsMobile()
   const info = HARNESS_INFO[harness]
   const label = HARNESS_LABELS[harness]
   const color = HARNESS_COLORS[harness]
@@ -50,7 +52,7 @@ export function HarnessInfoPanel({ harness }: Props) {
       background: 'var(--bg-surface)',
       border: '1px solid var(--border)',
       borderRadius: 'var(--radius-lg)',
-      padding: '20px 22px',
+      padding: isMobile ? '14px 12px' : '20px 22px',
       display: 'flex',
       flexDirection: 'column',
       gap: 20,
@@ -294,7 +296,7 @@ export function HarnessInfoPanel({ harness }: Props) {
                   <div style={{
                     fontFamily: MONO, fontSize: 11, color: 'var(--text-secondary)',
                     background: 'var(--bg-surface)', border: '1px solid var(--border)',
-                    borderRadius: 5, padding: '4px 8px',
+                    borderRadius: 5, padding: '4px 8px', wordBreak: 'break-all',
                   }}>
                     {chatStatus.setup.installCmd}
                   </div>
@@ -309,7 +311,7 @@ export function HarnessInfoPanel({ harness }: Props) {
                   <div style={{
                     fontFamily: MONO, fontSize: 11, color: 'var(--text-secondary)',
                     background: 'var(--bg-surface)', border: '1px solid var(--border)',
-                    borderRadius: 5, padding: '4px 8px',
+                    borderRadius: 5, padding: '4px 8px', wordBreak: 'break-all',
                   }}>
                     {chatStatus.setup.loginCmd}
                   </div>

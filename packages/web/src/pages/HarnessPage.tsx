@@ -5,6 +5,7 @@ import type { AppContext } from '../lib/app-context'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { HarnessInfoPanel } from '../components/HarnessInfoPanel'
 import { RecentSessions } from '../components/RecentSessions'
+import { useIsMobile } from '../hooks/useIsMobile'
 import HomePage from './HomePage'
 
 const VALID_HARNESS_IDS: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
@@ -35,6 +36,8 @@ export default function HarnessPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [validHarness])
 
+  const isMobile = useIsMobile()
+
   if (!validHarness) return null
 
   const tabs: { id: Tab; label: string }[] = [
@@ -46,38 +49,57 @@ export default function HarnessPage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Harness tab bar */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 4,
-        borderBottom: '1px solid var(--border)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginRight: 14 }}>
-          <span style={{
-            display: 'inline-block', width: 9, height: 9, borderRadius: '50%',
-            background: accent, flexShrink: 0,
-          }} />
-          <span style={{ fontSize: 13, fontWeight: 700, color: accent }}>
-            {HARNESS_LABELS[validHarness]}
-          </span>
+      {/* Harness tab bar — scrollable on mobile to prevent overflow */}
+      <div style={{ borderBottom: '1px solid var(--border)' }}>
+        {/* Harness label: own row on mobile, inline on desktop */}
+        {isMobile && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, paddingBottom: 8 }}>
+            <span style={{
+              display: 'inline-block', width: 9, height: 9, borderRadius: '50%',
+              background: accent, flexShrink: 0,
+            }} />
+            <span style={{ fontSize: 13, fontWeight: 700, color: accent }}>
+              {HARNESS_LABELS[validHarness]}
+            </span>
+          </div>
+        )}
+        {/* Tab buttons row — scrolls horizontally when content wider than viewport */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 4,
+          overflowX: 'auto',
+          scrollbarWidth: 'none',
+        }}>
+          {!isMobile && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginRight: 14, flexShrink: 0 }}>
+              <span style={{
+                display: 'inline-block', width: 9, height: 9, borderRadius: '50%',
+                background: accent, flexShrink: 0,
+              }} />
+              <span style={{ fontSize: 13, fontWeight: 700, color: accent }}>
+                {HARNESS_LABELS[validHarness]}
+              </span>
+            </div>
+          )}
+          {tabs.map(t => {
+            const active = tab === t.id
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                style={{
+                  appearance: 'none', background: 'transparent', cursor: 'pointer',
+                  border: 'none', borderBottom: `2px solid ${active ? accent : 'transparent'}`,
+                  color: active ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                  fontSize: isMobile ? 12 : 13, fontWeight: active ? 600 : 500,
+                  padding: isMobile ? '6px 10px' : '8px 12px', marginBottom: -1,
+                  flexShrink: 0, whiteSpace: 'nowrap',
+                }}
+              >
+                {t.label}
+              </button>
+            )
+          })}
         </div>
-        {tabs.map(t => {
-          const active = tab === t.id
-          return (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              style={{
-                appearance: 'none', background: 'transparent', cursor: 'pointer',
-                border: 'none', borderBottom: `2px solid ${active ? accent : 'transparent'}`,
-                color: active ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                fontSize: 13, fontWeight: active ? 600 : 500,
-                padding: '8px 12px', marginBottom: -1,
-              }}
-            >
-              {t.label}
-            </button>
-          )
-        })}
       </div>
 
       {tab === 'overview' && <HomePage />}

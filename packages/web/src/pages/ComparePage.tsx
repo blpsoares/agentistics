@@ -336,7 +336,7 @@ export default function ComparePage() {
       {/* Legend / harness header cards */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: `repeat(${aggs.length}, 1fr)`,
+        gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
         gap: 12,
       }}>
         {aggs.map(a => (
@@ -383,7 +383,7 @@ export default function ComparePage() {
         padding: '20px 22px',
         overflowX: 'auto',
       }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: `${120 + aggs.length * 130}px` }}>
           <thead>
             <tr>
               <th style={{
@@ -448,7 +448,7 @@ export default function ComparePage() {
       <SectionCard title={t('compare.costPerMTokens', lang)}>
         <div style={{
           display: 'grid',
-          gridTemplateColumns: `repeat(${aggs.length}, 1fr)`,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
           gap: 12,
         }}>
           {costPerMValues.map(({ harness, value }) => {
@@ -496,7 +496,7 @@ export default function ComparePage() {
       <SectionCard title={t('compare.costByModel', lang)}>
         <div style={{
           display: 'grid',
-          gridTemplateColumns: `repeat(${aggs.length}, 1fr)`,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
           gap: 16,
         }}>
           {aggs.map(a => {
@@ -609,7 +609,7 @@ export default function ComparePage() {
       <SectionCard title={t('compare.usageByHourOfDay', lang)}>
         <div style={{
           display: 'grid',
-          gridTemplateColumns: `repeat(${aggs.length}, 1fr)`,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
           gap: 16,
         }}>
           {aggs.map(a => {
@@ -653,7 +653,7 @@ export default function ComparePage() {
       <SectionCard title={t('compare.busiestDayOfWeek', lang)}>
         <div style={{
           display: 'grid',
-          gridTemplateColumns: `repeat(${aggs.length}, 1fr)`,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
           gap: 16,
         }}>
           {aggs.map(a => {
@@ -709,7 +709,7 @@ export default function ComparePage() {
       <SectionCard title={t('compare.activityOverTime', lang)}>
         <div style={{
           display: 'grid',
-          gridTemplateColumns: `repeat(${aggs.length}, 1fr)`,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
           gap: 16,
         }}>
           {aggs.map(a => {
@@ -738,7 +738,8 @@ export default function ComparePage() {
 
       {/* Section 4: Peaks (token day + session cost) */}
       <SectionCard title={t('compare.peaks', lang)}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: `${120 + aggs.length * 130}px` }}>
           <thead>
             <tr>
               <th style={{
@@ -838,6 +839,7 @@ export default function ComparePage() {
             </tr>
           </tbody>
         </table>
+        </div>
       </SectionCard>
     </>
   )
