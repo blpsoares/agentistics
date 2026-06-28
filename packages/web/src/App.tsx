@@ -2064,6 +2064,7 @@ export default function AppLayout() {
                 modelGroups={modelGroups}
                 modelsInProject={modelsInProject}
                 lang={lang}
+                compact
               />
               <button
                 onClick={() => setFilterSheetOpen(false)}
