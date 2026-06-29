@@ -35,6 +35,12 @@ claude mcp list
 |----------|---------|-------------|
 | `AGENTISTICS_API` | `http://localhost:47291` | Base URL of the agentistics API server |
 
+## Multi-harness scope
+
+agentistics now tracks multiple coding harnesses (Claude Code, Codex CLI, Gemini CLI, Copilot CLI). The MCP server reads the same `/api/data` endpoint, so its numbers reflect the **unified (all-harness)** view — totals, projects, sessions, and costs are summed across every enabled harness.
+
+The MCP tools do **not** yet expose a per-harness filter parameter: there is no way (via MCP) to scope a query to e.g. only Codex sessions. Per-harness slicing is available in the web UI (the harness selector, the `/h/:harness` pages, and the `/compare` page) but is a known follow-up for the MCP surface. Cost/token accuracy caveats still apply per harness — non-Claude harnesses that don't emit token usage (e.g. Gemini's local files) contribute 0 tokens/cost, matching the dashboard.
+
 ## Available tools
 
 ### `agentistics_summary`
