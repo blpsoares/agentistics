@@ -95,6 +95,8 @@ export interface SessionMeta {
   user_message_timestamps: string[]
   model?: string
   harness: HarnessId
+  /** Owning user in team mode. Undefined for local/Solo sessions. */
+  user?: string
   _source?: 'meta' | 'jsonl' | 'subdir'
   agentMetrics?: SessionAgentMetrics
   /** Number of MCP tool calls recorded in this session (Copilot adapter). */
@@ -204,6 +206,7 @@ export interface Filters {
   customStart: string
   customEnd: string
   projects: string[]   // empty = all projects
+  users?: string[]     // empty/undefined = all users
   models: string[]     // empty = all models
   harness?: HarnessId
 }
