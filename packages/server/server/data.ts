@@ -673,6 +673,11 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
           })
         }
       }
+      // Central: fold team sessions into statsCache so the unfiltered (no user
+      // selected) Cost/Tokens KPIs reflect the whole team. Safe on a dedicated
+      // central (empty local statsCache → nothing to corrupt); the day<=lastComputed
+      // guard inside supplementStatsCache prevents any double-count.
+      if (TEAM_CENTRAL) supplementStatsCache(statsCache, teamSessions)
     }
 
     sessions.sort((a, b) => b.start_time.localeCompare(a.start_time))
