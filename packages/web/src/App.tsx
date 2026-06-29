@@ -15,7 +15,7 @@ import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
 import type { Filters, HarnessId, HealthIssue } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { formatProjectName, setHomeDir, MODEL_PRICING } from '@agentistics/core'
+import { formatProjectName, setHomeDir, MODEL_PRICING, distinctUsers } from '@agentistics/core'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
 import { ActivityHeatmap } from './components/ActivityHeatmap'
@@ -1350,6 +1350,8 @@ export default function AppLayout() {
     return counts
   }, [data])
 
+  const users = useMemo(() => (data ? distinctUsers(data.sessions) : []), [data])
+
   // ── Info items for all 8 stat cards ──────────────────────────────────────────
   const infoItems = useMemo(() => {
     const projectFiltered = filters.projects.length > 0
@@ -1894,6 +1896,7 @@ export default function AppLayout() {
                   models={models}
                   modelGroups={modelGroups}
                   modelsInProject={modelsInProject}
+                  users={users}
                   lang={lang}
                   compact
                 />
@@ -1931,6 +1934,7 @@ export default function AppLayout() {
               models={models}
               modelGroups={modelGroups}
               modelsInProject={modelsInProject}
+              users={users}
               lang={lang}
             />
           </div>
@@ -1975,7 +1979,7 @@ export default function AppLayout() {
           infoItems,
           cardOrder, setCardOrder: setCardOrder as (o: string[]) => void,
           cardPrecision, setCardPrecision,
-          sessionCountByProject, models, modelGroups, modelsInProject,
+          sessionCountByProject, models, modelGroups, modelsInProject, users,
         }} />
       </main>
 

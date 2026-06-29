@@ -4,6 +4,7 @@ import { formatModel, formatProjectName } from '@agentistics/core'
 import { Layers, Cpu, RotateCcw, ChevronDown, X, CalendarDays, Check } from 'lucide-react'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { ProjectsModal } from './ProjectsModal'
+import { UsersFilter } from './UsersFilter'
 import { DatePicker } from './DatePicker'
 import { format } from 'date-fns'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -18,6 +19,7 @@ interface Props {
    *  unified view; a single group when a harness filter is active. */
   modelGroups?: { harness: HarnessId; models: string[] }[]
   modelsInProject?: Set<string> | null
+  users: string[]
   lang: Lang
   compact?: boolean
 }
@@ -44,7 +46,7 @@ const CTL: React.CSSProperties = {
   alignItems: 'center',
 }
 
-export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, lang, compact }: Props) {
+export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, lang, compact }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
@@ -220,6 +222,15 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
 
         {/* Divider */}
         {!compact && <div style={{ width: 1, height: 20, background: 'var(--border)', flexShrink: 0 }} />}
+
+        {users.length > 0 && (
+          <UsersFilter
+            users={users}
+            selected={filters.users ?? []}
+            onChange={u => onChange({ ...filters, users: u })}
+            lang={lang}
+          />
+        )}
 
         {/* Projects */}
         <button
