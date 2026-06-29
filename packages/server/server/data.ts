@@ -677,6 +677,11 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       // selected) Cost/Tokens KPIs reflect the whole team. Safe on a dedicated
       // central (empty local statsCache → nothing to corrupt); the day<=lastComputed
       // guard inside supplementStatsCache prevents any double-count.
+      // NOTE: assumes a DEDICATED central (empty local ~/.claude). On a central
+      // that also has local activity, the per-day dailyActivity/dailyModelTokens
+      // entries are replaced (not added) for days present in both sets, which can
+      // undercount the daily chart for shared days. modelUsage (Cost/Tokens) stays
+      // correct because it is additive. Run a dedicated central to avoid this.
       if (TEAM_CENTRAL) supplementStatsCache(statsCache, teamSessions)
     }
 
