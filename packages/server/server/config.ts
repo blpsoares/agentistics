@@ -33,6 +33,18 @@ export const TEAM_MODE = process.env.AGENTISTICS_TEAM === '1'
 export const TEAM_DIR = process.env.AGENTISTICS_TEAM_DIR ?? join(HOME_DIR, '.agentistics', 'team')
 
 // ---------------------------------------------------------------------------
+// Phase 2 — central aggregator. When AGENTISTICS_TEAM_CENTRAL=1 the instance
+// sources team sessions from MongoDB (not the folder) and accepts pushed
+// sessions on POST /api/team/ingest. MONGO_URL/MONGO_DB point at the store;
+// TEAM_ORG namespaces docs; TEAM_INGEST_TOKEN (optional) gates ingestion.
+// ---------------------------------------------------------------------------
+export const TEAM_CENTRAL = process.env.AGENTISTICS_TEAM_CENTRAL === '1'
+export const MONGO_URL = process.env.MONGO_URL ?? 'mongodb://localhost:27017'
+export const MONGO_DB = process.env.MONGO_DB ?? 'agentistics'
+export const TEAM_ORG = process.env.AGENTISTICS_TEAM_ORG ?? 'default'
+export const TEAM_INGEST_TOKEN = process.env.AGENTISTICS_TEAM_INGEST_TOKEN || undefined
+
+// ---------------------------------------------------------------------------
 // Other harnesses (Phase 1: Codex). Each adapter checks its own root.
 // Override with CODEX_DIR; disable with AGENTISTICS_HARNESS_CODEX=0.
 // ---------------------------------------------------------------------------
