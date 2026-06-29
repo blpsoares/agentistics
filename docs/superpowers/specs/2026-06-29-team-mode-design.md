@@ -224,7 +224,10 @@ This is large; the implementation plan should phase it so each phase is shippabl
    ingestion API exists.
 2. **Central Mongo source + ingestion API + local uploader.** Replace the folder
    source with Mongo; add `POST /api/team/ingest`, the local team-config UI, and
-   the uploader. Change-stream SSE.
+   the uploader. Change-stream SSE. **Also resolves the Phase 1 limitation** where
+   the unfiltered team-total Cost/Tokens read 0 on a dedicated empty central:
+   deriving all totals from per-session Mongo docs removes the reliance on a local
+   `statsCache` for the no-selection view.
 3. **Security + admin.** Team login gate, token mint/revoke admin page, last-seen.
 4. **Autostart + Docker packaging.** Autostart toggle per OS; `compose.yml` +
    wizard.
@@ -240,3 +243,8 @@ This is large; the implementation plan should phase it so each phase is shippabl
   lean to hashed-in-Mongo so revoke is live.
 - **Time zones / date bucketing across devs:** confirm dates are normalized
   consistently when aggregating across machines in different TZs.
+- **[Phase 1 limitation, Phase 2 fixes] Empty-central team-total Cost/Tokens = 0:**
+  in Phase 1's folder transport, the no-user-selection Cost/Tokens KPIs derive from
+  the central's local `statsCache`, which is empty on a dedicated central. Drill-down
+  (any user selected) is correct; only the unfiltered aggregate of Cost/Tokens is
+  affected. Phase 2's Mongo source (per-session derivation) resolves it.

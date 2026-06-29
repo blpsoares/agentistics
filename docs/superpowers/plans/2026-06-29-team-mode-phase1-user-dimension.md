@@ -642,6 +642,32 @@ git commit -m "feat(web): add multi-select user filter dropdown to the dashboard
 
 ---
 
+## Known Limitations (Phase 1) — resolved by Phase 2
+
+- **Team-total (no user selected) Cost/Tokens read from `statsCache`, not from team
+  sessions.** In the unfiltered view the Cost and Tokens KPIs are derived from the
+  central's local `statsCache.modelUsage` (supplemented only by non-Claude
+  sessions). Team sessions arrive via the folder transport as `harness: 'claude'`
+  and are intentionally NOT written into `statsCache` (to avoid corrupting Claude
+  totals), so on a **dedicated empty central** (its own `~/.claude` is empty →
+  `statsCache.modelUsage = {}`) the unfiltered team-total Cost/Tokens show **0**,
+  even though session/message/tool counts correctly reflect the team (via the
+  `extendedDailyActivity` gap-fill).
+  - **Not a bug in the drill-down:** as soon as any user (or subset) is selected,
+    `userFiltered` routes Cost/Tokens through the per-session sums and the numbers
+    are correct. Only the *no-selection* aggregate of Cost/Tokens is affected.
+  - **Phase 2 resolves this at the root:** when the central sources sessions from
+    Mongo and derives all totals from per-session sums (no reliance on a local
+    `statsCache`), the unfiltered team-total Cost/Tokens become correct. Fixing it
+    in Phase 1 would mean special-casing the delicate `statsCache` aggregation that
+    Phase 2 rewrites anyway, so it is deferred deliberately.
+- **`org` dimension absent from the dedup key.** The spec's central key is
+  `org:user:sessionId`; Phase 1 uses `user:harness:sessionId`. Additive when
+  Phase 2 introduces `org` — the key gains a segment, no rework of existing data.
+- **Same-session double-count if the central operator is also an ingested team
+  member** (a session present both locally untagged and in that operator's team
+  folder gets two keys). Irrelevant on the designed empty central; noted for Phase 2.
+
 ## Self-Review
 
 **Spec coverage (Phase 1 scope only):**
