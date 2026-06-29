@@ -76,6 +76,7 @@ void setupFileWatcher()
 if (TEAM_CENTRAL) {
   import('./team-watch').then(m => m.startTeamWatch()).catch(err => console.error('[team-watch] failed to start:', err))
 }
+import('./team-uploader').then(m => m.startUploader()).catch(err => console.error('[team-uploader] failed to start:', err))
 maybeSpawnWatcher()
 ensureNayChat(PORT).catch(err => console.error('[nay-chat] failed to initialize:', err))
 ensureClaudeChat().catch(err => console.error('[claude-chat] failed to initialize:', err))
@@ -707,6 +708,15 @@ Bun.serve({
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
+    }
+
+    if (url.pathname === '/api/team/test-connection' && req.method === 'POST') {
+      const { handleTeamTestConnection } = await import('./team-uploader')
+      const res = await handleTeamTestConnection(req)
+      // Re-wrap to attach CORS headers (handler sets only Content-Type)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
     }
 
     if (url.pathname === '/api/team/ingest' && req.method === 'POST') {

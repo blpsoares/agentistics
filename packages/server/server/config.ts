@@ -45,6 +45,12 @@ export const TEAM_ORG = process.env.AGENTISTICS_TEAM_ORG ?? 'default'
 export const TEAM_INGEST_TOKEN = process.env.AGENTISTICS_TEAM_INGEST_TOKEN || undefined
 
 // ---------------------------------------------------------------------------
+// Team uploader — tracks which sessions have already been pushed to the central.
+// Override with AGENTISTICS_TEAM_SENT_FILE.
+// ---------------------------------------------------------------------------
+export const TEAM_SENT_FILE = process.env.AGENTISTICS_TEAM_SENT_FILE ?? join(HOME_DIR, '.agentistics', 'team-sent.json')
+
+// ---------------------------------------------------------------------------
 // Other harnesses (Phase 1: Codex). Each adapter checks its own root.
 // Override with CODEX_DIR; disable with AGENTISTICS_HARNESS_CODEX=0.
 // ---------------------------------------------------------------------------

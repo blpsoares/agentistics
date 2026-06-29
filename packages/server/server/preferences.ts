@@ -14,6 +14,21 @@ export interface CustomGridItem {
   componentId: string
 }
 
+export interface TeamConfig {
+  /** 'solo' = normal local-only behavior; 'member' = push metrics to a central */
+  mode: 'solo' | 'member'
+  /** Central base URL, e.g. "https://central.example:47291" (no trailing slash) */
+  endpoint: string
+  /** Org namespace used on the central server */
+  org: string
+  /** This developer's identity (name or email) */
+  user: string
+  /** Whether automatic delta-push is active */
+  pushEnabled: boolean
+  /** Bearer token for the central ingest endpoint (never logged) */
+  token: string
+}
+
 export interface Preferences {
   customLayout?: CustomGridItem[]
   monthlyBudgetUSD?: number | null
@@ -32,6 +47,8 @@ export interface Preferences {
   archiveMode?: 'off' | 'consolidate' | 'full'
   /** @deprecated legacy boolean — read by resolveArchiveMode for migration only */
   archiveSessions?: boolean
+  /** Team mode configuration. Absent / mode=solo means solo behavior (no push). */
+  team?: TeamConfig
 }
 
 export type ArchiveMode = 'off' | 'consolidate' | 'full'
@@ -49,8 +66,18 @@ export async function getArchiveMode(): Promise<ArchiveMode | undefined> {
   return resolveArchiveMode(await readPreferences())
 }
 
+const DEFAULT_TEAM: TeamConfig = {
+  mode: 'solo',
+  endpoint: '',
+  org: 'default',
+  user: '',
+  pushEnabled: false,
+  token: '',
+}
+
 const DEFAULT_PREFS: Preferences = {
   customLayout: [],
+  team: DEFAULT_TEAM,
 }
 
 export async function readPreferences(): Promise<Preferences> {
