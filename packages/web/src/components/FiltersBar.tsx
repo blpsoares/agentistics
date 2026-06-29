@@ -67,9 +67,10 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
   const isDefault = filters.dateRange === 'all'
     && !filters.customStart && !filters.customEnd
     && filters.projects.length === 0 && !hasModelFilter
+    && !(filters.users?.length)
 
   const reset = () => onChange({
-    dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [],
+    dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [], users: [],
   })
 
   const hasProjects = filters.projects.length > 0
