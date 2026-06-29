@@ -1,7 +1,7 @@
 // embeddedDist is loaded inside server/sse.ts (conditional on SERVE_STATIC=1)
 
 import { readFile } from 'node:fs/promises'
-import { PORT } from './config'
+import { PORT, TEAM_CENTRAL } from './config'
 import { getRates } from './rates'
 import { getVersionInfo } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
@@ -73,6 +73,9 @@ void (async () => {
 })()
 
 void setupFileWatcher()
+if (TEAM_CENTRAL) {
+  import('./team-watch').then(m => m.startTeamWatch()).catch(err => console.error('[team-watch] failed to start:', err))
+}
 maybeSpawnWatcher()
 ensureNayChat(PORT).catch(err => console.error('[nay-chat] failed to initialize:', err))
 ensureClaudeChat().catch(err => console.error('[claude-chat] failed to initialize:', err))
@@ -707,6 +710,7 @@ Bun.serve({
     }
 
     if (url.pathname === '/api/team/ingest' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleTeamIngest } = await import('./team-ingest')
       const res = await handleTeamIngest(req)
       // Re-wrap to attach CORS headers (handler sets only Content-Type)
