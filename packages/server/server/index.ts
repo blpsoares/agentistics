@@ -706,6 +706,15 @@ Bun.serve({
       }
     }
 
+    if (url.pathname === '/api/team/ingest' && req.method === 'POST') {
+      const { handleTeamIngest } = await import('./team-ingest')
+      const res = await handleTeamIngest(req)
+      // Re-wrap to attach CORS headers (handler sets only Content-Type)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
     // Serve embedded frontend assets (binary mode only)
     if (!url.pathname.startsWith('/api')) {
       const asset = serveStatic(url.pathname)
