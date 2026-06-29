@@ -752,10 +752,10 @@ function HarnessSelector({ harnesses, lang, isMobile }: { harnesses: HarnessId[]
   ]
 
   // Mobile: always-visible chips/pills — one tap to switch harness, no dropdown.
-  // nowrap so they scroll horizontally inside the slim sticky filter row.
+  // wrap so they stay visible inside the fixed filter bar regardless of count.
   if (isMobile) {
     return (
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'nowrap', alignItems: 'center', width: 'max-content' }}>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
         {options.map(opt => {
           const active = opt.id === currentHarness
           const color = opt.id ? HARNESS_COLORS[opt.id] : 'var(--anthropic-orange)'
@@ -988,7 +988,6 @@ export default function AppLayout() {
     return DEFAULT_CARD_ORDER
   })
   const [showPrefsModal, setShowPrefsModal] = useState(false)
-  const [filterSheetOpen, setFilterSheetOpen] = useState(false)
   const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string } | null>(null)
   // First-run archive consent gate: undefined = prefs not loaded, null = loaded but
   // not yet chosen (blocks the app), ArchiveMode = chosen.
@@ -1475,12 +1474,6 @@ export default function AppLayout() {
     ? Object.values(derived.modelUsage).reduce((s, u) => s + u.outputTokens, 0)
     : derived.outputTokens
 
-  // Count active filters (date / projects / models) for the mobile "Filters" badge.
-  const activeFilterCount =
-    (filters.dateRange !== 'all' || filters.customStart || filters.customEnd ? 1 : 0) +
-    (filters.projects.length > 0 ? 1 : 0) +
-    (filters.models.length > 0 ? 1 : 0)
-
   // Block the app until the user makes the first-run archive choice. While prefs
   // are still loading (undefined) render a neutral background to avoid a flash.
   if (archiveChoice === undefined) {
@@ -1755,16 +1748,23 @@ export default function AppLayout() {
           </div>
         </div>
 
-        {/* Filters — desktop: full inline bar. Hidden on /custom (filter bar moves into the page). */}
-        {data && !isCustomPage && !isMobile && (
+        {/* Filters — full bar, fixed in the sticky header so it's reachable at any
+            scroll position. On mobile the harness chips sit on their own row above
+            the date/projects/models controls. Hidden on /custom. */}
+        {data && !isCustomPage && (
           <div style={{
             borderTop: '1px solid var(--border)',
             maxWidth: 1400,
             margin: '0 auto',
-            padding: '0 32px',
+            padding: isMobile ? '0 12px' : '0 32px',
             width: '100%',
             boxSizing: 'border-box',
           }}>
+            {isMobile && data.harnesses && data.harnesses.length > 1 && (
+              <div style={{ paddingTop: 10 }}>
+                <HarnessSelector harnesses={data.harnesses} lang={lang} isMobile />
+              </div>
+            )}
             <FiltersBar
               filters={filters}
               onChange={setFilters}
@@ -1775,47 +1775,6 @@ export default function AppLayout() {
               modelsInProject={modelsInProject}
               lang={lang}
             />
-          </div>
-        )}
-
-        {/* Filters — mobile: slim sticky row (harness chips + a Filters button that
-            opens the bottom sheet). Stays reachable while scrolling. */}
-        {data && !isCustomPage && isMobile && (
-          <div style={{
-            borderTop: '1px solid var(--border)',
-            padding: '8px 12px',
-            display: 'flex', alignItems: 'center', gap: 8,
-          }}>
-            {data.harnesses && data.harnesses.length > 1 && (
-              <div className="hide-scrollbar" style={{ flex: 1, minWidth: 0, overflowX: 'auto' }}>
-                <HarnessSelector harnesses={data.harnesses} lang={lang} isMobile />
-              </div>
-            )}
-            <button
-              onClick={() => setFilterSheetOpen(true)}
-              style={{
-                marginLeft: data.harnesses && data.harnesses.length > 1 ? 0 : 'auto',
-                flexShrink: 0,
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                height: 34, padding: '0 12px', borderRadius: 9,
-                border: activeFilterCount > 0 ? '1px solid var(--anthropic-orange)' : '1px solid var(--border)',
-                background: activeFilterCount > 0 ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
-                color: activeFilterCount > 0 ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
-              }}
-            >
-              <SlidersHorizontal size={14} />
-              {lang === 'pt' ? 'Filtros' : 'Filters'}
-              {activeFilterCount > 0 && (
-                <span style={{
-                  minWidth: 18, height: 18, borderRadius: 9, padding: '0 5px',
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  background: 'var(--anthropic-orange)', color: '#fff', fontSize: 11, fontWeight: 700,
-                }}>
-                  {activeFilterCount}
-                </span>
-              )}
-            </button>
           </div>
         )}
 
@@ -2011,75 +1970,6 @@ export default function AppLayout() {
 
       {/* Mobile bottom navigation bar */}
       {isMobile && <MobileBottomNav lang={lang} harnesses={data.harnesses} />}
-
-      {/* Mobile filter bottom sheet — date / projects / models, opened from the slim filter row. */}
-      {isMobile && filterSheetOpen && data && (
-        <div
-          onClick={() => setFilterSheetOpen(false)}
-          style={{
-            position: 'fixed', inset: 0, zIndex: 2500,
-            background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)',
-            display: 'flex', alignItems: 'flex-end',
-          }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
-              width: '100%', maxHeight: '85vh',
-              background: 'var(--bg-surface)',
-              borderTop: '1px solid var(--border)',
-              borderRadius: '16px 16px 0 0',
-              boxShadow: '0 -8px 40px rgba(0,0,0,0.4)',
-              display: 'flex', flexDirection: 'column',
-            }}
-          >
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 8 }}>
-              <div style={{ width: 36, height: 4, borderRadius: 2, background: 'var(--border)' }} />
-            </div>
-            <div style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '10px 16px 4px',
-            }}>
-              <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
-                {lang === 'pt' ? 'Filtros' : 'Filters'}
-              </span>
-              <button
-                onClick={() => setFilterSheetOpen(false)}
-                style={{
-                  width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  border: '1px solid var(--border)', borderRadius: 8, background: 'transparent',
-                  color: 'var(--text-tertiary)', cursor: 'pointer',
-                }}
-              >
-                <X size={15} />
-              </button>
-            </div>
-            <div style={{ overflowY: 'auto', padding: '4px 16px 20px' }}>
-              <FiltersBar
-                filters={filters}
-                onChange={setFilters}
-                projects={data.projects}
-                sessionCountByProject={sessionCountByProject}
-                models={models}
-                modelGroups={modelGroups}
-                modelsInProject={modelsInProject}
-                lang={lang}
-                compact
-              />
-              <button
-                onClick={() => setFilterSheetOpen(false)}
-                style={{
-                  marginTop: 14, width: '100%', height: 44, borderRadius: 10,
-                  border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange)',
-                  color: '#fff', fontSize: 14, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer',
-                }}
-              >
-                {lang === 'pt' ? 'Aplicar' : 'Apply'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* TTY Chat — floating button + panel, globally available */}
       <TtyChat

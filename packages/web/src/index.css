@@ -164,8 +164,11 @@ html, body {
 /* ── Mobile base ────────────────────────────────────────────────────────────── */
 @media (max-width: 767px) {
   html, body {
-    /* Prevent horizontal scroll */
-    overflow-x: hidden;
+    /* Prevent horizontal scroll. Use `clip` (not `hidden`): `hidden` forces
+       overflow-y to compute to `auto`, creating a scroll container that breaks
+       `position: sticky` on iOS Safari. `clip` clips without that side effect,
+       so the window stays the scroller and the sticky header stays fixed. */
+    overflow-x: clip;
     max-width: 100vw;
     /* Smooth momentum scrolling on iOS */
     -webkit-overflow-scrolling: touch;
@@ -173,7 +176,7 @@ html, body {
 
   #root {
     max-width: 100vw;
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
   /* Hide scrollbars on mobile to save space */
