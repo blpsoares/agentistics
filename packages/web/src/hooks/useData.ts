@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { AppData, Filters, DateRange, AgentInvocation, HarnessId } from '@agentistics/core'
-import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES } from '@agentistics/core'
+import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 
 export interface StageProgress {
@@ -488,10 +488,12 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const projects = filters.projects ?? []
     const projectFiltered = projects.length > 0
     const projectSet = new Set(projects)
+    const users = filters.users ?? []
+    const userFiltered = users.length > 0
     const modelSet = filters.models && filters.models.length > 0 ? new Set(filters.models) : null
 
     // ── Harness filter — applied first so all downstream filters compose on top ──
-    const harnessSessions = filterByHarness(data.sessions, filters.harness)
+    const harnessSessions = filterByUsers(filterByHarness(data.sessions, filters.harness), users)
     const harnessActive = filters.harness != null
     const nonClaudeHarness = harnessActive && filters.harness !== 'claude'
 
@@ -569,7 +571,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // ── Aggregate stats ──
     // Use filteredSessions when project/model/non-claude-harness filter is active
     // (statsCache has no per-project/model/harness granularity)
-    const sessionFiltered = projectFiltered || modelSet !== null || nonClaudeHarness
+    const sessionFiltered = projectFiltered || modelSet !== null || nonClaudeHarness || userFiltered
 
     const totalMessages = sessionFiltered
       ? filteredSessions.reduce((s, sess) => s + (sess.user_message_count ?? 0) + (sess.assistant_message_count ?? 0), 0)
