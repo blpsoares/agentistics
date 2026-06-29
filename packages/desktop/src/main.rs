@@ -338,6 +338,14 @@ fn reset_config(state: State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Forget the saved data source and restart, so the onboarding source picker
+/// (Windows / WSL) shows again. Invoked from the dashboard's Settings.
+#[tauri::command]
+fn change_source(state: State<AppState>, app: AppHandle) {
+    let _ = std::fs::remove_file(&state.config_path);
+    app.restart();
+}
+
 // ── Auto-update ───────────────────────────────────────────────────────────────
 
 async fn check_for_update(app: AppHandle) {
@@ -422,6 +430,7 @@ fn main() {
             get_setup_state,
             launch_with_config,
             reset_config,
+            change_source,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
