@@ -3,7 +3,7 @@ import {
   X, GripVertical, RotateCcw, Save, Volume2, VolumeX, Zap, Bot,
   Globe, Monitor, Download, SlidersHorizontal, Activity, Code2,
   Archive, Check, HardDrive, FolderClock, ExternalLink, DatabaseZap,
-  Cpu, Copy, CheckCheck, AlertCircle, CircleDot,
+  Cpu, Copy, CheckCheck, AlertCircle, CircleDot, Users,
 } from 'lucide-react'
 import type { Lang, Theme } from '@agentistics/core'
 import type { ArchiveMode } from './ArchiveConsentModal'
@@ -12,6 +12,7 @@ import { LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from '../hooks/use
 import { CHAT_SOUNDS, DEFAULT_CHAT_SOUND_ID, findChatSound } from '../lib/chatSounds'
 import { useChatHarnesses, type HarnessChatStatus } from '../hooks/useChatHarnesses'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { TeamSettings, type TeamConfig } from './TeamSettings'
 
 type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
 
@@ -60,7 +61,7 @@ const BADGE_COLORS: Record<string, string> = {
   Powerful: 'var(--accent-purple)',
 }
 
-export type SettingsTab = 'preferences' | 'sessions' | 'live' | 'install' | 'environment' | 'harnesses'
+export type SettingsTab = 'preferences' | 'sessions' | 'live' | 'install' | 'environment' | 'harnesses' | 'team'
 
 interface Props {
   initial: PrefsDraft
@@ -1135,6 +1136,73 @@ function HarnessesTab({ pt }: { pt: boolean }) {
   )
 }
 
+// ── Tab: Team ─────────────────────────────────────────────────────────────
+
+const DEFAULT_TEAM_CONFIG: TeamConfig = {
+  mode: 'solo',
+  endpoint: '',
+  org: 'default',
+  user: '',
+  pushEnabled: false,
+  token: '',
+}
+
+function TeamTab({ pt }: { pt: boolean }) {
+  const lang: 'pt' | 'en' = pt ? 'pt' : 'en'
+  const [team, setTeam] = useState<TeamConfig>(DEFAULT_TEAM_CONFIG)
+  const [saving, setSaving] = useState(false)
+  const [savedAt, setSavedAt] = useState(0)
+  const [loadErr, setLoadErr] = useState<string | null>(null)
+
+  // Load team preferences on mount
+  useEffect(() => {
+    fetch('/api/preferences')
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((prefs: { team?: Partial<TeamConfig> }) => {
+        if (prefs.team) {
+          setTeam({ ...DEFAULT_TEAM_CONFIG, ...prefs.team })
+        }
+      })
+      .catch(err => { setLoadErr(err instanceof Error ? err.message : String(err)) })
+  }, [])
+
+  const handleChange = (next: TeamConfig) => {
+    setTeam(next)
+    setSaving(true)
+    fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team: next }),
+    })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); setSavedAt(Date.now()) })
+      .catch(() => { /* silent; user can retry */ })
+      .finally(() => setSaving(false))
+  }
+
+  if (loadErr) {
+    return (
+      <div style={{
+        padding: '10px 14px', borderRadius: 8,
+        background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+        fontSize: 12, color: '#ef4444',
+      }}>
+        {loadErr}
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <TeamSettings team={team} onChange={handleChange} lang={lang} />
+      {(saving || savedAt > 0) && (
+        <div style={{ marginTop: 10, fontSize: 11, color: saving ? 'var(--text-tertiary)' : 'var(--accent-green)', textAlign: 'right' }}>
+          {saving ? (pt ? 'Salvando…' : 'Saving…') : (pt ? 'Salvo' : 'Saved')}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main modal ────────────────────────────────────────────────────────────
 
 const TABS: { id: SettingsTab; icon: React.ReactNode; labelEn: string; labelPt: string }[] = [
@@ -1143,6 +1211,7 @@ const TABS: { id: SettingsTab; icon: React.ReactNode; labelEn: string; labelPt: 
   { id: 'live',        icon: <Activity size={13} />,          labelEn: 'Live',         labelPt: 'Live' },
   { id: 'install',     icon: <Download size={13} />,          labelEn: 'Install',      labelPt: 'Instalar' },
   { id: 'harnesses',   icon: <Cpu size={13} />,               labelEn: 'Harnesses',    labelPt: 'Backends' },
+  { id: 'team',        icon: <Users size={13} />,             labelEn: 'Team',         labelPt: 'Time' },
   { id: 'environment', icon: <Code2 size={13} />,             labelEn: 'Environment',  labelPt: 'Ambiente' },
 ]
 
@@ -1284,6 +1353,7 @@ export function PreferencesModal({
             />
           )}
           {activeTab === 'harnesses' && <HarnessesTab pt={pt} />}
+          {activeTab === 'team' && <TeamTab pt={pt} />}
           {activeTab === 'environment' && <EnvironmentTab pt={pt} />}
         </div>
 
