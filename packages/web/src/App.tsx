@@ -8,6 +8,7 @@ import {
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
+  ChevronDown, ChevronUp,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -988,6 +989,9 @@ export default function AppLayout() {
     return DEFAULT_CARD_ORDER
   })
   const [showPrefsModal, setShowPrefsModal] = useState(false)
+  // Mobile-only: lets the user minimize the sticky filter bar while scrolling so
+  // it doesn't eat the viewport on small screens. Expanded by default.
+  const [filtersCollapsed, setFiltersCollapsed] = useState(false)
   const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string } | null>(null)
   // First-run archive consent gate: undefined = prefs not loaded, null = loaded but
   // not yet chosen (blocks the app), ArchiveMode = chosen.
@@ -1474,6 +1478,14 @@ export default function AppLayout() {
     ? Object.values(derived.modelUsage).reduce((s, u) => s + u.outputTokens, 0)
     : derived.outputTokens
 
+  // Count active filters (date / projects / models / harness) for the collapsed-bar badge.
+  const harnessFilterActive = /^\/h\//.test(location.pathname)
+  const activeFilterCount =
+    (filters.dateRange !== 'all' || filters.customStart || filters.customEnd ? 1 : 0) +
+    (filters.projects.length > 0 ? 1 : 0) +
+    (filters.models.length > 0 ? 1 : 0) +
+    (harnessFilterActive ? 1 : 0)
+
   // Block the app until the user makes the first-run archive choice. While prefs
   // are still loading (undefined) render a neutral background to avoid a flash.
   if (archiveChoice === undefined) {
@@ -1749,22 +1761,81 @@ export default function AppLayout() {
         </div>
 
         {/* Filters — full bar, fixed in the sticky header so it's reachable at any
-            scroll position. On mobile the harness chips sit on their own row above
-            the date/projects/models controls. Hidden on /custom. */}
-        {data && !isCustomPage && (
+            scroll position. Hidden on /custom. On mobile the bar is collapsible
+            (a slim summary row) so it doesn't eat the viewport while scrolling;
+            the harness chips sit on their own row above the date/projects/models
+            controls. Desktop always shows the full bar. */}
+        {data && !isCustomPage && isMobile && (
+          <div style={{ borderTop: '1px solid var(--border)', width: '100%', boxSizing: 'border-box' }}>
+            {filtersCollapsed ? (
+              // Collapsed: a single slim tappable row that re-expands the bar.
+              <button
+                onClick={() => setFiltersCollapsed(false)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                  padding: '9px 14px', background: 'transparent', border: 'none',
+                  color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 13,
+                  fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                <SlidersHorizontal size={15} style={{ color: 'var(--anthropic-orange)' }} />
+                <span>{lang === 'pt' ? 'Filtros' : 'Filters'}</span>
+                {activeFilterCount > 0 && (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
+                    background: 'var(--anthropic-orange)', color: '#fff',
+                    fontSize: 11, fontWeight: 700,
+                  }}>
+                    {activeFilterCount}
+                  </span>
+                )}
+                <ChevronDown size={18} style={{ marginLeft: 'auto', opacity: 0.6 }} />
+              </button>
+            ) : (
+              <div>
+                {data.harnesses && data.harnesses.length > 1 && (
+                  <div style={{ padding: '10px 12px 0' }}>
+                    <HarnessSelector harnesses={data.harnesses} lang={lang} isMobile />
+                  </div>
+                )}
+                <FiltersBar
+                  filters={filters}
+                  onChange={setFilters}
+                  projects={data.projects}
+                  sessionCountByProject={sessionCountByProject}
+                  models={models}
+                  modelGroups={modelGroups}
+                  modelsInProject={modelsInProject}
+                  lang={lang}
+                  compact
+                />
+                {/* Collapse handle */}
+                <button
+                  onClick={() => setFiltersCollapsed(true)}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                    width: '100%', padding: '5px 0 7px', background: 'transparent', border: 'none',
+                    color: 'var(--text-tertiary)', fontFamily: 'inherit', fontSize: 12,
+                    fontWeight: 600, cursor: 'pointer',
+                  }}
+                >
+                  <ChevronUp size={15} />
+                  {lang === 'pt' ? 'Minimizar filtros' : 'Minimize filters'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        {data && !isCustomPage && !isMobile && (
           <div style={{
             borderTop: '1px solid var(--border)',
             maxWidth: 1400,
             margin: '0 auto',
-            padding: isMobile ? '0 12px' : '0 32px',
+            padding: '0 32px',
             width: '100%',
             boxSizing: 'border-box',
           }}>
-            {isMobile && data.harnesses && data.harnesses.length > 1 && (
-              <div style={{ paddingTop: 10 }}>
-                <HarnessSelector harnesses={data.harnesses} lang={lang} isMobile />
-              </div>
-            )}
             <FiltersBar
               filters={filters}
               onChange={setFilters}
