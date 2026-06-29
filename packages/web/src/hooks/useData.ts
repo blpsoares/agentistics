@@ -716,7 +716,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
 
     let filteredModelUsage: Record<string, import('@agentistics/core').ModelUsage>
 
-    if (projectFiltered || nonClaudeHarness) {
+    if (projectFiltered || nonClaudeHarness || userFiltered) {
       // Build per-model breakdown from sessions that have a model field.
       // Sessions without a model field are excluded from the per-model breakdown.
       // Also used when a non-Claude harness is selected (statsCache has no harness granularity).
@@ -821,7 +821,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
 
     // ── Cost calculation ──
     let totalCostUSD = 0
-    if (projectFiltered || nonClaudeHarness) {
+    if (projectFiltered || nonClaudeHarness || userFiltered) {
       // Use per-session calcCost with the session's model field (includes cache tokens).
       // Also used when a non-Claude harness is selected (statsCache lacks harness granularity).
       // Sessions without a model fall back to blended rate on input+output only.
