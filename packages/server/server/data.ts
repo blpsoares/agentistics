@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { readFile } from 'fs/promises'
 import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue, HarnessId } from '@agentistics/core'
-import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR } from './config'
+import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE } from './config'
 import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
@@ -648,6 +648,27 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
         }
       }
     }
+
+    // --- Team mode (Phase 1): union per-user consolidated sessions from the shared folder ---
+    if (TEAM_MODE) {
+      const { loadTeamSessions } = await import('./team-source')
+      const teamSessions = await loadTeamSessions().catch(() => [] as SessionMeta[])
+      for (const s of teamSessions) {
+        sessions.push(s)
+        harnessSet.add(s.harness)
+        const existing = projects.find(p => p.path === s.project_path && p.path)
+        if (existing) {
+          existing.sessions.push({ sessionId: s.session_id, created: s.start_time })
+        } else if (s.project_path) {
+          projects.push({
+            path: s.project_path,
+            name: s.project_path.split('/').filter(Boolean).pop() ?? s.project_path,
+            sessions: [{ sessionId: s.session_id, created: s.start_time }],
+          })
+        }
+      }
+    }
+
     sessions.sort((a, b) => b.start_time.localeCompare(a.start_time))
 
     // Final safety net: dedup by (harness, session_id). A no-op today (each session
@@ -655,7 +676,7 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     // revived from the consolidate store in addition to the live adapter merge.
     const seenHarnessKeys = new Set<string>()
     const dedupedSessions = sessions.filter(s => {
-      const key = `${s.harness ?? 'claude'}:${s.session_id}`
+      const key = `${s.user ?? ''}:${s.harness ?? 'claude'}:${s.session_id}`
       if (seenHarnessKeys.has(key)) return false
       seenHarnessKeys.add(key)
       return true

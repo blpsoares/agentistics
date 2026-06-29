@@ -25,6 +25,14 @@ export const ARCHIVE_STATS_DIR = join(ARCHIVE_DIR, 'stats-cache')
 export const CONSOLIDATED_DIR = join(HOME_DIR, '.agentistics', 'sessions')
 
 // ---------------------------------------------------------------------------
+// Team mode (Phase 1: folder union). When AGENTISTICS_TEAM=1 the server unions
+// per-user consolidated SessionMeta JSONs from TEAM_DIR/<user>/sessions/*.json
+// and tags each session with its owning user. Off by default (Solo behavior).
+// ---------------------------------------------------------------------------
+export const TEAM_MODE = process.env.AGENTISTICS_TEAM === '1'
+export const TEAM_DIR = process.env.AGENTISTICS_TEAM_DIR ?? join(HOME_DIR, '.agentistics', 'team')
+
+// ---------------------------------------------------------------------------
 // Other harnesses (Phase 1: Codex). Each adapter checks its own root.
 // Override with CODEX_DIR; disable with AGENTISTICS_HARNESS_CODEX=0.
 // ---------------------------------------------------------------------------
