@@ -34,8 +34,7 @@
 - `packages/core/src/index.ts` — re-export `./team`.
 - `packages/server/server/config.ts` — add `TEAM_MODE`, `TEAM_DIR`.
 - `packages/server/server/data.ts` — union team sessions; widen dedup key to include `user`.
-- `packages/web/src/hooks/useData.ts` — apply the `user` filter in `useDerivedStats`.
-- `packages/web/src/hooks/useData.test.ts` — tests for the `user` filter in derived stats.
+- `packages/web/src/hooks/useData.ts` — apply the `user` filter (`filterByUsers`) in `useDerivedStats`.
 - `packages/web/src/lib/app-context.ts` — expose `users: string[]`.
 - `packages/web/src/App.tsx` — compute the `users` memo, pass it through the Outlet.
 - `packages/web/src/components/FiltersBar.tsx` — render `UsersFilter` when users exist.
@@ -344,110 +343,73 @@ git commit -m "feat(server): union per-user team sessions from shared folder in 
 ## Task 3: Apply the `user` filter in derived stats (web)
 
 **Files:**
-- Modify: `packages/web/src/hooks/useData.ts` (`useDerivedStats`, lines 488-490 and 510-516 and 572)
-- Test: `packages/web/src/hooks/useData.test.ts`
+- Modify: `packages/web/src/hooks/useData.ts` (`useDerivedStats`: import line ~13, lines 488-494 and 511-516 and 572)
 
 **Interfaces:**
-- Consumes: `Filters.users`, `SessionMeta.user` (from Task 1).
+- Consumes: `filterByUsers` from `@agentistics/core`; `Filters.users`, `SessionMeta.user` (from Task 1).
 - Produces: `useDerivedStats` now excludes sessions whose `user` is not in `filters.users` (when non-empty), and counts `userFiltered` toward `sessionFiltered` so totals come from per-session sums.
 
-- [ ] **Step 1: Write the failing test**
+> **No new unit test in this task.** The `user`-selection logic is the pure
+> `filterByUsers` helper, already fully tested in `packages/core/src/team.test.ts`
+> (Task 1). This task only wires that tested helper into the hook — exactly
+> mirroring how `filterByHarness` is applied as a pre-filter at line 494 and
+> tested separately, not via the hook. `useDerivedStats` is a React hook
+> (`useMemo`); the repo has no `@testing-library/react` and does not unit-test
+> the hook directly. Verification here is `tsc` + the full suite staying green;
+> behavioral verification happens in Task 4 Step 6 (manual browser check).
 
-Add to `packages/web/src/hooks/useData.test.ts` (import `useDerivedStats` is exported from `../hooks/useData`; if the test file does not already build an `AppData`, follow the pattern below). Append these tests:
+- [ ] **Step 1: Import `filterByUsers` and apply it as a pre-filter**
+
+In `packages/web/src/hooks/useData.ts`, the existing `@agentistics/core` import near the top of the file (~line 13) already pulls in shared helpers. Add `filterByUsers` to that import list (keep the other named imports intact), e.g.:
 
 ```ts
-import { renderHook } from '@testing-library/react'
-import { useDerivedStats } from './useData'
-import type { AppData, SessionMeta, Filters } from '@agentistics/core'
-
-function sess(id: string, user: string | undefined, msgs: number): SessionMeta {
-  return {
-    session_id: id, project_path: '/p', start_time: '2026-06-15T12:00:00Z',
-    duration_minutes: 1, user_message_count: msgs, assistant_message_count: 0,
-    tool_counts: {}, tool_output_tokens: {}, agent_file_reads: {}, languages: [],
-    git_commits: 0, git_pushes: 0, input_tokens: 0, output_tokens: 0,
-    first_prompt: '', user_interruptions: 0, user_response_times: [],
-    tool_errors: 0, tool_error_categories: {}, uses_task_agent: false,
-    uses_mcp: false, uses_web_search: false, uses_web_fetch: false,
-    lines_added: 0, lines_removed: 0, files_modified: 0, message_hours: [],
-    user_message_timestamps: [], harness: 'claude', user,
-  }
-}
-
-const teamData: AppData = {
-  statsCache: { dailyActivity: [], dailyModelTokens: [] } as unknown as AppData['statsCache'],
-  sessions: [sess('1', 'devA', 3), sess('2', 'devB', 5), sess('3', 'devC', 7)],
-  projects: [], allSessions: [], harnesses: ['claude'],
-}
-
-const baseFilters: Filters = { dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [] }
-
-test('no user filter = team total (all sessions counted)', () => {
-  const { result } = renderHook(() => useDerivedStats(teamData, baseFilters))
-  expect(result.current?.totalSessions).toBe(3)
-})
-
-test('single user filter isolates that dev', () => {
-  const { result } = renderHook(() => useDerivedStats(teamData, { ...baseFilters, users: ['devA'] }))
-  expect(result.current?.totalSessions).toBe(1)
-})
-
-test('multi-select user filter aggregates the chosen subset', () => {
-  const { result } = renderHook(() => useDerivedStats(teamData, { ...baseFilters, users: ['devA', 'devB'] }))
-  expect(result.current?.totalSessions).toBe(2)
-})
+import { calcCost, blendedCostPerToken, filterByUsers, /* …existing… */ } from '@agentistics/core'
 ```
 
-> Note: `renderHook` comes from `@testing-library/react`. If a lighter pattern is already used in this test file for `useDerivedStats`, mirror that instead — the assertions on `totalSessions` are what matter.
+> If `filterByUsers` is not in the `@agentistics/core` import there, add it to whichever existing `from '@agentistics/core'` import already brings in `calcCost`/`blendedCostPerToken`.
 
-- [ ] **Step 2: Run the test to verify it fails**
-
-Run: `bun test packages/web/src/hooks/useData.test.ts`
-Expected: FAIL — the single/multi user tests report `totalSessions` of 3 (filter not applied yet).
-
-- [ ] **Step 3: Apply the filter in `useDerivedStats`**
-
-In `packages/web/src/hooks/useData.ts`, just after line 490 (`const projectSet = new Set(projects)`), add the user-filter state:
+Then, just after line 490 (`const projectSet = new Set(projects)`), add the user-filter state:
 
 ```ts
     const projectSet = new Set(projects)
     const users = filters.users ?? []
     const userFiltered = users.length > 0
-    const userSet = new Set(users)
 ```
 
-Then, inside the `filteredSessions` predicate (lines 511-516), add the user check right after the project line (line 513):
+Apply `filterByUsers` as a pre-filter on top of the harness pre-filter. Replace the `harnessSessions` line (currently line 494) so the user filter composes on top of it, mirroring how harness is pre-filtered:
 
 ```ts
-    const filteredSessions = harnessSessions.filter(s => {
-      if (!inDateRange(s)) return false
-      if (projectFiltered && !projectSet.has(s.project_path)) return false
-      if (userFiltered && (!s.user || !userSet.has(s.user))) return false
-      if (modelSet && (!s.model || !modelSet.has(s.model))) return false
-      return true
-    })
+    // ── Harness filter — applied first so all downstream filters compose on top ──
+    const harnessSessions = filterByUsers(filterByHarness(data.sessions, filters.harness), users)
 ```
 
-Finally, include `userFiltered` in the `sessionFiltered` decision on line 572 so totals come from per-session sums when a user filter is active:
+(`filterByUsers` with an empty `users` array is a pass-through, so Solo mode is unaffected.)
+
+- [ ] **Step 2: Count `userFiltered` toward `sessionFiltered`**
+
+Include `userFiltered` in the `sessionFiltered` decision on line 572 so totals come from per-session sums when a user filter is active:
 
 ```ts
     const sessionFiltered = projectFiltered || modelSet !== null || nonClaudeHarness || userFiltered
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `bun test packages/web/src/hooks/useData.test.ts`
-Expected: PASS (the three new tests + all existing ones).
-
-- [ ] **Step 5: Typecheck**
+- [ ] **Step 3: Typecheck**
 
 Run: `bun tsc --noEmit`
 Expected: no errors.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Run the full suite (no regression)**
+
+Run: `bun test`
+Expected: all existing tests still PASS. (The `user`-selection logic itself is
+already covered by `packages/core/src/team.test.ts` from Task 1; this task wires
+that tested helper in. Behavioral verification of the wired hook happens in
+Task 4 Step 6.)
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add packages/web/src/hooks/useData.ts packages/web/src/hooks/useData.test.ts
+git add packages/web/src/hooks/useData.ts
 git commit -m "feat(web): apply multi-select user filter in derived stats"
 ```
 
