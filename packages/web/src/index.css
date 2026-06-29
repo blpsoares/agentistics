@@ -155,6 +155,10 @@ html, body {
   scrollbar-color: rgba(255,255,255,0.1) transparent;
 }
 
+/* Settings modal tab bar: scrollable but no visible scrollbar (desktop + mobile) */
+.prefs-tabbar { scrollbar-width: none; }
+.prefs-tabbar::-webkit-scrollbar { display: none; }
+
 /* FiltersBar sticky shimmer scan */
 @keyframes filters-shimmer-scan {
   0%   { background-position: -100% 0; }

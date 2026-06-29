@@ -106,7 +106,7 @@ function TabSelect<T extends string>({
   accent?: string
 }) {
   return (
-    <div style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
+    <div style={{ display: 'inline-flex', width: 'fit-content', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
       {options.map((opt, i) => {
         const active = opt.value === value
         return (
@@ -1261,11 +1261,11 @@ export function PreferencesModal({
             </button>
           </div>
 
-          {/* Tab bar — scrolls horizontally on mobile so tabs never overflow */}
-          <div style={{
+          {/* Tab bar — scrolls horizontally (desktop + mobile) so the tabs never
+              overflow the modal width; scrollbar hidden via .prefs-tabbar in css */}
+          <div className="prefs-tabbar" style={{
             display: 'flex', gap: 2, borderBottom: '1px solid var(--border)', marginBottom: 0,
-            overflowX: isMobile ? 'auto' : undefined,
-            ...(isMobile ? { scrollbarWidth: 'none' as const } : {}),
+            overflowX: 'auto', scrollbarWidth: 'none' as const,
           }}>
             {TABS.map(tab => {
               const active = activeTab === tab.id
