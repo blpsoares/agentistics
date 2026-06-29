@@ -11,6 +11,22 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Multi-harness tracking** — alongside Claude Code, agentistics now ingests **Codex CLI**, **Gemini CLI**, and **GitHub Copilot CLI** sessions via per-harness `HarnessAdapter` modules under `packages/server/server/adapters/`
+- Harness selector (shown only when >1 harness has data), generic per-harness dashboards at `/h/:harness`, and a side-by-side `/compare` page with per-harness colors and comparatives
+- `HARNESS_CAPABILITIES` in `@agentistics/core` drives "N/A" rendering for metrics a harness can't produce (e.g. Codex/Gemini/Copilot have no agent metrics or git line counts), instead of a misleading 0
+- "Data & sources" tab per harness (`HarnessInfoPanel`) explaining each harness's data source, what's captured, and what's missing
+- Archive modes (`off` / `consolidate` / `full`) that survive Claude's 30-day transcript cleanup, gated by a first-run consent modal
+- **Full mobile/responsive support** — responsive layouts gated on `useIsMobile()`, a bottom nav with a square-tile "More" sheet (hosting settings/live/refresh/warnings), a collapsible sticky filter bar, full-screen modals on mobile, and iOS-aware PWA install guidance
+
+### Fixed
+- iOS `position: sticky` broke under `overflow-x: hidden`; switched mobile `html/body/#root` to `overflow-x: clip`
+- Mobile Models dropdown was clipped by the filter collapse-animation wrapper's `overflow: hidden`
+
+### Changed
+- `stats-cache.json` is treated as Claude-only; non-Claude harnesses are aggregated purely from per-session data so Claude totals are never corrupted
+- README now describes agentistics as a multi-harness dashboard; `docs/mcp.md` documents the MCP's unified (all-harness) scope
+
 ---
 
 ## [0.4.0] — 2026-04-10

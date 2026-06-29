@@ -8,7 +8,42 @@ import type { SessionMeta, Lang } from '@agentistics/core'
 import { formatProjectName, formatModel, calcCost, getModelColor } from '@agentistics/core'
 import { blendedCostPerToken } from '../hooks/useData'
 import { fmtFull } from '@agentistics/core'
+import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { PrecisionToggle } from './PrecisionToggle'
+import { useIsMobile } from '../hooks/useIsMobile'
+
+// ─── splitInlinedHistory ──────────────────────────────────────────────────────
+// Non-Claude harnesses sometimes concatenate a whole conversation into a single
+// user-turn (e.g. "User: hi\nAssistant: hello"). This helper splits such blocks
+// into individual bubbles so the transcript renders correctly.
+
+/** Pattern that matches a newline immediately followed by a conversation label. */
+const SPLIT_LABEL_RE = /\n(?=(?:User|Assistant|Gemini|Copilot):)/
+
+export function splitInlinedHistory(
+  role: 'user' | 'assistant',
+  content: string
+): { role: 'user' | 'assistant'; content: string }[] {
+  if (role !== 'user' || !SPLIT_LABEL_RE.test(content)) {
+    return [{ role, content }]
+  }
+  const segments = content.split(SPLIT_LABEL_RE).filter(Boolean)
+  const result: { role: 'user' | 'assistant'; content: string }[] = []
+  for (const seg of segments) {
+    const match = seg.match(/^(User|Assistant|Gemini|Copilot):\s*/)
+    if (match) {
+      const label = match[1]!
+      const text = seg.slice(match[0].length).trim()
+      if (!text) continue
+      result.push({ role: label === 'User' ? 'user' : 'assistant', content: text })
+    } else {
+      const text = seg.trim()
+      if (text) result.push({ role, content: text })
+    }
+  }
+  return result.length > 0 ? result : [{ role, content }]
+}
+
 
 interface Props {
   session: SessionMeta
@@ -54,8 +89,8 @@ function fmtAgentDuration(ms: number): string {
   return rem > 0 ? `${m}m ${rem}s` : `${m}m`
 }
 
-function sessionCost(session: SessionMeta, globalModelUsage: Props['globalModelUsage']): number {
-  // If the session has an explicit model, use exact pricing; else fallback to blended input/output
+function sessionCost(session: SessionMeta, globalModelUsage: Props['globalModelUsage']): number | null {
+  // If the session has an explicit model, use exact pricing for any harness.
   if (session.model) {
     return calcCost(
       {
@@ -69,6 +104,11 @@ function sessionCost(session: SessionMeta, globalModelUsage: Props['globalModelU
       session.model,
     )
   }
+  // No model on this session.
+  // For Claude, fall back to the statsCache blended rate (it's Claude-only data, so safe to use).
+  // For any other harness, the Claude blended rate would be misleading — return null (N/A).
+  const harness = session.harness ?? 'claude'
+  if (harness !== 'claude') return null
   const blended = blendedCostPerToken(globalModelUsage)
   return ((session.input_tokens ?? 0) / 1_000_000) * blended.input
        + ((session.output_tokens ?? 0) / 1_000_000) * blended.output
@@ -76,6 +116,7 @@ function sessionCost(session: SessionMeta, globalModelUsage: Props['globalModelU
 
 export function SessionDrilldownModal({ session, globalModelUsage, currency, brlRate, lang, onClose }: Props) {
   const pt = lang === 'pt'
+  const isMobile = useIsMobile()
   const [fullPrecision, setFullPrecision] = useState(false)
 
   useEffect(() => {
@@ -121,8 +162,8 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
       style={{
         position: 'fixed', inset: 0, zIndex: 350,
         background: 'rgba(0,0,0,0.65)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 24,
+        display: 'flex', alignItems: isMobile ? 'stretch' : 'center', justifyContent: 'center',
+        padding: isMobile ? 0 : 24,
         backdropFilter: 'blur(4px)',
       }}
     >
@@ -130,13 +171,17 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
         onClick={e => e.stopPropagation()}
         style={{
           background: 'var(--bg-card)',
-          border: '1px solid var(--border)',
-          borderRadius: 14,
+          border: isMobile ? 'none' : '1px solid var(--border)',
+          borderRadius: isMobile ? 0 : 14,
           width: '100%',
-          maxWidth: 980,
-          maxHeight: '90vh',
-          overflow: 'auto',
-          boxShadow: '0 8px 40px rgba(0,0,0,0.5)',
+          maxWidth: isMobile ? '100%' : 980,
+          maxHeight: isMobile ? '100%' : '90vh',
+          height: isMobile ? '100%' : undefined,
+          // Vertical scroll only — never let a dense inner grid push the whole
+          // modal (and its sticky header) sideways on a narrow phone.
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          boxShadow: isMobile ? 'none' : '0 8px 40px rgba(0,0,0,0.5)',
         }}
       >
         {/* Header */}
@@ -145,7 +190,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
           top: 0,
           background: 'var(--bg-card)',
           borderBottom: '1px solid var(--border)',
-          padding: '18px 22px',
+          padding: isMobile ? '14px 16px' : '18px 22px',
           display: 'flex',
           alignItems: 'flex-start',
           justifyContent: 'space-between',
@@ -197,25 +242,31 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
             <button
               onClick={() => {
                 const isNay = session.project_path.includes('.agentistics/nay-chat')
-                const encodedDir = session.project_path.replace(/\//g, '-')
-                window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
-                  detail: isNay
-                    ? { tab: 'nay', sessionId: session.session_id }
-                    : { tab: 'claude', sessionId: session.session_id, project: { path: session.project_path, name: session.project_path.split('/').pop() ?? session.project_path, encodedDir } },
-                }))
+                if (isNay) {
+                  window.dispatchEvent(new CustomEvent('agentistics:open-nay-chat', {
+                    detail: { sessionId: session.session_id },
+                  }))
+                } else {
+                  const harness = session.harness ?? 'claude'
+                  // Match Claude's folder encoding: every non-alphanumeric char → '-'
+                  const encodedDir = session.project_path.replace(/[^a-zA-Z0-9-]/g, '-')
+                  window.dispatchEvent(new CustomEvent('agentistics:open-transcript', {
+                    detail: { harness, sessionId: session.session_id, project: { path: session.project_path, name: session.project_path.split('/').pop() ?? session.project_path, encodedDir } },
+                  }))
+                }
               }}
-              title={session.project_path.includes('.agentistics/nay-chat') ? 'Open in Nay Chat' : 'Open in Claude'}
+              title={session.project_path.includes('.agentistics/nay-chat') ? 'Open in Nay Chat' : 'View transcript'}
               style={{
                 height: 30, padding: '0 10px',
                 display: 'flex', alignItems: 'center', gap: 5,
                 border: '1px solid var(--border)', borderRadius: 8,
                 background: 'transparent',
-                color: session.project_path.includes('.agentistics/nay-chat') ? 'var(--anthropic-orange)' : 'var(--accent-purple, #a855f7)',
+                color: session.project_path.includes('.agentistics/nay-chat') ? 'var(--anthropic-orange)' : HARNESS_COLORS[session.harness ?? 'claude'],
                 cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 500,
               }}
             >
               <ExternalLink size={12} />
-              {session.project_path.includes('.agentistics/nay-chat') ? 'Nay' : 'Claude'}
+              {session.project_path.includes('.agentistics/nay-chat') ? 'Nay' : HARNESS_LABELS[session.harness ?? 'claude']}
             </button>
             <button
               onClick={onClose}
@@ -232,7 +283,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
           </div>
         </div>
 
-        <div style={{ padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+        <div style={{ padding: isMobile ? '14px 16px' : '18px 22px', display: 'flex', flexDirection: 'column', gap: 18 }}>
 
           {/* First prompt */}
           {session.first_prompt && (
@@ -256,7 +307,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginBottom: 6 }}>
               <PrecisionToggle full={fullPrecision} accent="var(--anthropic-orange)" onToggle={() => setFullPrecision(v => !v)} lang={lang} />
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(auto-fit, minmax(96px, 1fr))' : 'repeat(5, 1fr)', gap: isMobile ? 8 : 10 }}>
               <Kpi icon={<MessageSquare size={12} />} label={pt ? 'Mensagens' : 'Messages'} value={fmt(totalMessages, fullPrecision)} accent="var(--accent-blue, #3b82f6)" />
               <Kpi icon={<Zap size={12} />} label="Tokens" value={fmt(totalTokens, fullPrecision)} accent="var(--anthropic-orange)" />
               <Kpi icon={<Wrench size={12} />} label="Tool calls" value={fmt(totalTools, fullPrecision)} accent="var(--accent-green, #22c55e)" />
@@ -264,7 +315,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
               <Kpi
                 icon={<span style={{ fontSize: 10, fontWeight: 800 }}>$</span>}
                 label={pt ? 'Custo' : 'Cost'}
-                value={fmtCost(cost, currency, brlRate)}
+                value={cost !== null ? fmtCost(cost, currency, brlRate) : 'N/A'}
                 accent="var(--anthropic-orange)"
               />
             </div>
@@ -309,7 +360,8 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
               <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>
                 {pt ? 'Uso de ferramentas' : 'Tool usage'}
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <div style={{ overflowX: isMobile ? 'auto' : undefined }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: isMobile ? 320 : undefined }}>
                 {toolEntries.slice(0, 12).map(([tool, count]) => {
                   const pct = count / maxToolCount
                   const tokens = session.tool_output_tokens?.[tool] ?? 0
@@ -348,6 +400,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
                   </div>
                 )}
               </div>
+              </div>
             </div>
           )}
 
@@ -372,7 +425,8 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
                   </span>
                 )}
               </div>
-              <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+              <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', overflowX: isMobile ? 'auto' : 'hidden' }}>
+              <div style={{ minWidth: isMobile ? 420 : undefined }}>
                 {agentInvocations.slice(0, 20).map((inv, i) => (
                   <div
                     key={inv.toolUseId || i}
@@ -416,11 +470,12 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
                   </div>
                 )}
               </div>
+              </div>
             </div>
           )}
 
           {/* Hour distribution + git + errors in 2 cols */}
-          <div style={{ display: 'grid', gridTemplateColumns: activeHours > 0 ? '2fr 1fr' : '1fr', gap: 14, alignItems: 'start' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : (activeHours > 0 ? '2fr 1fr' : '1fr'), gap: 14, alignItems: 'start' }}>
             {activeHours > 0 && (
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>

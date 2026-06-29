@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import type { SessionMeta } from '@agentistics/core'
 import { formatProjectName } from '@agentistics/core'
+import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { format, parseISO } from 'date-fns'
 import {
   ChevronLeft,
@@ -116,6 +117,35 @@ function Chip({
   )
 }
 
+function HarnessBadge({ harness }: { harness?: string }) {
+  // Only show badge for non-Claude harnesses — Claude is the default and needs no label
+  if (!harness || harness === 'claude') return null
+  const color = (HARNESS_COLORS as Record<string, string>)[harness] ?? '#888'
+  const label = (HARNESS_LABELS as Record<string, string>)[harness] ?? harness
+  return (
+    <span
+      title={label}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        padding: '1px 5px',
+        borderRadius: 999,
+        fontSize: 9,
+        fontWeight: 600,
+        letterSpacing: 0.3,
+        lineHeight: 1.6,
+        background: `${color}22`,
+        color,
+        border: `1px solid ${color}55`,
+        flexShrink: 0,
+        textTransform: 'uppercase',
+      }}
+    >
+      {label}
+    </span>
+  )
+}
+
 function SourceDot({ source }: { source?: 'meta' | 'jsonl' | 'subdir' }) {
   if (!source) return null
   const colors: Record<string, string> = {
@@ -216,20 +246,24 @@ function isNayChatSession(projectPath: string): boolean {
 }
 
 function encodeProjectDir(projectPath: string): string {
-  return projectPath.replace(/\//g, '-')
+  // Claude encodes the project folder by replacing every non-alphanumeric char
+  // (slash, dot, underscore, etc.) with a dash — e.g. ".../bridge-cse_01H" →
+  // "...-bridge-cse-01H". Matching this exactly is required to locate the JSONL.
+  return projectPath.replace(/[^a-zA-Z0-9-]/g, '-')
 }
 
 function openSession(s: SessionMeta, e: React.MouseEvent) {
   e.stopPropagation()
   if (isNayChatSession(s.project_path)) {
-    window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
-      detail: { tab: 'nay', sessionId: s.session_id },
+    window.dispatchEvent(new CustomEvent('agentistics:open-nay-chat', {
+      detail: { sessionId: s.session_id },
     }))
   } else {
+    const harness = s.harness ?? 'claude'
     const encodedDir = encodeProjectDir(s.project_path)
-    window.dispatchEvent(new CustomEvent('agentistics:open-chat', {
+    window.dispatchEvent(new CustomEvent('agentistics:open-transcript', {
       detail: {
-        tab: 'claude',
+        harness,
         sessionId: s.session_id,
         project: { path: s.project_path, name: s.project_path.split('/').pop() ?? s.project_path, encodedDir },
       },
@@ -436,6 +470,7 @@ export function RecentSessions({ sessions, lang, onSelect }: Props) {
                       }}
                     >
                       <SourceDot source={s._source} />
+                      <HarnessBadge harness={s.harness} />
                       <span
                         style={{
                           overflow: 'hidden',
@@ -475,7 +510,7 @@ export function RecentSessions({ sessions, lang, onSelect }: Props) {
                     </span>
                     <button
                       onClick={(e) => openSession(s, e)}
-                      title={isNayChatSession(s.project_path) ? 'Open in Nay Chat' : 'Open in Claude'}
+                      title={isNayChatSession(s.project_path) ? 'Open in Nay Chat' : 'View transcript'}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -493,8 +528,11 @@ export function RecentSessions({ sessions, lang, onSelect }: Props) {
                       }}
                       onMouseEnter={e => {
                         const btn = e.currentTarget
-                        btn.style.borderColor = isNayChatSession(s.project_path) ? 'var(--anthropic-orange)' : 'var(--accent-purple, #a855f7)'
-                        btn.style.color = isNayChatSession(s.project_path) ? 'var(--anthropic-orange)' : 'var(--accent-purple, #a855f7)'
+                        const hoverColor = isNayChatSession(s.project_path)
+                          ? 'var(--anthropic-orange)'
+                          : HARNESS_COLORS[s.harness ?? 'claude']
+                        btn.style.borderColor = hoverColor
+                        btn.style.color = hoverColor
                       }}
                       onMouseLeave={e => {
                         const btn = e.currentTarget
@@ -503,7 +541,7 @@ export function RecentSessions({ sessions, lang, onSelect }: Props) {
                       }}
                     >
                       <ExternalLink size={9} />
-                      {isNayChatSession(s.project_path) ? 'Nay' : 'Claude'}
+                      {isNayChatSession(s.project_path) ? 'Nay' : HARNESS_LABELS[s.harness ?? 'claude']}
                     </button>
                   </div>
                 </div>

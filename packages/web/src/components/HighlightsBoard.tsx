@@ -1,8 +1,10 @@
 import React, { useState } from 'react'
 import { Clock, Download, Upload, MessageSquare, Wrench, FolderOpen } from 'lucide-react'
-import type { SessionMeta, Project } from '@agentistics/core'
+import type { SessionMeta, Project, HarnessId } from '@agentistics/core'
 import { formatProjectName } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { NAtag } from './NAtag'
+import { capable } from '../lib/harness'
 
 function fmt(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -33,9 +35,16 @@ interface HighlightsBoardProps {
   sessions: SessionMeta[]
   projects: Project[]
   lang: 'pt' | 'en'
+  /**
+   * The active harness filter (undefined = unified / all-harness view).
+   * Individual highlight cards are gated per capability — e.g. the
+   * "Most tool calls" card is hidden for harnesses where tools=false.
+   * In the unified view (harness undefined) all cards are shown.
+   */
+  harness?: HarnessId
 }
 
-export function HighlightsBoard({ sessions, projects, lang }: HighlightsBoardProps) {
+export function HighlightsBoard({ sessions, projects, lang, harness }: HighlightsBoardProps) {
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
 
@@ -123,10 +132,19 @@ export function HighlightsBoard({ sessions, projects, lang }: HighlightsBoardPro
           color: var(--text-secondary);
           font-style: italic;
         }
+        @media (max-width: 767px) {
+          .hl-card { padding: 12px 13px 11px; border-radius: var(--radius-md); }
+          .hl-value { font-size: 24px; }
+          .hl-prompt { font-size: 11px; }
+        }
       `}</style>
 
       {/* Number of cards: 5 always + 1 conditional (topProjectEntry) */}
       {(() => {
+        // When the active harness does not support tools, the tool-calls card is
+        // replaced with an N/A placeholder that still occupies the same grid slot
+        // so the layout stays consistent.
+        const canTools = !harness || capable(harness, 'tools')
         const cardCount = topProjectEntry ? 6 : 5
         const cols = isMobile ? 2 : 3
         // last card's column span: fill leftover columns when not aligned to cols
@@ -179,19 +197,30 @@ export function HighlightsBoard({ sessions, projects, lang }: HighlightsBoardPro
           project={formatProjectName(mostMessages.project_path ?? '')}
         />
 
-        <HighlightCard
-          label={pt ? 'Mais chamadas de ferramentas' : 'Most tool calls'}
-          icon={<Wrench size={14} />}
-          accent="#10b981"
-          value={fmt(Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0))}
-          comparison={multiplier(
-            Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0),
-            avgTools
-          )}
-          prompt={truncate(mostToolCalls.first_prompt, 90)}
-          project={formatProjectName(mostToolCalls.project_path ?? '')}
-          style={topProjectEntry ? {} : lastStyle}
-        />
+        {/* Tool calls card — gated by tools capability. When capability is false,
+            an N/A placeholder occupies the same grid slot so layout is unchanged. */}
+        {canTools ? (
+          <HighlightCard
+            label={pt ? 'Mais chamadas de ferramentas' : 'Most tool calls'}
+            icon={<Wrench size={14} />}
+            accent="#10b981"
+            value={fmt(Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0))}
+            comparison={multiplier(
+              Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0),
+              avgTools
+            )}
+            prompt={truncate(mostToolCalls.first_prompt, 90)}
+            project={formatProjectName(mostToolCalls.project_path ?? '')}
+            style={topProjectEntry ? {} : lastStyle}
+          />
+        ) : (
+          <div
+            className="hl-card"
+            style={{ borderColor: 'var(--border)', ...(topProjectEntry ? {} : lastStyle) }}
+          >
+            {harness && <NAtag harness={harness} label={pt ? 'Mais chamadas de ferramentas' : 'Most tool calls'} />}
+          </div>
+        )}
 
         {topProjectEntry && (
           <HighlightCard
@@ -230,6 +259,8 @@ function HighlightCard({
   style?: React.CSSProperties
 }) {
   const [hovered, setHovered] = useState(false)
+  const isMobile = useIsMobile()
+  const gap = isMobile ? 8 : 14
 
   return (
     <div
@@ -256,10 +287,10 @@ function HighlightCard({
       {/* Label + icon */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 7,
-        marginBottom: 14,
+        marginBottom: gap,
       }}>
         <span style={{
-          width: 26, height: 26, borderRadius: 7,
+          width: isMobile ? 22 : 26, height: isMobile ? 22 : 26, borderRadius: 7,
           background: `${accent}20`,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           color: accent, flexShrink: 0,
@@ -296,15 +327,15 @@ function HighlightCard({
           border: `1px solid ${accent}30`,
           borderRadius: 20,
           padding: '2px 8px',
-          marginBottom: 14,
+          marginBottom: gap,
         }}>
           {comparison}
         </div>
       )}
-      {!comparison && <div style={{ marginBottom: 14 }} />}
+      {!comparison && <div style={{ marginBottom: gap }} />}
 
       {/* Divider */}
-      <div style={{ height: 1, background: 'var(--border)', marginBottom: 12 }} />
+      <div style={{ height: 1, background: 'var(--border)', marginBottom: isMobile ? 8 : 12 }} />
 
       {/* Prompt */}
       {prompt && (

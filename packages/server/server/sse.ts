@@ -1,9 +1,11 @@
 import { join } from 'path'
 import { spawn } from 'child_process'
+import { stat } from 'fs/promises'
 import chokidar from 'chokidar'
-import { SESSION_META_DIR, PROJECTS_DIR, STATS_CACHE_FILE, PORT } from './config'
+import { SESSION_META_DIR, PROJECTS_DIR, STATS_CACHE_FILE, PORT, CODEX_SESSIONS_DIR, GEMINI_DIR, COPILOT_DIR } from './config'
 import { invalidateCache } from './data'
 import { mirrorFile } from './archive'
+import { getEnabledAdapters } from './adapters/types'
 
 export type SseController = ReadableStreamDefaultController<Uint8Array>
 
@@ -29,11 +31,17 @@ export function triggerSseNotification() {
   sseDebounce = setTimeout(notifySseClients, 2000)
 }
 
-export function setupFileWatcher() {
+export async function setupFileWatcher() {
   const watch = (dir: string) => {
     const watcher = chokidar.watch(dir, {
       persistent: true,
       ignoreInitial: true,
+      followSymlinks: false,
+      // Depth cap + ignore noisy trees. Harness roots like ~/.claude and ~/.codex
+      // contain huge plugin caches, temp git clones, sqlite logs and snapshots that
+      // would saturate the watcher (and throw EINVAL) if traversed.
+      depth: 6,
+      ignored: /(^|[/\\])(\.git|node_modules|plugins|cache|\.tmp|shell_snapshots|skills|memories|log|logs|bin|antigravity|history|ide|pkg)([/\\]|$)|\.sqlite/,
     })
     watcher.on('all', (event: string, path: string) => {
       // Mirror new/changed source files into the archive before notifying clients,
@@ -48,9 +56,39 @@ export function setupFileWatcher() {
     })
     console.log(`[watcher] Watching ${dir}`)
   }
+
+  // Claude core paths
   watch(SESSION_META_DIR)
   watch(PROJECTS_DIR)
   watch(STATS_CACHE_FILE)
+
+  // Additional harnesses: watch ONLY each harness's session directory — NOT its
+  // whole data root (adapter.dataRoot). Roots like ~/.codex contain .tmp plugin
+  // clones, an 18MB sqlite log, caches, etc.; watching them recursively saturates
+  // chokidar and starves the request handler. Claude is already covered above.
+  const HARNESS_SESSION_DIRS: Partial<Record<string, string>> = {
+    codex: CODEX_SESSIONS_DIR,
+    gemini: join(GEMINI_DIR, 'tmp'),
+    copilot: join(COPILOT_DIR, 'session-state'),
+  }
+  try {
+    const adapters = await getEnabledAdapters()
+    const seen = new Set<string>([SESSION_META_DIR, PROJECTS_DIR, STATS_CACHE_FILE])
+    for (const adapter of adapters) {
+      const dir = HARNESS_SESSION_DIRS[adapter.id]
+      if (!dir || seen.has(dir)) continue
+      seen.add(dir)
+      try {
+        await stat(dir)
+        watch(dir)
+      } catch {
+        // Directory doesn't exist yet — skip; data.ts re-scans on every request.
+        console.log(`[watcher] Skipping ${dir} (not found)`)
+      }
+    }
+  } catch (err) {
+    console.warn('[watcher] Could not resolve harness adapters:', String(err))
+  }
 }
 
 export function maybeSpawnWatcher() {

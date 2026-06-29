@@ -12,24 +12,24 @@ interface Props {
 const DOCS_URL = 'https://code.claude.com/docs/en/settings'
 
 const T = {
-  badge:    { en: 'Action required', pt: 'Ação necessária' },
-  title:    { en: 'Claude Code deletes your sessions after 30 days', pt: 'O Claude Code apaga suas sessões após 30 dias' },
+  badge:    { en: "Action required", pt: "Ação necessária" },
+  title:    { en: "AI coding assistants prune session data automatically", pt: "Assistentes de IA apagam dados de sessão automaticamente" },
   body1:    {
-    en: 'By default, Claude Code permanently deletes session transcripts older than 30 days on every startup (the cleanupPeriodDays setting). The aggregate totals survive, but each old session’s detail and agent metrics are lost forever.',
-    pt: 'Por padrão, o Claude Code apaga permanentemente os transcripts de sessões com mais de 30 dias a cada inicialização (o setting cleanupPeriodDays). Os totais agregados sobrevivem, mas o detalhe e as métricas de agentes de cada sessão antiga são perdidos para sempre.',
+    en: "Claude Code permanently deletes session transcripts older than 30 days on every startup (cleanupPeriodDays). Codex and other assistants also prune local history. Aggregate totals survive, but each old session's detail and agent metrics are lost forever.",
+    pt: "O Claude Code apaga permanentemente os transcripts de sessões com mais de 30 dias a cada inicialização (cleanupPeriodDays). O Codex e outros assistentes também purgam o histórico local. Os totais agregados sobrevivem, mas o detalhe e as métricas de agentes de cada sessão antiga são perdidos para sempre.",
   },
   body2:    {
-    en: 'Agentistics can preserve your history locally in ~/.agentistics. The data never leaves your machine.',
-    pt: 'O Agentistics pode preservar seu histórico localmente em ~/.agentistics. Os dados nunca saem da sua máquina.',
+    en: "Agentistics can preserve your history locally in ~/.agentistics — across Claude Code, Codex, Gemini, and Copilot. The data never leaves your machine.",
+    pt: "O Agentistics pode preservar seu histórico localmente em ~/.agentistics — para Claude Code, Codex, Gemini e Copilot. Os dados nunca saem da sua máquina.",
   },
-  source:   { en: 'Official documentation', pt: 'Documentação oficial' },
+  source:   { en: "Official documentation (Claude Code)", pt: "Documentação oficial (Claude Code)" },
 
-  consTitle: { en: 'Yes, preserve my history', pt: 'Sim, preservar meu histórico' },
-  consDesc:  { en: 'Keeps every session’s computed metrics forever (~KB). Nothing duplicated.', pt: 'Mantém as métricas calculadas de cada sessão para sempre (~KB). Sem duplicar arquivos.' },
-  recommended: { en: 'Recommended', pt: 'Recomendado' },
+  consTitle: { en: "Yes, preserve my history", pt: "Sim, preservar meu histórico" },
+  consDesc:  { en: "Keeps every session's computed metrics forever (~KB). Nothing duplicated.", pt: "Mantém as métricas calculadas de cada sessão para sempre (~KB). Sem duplicar arquivos." },
+  recommended: { en: "Recommended", pt: "Recomendado" },
 
-  offTitle:  { en: 'No, use Claude’s default folder', pt: 'Não, usar a pasta padrão do Claude' },
-  offDesc:   { en: 'Sessions older than 30 days will keep disappearing.', pt: 'Sessões com mais de 30 dias vão continuar sumindo.' },
+  offTitle:  { en: "No, use each tool's default folders", pt: "Não, usar as pastas padrão de cada ferramenta" },
+  offDesc:   { en: "Sessions older than the cleanup threshold will keep disappearing.", pt: "Sessões acima do limite de limpeza vão continuar sumindo." },
 
   advToggle: { en: 'Advanced — keep full copy of everything', pt: 'Avançado — guardar cópia completa de tudo' },
   fullTitle: { en: 'Keep full transcripts too', pt: 'Guardar transcripts completos também' },

@@ -1,8 +1,10 @@
 import React from 'react'
 import { Zap, Lightbulb, TrendingDown, TrendingUp, Info } from 'lucide-react'
 import { formatModel, getModelColor } from '@agentistics/core'
-import type { Lang } from '@agentistics/core'
+import type { Lang, HarnessId } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { NAtag } from './NAtag'
+import { capable } from '../lib/harness'
 
 interface Props {
   hitRate: number
@@ -18,6 +20,12 @@ interface Props {
   currency: 'USD' | 'BRL'
   brlRate: number
   lang: Lang
+  /**
+   * The active harness filter (undefined = unified / all-harness view).
+   * When a harness does not support tokens (!capable(harness, 'tokens')),
+   * cache data is meaningless — show N/A instead of a misleading 0%.
+   */
+  harness?: HarnessId
 }
 
 function fmtTokens(n: number): string {
@@ -107,9 +115,17 @@ export function CacheHitRatePanel({
   currency,
   brlRate,
   lang,
+  harness,
 }: Props) {
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
+
+  // Only show N/A when the active harness explicitly lacks token capability.
+  // A 0% cache hit for a token-capable harness (e.g. codex, gemini) is a real 0 — fine.
+  if (harness && !capable(harness, 'tokens')) {
+    return <NAtag harness={harness} label="Cache efficiency" />
+  }
+
   const totalRelevant = cacheTotals.inputTokens + cacheTotals.cacheReadInputTokens + cacheTotals.cacheCreationInputTokens
 
   if (totalRelevant === 0) {

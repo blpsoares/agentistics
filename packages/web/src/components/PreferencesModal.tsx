@@ -3,12 +3,15 @@ import {
   X, GripVertical, RotateCcw, Save, Volume2, VolumeX, Zap, Bot,
   Globe, Monitor, Download, SlidersHorizontal, Activity, Code2,
   Archive, Check, HardDrive, FolderClock, ExternalLink, DatabaseZap,
+  Cpu, Copy, CheckCheck, AlertCircle, CircleDot,
 } from 'lucide-react'
 import type { Lang, Theme } from '@agentistics/core'
 import type { ArchiveMode } from './ArchiveConsentModal'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
 import { LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from '../hooks/useData'
 import { CHAT_SOUNDS, DEFAULT_CHAT_SOUND_ID, findChatSound } from '../lib/chatSounds'
+import { useChatHarnesses, type HarnessChatStatus } from '../hooks/useChatHarnesses'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
 
@@ -57,7 +60,7 @@ const BADGE_COLORS: Record<string, string> = {
   Powerful: 'var(--accent-purple)',
 }
 
-export type SettingsTab = 'preferences' | 'sessions' | 'live' | 'install' | 'environment'
+export type SettingsTab = 'preferences' | 'sessions' | 'live' | 'install' | 'environment' | 'harnesses'
 
 interface Props {
   initial: PrefsDraft
@@ -372,19 +375,24 @@ function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose }: {
   onPwaInstalled?: () => void
   onClose: () => void
 }) {
+  // iOS Safari has no beforeinstallprompt — install is always Share → "Add to Home Screen".
+  const isIOS = /ipad|iphone|ipod/i.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+    || (navigator as unknown as { standalone?: boolean }).standalone === true
   const isDevPort = window.location.port === '47292'
   const [uninstallHint, setUninstallHint] = useState(false)
 
   const pwaStatus = pwaPrompt
     ? 'available'
-    : isStandalone ? 'installed' : isDevPort ? 'dev' : 'waiting'
+    : isStandalone ? 'installed' : isIOS ? 'ios' : isDevPort ? 'dev' : 'waiting'
 
   const pwaHint: Record<string, string> = {
     available: pt ? 'Instale pelo navegador, sem download necessário.' : 'Install via browser — no download needed.',
     installed:  pt ? 'Você já está usando o App Web instalado.' : 'You are already using the installed Web App.',
     dev:        pt ? 'Não disponível no servidor de dev. Abra via porta 47291.' : 'Not available in dev mode. Open via port 47291.',
     waiting:    pt ? 'Recarregue a página para habilitar a instalação.' : 'Reload the page to enable installation.',
+    ios:        pt ? 'No iPhone/iPad: toque em Compartilhar e em “Adicionar à Tela de Início”.' : 'On iPhone/iPad: tap Share, then “Add to Home Screen”.',
   }
 
   return (
@@ -425,7 +433,7 @@ function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose }: {
               </div>
             </div>
           </div>
-          {pwaStatus === 'installed' ? (
+          {pwaStatus === 'ios' ? null : pwaStatus === 'installed' ? (
             <button
               onClick={() => setUninstallHint(h => !h)}
               style={{
@@ -470,6 +478,31 @@ function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose }: {
             {pt
               ? 'Para desinstalar: clique no menu ⋮ no canto superior direito da janela do app → "Desinstalar Agentistics".'
               : 'To uninstall: click the ⋮ menu in the top-right corner of the app window → "Uninstall Agentistics".'}
+          </div>
+        )}
+        {pwaStatus === 'ios' && (
+          <div style={{
+            marginTop: 12, padding: '10px 12px', borderRadius: 8,
+            background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+            fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7,
+          }}>
+            <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
+              {pt ? 'Instalar no iPhone / iPad' : 'Install on iPhone / iPad'}
+            </div>
+            {pt ? (
+              <>1. Toque no botão <strong>Compartilhar</strong> (o quadrado com a seta) na barra do Safari.<br />
+              2. Role e toque em <strong>“Adicionar à Tela de Início”</strong>.<br />
+              3. Toque em <strong>Adicionar</strong>. O app abre em tela cheia, como um app nativo.</>
+            ) : (
+              <>1. Tap the <strong>Share</strong> button (square with an arrow) in the Safari bar.<br />
+              2. Scroll and tap <strong>“Add to Home Screen”</strong>.<br />
+              3. Tap <strong>Add</strong>. The app opens full-screen, like a native app.</>
+            )}
+            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>
+              {pt
+                ? 'O iOS não permite instalação com um clique — esse é o fluxo oficial da Apple.'
+                : 'iOS does not allow one-click install — this is Apple’s official flow.'}
+            </div>
           </div>
         )}
       </div>
@@ -891,6 +924,217 @@ function SessionsTab({ pt }: { pt: boolean }) {
   )
 }
 
+// ── Tab: Harnesses (AI backend status) ───────────────────────────────────
+
+function CopyableCode({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1800)
+    })
+  }
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 6,
+      background: 'var(--bg-card)', border: '1px solid var(--border)',
+      borderRadius: 6, padding: '5px 10px', marginTop: 5,
+    }}>
+      <code style={{ flex: 1, fontSize: 11.5, color: 'var(--text-primary)', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+        {text}
+      </code>
+      <button
+        onClick={copy}
+        title="Copy"
+        style={{
+          background: 'transparent', border: 'none', cursor: 'pointer',
+          color: copied ? 'var(--accent-green)' : 'var(--text-tertiary)',
+          display: 'flex', alignItems: 'center', padding: 2, flexShrink: 0,
+          transition: 'color 0.15s',
+        }}
+      >
+        {copied ? <CheckCheck size={13} /> : <Copy size={13} />}
+      </button>
+    </div>
+  )
+}
+
+function HarnessStatusBadge({ h }: { h: HarnessChatStatus }) {
+  if (h.ready) {
+    return (
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        fontSize: 11, fontWeight: 700,
+        color: 'var(--accent-green)',
+        background: 'color-mix(in srgb, var(--accent-green) 12%, transparent)',
+        border: '1px solid color-mix(in srgb, var(--accent-green) 28%, transparent)',
+        padding: '2px 8px', borderRadius: 20,
+      }}>
+        <CircleDot size={10} />
+        Ready
+      </span>
+    )
+  }
+  if (!h.installed) {
+    return (
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        fontSize: 11, fontWeight: 700,
+        color: 'var(--text-tertiary)',
+        background: 'var(--bg-elevated)',
+        border: '1px solid var(--border)',
+        padding: '2px 8px', borderRadius: 20,
+      }}>
+        <AlertCircle size={10} />
+        Not installed
+      </span>
+    )
+  }
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      fontSize: 11, fontWeight: 700,
+      color: '#f97316',
+      background: 'rgba(249,115,22,0.10)',
+      border: '1px solid rgba(249,115,22,0.28)',
+      padding: '2px 8px', borderRadius: 20,
+    }}>
+      <AlertCircle size={10} />
+      Not authenticated
+    </span>
+  )
+}
+
+function HarnessCard({ h }: { h: HarnessChatStatus }) {
+  const { setup } = h
+  const hasGuidance = !h.ready && (setup.installCmd || setup.loginCmd || setup.docUrl || setup.note)
+
+  return (
+    <div style={{
+      padding: '14px 16px', borderRadius: 10,
+      border: h.ready
+        ? '1px solid color-mix(in srgb, var(--accent-green) 25%, var(--border))'
+        : '1px solid var(--border)',
+      background: h.ready ? 'color-mix(in srgb, var(--accent-green) 5%, var(--bg-elevated))' : 'var(--bg-elevated)',
+      display: 'flex', flexDirection: 'column', gap: 0,
+    }}>
+      {/* Row: icon + name + badge */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: hasGuidance ? 10 : 0 }}>
+        <div style={{
+          width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+          background: 'var(--bg-card)', border: '1px solid var(--border)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <Cpu size={14} color={h.ready ? 'var(--accent-green)' : 'var(--text-tertiary)'} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{h.label}</span>
+            <HarnessStatusBadge h={h} />
+          </div>
+          {h.ready && h.models.length > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
+              {h.models.length} model{h.models.length !== 1 ? 's' : ''} available
+              {h.defaultModel ? ` · default: ${h.defaultModel}` : ''}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Setup guidance for non-ready harnesses */}
+      {hasGuidance && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 42 }}>
+          {!h.installed && setup.installCmd && (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: 1 }}>Install</div>
+              <CopyableCode text={setup.installCmd} />
+            </div>
+          )}
+          {h.installed && !h.authReady && setup.loginCmd && (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: 1 }}>Authenticate</div>
+              <CopyableCode text={setup.loginCmd} />
+            </div>
+          )}
+          {/* Show login cmd even when not installed, as reference */}
+          {!h.installed && setup.loginCmd && (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: 1 }}>Then login</div>
+              <CopyableCode text={setup.loginCmd} />
+            </div>
+          )}
+          {setup.note && (
+            <div style={{
+              fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5,
+              padding: '5px 8px', borderRadius: 6,
+              background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+              marginTop: 2,
+            }}>
+              {setup.note}
+            </div>
+          )}
+          {setup.docUrl && (
+            <a
+              href={setup.docUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                fontSize: 11.5, color: 'var(--anthropic-orange)', textDecoration: 'none',
+                marginTop: 2,
+              }}
+            >
+              <ExternalLink size={11} />
+              Learn more / check eligibility
+            </a>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function HarnessesTab({ pt }: { pt: boolean }) {
+  const { harnesses, loading } = useChatHarnesses()
+  const readyCount = harnesses.filter(h => h.ready).length
+
+  return (
+    <div>
+      <SectionHeader label={pt ? 'Backends de IA (Nay chat)' : 'AI backends (Nay chat)'} />
+      <p style={{ fontSize: 12.5, color: 'var(--text-tertiary)', lineHeight: 1.55, margin: '0 0 14px' }}>
+        {pt
+          ? 'Cada backend pode ser usado para conversar via Nay. Mostramos o status de instalação e autenticação de cada um.'
+          : 'Each backend can be used for chat in Nay. Showing installation and authentication status for all known harnesses.'}
+      </p>
+
+      {loading ? (
+        <div style={{ fontSize: 13, color: 'var(--text-tertiary)', textAlign: 'center', padding: '24px 0' }}>
+          {pt ? 'Verificando…' : 'Checking…'}
+        </div>
+      ) : harnesses.length === 0 ? (
+        <div style={{ fontSize: 13, color: 'var(--text-tertiary)', textAlign: 'center', padding: '24px 0' }}>
+          {pt ? 'Nenhum backend encontrado.' : 'No backends found.'}
+        </div>
+      ) : (
+        <>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {harnesses.map(h => <HarnessCard key={h.id} h={h} />)}
+          </div>
+          <div style={{
+            marginTop: 14, padding: '10px 14px', borderRadius: 8,
+            background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+            fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.6,
+          }}>
+            {pt
+              ? `${readyCount} de ${harnesses.length} backends prontos. Instalação e autenticação devem ser feitas no terminal — o Agentistics não executa comandos automaticamente.`
+              : `${readyCount} of ${harnesses.length} backend${harnesses.length !== 1 ? 's' : ''} ready. Install and authenticate in your terminal — Agentistics does not run commands on your behalf.`}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ── Main modal ────────────────────────────────────────────────────────────
 
 const TABS: { id: SettingsTab; icon: React.ReactNode; labelEn: string; labelPt: string }[] = [
@@ -898,6 +1142,7 @@ const TABS: { id: SettingsTab; icon: React.ReactNode; labelEn: string; labelPt: 
   { id: 'sessions',    icon: <Archive size={13} />,           labelEn: 'Sessions',     labelPt: 'Sessões' },
   { id: 'live',        icon: <Activity size={13} />,          labelEn: 'Live',         labelPt: 'Live' },
   { id: 'install',     icon: <Download size={13} />,          labelEn: 'Install',      labelPt: 'Instalar' },
+  { id: 'harnesses',   icon: <Cpu size={13} />,               labelEn: 'Harnesses',    labelPt: 'Backends' },
   { id: 'environment', icon: <Code2 size={13} />,             labelEn: 'Environment',  labelPt: 'Ambiente' },
 ]
 
@@ -908,6 +1153,7 @@ export function PreferencesModal({
   riskyMode, setRiskyMode, highlightUpdates, setHighlightUpdates,
   defaultTab = 'preferences',
 }: Props) {
+  const isMobile = useIsMobile()
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab)
   const [draft, setDraft] = useState<PrefsDraft>({
     ...initial,
@@ -950,18 +1196,19 @@ export function PreferencesModal({
       <div
         style={{
           background: 'var(--bg-surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-lg)',
-          width: 560,
-          height: 'min(680px, 90vh)',
+          border: isMobile ? 'none' : '1px solid var(--border)',
+          borderRadius: isMobile ? 0 : 'var(--radius-lg)',
+          width: isMobile ? '100%' : 560,
+          maxWidth: '100%',
+          height: isMobile ? '100%' : 'min(680px, 90vh)',
           display: 'flex',
           flexDirection: 'column',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
+          boxShadow: isMobile ? 'none' : '0 20px 60px rgba(0,0,0,0.35)',
         }}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div style={{ padding: '20px 24px 0' }}>
+        <div style={{ padding: isMobile ? '16px 16px 0' : '20px 24px 0' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
             <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
               {pt ? 'Configurações' : 'Settings'}
@@ -978,8 +1225,12 @@ export function PreferencesModal({
             </button>
           </div>
 
-          {/* Tab bar */}
-          <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border)', marginBottom: 0 }}>
+          {/* Tab bar — scrolls horizontally on mobile so tabs never overflow */}
+          <div style={{
+            display: 'flex', gap: 2, borderBottom: '1px solid var(--border)', marginBottom: 0,
+            overflowX: isMobile ? 'auto' : undefined,
+            ...(isMobile ? { scrollbarWidth: 'none' as const } : {}),
+          }}>
             {TABS.map(tab => {
               const active = activeTab === tab.id
               const label = pt ? tab.labelPt : tab.labelEn
@@ -989,7 +1240,7 @@ export function PreferencesModal({
                   onClick={() => setActiveTab(tab.id)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 6,
-                    padding: '8px 14px',
+                    padding: isMobile ? '8px 12px' : '8px 14px',
                     fontSize: 12, fontWeight: active ? 700 : 500,
                     color: active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
                     background: 'transparent',
@@ -1000,6 +1251,7 @@ export function PreferencesModal({
                     fontFamily: 'inherit',
                     transition: 'color 0.15s',
                     whiteSpace: 'nowrap',
+                    flexShrink: 0,
                   }}
                 >
                   <span style={{ opacity: active ? 1 : 0.6 }}>{tab.icon}</span>
@@ -1011,7 +1263,7 @@ export function PreferencesModal({
         </div>
 
         {/* Scrollable body */}
-        <div style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
+        <div style={{ overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '18px 16px' : '20px 24px', flex: 1 }}>
           {activeTab === 'preferences' && (
             <PreferencesTab draft={draft} set={set} pt={pt} previewSound={previewSound} />
           )}
@@ -1031,6 +1283,7 @@ export function PreferencesModal({
               pwaPrompt={pwaPrompt} onPwaInstalled={onPwaInstalled} onClose={onClose}
             />
           )}
+          {activeTab === 'harnesses' && <HarnessesTab pt={pt} />}
           {activeTab === 'environment' && <EnvironmentTab pt={pt} />}
         </div>
 
@@ -1038,10 +1291,10 @@ export function PreferencesModal({
         {activeTab === 'preferences' && (
           <div style={{
             display: 'flex', justifyContent: 'flex-end', gap: 8,
-            padding: '16px 24px',
+            padding: isMobile ? '14px 16px' : '16px 24px',
             borderTop: '1px solid var(--border)',
             background: 'var(--bg-surface)',
-            borderRadius: '0 0 var(--radius-lg) var(--radius-lg)',
+            borderRadius: isMobile ? 0 : '0 0 var(--radius-lg) var(--radius-lg)',
             flexShrink: 0,
           }}>
             <button

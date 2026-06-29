@@ -39,18 +39,21 @@
 
 ## What is agentistics?
 
-agentistics is a **local analytics dashboard** for Claude Code. It reads the data Claude Code writes to `~/.claude/` and turns it into charts, metrics, and reports — all without sending anything to a server.
+agentistics is a **local analytics dashboard** for AI coding assistants. It reads the data your harnesses write locally and turns it into charts, metrics, and reports — all without sending anything to a server.
+
+**Multi-harness:** beyond Claude Code (`~/.claude/`), it also tracks **Codex CLI**, **Gemini CLI**, and **GitHub Copilot CLI**. A harness selector lets you view any one harness, a unified "All" view, or a side-by-side `/compare` page. Metrics a given harness can't produce render as "N/A" instead of a misleading 0.
 
 **Key capabilities:**
 
-- Tokens, costs, sessions, and streaks across all your projects
-- Per-project and per-model breakdowns with live BRL/USD conversion
+- Tokens, costs, sessions, and streaks across all your projects — for every harness
+- Per-harness, per-project, and per-model breakdowns with live BRL/USD conversion
+- Side-by-side harness comparison (`/compare`) and per-harness dashboards (`/h/:harness`)
 - Custom layout builder — drag, resize, and arrange any combination of charts
 - **Nay** — an AI chat assistant that answers questions about your data using MCP tools
 - **MCP server** — exposes your analytics as tools for Claude Code and other agents
 - OpenTelemetry export for Grafana, Datadog, and any OTLP-compatible collector
 - PDF export, themes, PT/BR + EN languages
-- Installable as a PWA (web) or native Windows desktop app (Tauri)
+- Fully responsive — installable as a PWA (web, mobile-friendly) or native Windows desktop app (Tauri)
 
 ---
 

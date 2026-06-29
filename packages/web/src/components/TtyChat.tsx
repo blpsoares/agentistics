@@ -8,6 +8,7 @@ import {
   Maximize2, Minimize2, Terminal, Play, ChevronRight,
   Wrench, ChevronDown, ChevronUp, ArrowRight, Filter, History, Plus,
   ShieldAlert, Check, ExternalLink, Paperclip, FileText as FileTextIcon, Minus, Brain,
+  AlertTriangle, Copy,
 } from 'lucide-react'
 
 // ── Attachment type (Nay only handles images + text files) ────────────────────
@@ -19,11 +20,13 @@ type NayAttachment = {
   isImage: boolean
   preview?: string
 }
-import { ClaudeChat } from './ClaudeChat'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
+import type { HarnessId } from '@agentistics/core'
+import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { formatToolName, fmtTime, NAV_LINK_RE, PDF_LINK_RE } from '@agentistics/core'
 import { t } from '@agentistics/core'
 import type { Filters } from '@agentistics/core'
+import { useChatHarnesses, type HarnessChatStatus } from '../hooks/useChatHarnesses'
 
 type Lang = 'pt' | 'en'
 
@@ -726,6 +729,144 @@ function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) =
   )
 }
 
+// ── Harness setup guidance panel ─────────────────────────────────────────────
+
+function CopyableCode({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }).catch(() => { /* ignore */ })
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 3 }}>
+      <code style={{
+        flex: 1, fontSize: 10, background: 'var(--bg-base)', border: '1px solid var(--border)',
+        borderRadius: 4, padding: '2px 6px', fontFamily: 'monospace', color: 'var(--text-secondary)',
+        whiteSpace: 'pre', overflow: 'hidden', textOverflow: 'ellipsis',
+      }}>{text}</code>
+      <button
+        onClick={copy}
+        title="Copy"
+        style={{
+          flexShrink: 0, width: 20, height: 20, borderRadius: 4,
+          border: '1px solid var(--border)', background: 'transparent',
+          cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: copied ? 'var(--accent-green)' : 'var(--text-tertiary)',
+          transition: 'color 0.15s',
+        }}
+      >
+        {copied ? <Check size={9} /> : <Copy size={9} />}
+      </button>
+    </div>
+  )
+}
+
+function HarnessSetupPanel({ harness }: { harness: HarnessChatStatus }) {
+  const { setup, installed, authReady } = harness
+  const reason = !installed ? 'not-installed' : !authReady ? 'not-authed' : null
+  if (!reason) return null
+  return (
+    <div style={{
+      marginTop: 6, padding: '8px 10px', borderRadius: 8,
+      background: 'color-mix(in srgb, var(--accent-orange) 8%, transparent)',
+      border: '1px solid color-mix(in srgb, var(--accent-orange) 30%, transparent)',
+      fontSize: 11, color: 'var(--text-secondary)',
+      animation: 'ttyChatFadeIn 0.15s ease-out',
+    }}>
+      <div style={{ fontWeight: 700, color: 'var(--accent-orange)', marginBottom: 5, fontSize: 11 }}>
+        {reason === 'not-installed' ? `${harness.label} is not installed` : `${harness.label} is not authenticated`}
+      </div>
+      {reason === 'not-installed' && setup.installCmd && (
+        <div>
+          <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 2 }}>Install:</div>
+          <CopyableCode text={setup.installCmd} />
+        </div>
+      )}
+      {reason === 'not-authed' && setup.loginCmd && (
+        <div>
+          <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 2 }}>Login:</div>
+          <CopyableCode text={setup.loginCmd} />
+        </div>
+      )}
+      {setup.note && (
+        <div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+          {setup.note}
+        </div>
+      )}
+      {setup.docUrl && (
+        <a href={setup.docUrl} target="_blank" rel="noopener noreferrer"
+          style={{
+            marginTop: 5, display: 'inline-flex', alignItems: 'center', gap: 3,
+            fontSize: 10, color: 'var(--accent-purple)', textDecoration: 'none',
+          }}
+        >
+          <ExternalLink size={9} /> Learn more
+        </a>
+      )}
+    </div>
+  )
+}
+
+/** Small inline "How to fix" panel shown inside the error display when a backend errors at runtime */
+function HarnessErrorHelp({ harness }: { harness: HarnessChatStatus }) {
+  const { setup } = harness
+  const hasHelp = setup.installCmd || setup.loginCmd || setup.docUrl || setup.note
+  if (!hasHelp) return null
+  return (
+    <div style={{
+      marginTop: 8, padding: '8px 10px', borderRadius: 7,
+      background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.18)',
+      fontSize: 11,
+    }}>
+      <div style={{ fontWeight: 700, color: '#ef4444', marginBottom: 5, fontSize: 11 }}>
+        How to fix ({harness.label})
+      </div>
+      {setup.installCmd && (
+        <div style={{ marginBottom: 4 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 2 }}>Install:</div>
+          <CopyableCode text={setup.installCmd} />
+        </div>
+      )}
+      {setup.loginCmd && (
+        <div style={{ marginBottom: 4 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 2 }}>Login:</div>
+          <CopyableCode text={setup.loginCmd} />
+        </div>
+      )}
+      {setup.note && (
+        <div style={{ fontSize: 10, color: 'var(--text-tertiary)', lineHeight: 1.5, marginTop: 3 }}>
+          {setup.note}
+        </div>
+      )}
+      {setup.docUrl && (
+        <a href={setup.docUrl} target="_blank" rel="noopener noreferrer"
+          style={{
+            marginTop: 5, display: 'inline-flex', alignItems: 'center', gap: 3,
+            fontSize: 10, color: 'var(--accent-purple)', textDecoration: 'none',
+          }}
+        >
+          <ExternalLink size={9} /> Learn more
+        </a>
+      )}
+    </div>
+  )
+}
+
+// ── Nay backend harness types + localStorage helpers ─────────────────────────
+
+const NAY_HARNESS_KEY = 'agentistics-nay-backend-harness'
+
+function loadNayHarnessId(): string | null {
+  try { return localStorage.getItem(NAY_HARNESS_KEY) } catch { return null }
+}
+
+
+function saveNayHarnessId(id: string) {
+  try { localStorage.setItem(NAY_HARNESS_KEY, id) } catch { /* ignore */ }
+}
+
 // ── Nay floating window localStorage helpers ──────────────────────────────────
 
 const NAY_POS_KEY  = 'agentistics-nay-chat-pos'
@@ -760,7 +901,6 @@ function saveNaySize(size: { w: number; h: number }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-import type { ChatMessage as ClaudeChatMessage } from './ClaudeChat'
 
 interface TtyChatProps {
   lang: Lang
@@ -771,18 +911,7 @@ interface TtyChatProps {
   filters: Filters
   setFilters: React.Dispatch<React.SetStateAction<Filters>>
   isMobile?: boolean
-  onDetachClaude?: () => void
-  claudeDetached?: boolean
-  onReattachClaude?: () => void
   onPdfExport?: (range: string) => void
-  claudeSharedState?: {
-    projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
-    sessionId: string | null; messages: ClaudeChatMessage[]; model?: ChatModelId
-  }
-  onClaudeStateChange?: (s: {
-    projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
-    sessionId: string | null; messages: ClaudeChatMessage[]; model?: ChatModelId
-  }) => void
 }
 
 /** Parses filter query params from a nav path like /costs?projects=path1|path2 */
@@ -813,7 +942,7 @@ interface PendingNavigation {
   newProjects: string[]
 }
 
-export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping', onModelSet, filters, setFilters, isMobile, onDetachClaude, claudeDetached, onReattachClaude, onPdfExport, claudeSharedState, onClaudeStateChange }: TtyChatProps) {
+export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping', onModelSet, filters, setFilters, isMobile, onPdfExport }: TtyChatProps) {
   const navigate = useNavigate()
   const [pendingNav, setPendingNav] = useState<PendingNavigation | null>(null)
 
@@ -837,9 +966,6 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
 
   const [open, setOpen] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
-  const [activeTab, setActiveTab] = useState<'nay' | 'claude'>('nay')
-  // Incremented to force ClaudeChat to remount with fresh initial props
-  const [claudeResetKey, setClaudeResetKey] = useState(0)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -852,7 +978,11 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [nayThinking, setNayThinking] = useState<ThinkingBudget>(false)
   const [showNayModelPicker, setShowNayModelPicker] = useState(false)
-  const [claudeCurrentModel, setClaudeCurrentModel] = useState<ChatModelId>(DEFAULT_CHAT_MODEL)
+  const { harnesses: nayBackendHarnesses, loading: nayHarnessesLoading } = useChatHarnesses()
+  const [nayBackendHarnessId, setNayBackendHarnessId] = useState<string>(() => loadNayHarnessId() ?? 'claude')
+  const [showNayHarnessPicker, setShowNayHarnessPicker] = useState(false)
+  // Track which harness picker item is hovered for setup panel preview
+  const [hoveredHarnessId, setHoveredHarnessId] = useState<string | null>(null)
   // Track which historical Nay session is being viewed (for live polling)
   const [viewedNaySessionId, setViewedNaySessionId] = useState<string | null>(null)
 
@@ -901,9 +1031,23 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
   useEffect(() => { openRef.current = open }, [open])
   useEffect(() => { soundRef.current = chatSoundEnabled }, [chatSoundEnabled])
   useEffect(() => { soundIdRef.current = chatSoundId }, [chatSoundId])
-  useEffect(() => { if (nayDetached) setActiveTab('claude') }, [nayDetached])
-  useEffect(() => { if (claudeDetached) setActiveTab('nay') }, [claudeDetached])
-  useEffect(() => { if (claudeSharedState?.model) setClaudeCurrentModel(claudeSharedState.model) }, [claudeSharedState?.model])
+  // When harness list loads, default to the best READY harness (prefer claude, else first ready)
+  useEffect(() => {
+    if (nayHarnessesLoading || nayBackendHarnesses.length === 0) return
+    const savedId = loadNayHarnessId()
+    const savedEntry = savedId ? nayBackendHarnesses.find(h => h.id === savedId) : null
+    // If saved preference exists and is ready, keep it; otherwise pick best ready harness
+    if (savedEntry && savedEntry.ready) {
+      setNayBackendHarnessId(savedId!)
+      return
+    }
+    const readyHarnesses = nayBackendHarnesses.filter(h => h.ready)
+    const preferred = readyHarnesses.find(h => h.id === 'claude') ?? readyHarnesses[0]
+    if (preferred) {
+      setNayBackendHarnessId(preferred.id)
+      saveNayHarnessId(preferred.id)
+    }
+  }, [nayHarnessesLoading, nayBackendHarnesses])
   useEffect(() => { nayPosRef.current = nayPos }, [nayPos])
   useEffect(() => { naySizeRef.current = naySize }, [naySize])
   useEffect(() => { nayFabPosRef.current = nayFabPos }, [nayFabPos])
@@ -927,75 +1071,30 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
   }, [vpRect.height, isMobile, open])
 
-  // External open trigger: dispatched by RecentSessions "open in Claude/Nay" button
+  // External open trigger: dispatched by RecentSessions "Open in Nay Chat" button
   useEffect(() => {
     const handler = (e: Event) => {
-      const { tab, project, sessionId: targetSessionId } = (e as CustomEvent<{
-        tab: 'nay' | 'claude'
-        sessionId?: string
-        project?: { path: string; name: string; encodedDir: string }
-      }>).detail
+      const { sessionId: targetSessionId } = (e as CustomEvent<{ sessionId?: string }>).detail
 
       setOpen(true)
 
-      if (tab === 'nay') {
-        setActiveTab('nay')
-        if (targetSessionId) {
-          // Load the specific Nay session history
-          setError(null)
-          setHistoryLoading(true)
-          fetch(`/api/nay-sessions/${targetSessionId}`)
-            .then(r => r.ok ? r.json() : [])
-            .then((msgs: RawSessionMessage[]) => {
-              setMessages(expandHistoryBlob(msgs))
-              setSessionId(targetSessionId)
-            })
-            .catch(() => {})
-            .finally(() => setHistoryLoading(false))
-        }
-      } else if (tab === 'claude' && project) {
-        if (targetSessionId) {
-          // Fetch messages FIRST, then switch tab so ClaudeChat mounts with data ready
-          fetch(`/api/claude-sessions/${targetSessionId}?encodedDir=${encodeURIComponent(project.encodedDir)}`)
-            .then(r => r.ok ? r.json() : [])
-            .then((msgs: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number; tools?: string[] }>) => {
-              onClaudeStateChange?.({
-                projectPath: project.path,
-                projectName: project.name,
-                projectEncodedDir: project.encodedDir,
-                sessionId: targetSessionId,
-                messages: msgs,
-              })
-              setClaudeResetKey(k => k + 1)
-              setActiveTab('claude')
-            })
-            .catch(() => {
-              onClaudeStateChange?.({
-                projectPath: project.path,
-                projectName: project.name,
-                projectEncodedDir: project.encodedDir,
-                sessionId: targetSessionId,
-                messages: [],
-              })
-              setClaudeResetKey(k => k + 1)
-              setActiveTab('claude')
-            })
-        } else {
-          onClaudeStateChange?.({
-            projectPath: project.path,
-            projectName: project.name,
-            projectEncodedDir: project.encodedDir,
-            sessionId: null,
-            messages: [],
+      if (targetSessionId) {
+        // Load the specific Nay session history
+        setError(null)
+        setHistoryLoading(true)
+        fetch(`/api/nay-sessions/${targetSessionId}`)
+          .then(r => r.ok ? r.json() : [])
+          .then((msgs: RawSessionMessage[]) => {
+            setMessages(expandHistoryBlob(msgs))
+            setSessionId(targetSessionId)
           })
-          setClaudeResetKey(k => k + 1)
-          setActiveTab('claude')
-        }
+          .catch(() => {})
+          .finally(() => setHistoryLoading(false))
       }
     }
-    window.addEventListener('agentistics:open-chat', handler)
-    return () => window.removeEventListener('agentistics:open-chat', handler)
-  }, [onClaudeStateChange])
+    window.addEventListener('agentistics:open-nay-chat', handler)
+    return () => window.removeEventListener('agentistics:open-nay-chat', handler)
+  }, [])
 
   // Update browser tab title to indicate unread Nay message
   useEffect(() => {
@@ -1307,7 +1406,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
     const pendingAttachments = nayAttachments
     setNayAttachments([])
 
-    const model = chatModel ?? DEFAULT_CHAT_MODEL
+    // Resolve effective model for the chosen backend harness
+    const currentHarness = nayBackendHarnesses.find(h => h.id === nayBackendHarnessId)
+    const harnessModels = currentHarness?.models ?? []
+    const model = (chatModel && harnessModels.some(m => m.id === chatModel))
+      ? chatModel
+      : (currentHarness?.defaultModel ?? chatModel ?? DEFAULT_CHAT_MODEL)
     const userMsg: ChatMessage = {
       role: 'user', content: text, timestamp: Date.now(),
       images: pendingAttachments.filter(a => a.isImage).map(a => a.preview!),
@@ -1334,6 +1438,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
         signal: abortCtrl.signal,
         body: JSON.stringify({
           message: text, history, model, sessionId,
+          harness: nayBackendHarnessId !== 'claude' ? nayBackendHarnessId : undefined,
           thinkingBudget: nayThinking || undefined,
           attachments: pendingAttachments.length > 0
             ? pendingAttachments.map(a => ({ name: a.name, mimeType: a.mimeType, data: a.data, isImage: a.isImage }))
@@ -1401,7 +1506,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
       setStreaming(false)
       setCurrentTools([])
     }
-  }, [input, streaming, messages, chatModel, sessionId, execCmd, playNotification, nayAttachments]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [input, streaming, messages, chatModel, sessionId, execCmd, playNotification, nayAttachments, nayBackendHarnessId, nayBackendHarnesses]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Mobile: Enter = newline, send button sends. Desktop: Enter sends, Shift+Enter = newline.
@@ -1429,6 +1534,17 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
   const pt = lang === 'pt'
   const effectiveModel = chatModel ?? DEFAULT_CHAT_MODEL
   const modelInfo = CHAT_MODELS.find(m => m.id === effectiveModel)
+
+  // Nay backend harness helpers
+  const nayBackendHarness: HarnessChatStatus | null = nayBackendHarnesses.find(h => h.id === nayBackendHarnessId) ?? null
+  // When harness info is loaded, use its models; otherwise fall back to CHAT_MODELS (claude)
+  const nayHarnessModels = nayBackendHarness?.models ?? CHAT_MODELS.map(m => ({ id: m.id, label: m.label, badge: m.badge }))
+  const nayEffectiveModel = (chatModel && nayHarnessModels.some(m => m.id === chatModel)) ? chatModel : (nayBackendHarness?.defaultModel ?? effectiveModel)
+  const nayModelInfo = nayHarnessModels.find(m => m.id === nayEffectiveModel) ?? CHAT_MODELS.find(m => m.id === nayEffectiveModel)
+  // Total harnesses count (all, not just ready) — show selector when >1 known harness
+  const totalHarnessCount = nayBackendHarnesses.length
+  // For the error panel: active harness's setup info (for runtime-error "How to fix" guidance)
+  const activeHarnessForError: HarnessChatStatus | null = nayBackendHarness
 
   const panelStyle: React.CSSProperties = isMobile
     ? { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, width: 'auto', height: 'auto' }
@@ -1503,7 +1619,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
       </button>
 
       {/* Panel */}
-      {open && (
+      {open && !nayDetached && (
         <div style={{
           ...panelStyle,
           zIndex: 400,
@@ -1533,80 +1649,60 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                 background: 'var(--bg-elevated)', border: '1px solid var(--border)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                <img
-                  src={activeTab === 'claude' ? '/claudeLogo.png' : '/minimalistLogo.png'}
-                  alt={activeTab === 'claude' ? 'Claude' : 'Nay'}
-                  style={{ width: 22, height: 22, objectFit: 'contain' }}
-                />
+                <img src="/minimalistLogo.png" alt="Nay" style={{ width: 22, height: 22, objectFit: 'contain' }} />
               </div>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
-                  {activeTab === 'claude' ? 'Claude' : 'Nay'}
+                  Nay
                 </div>
-                {(() => {
-                  if (activeTab === 'nay') {
-                    return (
-                      <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                        {streaming ? (
-                          <span style={{ color: 'var(--accent-purple)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <Loader size={8} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
-                            {currentTools.length > 0
-                              ? formatToolName(currentTools[currentTools.length - 1]!)
-                              : (pt ? 'pensando...' : 'thinking...')}
-                          </span>
-                        ) : (
-                          <>
-                            <span>{modelInfo?.label ?? effectiveModel}</span>
-                            {modelInfo && (
-                              <span style={{
-                                fontSize: 9, fontWeight: 700,
-                                color: BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)',
-                                background: `color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
-                                border: `1px solid color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
-                                padding: '0px 4px', borderRadius: 3,
-                              }}>
-                                {modelInfo.badge}
-                              </span>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    )
-                  }
-                  const claudeModelInfo = CHAT_MODELS.find(m => m.id === claudeCurrentModel)
-                  return (
-                    <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <span>{claudeModelInfo?.label ?? claudeCurrentModel}</span>
-                      {claudeModelInfo && (
+                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  {streaming ? (
+                    <span style={{ color: 'var(--accent-purple)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <Loader size={8} style={{ animation: 'ttyChatSpin 1s linear infinite' }} />
+                      {currentTools.length > 0
+                        ? formatToolName(currentTools[currentTools.length - 1]!)
+                        : (pt ? 'pensando...' : 'thinking...')}
+                    </span>
+                  ) : (
+                    <>
+                      {nayBackendHarnesses.length > 1 && nayBackendHarness && (
                         <span style={{
-                          fontSize: 9, fontWeight: 700,
-                          color: BADGE_COLORS[claudeModelInfo.badge] ?? 'var(--text-tertiary)',
-                          background: `color-mix(in srgb, ${BADGE_COLORS[claudeModelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
-                          border: `1px solid color-mix(in srgb, ${BADGE_COLORS[claudeModelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
-                          padding: '0px 4px', borderRadius: 3,
+                          fontSize: 9, color: nayBackendHarnessId !== 'claude' ? HARNESS_COLORS[nayBackendHarnessId as HarnessId] ?? 'var(--text-tertiary)' : 'var(--anthropic-orange)',
+                          fontWeight: 700,
                         }}>
-                          {claudeModelInfo.badge}
+                          {nayBackendHarness.label}·
                         </span>
                       )}
-                    </div>
-                  )
-                })()}
+                      <span>{nayModelInfo?.label ?? nayEffectiveModel}</span>
+                      {nayModelInfo?.badge && (
+                        <span style={{
+                          fontSize: 9, fontWeight: 700,
+                          color: BADGE_COLORS[nayModelInfo.badge] ?? 'var(--text-tertiary)',
+                          background: `color-mix(in srgb, ${BADGE_COLORS[nayModelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
+                          border: `1px solid color-mix(in srgb, ${BADGE_COLORS[nayModelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
+                          padding: '0px 4px', borderRadius: 3,
+                        }}>
+                          {nayModelInfo.badge}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
               </div>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              {activeTab === 'nay' && messages.length > 0 && (
+              {messages.length > 0 && (
                 <button className="tty-icon-btn" onClick={clearChat} title={pt ? 'Nova conversa' : 'New conversation'} style={iconBtnStyle}>
                   <Plus size={12} />
                 </button>
               )}
-              {activeTab === 'nay' && !nayDetached && !isMobile && (
+              {!nayDetached && !isMobile && (
                 <button
                   className="tty-icon-btn"
                   onClick={() => {
                     setNayDetached(true)
                     setNayMinimized(false)
-                    setActiveTab('claude')
                   }}
                   title={pt ? 'Destacar janela Nay' : 'Detach Nay window'}
                   style={iconBtnStyle}
@@ -1614,26 +1710,14 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                   <ExternalLink size={12} />
                 </button>
               )}
-              {activeTab === 'claude' && !claudeDetached && !isMobile && (
-                <button
-                  className="tty-icon-btn"
-                  onClick={() => { onDetachClaude?.(); setActiveTab('nay') }}
-                  title={pt ? 'Destacar janela Claude' : 'Detach Claude window'}
-                  style={iconBtnStyle}
-                >
-                  <ExternalLink size={12} />
-                </button>
-              )}
-              {activeTab === 'nay' && (
-                <button
-                  className="tty-icon-btn"
-                  onClick={openHistory}
-                  title={pt ? 'Histórico de conversas' : 'Conversation history'}
-                  style={{ ...iconBtnStyle, color: showHistory ? 'var(--accent-purple)' : 'var(--text-secondary)' }}
-                >
-                  <History size={12} />
-                </button>
-              )}
+              <button
+                className="tty-icon-btn"
+                onClick={openHistory}
+                title={pt ? 'Histórico de conversas' : 'Conversation history'}
+                style={{ ...iconBtnStyle, color: showHistory ? 'var(--accent-purple)' : 'var(--text-secondary)' }}
+              >
+                <History size={12} />
+              </button>
               <button
                 className="tty-icon-btn"
                 onClick={() => setFullscreen(v => !v)}
@@ -1648,78 +1732,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
             </div>
           </div>
 
-          {/* Both detached — show re-attach panel instead of tabs */}
-          {nayDetached && claudeDetached && (
-            <div style={{
-              flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-              gap: 16, padding: '32px 24px', color: 'var(--text-tertiary)', textAlign: 'center',
-            }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
-                {pt ? 'Ambos os chats estão flutuando' : 'Both chats are floating'}
-              </div>
-              <div style={{ fontSize: 11, lineHeight: 1.7, opacity: 0.8 }}>
-                {pt ? 'Clique em um dos botões abaixo para acoplar o chat de volta ao painel.' : 'Click one of the buttons below to re-attach a chat to this panel.'}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: 220 }}>
-                <button
-                  onClick={() => { setNayDetached(false); setNayMinimized(false); setActiveTab('nay') }}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                    padding: '9px 14px', borderRadius: 8, border: '1px solid color-mix(in srgb, var(--accent-purple) 40%, transparent)',
-                    background: 'color-mix(in srgb, var(--accent-purple) 10%, transparent)',
-                    color: 'var(--accent-purple)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
-                  }}
-                >
-                  <img src="/minimalistLogo.png" alt="Nay" style={{ width: 14, height: 14, objectFit: 'contain' }} />
-                  {pt ? 'Acoplar Nay' : 'Re-attach Nay'}
-                </button>
-                <button
-                  onClick={() => { onReattachClaude?.(); setActiveTab('claude') }}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                    padding: '9px 14px', borderRadius: 8, border: '1px solid color-mix(in srgb, var(--anthropic-orange) 40%, transparent)',
-                    background: 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)',
-                    color: 'var(--anthropic-orange)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
-                  }}
-                >
-                  <img src="/claudeLogo.png" alt="Claude" style={{ width: 14, height: 14, objectFit: 'contain' }} />
-                  {pt ? 'Acoplar Claude' : 'Re-attach Claude'}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Tab bar */}
-          {!(nayDetached && claudeDetached) && <div style={{
-            display: 'flex', borderBottom: '1px solid var(--border)',
-            background: 'var(--bg-card)', flexShrink: 0,
-          }}>
-            {(['nay', 'claude'] as const).filter(tab => !(tab === 'nay' && nayDetached) && !(tab === 'claude' && claudeDetached)).map(tab => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                style={{
-                  flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                  padding: '7px 0', border: 'none', background: 'transparent',
-                  cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: activeTab === tab ? 700 : 400,
-                  color: activeTab === tab ? (tab === 'nay' ? 'var(--accent-purple)' : 'var(--anthropic-orange)') : 'var(--text-tertiary)',
-                  borderBottom: activeTab === tab
-                    ? `2px solid ${tab === 'nay' ? 'var(--accent-purple)' : 'var(--anthropic-orange)'}`
-                    : '2px solid transparent',
-                  transition: 'all 0.15s',
-                }}
-              >
-                <img
-                  src={tab === 'nay' ? '/minimalistLogo.png' : '/claudeLogo.png'}
-                  alt={tab}
-                  style={{ width: 14, height: 14, objectFit: 'contain' }}
-                />
-                {tab === 'nay' ? 'Nay' : 'Claude'}
-              </button>
-            ))}
-          </div>}
-
-          {!nayDetached && activeTab === 'nay' && <>
+          {<>
 
           {/* History panel */}
           {showHistory && (
@@ -1895,13 +1908,17 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
 
             {error && (
               <div style={{
-                display: 'flex', alignItems: 'flex-start', gap: 8,
                 padding: '10px 12px', borderRadius: 8, marginBottom: 8,
                 background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
                 fontSize: 12, color: '#ef4444',
               }}>
-                <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
-                <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{error}</span>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{error}</span>
+                </div>
+                {activeHarnessForError && (
+                  <HarnessErrorHelp harness={activeHarnessForError} />
+                )}
               </div>
             )}
           </div>
@@ -1931,8 +1948,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
             )}
             <input ref={nayFileInputRef} type="file" multiple accept="image/*,text/*,.md,.json,.ts,.js,.py,.txt,.csv" onChange={handleNayFileSelect} style={{ display: 'none' }} />
 
-          {/* Nay toolbar: thinking + model picker */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 12px 0', justifyContent: 'flex-end' }}>
+          {/* Nay toolbar: thinking + harness selector + model picker */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 12px 0', justifyContent: 'flex-end', flexWrap: 'wrap', overflow: 'hidden' }}>
             {/* Thinking toggle */}
             <button
               className="tty-icon-btn"
@@ -1950,15 +1967,85 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
               {nayThinking && <span style={{ fontSize: 9, fontWeight: 700 }}>{thinkingLabel(nayThinking)}</span>}
             </button>
 
+            {/* Harness selector — shown when >1 harness known (including not-ready ones) */}
+            {totalHarnessCount > 1 && (
+              <div style={{ position: 'relative' }}>
+                <button
+                  className="tty-icon-btn"
+                  onClick={() => { setShowNayHarnessPicker(v => !v); setShowNayModelPicker(false) }}
+                  title="Change backend"
+                  style={{ ...iconBtnStyle, width: 'auto', padding: '0 6px', gap: 4, fontSize: 10,
+                    color: nayBackendHarnessId !== 'claude' ? HARNESS_COLORS[nayBackendHarnessId as HarnessId] ?? 'var(--text-secondary)' : 'var(--text-secondary)' }}
+                >
+                  {nayBackendHarness && !nayBackendHarness.ready && (
+                    <AlertTriangle size={9} style={{ color: 'var(--accent-orange)' }} />
+                  )}
+                  <span style={{ maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nayBackendHarness?.label ?? nayBackendHarnessId}</span>
+                  <ChevronDown size={9} />
+                </button>
+                {showNayHarnessPicker && (
+                  <div style={{
+                    position: 'absolute', bottom: 'calc(100% + 4px)', right: 0, zIndex: 10, minWidth: 200,
+                    background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10,
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden',
+                  }}>
+                    {nayBackendHarnesses.map(h => {
+                      const active = nayBackendHarnessId === h.id
+                      const hColor = h.id === 'claude' ? 'var(--anthropic-orange)' : (HARNESS_COLORS[h.id as HarnessId] ?? 'var(--text-secondary)')
+                      const isHovered = hoveredHarnessId === h.id
+                      return (
+                        <div key={h.id}>
+                          <button className="tty-icon-btn"
+                            onClick={() => {
+                              setNayBackendHarnessId(h.id)
+                              saveNayHarnessId(h.id)
+                              if (h.ready) onModelSet(h.defaultModel as ChatModelId)
+                              setShowNayHarnessPicker(false)
+                            }}
+                            onMouseEnter={() => setHoveredHarnessId(h.id)}
+                            onMouseLeave={() => setHoveredHarnessId(null)}
+                            style={{
+                              width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+                              background: active ? 'var(--bg-elevated)' : 'transparent', border: 'none',
+                              cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                              borderBottom: isHovered && !h.ready ? 'none' : '1px solid var(--border)',
+                              transition: 'background 0.1s',
+                              borderRadius: 0,
+                            }}>
+                            {h.ready
+                              ? <span style={{ width: 7, height: 7, borderRadius: '50%', background: hColor, flexShrink: 0 }} />
+                              : <AlertTriangle size={9} style={{ color: 'var(--accent-orange)', flexShrink: 0 }} />
+                            }
+                            <span style={{ flex: 1, fontSize: 12, fontWeight: active ? 700 : 400, color: active ? 'var(--text-primary)' : h.ready ? 'var(--text-secondary)' : 'var(--text-tertiary)' }}>{h.label}</span>
+                            {!h.ready && (
+                              <span style={{ fontSize: 9, color: 'var(--accent-orange)', flexShrink: 0 }}>
+                                {!h.installed ? 'not installed' : 'not authed'}
+                              </span>
+                            )}
+                          </button>
+                          {/* Setup guidance shown when hovered and not ready */}
+                          {isHovered && !h.ready && (
+                            <div style={{ padding: '0 10px 8px', borderBottom: '1px solid var(--border)' }}>
+                              <HarnessSetupPanel harness={h} />
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Model picker */}
             <div style={{ position: 'relative' }}>
               <button
                 className="tty-icon-btn"
-                onClick={() => setShowNayModelPicker(v => !v)}
+                onClick={() => { setShowNayModelPicker(v => !v); setShowNayHarnessPicker(false) }}
                 title="Change model"
-                style={{ ...iconBtnStyle, width: 'auto', padding: '0 6px', gap: 4, fontSize: 10 }}
+                style={{ ...iconBtnStyle, width: 'auto', padding: '0 6px', gap: 4, fontSize: 10, maxWidth: isMobile ? 140 : 'none' }}
               >
-                <span>{modelInfo?.label ?? effectiveModel}</span>
+                <span style={{ maxWidth: isMobile ? 110 : 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nayModelInfo?.label ?? nayEffectiveModel}</span>
                 <ChevronDown size={9} />
               </button>
               {showNayModelPicker && (
@@ -1967,12 +2054,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                   background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10,
                   boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden',
                 }}>
-                  {CHAT_MODELS.map(m => {
-                    const active = effectiveModel === m.id
-                    const badgeColor = BADGE_COLORS[m.badge] ?? 'var(--text-tertiary)'
+                  {nayHarnessModels.map(m => {
+                    const active = nayEffectiveModel === m.id
+                    const badgeColor = m.badge ? (BADGE_COLORS[m.badge] ?? 'var(--text-tertiary)') : 'var(--text-tertiary)'
                     return (
                       <button key={m.id} className="tty-icon-btn"
-                        onClick={() => { onModelSet(m.id); setShowNayModelPicker(false) }}
+                        onClick={() => { onModelSet(m.id as ChatModelId); setShowNayModelPicker(false) }}
                         style={{
                           width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
                           background: active ? 'var(--bg-elevated)' : 'transparent', border: 'none',
@@ -1981,10 +2068,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                           borderRadius: 0,
                         }}>
                         <span style={{ flex: 1, fontSize: 12, fontWeight: active ? 700 : 400, color: active ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{m.label}</span>
-                        <span style={{ fontSize: 9, fontWeight: 700, color: badgeColor,
-                          background: `color-mix(in srgb, ${badgeColor} 12%, transparent)`,
-                          border: `1px solid color-mix(in srgb, ${badgeColor} 30%, transparent)`,
-                          padding: '1px 5px', borderRadius: 3 }}>{m.badge}</span>
+                        {m.badge && (
+                          <span style={{ fontSize: 9, fontWeight: 700, color: badgeColor,
+                            background: `color-mix(in srgb, ${badgeColor} 12%, transparent)`,
+                            border: `1px solid color-mix(in srgb, ${badgeColor} 30%, transparent)`,
+                            padding: '1px 5px', borderRadius: 3 }}>{m.badge}</span>
+                        )}
                       </button>
                     )
                   })}
@@ -1993,6 +2082,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
             </div>
           </div>
 
+          {/* Show setup panel inline when selected backend is not installed */}
+          {nayBackendHarness && !nayBackendHarness.installed && (
+            <div style={{ padding: '0 12px 8px' }}>
+              <HarnessSetupPanel harness={nayBackendHarness} />
+            </div>
+          )}
           <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
             <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30, alignSelf: 'flex-end', marginBottom: 1 }}>
               <Paperclip size={12} />
@@ -2005,7 +2100,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
               onPaste={handleNayPaste}
               placeholder={pt ? 'Pergunte algo...' : 'Ask something...'}
               rows={1}
-              disabled={streaming || chatModel === null}
+              disabled={streaming || chatModel === null || nayBackendHarness?.installed === false}
               style={{
                 flex: 1, resize: 'none',
                 background: 'var(--bg-elevated)', border: '1px solid var(--border)',
@@ -2040,7 +2135,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
               <button
                 className="tty-send-btn"
                 onClick={() => sendMessage()}
-                disabled={(!input.trim() && nayAttachments.length === 0) || chatModel === null}
+                disabled={(!input.trim() && nayAttachments.length === 0) || chatModel === null || nayBackendHarness?.installed === false}
                 title={pt ? 'Enviar (Enter)' : 'Send (Enter)'}
                 style={{
                   width: 34, height: 34, borderRadius: 8, flexShrink: 0,
@@ -2059,23 +2154,6 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
           </div>
 
           </>}
-
-          {!claudeDetached && activeTab === 'claude' && (
-            <ClaudeChat
-              key={claudeResetKey}
-              embedded
-              lang={lang}
-              onDetach={() => { onDetachClaude?.(); setActiveTab('nay') }}
-              initialProject={claudeSharedState?.projectPath ? {
-                path: claudeSharedState.projectPath,
-                name: claudeSharedState.projectName ?? '',
-                encodedDir: claudeSharedState.projectEncodedDir ?? '',
-              } : null}
-              initialSessionId={claudeSharedState?.sessionId ?? null}
-              initialMessages={claudeSharedState?.messages ?? []}
-              onStateChange={(s) => { if (s.model) setClaudeCurrentModel(s.model); onClaudeStateChange?.(s) }}
-            />
-          )}
 
         </div>
       )}
@@ -2164,16 +2242,24 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                     </span>
                   ) : (
                     <>
-                      <span>{modelInfo?.label ?? effectiveModel}</span>
-                      {modelInfo && (
+                      {nayBackendHarnesses.length > 1 && nayBackendHarness && (
+                        <span style={{
+                          fontSize: 9, color: nayBackendHarnessId !== 'claude' ? HARNESS_COLORS[nayBackendHarnessId as HarnessId] ?? 'var(--text-tertiary)' : 'var(--anthropic-orange)',
+                          fontWeight: 700,
+                        }}>
+                          {nayBackendHarness.label}·
+                        </span>
+                      )}
+                      <span>{nayModelInfo?.label ?? nayEffectiveModel}</span>
+                      {nayModelInfo?.badge && (
                         <span style={{
                           fontSize: 9, fontWeight: 700,
-                          color: BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)',
-                          background: `color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
-                          border: `1px solid color-mix(in srgb, ${BADGE_COLORS[modelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
+                          color: BADGE_COLORS[nayModelInfo.badge] ?? 'var(--text-tertiary)',
+                          background: `color-mix(in srgb, ${BADGE_COLORS[nayModelInfo.badge] ?? 'var(--text-tertiary)'} 12%, transparent)`,
+                          border: `1px solid color-mix(in srgb, ${BADGE_COLORS[nayModelInfo.badge] ?? 'var(--text-tertiary)'} 25%, transparent)`,
                           padding: '0px 4px', borderRadius: 3,
                         }}>
-                          {modelInfo.badge}
+                          {nayModelInfo.badge}
                         </span>
                       )}
                     </>
@@ -2202,7 +2288,6 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                   setNayDetached(false)
                   setNayMinimized(false)
                   setOpen(true)
-                  setActiveTab('nay')
                 }}
                 title={pt ? 'Encaixar no chat' : 'Re-attach to chat'}
                 style={iconBtnStyle}
@@ -2395,13 +2480,17 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
             )}
             {error && (
               <div style={{
-                display: 'flex', alignItems: 'flex-start', gap: 8,
                 padding: '10px 12px', borderRadius: 8, marginBottom: 8,
                 background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
                 fontSize: 12, color: '#ef4444',
               }}>
-                <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
-                <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{error}</span>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{error}</span>
+                </div>
+                {activeHarnessForError && (
+                  <HarnessErrorHelp harness={activeHarnessForError} />
+                )}
               </div>
             )}
           </div>
@@ -2428,6 +2517,12 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                 ))}
               </div>
             )}
+            {/* Show setup panel inline when selected backend is not installed */}
+            {nayBackendHarness && !nayBackendHarness.installed && (
+              <div style={{ padding: '0 12px 8px' }}>
+                <HarnessSetupPanel harness={nayBackendHarness} />
+              </div>
+            )}
             <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
               <button className="tty-icon-btn" onClick={() => nayFileInputRef.current?.click()} title={pt ? 'Anexar arquivo' : 'Attach file'} style={{ ...iconBtnStyle, flexShrink: 0, width: 30, height: 30, alignSelf: 'flex-end', marginBottom: 1 }}>
                 <Paperclip size={12} />
@@ -2440,7 +2535,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                 onPaste={handleNayPaste}
                 placeholder={pt ? 'Pergunte algo...' : 'Ask something...'}
                 rows={1}
-                disabled={streaming || chatModel === null}
+                disabled={streaming || chatModel === null || nayBackendHarness?.installed === false}
                 style={{
                   flex: 1, resize: 'none',
                   background: 'var(--bg-elevated)', border: '1px solid var(--border)',
@@ -2475,7 +2570,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                 <button
                   className="tty-send-btn"
                   onClick={() => sendMessage()}
-                  disabled={(!input.trim() && nayAttachments.length === 0) || chatModel === null}
+                  disabled={(!input.trim() && nayAttachments.length === 0) || chatModel === null || nayBackendHarness?.installed === false}
                   title={pt ? 'Enviar (Enter)' : 'Send (Enter)'}
                   style={{
                     width: 34, height: 34, borderRadius: 8, flexShrink: 0,

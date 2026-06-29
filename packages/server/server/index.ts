@@ -7,12 +7,17 @@ import { getVersionInfo } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
 import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, type ChatMessage, type ChatModelId, type ChatAttachment } from './chat-tty'
+import { getChatDriver, chatHarnessStatus } from './chat-drivers/index'
 import { listMcpServers, removeMcpServer } from './mcp-list'
 import { listNaySessions, getNaySessionMessages } from './nay-sessions'
 import { listClaudeSessions, getClaudeSessionMessages, type ClaudeSessionSummary, type ClaudeSessionMessage } from './claude-sessions'
+import { listCodexSessions, getCodexSessionMessages, type CodexSessionSummary, type CodexSessionMessage } from './codex-sessions'
+import { listGeminiSessions, getGeminiSessionMessages, type GeminiSessionSummary, type GeminiSessionMessage } from './gemini-sessions'
+import { listCopilotSessions, getCopilotSessionMessages, type CopilotSessionSummary, type CopilotSessionMessage } from './copilot-sessions'
 import { PROJECTS_DIR } from './config'
 import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
+import { getEnabledAdapters } from './adapters/types'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -67,7 +72,7 @@ void (async () => {
   }
 })()
 
-setupFileWatcher()
+void setupFileWatcher()
 maybeSpawnWatcher()
 ensureNayChat(PORT).catch(err => console.error('[nay-chat] failed to initialize:', err))
 ensureClaudeChat().catch(err => console.error('[claude-chat] failed to initialize:', err))
@@ -264,6 +269,30 @@ Bun.serve({
           const name = projectPath.split('/').filter(Boolean).pop() ?? dir
           entries.push({ name, path: projectPath, encodedDir: dir, sessionCount: jsonlFiles.length })
         }))
+        // Collect project paths from all non-Claude harness adapters via their sessions.
+        // Avoids touching statsCache (Claude-only) and reuses the already-loaded session data.
+        const seenPaths = new Set(entries.map(e => e.path))
+        const adapters = await getEnabledAdapters()
+        await Promise.all(
+          adapters
+            .filter(a => a.id !== 'claude')
+            .map(async a => {
+              const sessions = await a.loadSessions()
+              const byPath = new Map<string, number>()
+              for (const s of sessions) {
+                if (s.project_path) {
+                  byPath.set(s.project_path, (byPath.get(s.project_path) ?? 0) + 1)
+                }
+              }
+              for (const [projectPath, sessionCount] of byPath) {
+                if (seenPaths.has(projectPath)) continue
+                seenPaths.add(projectPath)
+                const name = projectPath.split('/').filter(Boolean).pop() ?? projectPath
+                entries.push({ name, path: projectPath, encodedDir: '', sessionCount })
+              }
+            })
+        )
+
         entries.sort((a, b) => b.sessionCount - a.sessionCount)
         return new Response(JSON.stringify(entries), {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -320,6 +349,72 @@ Bun.serve({
       })
     }
 
+    // GET /api/codex-sessions → list all Codex sessions
+    // GET /api/codex-sessions/:id → messages for a Codex session
+    if (url.pathname === '/api/codex-sessions' && req.method === 'GET') {
+      const sessions: CodexSessionSummary[] = await listCodexSessions()
+      return new Response(JSON.stringify(sessions), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (url.pathname.startsWith('/api/codex-sessions/') && req.method === 'GET') {
+      const id = decodeURIComponent(url.pathname.slice('/api/codex-sessions/'.length))
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'id required' }), {
+          status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const msgs: CodexSessionMessage[] = await getCodexSessionMessages(id)
+      return new Response(JSON.stringify(msgs), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // GET /api/gemini-sessions → list all Gemini sessions
+    // GET /api/gemini-sessions/:id → messages for a Gemini session
+    if (url.pathname === '/api/gemini-sessions' && req.method === 'GET') {
+      const sessions: GeminiSessionSummary[] = await listGeminiSessions()
+      return new Response(JSON.stringify(sessions), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (url.pathname.startsWith('/api/gemini-sessions/') && req.method === 'GET') {
+      const id = decodeURIComponent(url.pathname.slice('/api/gemini-sessions/'.length))
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'id required' }), {
+          status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const msgs: GeminiSessionMessage[] = await getGeminiSessionMessages(id)
+      return new Response(JSON.stringify(msgs), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // GET /api/copilot-sessions → list all Copilot sessions
+    // GET /api/copilot-sessions/:id → messages for a Copilot session
+    if (url.pathname === '/api/copilot-sessions' && req.method === 'GET') {
+      const sessions: CopilotSessionSummary[] = await listCopilotSessions()
+      return new Response(JSON.stringify(sessions), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (url.pathname.startsWith('/api/copilot-sessions/') && req.method === 'GET') {
+      const id = decodeURIComponent(url.pathname.slice('/api/copilot-sessions/'.length))
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'id required' }), {
+          status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const msgs: CopilotSessionMessage[] = await getCopilotSessionMessages(id)
+      return new Response(JSON.stringify(msgs), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (url.pathname === '/api/mcp-list' && req.method === 'GET') {
       const projectPath = url.searchParams.get('projectPath') ?? null
       const result = await listMcpServers(projectPath)
@@ -349,33 +444,76 @@ Bun.serve({
       }
     }
 
+    if (url.pathname === '/api/chat-harnesses' && req.method === 'GET') {
+      return new Response(JSON.stringify(chatHarnessStatus()), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (url.pathname === '/api/chat-tty' && req.method === 'POST') {
       try {
-        const body = await req.json() as { message: string; history?: ChatMessage[]; model?: ChatModelId; sessionId?: string | null; thinkingBudget?: number; attachments?: ChatAttachment[] }
-        const { message, history = [], model = 'claude-sonnet-4-6', sessionId = null, thinkingBudget, attachments } = body
+        const body = await req.json() as { message: string; history?: ChatMessage[]; model?: string; sessionId?: string | null; thinkingBudget?: number; attachments?: ChatAttachment[]; harness?: string }
+        const { message, history = [], model: requestedModel, sessionId = null, thinkingBudget, attachments, harness } = body
+
+        // Resolve the requested driver.
+        // - If harness explicitly provided but not installed → stream an error (no silent Claude fallback)
+        // - If harness not provided → default to claude
+        // - Installed-but-not-authed harnesses still route to their driver
+        const requestedDriver = harness ? getChatDriver(harness as import('@agentistics/core').HarnessId) : undefined
+        if (harness && requestedDriver && !requestedDriver.isAvailable()) {
+          const label = requestedDriver.label
+          const errBody = new TextEncoder().encode(`data: ${JSON.stringify({ error: `${label} is not installed. Install it to use it as a Nay backend.` })}
+
+`)
+          return new Response(new ReadableStream({
+            start(ctrl) { ctrl.enqueue(errBody); ctrl.close() },
+          }), {
+            status: 200,
+            headers: {
+              ...CORS_HEADERS,
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              'X-Accel-Buffering': 'no',
+            },
+          })
+        }
+        const driver = (requestedDriver?.isAvailable() ? requestedDriver : undefined) ?? getChatDriver('claude')!
+
+        // The model MUST belong to the resolved driver — a model from another
+        // harness (or none) would be rejected by that CLI. Fall back to the
+        // driver's defaultModel when the requested model isn't one of its own.
+        const model = (requestedModel && driver.models.some(m => m.id === requestedModel))
+          ? requestedModel
+          : driver.defaultModel
+
+        // Ensure MCP is registered for the selected driver
+        await driver.ensureMcp(PORT)
+
         const enc = new TextEncoder()
         const stream = new ReadableStream<Uint8Array>({
           start(ctrl) {
-            streamViaClaude(
+            void driver.stream(
               message,
               history,
               model,
-              (text) => {
-                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ text })}\n\n`))
-              },
-              (tool) => {
-                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ tool })}\n\n`))
-              },
-              () => {
-                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ done: true })}\n\n`))
-                ctrl.close()
-              },
-              (err) => {
-                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ error: err })}\n\n`))
-                ctrl.close()
-              },
-              (id) => {
-                ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ sessionId: id })}\n\n`))
+              {
+                onChunk(text) {
+                  ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ text })}\n\n`))
+                },
+                onTool(tool) {
+                  ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ tool })}\n\n`))
+                },
+                onDone() {
+                  ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ done: true })}\n\n`))
+                  ctrl.close()
+                },
+                onError(err) {
+                  ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ error: err })}\n\n`))
+                  ctrl.close()
+                },
+                onSessionId(id) {
+                  ctrl.enqueue(enc.encode(`data: ${JSON.stringify({ sessionId: id })}\n\n`))
+                },
               },
               sessionId,
               { thinkingBudget, attachments, signal: req.signal },

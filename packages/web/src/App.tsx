@@ -1,18 +1,19 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
-import { Outlet, NavLink, useLocation } from 'react-router-dom'
+import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { version } from '../../../package.json'
 import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, RefreshCw, FileCode, TrendingUp, BarChart2,
-  Sun, Moon, Globe, AlertTriangle, Download,
+  Sun, Moon, Globe, AlertTriangle, Download, FileDown,
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
-  Target, Home, DollarSign, Layers, Code2,
+  Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
+  ChevronDown, ChevronUp,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
-import type { Filters } from '@agentistics/core'
+import type { Filters, HarnessId, HealthIssue } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
 import { formatProjectName, setHomeDir, MODEL_PRICING } from '@agentistics/core'
 import { StatCard } from './components/StatCard'
@@ -26,20 +27,21 @@ import { FiltersBar } from './components/FiltersBar'
 import { RecentSessions } from './components/RecentSessions'
 import { HighlightsBoard } from './components/HighlightsBoard'
 import { InfoModal } from './components/InfoModal'
-import { PDFExportModal, PDFDirectExporter } from './components/PDFExportModal'
+import { PDFDirectExporter } from './components/PDFExportModal'
 import { HealthWarnings } from './components/HealthWarnings'
 import { ToolMetricsPanel } from './components/ToolMetricsPanel'
 import { AgentMetricsPanel } from './components/AgentMetricsPanel'
 import { CacheHitRatePanel } from './components/CacheHitRatePanel'
 import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
+import { TranscriptModal } from './components/TranscriptModal'
 import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
 import { TtyChat } from './components/TtyChat'
-import { ClaudeChat } from './components/ClaudeChat'
 import { UpdateModal } from './components/UpdateModal'
 import { InstallModal } from './components/InstallModal'
 import { ArchiveConsentModal, type ArchiveMode } from './components/ArchiveConsentModal'
 import { type ChatModelId } from './lib/chatModels'
+import { HARNESS_LABELS, HARNESS_COLORS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
@@ -586,69 +588,333 @@ function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): st
   return `USD ${usd.toFixed(6)}`
 }
 
-function MobileBottomNav({ lang }: { lang: Lang }) {
+function MobileBottomNav({
+  lang, harnesses, onSettings, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues,
+}: {
+  lang: Lang
+  harnesses?: HarnessId[]
+  onSettings: () => void
+  onRefresh: () => void
+  liveUpdates: boolean
+  onToggleLive: () => void
+  updateInterval: number
+  healthIssues?: HealthIssue[]
+}) {
   const location = useLocation()
+  const navigate = useNavigate()
   const pt = lang === 'pt'
+  const [moreOpen, setMoreOpen] = useState(false)
+  const orange = 'var(--anthropic-orange)'
 
-  const tabs = [
+  // Primary destinations live in the bar; the rest go behind a "More" sheet so
+  // the bar never crams more than 5 slots on a narrow phone.
+  const primary = [
     { to: '/',         labelPt: 'Home',       labelEn: 'Home',      icon: Home },
     { to: '/costs',    labelPt: 'Custos',     labelEn: 'Costs',     icon: DollarSign },
     { to: '/projects', labelPt: 'Projetos',   labelEn: 'Projects',  icon: FolderOpen },
-    { to: '/tools',    labelPt: 'Ferramentas',labelEn: 'Tools',     icon: Wrench },
-    { to: '/custom',   labelPt: 'Custom',     labelEn: 'Custom',    icon: Layers },
+    { to: '/tools',    labelPt: 'Tools',      labelEn: 'Tools',     icon: Wrench },
   ] as const
 
+  // Square tiles in the "More" sheet: nav destinations + the actions that used
+  // to crowd the top header (settings, live toggle, refresh, warnings).
+  type Tile = {
+    key: string
+    label: string
+    icon: typeof Home
+    onClick: () => void
+    active?: boolean
+    accent?: boolean
+    badge?: string
+  }
+  const navTiles: Tile[] = [
+    { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { setMoreOpen(false); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
+    { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { setMoreOpen(false); navigate('/export') }, active: location.pathname.startsWith('/export') },
+    ...(harnesses && harnesses.length > 1
+      ? [{ key: 'compare', label: pt ? 'Comparar' : 'Compare', icon: GitCompare, onClick: () => { setMoreOpen(false); navigate('/compare') }, active: location.pathname.startsWith('/compare') } as Tile]
+      : []),
+  ]
+  const activeIssueCount = healthIssues?.length ?? 0
+  const actionTiles: Tile[] = [
+    {
+      key: 'live', label: pt ? 'Ao vivo' : 'Live', icon: Activity,
+      onClick: () => onToggleLive(), accent: liveUpdates,
+      badge: liveUpdates ? (updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`) : undefined,
+    },
+    { key: 'refresh', label: pt ? 'Atualizar' : 'Refresh', icon: RefreshCw, onClick: () => { onRefresh(); setMoreOpen(false) } },
+    { key: 'settings', label: pt ? 'Ajustes' : 'Settings', icon: SlidersHorizontal, onClick: () => { onSettings(); setMoreOpen(false) } },
+    ...(activeIssueCount > 0
+      ? [{ key: 'warnings', label: pt ? 'Avisos' : 'Warnings', icon: AlertTriangle, onClick: () => { setMoreOpen(false); onSettings() }, accent: true, badge: String(activeIssueCount) } as Tile]
+      : []),
+  ]
+  const allTiles = [...navTiles, ...actionTiles]
+
+  const navAction = navTiles.some(t => t.active)
+
+  const itemStyle = (active: boolean): React.CSSProperties => ({
+    flex: 1,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    textDecoration: 'none',
+    color: active ? orange : 'var(--text-tertiary)',
+    fontSize: 10,
+    fontWeight: active ? 700 : 500,
+    transition: 'color 0.15s',
+    padding: '6px 2px',
+    overflow: 'hidden',
+    background: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  })
+
+  const labelStyle: React.CSSProperties = {
+    width: '100%', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  }
+
   return (
-    <nav
-      className="mobile-bottom-nav"
-      style={{
-        position: 'fixed',
-        bottom: 0,
-        left: 0,
-        right: 0,
-        zIndex: 200,
-        background: 'var(--bg-surface)',
-        borderTop: '1px solid var(--border)',
-        display: 'flex',
-        alignItems: 'stretch',
-        height: 56,
-      }}
-    >
-      {tabs.map(tab => {
-        const active = tab.to === '/'
-          ? location.pathname === '/'
-          : location.pathname.startsWith(tab.to)
-        const Icon = tab.icon
-        return (
-          <NavLink
-            key={tab.to}
-            to={tab.to}
-            end={tab.to === '/'}
-            style={{
-              flex: 1,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 3,
-              textDecoration: 'none',
-              color: active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-              fontSize: 10,
-              fontWeight: active ? 700 : 500,
-              transition: 'color 0.15s',
-              padding: '6px 0',
-            }}
-          >
-            <Icon size={18} />
-            <span>{pt ? tab.labelPt : tab.labelEn}</span>
-          </NavLink>
-        )
-      })}
-    </nav>
+    <>
+      {/* "More" bottom sheet — square tiles for bigger, friendlier tap targets */}
+      <div
+        onClick={() => setMoreOpen(false)}
+        style={{
+          position: 'fixed', inset: 0, zIndex: 210, background: 'rgba(0,0,0,0.45)',
+          opacity: moreOpen ? 1 : 0,
+          pointerEvents: moreOpen ? 'auto' : 'none',
+          transition: 'opacity 0.25s ease',
+        }}
+      />
+      <div style={{
+        position: 'fixed', left: 0, right: 0, bottom: 56, zIndex: 220,
+        background: 'var(--bg-surface)', borderTop: '1px solid var(--border)',
+        borderRadius: '16px 16px 0 0', boxShadow: '0 -8px 30px rgba(0,0,0,0.35)',
+        padding: '8px 12px 16px',
+        transform: moreOpen ? 'translateY(0)' : 'translateY(110%)',
+        transition: 'transform 0.28s cubic-bezier(0.22, 1, 0.36, 1)',
+      }}>
+        <div style={{
+          width: 36, height: 4, borderRadius: 2, background: 'var(--border)',
+          margin: '4px auto 12px',
+        }} />
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(3, 1fr)',
+          gap: 8,
+        }}>
+          {allTiles.map(tile => {
+            const Icon = tile.icon
+            const lit = tile.active || tile.accent
+            return (
+              <button
+                key={tile.key}
+                onClick={tile.onClick}
+                style={{
+                  position: 'relative',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                  gap: 6, padding: '11px 4px',
+                  borderRadius: 12,
+                  border: `1px solid ${lit ? orange : 'var(--border)'}`,
+                  background: lit ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+                  color: lit ? orange : 'var(--text-primary)',
+                  cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 11, fontWeight: 600,
+                  transition: 'all 0.15s',
+                }}
+              >
+                <Icon size={19} strokeWidth={1.8} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>{tile.label}</span>
+                {tile.badge && (
+                  <span style={{
+                    position: 'absolute', top: 4, right: 5,
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    minWidth: 15, height: 15, padding: '0 4px', borderRadius: 8,
+                    background: orange, color: '#fff', fontSize: 9, fontWeight: 700,
+                  }}>
+                    {tile.badge}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      <nav
+        className="mobile-bottom-nav"
+        style={{
+          position: 'fixed',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          zIndex: 230,
+          background: 'var(--bg-surface)',
+          borderTop: '1px solid var(--border)',
+          display: 'flex',
+          alignItems: 'stretch',
+          height: 56,
+        }}
+      >
+        {primary.map(tab => {
+          const active = tab.to === '/'
+            ? location.pathname === '/'
+            : location.pathname.startsWith(tab.to)
+          const Icon = tab.icon
+          return (
+            <NavLink
+              key={tab.to}
+              to={tab.to}
+              end={tab.to === '/'}
+              onClick={() => setMoreOpen(false)}
+              style={itemStyle(active)}
+            >
+              <Icon size={18} />
+              <span style={labelStyle}>{pt ? tab.labelPt : tab.labelEn}</span>
+            </NavLink>
+          )
+        })}
+        <button onClick={() => setMoreOpen(v => !v)} style={itemStyle(navAction || moreOpen)}>
+          <div style={{ position: 'relative' }}>
+            <MoreHorizontal size={18} />
+            {activeIssueCount > 0 && !moreOpen && (
+              <span style={{
+                position: 'absolute', top: -4, right: -6,
+                width: 8, height: 8, borderRadius: '50%', background: '#f59e0b',
+              }} />
+            )}
+          </div>
+          <span style={labelStyle}>{pt ? 'Mais' : 'More'}</span>
+        </button>
+      </nav>
+    </>
   )
 }
 
-function NavTabs({ lang }: { lang: Lang }) {
+function HarnessSelector({ harnesses, lang, isMobile }: { harnesses: HarnessId[]; lang: Lang; isMobile?: boolean }) {
+  const location = useLocation()
+  const navigate = useNavigate()
+
+  // Only render when there is more than one harness present in the data
+  if (harnesses.length <= 1) return null
+
+  const harnessMatch = location.pathname.match(/^\/h\/([^/]+)$/)
+  const currentHarness: HarnessId | null = harnessMatch
+    ? (harnessMatch[1] as HarnessId)
+    : null
+
+  const handleSelect = (harness: HarnessId | null) => {
+    if (harness === null) {
+      navigate('/')
+    } else {
+      navigate(`/h/${harness}`)
+    }
+  }
+
+  const allOption = { id: null as HarnessId | null, label: lang === 'pt' ? 'Todos' : 'All' }
+  const options = [
+    allOption,
+    ...harnesses.map(h => ({ id: h as HarnessId | null, label: HARNESS_LABELS[h] })),
+  ]
+
+  // Mobile: always-visible chips/pills — one tap to switch harness, no dropdown.
+  // Short labels (first word) + flex-grow so the chips fill each row evenly
+  // instead of leaving a ragged gap on the right.
+  if (isMobile) {
+    return (
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        {options.map(opt => {
+          const active = opt.id === currentHarness
+          const color = opt.id ? HARNESS_COLORS[opt.id] : 'var(--anthropic-orange)'
+          const shortLabel = opt.id ? opt.label.split(' ')[0] : opt.label
+          return (
+            <button
+              key={opt.id ?? '__all__'}
+              onClick={() => handleSelect(opt.id)}
+              style={{
+                flex: '1 1 auto',
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                padding: '6px 11px', borderRadius: 999,
+                border: active ? `1px solid ${color}` : '1px solid var(--border)',
+                background: active
+                  ? (opt.id ? `${color}22` : 'var(--anthropic-orange-dim)')
+                  : 'var(--bg-elevated)',
+                color: active ? color : 'var(--text-secondary)',
+                fontSize: 12, fontWeight: active ? 700 : 500, fontFamily: 'inherit',
+                cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all 0.15s',
+              }}
+            >
+              {opt.id && (
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
+              )}
+              {shortLabel}
+            </button>
+          )
+        })}
+      </div>
+    )
+  }
+
+  // Desktop: horizontal pills in the nav bar
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 4,
+      marginLeft: 12,
+      padding: '0 12px',
+      borderLeft: '1px solid var(--border)',
+    }}>
+      {options.map(opt => {
+        const active = opt.id === currentHarness
+        const color = opt.id ? HARNESS_COLORS[opt.id] : undefined
+        return (
+          <button
+            key={opt.id ?? '__all__'}
+            onClick={() => handleSelect(opt.id)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '5px 10px',
+              borderRadius: 7,
+              border: active
+                ? `1px solid ${color ? `${color}50` : 'var(--anthropic-orange)30'}`
+                : '1px solid transparent',
+              background: active
+                ? color ? `${color}18` : 'var(--anthropic-orange-dim)'
+                : 'transparent',
+              color: active
+                ? color ?? 'var(--anthropic-orange)'
+                : 'var(--text-tertiary)',
+              fontSize: 12,
+              fontWeight: active ? 700 : 500,
+              fontFamily: 'inherit',
+              cursor: 'pointer',
+              transition: 'all 0.15s',
+              whiteSpace: 'nowrap',
+            }}
+            onMouseEnter={e => {
+              if (!active) {
+                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
+                ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-elevated)'
+              }
+            }}
+            onMouseLeave={e => {
+              if (!active) {
+                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'
+                ;(e.currentTarget as HTMLButtonElement).style.background = 'transparent'
+              }
+            }}
+          >
+            {opt.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function NavTabs({ lang, harnesses }: { lang: Lang; harnesses?: HarnessId[] }) {
   const location = useLocation()
   const pt = lang === 'pt'
 
@@ -658,6 +924,10 @@ function NavTabs({ lang }: { lang: Lang }) {
     { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={12} /> },
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={12} /> },
     { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={12} /> },
+    { to: '/export',    labelPt: 'Exportar',     labelEn: 'Export',       icon: <FileDown size={12} /> },
+    ...(harnesses && harnesses.length > 1
+      ? [{ to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={12} /> }]
+      : []),
   ]
 
   return (
@@ -709,6 +979,7 @@ function NavTabs({ lang }: { lang: Lang }) {
 
 export default function AppLayout() {
   const location = useLocation()
+  const navigate = useNavigate()
   const isCustomPage = location.pathname === '/custom'
   const isMobile = useIsMobile()
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
@@ -729,9 +1000,6 @@ export default function AppLayout() {
     models: [],
   })
   const [infoModalIndex, setInfoModalIndex] = useState<number | null>(null)
-  const [showExportModal, setShowExportModal] = useState(
-    () => new URLSearchParams(window.location.search).has('export')
-  )
   const [pdfDirectExportRange, setPdfDirectExportRange] = useState<string | null>(null)
   const [expandedChart, setExpandedChart] = useState<string | null>(null)
   const [selectedSession, setSelectedSession] = useState<import('@agentistics/core').SessionMeta | null>(null)
@@ -790,6 +1058,16 @@ export default function AppLayout() {
     return DEFAULT_CARD_ORDER
   })
   const [showPrefsModal, setShowPrefsModal] = useState(false)
+  // Mobile-only: lets the user minimize the sticky filter bar while scrolling so
+  // it doesn't eat the viewport on small screens. Expanded by default.
+  const [filtersCollapsed, setFiltersCollapsed] = useState(false)
+  // The collapse animation needs `overflow: hidden` to clip the sliding panel,
+  // but that also clips the Models dropdown popover. Keep it clipped only while
+  // animating/collapsed; once an expand transition finishes, switch to visible
+  // so the popover can overflow the header.
+  const [filtersClip, setFiltersClip] = useState(false)
+  const collapseFilters = () => { setFiltersClip(true); setFiltersCollapsed(true) }
+  const expandFilters = () => { setFiltersClip(true); setFiltersCollapsed(false) }
   const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string } | null>(null)
   // First-run archive consent gate: undefined = prefs not loaded, null = loaded but
   // not yet chosen (blocks the app), ArchiveMode = chosen.
@@ -837,13 +1115,6 @@ export default function AppLayout() {
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
   const [chatSoundId, setChatSoundId] = useState('ping')
-  const [claudeDetached, setClaudeDetached] = useState(false)
-  // Lifted Claude Chat state so project/session is preserved when toggling detach/attach
-  const [claudeSharedState, setClaudeSharedState] = useState<{
-    projectPath: string | null; projectName: string | null; projectEncodedDir: string | null
-    sessionId: string | null; messages: import('./components/ClaudeChat').ChatMessage[]
-    model?: import('./lib/chatModels').ChatModelId
-  }>({ projectPath: null, projectName: null, projectEncodedDir: null, sessionId: null, messages: [] })
 
   const [cardPrecision, setCardPrecisionState] = useState<Record<string, boolean>>({})
   const precisionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -995,10 +1266,10 @@ export default function AppLayout() {
     if (!data) return []
     const set = new Set<string>()
     for (const id of Object.keys(data.statsCache.modelUsage ?? {})) {
-      if (id.startsWith('claude-')) set.add(id)
+      set.add(id)
     }
     for (const s of data.sessions) {
-      if (s.model && s.model.startsWith('claude-')) set.add(s.model)
+      if (s.model) set.add(s.model)
     }
     return Array.from(set)
   }, [data])
@@ -1013,6 +1284,22 @@ export default function AppLayout() {
     }
     return used
   }, [data, filters.projects])
+
+  // Models grouped by the harness that actually used them (NOT by prefix — Copilot
+  // also uses gpt-* models). When a harness filter is active, only that harness's
+  // models are offered; in the unified view all harnesses are shown as sections.
+  const modelGroups = useMemo<{ harness: HarnessId; models: string[] }[]>(() => {
+    if (!data) return []
+    const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
+    const byH: Partial<Record<HarnessId, Set<string>>> = {}
+    const add = (h: HarnessId, m?: string) => { if (!m) return; (byH[h] ??= new Set<string>()).add(m) }
+    for (const id of Object.keys(data.statsCache.modelUsage ?? {})) add('claude', id)
+    for (const s of data.sessions) add((s.harness ?? 'claude') as HarnessId, s.model)
+    const harnesses = filters.harness ? [filters.harness] : order
+    return harnesses
+      .filter(h => byH[h] && byH[h]!.size > 0)
+      .map(h => ({ harness: h, models: Array.from(byH[h]!).sort() }))
+  }, [data, filters.harness])
 
   // Live update highlight detection
   useEffect(() => {
@@ -1267,6 +1554,14 @@ export default function AppLayout() {
     ? Object.values(derived.modelUsage).reduce((s, u) => s + u.outputTokens, 0)
     : derived.outputTokens
 
+  // Count active filters (date / projects / models / harness) for the collapsed-bar badge.
+  const harnessFilterActive = /^\/h\//.test(location.pathname)
+  const activeFilterCount =
+    (filters.dateRange !== 'all' || filters.customStart || filters.customEnd ? 1 : 0) +
+    (filters.projects.length > 0 ? 1 : 0) +
+    (filters.models.length > 0 ? 1 : 0) +
+    (harnessFilterActive ? 1 : 0)
+
   // Block the app until the user makes the first-run archive choice. While prefs
   // are still loading (undefined) render a neutral background to avoid a flash.
   if (archiveChoice === undefined) {
@@ -1320,16 +1615,25 @@ export default function AppLayout() {
             />
             {!isMobile && <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
               {lang === 'pt' ? 'Atualizado em' : 'Updated'}{' '}
-              {statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : lang === 'pt' ? 'hoje' : 'today'}
+              {filters.harness && filters.harness !== 'claude'
+                ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : lang === 'pt' ? 'hoje' : 'today')
+                : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : lang === 'pt' ? 'hoje' : 'today')}
             </div>}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 10 }}>
-            {!isMobile && statsCache.firstSessionDate && (
+            {!isMobile && (filters.harness ? derived.firstSessionDate : statsCache.firstSessionDate) && (
               <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'right' }}>
-                <div>{lang === 'pt' ? 'Desde' : 'Since'} {format(parseISO(statsCache.firstSessionDate), 'MMM d, yyyy')}</div>
+                <div>
+                  {lang === 'pt' ? 'Desde' : 'Since'}{' '}
+                  {format(
+                    filters.harness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!),
+                    'MMM d, yyyy'
+                  )}
+                </div>
                 <div style={{ color: 'var(--text-secondary)' }}>
                   {derived.allTimeTotalSessions.toLocaleString()} {lang === 'pt' ? 'sessões' : 'sessions'}
+                  {filters.harness ? ` · ${HARNESS_LABELS[filters.harness]}` : ''}
                 </div>
               </div>
             )}
@@ -1396,9 +1700,9 @@ export default function AppLayout() {
               {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
             </button>}
 
-            {/* Export report — hidden on mobile */}
+            {/* Export report — hidden on mobile; navigates to /export page */}
             {!isMobile && <button
-              onClick={() => setShowExportModal(true)}
+              onClick={() => navigate('/export')}
               style={{
                 height: 32,
                 padding: '0 12px',
@@ -1429,8 +1733,9 @@ export default function AppLayout() {
               {lang === 'pt' ? 'Exportar' : 'Export'}
             </button>}
 
-            {/* Settings — unified modal (Preferences + Live + Environment) */}
-            <button
+            {/* Settings — unified modal (Preferences + Live + Environment).
+                On mobile this lives in the bottom "More" sheet instead. */}
+            {!isMobile && <button
               onClick={() => setShowPrefsModal(true)}
               style={{
                 width: 32, height: 32,
@@ -1453,17 +1758,17 @@ export default function AppLayout() {
               title={lang === 'pt' ? 'Configurações' : 'Settings'}
             >
               <SlidersHorizontal size={14} />
-            </button>
+            </button>}
 
-            {/* Health warnings */}
-            {data?.healthIssues && data.healthIssues.length > 0 && (
+            {/* Health warnings — on mobile surfaced via the "More" sheet */}
+            {!isMobile && data?.healthIssues && data.healthIssues.length > 0 && (
               <HealthWarnings issues={data.healthIssues} lang={lang} />
             )}
 
-            {/* Live updates pill */}
-            <div style={{
+            {/* Live updates pill — on mobile surfaced via the "More" sheet */}
+            {!isMobile && <div style={{
               display: 'flex', alignItems: 'center', gap: 6,
-              padding: isMobile ? '0 8px' : '0 4px 0 10px',
+              padding: '0 4px 0 10px',
               height: 32,
               borderRadius: 8,
               border: '1px solid var(--border)',
@@ -1502,10 +1807,10 @@ export default function AppLayout() {
                 </span>
               )}
 
-            </div>
+            </div>}
 
-            {/* Refresh */}
-            <button
+            {/* Refresh — on mobile surfaced via the "More" sheet */}
+            {!isMobile && <button
               onClick={refetch}
               style={{
                 width: 32, height: 32,
@@ -1528,20 +1833,95 @@ export default function AppLayout() {
               title={lang === 'pt' ? 'Atualizar' : 'Refresh'}
             >
               <RefreshCw size={14} />
-            </button>
+            </button>}
           </div>
         </div>
 
-        {/* Filters row — second row of sticky header. Hidden on /custom (filter bar moves into the page). */}
-        {data && !isCustomPage && (
+        {/* Filters — full bar, fixed in the sticky header so it's reachable at any
+            scroll position. Hidden on /custom. On mobile the bar is collapsible
+            (a slim summary row) so it doesn't eat the viewport while scrolling;
+            the harness chips sit on their own row above the date/projects/models
+            controls. Desktop always shows the full bar. */}
+        {data && !isCustomPage && isMobile && (
+          <div style={{ borderTop: '1px solid var(--border)', width: '100%', boxSizing: 'border-box' }}>
+            {/* Collapsed slim row — visible only when minimized; tap to expand. */}
+            {filtersCollapsed && (
+              <button
+                onClick={expandFilters}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                  padding: '9px 14px', background: 'transparent', border: 'none',
+                  color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 13,
+                  fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                <SlidersHorizontal size={15} style={{ color: 'var(--anthropic-orange)' }} />
+                <span>{lang === 'pt' ? 'Filtros' : 'Filters'}</span>
+                {activeFilterCount > 0 && (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
+                    background: 'var(--anthropic-orange)', color: '#fff',
+                    fontSize: 11, fontWeight: 700,
+                  }}>
+                    {activeFilterCount}
+                  </span>
+                )}
+                <ChevronDown size={18} style={{ marginLeft: 'auto', opacity: 0.6 }} />
+              </button>
+            )}
+            {/* Animated panel — collapses via a grid-rows transition so minimize
+                and expand both glide instead of snapping. */}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateRows: filtersCollapsed ? '0fr' : '1fr',
+                transition: 'grid-template-rows 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
+              }}
+              onTransitionEnd={() => { if (!filtersCollapsed) setFiltersClip(false) }}
+            >
+              <div style={{ overflow: (filtersCollapsed || filtersClip) ? 'hidden' : 'visible', minHeight: 0 }}>
+                {data.harnesses && data.harnesses.length > 1 && (
+                  <div style={{ padding: '10px 12px 0' }}>
+                    <HarnessSelector harnesses={data.harnesses} lang={lang} isMobile />
+                  </div>
+                )}
+                <FiltersBar
+                  filters={filters}
+                  onChange={setFilters}
+                  projects={data.projects}
+                  sessionCountByProject={sessionCountByProject}
+                  models={models}
+                  modelGroups={modelGroups}
+                  modelsInProject={modelsInProject}
+                  lang={lang}
+                  compact
+                />
+                {/* Collapse handle */}
+                <button
+                  onClick={collapseFilters}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                    width: '100%', padding: '5px 0 7px', background: 'transparent', border: 'none',
+                    color: 'var(--text-tertiary)', fontFamily: 'inherit', fontSize: 12,
+                    fontWeight: 600, cursor: 'pointer',
+                  }}
+                >
+                  <ChevronUp size={15} />
+                  {lang === 'pt' ? 'Minimizar filtros' : 'Minimize filters'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {data && !isCustomPage && !isMobile && (
           <div style={{
             borderTop: '1px solid var(--border)',
             maxWidth: 1400,
             margin: '0 auto',
-            padding: isMobile ? '0 16px' : '0 32px',
+            padding: '0 32px',
             width: '100%',
             boxSizing: 'border-box',
-            overflowX: isMobile ? 'auto' : undefined,
           }}>
             <FiltersBar
               filters={filters}
@@ -1549,6 +1929,7 @@ export default function AppLayout() {
               projects={data.projects}
               sessionCountByProject={sessionCountByProject}
               models={models}
+              modelGroups={modelGroups}
               modelsInProject={modelsInProject}
               lang={lang}
             />
@@ -1564,8 +1945,11 @@ export default function AppLayout() {
             padding: '0 32px',
             width: '100%',
             boxSizing: 'border-box',
+            display: 'flex',
+            alignItems: 'center',
           }}>
-            <NavTabs lang={lang} />
+            <NavTabs lang={lang} harnesses={data.harnesses} />
+            <HarnessSelector harnesses={data.harnesses} lang={lang} />
           </div>
         )}
       </header>
@@ -1591,7 +1975,7 @@ export default function AppLayout() {
           infoItems,
           cardOrder, setCardOrder: setCardOrder as (o: string[]) => void,
           cardPrecision, setCardPrecision,
-          sessionCountByProject, models, modelsInProject,
+          sessionCountByProject, models, modelGroups, modelsInProject,
         }} />
       </main>
 
@@ -1727,17 +2111,7 @@ export default function AppLayout() {
         />
       )}
 
-      {/* PDF Export Modal */}
-      {showExportModal && (
-        <PDFExportModal
-          data={data}
-          filters={filters}
-          lang={lang}
-          currency={currency}
-          brlRate={brlRate}
-          onClose={() => setShowExportModal(false)}
-        />
-      )}
+      <TranscriptModal lang={lang} />
 
       {/* PDF Direct Export — triggered from chat, no modal */}
       {pdfDirectExportRange !== null && (
@@ -1753,7 +2127,18 @@ export default function AppLayout() {
       )}
 
       {/* Mobile bottom navigation bar */}
-      {isMobile && <MobileBottomNav lang={lang} />}
+      {isMobile && (
+        <MobileBottomNav
+          lang={lang}
+          harnesses={data.harnesses}
+          onSettings={() => setShowPrefsModal(true)}
+          onRefresh={refetch}
+          liveUpdates={liveUpdates}
+          onToggleLive={() => setLiveUpdates(v => !v)}
+          updateInterval={updateInterval}
+          healthIssues={data.healthIssues}
+        />
+      )}
 
       {/* TTY Chat — floating button + panel, globally available */}
       <TtyChat
@@ -1765,9 +2150,6 @@ export default function AppLayout() {
         setFilters={setFilters}
         onPdfExport={(range) => setPdfDirectExportRange(range)}
         isMobile={isMobile}
-        onDetachClaude={() => setClaudeDetached(true)}
-        claudeDetached={claudeDetached}
-        onReattachClaude={() => setClaudeDetached(false)}
         onModelSet={(model) => {
           setChatModel(model)
           fetch('/api/preferences', {
@@ -1776,25 +2158,7 @@ export default function AppLayout() {
             body: JSON.stringify({ chatModel: model }),
           }).catch(() => {})
         }}
-        claudeSharedState={claudeSharedState}
-        onClaudeStateChange={setClaudeSharedState}
       />
-
-      {/* Claude Chat — floating draggable window (only when detached from TtyChat tab) */}
-      {claudeDetached && (
-        <ClaudeChat
-          lang={lang}
-          onAttach={() => setClaudeDetached(false)}
-          initialProject={claudeSharedState.projectPath ? {
-            path: claudeSharedState.projectPath,
-            name: claudeSharedState.projectName ?? '',
-            encodedDir: claudeSharedState.projectEncodedDir ?? '',
-          } : null}
-          initialSessionId={claudeSharedState.sessionId}
-          initialMessages={claudeSharedState.messages}
-          onStateChange={setClaudeSharedState}
-        />
-      )}
 
       {/* Footer */}
       <footer style={{

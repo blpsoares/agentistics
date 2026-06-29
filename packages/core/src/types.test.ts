@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcCost, getModelPrice, formatModel, getModelColor, formatProjectName, setHomeDir } from './types'
+import { calcCost, getModelPrice, formatModel, getModelColor, formatProjectName, setHomeDir, HARNESS_CAPABILITIES } from './types'
 import type { ModelUsage } from './types'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -165,4 +165,77 @@ describe('formatProjectName', () => {
     setHomeDir('/home/user')
     expect(formatProjectName('/opt/apps/servidor')).toBe('/opt/apps/servidor')
   })
+})
+
+// ── OpenAI/Codex pricing ────────────────────────────────────────────────────────
+
+test('gpt-5.5 resolves to a non-fallback price', () => {
+  const price = getModelPrice('gpt-5.5')
+  // Must differ from the Sonnet 4.6 fallback ($3 in / $15 out)
+  expect(price.input === 3 && price.output === 15).toBe(false)
+})
+
+test('calcCost works for a codex usage record', () => {
+  const cost = calcCost(
+    { inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 },
+    'gpt-5.5',
+  )
+  expect(cost).toBeGreaterThan(0)
+})
+
+test('formatModel renders gpt-5.5 readably', () => {
+  expect(formatModel('gpt-5.5')).toBe('GPT-5.5')
+})
+
+// ── Google/Gemini pricing ────────────────────────────────────────────────────────
+
+test('gemini-3-flash-preview resolves to a non-fallback price', () => {
+  const price = getModelPrice('gemini-3-flash-preview')
+  // Must NOT fall back to the Sonnet 4.6 rates ($3 in / $15 out)
+  expect(price.input === 3 && price.output === 15).toBe(false)
+  expect(price.input).toBe(0.5)
+  expect(price.output).toBe(3)
+  expect(price.cacheRead).toBe(0.05)
+})
+
+test('formatModel renders gemini-3-flash-preview as "Gemini 3 Flash"', () => {
+  expect(formatModel('gemini-3-flash-preview')).toBe('Gemini 3 Flash')
+})
+
+test('getModelColor returns Google blue for gemini models', () => {
+  expect(getModelColor('gemini-3-flash-preview')).toBe('#4285f4')
+  expect(getModelColor('gemini-2.5-flash')).toBe('#4285f4')
+})
+
+test('gemini-2.5-flash resolves to correct price', () => {
+  const price = getModelPrice('gemini-2.5-flash')
+  expect(price.input).toBe(0.3)
+  expect(price.output).toBe(2.5)
+})
+
+// ── HARNESS_CAPABILITIES ──────────────────────────────────────────────────────
+
+test('HARNESS_CAPABILITIES declares all four harnesses', () => {
+  expect(Object.keys(HARNESS_CAPABILITIES).sort()).toEqual(['claude', 'codex', 'copilot', 'gemini'])
+})
+
+test('claude is fully capable; gemini and copilot have tokens/cost/model', () => {
+  expect(HARNESS_CAPABILITIES.claude.tokens).toBe(true)
+  expect(HARNESS_CAPABILITIES.claude.agents).toBe(true)
+  expect(HARNESS_CAPABILITIES.codex.tokens).toBe(true)
+  expect(HARNESS_CAPABILITIES.codex.agents).toBe(false)
+  // gemini: tokens/cost/model/tools enabled; agents and gitLines not yet supported
+  expect(HARNESS_CAPABILITIES.gemini.tokens).toBe(true)
+  expect(HARNESS_CAPABILITIES.gemini.cost).toBe(true)
+  expect(HARNESS_CAPABILITIES.gemini.model).toBe(true)
+  expect(HARNESS_CAPABILITIES.gemini.tools).toBe(true)
+  expect(HARNESS_CAPABILITIES.gemini.agents).toBe(false)
+  expect(HARNESS_CAPABILITIES.gemini.gitLines).toBe(false)
+  // copilot: tokens/cost/model/gitLines enabled; tools and agents not supported
+  expect(HARNESS_CAPABILITIES.copilot.tokens).toBe(true)
+  expect(HARNESS_CAPABILITIES.copilot.cost).toBe(true)
+  expect(HARNESS_CAPABILITIES.copilot.model).toBe(true)
+  expect(HARNESS_CAPABILITIES.copilot.tools).toBe(false)
+  expect(HARNESS_CAPABILITIES.copilot.agents).toBe(false)
+  expect(HARNESS_CAPABILITIES.copilot.gitLines).toBe(true)
 })

@@ -2,22 +2,29 @@ import React from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Wrench, Bot } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
+import { HARNESS_LABELS } from '../lib/harness'
 import { Section } from '../components/Section'
 import { ToolMetricsPanel } from '../components/ToolMetricsPanel'
 import { AgentMetricsPanel } from '../components/AgentMetricsPanel'
 
 export default function ToolsPage() {
   const ctx = useOutletContext<AppContext>()
-  const { derived, lang, currency, brlRate } = ctx
+  const { derived, lang, currency, brlRate, filters } = ctx
+
+  const subtitle = lang === 'pt'
+    ? filters.harness
+      ? `Quais ferramentas o ${HARNESS_LABELS[filters.harness]} usa mais e a performance dos agentes delegados.`
+      : 'Quais ferramentas estão sendo mais usadas e a performance dos agentes delegados.'
+    : filters.harness
+      ? `Which tools ${HARNESS_LABELS[filters.harness]} uses the most and the performance of delegated agents.`
+      : 'Which tools are used most across all harnesses and the performance of delegated agents.'
 
   return (
     <>
       <PageHeader
         icon={<Wrench size={16} />}
         title={lang === 'pt' ? 'Ferramentas & agentes' : 'Tools & agents'}
-        subtitle={lang === 'pt'
-          ? 'Quais ferramentas o Claude está usando mais e performance dos agentes delegados.'
-          : 'Which tools Claude is using the most and the performance of delegated agents.'}
+        subtitle={subtitle}
       />
 
       <Section flashId="tools" title={<><Wrench size={14} /> {lang === 'pt' ? 'Métricas de ferramentas' : 'Tool metrics'}</>}>
@@ -25,7 +32,7 @@ export default function ToolsPage() {
       </Section>
 
       <Section flashId="agents" title={<><Bot size={14} /> {lang === 'pt' ? 'Métricas de agentes' : 'Agent metrics'}</>}>
-        <AgentMetricsPanel invocations={derived.agentInvocations} agentTypeBreakdown={derived.agentTypeBreakdown} totalInvocations={derived.totalAgentInvocations} totalTokens={derived.totalAgentTokens} totalCostUSD={derived.totalAgentCostUSD} totalDurationMs={derived.totalAgentDurationMs} currency={currency} brlRate={brlRate} lang={lang} />
+        <AgentMetricsPanel invocations={derived.agentInvocations} agentTypeBreakdown={derived.agentTypeBreakdown} totalInvocations={derived.totalAgentInvocations} totalTokens={derived.totalAgentTokens} totalCostUSD={derived.totalAgentCostUSD} totalDurationMs={derived.totalAgentDurationMs} currency={currency} brlRate={brlRate} lang={lang} harness={filters.harness} />
       </Section>
     </>
   )

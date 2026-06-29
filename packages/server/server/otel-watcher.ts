@@ -16,6 +16,12 @@
  *   OTEL_EXPORTER_OTLP_HEADERS   — Extra headers (e.g. "Authorization=Bearer tok")
  *   OTEL_SERVICE_NAME             — Service name (default: "agentistics")
  *   CLAUDE_STATS_WATCH_INTERVAL   — Polling interval in seconds (default: 30, min: 5)
+ *
+ * Multi-harness metrics (backward compatible):
+ *   The existing claude_stats.* metrics are preserved unchanged for backward
+ *   compatibility with existing dashboards. In addition, new agentistics.harness.*
+ *   metrics are exported with a `harness` attribute (claude|codex|gemini|copilot),
+ *   aggregated from the per-session consolidated store (~/.agentistics/sessions/).
  */
 
 import { join } from 'path'
@@ -32,10 +38,11 @@ import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions'
 // ── Shared imports from the main codebase ──────────────────────────────────
 
 import { calcCost } from '@agentistics/core'
-import type { ModelUsage } from '@agentistics/core'
+import type { ModelUsage, HarnessId, SessionMeta } from '@agentistics/core'
 import type { OtelSnapshot } from '@agentistics/core'
-import { HOME_DIR, CLAUDE_DIR, PROJECTS_DIR, SESSION_META_DIR, STATS_CACHE_FILE } from './config'
+import { HOME_DIR, CLAUDE_DIR, PROJECTS_DIR, SESSION_META_DIR, STATS_CACHE_FILE, CONSOLIDATED_DIR } from './config'
 import { createLimiter, safeReadJson, safeReadDir, safeStat } from './utils'
+import { getEnabledAdapters } from './adapters/types'
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -73,7 +80,67 @@ interface SessionMetaLight {
   files_modified: number
 }
 
-async function buildSnapshot(): Promise<OtelSnapshot> {
+/** Per-harness aggregated totals derived from the consolidated session store. */
+export interface HarnessSnapshot {
+  harness: HarnessId
+  totalSessions: number
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalCostUsd: number
+}
+
+/** Aggregate per-harness totals from the ~/.agentistics/sessions/<harness>/ store.
+ *  Only includes harnesses that are currently enabled (respects AGENTISTICS_HARNESS_<ID>=0).
+ *  Uses per-session token fields and calcCost() — no inline math. */
+async function buildHarnessSnapshots(): Promise<HarnessSnapshot[]> {
+  const limit = createLimiter(40)
+  const results: HarnessSnapshot[] = []
+
+  const enabledAdapters = await getEnabledAdapters()
+  const enabledHarnesses: HarnessId[] = enabledAdapters.map(a => a.id as HarnessId)
+
+  for (const harness of enabledHarnesses) {
+    const dir = `${CONSOLIDATED_DIR}/${harness}`
+    const files = (await safeReadDir(dir)).filter(f => f.endsWith('.json'))
+
+    let totalSessions = 0
+    let totalInputTokens = 0
+    let totalOutputTokens = 0
+    let totalCostUsd = 0
+
+    await Promise.all(
+      files.map(f =>
+        limit(async () => {
+          const s = await safeReadJson<SessionMeta>(`${dir}/${f}`)
+          if (!s) return
+          totalSessions++
+          const inp = s.input_tokens ?? 0
+          const out = s.output_tokens ?? 0
+          const cacheRead = s.cache_read_input_tokens ?? 0
+          const cacheWrite = s.cache_creation_input_tokens ?? 0
+          totalInputTokens += inp + cacheRead + cacheWrite
+          totalOutputTokens += out
+          // Build a ModelUsage-compatible shape for calcCost
+          const usage: ModelUsage = {
+            inputTokens: inp,
+            outputTokens: out,
+            cacheReadInputTokens: cacheRead,
+            cacheCreationInputTokens: cacheWrite,
+            webSearchRequests: 0,
+            costUSD: 0,
+          }
+          totalCostUsd += calcCost(usage, s.model ?? '')
+        })
+      )
+    )
+
+    results.push({ harness, totalSessions, totalInputTokens, totalOutputTokens, totalCostUsd })
+  }
+
+  return results
+}
+
+async function buildSnapshot(): Promise<OtelSnapshot & { harnessSnapshots: HarnessSnapshot[] }> {
   const statsCache = await safeReadJson<StatsCache>(STATS_CACHE_FILE) ?? {}
 
   // Load session-meta files in parallel with concurrency limit
@@ -146,6 +213,9 @@ async function buildSnapshot(): Promise<OtelSnapshot> {
     }
   }
 
+  // Build per-harness snapshots from the consolidated store (non-blocking; empty if dir not found)
+  const harnessSnapshots = await buildHarnessSnapshots()
+
   return {
     totalMessages,
     totalSessions,
@@ -163,6 +233,7 @@ async function buildSnapshot(): Promise<OtelSnapshot> {
     activeProjects: projectPaths.size,
     modelTokens,
     toolCounts,
+    harnessSnapshots,
   }
 }
 
@@ -187,7 +258,7 @@ function buildOtlpUrl(endpoint: string): string {
   return base + '/v1/metrics'
 }
 
-let latestSnapshot: OtelSnapshot | null = null
+let latestSnapshot: (OtelSnapshot & { harnessSnapshots: HarnessSnapshot[] }) | null = null
 
 function setupOtel(): { shutdown: () => Promise<void> } | null {
   if (!OTLP_ENDPOINT) {
@@ -385,6 +456,59 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     }
   })
 
+  // ── Per-harness metrics (backward-compatible additions) ───────────────────
+  // These agentistics.harness.* metrics add a `harness` attribute so consumers
+  // can track all AI assistants in a single dashboard, without touching the
+  // existing claude_stats.* metrics above.
+
+  const harnessSessions = meter.createObservableCounter('agentistics.harness.sessions.total', {
+    description: 'Total sessions per harness (from consolidated store)',
+    unit: '{sessions}',
+    valueType: ValueType.INT,
+  })
+  harnessSessions.addCallback(obs => {
+    if (!latestSnapshot) return
+    for (const h of latestSnapshot.harnessSnapshots) {
+      obs.observe(h.totalSessions, { harness: h.harness })
+    }
+  })
+
+  const harnessInputTokens = meter.createObservableCounter('agentistics.harness.tokens.input', {
+    description: 'Total input tokens per harness (includes cache reads/writes)',
+    unit: '{tokens}',
+    valueType: ValueType.INT,
+  })
+  harnessInputTokens.addCallback(obs => {
+    if (!latestSnapshot) return
+    for (const h of latestSnapshot.harnessSnapshots) {
+      obs.observe(h.totalInputTokens, { harness: h.harness })
+    }
+  })
+
+  const harnessOutputTokens = meter.createObservableCounter('agentistics.harness.tokens.output', {
+    description: 'Total output tokens per harness',
+    unit: '{tokens}',
+    valueType: ValueType.INT,
+  })
+  harnessOutputTokens.addCallback(obs => {
+    if (!latestSnapshot) return
+    for (const h of latestSnapshot.harnessSnapshots) {
+      obs.observe(h.totalOutputTokens, { harness: h.harness })
+    }
+  })
+
+  const harnessCost = meter.createObservableCounter('agentistics.harness.cost.usd', {
+    description: 'Estimated total cost in USD per harness',
+    unit: 'USD',
+    valueType: ValueType.DOUBLE,
+  })
+  harnessCost.addCallback(obs => {
+    if (!latestSnapshot) return
+    for (const h of latestSnapshot.harnessSnapshots) {
+      obs.observe(h.totalCostUsd, { harness: h.harness })
+    }
+  })
+
   console.log(`[otel] Exporting metrics to ${OTLP_ENDPOINT} every ${WATCH_INTERVAL_SEC}s (service.name="${SERVICE_NAME}")`)
 
   return {
@@ -427,7 +551,11 @@ async function rebuildSnapshot(): Promise<void> {
   snapshotInFlight = true
   try {
     latestSnapshot = await buildSnapshot()
-    console.log(`[snapshot] Messages=${latestSnapshot.totalMessages} Sessions=${latestSnapshot.totalSessions} Cost=$${latestSnapshot.totalCostUsd.toFixed(2)} Streak=${latestSnapshot.streak}d Projects=${latestSnapshot.activeProjects}`)
+    const harnessLine = latestSnapshot.harnessSnapshots
+      .filter(h => h.totalSessions > 0)
+      .map(h => `${h.harness}=${h.totalSessions}s/$${h.totalCostUsd.toFixed(2)}`)
+      .join(' ')
+    console.log(`[snapshot] Messages=${latestSnapshot.totalMessages} Sessions=${latestSnapshot.totalSessions} Cost=$${latestSnapshot.totalCostUsd.toFixed(2)} Streak=${latestSnapshot.streak}d Projects=${latestSnapshot.activeProjects}${harnessLine ? ` | ${harnessLine}` : ''}`)
   } catch (err) {
     console.error('[snapshot] Error:', String(err))
   } finally {

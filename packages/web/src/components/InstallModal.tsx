@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
-import { X, Monitor, Globe, Download, BarChart2 } from 'lucide-react'
+import { X, Monitor, Globe, Download, BarChart2, Share } from 'lucide-react'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
 
@@ -21,6 +22,10 @@ const T = {
   notNow:       { en: 'Not now',                    pt: 'Agora não' },
   dontShow:     { en: "Don't show again",           pt: 'Não mostrar novamente' },
   installing:   { en: 'Installing…',                pt: 'Instalando…' },
+  iosTitle:     { en: 'Add to Home Screen',         pt: 'Adicionar à Tela de Início' },
+  iosStep1:     { en: 'Tap the Share button in the Safari bar.', pt: 'Toque no botão Compartilhar na barra do Safari.' },
+  iosStep2:     { en: 'Choose “Add to Home Screen”.', pt: 'Escolha “Adicionar à Tela de Início”.' },
+  iosStep3:     { en: 'Tap Add — it opens full-screen, like a native app.', pt: 'Toque em Adicionar — abre em tela cheia, como um app nativo.' },
 }
 
 function t(key: keyof typeof T, lang: string): string {
@@ -30,6 +35,10 @@ function t(key: keyof typeof T, lang: string): string {
 export function InstallModal({ lang, pwaPrompt, onClose, onPwaInstalled }: Props) {
   const [dontShow, setDontShow] = useState(false)
   const [installing, setInstalling] = useState(false)
+  const isMobile = useIsMobile()
+  // iOS Safari has no install prompt — the only path is Share → Add to Home Screen.
+  const isIOS = /ipad|iphone|ipod/i.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 
   async function handleWebApp() {
     if (!pwaPrompt) return
@@ -114,7 +123,36 @@ export function InstallModal({ lang, pwaPrompt, onClose, onPwaInstalled }: Props
         {/* Options */}
         <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 10 }}>
 
-          {/* Web App card */}
+          {/* iOS: no install prompt — show Add to Home Screen steps instead of the Web App button. */}
+          {isIOS && (
+            <div style={{
+              display: 'flex', alignItems: 'flex-start', gap: 14,
+              padding: '14px 16px', borderRadius: 10,
+              border: '1.5px solid var(--anthropic-orange)',
+              background: 'var(--anthropic-orange-dim)',
+            }}>
+              <div style={{
+                width: 36, height: 36, borderRadius: 9, flexShrink: 0,
+                background: 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <Share size={16} color="var(--anthropic-orange)" />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>
+                  {t('iosTitle', lang)}
+                </div>
+                <ol style={{ margin: 0, paddingLeft: 16, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                  <li>{t('iosStep1', lang)}</li>
+                  <li>{t('iosStep2', lang)}</li>
+                  <li>{t('iosStep3', lang)}</li>
+                </ol>
+              </div>
+            </div>
+          )}
+
+          {/* Web App card — hidden on iOS (no prompt). */}
+          {!isIOS && (
           <button
             onClick={handleWebApp}
             disabled={!pwaPrompt || installing}
@@ -163,8 +201,10 @@ export function InstallModal({ lang, pwaPrompt, onClose, onPwaInstalled }: Props
               </div>
             </div>
           </button>
+          )}
 
-          {/* Desktop App card */}
+          {/* Desktop App card — Windows only, hidden on phones. */}
+          {!isMobile && (
           <button
             onClick={handleDesktop}
             style={{
@@ -208,6 +248,7 @@ export function InstallModal({ lang, pwaPrompt, onClose, onPwaInstalled }: Props
               </div>
             </div>
           </button>
+          )}
         </div>
 
         {/* Footer */}

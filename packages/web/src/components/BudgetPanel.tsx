@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from 'react'
 import { Target, TrendingUp, AlertTriangle, CheckCircle2, Pencil, Check, X } from 'lucide-react'
 import { parseISO } from 'date-fns'
-import type { StatsCache, Lang } from '@agentistics/core'
+import type { StatsCache, Lang, HarnessId } from '@agentistics/core'
 import { getModelPrice } from '@agentistics/core'
+import { NAtag } from './NAtag'
 
 interface Props {
   statsCache: StatsCache
@@ -11,6 +12,13 @@ interface Props {
   currency: 'USD' | 'BRL'
   brlRate: number
   lang: Lang
+  /**
+   * The active harness filter (undefined = unified / all-harness view).
+   * BudgetPanel reads Claude's stats-cache which is Claude-only data.
+   * When a non-claude harness is active we show N/A instead of surfacing
+   * Claude's spend as if it were the selected harness's spend.
+   */
+  harness?: HarnessId
 }
 
 function fmtCost(usd: number, currency: 'USD' | 'BRL', rate: number): string {
@@ -52,7 +60,7 @@ function computeMonthCost(statsCache: StatsCache, monthStart: Date, now: Date): 
   return total
 }
 
-export function BudgetPanel({ statsCache, budgetUSD, onBudgetChange, currency, brlRate, lang }: Props) {
+export function BudgetPanel({ statsCache, budgetUSD, onBudgetChange, currency, brlRate, lang, harness }: Props) {
   const pt = lang === 'pt'
   const [editing, setEditing] = useState(false)
   const displayBudget = budgetUSD !== null
@@ -76,6 +84,13 @@ export function BudgetPanel({ statsCache, budgetUSD, onBudgetChange, currency, b
       monthLabel: formatter.format(now),
     }
   }, [statsCache, pt])
+
+  // BudgetPanel reads the Claude stats-cache (Claude-only aggregate data).
+  // Showing it for a non-claude harness would mislead the user into thinking
+  // they're seeing that harness's spend. Show N/A for any non-claude harness.
+  if (harness && harness !== 'claude') {
+    return <NAtag harness={harness} label="Budget & forecast" />
+  }
 
   function save() {
     const v = parseFloat(draft.replace(',', '.'))

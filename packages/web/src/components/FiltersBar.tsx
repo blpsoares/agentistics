@@ -1,10 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react'
-import type { Filters, DateRange, Project, Lang } from '@agentistics/core'
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react'
+import type { Filters, DateRange, Project, Lang, HarnessId } from '@agentistics/core'
 import { formatModel, formatProjectName } from '@agentistics/core'
 import { Layers, Cpu, RotateCcw, ChevronDown, X, CalendarDays, Check } from 'lucide-react'
+import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { ProjectsModal } from './ProjectsModal'
 import { DatePicker } from './DatePicker'
 import { format } from 'date-fns'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 interface Props {
   filters: Filters
@@ -12,6 +14,9 @@ interface Props {
   projects: Project[]
   sessionCountByProject: Record<string, number>
   models: string[]
+  /** Models grouped by the harness that used them. Shown as sections in the
+   *  unified view; a single group when a harness filter is active. */
+  modelGroups?: { harness: HarnessId; models: string[] }[]
   modelsInProject?: Set<string> | null
   lang: Lang
   compact?: boolean
@@ -39,10 +44,18 @@ const CTL: React.CSSProperties = {
   alignItems: 'center',
 }
 
-export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelsInProject, lang, compact }: Props) {
+export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, lang, compact }: Props) {
+  // Fall back to a single unlabeled group when modelGroups isn't provided.
+  const groups: { harness: HarnessId | null; models: string[] }[] =
+    modelGroups && modelGroups.length > 0
+      ? modelGroups
+      : [{ harness: null, models }]
+  const showGroupHeaders = groups.length > 1
+  const isMobile = useIsMobile()
   const [showProjectsModal, setShowProjectsModal] = useState(false)
   const [showModelDropdown, setShowModelDropdown] = useState(false)
   const modelDropdownRef = useRef<HTMLDivElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
   const today = format(new Date(), 'yyyy-MM-dd')
   const hasCustomDates = !!(filters.customStart || filters.customEnd)
 
@@ -86,6 +99,22 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [showModelDropdown])
 
+  // Clamp the popover so it never overflows the right (or left) edge of the viewport.
+  useLayoutEffect(() => {
+    if (!showModelDropdown || !popoverRef.current || !modelDropdownRef.current) return
+    const container = modelDropdownRef.current.getBoundingClientRect()
+    const popover = popoverRef.current
+    // Reset any previous adjustment before measuring.
+    popover.style.left = '0'
+    popover.style.right = 'auto'
+    const popoverWidth = popover.offsetWidth
+    const rightEdge = container.left + popoverWidth
+    const overflow = rightEdge - window.innerWidth + 8 // 8px safe margin
+    if (overflow > 0) {
+      popover.style.left = `-${Math.min(overflow, container.left)}px`
+    }
+  }, [showModelDropdown])
+
   return (
     <>
       <div style={{
@@ -96,8 +125,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         padding: compact ? '10px 12px' : '8px 0',
       }}>
 
-        {/* Date range presets */}
-        <div style={{ display: 'flex', gap: 3 }}>
+        {/* Date range presets — stretch to fill the row on mobile */}
+        <div style={{ display: 'flex', gap: 3, width: isMobile ? '100%' : undefined }}>
           {DATE_RANGES.map(r => {
             const active = filters.dateRange === r.key && !filters.customStart
             return (
@@ -106,6 +135,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                 onClick={() => onChange({ ...filters, dateRange: r.key, customStart: '', customEnd: '' })}
                 style={{
                   ...CTL,
+                  flex: isMobile ? 1 : undefined,
+                  justifyContent: 'center',
                   border: active ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
                   background: active ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
                   color: active ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
@@ -124,6 +155,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         {/* Custom date range */}
         <div style={{
           display: 'flex', alignItems: 'center',
+          flex: isMobile ? '1 1 100%' : undefined,
           background: hasCustomDates ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
           border: hasCustomDates ? '1px solid rgba(217,119,6,0.55)' : '1px solid var(--border)',
           borderRadius: 7,
@@ -196,10 +228,11 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
           style={{
             ...CTL,
             gap: 5,
+            flex: isMobile ? '1 1 0' : undefined,
             border: hasProjects ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
             background: hasProjects ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
             color: hasProjects ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-            minWidth: 110,
+            minWidth: isMobile ? 0 : 110,
             justifyContent: 'space-between',
           }}
         >
@@ -211,17 +244,18 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         </button>
 
         {/* Model multi-select */}
-        <div ref={modelDropdownRef} style={{ position: 'relative' }}>
+        <div ref={modelDropdownRef} style={{ position: 'relative', flex: isMobile ? '1 1 0' : undefined }}>
           <button
             onClick={() => setShowModelDropdown(v => !v)}
             title={lang === 'pt' ? 'Filtrar por modelo' : 'Filter by model'}
             style={{
               ...CTL,
               gap: 5,
+              width: isMobile ? '100%' : undefined,
               border: hasModelFilter ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
               background: hasModelFilter ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
               color: hasModelFilter ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-              minWidth: 130,
+              minWidth: isMobile ? 0 : 130,
               justifyContent: 'space-between',
             }}
           >
@@ -233,7 +267,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
           </button>
 
           {showModelDropdown && (
-            <div style={{
+            <div ref={popoverRef} style={{
               position: 'absolute',
               top: 'calc(100% + 4px)',
               left: 0,
@@ -242,60 +276,99 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               borderRadius: 8,
               boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
               zIndex: 1000,
-              minWidth: 190,
-              padding: '4px 0',
+              // On mobile, cap to 92vw so it never exceeds the viewport;
+              // on desktop, 80vw keeps the existing generous maximum.
+              width: isMobile ? 'min(92vw, 360px)' : undefined,
+              maxWidth: isMobile ? undefined : '80vw',
+              maxHeight: '70vh',
+              overflowY: 'auto',
+              padding: 6,
             }}>
-              {models.map(m => {
-                const disabled = modelsInProject ? !modelsInProject.has(m) : false
-                const selected = selectedModels.includes(m)
-                return (
-                  <button
-                    key={m}
-                    disabled={disabled}
-                    onClick={() => toggleModel(m)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      width: '100%',
-                      padding: '7px 12px',
-                      background: selected ? 'var(--anthropic-orange-dim)' : 'transparent',
-                      border: 'none',
-                      cursor: disabled ? 'not-allowed' : 'pointer',
-                      color: disabled ? 'var(--text-tertiary)' : selected ? 'var(--anthropic-orange)' : 'var(--text-primary)',
-                      fontSize: 12,
-                      fontFamily: 'inherit',
-                      textAlign: 'left',
-                      opacity: disabled ? 0.45 : 1,
-                      transition: 'background 0.1s',
-                    }}
-                  >
+              {/* Harness groups laid out as side-by-side columns (a grid), so the
+                  list doesn't become one giant vertical column.
+                  On mobile collapse to 1 column; desktop allows up to 4. */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: isMobile
+                  ? `repeat(${Math.min(groups.length, 2)}, minmax(0, 1fr))`
+                  : `repeat(${Math.min(groups.length, 4)}, minmax(150px, 1fr))`,
+                gap: 2,
+                alignItems: 'start',
+              }}>
+              {groups.map((group, gi) => (
+                <div key={group.harness ?? '__all__'} style={{
+                  borderLeft: gi > 0 ? '1px solid var(--border)' : 'none',
+                  paddingLeft: gi > 0 ? 6 : 0,
+                }}>
+                  {showGroupHeaders && group.harness && (
                     <div style={{
-                      width: 14,
-                      height: 14,
-                      borderRadius: 3,
-                      border: selected
-                        ? '1.5px solid var(--anthropic-orange)'
-                        : disabled
-                          ? '1.5px solid var(--border)'
-                          : '1.5px solid var(--text-tertiary)',
-                      background: selected ? 'var(--anthropic-orange)' : 'transparent',
-                      flexShrink: 0,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '7px 12px 3px',
+                      fontSize: 10, fontWeight: 700,
+                      textTransform: 'uppercase', letterSpacing: '0.06em',
+                      color: HARNESS_COLORS[group.harness],
                     }}>
-                      {selected && <Check size={9} color="white" strokeWidth={3} />}
+                      <span style={{
+                        width: 7, height: 7, borderRadius: '50%',
+                        background: HARNESS_COLORS[group.harness], flexShrink: 0,
+                      }} />
+                      {HARNESS_LABELS[group.harness]}
                     </div>
-                    <span style={{ flex: 1 }}>{formatModel(m)}</span>
-                    {disabled && (
-                      <span style={{ fontSize: 10, opacity: 0.7 }}>
-                        {lang === 'pt' ? 'sem uso' : 'unused'}
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
+                  )}
+                  {group.models.map(m => {
+                    const disabled = modelsInProject ? !modelsInProject.has(m) : false
+                    const selected = selectedModels.includes(m)
+                    return (
+                      <button
+                        key={`${group.harness ?? ''}:${m}`}
+                        disabled={disabled}
+                        onClick={() => toggleModel(m)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          width: '100%',
+                          padding: '7px 12px',
+                          background: selected ? 'var(--anthropic-orange-dim)' : 'transparent',
+                          border: 'none',
+                          cursor: disabled ? 'not-allowed' : 'pointer',
+                          color: disabled ? 'var(--text-tertiary)' : selected ? 'var(--anthropic-orange)' : 'var(--text-primary)',
+                          fontSize: 12,
+                          fontFamily: 'inherit',
+                          textAlign: 'left',
+                          opacity: disabled ? 0.45 : 1,
+                          transition: 'background 0.1s',
+                        }}
+                      >
+                        <div style={{
+                          width: 14,
+                          height: 14,
+                          borderRadius: 3,
+                          border: selected
+                            ? '1.5px solid var(--anthropic-orange)'
+                            : disabled
+                              ? '1.5px solid var(--border)'
+                              : '1.5px solid var(--text-tertiary)',
+                          background: selected ? 'var(--anthropic-orange)' : 'transparent',
+                          flexShrink: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}>
+                          {selected && <Check size={9} color="white" strokeWidth={3} />}
+                        </div>
+                        <span style={{ flex: 1 }}>{formatModel(m)}</span>
+                        {disabled && (
+                          <span style={{ fontSize: 10, opacity: 0.7 }}>
+                            {lang === 'pt' ? 'sem uso' : 'unused'}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              ))}
+              </div>
               {hasModelFilter && (
                 <>
                   <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />

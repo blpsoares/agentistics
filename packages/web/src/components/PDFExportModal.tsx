@@ -1,19 +1,19 @@
 import React, { useRef, useState, useMemo, useEffect } from 'react'
 import {
-  X, Download, Sun, Moon, Check, Calendar, Cpu, Search,
-  BarChart2, TrendingUp, Clock, Wrench, FolderOpen, List, LayoutGrid, Trophy, Bot,
+  BarChart2, TrendingUp, Clock, Wrench, FolderOpen, List, LayoutGrid, Trophy, Bot, Cpu,
 } from 'lucide-react'
 import { format, parseISO, subDays } from 'date-fns'
 import type { AppData, Filters, Lang, ModelUsage, SessionMeta } from '@agentistics/core'
 import { formatModel, formatProjectName, calcCost } from '@agentistics/core'
 import { useDerivedStats, blendedCostPerToken } from '../hooks/useData'
+import { HARNESS_LABELS } from '../lib/harness'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type PDFTheme = 'light' | 'dark'
+export type PDFTheme = 'light' | 'dark'
 
-const SECTION_IDS = ['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools', 'sessions', 'highlights', 'agents'] as const
-type SectionId = typeof SECTION_IDS[number]
+export const SECTION_IDS = ['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools', 'sessions', 'highlights', 'agents'] as const
+export type SectionId = typeof SECTION_IDS[number]
 
 interface Colors {
   bg: string; bgCard: string; bgElevated: string; border: string
@@ -23,18 +23,9 @@ interface Colors {
 
 interface HeatmapDay { date: string; value: number; sessions: number; tools: number }
 
-interface PDFExportModalProps {
-  data: AppData
-  filters: Filters        // current app filters — used as initial value only
-  lang: Lang
-  currency: 'USD' | 'BRL'
-  brlRate: number
-  onClose: () => void
-}
-
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const COLORS: Record<PDFTheme, Colors> = {
+export const COLORS: Record<PDFTheme, Colors> = {
   light: {
     bg: '#ffffff', bgCard: '#f9fafb', bgElevated: '#f3f4f6', border: '#e5e7eb',
     text: '#111827', textSec: '#6b7280', textTer: '#9ca3af',
@@ -47,13 +38,7 @@ const COLORS: Record<PDFTheme, Colors> = {
   },
 }
 
-// Fixed UI colors (independent of app theme)
-const UI_THEME_BTNS: Record<PDFTheme, { bg: string; text: string; icon: string }> = {
-  light: { bg: '#f9fafb', text: '#374151', icon: '#6b7280' },
-  dark:  { bg: '#181b24', text: '#e8eaf0', icon: '#94a3b8' },
-}
-
-const SECTIONS: { id: SectionId; labelPt: string; labelEn: string; Icon: React.ElementType }[] = [
+export const SECTIONS: { id: SectionId; labelPt: string; labelEn: string; Icon: React.ElementType }[] = [
   { id: 'summary',    labelPt: 'Resumo',       labelEn: 'Summary',    Icon: BarChart2   },
   { id: 'activity',   labelPt: 'Atividade',    labelEn: 'Activity',   Icon: TrendingUp  },
   { id: 'heatmap',    labelPt: 'Mapa calor',   labelEn: 'Heatmap',    Icon: LayoutGrid  },
@@ -66,7 +51,7 @@ const SECTIONS: { id: SectionId; labelPt: string; labelEn: string; Icon: React.E
   { id: 'agents',     labelPt: 'Agentes',      labelEn: 'Agents',     Icon: Bot         },
 ]
 
-const DATE_OPTIONS = [
+export const DATE_OPTIONS = [
   { value: 'all',  labelPt: 'Tudo',      labelEn: 'All' },
   { value: '7d',   labelPt: '7 dias',    labelEn: '7 days' },
   { value: '30d',  labelPt: '30 dias',   labelEn: '30 days' },
@@ -125,7 +110,7 @@ function KPICard({ label, value, sub, accent, c }: {
   )
 }
 
-type ChartMetric = 'messages' | 'sessions' | 'tools'
+export type ChartMetric = 'messages' | 'sessions' | 'tools'
 
 const METRIC_META: Record<ChartMetric, { label: string; getVal: (d: HeatmapDay) => number; colorKey: keyof Colors }> = {
   messages: { label: 'Messages', getVal: d => d.value,    colorKey: 'orange' },
@@ -477,7 +462,16 @@ function MiniSessionsTable({ sessions, c, lang, currency, brlRate, blendedRates 
       {sessions.slice(0, 12).map((s, i) => {
         const msgs = (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
         const tools = Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
-        const costUSD = ((s.input_tokens ?? 0) / 1_000_000) * blendedRates.input + ((s.output_tokens ?? 0) / 1_000_000) * blendedRates.output
+        const costUSD = s.model
+          ? calcCost({
+              inputTokens: s.input_tokens ?? 0,
+              outputTokens: s.output_tokens ?? 0,
+              cacheReadInputTokens: s.cache_read_input_tokens ?? 0,
+              cacheCreationInputTokens: s.cache_creation_input_tokens ?? 0,
+              webSearchRequests: 0,
+              costUSD: 0,
+            }, s.model)
+          : ((s.input_tokens ?? 0) / 1_000_000) * blendedRates.input + ((s.output_tokens ?? 0) / 1_000_000) * blendedRates.output
         return (
           <div key={i} style={{ display: 'grid', gridTemplateColumns: cols, gap: 6, padding: '4px 0', borderBottom: `1px solid ${c.border}40`, alignItems: 'center' }}>
             <div style={{ color: c.textSec }}>{s.start_time ? format(parseISO(s.start_time), 'MM/dd HH:mm') : '—'}</div>
@@ -647,9 +641,10 @@ function MiniHighlightsSection({ sessions, c, lang }: {
   )
 }
 
-// ── Standalone PDF generation (used by PDFDirectExporter and PDFExportModal) ──
+// ── Standalone PDF generation (used by PDFDirectExporter and ExportPage) ──────
 
-export async function runPDFCapture(el: HTMLElement, pdfTheme: PDFTheme): Promise<void> {
+export async function runPDFCapture(el: HTMLElement, pdfTheme: PDFTheme, filename?: string): Promise<void> {
+  const resolvedFilename = filename ?? `claude-stats-${format(new Date(), 'yyyy-MM-dd')}.pdf`
   const html2canvas = (await import('html2canvas')).default
   const { jsPDF } = await import('jspdf')
 
@@ -674,7 +669,7 @@ export async function runPDFCapture(el: HTMLElement, pdfTheme: PDFTheme): Promis
   if (totalH_mm <= A4_H) {
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: [A4_W, totalH_mm] })
     pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, A4_W, totalH_mm)
-    pdf.save(`claude-stats-${format(new Date(), 'yyyy-MM-dd')}.pdf`)
+    pdf.save(resolvedFilename)
   } else {
     const pageH_px = Math.round(A4_H * pxPerMm)
     const totalPages = Math.ceil(canvas.height / pageH_px)
@@ -704,7 +699,7 @@ export async function runPDFCapture(el: HTMLElement, pdfTheme: PDFTheme): Promis
         pdf.addImage(slice.toDataURL('image/png'), 'PNG', 0, 0, A4_W, sliceH_mm)
       }
     }
-    pdf.save(`claude-stats-${format(new Date(), 'yyyy-MM-dd')}.pdf`)
+    pdf.save(resolvedFilename)
   }
 }
 
@@ -729,7 +724,17 @@ export function PDFDirectExporter({ data, range, currentFilters, lang, currency,
   }
   const pdfTheme: PDFTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   const derived = useDerivedStats(data, pdfFilters)
-  const blendedRates = useMemo(() => blendedCostPerToken(data.statsCache.modelUsage ?? {}), [data])
+  const blendedRates = useMemo(
+    () => blendedCostPerToken(derived?.modelUsage ?? data.statsCache.modelUsage ?? {}),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [derived?.modelUsage, data.statsCache.modelUsage],
+  )
+  const pdfFilename = useMemo(() => {
+    const h = currentFilters.harness
+    const dateStr = format(new Date(), 'yyyy-MM-dd')
+    if (h && h !== 'claude') return `${h}-stats-${dateStr}.pdf`
+    return `claude-stats-${dateStr}.pdf`
+  }, [currentFilters.harness])
   const contentRef = useRef<HTMLDivElement>(null)
   const [logoDataUri, setLogoDataUri] = useState<string>('/logo.png')
   const triggered = useRef(false)
@@ -749,7 +754,7 @@ export function PDFDirectExporter({ data, range, currentFilters, lang, currency,
   useEffect(() => {
     if (!contentRef.current || !derived || triggered.current) return
     triggered.current = true
-    runPDFCapture(contentRef.current, pdfTheme)
+    runPDFCapture(contentRef.current, pdfTheme, pdfFilename)
       .catch(err => console.error('PDF direct export failed:', err))
       .finally(onDone)
   }, [derived, logoDataUri])
@@ -778,7 +783,7 @@ export function PDFDirectExporter({ data, range, currentFilters, lang, currency,
 
 // ── PDF Content (the exportable A4 page, 794px wide) ─────────────────────────
 
-interface PDFContentProps {
+export interface PDFContentProps {
   pdfTheme: PDFTheme
   sectionOrder: SectionId[]
   derived: ReturnType<typeof useDerivedStats>
@@ -793,7 +798,7 @@ interface PDFContentProps {
   logoDataUri: string
 }
 
-function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currency, brlRate, blendedRates, chartMetric, chartOverlay, chartOverlayAll, logoDataUri }: PDFContentProps) {
+export function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currency, brlRate, blendedRates, chartMetric, chartOverlay, chartOverlayAll, logoDataUri }: PDFContentProps) {
   if (!derived) return null
   const c = COLORS[pdfTheme]
   const pt = lang === 'pt'
@@ -810,6 +815,12 @@ function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currenc
     ? pdfFilters.models.length === 1 ? formatModel(pdfFilters.models[0]!) : `${pdfFilters.models.length} models`
     : null
 
+  // Harness-aware title: use the harness label when filtered to a specific harness,
+  // otherwise fall back to the neutral 'agentistics' brand name.
+  const harnessTitle = pdfFilters.harness
+    ? HARNESS_LABELS[pdfFilters.harness]
+    : 'agentistics'
+
   return (
     <div style={{
       width: 794, background: c.bg,
@@ -825,7 +836,7 @@ function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currenc
             style={{ width: 36, height: 36, borderRadius: 10, flexShrink: 0, objectFit: 'contain' }}
           />
           <div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: c.text, lineHeight: 1 }}>Claude Stats</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: c.text, lineHeight: 1 }}>{harnessTitle}</div>
             <div style={{ fontSize: 11, color: c.textSec, marginTop: 3 }}>
               {pt ? 'Relatório de uso' : 'Usage Report'} · {periodLabel}
               {modelLabel && ` · ${modelLabel}`}
@@ -853,7 +864,7 @@ function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currenc
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
                 <KPICard label={pt ? 'Sequência' : 'Streak'} value={`${derived.streak}d`} sub={pt ? 'dias consec.' : 'consecutive'} accent={c.red} c={c} />
                 <KPICard label={pt ? 'Sessão mais longa' : 'Longest session'} value={derived.longestSession?.duration_minutes ? fmtDur(derived.longestSession.duration_minutes) : '—'} sub="" accent={c.purple} c={c} />
-                <KPICard label="Commits" value={String(derived.gitCommits)} sub={derived.gitPushes > 0 ? `${derived.gitPushes} pushes` : pt ? 'via Claude' : 'via Claude'} accent={c.cyan} c={c} />
+                <KPICard label="Commits" value={String(derived.gitCommits)} sub={derived.gitPushes > 0 ? `${derived.gitPushes} pushes` : `via ${harnessTitle}`} accent={c.cyan} c={c} />
                 <KPICard label={pt ? 'Arquivos' : 'Files'} value={String(derived.filesModified)} sub={`+${fmtN(derived.linesAdded)} / -${fmtN(derived.linesRemoved)}`} accent={c.green} c={c} />
               </div>
             </div>
@@ -991,7 +1002,7 @@ function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currenc
       })}
 
       <div style={{ marginTop: 24, paddingTop: 14, borderTop: `1px solid ${c.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ fontSize: 8, color: c.textTer }}>Claude Stats · Gerado automaticamente</div>
+        <div style={{ fontSize: 8, color: c.textTer }}>{harnessTitle} · {pt ? 'Gerado automaticamente' : 'Auto-generated'}</div>
         <div style={{ fontSize: 8, color: c.textTer }}>
           {derived.totalSessions.toLocaleString()} {pt ? 'sessões analisadas' : 'sessions analyzed'}
         </div>
@@ -1000,543 +1011,3 @@ function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currenc
   )
 }
 
-// ── Modal Shell ────────────────────────────────────────────────────────────────
-
-export function PDFExportModal({ data, filters, lang, currency, brlRate, onClose }: PDFExportModalProps) {
-  const pt = lang === 'pt'
-
-  // Local filter state — independent from the app, initialized from current app filters
-  const [pdfFilters, setPdfFilters] = useState<Filters>({
-    dateRange: filters.dateRange,
-    customStart: filters.customStart,
-    customEnd: filters.customEnd,
-    projects: filters.projects,
-    models: filters.models,
-  })
-
-  const [pdfTheme, setPdfTheme] = useState<PDFTheme>(
-    () => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-  )
-  const [sectionOrder, setSectionOrder] = useState<SectionId[]>(
-    ['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools']
-  )
-  const [chartMetric, setChartMetric] = useState<ChartMetric>('messages')
-  const [chartOverlay, setChartOverlay] = useState<ChartMetric | null>(null)
-  const [chartOverlayAll, setChartOverlayAll] = useState(false)
-  const [exporting, setExporting] = useState(false)
-  const [exportSuccess, setExportSuccess] = useState(false)
-  const [logoDataUri, setLogoDataUri] = useState<string>('/logo.png')
-  const contentRef = useRef<HTMLDivElement>(null)
-
-  // Pre-fetch logo as base64 data URI so html2canvas can render it in the off-screen clone
-  useEffect(() => {
-    fetch('/logo.png')
-      .then(r => r.blob())
-      .then(blob => new Promise<string>(resolve => {
-        const reader = new FileReader()
-        reader.onloadend = () => resolve(reader.result as string)
-        reader.readAsDataURL(blob)
-      }))
-      .then(dataUri => setLogoDataUri(dataUri))
-      .catch(() => { /* keep the relative path as fallback */ })
-  }, [])
-
-  // Derive stats using the LOCAL PDF filters (not the app's filters)
-  const derived = useDerivedStats(data, pdfFilters)
-
-  const availableModels = useMemo(() => Object.keys(data.statsCache.modelUsage ?? {}), [data])
-
-  const sortedProjects = useMemo(() =>
-    [...data.projects].sort((a, b) => b.sessions.length - a.sessions.length),
-    [data.projects]
-  )
-
-  const [projectQuery, setProjectQuery] = useState('')
-
-  const toggleProject = (path: string) => {
-    setPdfFilters(f => ({
-      ...f,
-      projects: f.projects.includes(path)
-        ? f.projects.filter(p => p !== path)
-        : [...f.projects, path],
-    }))
-  }
-
-  const toggleSection = (id: SectionId) => {
-    setSectionOrder(prev =>
-      prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]
-    )
-  }
-
-  const allSelected = sectionOrder.length === SECTIONS.length
-  const toggleAll = () => {
-    if (allSelected) setSectionOrder([])
-    else setSectionOrder([...SECTION_IDS])
-  }
-
-  const blendedRates = useMemo(
-    () => blendedCostPerToken(data.statsCache.modelUsage ?? {}),
-    [data.statsCache.modelUsage]
-  )
-
-  const handleExport = async () => {
-    if (!contentRef.current || exporting) return
-    setExporting(true)
-    try {
-      await runPDFCapture(contentRef.current, pdfTheme)
-      setExportSuccess(true)
-      setTimeout(() => setExportSuccess(false), 2500)
-    } catch (err) {
-      console.error('PDF export failed:', err)
-    } finally {
-      setExporting(false)
-    }
-  }
-
-  // ── Section label helper ─────────────────────────────────────────────────────
-
-  const configSectionLabel = (txt: string) => (
-    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
-      {txt}
-    </div>
-  )
-
-  return (
-    <div
-      style={{ position: 'fixed', inset: 0, zIndex: 500, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
-      onClick={e => e.target === e.currentTarget && onClose()}
-    >
-      <div style={{
-        background: 'var(--bg-surface)', border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-xl)', boxShadow: 'var(--shadow-elevated)',
-        width: '90vw', maxWidth: 1300, height: '90vh',
-        display: 'flex', flexDirection: 'column', overflow: 'hidden',
-      }}>
-        {/* Modal header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--anthropic-orange-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Download size={15} color="var(--anthropic-orange)" />
-            </div>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
-                {pt ? 'Exportar relatório PDF' : 'Export PDF report'}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                {pt ? 'Configure, filtre e visualize antes de exportar' : 'Configure, filter and preview before exporting'}
-              </div>
-            </div>
-          </div>
-          <button onClick={onClose} style={{ display: 'flex', alignItems: 'center', padding: '6px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer' }}>
-            <X size={16} />
-          </button>
-        </div>
-
-        {/* Two-panel body */}
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-
-          {/* ── Left panel: config ───────────────────────────────────────────── */}
-          <div style={{ width: 288, flexShrink: 0, borderRight: '1px solid var(--border)', overflowY: 'auto', padding: '18px 16px', display: 'flex', flexDirection: 'column', gap: 18 }}>
-
-            {/* PDF Theme */}
-            <div>
-              {configSectionLabel(pt ? 'Tema do PDF' : 'PDF theme')}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                {(['light', 'dark'] as PDFTheme[]).map(t => {
-                  const sel = pdfTheme === t
-                  const ui = UI_THEME_BTNS[t]
-                  return (
-                    <button key={t} onClick={() => setPdfTheme(t)} style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                      padding: '9px 8px', borderRadius: 8, cursor: 'pointer',
-                      fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
-                      background: ui.bg,
-                      color: ui.text,
-                      border: sel ? `2px solid var(--anthropic-orange)` : `1px solid ${t === 'light' ? '#d1d5db' : '#374151'}`,
-                      boxShadow: sel ? '0 0 0 1px var(--anthropic-orange)30' : 'none',
-                      transition: 'all 0.12s',
-                    }}>
-                      {t === 'light'
-                        ? <Sun size={13} color={ui.icon} />
-                        : <Moon size={13} color={ui.icon} />}
-                      {t === 'light' ? (pt ? 'Claro' : 'Light') : (pt ? 'Escuro' : 'Dark')}
-                      {sel && <Check size={11} color="var(--anthropic-orange)" />}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* Divider */}
-            <div style={{ height: 1, background: 'var(--border)' }} />
-
-            {/* Period filter */}
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                <Calendar size={11} color="var(--text-tertiary)" />
-                {configSectionLabel(pt ? 'Período' : 'Period')}
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
-                {DATE_OPTIONS.map(opt => {
-                  const sel = pdfFilters.dateRange === opt.value
-                  return (
-                    <button key={opt.value} onClick={() => setPdfFilters(f => ({ ...f, dateRange: opt.value as Filters['dateRange'], customStart: '', customEnd: '' }))} style={{
-                      padding: '6px 4px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-                      fontSize: 11, fontWeight: sel ? 700 : 500, textAlign: 'center',
-                      background: sel ? 'var(--anthropic-orange-dim)' : 'transparent',
-                      border: sel ? '1px solid var(--anthropic-orange)50' : '1px solid var(--border)',
-                      color: sel ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                      transition: 'all 0.12s',
-                    }}>
-                      {pt ? opt.labelPt : opt.labelEn}
-                    </button>
-                  )
-                })}
-              </div>
-              {derived && (
-                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 6 }}>
-                  {fmtN(derived.totalMessages)} {pt ? 'mensagens' : 'msgs'} · {fmtN(derived.totalSessions)} {pt ? 'sessões' : 'sessions'}
-                </div>
-              )}
-            </div>
-
-            {/* Model filter */}
-            {availableModels.length > 1 && (
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                  <Cpu size={11} color="var(--text-tertiary)" />
-                  {configSectionLabel(pt ? 'Modelo' : 'Model')}
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  {availableModels.map(m => {
-                    const sel = (pdfFilters.models ?? []).includes(m)
-                    return (
-                      <button key={m} onClick={() => setPdfFilters(f => {
-                        const cur = f.models ?? []
-                        return { ...f, models: cur.includes(m) ? cur.filter(x => x !== m) : [...cur, m] }
-                      })} style={{
-                        display: 'flex', alignItems: 'center', gap: 8,
-                        padding: '6px 10px', borderRadius: 6, cursor: 'pointer',
-                        fontFamily: 'inherit', fontSize: 11, textAlign: 'left',
-                        background: sel ? 'var(--anthropic-orange-dim)' : 'transparent',
-                        border: sel ? '1px solid var(--anthropic-orange)30' : '1px solid transparent',
-                        color: sel ? 'var(--text-primary)' : 'var(--text-secondary)',
-                        fontWeight: sel ? 600 : 400,
-                        transition: 'all 0.12s',
-                      }}>
-                        <div style={{ width: 8, height: 8, borderRadius: '50%', background: sel ? 'var(--anthropic-orange)' : 'var(--border)', flexShrink: 0 }} />
-                        {formatModel(m)}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Project filter */}
-            {sortedProjects.length > 1 && (
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                  <FolderOpen size={11} color="var(--text-tertiary)" />
-                  {configSectionLabel(pt ? 'Projetos' : 'Projects')}
-                </div>
-                {/* Search */}
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                  borderRadius: 6, padding: '5px 8px', marginBottom: 6,
-                }}>
-                  <Search size={11} color="var(--text-tertiary)" style={{ flexShrink: 0 }} />
-                  <input
-                    value={projectQuery}
-                    onChange={e => setProjectQuery(e.target.value)}
-                    placeholder={pt ? 'Buscar...' : 'Search...'}
-                    style={{
-                      flex: 1, background: 'transparent', border: 'none', outline: 'none',
-                      color: 'var(--text-primary)', fontSize: 11, fontFamily: 'inherit',
-                    }}
-                  />
-                  {projectQuery && (
-                    <button onClick={() => setProjectQuery('')} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)', display: 'flex', padding: 0 }}>
-                      <X size={10} />
-                    </button>
-                  )}
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 176, overflowY: 'auto' }}>
-                  {/* All projects — only show when no search */}
-                  {!projectQuery && (
-                    <button
-                      onClick={() => setPdfFilters(f => ({ ...f, projects: [] }))}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
-                        borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, textAlign: 'left',
-                        background: pdfFilters.projects.length === 0 ? 'var(--anthropic-orange-dim)' : 'transparent',
-                        border: pdfFilters.projects.length === 0 ? '1px solid var(--anthropic-orange)30' : '1px solid transparent',
-                        color: pdfFilters.projects.length === 0 ? 'var(--text-primary)' : 'var(--text-secondary)',
-                        fontWeight: pdfFilters.projects.length === 0 ? 600 : 400, transition: 'all 0.1s',
-                      }}
-                    >
-                      <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: pdfFilters.projects.length === 0 ? 'var(--anthropic-orange)' : 'var(--border)' }} />
-                      {pt ? 'Todos os projetos' : 'All projects'}
-                    </button>
-                  )}
-                  {/* Individual projects — filtered by search query */}
-                  {sortedProjects
-                    .filter(p => p.path.toLowerCase().includes(projectQuery.toLowerCase()))
-                    .map(proj => {
-                      const sel = pdfFilters.projects.includes(proj.path)
-                      return (
-                        <button key={proj.path} onClick={() => toggleProject(proj.path)} style={{
-                          display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
-                          borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, textAlign: 'left',
-                          background: sel ? 'var(--anthropic-orange-dim)' : 'transparent',
-                          border: sel ? '1px solid var(--anthropic-orange)30' : '1px solid transparent',
-                          color: sel ? 'var(--text-primary)' : 'var(--text-secondary)',
-                          fontWeight: sel ? 600 : 400, transition: 'all 0.1s',
-                        }}>
-                          <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: sel ? 'var(--anthropic-orange)' : 'var(--border)' }} />
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {formatProjectName(proj.path)}
-                          </span>
-                          <span style={{ marginLeft: 'auto', fontSize: 9, color: 'var(--text-tertiary)', flexShrink: 0 }}>
-                            {proj.sessions.length}
-                          </span>
-                        </button>
-                      )
-                    })
-                  }
-                </div>
-                {pdfFilters.projects.length > 0 && (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 5 }}>
-                    <span style={{ fontSize: 10, color: 'var(--anthropic-orange)', fontWeight: 500 }}>
-                      {pdfFilters.projects.length} {pt ? 'selecionado(s)' : 'selected'}
-                    </span>
-                    <button
-                      onClick={() => setPdfFilters(f => ({ ...f, projects: [] }))}
-                      style={{ fontSize: 10, color: 'var(--text-tertiary)', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: 0 }}
-                    >
-                      {pt ? 'Limpar' : 'Clear'}
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Divider */}
-            <div style={{ height: 1, background: 'var(--border)' }} />
-
-            {/* Sections */}
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                {configSectionLabel(pt ? 'Seções do PDF' : 'PDF sections')}
-                <button onClick={toggleAll} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 10, color: 'var(--text-tertiary)', fontFamily: 'inherit', padding: 0, marginTop: -8 }}>
-                  {allSelected ? (pt ? 'Desmarcar tudo' : 'Deselect all') : (pt ? 'Selecionar tudo' : 'Select all')}
-                </button>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-                {SECTIONS.map(({ id, labelPt, labelEn, Icon }) => {
-                  const on = sectionOrder.includes(id)
-                  return (
-                    <button key={id} onClick={() => toggleSection(id)} style={{
-                      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                      gap: 6, padding: '12px 6px', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit',
-                      background: on ? 'var(--anthropic-orange-dim)' : 'var(--bg-card)',
-                      border: on ? '1.5px solid var(--anthropic-orange)70' : '1px solid var(--border)',
-                      textAlign: 'center', transition: 'all 0.13s',
-                      boxShadow: on ? '0 0 0 2px var(--anthropic-orange)18' : 'none',
-                    }}>
-                      <Icon
-                        size={17}
-                        color={on ? 'var(--anthropic-orange)' : 'var(--text-tertiary)'}
-                        strokeWidth={on ? 2.2 : 1.8}
-                      />
-                      <span style={{
-                        fontSize: 10, lineHeight: 1.25,
-                        color: on ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                        fontWeight: on ? 700 : 400,
-                      }}>
-                        {pt ? labelPt : labelEn}
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* Activity chart options — only relevant when 'activity' section is active */}
-            {sectionOrder.includes('activity') && (
-              <>
-                <div style={{ height: 1, background: 'var(--border)' }} />
-                <div>
-                  {configSectionLabel(pt ? 'Gráfico de atividade' : 'Activity chart')}
-
-                  {/* Primary metric */}
-                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 5 }}>
-                    {pt ? 'Linha principal' : 'Primary line'}
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5, marginBottom: 12 }}>
-                    {(['messages', 'sessions', 'tools'] as ChartMetric[]).map(m => {
-                      const labels: Record<ChartMetric, { en: string; pt: string }> = {
-                        messages: { en: 'Messages', pt: 'Msgs' },
-                        sessions: { en: 'Sessions', pt: 'Sessões' },
-                        tools:    { en: 'Tools', pt: 'Tools' },
-                      }
-                      const dotColors: Record<ChartMetric, string> = {
-                        messages: 'var(--anthropic-orange)',
-                        sessions: '#60a5fa',
-                        tools:    '#34d399',
-                      }
-                      const sel = chartMetric === m
-                      return (
-                        <button key={m} onClick={() => { setChartMetric(m); if (chartOverlay === m) setChartOverlay(null) }} style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
-                          padding: '6px 4px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-                          fontSize: 10, fontWeight: sel ? 700 : 400,
-                          background: sel ? 'var(--anthropic-orange-dim)' : 'transparent',
-                          border: sel ? '1px solid var(--anthropic-orange)50' : '1px solid var(--border)',
-                          color: sel ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                          transition: 'all 0.12s',
-                        }}>
-                          <div style={{ width: 6, height: 6, borderRadius: '50%', background: dotColors[m], flexShrink: 0 }} />
-                          {pt ? labels[m].pt : labels[m].en}
-                        </button>
-                      )
-                    })}
-                  </div>
-
-                  {/* Overlay */}
-                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 5 }}>
-                    {pt ? 'Overlay (opcional)' : 'Overlay (optional)'}
-                  </div>
-                  {/* Overlay All toggle */}
-                  <button
-                    onClick={() => { setChartOverlayAll(v => !v); setChartOverlay(null) }}
-                    style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
-                      padding: '6px 8px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-                      fontSize: 10, fontWeight: chartOverlayAll ? 700 : 400, width: '100%', marginBottom: 5,
-                      background: chartOverlayAll ? '#8b5cf620' : 'transparent',
-                      border: chartOverlayAll ? '1px solid #8b5cf660' : '1px solid var(--border)',
-                      color: chartOverlayAll ? '#a78bfa' : 'var(--text-secondary)',
-                      transition: 'all 0.12s',
-                    }}
-                  >
-                    {pt ? '⊞ Overlay todas as linhas' : '⊞ Overlay all lines'}
-                  </button>
-                  {!chartOverlayAll && (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5 }}>
-                      {([null, 'messages', 'sessions', 'tools'] as (ChartMetric | null)[])
-                        .filter(m => m !== chartMetric)
-                        .map(m => {
-                          const labels: Record<string, { en: string; pt: string }> = {
-                            messages: { en: 'Messages', pt: 'Msgs' },
-                            sessions: { en: 'Sessions', pt: 'Sessões' },
-                            tools:    { en: 'Tools', pt: 'Tools' },
-                          }
-                          const dotColors: Record<string, string> = {
-                            messages: 'var(--anthropic-orange)',
-                            sessions: '#60a5fa',
-                            tools:    '#34d399',
-                          }
-                          const sel = chartOverlay === m
-                          return (
-                            <button key={String(m)} onClick={() => setChartOverlay(m)} style={{
-                              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
-                              padding: '6px 4px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-                              fontSize: 10, fontWeight: sel ? 700 : 400,
-                              background: sel ? (m ? 'color-mix(in srgb, var(--border) 60%, transparent)' : 'var(--bg-card)') : 'transparent',
-                              border: sel ? '1px solid var(--border)' : '1px solid var(--border)',
-                              color: sel ? 'var(--text-primary)' : 'var(--text-secondary)',
-                              opacity: m === null && !sel ? 0.6 : 1,
-                              transition: 'all 0.12s',
-                            }}>
-                              {m ? (
-                                <>
-                                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: dotColors[m]!, flexShrink: 0 }} />
-                                  {pt ? labels[m]!.pt : labels[m]!.en}
-                                </>
-                              ) : (pt ? 'Nenhum' : 'None')}
-                            </button>
-                          )
-                        })}
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-
-            {/* Spacer */}
-            <div style={{ flex: 1 }} />
-
-            {/* Export button */}
-            <button
-              onClick={handleExport}
-              disabled={exporting || sectionOrder.length === 0}
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                padding: '11px 16px', borderRadius: 10, border: 'none',
-                cursor: sectionOrder.length === 0 ? 'not-allowed' : 'pointer',
-                background: exportSuccess ? '#10b981' : sectionOrder.length === 0 ? 'var(--bg-elevated)' : 'var(--anthropic-orange)',
-                color: exportSuccess || sectionOrder.length > 0 ? '#fff' : 'var(--text-tertiary)',
-                fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
-                transition: 'all 0.2s', opacity: exporting ? 0.8 : 1,
-              }}
-            >
-              {exporting ? (
-                <>
-                  <div style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', animation: 'spin 0.7s linear infinite' }} />
-                  {pt ? 'Gerando PDF...' : 'Generating PDF...'}
-                </>
-              ) : exportSuccess ? (
-                <><Check size={14} /> {pt ? 'PDF salvo!' : 'PDF saved!'}</>
-              ) : (
-                <><Download size={14} /> {pt ? 'Exportar PDF' : 'Export PDF'}</>
-              )}
-            </button>
-            {sectionOrder.length === 0 && (
-              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textAlign: 'center', marginTop: -12 }}>
-                {pt ? 'Selecione pelo menos uma seção' : 'Select at least one section'}
-              </div>
-            )}
-          </div>
-
-          {/* ── Right panel: live preview ────────────────────────────────────── */}
-          <div style={{ flex: 1, overflow: 'auto', background: 'var(--bg-base)', display: 'flex', flexDirection: 'column' }}>
-            {/* Preview bar */}
-            <div style={{ padding: '8px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-surface)' }}>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--accent-green)', flexShrink: 0 }} />
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                {pt ? 'Prévia em tempo real' : 'Live preview'} · 794px (A4)
-              </div>
-              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 'auto' }}>
-                {sectionOrder.length} {pt ? 'seção(ões)' : 'section(s)'}
-              </div>
-            </div>
-
-            {/* Preview content */}
-            <div style={{ padding: '24px', display: 'flex', justifyContent: 'center' }}>
-              <div ref={contentRef} style={{ boxShadow: '0 4px 32px rgba(0,0,0,0.3)', borderRadius: 4, overflow: 'hidden', flexShrink: 0, alignSelf: 'flex-start', background: COLORS[pdfTheme].bg }}>
-                <PDFContent
-                  pdfTheme={pdfTheme}
-                  sectionOrder={sectionOrder}
-                  derived={derived}
-                  pdfFilters={pdfFilters}
-                  lang={lang}
-                  currency={currency}
-                  brlRate={brlRate}
-                  blendedRates={blendedRates}
-                  chartMetric={chartMetric}
-                  chartOverlay={chartOverlay}
-                  chartOverlayAll={chartOverlayAll}
-                  logoDataUri={logoDataUri}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-    </div>
-  )
-}

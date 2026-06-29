@@ -19,7 +19,7 @@ import {
 } from '@inquirer/core'
 import { select, input, confirm } from '@inquirer/prompts'
 import { calcCost, getModelPrice } from '@agentistics/core'
-import type { ModelUsage, SessionMeta } from '@agentistics/core'
+import type { ModelUsage, SessionMeta, HarnessId } from '@agentistics/core'
 
 // ── Paths ──────────────────────────────────────────────────────────────────
 
@@ -114,12 +114,13 @@ interface StatsCache {
 }
 
 interface AppState {
-  snapshots:   Map<string, CliSnapshot>
-  lastUpdated: Date
-  animFrame:   number
-  showAnim:    boolean
-  isLoading:   boolean
-  dataSource:  DataSrc
+  snapshots:        Map<string, CliSnapshot>
+  harnessSnapshots: HarnessSnapshot[]
+  lastUpdated:      Date
+  animFrame:        number
+  showAnim:         boolean
+  isLoading:        boolean
+  dataSource:       DataSrc
 }
 
 // ── API ────────────────────────────────────────────────────────────────────
@@ -139,6 +140,7 @@ interface ApiResponse {
   statsCache: StatsCache
   projects:   ApiProject[]
   sessions:   SessionMeta[]
+  harnesses?: HarnessId[]
 }
 
 async function fetchApi(timeout = 3000): Promise<ApiResponse | null> {
@@ -297,11 +299,82 @@ function computeSnapshot(
     costUsd: cost, streak, gitCommits: gC, linesAdded: lA, linesRemoved: lR }
 }
 
+// ── Per-harness snapshot ───────────────────────────────────────────────────
+
+interface HarnessSnapshot {
+  harness:      HarnessId
+  sessions:     number
+  inputTokens:  number
+  outputTokens: number
+  costUsd:      number
+}
+
+/** HARNESS_LABELS for terminal display — avoids importing from packages/web/src/lib/harness.ts */
+const HARNESS_LABELS: Record<HarnessId, string> = {
+  claude:  'Claude Code',
+  codex:   'Codex CLI',
+  gemini:  'Gemini CLI',
+  copilot: 'Copilot CLI',
+}
+
+/** Compute per-harness totals from per-session data.
+ *  Claude totals come from statsCache (authoritative); non-Claude are pure session sums.
+ *  Cost always uses calcCost() — never inline math. */
+function computeHarnessSnapshots(
+  sessions:   SessionMeta[],
+  statsCache: StatsCache,
+  harnesses:  HarnessId[],
+  filter?:    string[],
+): HarnessSnapshot[] {
+  const isF  = !!(filter?.length)
+  const filt = isF ? sessions.filter(s => filter!.includes(s.project_path)) : sessions
+
+  return harnesses.map(harness => {
+    const hSessions = filt.filter(s => s.harness === harness)
+
+    if (harness === 'claude' && !isF) {
+      // For Claude without a project filter, use the authoritative statsCache totals
+      const mu = statsCache.modelUsage ?? {}
+      const costUsd = Object.entries(mu).reduce((acc, [id, u]) => acc + calcCost(u, id), 0)
+      const inputTokens  = hSessions.reduce((s, x) => s + (x.input_tokens  ?? 0), 0)
+      const outputTokens = hSessions.reduce((s, x) => s + (x.output_tokens ?? 0), 0)
+      const daily = statsCache.dailyActivity ?? []
+      const sessCnt = daily.reduce((s, d) => s + d.sessionCount, 0)
+      return { harness, sessions: sessCnt || hSessions.length, inputTokens, outputTokens, costUsd }
+    }
+
+    // Non-Claude harnesses (or Claude with project filter): pure per-session sums
+    const inputTokens  = hSessions.reduce((s, x) => s + (x.input_tokens  ?? 0), 0)
+    const outputTokens = hSessions.reduce((s, x) => s + (x.output_tokens ?? 0), 0)
+    let costUsd = 0
+    for (const sess of hSessions) {
+      const m = sess.model
+      if (m) {
+        costUsd += calcCost({
+          inputTokens: sess.input_tokens ?? 0,
+          outputTokens: sess.output_tokens ?? 0,
+          cacheReadInputTokens: sess.cache_read_input_tokens ?? 0,
+          cacheCreationInputTokens: sess.cache_creation_input_tokens ?? 0,
+          webSearchRequests: 0, costUSD: 0,
+        }, m)
+      } else {
+        // Fallback: use blendedCost rates from statsCache (Claude's model mix as a proxy)
+        const mu = statsCache.modelUsage ?? {}
+        const b  = blendedCost(Object.keys(mu).length > 0 ? mu : {})
+        costUsd += ((sess.input_tokens ?? 0) / 1_000_000) * b.input
+               +  ((sess.output_tokens ?? 0) / 1_000_000) * b.output
+      }
+    }
+    return { harness, sessions: hSessions.length, inputTokens, outputTokens, costUsd }
+  })
+}
+
 // ── Reload de dados (apenas via API) ──────────────────────────────────────
 
 async function reloadData(config: WatchConfig): Promise<{
-  snapshots: Map<string, CliSnapshot>
-  dataSource: DataSrc
+  snapshots:        Map<string, CliSnapshot>
+  harnessSnapshots: HarnessSnapshot[]
+  dataSource:       DataSrc
 }> {
   const paths     = config.selectedProjects.length > 0 ? config.selectedProjects.map(p => p.path) : undefined
   const snapshots = new Map<string, CliSnapshot>()
@@ -310,11 +383,19 @@ async function reloadData(config: WatchConfig): Promise<{
   if (!apiData) throw new Error('API indisponivel')
 
   const { sessions, statsCache, projects } = apiData
+  // Derive the list of active harnesses; fall back to session-based detection if not in response
+  const harnesses: HarnessId[] = apiData.harnesses && apiData.harnesses.length > 0
+    ? apiData.harnesses
+    : Array.from(new Set(sessions.map(s => s.harness ?? 'claude'))) as HarnessId[]
+
   snapshots.set('', computeSnapshot(sessions, statsCache, projects, paths))
   for (const p of config.selectedProjects) {
     snapshots.set(p.path, computeSnapshot(sessions, statsCache, projects, [p.path]))
   }
-  return { snapshots, dataSource: 'api' }
+  const harnessSnapshots = harnesses.length > 1
+    ? computeHarnessSnapshots(sessions, statsCache, harnesses, paths)
+    : []
+  return { snapshots, harnessSnapshots, dataSource: 'api' }
 }
 
 // ── Loader ─────────────────────────────────────────────────────────────────
@@ -534,6 +615,38 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
     lines.push(sepLine(W))
   }
 
+  // Harness breakdown (shown only when >1 harness is active)
+  if (st.harnessSnapshots.length > 1) {
+    lines.push('')
+    lines.push(sepLine(W))
+    lines.push(`  ${B}${VI}HARNESSES${R}`)
+    lines.push('')
+
+    // Column widths for harness table
+    const HW = { label: 14, sessions: 9, tokIn: 9, tokOut: 9, cost: 10 }
+    const hHdr = [
+      padStr(`${D}Harness${R}`, HW.label, 'l'),
+      padStr(`${D}Sessions${R}`, HW.sessions),
+      padStr(`${D}Tok-In${R}`,   HW.tokIn),
+      padStr(`${D}Tok-Out${R}`,  HW.tokOut),
+      padStr(`${D}Cost${R}`,     HW.cost),
+    ].join('  ')
+    lines.push('  ' + hHdr)
+
+    for (const hs of st.harnessSnapshots) {
+      const label = HARNESS_LABELS[hs.harness] ?? hs.harness
+      const row = [
+        padStr(`${VI}${label}${R}`, HW.label, 'l'),
+        padStr(`${AM}${fmtN(hs.sessions)}${R}`,     HW.sessions),
+        padStr(`${AM}${fmtN(hs.inputTokens)}${R}`,  HW.tokIn),
+        padStr(`${AM}${fmtN(hs.outputTokens)}${R}`, HW.tokOut),
+        padStr(`${AM}${fmtC(hs.costUsd)}${R}`,      HW.cost),
+      ].join('  ')
+      lines.push('  ' + row)
+    }
+    lines.push(sepLine(W))
+  }
+
   lines.push('')
   lines.push(`  ${D}Ctrl+C sair  |  Ctrl+O ${st.showAnim ? 'ocultar' : 'mostrar'} animação${R}`)
   return lines.join('\n') + '\n'
@@ -543,7 +656,7 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
 
 async function watchLoop(cfg: WatchConfig): Promise<void> {
   const st: AppState = {
-    snapshots: new Map(), lastUpdated: new Date(),
+    snapshots: new Map(), harnessSnapshots: [], lastUpdated: new Date(),
     animFrame: 0, showAnim: cfg.showAnim, isLoading: true, dataSource: 'api' as DataSrc,
   }
 
@@ -569,8 +682,8 @@ async function watchLoop(cfg: WatchConfig): Promise<void> {
     if (reloading) return
     reloading = true; st.isLoading = true
     try {
-      const { snapshots, dataSource } = await reloadData(cfg)
-      st.snapshots = snapshots; st.dataSource = dataSource
+      const { snapshots, harnessSnapshots, dataSource } = await reloadData(cfg)
+      st.snapshots = snapshots; st.harnessSnapshots = harnessSnapshots; st.dataSource = dataSource
       st.lastUpdated = new Date()
     } catch { /* mantém anterior */ }
     finally { st.isLoading = false; reloading = false }
