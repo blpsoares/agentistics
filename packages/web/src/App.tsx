@@ -13,7 +13,7 @@ import {
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
-import type { Filters, HarnessId } from '@agentistics/core'
+import type { Filters, HarnessId, HealthIssue } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
 import { formatProjectName, setHomeDir, MODEL_PRICING } from '@agentistics/core'
 import { StatCard } from './components/StatCard'
@@ -588,11 +588,23 @@ function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): st
   return `USD ${usd.toFixed(6)}`
 }
 
-function MobileBottomNav({ lang, harnesses }: { lang: Lang; harnesses?: HarnessId[] }) {
+function MobileBottomNav({
+  lang, harnesses, onSettings, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues,
+}: {
+  lang: Lang
+  harnesses?: HarnessId[]
+  onSettings: () => void
+  onRefresh: () => void
+  liveUpdates: boolean
+  onToggleLive: () => void
+  updateInterval: number
+  healthIssues?: HealthIssue[]
+}) {
   const location = useLocation()
   const navigate = useNavigate()
   const pt = lang === 'pt'
   const [moreOpen, setMoreOpen] = useState(false)
+  const orange = 'var(--anthropic-orange)'
 
   // Primary destinations live in the bar; the rest go behind a "More" sheet so
   // the bar never crams more than 5 slots on a narrow phone.
@@ -603,15 +615,40 @@ function MobileBottomNav({ lang, harnesses }: { lang: Lang; harnesses?: HarnessI
     { to: '/tools',    labelPt: 'Tools',      labelEn: 'Tools',     icon: Wrench },
   ] as const
 
-  const more = [
-    { to: '/custom',   labelPt: 'Personalizado', labelEn: 'Custom',  icon: Layers },
-    { to: '/export',   labelPt: 'Exportar',      labelEn: 'Export',  icon: FileDown },
+  // Square tiles in the "More" sheet: nav destinations + the actions that used
+  // to crowd the top header (settings, live toggle, refresh, warnings).
+  type Tile = {
+    key: string
+    label: string
+    icon: typeof Home
+    onClick: () => void
+    active?: boolean
+    accent?: boolean
+    badge?: string
+  }
+  const navTiles: Tile[] = [
+    { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { setMoreOpen(false); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
+    { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { setMoreOpen(false); navigate('/export') }, active: location.pathname.startsWith('/export') },
     ...(harnesses && harnesses.length > 1
-      ? [{ to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: GitCompare }]
+      ? [{ key: 'compare', label: pt ? 'Comparar' : 'Compare', icon: GitCompare, onClick: () => { setMoreOpen(false); navigate('/compare') }, active: location.pathname.startsWith('/compare') } as Tile]
       : []),
-  ] as const
+  ]
+  const activeIssueCount = healthIssues?.length ?? 0
+  const actionTiles: Tile[] = [
+    {
+      key: 'live', label: pt ? 'Ao vivo' : 'Live', icon: Activity,
+      onClick: () => onToggleLive(), accent: liveUpdates,
+      badge: liveUpdates ? (updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`) : undefined,
+    },
+    { key: 'refresh', label: pt ? 'Atualizar' : 'Refresh', icon: RefreshCw, onClick: () => { onRefresh(); setMoreOpen(false) } },
+    { key: 'settings', label: pt ? 'Ajustes' : 'Settings', icon: SlidersHorizontal, onClick: () => { onSettings(); setMoreOpen(false) } },
+    ...(activeIssueCount > 0
+      ? [{ key: 'warnings', label: pt ? 'Avisos' : 'Warnings', icon: AlertTriangle, onClick: () => { setMoreOpen(false); onSettings() }, accent: true, badge: String(activeIssueCount) } as Tile]
+      : []),
+  ]
+  const allTiles = [...navTiles, ...actionTiles]
 
-  const moreActive = more.some(t => location.pathname.startsWith(t.to))
+  const navAction = navTiles.some(t => t.active)
 
   const itemStyle = (active: boolean): React.CSSProperties => ({
     flex: 1,
@@ -622,7 +659,7 @@ function MobileBottomNav({ lang, harnesses }: { lang: Lang; harnesses?: HarnessI
     justifyContent: 'center',
     gap: 3,
     textDecoration: 'none',
-    color: active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+    color: active ? orange : 'var(--text-tertiary)',
     fontSize: 10,
     fontWeight: active ? 700 : 500,
     transition: 'color 0.15s',
@@ -640,47 +677,70 @@ function MobileBottomNav({ lang, harnesses }: { lang: Lang; harnesses?: HarnessI
 
   return (
     <>
-      {/* "More" bottom sheet */}
-      {moreOpen && (
-        <>
-          <div
-            onClick={() => setMoreOpen(false)}
-            style={{ position: 'fixed', inset: 0, zIndex: 210, background: 'rgba(0,0,0,0.45)' }}
-          />
-          <div style={{
-            position: 'fixed', left: 0, right: 0, bottom: 56, zIndex: 220,
-            background: 'var(--bg-surface)', borderTop: '1px solid var(--border)',
-            borderRadius: '14px 14px 0 0', boxShadow: '0 -8px 30px rgba(0,0,0,0.35)',
-            padding: '8px 8px 12px',
-          }}>
-            <div style={{
-              width: 36, height: 4, borderRadius: 2, background: 'var(--border)',
-              margin: '4px auto 10px',
-            }} />
-            {more.map(tab => {
-              const active = location.pathname.startsWith(tab.to)
-              const Icon = tab.icon
-              return (
-                <button
-                  key={tab.to}
-                  onClick={() => { setMoreOpen(false); navigate(tab.to) }}
-                  style={{
-                    width: '100%', display: 'flex', alignItems: 'center', gap: 12,
-                    padding: '13px 16px', borderRadius: 10,
-                    background: active ? 'var(--anthropic-orange-dim)' : 'transparent',
-                    border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
-                    color: active ? 'var(--anthropic-orange)' : 'var(--text-primary)',
-                    fontSize: 15, fontWeight: active ? 700 : 500,
-                  }}
-                >
-                  <Icon size={19} style={{ flexShrink: 0 }} />
-                  {pt ? tab.labelPt : tab.labelEn}
-                </button>
-              )
-            })}
-          </div>
-        </>
-      )}
+      {/* "More" bottom sheet — square tiles for bigger, friendlier tap targets */}
+      <div
+        onClick={() => setMoreOpen(false)}
+        style={{
+          position: 'fixed', inset: 0, zIndex: 210, background: 'rgba(0,0,0,0.45)',
+          opacity: moreOpen ? 1 : 0,
+          pointerEvents: moreOpen ? 'auto' : 'none',
+          transition: 'opacity 0.25s ease',
+        }}
+      />
+      <div style={{
+        position: 'fixed', left: 0, right: 0, bottom: 56, zIndex: 220,
+        background: 'var(--bg-surface)', borderTop: '1px solid var(--border)',
+        borderRadius: '16px 16px 0 0', boxShadow: '0 -8px 30px rgba(0,0,0,0.35)',
+        padding: '8px 12px 16px',
+        transform: moreOpen ? 'translateY(0)' : 'translateY(110%)',
+        transition: 'transform 0.28s cubic-bezier(0.22, 1, 0.36, 1)',
+      }}>
+        <div style={{
+          width: 36, height: 4, borderRadius: 2, background: 'var(--border)',
+          margin: '4px auto 12px',
+        }} />
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(3, 1fr)',
+          gap: 10,
+        }}>
+          {allTiles.map(tile => {
+            const Icon = tile.icon
+            const lit = tile.active || tile.accent
+            return (
+              <button
+                key={tile.key}
+                onClick={tile.onClick}
+                style={{
+                  position: 'relative',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                  gap: 9, aspectRatio: '1 / 1',
+                  borderRadius: 16,
+                  border: `1px solid ${lit ? orange : 'var(--border)'}`,
+                  background: lit ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+                  color: lit ? orange : 'var(--text-primary)',
+                  cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 13, fontWeight: 600,
+                  transition: 'all 0.15s',
+                }}
+              >
+                <Icon size={26} strokeWidth={1.8} />
+                <span>{tile.label}</span>
+                {tile.badge && (
+                  <span style={{
+                    position: 'absolute', top: 10, right: 12,
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
+                    background: orange, color: '#fff', fontSize: 10, fontWeight: 700,
+                  }}>
+                    {tile.badge}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      </div>
 
       <nav
         className="mobile-bottom-nav"
@@ -715,12 +775,18 @@ function MobileBottomNav({ lang, harnesses }: { lang: Lang; harnesses?: HarnessI
             </NavLink>
           )
         })}
-        {more.length > 0 && (
-          <button onClick={() => setMoreOpen(v => !v)} style={itemStyle(moreActive || moreOpen)}>
+        <button onClick={() => setMoreOpen(v => !v)} style={itemStyle(navAction || moreOpen)}>
+          <div style={{ position: 'relative' }}>
             <MoreHorizontal size={18} />
-            <span style={labelStyle}>{pt ? 'Mais' : 'More'}</span>
-          </button>
-        )}
+            {activeIssueCount > 0 && !moreOpen && (
+              <span style={{
+                position: 'absolute', top: -4, right: -6,
+                width: 8, height: 8, borderRadius: '50%', background: '#f59e0b',
+              }} />
+            )}
+          </div>
+          <span style={labelStyle}>{pt ? 'Mais' : 'More'}</span>
+        </button>
       </nav>
     </>
   )
@@ -753,20 +819,23 @@ function HarnessSelector({ harnesses, lang, isMobile }: { harnesses: HarnessId[]
   ]
 
   // Mobile: always-visible chips/pills — one tap to switch harness, no dropdown.
-  // wrap so they stay visible inside the fixed filter bar regardless of count.
+  // Short labels (first word) + flex-grow so the chips fill each row evenly
+  // instead of leaving a ragged gap on the right.
   if (isMobile) {
     return (
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
         {options.map(opt => {
           const active = opt.id === currentHarness
           const color = opt.id ? HARNESS_COLORS[opt.id] : 'var(--anthropic-orange)'
+          const shortLabel = opt.id ? opt.label.split(' ')[0] : opt.label
           return (
             <button
               key={opt.id ?? '__all__'}
               onClick={() => handleSelect(opt.id)}
               style={{
-                display: 'inline-flex', alignItems: 'center', gap: 5,
-                padding: '5px 11px', borderRadius: 999,
+                flex: '1 1 auto',
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                padding: '6px 11px', borderRadius: 999,
                 border: active ? `1px solid ${color}` : '1px solid var(--border)',
                 background: active
                   ? (opt.id ? `${color}22` : 'var(--anthropic-orange-dim)')
@@ -779,7 +848,7 @@ function HarnessSelector({ harnesses, lang, isMobile }: { harnesses: HarnessId[]
               {opt.id && (
                 <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
               )}
-              {opt.label}
+              {shortLabel}
             </button>
           )
         })}
@@ -1657,8 +1726,9 @@ export default function AppLayout() {
               {lang === 'pt' ? 'Exportar' : 'Export'}
             </button>}
 
-            {/* Settings — unified modal (Preferences + Live + Environment) */}
-            <button
+            {/* Settings — unified modal (Preferences + Live + Environment).
+                On mobile this lives in the bottom "More" sheet instead. */}
+            {!isMobile && <button
               onClick={() => setShowPrefsModal(true)}
               style={{
                 width: 32, height: 32,
@@ -1681,17 +1751,17 @@ export default function AppLayout() {
               title={lang === 'pt' ? 'Configurações' : 'Settings'}
             >
               <SlidersHorizontal size={14} />
-            </button>
+            </button>}
 
-            {/* Health warnings */}
-            {data?.healthIssues && data.healthIssues.length > 0 && (
+            {/* Health warnings — on mobile surfaced via the "More" sheet */}
+            {!isMobile && data?.healthIssues && data.healthIssues.length > 0 && (
               <HealthWarnings issues={data.healthIssues} lang={lang} />
             )}
 
-            {/* Live updates pill */}
-            <div style={{
+            {/* Live updates pill — on mobile surfaced via the "More" sheet */}
+            {!isMobile && <div style={{
               display: 'flex', alignItems: 'center', gap: 6,
-              padding: isMobile ? '0 8px' : '0 4px 0 10px',
+              padding: '0 4px 0 10px',
               height: 32,
               borderRadius: 8,
               border: '1px solid var(--border)',
@@ -1730,10 +1800,10 @@ export default function AppLayout() {
                 </span>
               )}
 
-            </div>
+            </div>}
 
-            {/* Refresh */}
-            <button
+            {/* Refresh — on mobile surfaced via the "More" sheet */}
+            {!isMobile && <button
               onClick={refetch}
               style={{
                 width: 32, height: 32,
@@ -1756,7 +1826,7 @@ export default function AppLayout() {
               title={lang === 'pt' ? 'Atualizar' : 'Refresh'}
             >
               <RefreshCw size={14} />
-            </button>
+            </button>}
           </div>
         </div>
 
@@ -1767,8 +1837,8 @@ export default function AppLayout() {
             controls. Desktop always shows the full bar. */}
         {data && !isCustomPage && isMobile && (
           <div style={{ borderTop: '1px solid var(--border)', width: '100%', boxSizing: 'border-box' }}>
-            {filtersCollapsed ? (
-              // Collapsed: a single slim tappable row that re-expands the bar.
+            {/* Collapsed slim row — visible only when minimized; tap to expand. */}
+            {filtersCollapsed && (
               <button
                 onClick={() => setFiltersCollapsed(false)}
                 style={{
@@ -1792,8 +1862,15 @@ export default function AppLayout() {
                 )}
                 <ChevronDown size={18} style={{ marginLeft: 'auto', opacity: 0.6 }} />
               </button>
-            ) : (
-              <div>
+            )}
+            {/* Animated panel — collapses via a grid-rows transition so minimize
+                and expand both glide instead of snapping. */}
+            <div style={{
+              display: 'grid',
+              gridTemplateRows: filtersCollapsed ? '0fr' : '1fr',
+              transition: 'grid-template-rows 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
+            }}>
+              <div style={{ overflow: 'hidden', minHeight: 0 }}>
                 {data.harnesses && data.harnesses.length > 1 && (
                   <div style={{ padding: '10px 12px 0' }}>
                     <HarnessSelector harnesses={data.harnesses} lang={lang} isMobile />
@@ -1824,7 +1901,7 @@ export default function AppLayout() {
                   {lang === 'pt' ? 'Minimizar filtros' : 'Minimize filters'}
                 </button>
               </div>
-            )}
+            </div>
           </div>
         )}
         {data && !isCustomPage && !isMobile && (
@@ -2040,7 +2117,18 @@ export default function AppLayout() {
       )}
 
       {/* Mobile bottom navigation bar */}
-      {isMobile && <MobileBottomNav lang={lang} harnesses={data.harnesses} />}
+      {isMobile && (
+        <MobileBottomNav
+          lang={lang}
+          harnesses={data.harnesses}
+          onSettings={() => setShowPrefsModal(true)}
+          onRefresh={refetch}
+          liveUpdates={liveUpdates}
+          onToggleLive={() => setLiveUpdates(v => !v)}
+          updateInterval={updateInterval}
+          healthIssues={data.healthIssues}
+        />
+      )}
 
       {/* TTY Chat — floating button + panel, globally available */}
       <TtyChat

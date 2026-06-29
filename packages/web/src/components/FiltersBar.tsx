@@ -125,8 +125,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         padding: compact ? '10px 12px' : '8px 0',
       }}>
 
-        {/* Date range presets */}
-        <div style={{ display: 'flex', gap: 3 }}>
+        {/* Date range presets — stretch to fill the row on mobile */}
+        <div style={{ display: 'flex', gap: 3, width: isMobile ? '100%' : undefined }}>
           {DATE_RANGES.map(r => {
             const active = filters.dateRange === r.key && !filters.customStart
             return (
@@ -135,6 +135,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                 onClick={() => onChange({ ...filters, dateRange: r.key, customStart: '', customEnd: '' })}
                 style={{
                   ...CTL,
+                  flex: isMobile ? 1 : undefined,
+                  justifyContent: 'center',
                   border: active ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
                   background: active ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
                   color: active ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
@@ -153,6 +155,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         {/* Custom date range */}
         <div style={{
           display: 'flex', alignItems: 'center',
+          flex: isMobile ? '1 1 100%' : undefined,
           background: hasCustomDates ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
           border: hasCustomDates ? '1px solid rgba(217,119,6,0.55)' : '1px solid var(--border)',
           borderRadius: 7,
@@ -225,10 +228,11 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
           style={{
             ...CTL,
             gap: 5,
+            flex: isMobile ? '1 1 0' : undefined,
             border: hasProjects ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
             background: hasProjects ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
             color: hasProjects ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-            minWidth: 110,
+            minWidth: isMobile ? 0 : 110,
             justifyContent: 'space-between',
           }}
         >
@@ -240,17 +244,18 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         </button>
 
         {/* Model multi-select */}
-        <div ref={modelDropdownRef} style={{ position: 'relative' }}>
+        <div ref={modelDropdownRef} style={{ position: 'relative', flex: isMobile ? '1 1 0' : undefined }}>
           <button
             onClick={() => setShowModelDropdown(v => !v)}
             title={lang === 'pt' ? 'Filtrar por modelo' : 'Filter by model'}
             style={{
               ...CTL,
               gap: 5,
+              width: isMobile ? '100%' : undefined,
               border: hasModelFilter ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
               background: hasModelFilter ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
               color: hasModelFilter ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-              minWidth: 130,
+              minWidth: isMobile ? 0 : 130,
               justifyContent: 'space-between',
             }}
           >
