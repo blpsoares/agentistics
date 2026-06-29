@@ -697,8 +697,44 @@ function EnvironmentTab({ pt }: { pt: boolean }) {
     ? CONFIG_FIELDS.map(f => `${f.key}=${configData.backup?.[f.key] ?? f.default}`).join(', ')
     : ''
 
+  const isTauri = typeof window !== 'undefined' &&
+    ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
+  const changeSource = async () => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const invoke = (window as any).__TAURI__?.core?.invoke
+      if (invoke) await invoke('change_source')
+    } catch { /* ignore */ }
+  }
+
   return (
     <>
+      {isTauri && (
+        <div style={{
+          marginBottom: 20, padding: '12px 14px', borderRadius: 8,
+          border: '1px solid var(--border)', background: 'var(--bg-elevated)',
+        }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>
+            {pt ? 'Fonte de dados (Windows / WSL)' : 'Data source (Windows / WSL)'}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 10, lineHeight: 1.5 }}>
+            {pt
+              ? 'Escolha de qual ~/.claude ler. Os harnesses Codex/Gemini/Copilot são lidos da mesma pasta. Trocar reinicia o app e mostra o seletor de fontes.'
+              : 'Choose which ~/.claude to read from. Codex/Gemini/Copilot are read from the same folder. Switching restarts the app and shows the source picker.'}
+          </div>
+          <button
+            onClick={changeSource}
+            style={{
+              height: 32, padding: '0 14px', borderRadius: 8, cursor: 'pointer',
+              border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)',
+              color: 'var(--anthropic-orange)', fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
+            }}
+          >
+            {pt ? 'Trocar fonte…' : 'Change source…'}
+          </button>
+        </div>
+      )}
+
       <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 20, lineHeight: 1.6 }}>
         {pt
           ? 'Alterações entram em vigor após reiniciar o servidor.'
