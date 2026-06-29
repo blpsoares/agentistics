@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { readFile } from 'fs/promises'
 import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue, HarnessId } from '@agentistics/core'
-import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE } from './config'
+import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL } from './config'
 import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
@@ -649,10 +649,16 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       }
     }
 
-    // --- Team mode (Phase 1): union per-user consolidated sessions from the shared folder ---
-    if (TEAM_MODE) {
-      const { loadTeamSessions } = await import('./team-source')
-      const teamSessions = await loadTeamSessions().catch(() => [] as SessionMeta[])
+    // --- Team sessions: central reads Mongo (Phase 2); else folder union (Phase 1) ---
+    if (TEAM_MODE || TEAM_CENTRAL) {
+      let teamSessions: SessionMeta[] = []
+      if (TEAM_CENTRAL) {
+        const { loadTeamSessionsFromMongo } = await import('./team-source')
+        teamSessions = await loadTeamSessionsFromMongo().catch(() => [] as SessionMeta[])
+      } else {
+        const { loadTeamSessions } = await import('./team-source')
+        teamSessions = await loadTeamSessions().catch(() => [] as SessionMeta[])
+      }
       for (const s of teamSessions) {
         sessions.push(s)
         harnessSet.add(s.harness)

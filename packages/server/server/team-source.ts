@@ -3,6 +3,8 @@ import type { SessionMeta } from '@agentistics/core'
 import { tagUser } from '@agentistics/core'
 import { safeReadDir, safeReadJson } from './utils'
 import { TEAM_DIR } from './config'
+import { getTeamCollection } from './mongo'
+import { fromTeamDoc } from './team-store'
 
 /**
  * Phase-1 "folder union" transport. Reads consolidated SessionMeta JSONs from
@@ -23,4 +25,12 @@ export async function loadTeamSessions(root: string = TEAM_DIR): Promise<Session
     }
   }
   return out
+}
+
+/** Phase 2 central read: load every team session from Mongo, mapped back to
+ *  plain SessionMeta (with `user` retained). Tolerates an unreachable DB. */
+export async function loadTeamSessionsFromMongo(): Promise<SessionMeta[]> {
+  const col = await getTeamCollection()
+  const docs = await col.find({}).toArray()
+  return docs.map(fromTeamDoc)
 }
