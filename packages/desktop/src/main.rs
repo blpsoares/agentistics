@@ -244,6 +244,16 @@ fn spawn_sidecar(
     let mut cmd = std::process::Command::new(&binary);
     cmd.arg("server").env("CLAUDE_DIR", claude_dir);
 
+    // Multi-harness: the other CLIs (Codex/Gemini/Copilot) live next to ~/.claude
+    // in the same home directory. The selected claude_dir is "<home>/.claude", so
+    // point each adapter at its sibling. Without this the server derives them from
+    // the Windows HOME and never finds the user's WSL data → only Claude shows up.
+    if let Some(home) = Path::new(claude_dir).parent() {
+        cmd.env("CODEX_DIR", home.join(".codex"));
+        cmd.env("GEMINI_DIR", home.join(".gemini"));
+        cmd.env("COPILOT_DIR", home.join(".copilot"));
+    }
+
     // Suppress the console window that would otherwise flash on Windows
     #[cfg(windows)]
     {
