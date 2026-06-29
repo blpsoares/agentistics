@@ -702,7 +702,7 @@ function MobileBottomNav({
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(3, 1fr)',
-          gap: 10,
+          gap: 8,
         }}>
           {allTiles.map(tile => {
             const Icon = tile.icon
@@ -714,24 +714,24 @@ function MobileBottomNav({
                 style={{
                   position: 'relative',
                   display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                  gap: 9, aspectRatio: '1 / 1',
-                  borderRadius: 16,
+                  gap: 6, padding: '11px 4px',
+                  borderRadius: 12,
                   border: `1px solid ${lit ? orange : 'var(--border)'}`,
                   background: lit ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
                   color: lit ? orange : 'var(--text-primary)',
                   cursor: 'pointer', fontFamily: 'inherit',
-                  fontSize: 13, fontWeight: 600,
+                  fontSize: 11, fontWeight: 600,
                   transition: 'all 0.15s',
                 }}
               >
-                <Icon size={26} strokeWidth={1.8} />
-                <span>{tile.label}</span>
+                <Icon size={19} strokeWidth={1.8} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>{tile.label}</span>
                 {tile.badge && (
                   <span style={{
-                    position: 'absolute', top: 10, right: 12,
+                    position: 'absolute', top: 4, right: 5,
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
-                    background: orange, color: '#fff', fontSize: 10, fontWeight: 700,
+                    minWidth: 15, height: 15, padding: '0 4px', borderRadius: 8,
+                    background: orange, color: '#fff', fontSize: 9, fontWeight: 700,
                   }}>
                     {tile.badge}
                   </span>
@@ -1061,6 +1061,13 @@ export default function AppLayout() {
   // Mobile-only: lets the user minimize the sticky filter bar while scrolling so
   // it doesn't eat the viewport on small screens. Expanded by default.
   const [filtersCollapsed, setFiltersCollapsed] = useState(false)
+  // The collapse animation needs `overflow: hidden` to clip the sliding panel,
+  // but that also clips the Models dropdown popover. Keep it clipped only while
+  // animating/collapsed; once an expand transition finishes, switch to visible
+  // so the popover can overflow the header.
+  const [filtersClip, setFiltersClip] = useState(false)
+  const collapseFilters = () => { setFiltersClip(true); setFiltersCollapsed(true) }
+  const expandFilters = () => { setFiltersClip(true); setFiltersCollapsed(false) }
   const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string } | null>(null)
   // First-run archive consent gate: undefined = prefs not loaded, null = loaded but
   // not yet chosen (blocks the app), ArchiveMode = chosen.
@@ -1840,7 +1847,7 @@ export default function AppLayout() {
             {/* Collapsed slim row — visible only when minimized; tap to expand. */}
             {filtersCollapsed && (
               <button
-                onClick={() => setFiltersCollapsed(false)}
+                onClick={expandFilters}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8, width: '100%',
                   padding: '9px 14px', background: 'transparent', border: 'none',
@@ -1865,12 +1872,15 @@ export default function AppLayout() {
             )}
             {/* Animated panel — collapses via a grid-rows transition so minimize
                 and expand both glide instead of snapping. */}
-            <div style={{
-              display: 'grid',
-              gridTemplateRows: filtersCollapsed ? '0fr' : '1fr',
-              transition: 'grid-template-rows 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
-            }}>
-              <div style={{ overflow: 'hidden', minHeight: 0 }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateRows: filtersCollapsed ? '0fr' : '1fr',
+                transition: 'grid-template-rows 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
+              }}
+              onTransitionEnd={() => { if (!filtersCollapsed) setFiltersClip(false) }}
+            >
+              <div style={{ overflow: (filtersCollapsed || filtersClip) ? 'hidden' : 'visible', minHeight: 0 }}>
                 {data.harnesses && data.harnesses.length > 1 && (
                   <div style={{ padding: '10px 12px 0' }}>
                     <HarnessSelector harnesses={data.harnesses} lang={lang} isMobile />
@@ -1889,7 +1899,7 @@ export default function AppLayout() {
                 />
                 {/* Collapse handle */}
                 <button
-                  onClick={() => setFiltersCollapsed(true)}
+                  onClick={collapseFilters}
                   style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
                     width: '100%', padding: '5px 0 7px', background: 'transparent', border: 'none',
