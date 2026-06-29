@@ -37,31 +37,62 @@ claude mcp list
 
 ## Multi-harness scope
 
-agentistics now tracks multiple coding harnesses (Claude Code, Codex CLI, Gemini CLI, Copilot CLI). The MCP server reads the same `/api/data` endpoint, so its numbers reflect the **unified (all-harness)** view — totals, projects, sessions, and costs are summed across every enabled harness.
+agentistics tracks multiple coding harnesses (Claude Code, Codex CLI, Gemini CLI, Copilot CLI). The MCP server reads the same `/api/data` endpoint, so by default its numbers reflect the **unified (all-harness)** view.
 
-The MCP tools do **not** yet expose a per-harness filter parameter: there is no way (via MCP) to scope a query to e.g. only Codex sessions. Per-harness slicing is available in the web UI (the harness selector, the `/h/:harness` pages, and the `/compare` page) but is a known follow-up for the MCP surface. Cost/token accuracy caveats still apply per harness — non-Claude harnesses that don't emit token usage (e.g. Gemini's local files) contribute 0 tokens/cost, matching the dashboard.
+- **Per-harness filtering:** `agentistics_summary`, `agentistics_projects`, `agentistics_sessions`, and `agentistics_costs` accept an optional `harness` parameter (`claude` | `codex` | `gemini` | `copilot`, or `all` — the default). When set, the tool scopes its result to that harness only.
+- **Comparison:** `agentistics_harnesses` lists every harness present in the data with its sessions, messages, tokens, estimated cost, and last-active date — the quickest way to answer "which harness do I use most / costs most".
+- **Caveats** match the dashboard: `currentStreak` is Claude-only (returned as `null` when scoping to a single non-Claude harness); harnesses that don't emit token usage (e.g. Gemini's local files) contribute 0 tokens/cost; the unified/`claude` cost breakdown comes from the Claude-complete stats-cache, while a specific non-Claude harness's cost breakdown is aggregated per-model from its sessions.
 
 ## Available tools
 
 ### `agentistics_summary`
 
-All-time totals aggregated from all sessions. Token counts and cost are computed directly from session records (not from the stats-cache snapshot), so they are always accurate even if the cache is stale.
+All-time totals aggregated from sessions. Token counts and cost are computed directly from session records (not from the stats-cache snapshot), so they are always accurate even if the cache is stale.
+
+**Parameters:** `harness` *(optional)* — `claude` | `codex` | `gemini` | `copilot` | `all` (default `all`).
 
 **Returns:**
 ```json
 {
+  "harness": "all",
   "totalInputTokens": 12500000,
   "totalOutputTokens": 890000,
   "totalCacheReadTokens": 45000000,
   "totalCacheWriteTokens": 1200000,
   "estimatedCostUSD": 18.42,
   "totalSessions": 142,
-  "totalProjects": 44,
-  "topModel": "claude-sonnet-4-6",
+  "topModel": "claude-opus-4-8",
   "topProject": "my-app",
   "activeDays": 38,
   "currentStreak": 7
 }
+```
+
+`currentStreak` is `null` when scoped to a single non-Claude harness (streak is Claude-only).
+
+---
+
+### `agentistics_harnesses`
+
+Side-by-side comparison of every harness present in the data, sorted by total tokens. No parameters.
+
+**Returns:**
+```json
+[
+  {
+    "harness": "claude",
+    "sessions": 157,
+    "messages": 38664,
+    "inputTokens": 2467133,
+    "outputTokens": 29339498,
+    "cacheReadTokens": 5981874127,
+    "cacheWriteTokens": 208186404,
+    "totalTokens": 6221867162,
+    "estimatedCostUSD": 3031.51,
+    "lastActive": "2026-06-29T13:52:24.823Z"
+  },
+  { "harness": "codex", "sessions": 20, "estimatedCostUSD": 0.20, "...": "..." }
+]
 ```
 
 ---
@@ -69,6 +100,8 @@ All-time totals aggregated from all sessions. Token counts and cost are computed
 ### `agentistics_projects`
 
 Per-project breakdown with aggregated token and cost data, sorted by total tokens descending.
+
+**Parameters:** `harness` *(optional)* — scope to one harness, or `all` (default). When scoped, projects with no sessions in that harness are omitted and `sessions` reflects that harness's count.
 
 **Returns:** array of projects
 ```json
@@ -100,12 +133,14 @@ Recent sessions with duration, model, and cost.
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
 | `limit` | number | 20 | Max sessions to return (1–50) |
+| `harness` | string | `all` | Scope to one harness (`claude` \| `codex` \| `gemini` \| `copilot`) |
 
-**Returns:** array of sessions sorted by start time descending
+**Returns:** array of sessions sorted by start time descending (each row includes its `harness`)
 ```json
 [
   {
     "id": "abc123",
+    "harness": "claude",
     "project": "/home/user/projects/my-app",
     "startedAt": "2025-01-15T14:30:00Z",
     "durationMinutes": 47,
@@ -126,6 +161,8 @@ Recent sessions with duration, model, and cost.
 ### `agentistics_costs`
 
 Model pricing breakdown and cache analysis.
+
+**Parameters:** `harness` *(optional)* — `all`/`claude` (default) uses the Claude-complete stats-cache; a specific non-Claude harness is aggregated per-model from its sessions.
 
 **Returns:** array of models sorted by total tokens descending
 ```json

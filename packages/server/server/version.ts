@@ -13,6 +13,16 @@ interface VersionCache {
 
 let _cache: VersionCache | null = null
 
+/** Strict semver pattern (major.minor.patch). Non-matching tags (e.g. the
+ *  rolling "latest" release tag) are ignored when resolving the newest version. */
+const SEMVER_RE = /^\d+\.\d+\.\d+$/
+
+/** Normalizes a tag to a bare semver string, or null if it isn't semver. */
+function toSemver(tag: string): string | null {
+  const v = tag.replace(/^v/, '').trim()
+  return SEMVER_RE.test(v) ? v : null
+}
+
 /** Compares two semver strings. Returns positive if a > b. */
 export function compareVersions(a: string, b: string): number {
   const pa = a.split('.').map(Number)
@@ -41,8 +51,12 @@ export async function getVersionInfo(): Promise<VersionInfo> {
   }
 
   try {
+    // List releases and pick the highest *semver* tag. We can't use
+    // /releases/latest because this repo also publishes a rolling "latest"
+    // tagged release, which /releases/latest returns (tag_name "latest" is not
+    // semver and would never compare as an update).
     const resp = await fetch(
-      `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
+      `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=30`,
       {
         headers: {
           'Accept': 'application/vnd.github+json',
@@ -52,8 +66,13 @@ export async function getVersionInfo(): Promise<VersionInfo> {
       },
     )
     if (!resp.ok) throw new Error(`GitHub API ${resp.status}`)
-    const data = await resp.json() as { tag_name: string }
-    const latest = data.tag_name.replace(/^v/, '')
+    const releases = await resp.json() as Array<{ tag_name: string; draft?: boolean; prerelease?: boolean }>
+    const latest = releases
+      .filter(r => !r.draft && !r.prerelease)
+      .map(r => toSemver(r.tag_name))
+      .filter((v): v is string => v !== null)
+      .sort((a, b) => compareVersions(b, a))[0]
+      ?? CURRENT_VERSION
     const hasUpdate = compareVersions(latest, CURRENT_VERSION) > 0
     _cache = { latest, hasUpdate, fetchedAt: now }
     return { current: CURRENT_VERSION, latest, hasUpdate }

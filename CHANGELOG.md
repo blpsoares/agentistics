@@ -18,6 +18,7 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - "Data & sources" tab per harness (`HarnessInfoPanel`) explaining each harness's data source, what's captured, and what's missing
 - Archive modes (`off` / `consolidate` / `full`) that survive Claude's 30-day transcript cleanup, gated by a first-run consent modal
 - **Full mobile/responsive support** — responsive layouts gated on `useIsMobile()`, a bottom nav with a square-tile "More" sheet (hosting settings/live/refresh/warnings), a collapsible sticky filter bar, full-screen modals on mobile, and iOS-aware PWA install guidance
+- **MCP multi-harness support** — `agentistics_summary` / `agentistics_projects` / `agentistics_sessions` / `agentistics_costs` accept an optional `harness` filter, plus a new `agentistics_harnesses` tool for side-by-side harness comparison
 
 ### Fixed
 - iOS `position: sticky` broke under `overflow-x: hidden`; switched mobile `html/body/#root` to `overflow-x: clip`
@@ -25,7 +26,7 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 - `stats-cache.json` is treated as Claude-only; non-Claude harnesses are aggregated purely from per-session data so Claude totals are never corrupted
-- README now describes agentistics as a multi-harness dashboard; `docs/mcp.md` documents the MCP's unified (all-harness) scope
+- README now describes agentistics as a multi-harness dashboard; `docs/mcp.md` documents the MCP's per-harness filtering and comparison tool
 
 ---
 

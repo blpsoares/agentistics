@@ -335,15 +335,26 @@ async fn check_for_update(app: AppHandle) {
 
     let updater = match app.updater() {
         Ok(u) => u,
-        Err(_) => return,
+        Err(e) => {
+            log_error(&format!("updater init failed: {e}"));
+            return;
+        }
     };
 
     let update = match updater.check().await {
         Ok(Some(u)) => u,
-        _ => return,
+        Ok(None) => {
+            log_error("update check: already on the latest version");
+            return;
+        }
+        Err(e) => {
+            log_error(&format!("update check failed: {e}"));
+            return;
+        }
     };
 
     let version = update.version.clone();
+    log_error(&format!("update available: {} (current {})", version, update.current_version));
     let msg = format!(
         "Agentistics {} is available (you have {}).\n\nInstall now?",
         version,

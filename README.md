@@ -156,10 +156,11 @@ claude mcp list   # verify: should show "agentistics"
 
 | Tool | What it returns |
 |------|----------------|
-| `agentistics_summary` | All-time totals: tokens, cost, sessions, streak, cache hit rate |
-| `agentistics_projects` | Per-project token and cost breakdown |
-| `agentistics_sessions` | Recent sessions with duration, model, cost |
-| `agentistics_costs` | Model pricing breakdown and cache savings |
+| `agentistics_summary` | All-time totals: tokens, cost, sessions, streak — unified or per-harness |
+| `agentistics_harnesses` | Side-by-side comparison of every tracked harness |
+| `agentistics_projects` | Per-project token and cost breakdown (optionally per-harness) |
+| `agentistics_sessions` | Recent sessions with harness, duration, model, cost |
+| `agentistics_costs` | Model pricing breakdown and cache savings (optionally per-harness) |
 | `agentistics_component_catalog` | Available dashboard components |
 | `agentistics_get_layouts` | Current custom page layouts |
 | `agentistics_build_layout` | Create a full layout from a component list |
