@@ -310,7 +310,7 @@ jobs:
             echo "has_sig=true" >> $GITHUB_OUTPUT
           else
             echo "has_sig=false" >> $GITHUB_OUTPUT
-            echo "No .sig file — TAURI_SIGNING_PRIVATE_KEY is not set. Auto-updater disabled for this build."
+            echo "::warning title=Auto-updater disabled::No .exe.sig produced — the TAURI_SIGNING_PRIVATE_KEY secret is not set, so latest.json will not be generated and the in-app Tauri updater cannot detect this release. Add the signing secret to enable auto-update. (The in-app update banner still works.)"
           fi
 
       - name: Generate latest.json for auto-updater
