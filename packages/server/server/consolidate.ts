@@ -8,7 +8,12 @@ const writeLimit = createLimiter(20)
 const readyDirs = new Set<string>()
 
 export function consolidatedPath(harness: HarnessId, sessionId: string): string {
-  return join(CONSOLIDATED_DIR, harness, `${sessionId}.json`)
+  // Some harnesses (e.g. Gemini) embed a path segment in the session id
+  // ("project/session-..."), so the raw id cannot be a flat filename — the
+  // intermediate dir would not exist (ENOENT). Flatten path separators; the real
+  // session id is read back from the file CONTENT, not the filename, so this is safe.
+  const safeId = sessionId.replace(/[/\\]/g, '_')
+  return join(CONSOLIDATED_DIR, harness, `${safeId}.json`)
 }
 
 async function ensureDir(harness: HarnessId): Promise<void> {

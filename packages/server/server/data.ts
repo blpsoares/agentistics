@@ -628,12 +628,14 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     // MUST run AFTER supplementStatsCache so non-Claude sessions never corrupt Claude totals.
     const { getEnabledAdapters } = await import('./adapters/types')
     const harnessSet = new Set<HarnessId>(['claude'])
+    const extraHarnessSessions: SessionMeta[] = []
     for (const adapter of await getEnabledAdapters()) {
       if (adapter.id === 'claude') continue // already loaded above
       const extra = await adapter.loadSessions().catch(() => [] as SessionMeta[])
       for (const s of extra) {
         // Key by (harness, session_id) so IDs never collide across harnesses
         sessions.push(s)
+        extraHarnessSessions.push(s)
         harnessSet.add(s.harness)
         // surface as a project too
         const existing = projects.find(p => p.path === s.project_path && p.path)
@@ -647,6 +649,15 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
           })
         }
       }
+    }
+    // Persist non-Claude sessions to the consolidate store too. The Claude-only
+    // writeConsolidated() above runs before this merge, so without this the store
+    // (and therefore the team uploader, which pushes loadConsolidated()) would only
+    // ever carry Claude — a central would never receive Codex/Gemini/Copilot data.
+    // The store is namespaced per harness and writeConsolidated dedups by
+    // (harness, session_id), so this never collides with the Claude entries.
+    if (mode !== 'off' && extraHarnessSessions.length > 0) {
+      await writeConsolidated(extraHarnessSessions)
     }
 
     // --- Team sessions: central reads Mongo (Phase 2); else folder union (Phase 1) ---
