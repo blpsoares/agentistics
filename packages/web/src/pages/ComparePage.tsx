@@ -254,7 +254,11 @@ export default function ComparePage() {
     const modelSet = filters.models && filters.models.length > 0 ? new Set(filters.models) : null
     const { start, end } = getDateRangeFilter(filters.dateRange, filters.customStart, filters.customEnd)
 
+    // Team data present (a central) → always aggregate per-session: statsCache only
+    // represents the central machine's own Claude, never the members'.
+    const teamData = data.sessions.some(s => s.user)
     const anyFilter =
+      teamData ||
       usersSel.length > 0 || harnessSel.length > 0 || projects.length > 0 ||
       modelSet !== null || filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd
 
