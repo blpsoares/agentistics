@@ -261,8 +261,12 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
   // lock the form once it becomes configured — but never fight the user after
   // they have manually toggled editing.
   const editingInitialized = useRef(false)
+  // Tracks whether the USER has edited a field. An async config load (parent populating
+  // the saved config) should lock the form; but the user TYPING the last field must NOT
+  // flip it to locked before they get to click Save.
+  const userTouched = useRef(false)
   useEffect(() => {
-    if (editingInitialized.current) return
+    if (editingInitialized.current || userTouched.current) return
     if (team.endpoint && team.user && team.token) {
       editingInitialized.current = true
       setEditing(false)
@@ -315,6 +319,7 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
   }
 
   function set<K extends keyof TeamConfig>(key: K, value: TeamConfig[K]) {
+    userTouched.current = true // user is editing — don't let the async-load lock fire
     onChange({ ...team, [key]: value })
     // Clear test/save results when connection details change
     if (key === 'endpoint' || key === 'org' || key === 'user' || key === 'token') {
