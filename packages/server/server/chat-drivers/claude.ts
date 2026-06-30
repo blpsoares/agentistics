@@ -1,17 +1,9 @@
-import { existsSync } from 'node:fs'
 import { CHAT_MODELS, registerMcpGlobally, streamViaClaude } from '../chat-tty'
 import type { ChatDriver } from './types'
+import { findCli } from './cli-detect'
 
 function claudeIsAvailable(): boolean {
-  // Try common binary paths; fall back to PATH via `which`
-  if (existsSync('/usr/local/bin/claude')) return true
-  if (existsSync('/usr/bin/claude')) return true
-  try {
-    const proc = Bun.spawnSync(['which', 'claude'], { stdout: 'pipe', stderr: 'pipe' })
-    return proc.exitCode === 0
-  } catch {
-    return false
-  }
+  return findCli('claude')
 }
 
 export const claudeDriver: ChatDriver = {
