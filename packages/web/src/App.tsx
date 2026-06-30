@@ -15,7 +15,7 @@ import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
 import type { Filters, HarnessId, HealthIssue } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { formatProjectName, setHomeDir, MODEL_PRICING, distinctUsers } from '@agentistics/core'
+import { formatProjectName, setHomeDir, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers } from '@agentistics/core'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
 import { ActivityHeatmap } from './components/ActivityHeatmap'
@@ -42,7 +42,7 @@ import { InstallModal } from './components/InstallModal'
 import { ArchiveConsentModal, type ArchiveMode } from './components/ArchiveConsentModal'
 import { TeamLogin } from './components/TeamLogin'
 import { type ChatModelId } from './lib/chatModels'
-import { HARNESS_LABELS, HARNESS_COLORS } from './lib/harness'
+import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
 
 // ── Team session state ────────────────────────────────────────────────────
@@ -801,128 +801,6 @@ function MobileBottomNav({
   )
 }
 
-function HarnessSelector({ harnesses, lang, isMobile }: { harnesses: HarnessId[]; lang: Lang; isMobile?: boolean }) {
-  const location = useLocation()
-  const navigate = useNavigate()
-
-  // Only render when there is more than one harness present in the data
-  if (harnesses.length <= 1) return null
-
-  const harnessMatch = location.pathname.match(/^\/h\/([^/]+)$/)
-  const currentHarness: HarnessId | null = harnessMatch
-    ? (harnessMatch[1] as HarnessId)
-    : null
-
-  const handleSelect = (harness: HarnessId | null) => {
-    if (harness === null) {
-      navigate('/')
-    } else {
-      navigate(`/h/${harness}`)
-    }
-  }
-
-  const allOption = { id: null as HarnessId | null, label: lang === 'pt' ? 'Todos' : 'All' }
-  const options = [
-    allOption,
-    ...harnesses.map(h => ({ id: h as HarnessId | null, label: HARNESS_LABELS[h] })),
-  ]
-
-  // Mobile: always-visible chips/pills — one tap to switch harness, no dropdown.
-  // Short labels (first word) + flex-grow so the chips fill each row evenly
-  // instead of leaving a ragged gap on the right.
-  if (isMobile) {
-    return (
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-        {options.map(opt => {
-          const active = opt.id === currentHarness
-          const color = opt.id ? HARNESS_COLORS[opt.id] : 'var(--anthropic-orange)'
-          const shortLabel = opt.id ? opt.label.split(' ')[0] : opt.label
-          return (
-            <button
-              key={opt.id ?? '__all__'}
-              onClick={() => handleSelect(opt.id)}
-              style={{
-                flex: '1 1 auto',
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5,
-                padding: '6px 11px', borderRadius: 999,
-                border: active ? `1px solid ${color}` : '1px solid var(--border)',
-                background: active
-                  ? (opt.id ? `${color}22` : 'var(--anthropic-orange-dim)')
-                  : 'var(--bg-elevated)',
-                color: active ? color : 'var(--text-secondary)',
-                fontSize: 12, fontWeight: active ? 700 : 500, fontFamily: 'inherit',
-                cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all 0.15s',
-              }}
-            >
-              {opt.id && (
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
-              )}
-              {shortLabel}
-            </button>
-          )
-        })}
-      </div>
-    )
-  }
-
-  // Desktop: horizontal pills in the nav bar
-  return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: 4,
-      marginLeft: 12,
-      padding: '0 12px',
-      borderLeft: '1px solid var(--border)',
-    }}>
-      {options.map(opt => {
-        const active = opt.id === currentHarness
-        const color = opt.id ? HARNESS_COLORS[opt.id] : undefined
-        return (
-          <button
-            key={opt.id ?? '__all__'}
-            onClick={() => handleSelect(opt.id)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 5,
-              padding: '5px 10px',
-              borderRadius: 7,
-              border: active
-                ? `1px solid ${color ? `${color}50` : 'var(--anthropic-orange)30'}`
-                : '1px solid transparent',
-              background: active
-                ? color ? `${color}18` : 'var(--anthropic-orange-dim)'
-                : 'transparent',
-              color: active
-                ? color ?? 'var(--anthropic-orange)'
-                : 'var(--text-tertiary)',
-              fontSize: 12,
-              fontWeight: active ? 700 : 500,
-              fontFamily: 'inherit',
-              cursor: 'pointer',
-              transition: 'all 0.15s',
-              whiteSpace: 'nowrap',
-            }}
-            onMouseEnter={e => {
-              if (!active) {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
-                ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-elevated)'
-              }
-            }}
-            onMouseLeave={e => {
-              if (!active) {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'
-                ;(e.currentTarget as HTMLButtonElement).style.background = 'transparent'
-              }
-            }}
-          >
-            {opt.label}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
 function NavTabs({ lang, harnesses }: { lang: Lang; harnesses?: HarnessId[] }) {
   const location = useLocation()
   const pt = lang === 'pt'
@@ -1326,11 +1204,14 @@ export default function AppLayout() {
     const add = (h: HarnessId, m?: string) => { if (!m) return; (byH[h] ??= new Set<string>()).add(m) }
     for (const id of Object.keys(data.statsCache.modelUsage ?? {})) add('claude', id)
     for (const s of data.sessions) add((s.harness ?? 'claude') as HarnessId, s.model)
-    const harnesses = filters.harness ? [filters.harness] : order
+    // When the harness filter is active, only the selected harnesses' models are offered;
+    // in the unified view all harnesses are shown as sections.
+    const sel = filters.harnesses ?? []
+    const harnesses = sel.length > 0 ? order.filter(h => sel.includes(h)) : order
     return harnesses
       .filter(h => byH[h] && byH[h]!.size > 0)
       .map(h => ({ harness: h, models: Array.from(byH[h]!).sort() }))
-  }, [data, filters.harness])
+  }, [data, filters.harnesses])
 
   // Live update highlight detection
   useEffect(() => {
@@ -1382,6 +1263,34 @@ export default function AppLayout() {
   }, [data])
 
   const users = useMemo(() => (data ? distinctUsers(data.sessions) : []), [data])
+
+  // Harnesses available in the harness filter, scoped to the SELECTED users (empty = all
+  // users). So picking one member narrows the harness options to the harnesses that member
+  // actually used; "All members" shows the union. Falls back to all harnesses in the data
+  // when the scoped slice is empty (e.g. a selected member has no sessions yet).
+  const availableHarnesses = useMemo<HarnessId[]>(() => {
+    if (!data) return []
+    const scoped = filterByUsers(data.sessions, filters.users ?? [])
+    const present = distinctHarnesses(scoped)
+    return present.length > 0 ? present : data.harnesses
+  }, [data, filters.users])
+
+  // Prune any selected harness that is no longer available after a user-selection change
+  // (e.g. selecting a member who never used a previously-selected harness).
+  useEffect(() => {
+    const sel = filters.harnesses ?? []
+    if (sel.length === 0) return
+    const allowed = new Set(availableHarnesses)
+    const pruned = sel.filter(h => allowed.has(h))
+    if (pruned.length !== sel.length) setFilters(f => ({ ...f, harnesses: pruned }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableHarnesses])
+
+  // When exactly one harness is selected, the header mirrors the old per-harness view
+  // (derived first/last dates + harness label). With 0 or >1 selected it uses the
+  // statsCache (Claude-canonical) dates, matching the unified dashboard.
+  const singleHarness: HarnessId | undefined =
+    (filters.harnesses?.length === 1) ? filters.harnesses[0] : undefined
 
   // ── Info items for all 8 stat cards ──────────────────────────────────────────
   const infoItems = useMemo(() => {
@@ -1663,25 +1572,25 @@ export default function AppLayout() {
             />
             {!isMobile && <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
               {lang === 'pt' ? 'Atualizado em' : 'Updated'}{' '}
-              {filters.harness && filters.harness !== 'claude'
+              {singleHarness && singleHarness !== 'claude'
                 ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : lang === 'pt' ? 'hoje' : 'today')
                 : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : lang === 'pt' ? 'hoje' : 'today')}
             </div>}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 10 }}>
-            {!isMobile && (filters.harness ? derived.firstSessionDate : statsCache.firstSessionDate) && (
+            {!isMobile && (singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate) && (
               <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'right' }}>
                 <div>
                   {lang === 'pt' ? 'Desde' : 'Since'}{' '}
                   {format(
-                    filters.harness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!),
+                    singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!),
                     'MMM d, yyyy'
                   )}
                 </div>
                 <div style={{ color: 'var(--text-secondary)' }}>
                   {derived.allTimeTotalSessions.toLocaleString()} {lang === 'pt' ? 'sessões' : 'sessions'}
-                  {filters.harness ? ` · ${HARNESS_LABELS[filters.harness]}` : ''}
+                  {singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}
                 </div>
               </div>
             )}
@@ -1929,11 +1838,6 @@ export default function AppLayout() {
               onTransitionEnd={() => { if (!filtersCollapsed) setFiltersClip(false) }}
             >
               <div style={{ overflow: (filtersCollapsed || filtersClip) ? 'hidden' : 'visible', minHeight: 0 }}>
-                {data.harnesses && data.harnesses.length > 1 && (
-                  <div style={{ padding: '10px 12px 0' }}>
-                    <HarnessSelector harnesses={data.harnesses} lang={lang} isMobile />
-                  </div>
-                )}
                 <FiltersBar
                   filters={filters}
                   onChange={setFilters}
@@ -1943,7 +1847,7 @@ export default function AppLayout() {
                   modelGroups={modelGroups}
                   modelsInProject={modelsInProject}
                   users={users}
-                  harnesses={data.harnesses}
+                  harnesses={availableHarnesses}
                   lang={lang}
                   compact
                 />
@@ -1982,7 +1886,7 @@ export default function AppLayout() {
               modelGroups={modelGroups}
               modelsInProject={modelsInProject}
               users={users}
-              harnesses={data.harnesses}
+              harnesses={availableHarnesses}
               lang={lang}
             />
           </div>
@@ -2001,7 +1905,6 @@ export default function AppLayout() {
             alignItems: 'center',
           }}>
             <NavTabs lang={lang} harnesses={data.harnesses} />
-            <HarnessSelector harnesses={data.harnesses} lang={lang} />
           </div>
         )}
       </header>
@@ -2072,6 +1975,7 @@ export default function AppLayout() {
           setRiskyMode={setRiskyMode}
           highlightUpdates={highlightUpdates}
           setHighlightUpdates={setHighlightUpdates}
+          harnesses={data.harnesses}
           />
       )}
 

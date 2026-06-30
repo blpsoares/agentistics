@@ -481,6 +481,56 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         </div>
       )}
 
+      {/* Selected harness chips — each in its harness color, removable (mirrors project chips) */}
+      {(filters.harnesses?.length ?? 0) > 0 && (
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', padding: compact ? '0 12px 8px' : '0 0 4px' }}>
+          {filters.harnesses!.map(h => {
+            const color = HARNESS_COLORS[h]
+            return (
+              <span
+                key={h}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color,
+                  background: `${color}1f`,
+                  border: `1px solid ${color}55`,
+                  borderRadius: 5,
+                  padding: '2px 6px 2px 8px',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <span style={{
+                  display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+                  background: color, flexShrink: 0,
+                }} />
+                {HARNESS_LABELS[h]}
+                <button
+                  onClick={() => onChange({ ...filters, harnesses: filters.harnesses!.filter(x => x !== h) })}
+                  title={lang === 'pt' ? 'Remover harness' : 'Remove harness'}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    color,
+                    opacity: 0.7,
+                    flexShrink: 0,
+                  }}
+                >
+                  <X size={10} strokeWidth={2.5} />
+                </button>
+              </span>
+            )
+          })}
+        </div>
+      )}
+
       {showProjectsModal && (
         <ProjectsModal
           projects={projects}

@@ -1,19 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Cpu, Check, ChevronDown } from 'lucide-react'
 import type { HarnessId } from '@agentistics/core'
+import { HARNESS_LABELS } from '../lib/harness'
 
 interface Props {
   harnesses: HarnessId[]
   selected: HarnessId[]
   onChange: (harnesses: HarnessId[]) => void
   lang: 'pt' | 'en'
-}
-
-const HARNESS_LABELS: Record<HarnessId, string> = {
-  claude:  'Claude Code',
-  codex:   'Codex',
-  gemini:  'Gemini',
-  copilot: 'Copilot',
 }
 
 const T = {

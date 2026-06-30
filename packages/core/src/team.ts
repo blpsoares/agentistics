@@ -67,6 +67,15 @@ export function distinctUsers(sessions: SessionMeta[]): string[] {
   return Array.from(set).sort()
 }
 
+/** Distinct, sorted list of harnesses present in a session list (missing harness = 'claude').
+ *  Sorted by the canonical order claude→codex→gemini→copilot. Pure. */
+export function distinctHarnesses(sessions: { harness?: HarnessId }[]): HarnessId[] {
+  const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
+  const set = new Set<HarnessId>()
+  for (const s of sessions) set.add(s.harness ?? 'claude')
+  return order.filter(h => set.has(h))
+}
+
 /** Multi-select user predicate. Empty/undefined selection = all sessions pass.
  *  Sessions with no `user` are excluded when a selection is active. Pure. */
 export function filterByUsers<T extends { user?: string }>(sessions: T[], users: string[]): T[] {

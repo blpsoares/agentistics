@@ -3,9 +3,11 @@ import {
   X, GripVertical, RotateCcw, Save, Volume2, VolumeX, Zap, Bot,
   Globe, Monitor, Download, SlidersHorizontal, Activity, Code2,
   Archive, Check, HardDrive, FolderClock, ExternalLink, DatabaseZap,
-  Cpu, Copy, CheckCheck, AlertCircle, CircleDot, Users,
+  Cpu, Copy, CheckCheck, AlertCircle, CircleDot, Users, Database,
 } from 'lucide-react'
-import type { Lang, Theme } from '@agentistics/core'
+import type { Lang, Theme, HarnessId } from '@agentistics/core'
+import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
+import { HarnessInfoPanel } from './HarnessInfoPanel'
 import type { ArchiveMode } from './ArchiveConsentModal'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
 import { LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from '../hooks/useData'
@@ -62,7 +64,7 @@ const BADGE_COLORS: Record<string, string> = {
   Powerful: 'var(--accent-purple)',
 }
 
-export type SettingsTab = 'preferences' | 'sessions' | 'live' | 'install' | 'environment' | 'harnesses' | 'team'
+export type SettingsTab = 'preferences' | 'sessions' | 'live' | 'install' | 'environment' | 'harnesses' | 'datasources' | 'team'
 
 interface Props {
   initial: PrefsDraft
@@ -80,6 +82,8 @@ interface Props {
   highlightUpdates: boolean
   setHighlightUpdates: (v: boolean) => void
   defaultTab?: SettingsTab
+  /** Harnesses present in the data — drives the "Data & sources" tab content. */
+  harnesses?: HarnessId[]
 }
 
 // ── Shared primitives ──────────────────────────────────────────────────────
@@ -1147,6 +1151,70 @@ function HarnessCard({ h }: { h: HarnessChatStatus }) {
   )
 }
 
+// ── Tab: Data & sources ───────────────────────────────────────────────────
+// Explains, per harness present in the data, where its metrics come from, what is
+// captured, and what is missing (and why). Replaces the old per-harness /h/:harness
+// "Data & sources" tab now that harness selection lives entirely in the filter.
+
+function DataSourcesTab({ pt, harnesses }: { pt: boolean; harnesses: HarnessId[] }) {
+  const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
+  const present = order.filter(h => harnesses.includes(h))
+  const [selected, setSelected] = useState<HarnessId>(present[0] ?? 'claude')
+
+  if (present.length === 0) {
+    return (
+      <div style={{ fontSize: 13, color: 'var(--text-tertiary)', textAlign: 'center', padding: '24px 0' }}>
+        {pt ? 'Nenhum harness com dados ainda.' : 'No harness data yet.'}
+      </div>
+    )
+  }
+
+  const active = present.includes(selected) ? selected : present[0]!
+
+  return (
+    <div>
+      <SectionHeader label={pt ? 'Dados & fontes' : 'Data & sources'} />
+      <p style={{ fontSize: 12.5, color: 'var(--text-tertiary)', lineHeight: 1.55, margin: '0 0 14px' }}>
+        {pt
+          ? 'De onde vêm as métricas de cada harness, o que é capturado e o que falta (e por quê).'
+          : 'Where each harness’s metrics come from, what is captured, and what is missing (and why).'}
+      </p>
+
+      {/* Per-harness selector — only shown when more than one harness has data */}
+      {present.length > 1 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
+          {present.map(h => {
+            const isActive = h === active
+            const color = HARNESS_COLORS[h]
+            return (
+              <button
+                key={h}
+                onClick={() => setSelected(h)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '6px 12px', borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 12, fontWeight: 600,
+                  border: `1px solid ${isActive ? color : 'var(--border)'}`,
+                  background: isActive ? `${color}1f` : 'var(--bg-elevated)',
+                  color: isActive ? color : 'var(--text-secondary)',
+                }}
+              >
+                <span style={{
+                  display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                  background: color, flexShrink: 0,
+                }} />
+                {HARNESS_LABELS[h]}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      <HarnessInfoPanel harness={active} />
+    </div>
+  )
+}
+
 function HarnessesTab({ pt }: { pt: boolean }) {
   const { harnesses, loading } = useChatHarnesses()
   const readyCount = harnesses.filter(h => h.ready).length
@@ -1244,6 +1312,7 @@ const TABS: { id: SettingsTab; icon: React.ReactNode; labelEn: string; labelPt: 
   { id: 'live',        icon: <Activity size={13} />,          labelEn: 'Live',         labelPt: 'Live' },
   { id: 'install',     icon: <Download size={13} />,          labelEn: 'Install',      labelPt: 'Instalar' },
   { id: 'harnesses',   icon: <Cpu size={13} />,               labelEn: 'Harnesses',    labelPt: 'Backends' },
+  { id: 'datasources', icon: <Database size={13} />,          labelEn: 'Data & sources', labelPt: 'Dados & fontes' },
   { id: 'team',        icon: <Users size={13} />,             labelEn: 'Team',         labelPt: 'Time' },
   { id: 'environment', icon: <Code2 size={13} />,             labelEn: 'Environment',  labelPt: 'Ambiente' },
 ]
@@ -1253,7 +1322,7 @@ export function PreferencesModal({
   pwaPrompt, onPwaInstalled,
   liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval,
   riskyMode, setRiskyMode, highlightUpdates, setHighlightUpdates,
-  defaultTab = 'preferences',
+  defaultTab = 'preferences', harnesses = [],
 }: Props) {
   const isMobile = useIsMobile()
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab)
@@ -1398,6 +1467,7 @@ export function PreferencesModal({
             />
           )}
           {activeTab === 'harnesses' && <HarnessesTab pt={pt} />}
+          {activeTab === 'datasources' && <DataSourcesTab pt={pt} harnesses={harnesses} />}
           {activeTab === 'team' && <TeamTab pt={pt} central={central} />}
           {activeTab === 'environment' && <EnvironmentTab pt={pt} />}
         </div>

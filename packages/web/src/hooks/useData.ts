@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import type { AppData, Filters, DateRange, AgentInvocation, HarnessId } from '@agentistics/core'
+import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMeta } from '@agentistics/core'
 import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 
@@ -256,6 +256,135 @@ function peakIndex(arr: number[]): number | null {
 }
 
 /**
+ * Summarize a set of sessions for ONE harness, purely from per-session data
+ * (no statsCache). Filters `sessions` to the given harness internally (a missing
+ * harness field counts as 'claude'). Used for non-Claude harnesses inside
+ * computeHarnessSummaries, and for ALL harnesses on the Compare page when a
+ * user/harness/date filter is active — statsCache has no per-user/-harness
+ * granularity, so the filtered view must come from per-session sums. Pure.
+ */
+export function summarizeHarnessSessions(sessions: SessionMeta[], harness: HarnessId): HarnessSummary {
+  const harnessSessions = sessions.filter(s => (s.harness ?? 'claude') === harness)
+  const sessionCount = harnessSessions.length
+  let messages = 0
+  let inputTokens = 0
+  let outputTokens = 0
+  let costUSD = 0
+
+  const hourCounts = Array.from({ length: 24 }, () => 0)
+  const dowCounts = Array.from({ length: 7 }, () => 0)
+  const dailyMap: Record<string, number> = {}
+  const tokensByDay: Record<string, number> = {}
+  let peakSessionCost: number | null = null
+  // Per-model token accumulation; cost computed via calcCost after the loop.
+  const modelMap: Record<string, import('@agentistics/core').ModelUsage> = {}
+
+  const hasCost = HARNESS_CAPABILITIES[harness].cost
+  const hasTokens = HARNESS_CAPABILITIES[harness].tokens
+
+  for (const s of harnessSessions) {
+    messages += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
+    inputTokens += s.input_tokens ?? 0
+    outputTokens += s.output_tokens ?? 0
+
+    // hour-of-day
+    for (const h of s.message_hours ?? []) {
+      if (h >= 0 && h <= 23) hourCounts[h] = (hourCounts[h] ?? 0) + 1
+    }
+
+    // day-of-week + daily activity
+    if (s.start_time) {
+      const dow = getDay(parseISO(s.start_time))
+      dowCounts[dow] = (dowCounts[dow] ?? 0) + 1
+      const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
+      dailyMap[day] = (dailyMap[day] ?? 0) + 1
+
+      if (hasTokens) {
+        const sessionTokens = (s.input_tokens ?? 0) + (s.output_tokens ?? 0)
+        tokensByDay[day] = (tokensByDay[day] ?? 0) + sessionTokens
+      }
+    }
+
+    // per-model token accumulation — skip sessions with no/empty model (cannot be priced)
+    if (hasTokens && s.model) {
+      const key = s.model
+      const entry = modelMap[key] ?? (modelMap[key] = {
+        inputTokens: 0, outputTokens: 0,
+        cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+        webSearchRequests: 0, costUSD: 0,
+      })
+      entry.inputTokens += s.input_tokens ?? 0
+      entry.outputTokens += s.output_tokens ?? 0
+      entry.cacheReadInputTokens += s.cache_read_input_tokens ?? 0
+      entry.cacheCreationInputTokens += s.cache_creation_input_tokens ?? 0
+    }
+
+    // cost
+    if (s.model && hasCost) {
+      const sessionCost = calcCost({
+        inputTokens: s.input_tokens ?? 0,
+        outputTokens: s.output_tokens ?? 0,
+        cacheReadInputTokens: s.cache_read_input_tokens ?? 0,
+        cacheCreationInputTokens: s.cache_creation_input_tokens ?? 0,
+        webSearchRequests: 0,
+        costUSD: 0,
+      }, s.model)
+      costUSD += sessionCost
+      if (peakSessionCost === null || sessionCost > peakSessionCost) {
+        peakSessionCost = sessionCost
+      }
+    }
+  }
+
+  // daily activity sorted asc
+  const dailyActivity = Object.entries(dailyMap)
+    .map(([date, sessions]) => ({ date, sessions }))
+    .sort((a, b) => a.date.localeCompare(b.date))
+
+  // peak token day (only set when there is actual token data > 0)
+  let peakTokenDay: { date: string; tokens: number } | null = null
+  if (hasTokens) {
+    for (const [date, tokens] of Object.entries(tokensByDay)) {
+      if (tokens > 0 && (!peakTokenDay || tokens > peakTokenDay.tokens)) {
+        peakTokenDay = { date, tokens }
+      }
+    }
+  }
+
+  // per-model breakdown — cost via calcCost (never inline).
+  // modelMap only contains sessions that had a real model, so every entry is priceable.
+  const models = Object.entries(modelMap)
+    .map(([model, u]) => ({
+      model,
+      inputTokens: u.inputTokens,
+      outputTokens: u.outputTokens,
+      costUSD: hasCost ? calcCost(u, model) : 0,
+    }))
+    .sort((a, b) => b.costUSD - a.costUSD)
+
+  // blended cost per 1M tokens (input + output)
+  const tokensM = (inputTokens + outputTokens) / 1e6
+  const costPerMTokens = hasCost && tokensM > 0 ? costUSD / tokensM : null
+
+  return {
+    sessions: sessionCount,
+    messages,
+    inputTokens,
+    outputTokens,
+    costUSD,
+    hourCounts,
+    peakHour: peakIndex(hourCounts),
+    dowCounts,
+    peakDow: peakIndex(dowCounts),
+    dailyActivity,
+    peakTokenDay,
+    peakSessionCost: hasCost ? peakSessionCost : null,
+    models,
+    costPerMTokens,
+  }
+}
+
+/**
  * Compute per-harness summary totals — pure function, no hooks.
  *
  * For 'claude': sessions = statsCache.dailyActivity sum + gap days (days with Claude
@@ -355,125 +484,7 @@ export function computeHarnessSummaries(
         costPerMTokens: claudeCostPerMTokens,
       }
     } else {
-      // ── Non-Claude: pure per-session sums ──
-      const harnessSessions = data.sessions.filter(s => s.harness === harness)
-      let sessions = harnessSessions.length
-      let messages = 0
-      let inputTokens = 0
-      let outputTokens = 0
-      let costUSD = 0
-
-      const hourCounts = Array.from({ length: 24 }, () => 0)
-      const dowCounts = Array.from({ length: 7 }, () => 0)
-      const dailyMap: Record<string, number> = {}
-      const tokensByDay: Record<string, number> = {}
-      let peakSessionCost: number | null = null
-      // Per-model token accumulation; cost computed via calcCost after the loop.
-      const modelMap: Record<string, import('@agentistics/core').ModelUsage> = {}
-
-      const hasCost = HARNESS_CAPABILITIES[harness].cost
-      const hasTokens = HARNESS_CAPABILITIES[harness].tokens
-
-      for (const s of harnessSessions) {
-        messages += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
-        inputTokens += s.input_tokens ?? 0
-        outputTokens += s.output_tokens ?? 0
-
-        // hour-of-day
-        for (const h of s.message_hours ?? []) {
-          if (h >= 0 && h <= 23) hourCounts[h] = (hourCounts[h] ?? 0) + 1
-        }
-
-        // day-of-week + daily activity
-        if (s.start_time) {
-          const dow = getDay(parseISO(s.start_time))
-          dowCounts[dow] = (dowCounts[dow] ?? 0) + 1
-          const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
-          dailyMap[day] = (dailyMap[day] ?? 0) + 1
-
-          if (hasTokens) {
-            const sessionTokens = (s.input_tokens ?? 0) + (s.output_tokens ?? 0)
-            tokensByDay[day] = (tokensByDay[day] ?? 0) + sessionTokens
-          }
-        }
-
-        // per-model token accumulation — skip sessions with no/empty model (cannot be priced)
-        if (hasTokens && s.model) {
-          const key = s.model
-          const entry = modelMap[key] ?? (modelMap[key] = {
-            inputTokens: 0, outputTokens: 0,
-            cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            webSearchRequests: 0, costUSD: 0,
-          })
-          entry.inputTokens += s.input_tokens ?? 0
-          entry.outputTokens += s.output_tokens ?? 0
-          entry.cacheReadInputTokens += s.cache_read_input_tokens ?? 0
-          entry.cacheCreationInputTokens += s.cache_creation_input_tokens ?? 0
-        }
-
-        // cost
-        if (s.model && hasCost) {
-          const sessionCost = calcCost({
-            inputTokens: s.input_tokens ?? 0,
-            outputTokens: s.output_tokens ?? 0,
-            cacheReadInputTokens: s.cache_read_input_tokens ?? 0,
-            cacheCreationInputTokens: s.cache_creation_input_tokens ?? 0,
-            webSearchRequests: 0,
-            costUSD: 0,
-          }, s.model)
-          costUSD += sessionCost
-          if (peakSessionCost === null || sessionCost > peakSessionCost) {
-            peakSessionCost = sessionCost
-          }
-        }
-      }
-
-      // daily activity sorted asc
-      const dailyActivity = Object.entries(dailyMap)
-        .map(([date, sessions]) => ({ date, sessions }))
-        .sort((a, b) => a.date.localeCompare(b.date))
-
-      // peak token day (only set when there is actual token data > 0)
-      let peakTokenDay: { date: string; tokens: number } | null = null
-      if (hasTokens) {
-        for (const [date, tokens] of Object.entries(tokensByDay)) {
-          if (tokens > 0 && (!peakTokenDay || tokens > peakTokenDay.tokens)) {
-            peakTokenDay = { date, tokens }
-          }
-        }
-      }
-
-      // per-model breakdown — cost via calcCost (never inline).
-      // modelMap only contains sessions that had a real model, so every entry is priceable.
-      const models = Object.entries(modelMap)
-        .map(([model, u]) => ({
-          model,
-          inputTokens: u.inputTokens,
-          outputTokens: u.outputTokens,
-          costUSD: hasCost ? calcCost(u, model) : 0,
-        }))
-        .sort((a, b) => b.costUSD - a.costUSD)
-
-      // blended cost per 1M tokens (input + output)
-      const tokensM = (inputTokens + outputTokens) / 1e6
-      const costPerMTokens = hasCost && tokensM > 0 ? costUSD / tokensM : null
-
-      result[harness] = {
-        sessions,
-        messages,
-        inputTokens,
-        outputTokens,
-        costUSD,
-        hourCounts,
-        peakHour: peakIndex(hourCounts),
-        dowCounts,
-        peakDow: peakIndex(dowCounts),
-        dailyActivity,
-        peakTokenDay,
-        peakSessionCost: hasCost ? peakSessionCost : null,
-        models,
-        costPerMTokens,
-      }
+      result[harness] = summarizeHarnessSessions(data.sessions, harness)
     }
   }
 
@@ -493,13 +504,18 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const modelSet = filters.models && filters.models.length > 0 ? new Set(filters.models) : null
 
     // ── Harness filter — applied first so all downstream filters compose on top ──
-    // Compose (all AND predicates): single-harness route filter → user filter → multi-select harnesses filter
+    // Compose (all AND predicates): legacy single-harness field (now always unset) →
+    // user filter → multi-select harnesses filter (the sole harness selection mechanism).
     const harnessSessions = filterByHarnesses(
       filterByUsers(filterByHarness(data.sessions, filters.harness), users),
       filters.harnesses ?? [],
     )
-    const harnessActive = filters.harness != null
-    const nonClaudeHarness = harnessActive && filters.harness !== 'claude'
+    // Harness selection comes solely from the multi-select filter (filters.harnesses).
+    // harnessActive: any harness chosen. nonClaudeHarness: a selection that excludes Claude
+    // (statsCache is Claude-only, so those views must aggregate purely from per-session data).
+    const harnessSel = filters.harnesses ?? []
+    const harnessActive = harnessSel.length > 0
+    const nonClaudeHarness = harnessActive && !harnessSel.includes('claude')
 
     // ── Filter daily activity (date-range only — no project granularity in statsCache) ──
     const filteredDailyActivity = (data.statsCache.dailyActivity ?? []).filter(d =>
@@ -565,10 +581,9 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
         const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
         if (!allDailyDates.has(day)) claudeGap += 1
       }
-      // Unified view adds ALL non-Claude sessions (statsCache contains none of them).
-      const nonClaudeCount = harnessActive
-        ? 0
-        : harnessSessions.filter(s => (s.harness ?? 'claude') !== 'claude').length
+      // harnessSessions is already restricted to the selected harnesses (or all, when none
+      // selected), so this counts exactly the non-Claude sessions in scope (statsCache has none).
+      const nonClaudeCount = harnessSessions.filter(s => (s.harness ?? 'claude') !== 'claude').length
       allTimeTotalSessions = claudeBase + claudeGap + nonClaudeCount
     }
 

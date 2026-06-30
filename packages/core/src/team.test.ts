@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test'
 import type { SessionMeta, HarnessId } from './types'
-import { tagUser, distinctUsers, filterByUsers, filterByHarnesses, clampPushInterval, PUSH_INTERVAL } from './team'
+import { tagUser, distinctUsers, distinctHarnesses, filterByUsers, filterByHarnesses, clampPushInterval, PUSH_INTERVAL } from './team'
 
 function session(id: string, user?: string): SessionMeta {
   return {
@@ -43,6 +43,27 @@ test('filterByUsers supports multi-select (aggregate of a subset)', () => {
   const sessions = [session('1', 'devA'), session('2', 'devB'), session('3', 'devC')]
   const result = filterByUsers(sessions, ['devA', 'devB'])
   expect(result.map(s => s.session_id).sort()).toEqual(['1', '2'])
+})
+
+// ── distinctHarnesses ─────────────────────────────────────────────────────
+
+test('distinctHarnesses returns harnesses in canonical order, deduped', () => {
+  const sessions = [
+    harnessSession('1', 'copilot'),
+    harnessSession('2', 'claude'),
+    harnessSession('3', 'copilot'),
+    harnessSession('4', 'gemini'),
+  ]
+  expect(distinctHarnesses(sessions)).toEqual(['claude', 'gemini', 'copilot'])
+})
+
+test('distinctHarnesses treats a missing harness field as claude', () => {
+  const s = { ...session('1'), harness: undefined as unknown as 'claude' }
+  expect(distinctHarnesses([s])).toEqual(['claude'])
+})
+
+test('distinctHarnesses on an empty list returns an empty array', () => {
+  expect(distinctHarnesses([])).toEqual([])
 })
 
 // ── filterByHarnesses ─────────────────────────────────────────────────────
