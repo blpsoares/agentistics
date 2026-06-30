@@ -853,7 +853,7 @@ Bun.serve({
 
         return new Response(JSON.stringify({
           env,
-          command: 'docker compose up -d',
+          command: 'docker compose --env-file central.env up -d',
           password,
           sessionSecret,
         }), {

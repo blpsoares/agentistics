@@ -235,8 +235,8 @@ export function DeployCentral({ pt }: { pt: boolean }) {
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
             {pt
-              ? 'Gera um .env com senha e segredo de sessão únicos + o comando para subir o Docker.'
-              : 'Generates a .env with a one-time password + session secret and the command to start Docker.'}
+              ? 'Gera um central.env com senha e segredo de sessão únicos + o comando para subir o Docker.'
+              : 'Generates a central.env with a one-time password + session secret and the command to start Docker.'}
           </div>
         </div>
       </div>
@@ -311,14 +311,14 @@ export function DeployCentral({ pt }: { pt: boolean }) {
             <AlertTriangle size={14} style={{ color: '#f97316', flexShrink: 0, marginTop: 1 }} />
             <div style={{ fontSize: 12, color: '#f97316', lineHeight: 1.5, fontWeight: 500 }}>
               {pt
-                ? 'Este .env contém uma senha e um segredo de sessão gerados uma única vez. Salve-os agora — eles não serão exibidos novamente.'
-                : 'This .env contains a one-time generated password and session secret. Save them now — they will not be shown again.'}
+                ? 'Este central.env contém uma senha e um segredo de sessão gerados uma única vez. Salve-os agora — eles não serão exibidos novamente.'
+                : 'This central.env contains a one-time generated password and session secret. Save them now — they will not be shown again.'}
             </div>
           </div>
 
           {/* .env block */}
           <CopyBlock
-            label={pt ? 'Arquivo .env' : '.env file'}
+            label={pt ? 'Arquivo central.env' : 'central.env file'}
             text={result.env}
           />
 

@@ -21,13 +21,17 @@ git clone https://github.com/blpsoares/agentistics.git
 cd agentistics
 ```
 
-### 2. Create your `.env`
+### 2. Create your `central.env`
 
 Copy the example and fill in your secrets:
 
 ```bash
-cp .env.example .env
+cp .env.example central.env
 ```
+
+> Name it `central.env`, **not** `.env`. A plain `.env` is auto-loaded by `bun run dev`
+> (a developer's local/member instance) and would make that instance wrongly think it is
+> the central. Using `central.env` keeps the two roles cleanly separated.
 
 Generate strong values for the two required secrets:
 
@@ -39,7 +43,7 @@ openssl rand -hex 24
 openssl rand -hex 32
 ```
 
-Edit `.env` and paste the values into:
+Edit `central.env` and paste the values into:
 - `AGENTISTICS_TEAM_PASSWORD`
 - `AGENTISTICS_TEAM_SESSION_SECRET`
 
@@ -50,7 +54,7 @@ Edit `.env` and paste the values into:
 ### 3. Start the stack
 
 ```bash
-docker compose up -d
+docker compose --env-file central.env up -d
 ```
 
 The first run builds the image and initialises the MongoDB replica set. This takes about 30–60 seconds.
@@ -78,15 +82,15 @@ Navigate to `http://<your-host>:<APP_PORT>` (default: `http://localhost:47291`).
 
 ## Generating a `.env` via the API
 
-When the server is running in central mode you can generate a pre-filled `.env` via:
+When the server is running in central mode you can generate a pre-filled `central.env` via:
 
 ```bash
 curl -s http://localhost:47291/api/team/deploy | jq .
 ```
 
 The response includes:
-- `env` — ready-to-write `.env` file content
-- `command` — `docker compose up -d`
+- `env` — ready-to-write `central.env` file content
+- `command` — `docker compose --env-file central.env up -d`
 - `password` / `sessionSecret` — the generated secrets (shown **once**; not stored by the server)
 
 > Store these values immediately. The server never logs or re-exposes them.
@@ -129,7 +133,7 @@ Requires=docker.service
 [Service]
 Type=simple
 WorkingDirectory=/opt/agentistics
-ExecStart=docker compose up -d
+ExecStart=docker compose --env-file central.env up -d
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -219,8 +223,8 @@ pm2 startup   # follow the printed command
 
 ```bash
 git pull
-docker compose build --pull
-docker compose up -d
+docker compose --env-file central.env build --pull
+docker compose --env-file central.env up -d
 ```
 
 ---

@@ -63,3 +63,6 @@ packages/web/public/*.mp4
 packages/web/public/*.mov
 packages/web/public/*.webm
 .scion/agents/
+
+# deploy env files (central.env etc.) — never commit secrets
+*.env
