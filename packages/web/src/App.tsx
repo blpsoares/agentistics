@@ -49,6 +49,8 @@ import { format, parseISO, parse } from 'date-fns'
 interface TeamSessionState {
   required: boolean
   authed: boolean
+  /** true when the server is running in central (hub) mode */
+  central?: boolean
 }
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
@@ -2158,6 +2160,7 @@ export default function AppLayout() {
           currency={currency}
           brlRate={brlRate}
           lang={lang}
+          central={teamSession?.central === true}
           onClose={() => setSelectedSession(null)}
         />
       )}

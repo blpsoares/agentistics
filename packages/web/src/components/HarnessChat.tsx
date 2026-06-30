@@ -38,7 +38,7 @@ type SessionItem = {
   model?: string
 }
 
-type TranscriptMessage = {
+export type TranscriptMessage = {
   role: 'user' | 'assistant'
   content: string
   timestamp?: number
@@ -72,7 +72,7 @@ function ToolsBlock({ tools, pt }: { tools: string[]; pt: boolean }) {
   )
 }
 
-function MessageBubble({ msg, harness, pt }: { msg: TranscriptMessage; harness: HarnessId; pt: boolean }) {
+export function MessageBubble({ msg, harness, pt }: { msg: TranscriptMessage; harness: HarnessId; pt: boolean }) {
   const isUser = msg.role === 'user'
   const color = HARNESS_COLORS[harness]
   return (

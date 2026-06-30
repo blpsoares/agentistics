@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import {
   X, Clock, FileCode, GitCommit, Wrench, MessageSquare, Bot, Zap, AlertTriangle,
-  CheckCircle, XCircle, Globe, Server, ExternalLink,
+  CheckCircle, XCircle, Globe, Server, ExternalLink, Loader,
 } from 'lucide-react'
 import type { SessionMeta, Lang } from '@agentistics/core'
 import { formatProjectName, formatModel, calcCost, getModelColor } from '@agentistics/core'
@@ -11,6 +11,7 @@ import { fmtFull } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { PrecisionToggle } from './PrecisionToggle'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { MessageBubble, type TranscriptMessage } from './HarnessChat'
 
 // ─── splitInlinedHistory ──────────────────────────────────────────────────────
 // Non-Claude harnesses sometimes concatenate a whole conversation into a single
@@ -51,6 +52,8 @@ interface Props {
   currency: 'USD' | 'BRL'
   brlRate: number
   lang: Lang
+  /** true when this agentistics instance is running in central (hub) mode */
+  central?: boolean
   onClose: () => void
 }
 
@@ -114,7 +117,7 @@ function sessionCost(session: SessionMeta, globalModelUsage: Props['globalModelU
        + ((session.output_tokens ?? 0) / 1_000_000) * blended.output
 }
 
-export function SessionDrilldownModal({ session, globalModelUsage, currency, brlRate, lang, onClose }: Props) {
+export function SessionDrilldownModal({ session, globalModelUsage, currency, brlRate, lang, central, onClose }: Props) {
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
   const [fullPrecision, setFullPrecision] = useState(false)
@@ -592,7 +595,158 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
               </div>
             </div>
           )}
+
+          {/* Remote member chat — central only, session must have a user */}
+          {central && session.user && (
+            <RemoteSessionChat session={session} pt={pt} />
+          )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── RemoteSessionChat ────────────────────────────────────────────────────────
+// Fetches a remote member's chat transcript from the central hub and renders it
+// using the same MessageBubble component as HarnessChat (local transcript view).
+
+type RemoteChatState =
+  | { status: 'loading' }
+  | { status: 'loaded'; messages: TranscriptMessage[] }
+  | { status: 'error' }
+
+function RemoteSessionChat({ session, pt }: { session: SessionMeta; pt: boolean }) {
+  const [state, setState] = useState<RemoteChatState>({ status: 'loading' })
+  const chatRef = useRef<HTMLDivElement>(null)
+  const harness = session.harness
+
+  useEffect(() => {
+    setState({ status: 'loading' })
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 10_000)
+
+    const qs = new URLSearchParams({
+      user: session.user ?? '',
+      sessionId: session.session_id,
+      harness: session.harness,
+    })
+
+    fetch(`/api/team/session-chat?${qs.toString()}`, { signal: controller.signal })
+      .then(r => {
+        if (r.status === 404) throw new Error('not-found')
+        if (!r.ok) throw new Error(`http-${r.status}`)
+        return r.json() as Promise<{ ok: boolean; messages?: unknown[]; error?: string }>
+      })
+      .then(data => {
+        if (!data.ok) throw new Error(data.error ?? 'offline')
+        const messages = (data.messages ?? []).filter(
+          (m): m is TranscriptMessage =>
+            typeof m === 'object' && m !== null &&
+            (typeof (m as Record<string, unknown>).role === 'string') &&
+            (typeof (m as Record<string, unknown>).content === 'string'),
+        )
+        setState({ status: 'loaded', messages })
+      })
+      .catch(() => {
+        setState({ status: 'error' })
+      })
+      .finally(() => clearTimeout(timeoutId))
+
+    return () => {
+      clearTimeout(timeoutId)
+      controller.abort()
+    }
+  }, [session.session_id, session.user, session.harness])
+
+  // Scroll to bottom when messages load
+  useEffect(() => {
+    if (state.status === 'loaded' && chatRef.current) {
+      chatRef.current.scrollTop = chatRef.current.scrollHeight
+    }
+  }, [state])
+
+  const harnessColor = HARNESS_COLORS[harness] ?? 'var(--text-secondary)'
+
+  return (
+    <div style={{
+      border: '1px solid var(--border)',
+      borderRadius: 10,
+      overflow: 'hidden',
+    }}>
+      {/* Section header */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7,
+        padding: '8px 12px',
+        borderBottom: '1px solid var(--border)',
+        background: 'var(--bg-elevated)',
+      }}>
+        <div style={{ width: 8, height: 8, borderRadius: '50%', background: harnessColor, flexShrink: 0 }} />
+        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', flex: 1 }}>
+          {pt ? 'Chat do membro' : 'Member chat'}
+        </span>
+        {state.status === 'loaded' && state.messages.length > 0 && (
+          <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
+            {state.messages.length} {pt ? 'msgs' : 'msgs'}
+          </span>
+        )}
+      </div>
+
+      {/* Body */}
+      <div
+        ref={chatRef}
+        style={{
+          maxHeight: 420,
+          overflowY: 'auto',
+          padding: '12px 14px',
+          background: 'var(--bg-surface)',
+        }}
+      >
+        {state.status === 'loading' && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px 0', gap: 8 }}>
+            <Loader size={14} style={{ animation: 'ttyChatSpin 1s linear infinite', color: harnessColor }} />
+            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+              {pt ? 'Carregando…' : 'Loading…'}
+            </span>
+          </div>
+        )}
+
+        {state.status === 'error' && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '14px 0',
+            color: 'var(--text-tertiary)',
+            fontSize: 12,
+          }}>
+            <AlertTriangle size={14} style={{ color: '#f59e0b', flexShrink: 0 }} />
+            <span>
+              Member offline — chat unavailable
+              <span style={{ display: 'block', fontSize: 10, opacity: 0.75, marginTop: 1 }}>
+                Membro offline — chat indisponível
+              </span>
+            </span>
+          </div>
+        )}
+
+        {state.status === 'loaded' && state.messages.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-tertiary)', fontSize: 12 }}>
+            {pt ? 'Nenhuma mensagem' : 'No messages'}
+          </div>
+        )}
+
+        {state.status === 'loaded' && state.messages.length > 0 &&
+          state.messages.flatMap((msg, i) =>
+            splitInlinedHistory(msg.role, msg.content).map((split, j) => (
+              <MessageBubble
+                key={`${i}-${j}`}
+                msg={{ ...msg, role: split.role, content: split.content }}
+                harness={harness}
+                pt={pt}
+              />
+            ))
+          )
+        }
       </div>
     </div>
   )
