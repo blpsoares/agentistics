@@ -1338,7 +1338,7 @@ export function PreferencesModal({
           background: 'var(--bg-surface)',
           border: isMobile ? 'none' : '1px solid var(--border)',
           borderRadius: isMobile ? 0 : 'var(--radius-lg)',
-          width: isMobile ? '100%' : 560,
+          width: isMobile ? '100%' : 'min(840px, 94vw)',
           maxWidth: '100%',
           height: isMobile ? '100%' : 'min(680px, 90vh)',
           display: 'flex',
@@ -1365,11 +1365,11 @@ export function PreferencesModal({
             </button>
           </div>
 
-          {/* Tab bar — scrolls horizontally (desktop + mobile) so the tabs never
-              overflow the modal width; scrollbar hidden via .prefs-tabbar in css */}
+          {/* Tab bar — wraps to a second row when the tabs don't fit (the modal is
+              wide enough for all tabs on desktop), so they are never hidden behind a
+              horizontal scroll that users may not notice. */}
           <div className="prefs-tabbar" style={{
-            display: 'flex', gap: 2, borderBottom: '1px solid var(--border)', marginBottom: 0,
-            overflowX: 'auto', scrollbarWidth: 'none' as const,
+            display: 'flex', flexWrap: 'wrap', gap: 2, borderBottom: '1px solid var(--border)', marginBottom: 0,
           }}>
             {TABS.map(tab => {
               const active = activeTab === tab.id
