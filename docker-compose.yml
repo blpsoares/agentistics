@@ -35,8 +35,17 @@ services:
       AGENTISTICS_TEAM_PASSWORD: ${AGENTISTICS_TEAM_PASSWORD:-}
       AGENTISTICS_TEAM_SESSION_SECRET: ${AGENTISTICS_TEAM_SESSION_SECRET:-}
       AGENTISTICS_TEAM_INGEST_TOKEN: ${AGENTISTICS_TEAM_INGEST_TOKEN:-}
+      # Self-contribution: set this to the central machine's own identity to also show
+      # this machine's Claude usage in the dashboard (one instance = central + member).
+      # When set, the app reads the host ~/.claude mounted read-only at /host-claude.
+      AGENTISTICS_CENTRAL_USER: ${AGENTISTICS_CENTRAL_USER:-}
       PORT: "47291"
       SERVE_STATIC: "1"
+    volumes:
+      # Host ~/.claude mounted read-only — only read when AGENTISTICS_CENTRAL_USER is set.
+      # Harmless (and unused) on a dedicated central; remove this line if you prefer not
+      # to expose the host directory to the container at all.
+      - ${HOME}/.claude:/host-claude:ro
     ports:
       - "${APP_PORT:-47291}:47291"
     restart: unless-stopped

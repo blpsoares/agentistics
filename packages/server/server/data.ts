@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { readFile } from 'fs/promises'
 import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue, HarnessId } from '@agentistics/core'
-import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL } from './config'
+import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL, CENTRAL_USER } from './config'
 import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
@@ -683,6 +683,17 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       // undercount the daily chart for shared days. modelUsage (Cost/Tokens) stays
       // correct because it is additive. Run a dedicated central to avoid this.
       if (TEAM_CENTRAL) supplementStatsCache(statsCache, teamSessions)
+    }
+
+    // Central self-contribution: the central machine's OWN local sessions have no `user`
+    // (team sessions from Mongo always do). When AGENTISTICS_CENTRAL_USER is set, tag those
+    // untagged sessions with it so the machine running the central also appears as a member
+    // in the dashboard's user filter — one instance, both roles. No double-count: the
+    // central never pushes itself to Mongo; it reads its own ~/.claude live.
+    if (TEAM_CENTRAL && CENTRAL_USER) {
+      for (const s of sessions) {
+        if (!s.user) s.user = CENTRAL_USER
+      }
     }
 
     sessions.sort((a, b) => b.start_time.localeCompare(a.start_time))

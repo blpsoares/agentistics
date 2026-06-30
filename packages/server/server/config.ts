@@ -4,7 +4,12 @@ import { loadEnvConfig } from './env-config'
 loadEnvConfig()
 
 export const HOME_DIR = process.env.HOME ?? process.env.USERPROFILE ?? ''
-export const CLAUDE_DIR = process.env.CLAUDE_DIR ?? join(HOME_DIR, '.claude')
+// A "self-contributing" central (TEAM_CENTRAL + AGENTISTICS_CENTRAL_USER set) reads the
+// host's ~/.claude that docker-compose mounts read-only at /host-claude, so the machine
+// running the central also shows its own usage. Explicit CLAUDE_DIR always wins.
+const _selfContributingCentral =
+  process.env.AGENTISTICS_TEAM_CENTRAL === '1' && !!(process.env.AGENTISTICS_CENTRAL_USER || '')
+export const CLAUDE_DIR = process.env.CLAUDE_DIR ?? (_selfContributingCentral ? '/host-claude' : join(HOME_DIR, '.claude'))
 export const PROJECTS_DIR = join(CLAUDE_DIR, 'projects')
 export const SESSION_META_DIR = join(CLAUDE_DIR, 'usage-data', 'session-meta')
 export const STATS_CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json')
@@ -43,6 +48,10 @@ export const MONGO_URL = process.env.MONGO_URL ?? 'mongodb://localhost:27017'
 export const MONGO_DB = process.env.MONGO_DB ?? 'agentistics'
 export const TEAM_ORG = process.env.AGENTISTICS_TEAM_ORG ?? 'default'
 export const TEAM_INGEST_TOKEN = process.env.AGENTISTICS_TEAM_INGEST_TOKEN || undefined
+// Self-contribution: when set on a central, the central machine's own local sessions
+// (read from the mounted host ~/.claude) are attributed to this user, so one instance
+// can be both the central AND a contributing member. Unset = isolated central.
+export const CENTRAL_USER = process.env.AGENTISTICS_CENTRAL_USER || undefined
 
 // ---------------------------------------------------------------------------
 // Phase 3 — auth gate. When AGENTISTICS_TEAM_PASSWORD is set, the central
