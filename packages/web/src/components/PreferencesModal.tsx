@@ -13,7 +13,6 @@ import { CHAT_SOUNDS, DEFAULT_CHAT_SOUND_ID, findChatSound } from '../lib/chatSo
 import { useChatHarnesses, type HarnessChatStatus } from '../hooks/useChatHarnesses'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { TeamSettings, type TeamConfig } from './TeamSettings'
-import { TeamMembers } from './TeamMembers'
 import { DeployCentral } from './DeployCentral'
 
 type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
@@ -81,7 +80,11 @@ interface Props {
   highlightUpdates: boolean
   setHighlightUpdates: (v: boolean) => void
   defaultTab?: SettingsTab
-  /** When true, surfaced via /api/team/session; enables the Members section in the Team tab */
+  /**
+   * @deprecated No longer used to gate the Members section.
+   * `central` is now read directly from /api/team/session inside TeamTab.
+   * Kept for API compatibility with App.tsx.
+   */
   teamRequired?: boolean
 }
 
@@ -1197,15 +1200,16 @@ const DEFAULT_TEAM_CONFIG: TeamConfig = {
   token: '',
 }
 
-function TeamTab({ pt, teamRequired }: { pt: boolean; teamRequired?: boolean }) {
+function TeamTab({ pt }: { pt: boolean }) {
   const lang: 'pt' | 'en' = pt ? 'pt' : 'en'
   const [team, setTeam] = useState<TeamConfig>(DEFAULT_TEAM_CONFIG)
+  const [central, setCentral] = useState(false)
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState(0)
   const [loadErr, setLoadErr] = useState<string | null>(null)
   const [saveErr, setSaveErr] = useState<string | null>(null)
 
-  // Load team preferences on mount
+  // Load team preferences and central flag on mount
   useEffect(() => {
     fetch('/api/preferences')
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
@@ -1215,6 +1219,13 @@ function TeamTab({ pt, teamRequired }: { pt: boolean; teamRequired?: boolean }) 
         }
       })
       .catch(err => { setLoadErr(err instanceof Error ? err.message : String(err)) })
+
+    fetch('/api/team/session')
+      .then(r => (r.ok ? r.json() : null))
+      .then((sess: { central?: boolean } | null) => {
+        if (sess?.central) setCentral(true)
+      })
+      .catch(() => { /* non-central instances may 404 — leave central=false */ })
   }, [])
 
   const handleChange = (next: TeamConfig) => {
@@ -1249,8 +1260,9 @@ function TeamTab({ pt, teamRequired }: { pt: boolean; teamRequired?: boolean }) 
 
   return (
     <div>
-      <TeamSettings team={team} onChange={handleChange} lang={lang} />
-      {saveErr && (
+      <TeamSettings team={team} onChange={handleChange} lang={lang} central={central} />
+      {/* Save status — only meaningful on non-central instances where the form is shown */}
+      {!central && saveErr && (
         <div style={{
           marginTop: 10, padding: '6px 10px', borderRadius: 7,
           background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
@@ -1259,18 +1271,10 @@ function TeamTab({ pt, teamRequired }: { pt: boolean; teamRequired?: boolean }) 
           {pt ? `Erro ao salvar: ${saveErr}` : `Save error: ${saveErr}`}
         </div>
       )}
-      {(saving || savedAt > 0) && (
+      {!central && (saving || savedAt > 0) && (
         <div style={{ marginTop: 10, fontSize: 11, color: saving ? 'var(--text-tertiary)' : 'var(--accent-green)', textAlign: 'right' }}>
           {saving ? (pt ? 'Salvando…' : 'Saving…') : (pt ? 'Salvo' : 'Saved')}
         </div>
-      )}
-
-      {/* Members admin — only shown when the central password gate is active */}
-      {teamRequired && (
-        <>
-          <div style={{ height: 1, background: 'var(--border)', margin: '20px 0' }} />
-          <TeamMembers lang={lang} />
-        </>
       )}
     </div>
   )
@@ -1427,7 +1431,7 @@ export function PreferencesModal({
             />
           )}
           {activeTab === 'harnesses' && <HarnessesTab pt={pt} />}
-          {activeTab === 'team' && <TeamTab pt={pt} teamRequired={teamRequired} />}
+          {activeTab === 'team' && <TeamTab pt={pt} />}
           {activeTab === 'environment' && <EnvironmentTab pt={pt} />}
         </div>
 

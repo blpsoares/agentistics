@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
-import { Loader2, CheckCircle, XCircle, Users, User } from 'lucide-react'
+import { Loader2, CheckCircle, XCircle, Users, User, Server } from 'lucide-react'
+import { TeamMembers } from './TeamMembers'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -16,6 +17,8 @@ export interface Props {
   team: TeamConfig
   onChange: (team: TeamConfig) => void
   lang: 'pt' | 'en'
+  /** When true, this instance is the team central — show admin panel, hide member connect fields */
+  central: boolean
 }
 
 interface TestResult {
@@ -51,6 +54,14 @@ const COPY = {
   soloDesc: {
     en: 'All data stays local. No metrics are pushed anywhere.',
     pt: 'Todos os dados ficam locais. Nenhuma métrica é enviada.',
+  },
+  centralTitle: {
+    en: 'Team central',
+    pt: 'Central do time',
+  },
+  centralDesc: {
+    en: 'This instance is running as the team central. Use the panel below to manage team members and their access tokens.',
+    pt: 'Esta instância está rodando como central do time. Use o painel abaixo para gerenciar membros e seus tokens de acesso.',
   },
 } satisfies Record<string, { en: string; pt: string }>
 
@@ -146,7 +157,7 @@ function FieldInput({
 
 // ── Main component ────────────────────────────────────────────────────────
 
-export function TeamSettings({ team, onChange, lang }: Props) {
+export function TeamSettings({ team, onChange, lang, central }: Props) {
   const pt = lang === 'pt'
   const [testResult, setTestResult] = useState<TestResult | null>(null)
   const [testing, setTesting] = useState(false)
@@ -183,6 +194,34 @@ export function TeamSettings({ team, onChange, lang }: Props) {
     }
   }
 
+  // ── Central mode: show admin panel only ──────────────────────────────────
+  if (central) {
+    return (
+      <div>
+        {/* Central instance banner */}
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: 10,
+          padding: '12px 14px', borderRadius: 8, marginBottom: 20,
+          background: 'var(--anthropic-orange-dim)',
+          border: '1.5px solid var(--anthropic-orange)',
+        }}>
+          <Server size={16} style={{ color: 'var(--anthropic-orange)', flexShrink: 0, marginTop: 1 }} />
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--anthropic-orange)', marginBottom: 3 }}>
+              {c('centralTitle', lang)}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+              {c('centralDesc', lang)}
+            </div>
+          </div>
+        </div>
+
+        <TeamMembers lang={lang} />
+      </div>
+    )
+  }
+
+  // ── Member / solo mode: show connect config ───────────────────────────────
   return (
     <div>
       {/* ── Mode selector ── */}

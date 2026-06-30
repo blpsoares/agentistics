@@ -17,7 +17,7 @@
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import { TEAM_PASSWORD, TEAM_SESSION_SECRET, TEAM_TLS } from './config'
+import { TEAM_CENTRAL, TEAM_PASSWORD, TEAM_SESSION_SECRET, TEAM_TLS } from './config'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -179,7 +179,7 @@ export function handleLogout(_req: Request): Response {
 export function handleSession(req: Request): Response {
   const required = Boolean(TEAM_PASSWORD)
   const authed = isAuthed(req)
-  return new Response(JSON.stringify({ authed, required }), {
+  return new Response(JSON.stringify({ authed, required, central: TEAM_CENTRAL }), {
     status: 200,
     headers: JSON_CT,
   })
