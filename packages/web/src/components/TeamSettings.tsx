@@ -63,6 +63,14 @@ const COPY = {
     en: 'This instance is running as the team central. Use the panel below to manage team members and their access tokens.',
     pt: 'Esta instância está rodando como central do time. Use o painel abaixo para gerenciar membros e seus tokens de acesso.',
   },
+  machineTitle: {
+    en: 'Machine mode',
+    pt: 'Modo máquina',
+  },
+  machineDesc: {
+    en: "This instance runs locally on your machine. Connect it to your team's central below to send your metrics.",
+    pt: 'Esta instância roda localmente na sua máquina. Conecte-a ao central do seu time abaixo para enviar suas métricas.',
+  },
 } satisfies Record<string, { en: string; pt: string }>
 
 function c(key: keyof typeof COPY, lang: 'pt' | 'en'): string {
@@ -229,6 +237,24 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
   // ── Member / solo mode: show connect config ───────────────────────────────
   return (
     <div>
+      {/* Machine mode banner — informational, blue/neutral styling */}
+      <div style={{
+        display: 'flex', alignItems: 'flex-start', gap: 10,
+        padding: '12px 14px', borderRadius: 8, marginBottom: 20,
+        background: 'var(--bg-secondary)',
+        border: '1px solid var(--border)',
+      }}>
+        <User size={16} style={{ color: 'var(--text-secondary)', flexShrink: 0, marginTop: 1 }} />
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 3 }}>
+            {c('machineTitle', lang)}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.55 }}>
+            {c('machineDesc', lang)}
+          </div>
+        </div>
+      </div>
+
       {/* ── Mode selector ── */}
       <SectionHeader label={c('mode', lang)} />
       <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>

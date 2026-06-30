@@ -1537,7 +1537,7 @@ export default function AppLayout() {
   if (teamSession.required && !teamSession.authed) {
     return (
       <TeamLogin
-        onAuthed={() => setTeamSession({ required: true, authed: true })}
+        onAuthed={() => { setTeamSession({ required: true, authed: true }); refetch() }}
       />
     )
   }

@@ -371,11 +371,12 @@ function PreferencesTab({ draft, set, pt, previewSound }: {
 
 // ── Tab: Install ──────────────────────────────────────────────────────────
 
-function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose }: {
+function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose, central }: {
   pt: boolean
   pwaPrompt?: PwaPrompt | null
   onPwaInstalled?: () => void
   onClose: () => void
+  central: boolean | null
 }) {
   // iOS Safari has no beforeinstallprompt — install is always Share → "Add to Home Screen".
   const isIOS = /ipad|iphone|ipod/i.test(navigator.userAgent)
@@ -560,15 +561,19 @@ function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose }: {
           : 'The Web App is faster to install and works on any platform. The Desktop App offers native Windows integration with a taskbar icon.'}
       </div>
 
-      {/* Deploy a team central */}
-      <div style={{ height: 1, background: 'var(--border)', margin: '4px 0 4px' }} />
-      <div style={{
-        fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)',
-        letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 10,
-      }}>
-        {pt ? 'Para equipes' : 'For teams'}
-      </div>
-      <DeployCentral pt={pt} />
+      {central === true && (
+        <>
+          {/* Deploy a team central — only shown on the central instance */}
+          <div style={{ height: 1, background: 'var(--border)', margin: '4px 0 4px' }} />
+          <div style={{
+            fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)',
+            letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 10,
+          }}>
+            {pt ? 'Para equipes' : 'For teams'}
+          </div>
+          <DeployCentral pt={pt} />
+        </>
+      )}
     </div>
   )
 }
@@ -1194,16 +1199,15 @@ const DEFAULT_TEAM_CONFIG: TeamConfig = {
   token: '',
 }
 
-function TeamTab({ pt }: { pt: boolean }) {
+function TeamTab({ pt, central }: { pt: boolean; central: boolean | null }) {
   const lang: 'pt' | 'en' = pt ? 'pt' : 'en'
   const [team, setTeam] = useState<TeamConfig>(DEFAULT_TEAM_CONFIG)
-  const [central, setCentral] = useState<boolean | null>(null)
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState(0)
   const [loadErr, setLoadErr] = useState<string | null>(null)
   const [saveErr, setSaveErr] = useState<string | null>(null)
 
-  // Load team preferences and central flag on mount
+  // Load team preferences on mount
   useEffect(() => {
     fetch('/api/preferences')
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
@@ -1213,13 +1217,6 @@ function TeamTab({ pt }: { pt: boolean }) {
         }
       })
       .catch(err => { setLoadErr(err instanceof Error ? err.message : String(err)) })
-
-    fetch('/api/team/session')
-      .then(r => (r.ok ? r.json() : null))
-      .then((sess: { central?: boolean } | null) => {
-        if (sess?.central) setCentral(true)
-      })
-      .catch(() => { /* network failure or a non-team build may fail — leave central false/null */ })
   }, [])
 
   const handleChange = (next: TeamConfig) => {
@@ -1304,6 +1301,7 @@ export function PreferencesModal({
     chatSoundId: initial.chatSoundId ?? DEFAULT_CHAT_SOUND_ID,
   })
   const pt = draft.lang === 'pt'
+  const [central, setCentral] = useState<boolean | null>(null)
   const previewCtxRef = useRef<AudioContext | null>(null)
 
   const previewSound = useCallback((id: string) => {
@@ -1318,6 +1316,16 @@ export function PreferencesModal({
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
   }, [onClose])
+
+  // Fetch central flag once on mount — used by Install tab to gate DeployCentral
+  useEffect(() => {
+    fetch('/api/team/session')
+      .then(r => (r.ok ? r.json() : null))
+      .then((sess: { central?: boolean } | null) => {
+        setCentral(sess?.central === true ? true : false)
+      })
+      .catch(() => { setCentral(false) })
+  }, [])
 
   function set<K extends keyof PrefsDraft>(key: K, value: PrefsDraft[K]) {
     setDraft(d => ({ ...d, [key]: value }))
@@ -1421,10 +1429,11 @@ export function PreferencesModal({
             <InstallTab
               pt={pt}
               pwaPrompt={pwaPrompt} onPwaInstalled={onPwaInstalled} onClose={onClose}
+              central={central}
             />
           )}
           {activeTab === 'harnesses' && <HarnessesTab pt={pt} />}
-          {activeTab === 'team' && <TeamTab pt={pt} />}
+          {activeTab === 'team' && <TeamTab pt={pt} central={central} />}
           {activeTab === 'environment' && <EnvironmentTab pt={pt} />}
         </div>
 
