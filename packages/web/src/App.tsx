@@ -40,9 +40,16 @@ import { TtyChat } from './components/TtyChat'
 import { UpdateModal } from './components/UpdateModal'
 import { InstallModal } from './components/InstallModal'
 import { ArchiveConsentModal, type ArchiveMode } from './components/ArchiveConsentModal'
+import { TeamLogin } from './components/TeamLogin'
 import { type ChatModelId } from './lib/chatModels'
 import { HARNESS_LABELS, HARNESS_COLORS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
+
+// ── Team session state ────────────────────────────────────────────────────
+interface TeamSessionState {
+  required: boolean
+  authed: boolean
+}
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
 const LOAD_STAGES: { key: string; labelPt: string; labelEn: string; icon: React.ReactNode; phase: 1 | 2 | 3 }[] = [
@@ -985,6 +992,24 @@ export default function AppLayout() {
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
   const [lang, setLangState] = useState<Lang>('en')
+
+  // ── Team session gate ────────────────────────────────────────────────────
+  // undefined = not yet fetched, TeamSessionState after fetch
+  const [teamSession, setTeamSession] = useState<TeamSessionState | undefined>(undefined)
+
+  useEffect(() => {
+    fetch('/api/team/session')
+      .then(r => r.ok ? (r.json() as Promise<TeamSessionState>) : null)
+      .then(s => setTeamSession(s ?? { required: false, authed: true }))
+      .catch(() => setTeamSession({ required: false, authed: true }))
+  }, [])
+
+  // Flip to login screen when any API call returns 401 (team password set but cookie expired)
+  useEffect(() => {
+    if (error && error.includes('401') && teamSession?.required) {
+      setTeamSession({ required: true, authed: false })
+    }
+  }, [error, teamSession?.required])
   const [theme, setThemeState] = useState<Theme>('dark')
   const [currency, setCurrencyState] = useState<'USD' | 'BRL'>('USD')
 
@@ -1564,6 +1589,19 @@ export default function AppLayout() {
     (filters.models.length > 0 ? 1 : 0) +
     (harnessFilterActive ? 1 : 0)
 
+  // Block the app until team session is known (undefined = still fetching)
+  if (teamSession === undefined) {
+    return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
+  }
+  // If the team password gate is active and we are not authed, show the login screen
+  if (teamSession.required && !teamSession.authed) {
+    return (
+      <TeamLogin
+        onAuthed={() => setTeamSession({ required: true, authed: true })}
+      />
+    )
+  }
+
   // Block the app until the user makes the first-run archive choice. While prefs
   // are still loading (undefined) render a neutral background to avoid a flash.
   if (archiveChoice === undefined) {
@@ -2023,6 +2061,7 @@ export default function AppLayout() {
           setRiskyMode={setRiskyMode}
           highlightUpdates={highlightUpdates}
           setHighlightUpdates={setHighlightUpdates}
+          teamRequired={teamSession?.required ?? false}
         />
       )}
 

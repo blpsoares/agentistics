@@ -13,6 +13,7 @@ import { CHAT_SOUNDS, DEFAULT_CHAT_SOUND_ID, findChatSound } from '../lib/chatSo
 import { useChatHarnesses, type HarnessChatStatus } from '../hooks/useChatHarnesses'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { TeamSettings, type TeamConfig } from './TeamSettings'
+import { TeamMembers } from './TeamMembers'
 
 type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
 
@@ -79,6 +80,8 @@ interface Props {
   highlightUpdates: boolean
   setHighlightUpdates: (v: boolean) => void
   defaultTab?: SettingsTab
+  /** When true, surfaced via /api/team/session; enables the Members section in the Team tab */
+  teamRequired?: boolean
 }
 
 // ── Shared primitives ──────────────────────────────────────────────────────
@@ -1147,7 +1150,7 @@ const DEFAULT_TEAM_CONFIG: TeamConfig = {
   token: '',
 }
 
-function TeamTab({ pt }: { pt: boolean }) {
+function TeamTab({ pt, teamRequired }: { pt: boolean; teamRequired?: boolean }) {
   const lang: 'pt' | 'en' = pt ? 'pt' : 'en'
   const [team, setTeam] = useState<TeamConfig>(DEFAULT_TEAM_CONFIG)
   const [saving, setSaving] = useState(false)
@@ -1214,6 +1217,14 @@ function TeamTab({ pt }: { pt: boolean }) {
           {saving ? (pt ? 'Salvando…' : 'Saving…') : (pt ? 'Salvo' : 'Saved')}
         </div>
       )}
+
+      {/* Members admin — only shown when the central password gate is active */}
+      {teamRequired && (
+        <>
+          <div style={{ height: 1, background: 'var(--border)', margin: '20px 0' }} />
+          <TeamMembers lang={lang} />
+        </>
+      )}
     </div>
   )
 }
@@ -1236,6 +1247,7 @@ export function PreferencesModal({
   liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval,
   riskyMode, setRiskyMode, highlightUpdates, setHighlightUpdates,
   defaultTab = 'preferences',
+  teamRequired = false,
 }: Props) {
   const isMobile = useIsMobile()
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab)
@@ -1368,7 +1380,7 @@ export function PreferencesModal({
             />
           )}
           {activeTab === 'harnesses' && <HarnessesTab pt={pt} />}
-          {activeTab === 'team' && <TeamTab pt={pt} />}
+          {activeTab === 'team' && <TeamTab pt={pt} teamRequired={teamRequired} />}
           {activeTab === 'environment' && <EnvironmentTab pt={pt} />}
         </div>
 
