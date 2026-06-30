@@ -7,7 +7,8 @@ export interface TeamMember {
   id: string
   user: string
   label: string
-  lastSeenAt?: string
+  createdAt: string
+  lastSeenAt: string | null
 }
 
 // ── i18n ──────────────────────────────────────────────────────────────────

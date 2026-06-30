@@ -51,6 +51,11 @@ export const TEAM_INGEST_TOKEN = process.env.AGENTISTICS_TEAM_INGEST_TOKEN || un
 // TEAM_TLS=1 adds the Secure flag to the session cookie.
 // ---------------------------------------------------------------------------
 export const TEAM_PASSWORD = process.env.AGENTISTICS_TEAM_PASSWORD || undefined
+// SECURITY NOTE: When AGENTISTICS_TEAM_SESSION_SECRET is unset, it falls back to
+// TEAM_PASSWORD. This means a password leak also enables session-cookie forgery,
+// since the HMAC key equals the password. Operators should always set a separate
+// AGENTISTICS_TEAM_SESSION_SECRET (e.g. `openssl rand -hex 32`) to isolate the two
+// secrets, especially when the password is shared with team members.
 export const TEAM_SESSION_SECRET = process.env.AGENTISTICS_TEAM_SESSION_SECRET || TEAM_PASSWORD || ''
 export const TEAM_TLS = process.env.AGENTISTICS_TEAM_TLS === '1'
 

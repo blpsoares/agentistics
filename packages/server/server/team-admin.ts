@@ -119,8 +119,8 @@ export async function handleRevokeToken(req: Request): Promise<Response> {
   }
 
   try {
-    await revokeToken(id)
-    return new Response(JSON.stringify({ ok: true }), {
+    const deleted = await revokeToken(id)
+    return new Response(JSON.stringify({ ok: deleted }), {
       status: 200,
       headers: JSON_CT,
     })

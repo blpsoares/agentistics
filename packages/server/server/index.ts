@@ -18,7 +18,7 @@ import { PROJECTS_DIR } from './config'
 import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
-import { handleLogin, handleLogout, handleSession, isAuthed } from './auth'
+import { handleLogin, handleLogout, handleSession, isAuthed, hasValidSession } from './auth'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -89,9 +89,20 @@ ensureClaudeChat().catch(err => console.error('[claude-chat] failed to initializ
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, PUT, POST, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 }
+
+// Routes that are always public (no auth gate applied)
+const AUTH_PUBLIC = new Set([
+  '/api/team/login',
+  '/api/team/logout',
+  '/api/team/session',
+  '/api/team/ingest',
+])
+
+// Admin routes that require a real session cookie even on a passwordless central
+const ADMIN_PATHS = new Set(['/api/team/members', '/api/team/tokens'])
 
 // ---------------------------------------------------------------------------
 // Bun HTTP server
@@ -113,12 +124,6 @@ Bun.serve({
     // a valid session cookie except the public allowlist below.
     // Static assets are always served (the SPA + login UI must load without auth).
     // ---------------------------------------------------------------------------
-    const AUTH_PUBLIC = new Set([
-      '/api/team/login',
-      '/api/team/logout',
-      '/api/team/session',
-      '/api/team/ingest',
-    ])
     if (
       TEAM_CENTRAL &&
       TEAM_PASSWORD &&
@@ -130,6 +135,11 @@ Bun.serve({
         status: 401,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
+    }
+
+    // Admin gate: admin routes require a real session even on a passwordless central.
+    if (TEAM_CENTRAL && ADMIN_PATHS.has(url.pathname) && !hasValidSession(req)) {
+      return new Response(JSON.stringify({ error: 'auth required' }), { status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
     }
 
     if (url.pathname === '/api/events' && req.method === 'GET') {

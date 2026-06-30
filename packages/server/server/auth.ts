@@ -86,21 +86,16 @@ export function parseCookies(header: string | null): Record<string, string> {
 }
 
 /**
- * Constant-time string comparison wrapping crypto.timingSafeEqual.
- * Length-safe: always does a full comparison before returning false for
- * length mismatches (a dummy same-length compare is done to equalize timing).
- * This prevents timing attacks that infer secret length from branch time.
+ * Constant-time string comparison.
+ * Both inputs are reduced to a fixed-length HMAC-SHA256 digest before
+ * comparison so that length differences cannot leak via timing side-channels.
+ * `timingSafeEqual` then compares the two 32-byte digests in constant time.
  */
+const EQ_KEY = 'agentistics-constant-length-equalization'
 export function constantTimeEqual(a: string, b: string): boolean {
-  const bufA = Buffer.from(a)
-  const bufB = Buffer.from(b)
-  if (bufA.length !== bufB.length) {
-    // Perform a dummy comparison of the same length to avoid a timing side
-    // channel on the length check itself.
-    timingSafeEqual(Buffer.alloc(bufA.length), Buffer.alloc(bufA.length))
-    return false
-  }
-  return timingSafeEqual(bufA, bufB)
+  const da = createHmac('sha256', EQ_KEY).update(a).digest()
+  const db = createHmac('sha256', EQ_KEY).update(b).digest()
+  return timingSafeEqual(da, db)
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +192,18 @@ export function handleSession(req: Request): Response {
  */
 export function isAuthed(req: Request): boolean {
   if (!TEAM_PASSWORD) return true
+  const cookieHeader = req.headers.get('cookie')
+  const cookies = parseCookies(cookieHeader)
+  return verifySession(cookies[COOKIE_NAME], TEAM_SESSION_SECRET, Date.now())
+}
+
+/**
+ * Strict session check — does NOT grant access on a passwordless central.
+ * Returns true only when the request carries a valid, unexpired, HMAC-signed
+ * session cookie. Use this for admin routes that must stay protected even
+ * when TEAM_PASSWORD is unset (no-password deployments).
+ */
+export function hasValidSession(req: Request): boolean {
   const cookieHeader = req.headers.get('cookie')
   const cookies = parseCookies(cookieHeader)
   return verifySession(cookies[COOKIE_NAME], TEAM_SESSION_SECRET, Date.now())
