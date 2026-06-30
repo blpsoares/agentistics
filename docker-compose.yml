@@ -42,10 +42,13 @@ services:
       PORT: "47291"
       SERVE_STATIC: "1"
     volumes:
-      # Host ~/.claude mounted read-only — only read when AGENTISTICS_CENTRAL_USER is set.
-      # Harmless (and unused) on a dedicated central; remove this line if you prefer not
-      # to expose the host directory to the container at all.
+      # Host harness dirs mounted read-only — only read when AGENTISTICS_CENTRAL_USER is
+      # set (self-contribution). Harmless (and unused) on a dedicated central; remove these
+      # lines if you prefer not to expose the host directories to the container at all.
       - ${HOME}/.claude:/host-claude:ro
+      - ${HOME}/.codex:/host-codex:ro
+      - ${HOME}/.gemini:/host-gemini:ro
+      - ${HOME}/.copilot:/host-copilot:ro
     ports:
       - "${APP_PORT:-47291}:47291"
     restart: unless-stopped

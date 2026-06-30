@@ -78,16 +78,16 @@ export const TEAM_SENT_FILE = process.env.AGENTISTICS_TEAM_SENT_FILE ?? join(HOM
 // Other harnesses (Phase 1: Codex). Each adapter checks its own root.
 // Override with CODEX_DIR; disable with AGENTISTICS_HARNESS_CODEX=0.
 // ---------------------------------------------------------------------------
-export const CODEX_DIR = process.env.CODEX_DIR ?? join(HOME_DIR, '.codex')
+export const CODEX_DIR = process.env.CODEX_DIR ?? (_selfContributingCentral ? '/host-codex' : join(HOME_DIR, '.codex'))
 export const CODEX_SESSIONS_DIR = join(CODEX_DIR, 'sessions')
 
 // ---------------------------------------------------------------------------
 // Gemini CLI harness. Override with GEMINI_DIR; disable with AGENTISTICS_HARNESS_GEMINI=0.
 // ---------------------------------------------------------------------------
-export const GEMINI_DIR = process.env.GEMINI_DIR ?? join(HOME_DIR, '.gemini')
+export const GEMINI_DIR = process.env.GEMINI_DIR ?? (_selfContributingCentral ? '/host-gemini' : join(HOME_DIR, '.gemini'))
 
 // ---------------------------------------------------------------------------
 // GitHub Copilot CLI harness. Override with COPILOT_DIR; disable with
 // AGENTISTICS_HARNESS_COPILOT=0.
 // ---------------------------------------------------------------------------
-export const COPILOT_DIR = process.env.COPILOT_DIR ?? join(HOME_DIR, '.copilot')
+export const COPILOT_DIR = process.env.COPILOT_DIR ?? (_selfContributingCentral ? '/host-copilot' : join(HOME_DIR, '.copilot'))
