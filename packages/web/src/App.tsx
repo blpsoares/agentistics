@@ -1523,6 +1523,21 @@ export default function AppLayout() {
     ]
   }, [filters.projects.length, lang])
 
+  // Team auth gate takes precedence over the data loading/error states below:
+  // on a gated central /api/data returns 401 until the operator logs in, so we
+  // must resolve the session and show the login screen FIRST — otherwise the
+  // expected 401 surfaces as a "failed to load" error and the login never shows.
+  if (teamSession === undefined) {
+    return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
+  }
+  if (teamSession.required && !teamSession.authed) {
+    return (
+      <TeamLogin
+        onAuthed={() => setTeamSession({ required: true, authed: true })}
+      />
+    )
+  }
+
   if (loading) {
     return <LoadingScreen lang={lang} loadProgress={loadProgress} />
   }
@@ -1588,19 +1603,6 @@ export default function AppLayout() {
     (filters.projects.length > 0 ? 1 : 0) +
     (filters.models.length > 0 ? 1 : 0) +
     (harnessFilterActive ? 1 : 0)
-
-  // Block the app until team session is known (undefined = still fetching)
-  if (teamSession === undefined) {
-    return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
-  }
-  // If the team password gate is active and we are not authed, show the login screen
-  if (teamSession.required && !teamSession.authed) {
-    return (
-      <TeamLogin
-        onAuthed={() => setTeamSession({ required: true, authed: true })}
-      />
-    )
-  }
 
   // Block the app until the user makes the first-run archive choice. While prefs
   // are still loading (undefined) render a neutral background to avoid a flash.

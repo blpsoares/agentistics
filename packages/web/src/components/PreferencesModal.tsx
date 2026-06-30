@@ -14,6 +14,7 @@ import { useChatHarnesses, type HarnessChatStatus } from '../hooks/useChatHarnes
 import { useIsMobile } from '../hooks/useIsMobile'
 import { TeamSettings, type TeamConfig } from './TeamSettings'
 import { TeamMembers } from './TeamMembers'
+import { DeployCentral } from './DeployCentral'
 
 type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
 
@@ -561,6 +562,16 @@ function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose }: {
           ? 'O App Web é mais rápido de instalar e funciona em qualquer plataforma. O App Desktop oferece integração nativa no Windows com ícone na barra de tarefas.'
           : 'The Web App is faster to install and works on any platform. The Desktop App offers native Windows integration with a taskbar icon.'}
       </div>
+
+      {/* Deploy a team central */}
+      <div style={{ height: 1, background: 'var(--border)', margin: '4px 0 4px' }} />
+      <div style={{
+        fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)',
+        letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 10,
+      }}>
+        {pt ? 'Para equipes' : 'For teams'}
+      </div>
+      <DeployCentral pt={pt} />
     </div>
   )
 }
