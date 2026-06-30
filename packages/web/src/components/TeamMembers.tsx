@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react'
-import { Users, Plus, Trash2, Copy, CheckCheck, RefreshCw, AlertCircle } from 'lucide-react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { Users, Plus, Trash2, Copy, CheckCheck, RefreshCw, AlertCircle, Pencil, Check, X } from 'lucide-react'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -37,6 +37,11 @@ const COPY = {
   mintErr:         { en: 'Failed to create token.',              pt: 'Falha ao criar token.' },
   revokeErr:       { en: 'Failed to revoke token.',              pt: 'Falha ao revogar token.' },
   refresh:         { en: 'Refresh',                              pt: 'Atualizar' },
+  rename:          { en: 'Rename',                               pt: 'Renomear' },
+  renaming:        { en: 'Saving…',                             pt: 'Salvando…' },
+  renameCancel:    { en: 'Cancel',                               pt: 'Cancelar' },
+  renameSave:      { en: 'Save',                                 pt: 'Salvar' },
+  renameErr:       { en: 'Failed to rename member.',            pt: 'Falha ao renomear membro.' },
 } satisfies Record<string, { en: string; pt: string }>
 
 function t(key: keyof typeof COPY, lang: 'en' | 'pt'): string {
@@ -86,6 +91,13 @@ export function TeamMembers({ lang }: Props) {
   // Per-row revoke state (id → true when revoking)
   const [revoking, setRevoking] = useState<Record<string, boolean>>({})
   const [revokeErr, setRevokeErr] = useState<string | null>(null)
+
+  // Per-row rename state
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [renameSaving, setRenameSaving] = useState(false)
+  const [renameErr, setRenameErr] = useState<string | null>(null)
+  const renameInputRef = useRef<HTMLInputElement>(null)
 
   const loadMembers = useCallback(async () => {
     setLoading(true)
@@ -146,6 +158,44 @@ export function TeamMembers({ lang }: Props) {
       setRevokeErr(err instanceof Error ? err.message : String(err))
     } finally {
       setRevoking(prev => ({ ...prev, [id]: false }))
+    }
+  }
+
+  function startRename(m: TeamMember) {
+    setRenamingId(m.id)
+    setRenameValue(m.user)
+    setRenameErr(null)
+    // Focus the input on the next paint
+    requestAnimationFrame(() => { renameInputRef.current?.focus() })
+  }
+
+  function cancelRename() {
+    setRenamingId(null)
+    setRenameValue('')
+    setRenameErr(null)
+  }
+
+  async function handleRename(id: string) {
+    const trimmed = renameValue.trim()
+    if (!trimmed || renameSaving) return
+    setRenameSaving(true)
+    setRenameErr(null)
+    try {
+      const res = await fetch('/api/team/members', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, user: trimmed }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      // Optimistically update the local list, then refresh from server
+      setMembers(prev => prev.map(m => m.id === id ? { ...m, user: trimmed } : m))
+      setRenamingId(null)
+      setRenameValue('')
+      void loadMembers()
+    } catch (err) {
+      setRenameErr(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRenameSaving(false)
     }
   }
 
@@ -270,9 +320,96 @@ export function TeamMembers({ lang }: Props) {
                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)' }}
                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-card)' }}
               >
-                <div style={{ fontSize: 12, color: 'var(--text-primary)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: 8 }}>
-                  {m.user}
-                </div>
+                {/* User cell — static or editable */}
+                {renamingId === m.id ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, paddingRight: 8 }}>
+                    <input
+                      ref={renameInputRef}
+                      type="text"
+                      value={renameValue}
+                      onChange={e => setRenameValue(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') { void handleRename(m.id) }
+                        if (e.key === 'Escape') { cancelRename() }
+                      }}
+                      disabled={renameSaving}
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        padding: '3px 6px',
+                        background: 'var(--bg-elevated)',
+                        border: '1px solid var(--anthropic-orange)',
+                        borderRadius: 5,
+                        fontSize: 12,
+                        color: 'var(--text-primary)',
+                        fontFamily: 'inherit',
+                        outline: 'none',
+                        opacity: renameSaving ? 0.6 : 1,
+                      }}
+                    />
+                    <button
+                      onClick={() => { void handleRename(m.id) }}
+                      disabled={!renameValue.trim() || renameSaving}
+                      title={t('renameSave', lang)}
+                      style={{
+                        display: 'flex', alignItems: 'center',
+                        padding: '3px 5px', borderRadius: 5,
+                        border: '1px solid rgba(34,197,94,0.4)',
+                        background: 'rgba(34,197,94,0.08)',
+                        color: !renameValue.trim() || renameSaving ? 'var(--text-tertiary)' : 'var(--accent-green)',
+                        cursor: !renameValue.trim() || renameSaving ? 'default' : 'pointer',
+                        fontFamily: 'inherit',
+                        opacity: !renameValue.trim() || renameSaving ? 0.5 : 1,
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Check size={11} />
+                    </button>
+                    <button
+                      onClick={cancelRename}
+                      disabled={renameSaving}
+                      title={t('renameCancel', lang)}
+                      style={{
+                        display: 'flex', alignItems: 'center',
+                        padding: '3px 5px', borderRadius: 5,
+                        border: '1px solid var(--border)',
+                        background: 'transparent',
+                        color: 'var(--text-tertiary)',
+                        cursor: renameSaving ? 'default' : 'pointer',
+                        fontFamily: 'inherit',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <X size={11} />
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, paddingRight: 8, minWidth: 0 }}>
+                    <span style={{ fontSize: 12, color: 'var(--text-primary)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                      {m.user}
+                    </span>
+                    <button
+                      onClick={() => startRename(m)}
+                      title={t('rename', lang)}
+                      style={{
+                        display: 'flex', alignItems: 'center',
+                        padding: '2px 4px', borderRadius: 4,
+                        border: 'none',
+                        background: 'transparent',
+                        color: 'var(--text-tertiary)',
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                        flexShrink: 0,
+                        transition: 'color 0.15s',
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)' }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = 'var(--text-tertiary)' }}
+                    >
+                      <Pencil size={10} />
+                    </button>
+                  </div>
+                )}
+
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: 8 }}>
                   {m.label}
                 </div>
@@ -281,19 +418,19 @@ export function TeamMembers({ lang }: Props) {
                 </div>
                 <button
                   onClick={() => { void handleRevoke(m.id) }}
-                  disabled={revoking[m.id]}
+                  disabled={revoking[m.id] || renamingId === m.id}
                   title={t('revoke', lang)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 4,
                     padding: '4px 8px', borderRadius: 6,
                     border: '1px solid rgba(239,68,68,0.3)',
                     background: 'rgba(239,68,68,0.06)',
-                    color: revoking[m.id] ? 'var(--text-tertiary)' : '#ef4444',
+                    color: revoking[m.id] || renamingId === m.id ? 'var(--text-tertiary)' : '#ef4444',
                     fontSize: 11, fontWeight: 600,
-                    cursor: revoking[m.id] ? 'default' : 'pointer',
+                    cursor: revoking[m.id] || renamingId === m.id ? 'default' : 'pointer',
                     fontFamily: 'inherit',
                     transition: 'all 0.15s',
-                    opacity: revoking[m.id] ? 0.5 : 1,
+                    opacity: revoking[m.id] || renamingId === m.id ? 0.5 : 1,
                     whiteSpace: 'nowrap',
                   }}
                 >
@@ -316,6 +453,19 @@ export function TeamMembers({ lang }: Props) {
         }}>
           <AlertCircle size={12} />
           {t('revokeErr', lang)}{revokeErr ? ` — ${revokeErr}` : ''}
+        </div>
+      )}
+
+      {/* Rename error */}
+      {renameErr && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '6px 10px', borderRadius: 7, marginBottom: 12,
+          background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+          fontSize: 11, color: '#ef4444',
+        }}>
+          <AlertCircle size={12} />
+          {t('renameErr', lang)}{renameErr ? ` — ${renameErr}` : ''}
         </div>
       )}
 
