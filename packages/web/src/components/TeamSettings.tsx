@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Loader2, CheckCircle, XCircle, Users, User, Server } from 'lucide-react'
 import { TeamMembers } from './TeamMembers'
 import { PUSH_INTERVAL, type TeamConfig } from '@agentistics/core'
@@ -50,6 +50,7 @@ const COPY = {
   connected:         { en: 'Connected',                    pt: 'Conectado' },
   connFailed:        { en: 'Connection failed',            pt: 'Falha na conexão' },
   save:              { en: 'Save',                          pt: 'Salvar' },
+  edit:              { en: 'Edit',                          pt: 'Editar' },
   saving:            { en: 'Saving…',                       pt: 'Salvando…' },
   pushNowOk:         { en: 'Connected — sent {n} sessions', pt: 'Conectado — {n} sessões enviadas' },
   pushNowErr:        { en: 'Connected but push failed',     pt: 'Conectado mas envio falhou' },
@@ -141,7 +142,7 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
 }
 
 function FieldInput({
-  label, sub, value, onChange, type = 'text', placeholder,
+  label, sub, value, onChange, type = 'text', placeholder, disabled,
 }: {
   label: string
   sub?: string
@@ -149,6 +150,7 @@ function FieldInput({
   onChange: (v: string) => void
   type?: 'text' | 'password'
   placeholder?: string
+  disabled?: boolean
 }) {
   return (
     <div style={{ marginBottom: 14 }}>
@@ -159,6 +161,8 @@ function FieldInput({
         value={value}
         placeholder={placeholder}
         onChange={e => onChange(e.target.value)}
+        disabled={disabled}
+        readOnly={disabled}
         style={{
           width: '100%', boxSizing: 'border-box',
           padding: '7px 10px',
@@ -170,8 +174,9 @@ function FieldInput({
           color: 'var(--text-primary)',
           outline: 'none',
           transition: 'border-color 0.15s',
+          ...(disabled ? { opacity: 0.6, cursor: 'not-allowed' } : {}),
         }}
-        onFocus={e => { e.currentTarget.style.borderColor = 'var(--anthropic-orange)' }}
+        onFocus={e => { if (!disabled) e.currentTarget.style.borderColor = 'var(--anthropic-orange)' }}
         onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
       />
     </div>
@@ -197,16 +202,19 @@ function IntervalSelect({
   onChange,
   minSec = PUSH_INTERVAL.MIN_SEC,
   disableBelow = false,
+  disabled = false,
 }: {
   value: number
   onChange: (sec: number) => void
   minSec?: number
   disableBelow?: boolean
+  disabled?: boolean
 }) {
   return (
     <select
       value={value}
       onChange={e => onChange(Number(e.target.value))}
+      disabled={disabled}
       style={{
         padding: '5px 8px',
         background: 'var(--bg-elevated)',
@@ -215,8 +223,9 @@ function IntervalSelect({
         fontSize: 12,
         color: 'var(--text-primary)',
         fontFamily: 'inherit',
-        cursor: 'pointer',
+        cursor: disabled ? 'not-allowed' : 'pointer',
         outline: 'none',
+        ...(disabled ? { opacity: 0.6 } : {}),
       }}
     >
       {(INTERVAL_OPTIONS as readonly number[]).filter(sec => disableBelow || sec >= minSec).map(sec => (
@@ -242,6 +251,23 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
   const [testing, setTesting] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveResult, setSaveResult] = useState<SaveResult | null>(null)
+
+  // ── Edit/lock state for the member connect form ──────────────────────────
+  // Starts locked when already configured; starts open for fresh setup.
+  const [editing, setEditing] = useState<boolean>(
+    () => !(team.endpoint && team.user && team.token),
+  )
+  // Guard: if team config arrives asynchronously after mount (e.g. from parent),
+  // lock the form once it becomes configured — but never fight the user after
+  // they have manually toggled editing.
+  const editingInitialized = useRef(false)
+  useEffect(() => {
+    if (editingInitialized.current) return
+    if (team.endpoint && team.user && team.token) {
+      editingInitialized.current = true
+      setEditing(false)
+    }
+  }, [team.endpoint, team.user, team.token])
 
   // ── Central push-interval state (loaded from /api/team/config) ──────────
   const [centralInterval, setCentralInterval] = useState<IntervalSec>(
@@ -355,6 +381,10 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
       const pushRes = await fetch('/api/team/push-now', { method: 'POST' })
       const pushData = (await pushRes.json()) as { ok: boolean; count?: number; error?: string }
       setSaveResult({ ok: pushData.ok, count: pushData.count, error: pushData.error })
+      if (pushData.ok) {
+        editingInitialized.current = true
+        setEditing(false)
+      }
     } catch (err) {
       setSaveResult({ ok: false, error: err instanceof Error ? err.message : 'Network error' })
     } finally {
@@ -452,7 +482,8 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
           return (
             <button
               key={m}
-              onClick={() => set('mode', m)}
+              onClick={() => { if (editing) set('mode', m) }}
+              disabled={!editing}
               style={{
                 flex: 1,
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
@@ -461,7 +492,7 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
                 background: active ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
                 color: active ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
                 fontSize: 13, fontWeight: active ? 700 : 500,
-                cursor: 'pointer', fontFamily: 'inherit',
+                cursor: editing ? 'pointer' : 'not-allowed', fontFamily: 'inherit',
                 transition: 'all 0.15s',
               }}
             >
@@ -493,6 +524,7 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
             value={team.endpoint}
             onChange={v => set('endpoint', v)}
             placeholder="https://central.example:47291"
+            disabled={!editing}
           />
 
           <FieldInput
@@ -501,6 +533,7 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
             value={team.user}
             onChange={v => set('user', v)}
             placeholder="alice@example.com"
+            disabled={!editing}
           />
 
           <FieldInput
@@ -509,6 +542,7 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
             value={team.org}
             onChange={v => set('org', v)}
             placeholder="default"
+            disabled={!editing}
           />
 
           <FieldInput
@@ -518,6 +552,7 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
             onChange={v => set('token', v)}
             type="password"
             placeholder="••••••••"
+            disabled={!editing}
           />
 
           {/* ── Push interval (member) ── */}
@@ -529,28 +564,46 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
               value={team.pushIntervalSec ?? PUSH_INTERVAL.DEFAULT_SEC}
               onChange={sec => set('pushIntervalSec', sec)}
               minSec={PUSH_INTERVAL.MIN_SEC}
+              disabled={!editing}
             />
           </PrefRow>
 
-          {/* ── Save button + result area ── */}
+          {/* ── Save / Edit button + result area ── */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-            <button
-              onClick={() => { void handleSave() }}
-              disabled={saving || !team.endpoint || !team.user}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '7px 18px', borderRadius: 7, fontSize: 13, fontWeight: 700,
-                border: 'none',
-                background: saving || !team.endpoint || !team.user ? 'var(--text-tertiary)' : 'var(--anthropic-orange)',
-                color: '#fff',
-                cursor: saving || !team.endpoint || !team.user ? 'default' : 'pointer',
-                opacity: !team.endpoint || !team.user ? 0.5 : 1,
-                fontFamily: 'inherit', transition: 'all 0.15s',
-              }}
-            >
-              {saving ? <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> : null}
-              {saving ? c('saving', lang) : c('save', lang)}
-            </button>
+            {editing ? (
+              <button
+                onClick={() => { void handleSave() }}
+                disabled={saving || !team.endpoint || !team.user}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '7px 18px', borderRadius: 7, fontSize: 13, fontWeight: 700,
+                  border: 'none',
+                  background: saving || !team.endpoint || !team.user ? 'var(--text-tertiary)' : 'var(--anthropic-orange)',
+                  color: '#fff',
+                  cursor: saving || !team.endpoint || !team.user ? 'default' : 'pointer',
+                  opacity: !team.endpoint || !team.user ? 0.5 : 1,
+                  fontFamily: 'inherit', transition: 'all 0.15s',
+                }}
+              >
+                {saving ? <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> : null}
+                {saving ? c('saving', lang) : c('save', lang)}
+              </button>
+            ) : (
+              <button
+                onClick={() => setEditing(true)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '7px 18px', borderRadius: 7, fontSize: 13, fontWeight: 700,
+                  border: '1.5px solid var(--border)',
+                  background: 'var(--bg-elevated)',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  fontFamily: 'inherit', transition: 'all 0.15s',
+                }}
+              >
+                {c('edit', lang)}
+              </button>
+            )}
 
             {saveResult !== null && (
               <span style={{
