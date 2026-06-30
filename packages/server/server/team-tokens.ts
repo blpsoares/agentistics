@@ -134,7 +134,7 @@ export async function validateIngestToken(
   const col = await getTokensCollection()
   const doc = await col.findOne({ _id: id })
   if (!doc) return { ok: false }
-  // Update last-seen asynchronously — fire and forget is fine here (non-critical).
-  await col.updateOne({ _id: id }, { $set: { lastSeenAt: new Date().toISOString() } })
+  // Update last-seen — fire and forget (non-critical, must not block the caller).
+  void col.updateOne({ _id: id }, { $set: { lastSeenAt: new Date().toISOString() } }).catch(() => {})
   return { ok: true, user: doc.user }
 }

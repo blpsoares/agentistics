@@ -123,15 +123,15 @@ const ADMIN_PATHS = new Set([
 // ---------------------------------------------------------------------------
 
 try {
-Bun.serve<{ user: string }>({
+Bun.serve<{ user: string; isAgent?: boolean }>({
   port: PORT,
   idleTimeout: 60,
   websocket: {
     // Inform TypeScript of the ws.data shape (see Bun docs — TS #26242 workaround).
-    data: {} as { user: string },
-    open(ws) { registerAgent(ws) },
-    message(ws, msg) { onAgentMessage(ws, msg) },
-    close(ws) { unregisterAgent(ws) },
+    data: {} as { user: string; isAgent?: boolean },
+    open(ws) { if (!ws.data.isAgent) return; registerAgent(ws) },
+    message(ws, msg) { if (!ws.data.isAgent) return; onAgentMessage(ws, msg) },
+    close(ws) { if (!ws.data.isAgent) return; unregisterAgent(ws) },
   },
   async fetch(req, server) {
     const url = new URL(req.url)
@@ -974,7 +974,7 @@ Bun.serve<{ user: string }>({
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
-      const upgraded = server.upgrade(req, { data: { user: tokenResult.user } })
+      const upgraded = server.upgrade(req, { data: { user: tokenResult.user, isAgent: true as const } })
       if (upgraded) return // WebSocket handshake handed off to the websocket: {} handler
       return new Response(JSON.stringify({ error: 'upgrade failed' }), {
         status: 500,

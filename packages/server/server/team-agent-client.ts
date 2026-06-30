@@ -9,6 +9,7 @@
 // startAgentClient() is idempotent — safe to call multiple times.
 // Never throws; all errors are swallowed internally.
 
+import path from 'node:path'
 import type { AgentRequest, AgentResponse, HarnessId } from '@agentistics/core'
 import { readPreferences } from './preferences'
 import { getClaudeSessionMessages } from './claude-sessions'
@@ -33,7 +34,7 @@ async function fetchLocalMessages(request: AgentRequest): Promise<unknown[]> {
   const { harness, sessionId, encodedDir } = request
   try {
     if (harness === 'claude') {
-      if (!encodedDir) return []
+      if (!encodedDir || encodedDir.includes('..') || path.isAbsolute(encodedDir)) return []
       return (await getClaudeSessionMessages(encodedDir, sessionId)) as unknown[]
     }
     if (harness === 'codex') {
@@ -58,11 +59,21 @@ async function fetchLocalMessages(request: AgentRequest): Promise<unknown[]> {
 let activeWs: WebSocket | null = null
 let backoffIdx = 0
 
-function scheduleReconnect(endpoint: string, token: string): void {
+function scheduleReconnect(): void {
   const delay = BACKOFF_MS[Math.min(backoffIdx, BACKOFF_MS.length - 1)] ?? 30_000
   backoffIdx++
   setTimeout(() => {
-    void openConnection(endpoint, token)
+    void (async () => {
+      try {
+        const prefs = await readPreferences()
+        const team = prefs.team
+        // Stop reconnecting if mode changed or credentials were cleared
+        if (!team || team.mode !== 'member' || !team.endpoint || !team.user || !team.token) return
+        openConnection(team.endpoint, team.token)
+      } catch {
+        // Preferences unavailable — stop reconnecting silently
+      }
+    })()
   }, delay)
 }
 
@@ -84,7 +95,7 @@ function openConnection(endpoint: string, token: string): void {
       { headers: { Authorization: `Bearer ${token}` } } as unknown as string,
     )
   } catch {
-    scheduleReconnect(endpoint, token)
+    scheduleReconnect()
     return
   }
   activeWs = socket
@@ -139,7 +150,7 @@ function openConnection(endpoint: string, token: string): void {
 
   socket.addEventListener('close', () => {
     if (activeWs === socket) activeWs = null
-    scheduleReconnect(endpoint, token)
+    scheduleReconnect()
   })
 
   socket.addEventListener('error', () => {

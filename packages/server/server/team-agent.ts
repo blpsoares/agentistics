@@ -6,6 +6,7 @@
 // handleSessionChat() serves GET /api/team/session-chat: tries the local FS
 // first, then falls back to requesting from the member over the reverse channel.
 
+import path from 'node:path'
 import type { ServerWebSocket } from 'bun'
 import type { AgentRequest, AgentResponse, HarnessId } from '@agentistics/core'
 import { getClaudeSessionMessages } from './claude-sessions'
@@ -20,6 +21,7 @@ import { getCopilotSessionMessages } from './copilot-sessions'
 /** Data attached to each server-side WebSocket via server.upgrade(req, { data }) */
 export interface AgentSocketData {
   user: string
+  isAgent?: boolean
 }
 
 const VALID_HARNESSES: readonly string[] = ['claude', 'codex', 'gemini', 'copilot']
@@ -209,6 +211,14 @@ export async function handleSessionChat(req: Request): Promise<Response> {
   const harnessRaw = url.searchParams.get('harness') ?? 'claude'
   const harness = (VALID_HARNESSES.includes(harnessRaw) ? harnessRaw : 'claude') as HarnessId
   const encodedDir = url.searchParams.get('encodedDir') ?? undefined
+
+  // Reject traversal attempts in the encoded directory segment
+  if (encodedDir !== undefined && (encodedDir.includes('..') || path.isAbsolute(encodedDir))) {
+    return new Response(JSON.stringify({ ok: false, error: 'invalid dir' }), {
+      status: 400,
+      headers: JSON_CT,
+    })
+  }
 
   if (!user || !sessionId) {
     return new Response(JSON.stringify({ error: 'user and sessionId required' }), {

@@ -618,9 +618,11 @@ type RemoteChatState =
 function RemoteSessionChat({ session, pt }: { session: SessionMeta; pt: boolean }) {
   const [state, setState] = useState<RemoteChatState>({ status: 'loading' })
   const chatRef = useRef<HTMLDivElement>(null)
+  const mountedRef = useRef(true)
   const harness = session.harness
 
   useEffect(() => {
+    mountedRef.current = true
     setState({ status: 'loading' })
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 10_000)
@@ -642,17 +644,17 @@ function RemoteSessionChat({ session, pt }: { session: SessionMeta; pt: boolean 
         const messages = (data.messages ?? []).filter(
           (m): m is TranscriptMessage =>
             typeof m === 'object' && m !== null &&
-            (typeof (m as Record<string, unknown>).role === 'string') &&
+            ((m as Record<string, unknown>).role === 'user' || (m as Record<string, unknown>).role === 'assistant') &&
             (typeof (m as Record<string, unknown>).content === 'string'),
         )
-        setState({ status: 'loaded', messages })
+        if (mountedRef.current) setState({ status: 'loaded', messages })
       })
       .catch(() => {
-        setState({ status: 'error' })
+        if (mountedRef.current) setState({ status: 'error' })
       })
-      .finally(() => clearTimeout(timeoutId))
 
     return () => {
+      mountedRef.current = false
       clearTimeout(timeoutId)
       controller.abort()
     }
@@ -721,10 +723,7 @@ function RemoteSessionChat({ session, pt }: { session: SessionMeta; pt: boolean 
           }}>
             <AlertTriangle size={14} style={{ color: '#f59e0b', flexShrink: 0 }} />
             <span>
-              Member offline — chat unavailable
-              <span style={{ display: 'block', fontSize: 10, opacity: 0.75, marginTop: 1 }}>
-                Membro offline — chat indisponível
-              </span>
+              {pt ? 'Membro offline — chat indisponível' : 'Member offline — chat unavailable'}
             </span>
           </div>
         )}
