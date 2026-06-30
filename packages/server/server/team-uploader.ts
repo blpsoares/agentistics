@@ -153,17 +153,21 @@ export async function pushOnce(team: NonNullable<Preferences['team']>): Promise<
 // ---------------------------------------------------------------------------
 
 let started = false
+let running = false
 
 /**
  * Start the periodic uploader. Idempotent — calling more than once is a no-op.
  * Reads preferences each cycle so toggling pushEnabled / mode takes effect
  * without a server restart. Interval: 60 s. First cycle runs ~5 s after start.
+ * A `running` flag prevents overlapping cycles if a push takes longer than 60 s.
  */
 export function startUploader(): void {
   if (started) return
   started = true
 
   const run = async () => {
+    if (running) return
+    running = true
     try {
       const prefs = await readPreferences()
       if (prefs.team?.mode === 'member' && prefs.team.pushEnabled) {
@@ -171,6 +175,8 @@ export function startUploader(): void {
       }
     } catch (err) {
       console.warn('[team-uploader] cycle error:', err instanceof Error ? err.message : String(err))
+    } finally {
+      running = false
     }
   }
 
@@ -219,6 +225,14 @@ export async function handleTeamTestConnection(req: Request): Promise<Response> 
 
   if (!endpoint) {
     const result: TestConnectionResult = { ok: false, status: 0, error: 'endpoint is required' }
+    return new Response(JSON.stringify(result), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  if (!org || !user) {
+    const result: TestConnectionResult = { ok: false, status: 0, error: 'org and user are required' }
     return new Response(JSON.stringify(result), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
