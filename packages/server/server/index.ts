@@ -36,6 +36,9 @@ import {
 } from './sse'
 import { fullSync } from './archive'
 import { getArchiveMode } from './preferences'
+import { registerAgent, unregisterAgent, onAgentMessage, handleSessionChat } from './team-agent'
+import { startAgentClient } from './team-agent-client'
+import { validateIngestToken } from './team-tokens'
 
 // ---------------------------------------------------------------------------
 // Reads the first `cwd` field found in a JSONL session file.
@@ -78,6 +81,7 @@ if (TEAM_CENTRAL) {
   import('./team-watch').then(m => m.startTeamWatch()).catch(err => console.error('[team-watch] failed to start:', err))
 }
 import('./team-uploader').then(m => m.startUploader()).catch(err => console.error('[team-uploader] failed to start:', err))
+startAgentClient()
 maybeSpawnWatcher()
 ensureNayChat(PORT).catch(err => console.error('[nay-chat] failed to initialize:', err))
 ensureClaudeChat().catch(err => console.error('[claude-chat] failed to initialize:', err))
@@ -100,20 +104,36 @@ const AUTH_PUBLIC = new Set([
   '/api/team/session',
   '/api/team/ingest',
   '/api/team/policy',
+  // WebSocket upgrade for the member→central reverse channel; auth is via
+  // validateIngestToken (Bearer token in the Upgrade request headers).
+  '/api/team/agent',
 ])
 
 // Admin routes that require a real session cookie even on a passwordless central
-const ADMIN_PATHS = new Set(['/api/team/members', '/api/team/tokens', '/api/team/config'])
+const ADMIN_PATHS = new Set([
+  '/api/team/members',
+  '/api/team/tokens',
+  '/api/team/config',
+  // on-demand session chat proxy — ADMIN-gated so only the dashboard can call it
+  '/api/team/session-chat',
+])
 
 // ---------------------------------------------------------------------------
 // Bun HTTP server
 // ---------------------------------------------------------------------------
 
 try {
-Bun.serve({
+Bun.serve<{ user: string }>({
   port: PORT,
   idleTimeout: 60,
-  async fetch(req) {
+  websocket: {
+    // Inform TypeScript of the ws.data shape (see Bun docs — TS #26242 workaround).
+    data: {} as { user: string },
+    open(ws) { registerAgent(ws) },
+    message(ws, msg) { onAgentMessage(ws, msg) },
+    close(ws) { unregisterAgent(ws) },
+  },
+  async fetch(req, server) {
     const url = new URL(req.url)
 
     if (req.method === 'OPTIONS') {
@@ -930,6 +950,55 @@ Bun.serve({
         status: 200,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
+    }
+
+    // ---------------------------------------------------------------------------
+    // WebSocket upgrade — member ↔ central reverse channel (Phase 7)
+    // POST/GET /api/team/agent — upgrade to WebSocket for connected members.
+    // Auth: validateIngestToken (Bearer in Authorization header), NOT session cookie.
+    // This path is in AUTH_PUBLIC so the cookie gate above does not block it.
+    // ---------------------------------------------------------------------------
+    if (url.pathname === '/api/team/agent') {
+      if (!TEAM_CENTRAL) {
+        return new Response(JSON.stringify({ error: 'not found' }), {
+          status: 404,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const authHeader = req.headers.get('authorization') ?? ''
+      const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+      const tokenResult = await validateIngestToken(bearer)
+      if (!tokenResult.ok || !tokenResult.user) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), {
+          status: 401,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const upgraded = server.upgrade(req, { data: { user: tokenResult.user } })
+      if (upgraded) return // WebSocket handshake handed off to the websocket: {} handler
+      return new Response(JSON.stringify({ error: 'upgrade failed' }), {
+        status: 500,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // ---------------------------------------------------------------------------
+    // GET /api/team/session-chat — on-demand session message proxy (ADMIN-gated)
+    // Tries local FS first; proxies to the member's reverse-channel socket otherwise.
+    // Query: user, sessionId, harness (default 'claude'), encodedDir (Claude-only)
+    // Response: { ok: true, messages: unknown[] } | { ok: false, error: string }
+    // ---------------------------------------------------------------------------
+    if (url.pathname === '/api/team/session-chat' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) {
+        return new Response(JSON.stringify({ error: 'not found' }), {
+          status: 404,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const res = await handleSessionChat(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
     }
 
     // Serve embedded frontend assets (binary mode only)
