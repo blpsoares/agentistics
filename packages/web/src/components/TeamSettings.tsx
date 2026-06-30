@@ -1,6 +1,7 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Loader2, CheckCircle, XCircle, Users, User, Server } from 'lucide-react'
 import { TeamMembers } from './TeamMembers'
+import { PUSH_INTERVAL } from '@agentistics/core'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -11,7 +12,13 @@ export interface TeamConfig {
   user: string
   pushEnabled: boolean
   token: string
+  /** Member's chosen push interval in seconds (≥ PUSH_INTERVAL.MIN_SEC). */
+  pushIntervalSec?: number
 }
+
+// Interval options shown in the selectors.
+const INTERVAL_OPTIONS = [15, 30, 60, 120, 300] as const
+type IntervalSec = (typeof INTERVAL_OPTIONS)[number]
 
 export interface Props {
   team: TeamConfig
@@ -70,6 +77,15 @@ const COPY = {
   machineDesc: {
     en: "This instance runs locally on your machine. Connect it to your team's central below to send your metrics.",
     pt: 'Esta instância roda localmente na sua máquina. Conecte-a ao central do seu time abaixo para enviar suas métricas.',
+  },
+  pushInterval:      { en: 'Push interval',                pt: 'Intervalo de envio' },
+  pushIntervalSubCentral: {
+    en: 'Members push at this interval (min 15 s)',
+    pt: 'Membros enviam neste intervalo (mín. 15 s)',
+  },
+  pushIntervalSubMember: {
+    en: "Your team's central enforces a minimum; you can only push less often.",
+    pt: 'O central do time exige um mínimo; você só pode enviar com menos frequência.',
   },
 } satisfies Record<string, { en: string; pt: string }>
 
@@ -163,12 +179,99 @@ function FieldInput({
   )
 }
 
+// ── Interval helpers ──────────────────────────────────────────────────────
+
+function formatInterval(sec: number): string {
+  if (sec < 60) return `${sec} s`
+  const m = sec / 60
+  return m === 1 ? '1 min' : `${m} min`
+}
+
+/**
+ * A <select> that shows push-interval options.
+ * @param minSec — options below this value are hidden (member mode)
+ *                 or disabled (central mode uses disableBelow instead).
+ * @param disableBelow — when true, renders all options but disables those < minSec
+ */
+function IntervalSelect({
+  value,
+  onChange,
+  minSec = PUSH_INTERVAL.MIN_SEC,
+  disableBelow = false,
+}: {
+  value: number
+  onChange: (sec: number) => void
+  minSec?: number
+  disableBelow?: boolean
+}) {
+  return (
+    <select
+      value={value}
+      onChange={e => onChange(Number(e.target.value))}
+      style={{
+        padding: '5px 8px',
+        background: 'var(--bg-elevated)',
+        border: '1px solid var(--border)',
+        borderRadius: 7,
+        fontSize: 12,
+        color: 'var(--text-primary)',
+        fontFamily: 'inherit',
+        cursor: 'pointer',
+        outline: 'none',
+      }}
+    >
+      {INTERVAL_OPTIONS.filter(sec => disableBelow || sec >= minSec).map(sec => (
+        <option key={sec} value={sec} disabled={disableBelow && sec < minSec}>
+          {formatInterval(sec)}
+        </option>
+      ))}
+    </select>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────
 
 export function TeamSettings({ team, onChange, lang, central }: Props) {
   const pt = lang === 'pt'
   const [testResult, setTestResult] = useState<TestResult | null>(null)
   const [testing, setTesting] = useState(false)
+
+  // ── Central push-interval state (loaded from /api/team/config) ──────────
+  const [centralInterval, setCentralInterval] = useState<IntervalSec>(
+    PUSH_INTERVAL.DEFAULT_SEC as IntervalSec,
+  )
+  const [intervalSaving, setIntervalSaving] = useState(false)
+
+  useEffect(() => {
+    if (!central) return
+    fetch('/api/team/config')
+      .then(r => (r.ok ? (r.json() as Promise<{ pushIntervalSec?: number }>) : Promise.reject()))
+      .then(cfg => {
+        if (typeof cfg.pushIntervalSec === 'number') {
+          // Snap to nearest option (or keep default if value is unusual)
+          const nearest = (INTERVAL_OPTIONS as readonly number[]).includes(cfg.pushIntervalSec)
+            ? (cfg.pushIntervalSec as IntervalSec)
+            : (PUSH_INTERVAL.DEFAULT_SEC as IntervalSec)
+          setCentralInterval(nearest)
+        }
+      })
+      .catch(() => { /* ignore — server may not have the field yet */ })
+  }, [central])
+
+  function handleCentralIntervalChange(sec: number) {
+    const snapped = (INTERVAL_OPTIONS as readonly number[]).includes(sec)
+      ? (sec as IntervalSec)
+      : (PUSH_INTERVAL.DEFAULT_SEC as IntervalSec)
+    setCentralInterval(snapped)
+    setIntervalSaving(true)
+    fetch('/api/team/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pushIntervalSec: snapped }),
+    })
+      .catch(() => { /* best-effort; Track A route will validate */ })
+      .finally(() => { setIntervalSaving(false) })
+  }
 
   function set<K extends keyof TeamConfig>(key: K, value: TeamConfig[K]) {
     onChange({ ...team, [key]: value })
@@ -229,7 +332,31 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
           </div>
         </div>
 
+        {/* ── Push interval control (central admin) ── */}
+        <SectionHeader label={pt ? 'Configurações de envio' : 'Push settings'} />
+        <PrefRow
+          label={c('pushInterval', lang)}
+          sub={c('pushIntervalSubCentral', lang)}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <IntervalSelect
+              value={centralInterval}
+              onChange={handleCentralIntervalChange}
+              minSec={PUSH_INTERVAL.MIN_SEC}
+              disableBelow
+            />
+            {intervalSaving && (
+              <Loader2 size={12} style={{ color: 'var(--text-tertiary)', animation: 'spin 1s linear infinite' }} />
+            )}
+          </div>
+        </PrefRow>
+
+        <Divider />
+
         <TeamMembers lang={lang} />
+
+        {/* Inline keyframe for spinner */}
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       </div>
     )
   }
@@ -377,6 +504,18 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
             sub={c('pushEnabledSub', lang)}
           >
             <Toggle on={team.pushEnabled} onToggle={() => set('pushEnabled', !team.pushEnabled)} />
+          </PrefRow>
+
+          {/* ── Push interval (member) ── */}
+          <PrefRow
+            label={c('pushInterval', lang)}
+            sub={c('pushIntervalSubMember', lang)}
+          >
+            <IntervalSelect
+              value={team.pushIntervalSec ?? PUSH_INTERVAL.DEFAULT_SEC}
+              onChange={sec => set('pushIntervalSec', sec)}
+              minSec={PUSH_INTERVAL.MIN_SEC}
+            />
           </PrefRow>
 
           {/* Info footer */}
