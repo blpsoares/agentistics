@@ -17,6 +17,7 @@ COPY packages/core/package.json      ./packages/core/
 COPY packages/server/package.json    ./packages/server/
 COPY packages/web/package.json       ./packages/web/
 COPY packages/mcp/package.json       ./packages/mcp/
+COPY packages/desktop/package.json   ./packages/desktop/
 
 RUN bun install --frozen-lockfile
 
@@ -41,9 +42,12 @@ COPY packages/core/package.json      ./packages/core/
 COPY packages/server/package.json    ./packages/server/
 COPY packages/web/package.json       ./packages/web/
 COPY packages/mcp/package.json       ./packages/mcp/
+COPY packages/desktop/package.json   ./packages/desktop/
 
-# Production deps only (no devDependencies)
-RUN bun install --frozen-lockfile --production
+# Production deps only (no devDependencies). --ignore-scripts skips the root
+# `prepare: husky` lifecycle (husky is a devDependency, absent in --production,
+# and git hooks are irrelevant in the runtime image).
+RUN bun install --frozen-lockfile --production --ignore-scripts
 
 # Copy built source + generated embed
 COPY --from=builder /app/packages ./packages
