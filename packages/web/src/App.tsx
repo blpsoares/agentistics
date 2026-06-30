@@ -1110,8 +1110,12 @@ export default function AppLayout() {
 
   type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
   const [pwaPrompt, setPwaPrompt] = useState<PwaPrompt | null>(null)
+  // Treat the Tauri desktop app as "already installed" — it must never show the
+  // PWA install prompt (it IS the app). Tauri v2 exposes these globals.
+  const isTauri = typeof window !== 'undefined' &&
+    ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
   const [pwaInstalled, setPwaInstalled] = useState(() =>
-    typeof window !== 'undefined' && window.matchMedia('(display-mode: standalone)').matches
+    isTauri || (typeof window !== 'undefined' && window.matchMedia('(display-mode: standalone)').matches)
   )
   useEffect(() => {
     const handler = (e: Event) => { e.preventDefault(); setPwaPrompt(e as PwaPrompt) }

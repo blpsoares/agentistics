@@ -26,7 +26,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZGMTU0QTlCOUFBNDlGQUIKUldTcm42U2FtMG9WYjlSSlpCMzQwdWE5blkzUUQ0b0x3Zkc5SDNJY2cweGQ5VUNwRURIZ2NncWgK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE3NzY3OTM4NzA5MjVCQQpSV1M2SlFtSGsyZDNBVTllbDdZV3VZWFpjeXlTeXZOcEtGa2d5ZUcvR3hzTHkxUjJFeEF5TUJyVAo=",
       "endpoints": [
         "https://github.com/blpsoares/agentistics/releases/latest/download/latest.json"
       ]
@@ -34,7 +34,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
+    "createUpdaterArtifacts": true,
+    "targets": [
+      "msi",
+      "nsis"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -49,6 +53,9 @@
       "webviewInstallMode": {
         "type": "downloadBootstrapper",
         "silent": false
+      },
+      "nsis": {
+        "installerHooks": "./installer-hooks.nsh"
       }
     }
   }

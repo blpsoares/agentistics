@@ -244,6 +244,16 @@ fn spawn_sidecar(
     let mut cmd = std::process::Command::new(&binary);
     cmd.arg("server").env("CLAUDE_DIR", claude_dir);
 
+    // Multi-harness: the other CLIs (Codex/Gemini/Copilot) live next to ~/.claude
+    // in the same home directory. The selected claude_dir is "<home>/.claude", so
+    // point each adapter at its sibling. Without this the server derives them from
+    // the Windows HOME and never finds the user's WSL data → only Claude shows up.
+    if let Some(home) = Path::new(claude_dir).parent() {
+        cmd.env("CODEX_DIR", home.join(".codex"));
+        cmd.env("GEMINI_DIR", home.join(".gemini"));
+        cmd.env("COPILOT_DIR", home.join(".copilot"));
+    }
+
     // Suppress the console window that would otherwise flash on Windows
     #[cfg(windows)]
     {
@@ -328,6 +338,14 @@ fn reset_config(state: State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Forget the saved data source and restart, so the onboarding source picker
+/// (Windows / WSL) shows again. Invoked from the dashboard's Settings.
+#[tauri::command]
+fn change_source(state: State<AppState>, app: AppHandle) {
+    let _ = std::fs::remove_file(&state.config_path);
+    app.restart();
+}
+
 // ── Auto-update ───────────────────────────────────────────────────────────────
 
 async fn check_for_update(app: AppHandle) {
@@ -335,15 +353,26 @@ async fn check_for_update(app: AppHandle) {
 
     let updater = match app.updater() {
         Ok(u) => u,
-        Err(_) => return,
+        Err(e) => {
+            log_error(&format!("updater init failed: {e}"));
+            return;
+        }
     };
 
     let update = match updater.check().await {
         Ok(Some(u)) => u,
-        _ => return,
+        Ok(None) => {
+            log_error("update check: already on the latest version");
+            return;
+        }
+        Err(e) => {
+            log_error(&format!("update check failed: {e}"));
+            return;
+        }
     };
 
     let version = update.version.clone();
+    log_error(&format!("update available: {} (current {})", version, update.current_version));
     let msg = format!(
         "Agentistics {} is available (you have {}).\n\nInstall now?",
         version,
@@ -401,6 +430,7 @@ fn main() {
             get_setup_state,
             launch_with_config,
             reset_config,
+            change_source,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

@@ -1,3 +1,7 @@
 target/
 binaries/
 ui/logo.png
+
+# Tauri updater signing keys — never commit
+*.key
+*.key.pub

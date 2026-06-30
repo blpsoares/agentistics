@@ -293,6 +293,22 @@ jobs:
         shell: bash
         run: cp packages/web/public/minimalistLogo.png packages/desktop/ui/logo.png
 
+      # The desktop job checks out the pre-bump commit, so set the version to the
+      # same value the build job published. Otherwise the installer is built at the
+      # old version while latest.json advertises the bumped one, which makes the
+      # updater re-prompt forever (installed version never reaches the manifest one).
+      - name: Set version
+        shell: bash
+        run: |
+          VERSION="${{ needs.build.outputs.next }}"
+          bun -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '$VERSION';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          echo "Desktop build version set to $VERSION"
+
       - name: Build Tauri app
         working-directory: packages/desktop
         env:
@@ -310,7 +326,7 @@ jobs:
             echo "has_sig=true" >> $GITHUB_OUTPUT
           else
             echo "has_sig=false" >> $GITHUB_OUTPUT
-            echo "No .sig file — TAURI_SIGNING_PRIVATE_KEY is not set. Auto-updater disabled for this build."
+            echo "::warning title=Auto-updater disabled::No .exe.sig produced — latest.json will not be generated and the native Tauri updater cannot detect this release. Check that the TAURI_SIGNING_PRIVATE_KEY secret is set AND that bundle.createUpdaterArtifacts is true in tauri.conf.json. (The in-app update banner still works.)"
           fi
 
       - name: Generate latest.json for auto-updater
