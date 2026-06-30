@@ -36,9 +36,12 @@ export async function handleTeamIngest(req: Request): Promise<Response> {
   const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
 
   // 1. Try minted token lookup (hashes bearer, looks up in Mongo, updates lastSeenAt).
+  //    The token's user is AUTHORITATIVE — sessions are attributed to it, ignoring the
+  //    member's self-declared name. This keeps identity stable (renaming the local name
+  //    never creates a duplicate user) and prevents one member impersonating another.
   const mintedResult = await validateIngestToken(bearer)
   if (mintedResult.ok) {
-    return handleIngestBody(req)
+    return handleIngestBody(req, mintedResult.user)
   }
 
   // 2. Legacy shared-secret fallback (constant-time compare).
@@ -65,8 +68,10 @@ export async function handleTeamIngest(req: Request): Promise<Response> {
   })
 }
 
-/** Parse and upsert the ingest body after authorization has been verified. */
-async function handleIngestBody(req: Request): Promise<Response> {
+/** Parse and upsert the ingest body after authorization has been verified.
+ *  When `overrideUser` is provided (the user a minted token belongs to), it is used
+ *  instead of the self-declared `body.user` so identity is authoritative. */
+async function handleIngestBody(req: Request, overrideUser?: string): Promise<Response> {
   let raw: unknown
   try {
     raw = await req.json()
@@ -78,7 +83,8 @@ async function handleIngestBody(req: Request): Promise<Response> {
     return new Response(JSON.stringify({ error: parsed.error }), { status: 400, headers: JSON_HEADERS })
   }
   try {
-    const count = await ingestSessions(parsed.body.org, parsed.body.user, parsed.body.sessions)
+    const user = (overrideUser && overrideUser.trim()) || parsed.body.user
+    const count = await ingestSessions(parsed.body.org, user, parsed.body.sessions)
     return new Response(JSON.stringify({ ok: true, count }), { status: 200, headers: JSON_HEADERS })
   } catch (e) {
     return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), { status: 500, headers: JSON_HEADERS })

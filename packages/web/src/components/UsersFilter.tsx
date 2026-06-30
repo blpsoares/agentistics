@@ -9,8 +9,8 @@ interface Props {
 }
 
 const T = {
-  pt: { all: 'Todos os devs', selected: 'devs', selectAll: 'Selecionar tudo', clear: 'Limpar' },
-  en: { all: 'All devs', selected: 'devs', selectAll: 'Select all', clear: 'Clear' },
+  pt: { all: 'Todos os membros', selected: 'membros', selectAll: 'Selecionar tudo', clear: 'Limpar' },
+  en: { all: 'All members', selected: 'members', selectAll: 'Select all', clear: 'Clear' },
 } as const
 
 export function UsersFilter({ users, selected, onChange, lang }: Props) {
