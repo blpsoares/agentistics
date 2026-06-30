@@ -1195,17 +1195,13 @@ const DEFAULT_TEAM_CONFIG: TeamConfig = {
   endpoint: '',
   org: 'default',
   user: '',
-  pushEnabled: false,
   token: '',
 }
 
 function TeamTab({ pt, central }: { pt: boolean; central: boolean | null }) {
   const lang: 'pt' | 'en' = pt ? 'pt' : 'en'
   const [team, setTeam] = useState<TeamConfig>(DEFAULT_TEAM_CONFIG)
-  const [saving, setSaving] = useState(false)
-  const [savedAt, setSavedAt] = useState(0)
   const [loadErr, setLoadErr] = useState<string | null>(null)
-  const [saveErr, setSaveErr] = useState<string | null>(null)
 
   // Load team preferences on mount
   useEffect(() => {
@@ -1218,24 +1214,6 @@ function TeamTab({ pt, central }: { pt: boolean; central: boolean | null }) {
       })
       .catch(err => { setLoadErr(err instanceof Error ? err.message : String(err)) })
   }, [])
-
-  const handleChange = (next: TeamConfig) => {
-    setTeam(next)
-    setSaving(true)
-    setSaveErr(null)
-    fetch('/api/preferences', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ team: next }),
-    })
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        setSavedAt(Date.now())
-        setTimeout(() => setSavedAt(0), 2000)
-      })
-      .catch(err => { setSaveErr(err instanceof Error ? err.message : String(err)) })
-      .finally(() => setSaving(false))
-  }
 
   if (loadErr) {
     return (
@@ -1251,22 +1229,9 @@ function TeamTab({ pt, central }: { pt: boolean; central: boolean | null }) {
 
   return (
     <div>
-      <TeamSettings team={team} onChange={handleChange} lang={lang} central={central} />
-      {/* Save status — only meaningful on non-central instances where the form is shown */}
-      {!central && saveErr && (
-        <div style={{
-          marginTop: 10, padding: '6px 10px', borderRadius: 7,
-          background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
-          fontSize: 11, color: '#ef4444',
-        }}>
-          {pt ? `Erro ao salvar: ${saveErr}` : `Save error: ${saveErr}`}
-        </div>
-      )}
-      {!central && (saving || savedAt > 0) && (
-        <div style={{ marginTop: 10, fontSize: 11, color: saving ? 'var(--text-tertiary)' : 'var(--accent-green)', textAlign: 'right' }}>
-          {saving ? (pt ? 'Salvando…' : 'Saving…') : (pt ? 'Salvo' : 'Saved')}
-        </div>
-      )}
+      {/* TeamSettings handles saving explicitly via its Save button (member mode)
+          or its own interval control (central mode). onChange just syncs local state. */}
+      <TeamSettings team={team} onChange={setTeam} lang={lang} central={central} />
     </div>
   )
 }

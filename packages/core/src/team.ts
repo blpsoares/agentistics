@@ -13,8 +13,6 @@ export interface TeamConfig {
   org: string
   /** This developer's identity (name or email) */
   user: string
-  /** Whether automatic delta-push is active */
-  pushEnabled: boolean
   /** Bearer token for the central ingest endpoint (never logged) */
   token: string
   /**
@@ -30,7 +28,6 @@ export const DEFAULT_TEAM: TeamConfig = {
   endpoint: '',
   org: 'default',
   user: '',
-  pushEnabled: false,
   token: '',
 }
 

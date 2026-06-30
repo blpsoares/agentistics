@@ -92,9 +92,19 @@ const BATCH_SIZE = 200
  * No-op (returns 0) when mode !== 'member' || !pushEnabled || !endpoint || !user.
  * Never throws — callers are fire-and-forget; logs a concise warning on failure.
  */
-export async function pushOnce(team: NonNullable<Preferences['team']>): Promise<number> {
-  if (team.mode !== 'member' || !team.pushEnabled || !team.endpoint || !team.user) {
-    return 0
+export interface PushOnceResult {
+  count: number
+  error?: string
+}
+
+/**
+ * Core push implementation — returns count and optional error string.
+ * No-op (count=0) when mode !== 'member' || !endpoint || !user.
+ * Never throws.
+ */
+export async function pushOnceDetailed(team: NonNullable<Preferences['team']>): Promise<PushOnceResult> {
+  if (team.mode !== 'member' || !team.endpoint || !team.user) {
+    return { count: 0 }
   }
 
   try {
@@ -103,7 +113,7 @@ export async function pushOnce(team: NonNullable<Preferences['team']>): Promise<
     const sent = await loadSentState()
     const { toSend, nextSent } = selectDeltas(sessions, sent)
 
-    if (toSend.length === 0) return 0
+    if (toSend.length === 0) return { count: 0 }
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
     if (team.token) {
@@ -122,14 +132,15 @@ export async function pushOnce(team: NonNullable<Preferences['team']>): Promise<
           body: JSON.stringify({ org: team.org, user: team.user, sessions: batch }),
         })
       } catch (fetchErr) {
-        console.warn('[team-uploader] network error pushing batch:', fetchErr instanceof Error ? fetchErr.message : String(fetchErr))
-        // Stop; do not advance sent-state for this or subsequent batches
-        break
+        const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
+        console.warn('[team-uploader] network error pushing batch:', msg)
+        return { count: pushed, error: msg }
       }
 
       if (!res.ok) {
-        console.warn(`[team-uploader] ingest returned ${res.status}; stopping push`)
-        break
+        const msg = `ingest returned ${res.status}`
+        console.warn(`[team-uploader] ${msg}; stopping push`)
+        return { count: pushed, error: msg }
       }
 
       // Batch succeeded — advance sent-state for this batch
@@ -142,11 +153,22 @@ export async function pushOnce(team: NonNullable<Preferences['team']>): Promise<
       pushed += batch.length
     }
 
-    return pushed
+    return { count: pushed }
   } catch (err) {
-    console.warn('[team-uploader] unexpected error in pushOnce:', err instanceof Error ? err.message : String(err))
-    return 0
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn('[team-uploader] unexpected error in pushOnceDetailed:', msg)
+    return { count: 0, error: msg }
   }
+}
+
+/**
+ * One push cycle — returns count pushed.
+ * No-op (returns 0) when mode !== 'member' || !endpoint || !user.
+ * Never throws — callers are fire-and-forget; logs a concise warning on failure.
+ */
+export async function pushOnce(team: NonNullable<Preferences['team']>): Promise<number> {
+  const { count } = await pushOnceDetailed(team)
+  return count
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +197,7 @@ async function fetchCentralInterval(endpoint: string): Promise<number> {
 
 /**
  * Start the periodic uploader. Idempotent — calling more than once is a no-op.
- * Reads preferences each cycle so toggling pushEnabled / mode takes effect
+ * Reads preferences each cycle so changes to mode/endpoint take effect
  * without a server restart.
  *
  * Each cycle:
@@ -206,7 +228,7 @@ export function startUploader(): void {
     try {
       const prefs = await readPreferences()
       const team = prefs.team
-      if (team?.mode === 'member' && team.pushEnabled && team.endpoint) {
+      if (team?.mode === 'member' && team.endpoint && team.user) {
         // Determine effective interval: max(central, member preference)
         const centralSec = await fetchCentralInterval(team.endpoint)
         const memberPref = typeof team.pushIntervalSec === 'number' ? team.pushIntervalSec : 0
@@ -223,6 +245,44 @@ export function startUploader(): void {
 
   // First cycle ~5 s after boot (fixed short delay, then dynamic from there)
   setTimeout(() => { void cycle() }, 5_000)
+}
+
+
+// ---------------------------------------------------------------------------
+// push-now route handler
+// ---------------------------------------------------------------------------
+
+interface PushNowResponse {
+  ok: boolean
+  count?: number
+  error?: string
+}
+
+/**
+ * Server-side handler for POST /api/team/push-now.
+ * Reads current preferences, checks mode === 'member', runs pushOnceDetailed,
+ * and returns { ok, count } or { ok: false, error }. Always returns 200.
+ */
+export async function handlePushNow(_req: Request): Promise<Response> {
+  const prefs = await readPreferences()
+  const team = prefs.team
+
+  if (!team || team.mode !== 'member') {
+    const result: PushNowResponse = { ok: false, error: 'Not in member mode' }
+    return new Response(JSON.stringify(result), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  const { count, error } = await pushOnceDetailed(team)
+  const result: PushNowResponse = error
+    ? { ok: false, count, error }
+    : { ok: true, count }
+  return new Response(JSON.stringify(result), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
 }
 
 // ---------------------------------------------------------------------------

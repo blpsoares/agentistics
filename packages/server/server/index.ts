@@ -811,6 +811,14 @@ Bun.serve({
       return new Response(res.body, { status: res.status, headers })
     }
 
+    if (url.pathname === '/api/team/push-now' && req.method === 'POST') {
+      const { handlePushNow } = await import('./team-uploader')
+      const res = await handlePushNow(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
     if (url.pathname === '/api/team/ingest' && req.method === 'POST') {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleTeamIngest } = await import('./team-ingest')

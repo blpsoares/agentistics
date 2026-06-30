@@ -45,12 +45,14 @@ const COPY = {
   orgSub:            { en: "Namespace for this member's data on the central server", pt: 'Namespace dos dados deste membro no servidor central' },
   token:             { en: 'Bearer token',                 pt: 'Token de acesso' },
   tokenSub:          { en: 'Matches TEAM_INGEST_TOKEN on the central server; leave blank if none', pt: 'Deve coincidir com TEAM_INGEST_TOKEN no servidor central; deixe em branco se não configurado' },
-  pushEnabled:       { en: 'Push enabled',                 pt: 'Envio ativo' },
-  pushEnabledSub:    { en: 'Automatically sends consolidated session metrics to the central server at the configured interval', pt: 'Envia automaticamente métricas consolidadas de sessão ao servidor central no intervalo configurado' },
   testConnection:    { en: 'Test connection',              pt: 'Testar conexão' },
   testing:           { en: 'Testing…',                     pt: 'Testando…' },
   connected:         { en: 'Connected',                    pt: 'Conectado' },
   connFailed:        { en: 'Connection failed',            pt: 'Falha na conexão' },
+  save:              { en: 'Save',                          pt: 'Salvar' },
+  saving:            { en: 'Saving…',                       pt: 'Salvando…' },
+  pushNowOk:         { en: 'Connected — sent {n} sessions', pt: 'Conectado — {n} sessões enviadas' },
+  pushNowErr:        { en: 'Connected but push failed',     pt: 'Conectado mas envio falhou' },
   whatIsPushed:      {
     en: 'Only computed session metrics (tokens, cost, duration) are pushed — no conversation content.',
     pt: 'Apenas métricas computadas (tokens, custo, duração) são enviadas — nenhum conteúdo de conversa.',
@@ -228,10 +230,18 @@ function IntervalSelect({
 
 // ── Main component ────────────────────────────────────────────────────────
 
+interface SaveResult {
+  ok: boolean
+  count?: number
+  error?: string
+}
+
 export function TeamSettings({ team, onChange, lang, central }: Props) {
   const pt = lang === 'pt'
   const [testResult, setTestResult] = useState<TestResult | null>(null)
   const [testing, setTesting] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveResult, setSaveResult] = useState<SaveResult | null>(null)
 
   // ── Central push-interval state (loaded from /api/team/config) ──────────
   const [centralInterval, setCentralInterval] = useState<IntervalSec>(
@@ -280,9 +290,10 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
 
   function set<K extends keyof TeamConfig>(key: K, value: TeamConfig[K]) {
     onChange({ ...team, [key]: value })
-    // Clear test result when connection details change
+    // Clear test/save results when connection details change
     if (key === 'endpoint' || key === 'org' || key === 'user' || key === 'token') {
       setTestResult(null)
+      setSaveResult(null)
     }
   }
 
@@ -307,6 +318,47 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
       setTestResult({ ok: false, status: 0, error: 'Network error' })
     } finally {
       setTesting(false)
+    }
+  }
+
+  async function handleSave() {
+    if (saving) return
+    setSaving(true)
+    setSaveResult(null)
+    setTestResult(null)
+    try {
+      // (a) Persist preferences
+      const putRes = await fetch('/api/preferences', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: { ...team, mode: 'member' } }),
+      })
+      if (!putRes.ok) {
+        setSaveResult({ ok: false, error: `Save failed (${putRes.status})` })
+        return
+      }
+
+      // (b) Test connection
+      const testRes = await fetch('/api/team/test-connection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: team.endpoint, org: team.org, user: team.user, token: team.token }),
+      })
+      const testData = (await testRes.json()) as TestResult
+      setTestResult(testData)
+      if (!testData.ok) {
+        setSaveResult({ ok: false, error: testData.error ?? `Connection failed (${testData.status})` })
+        return
+      }
+
+      // (c) Push now
+      const pushRes = await fetch('/api/team/push-now', { method: 'POST' })
+      const pushData = (await pushRes.json()) as { ok: boolean; count?: number; error?: string }
+      setSaveResult({ ok: pushData.ok, count: pushData.count, error: pushData.error })
+    } catch (err) {
+      setSaveResult({ ok: false, error: err instanceof Error ? err.message : 'Network error' })
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -468,52 +520,6 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
             placeholder="••••••••"
           />
 
-          {/* Test connection */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-            <button
-              onClick={() => { void handleTestConnection() }}
-              disabled={testing || !team.endpoint}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '6px 14px', borderRadius: 7, fontSize: 12, fontWeight: 600,
-                border: '1px solid var(--border)',
-                background: 'var(--bg-elevated)',
-                color: testing || !team.endpoint ? 'var(--text-tertiary)' : 'var(--text-secondary)',
-                cursor: testing || !team.endpoint ? 'default' : 'pointer',
-                opacity: !team.endpoint ? 0.5 : 1,
-                fontFamily: 'inherit', transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => { if (!testing && team.endpoint) e.currentTarget.style.color = 'var(--text-primary)' }}
-              onMouseLeave={e => { if (!testing && team.endpoint) e.currentTarget.style.color = 'var(--text-secondary)' }}
-            >
-              {testing ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> : null}
-              {testing ? c('testing', lang) : c('testConnection', lang)}
-            </button>
-
-            {testResult !== null && (
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: 5,
-                fontSize: 12, fontWeight: 600,
-                color: testResult.ok ? 'var(--accent-green)' : '#ef4444',
-              }}>
-                {testResult.ok
-                  ? <><CheckCircle size={13} /> {c('connected', lang)}</>
-                  : <><XCircle size={13} /> {c('connFailed', lang)}{testResult.error ? ` — ${testResult.error}` : testResult.status ? ` (${testResult.status})` : ''}</>
-                }
-              </span>
-            )}
-          </div>
-
-          <Divider />
-
-          {/* ── Push toggle ── */}
-          <PrefRow
-            label={c('pushEnabled', lang)}
-            sub={c('pushEnabledSub', lang)}
-          >
-            <Toggle on={team.pushEnabled} onToggle={() => set('pushEnabled', !team.pushEnabled)} />
-          </PrefRow>
-
           {/* ── Push interval (member) ── */}
           <PrefRow
             label={c('pushInterval', lang)}
@@ -525,6 +531,44 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
               minSec={PUSH_INTERVAL.MIN_SEC}
             />
           </PrefRow>
+
+          {/* ── Save button + result area ── */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+            <button
+              onClick={() => { void handleSave() }}
+              disabled={saving || !team.endpoint || !team.user}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '7px 18px', borderRadius: 7, fontSize: 13, fontWeight: 700,
+                border: 'none',
+                background: saving || !team.endpoint || !team.user ? 'var(--text-tertiary)' : 'var(--anthropic-orange)',
+                color: '#fff',
+                cursor: saving || !team.endpoint || !team.user ? 'default' : 'pointer',
+                opacity: !team.endpoint || !team.user ? 0.5 : 1,
+                fontFamily: 'inherit', transition: 'all 0.15s',
+              }}
+            >
+              {saving ? <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> : null}
+              {saving ? c('saving', lang) : c('save', lang)}
+            </button>
+
+            {saveResult !== null && (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                fontSize: 12, fontWeight: 600,
+                color: saveResult.ok ? 'var(--accent-green)' : '#ef4444',
+              }}>
+                {saveResult.ok
+                  ? (
+                    <><CheckCircle size={13} /> {c('pushNowOk', lang).replace('{n}', String(saveResult.count ?? 0))}</>
+                  )
+                  : (
+                    <><XCircle size={13} /> {saveResult.error ?? c('pushNowErr', lang)}</>
+                  )
+                }
+              </span>
+            )}
+          </div>
 
           {/* Info footer */}
           <div style={{
