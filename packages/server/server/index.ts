@@ -820,6 +820,53 @@ Bun.serve({
       return new Response(res.body, { status: res.status, headers })
     }
 
+    // ---------------------------------------------------------------------------
+    // GET /api/team/deploy — generate a ready-to-use .env + docker compose command.
+    // Only available in central mode. Protected by auth gate when a password is set.
+    // Generates fresh random password + session secret on each call (shown once).
+    // ---------------------------------------------------------------------------
+    if (url.pathname === '/api/team/deploy' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) {
+        return new Response(JSON.stringify({ error: 'central mode only' }), {
+          status: 403,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      try {
+        const { randomBytes } = await import('node:crypto')
+        const { generateEnvFile } = await import('./deploy')
+
+        const password = randomBytes(24).toString('hex')
+        const sessionSecret = randomBytes(32).toString('hex')
+        const mongoUrl = 'mongodb://mongo:27017/?replicaSet=rs0'
+
+        const env = generateEnvFile({
+          password,
+          sessionSecret,
+          mongoUrl,
+          mongoDb: 'agentistics',
+          teamOrg: 'default',
+          appPort: 47291,
+        })
+
+        return new Response(JSON.stringify({
+          env,
+          command: 'docker compose up -d',
+          password,
+          sessionSecret,
+        }), {
+          status: 200,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return new Response(JSON.stringify({ error: message }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
     // Serve embedded frontend assets (binary mode only)
     if (!url.pathname.startsWith('/api')) {
       const asset = serveStatic(url.pathname)
