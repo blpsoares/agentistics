@@ -11,6 +11,7 @@ import {
   verifySession,
   parseCookies,
   constantTimeEqual,
+  handleSession,
 } from './auth'
 
 // ---------------------------------------------------------------------------
@@ -151,5 +152,28 @@ describe('parseCookies', () => {
   it('ignores segments with no = sign', () => {
     const result = parseCookies('nodots; key=val')
     expect(result).toEqual({ key: 'val' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// handleSession
+// ---------------------------------------------------------------------------
+
+describe('handleSession', () => {
+  it('returns JSON with authed, required, and central boolean fields', async () => {
+    const req = new Request('http://localhost/api/team/session')
+    const res = handleSession(req)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('application/json')
+
+    const body = (await res.json()) as Record<string, unknown>
+    // All three keys must be present
+    expect('authed'   in body).toBe(true)
+    expect('required' in body).toBe(true)
+    expect('central'  in body).toBe(true)
+    // All three values must be booleans
+    expect(typeof body['authed']).toBe('boolean')
+    expect(typeof body['required']).toBe('boolean')
+    expect(typeof body['central']).toBe('boolean')
   })
 })

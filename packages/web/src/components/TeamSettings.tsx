@@ -18,7 +18,7 @@ export interface Props {
   onChange: (team: TeamConfig) => void
   lang: 'pt' | 'en'
   /** When true, this instance is the team central — show admin panel, hide member connect fields */
-  central: boolean
+  central: boolean | null
 }
 
 interface TestResult {
@@ -192,6 +192,11 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
     } finally {
       setTesting(false)
     }
+  }
+
+  // ── Central: null while /api/team/session is still in flight — show neutral placeholder ──
+  if (central === null) {
+    return <div style={{ minHeight: 80 }} />
   }
 
   // ── Central mode: show admin panel only ──────────────────────────────────

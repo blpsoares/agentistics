@@ -23,9 +23,6 @@ const T = {
 
 /** Multi-select harness filter pill. Renders only when harnesses.length > 1. */
 export function HarnessFilter({ harnesses, selected, onChange, lang }: Props) {
-  // Only show when there are multiple harnesses in the data
-  if (harnesses.length <= 1) return null
-
   const t = T[lang]
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -37,6 +34,9 @@ export function HarnessFilter({ harnesses, selected, onChange, lang }: Props) {
     window.addEventListener('mousedown', handler)
     return () => window.removeEventListener('mousedown', handler)
   }, [])
+
+  // Only show when there are multiple harnesses in the data
+  if (harnesses.length <= 1) return null
 
   function toggle(harness: HarnessId) {
     if (selected.includes(harness)) onChange(selected.filter(h => h !== harness))

@@ -2070,8 +2070,7 @@ export default function AppLayout() {
           setRiskyMode={setRiskyMode}
           highlightUpdates={highlightUpdates}
           setHighlightUpdates={setHighlightUpdates}
-          teamRequired={teamSession?.required ?? false}
-        />
+          />
       )}
 
       {/* Install Modal — shown once after first data load */}

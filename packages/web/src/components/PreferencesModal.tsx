@@ -80,12 +80,6 @@ interface Props {
   highlightUpdates: boolean
   setHighlightUpdates: (v: boolean) => void
   defaultTab?: SettingsTab
-  /**
-   * @deprecated No longer used to gate the Members section.
-   * `central` is now read directly from /api/team/session inside TeamTab.
-   * Kept for API compatibility with App.tsx.
-   */
-  teamRequired?: boolean
 }
 
 // ── Shared primitives ──────────────────────────────────────────────────────
@@ -1203,7 +1197,7 @@ const DEFAULT_TEAM_CONFIG: TeamConfig = {
 function TeamTab({ pt }: { pt: boolean }) {
   const lang: 'pt' | 'en' = pt ? 'pt' : 'en'
   const [team, setTeam] = useState<TeamConfig>(DEFAULT_TEAM_CONFIG)
-  const [central, setCentral] = useState(false)
+  const [central, setCentral] = useState<boolean | null>(null)
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState(0)
   const [loadErr, setLoadErr] = useState<string | null>(null)
@@ -1225,7 +1219,7 @@ function TeamTab({ pt }: { pt: boolean }) {
       .then((sess: { central?: boolean } | null) => {
         if (sess?.central) setCentral(true)
       })
-      .catch(() => { /* non-central instances may 404 — leave central=false */ })
+      .catch(() => { /* network failure or a non-team build may fail — leave central false/null */ })
   }, [])
 
   const handleChange = (next: TeamConfig) => {
@@ -1298,7 +1292,6 @@ export function PreferencesModal({
   liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval,
   riskyMode, setRiskyMode, highlightUpdates, setHighlightUpdates,
   defaultTab = 'preferences',
-  teamRequired = false,
 }: Props) {
   const isMobile = useIsMobile()
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab)
