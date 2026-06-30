@@ -828,6 +828,12 @@ Bun.serve<{ user: string; isAgent?: boolean }>({
       }
       const { setMemberName } = await import('./team-tokens')
       const ok = await setMemberName(b.id, b.user.trim())
+      if (ok) {
+        // Rename re-labels all of the member's history (resolved at read time), so the
+        // cached dashboard must be invalidated + connected dashboards notified to refresh.
+        const { triggerSseNotification } = await import('./sse')
+        triggerSseNotification()
+      }
       return new Response(JSON.stringify({ ok }), {
         status: ok ? 200 : 404,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
