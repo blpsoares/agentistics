@@ -103,7 +103,7 @@ const AUTH_PUBLIC = new Set([
 ])
 
 // Admin routes that require a real session cookie even on a passwordless central
-const ADMIN_PATHS = new Set(['/api/team/members', '/api/team/tokens'])
+const ADMIN_PATHS = new Set(['/api/team/members', '/api/team/tokens', '/api/team/config'])
 
 // ---------------------------------------------------------------------------
 // Bun HTTP server
@@ -890,12 +890,6 @@ Bun.serve({
     // ---------------------------------------------------------------------------
     if (url.pathname === '/api/team/config' && req.method === 'GET') {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
-      if (!hasValidSession(req)) {
-        return new Response(JSON.stringify({ error: 'auth required' }), {
-          status: 401,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-        })
-      }
       const { getCentralConfig } = await import('./central-config')
       const config = await getCentralConfig()
       return new Response(JSON.stringify(config), {
@@ -906,12 +900,6 @@ Bun.serve({
 
     if (url.pathname === '/api/team/config' && req.method === 'PUT') {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
-      if (!hasValidSession(req)) {
-        return new Response(JSON.stringify({ error: 'auth required' }), {
-          status: 401,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-        })
-      }
       let body: { pushIntervalSec?: unknown }
       try {
         body = await req.json() as { pushIntervalSec?: unknown }

@@ -46,7 +46,8 @@ export async function getCentralConfig(): Promise<CentralConfig> {
 
 /**
  * Clamp `sec` into [MIN_SEC, MAX_SEC], upsert into Mongo, and return the
- * stored value. Falls back to DEFAULT_SEC if Mongo is unreachable.
+ * stored value. If Mongo is unreachable, the clamped value is returned
+ * without being persisted.
  */
 export async function setPushInterval(sec: number): Promise<number> {
   const clamped = clampPushInterval(sec)

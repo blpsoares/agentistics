@@ -1,6 +1,40 @@
 import type { SessionMeta, HarnessId } from './types'
 
 // ---------------------------------------------------------------------------
+// TeamConfig — shared member configuration (single source of truth)
+// ---------------------------------------------------------------------------
+
+export interface TeamConfig {
+  /** 'solo' = normal local-only behavior; 'member' = push metrics to a central */
+  mode: 'solo' | 'member'
+  /** Central base URL, e.g. "https://central.example:47291" (no trailing slash) */
+  endpoint: string
+  /** Org namespace used on the central server */
+  org: string
+  /** This developer's identity (name or email) */
+  user: string
+  /** Whether automatic delta-push is active */
+  pushEnabled: boolean
+  /** Bearer token for the central ingest endpoint (never logged) */
+  token: string
+  /**
+   * Member-side push interval preference in seconds. The effective interval
+   * is max(centralPushIntervalSec, pushIntervalSec ?? 0), then clamped.
+   * Absent or 0 means "use whatever central dictates".
+   */
+  pushIntervalSec?: number
+}
+
+export const DEFAULT_TEAM: TeamConfig = {
+  mode: 'solo',
+  endpoint: '',
+  org: 'default',
+  user: '',
+  pushEnabled: false,
+  token: '',
+}
+
+// ---------------------------------------------------------------------------
 // Push interval — central-controlled cadence (Phase 6)
 // ---------------------------------------------------------------------------
 

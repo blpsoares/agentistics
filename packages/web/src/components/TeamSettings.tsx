@@ -1,23 +1,20 @@
 import React, { useState, useEffect } from 'react'
 import { Loader2, CheckCircle, XCircle, Users, User, Server } from 'lucide-react'
 import { TeamMembers } from './TeamMembers'
-import { PUSH_INTERVAL } from '@agentistics/core'
+import { PUSH_INTERVAL, type TeamConfig } from '@agentistics/core'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-export interface TeamConfig {
-  mode: 'solo' | 'member'
-  endpoint: string
-  org: string
-  user: string
-  pushEnabled: boolean
-  token: string
-  /** Member's chosen push interval in seconds (≥ PUSH_INTERVAL.MIN_SEC). */
-  pushIntervalSec?: number
-}
+// TeamConfig is imported from @agentistics/core — single source of truth.
+export type { TeamConfig }
 
 // Interval options shown in the selectors.
-const INTERVAL_OPTIONS = [15, 30, 60, 120, 300] as const
+// Must stay in sync with PUSH_INTERVAL.MIN_SEC / PUSH_INTERVAL.MAX_SEC.
+// Values outside [MIN_SEC, MAX_SEC] are filtered out at definition time so
+// raising MIN_SEC automatically drops invalid options from the member list.
+const INTERVAL_OPTIONS = ([15, 30, 60, 120, 300] as const).filter(
+  (sec) => sec >= PUSH_INTERVAL.MIN_SEC && sec <= PUSH_INTERVAL.MAX_SEC,
+) as readonly number[]
 type IntervalSec = (typeof INTERVAL_OPTIONS)[number]
 
 export interface Props {
@@ -49,7 +46,7 @@ const COPY = {
   token:             { en: 'Bearer token',                 pt: 'Token de acesso' },
   tokenSub:          { en: 'Matches TEAM_INGEST_TOKEN on the central server; leave blank if none', pt: 'Deve coincidir com TEAM_INGEST_TOKEN no servidor central; deixe em branco se não configurado' },
   pushEnabled:       { en: 'Push enabled',                 pt: 'Envio ativo' },
-  pushEnabledSub:    { en: 'Automatically sends consolidated session metrics to the central server every 60 s', pt: 'Envia automaticamente métricas consolidadas de sessão ao servidor central a cada 60 s' },
+  pushEnabledSub:    { en: 'Automatically sends consolidated session metrics to the central server at the configured interval', pt: 'Envia automaticamente métricas consolidadas de sessão ao servidor central no intervalo configurado' },
   testConnection:    { en: 'Test connection',              pt: 'Testar conexão' },
   testing:           { en: 'Testing…',                     pt: 'Testando…' },
   connected:         { en: 'Connected',                    pt: 'Conectado' },
@@ -220,7 +217,7 @@ function IntervalSelect({
         outline: 'none',
       }}
     >
-      {INTERVAL_OPTIONS.filter(sec => disableBelow || sec >= minSec).map(sec => (
+      {(INTERVAL_OPTIONS as readonly number[]).filter(sec => disableBelow || sec >= minSec).map(sec => (
         <option key={sec} value={sec} disabled={disableBelow && sec < minSec}>
           {formatInterval(sec)}
         </option>
@@ -241,6 +238,7 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
     PUSH_INTERVAL.DEFAULT_SEC as IntervalSec,
   )
   const [intervalSaving, setIntervalSaving] = useState(false)
+  const [intervalSaveErr, setIntervalSaveErr] = useState<string | null>(null)
 
   useEffect(() => {
     if (!central) return
@@ -264,12 +262,19 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
       : (PUSH_INTERVAL.DEFAULT_SEC as IntervalSec)
     setCentralInterval(snapped)
     setIntervalSaving(true)
+    setIntervalSaveErr(null)
     fetch('/api/team/config', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pushIntervalSec: snapped }),
     })
-      .catch(() => { /* best-effort; Track A route will validate */ })
+      .then(r => {
+        if (!r.ok) throw new Error(`${r.status}`)
+        setIntervalSaveErr(null)
+      })
+      .catch((err: unknown) => {
+        setIntervalSaveErr(err instanceof Error ? err.message : 'Save failed')
+      })
       .finally(() => { setIntervalSaving(false) })
   }
 
@@ -347,6 +352,9 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
             />
             {intervalSaving && (
               <Loader2 size={12} style={{ color: 'var(--text-tertiary)', animation: 'spin 1s linear infinite' }} />
+            )}
+            {!intervalSaving && intervalSaveErr !== null && (
+              <span style={{ fontSize: 11, color: '#ef4444' }}>{intervalSaveErr}</span>
             )}
           </div>
         </PrefRow>

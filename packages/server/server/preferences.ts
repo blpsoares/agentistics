@@ -1,5 +1,7 @@
 import { join } from 'path'
 import { CLAUDE_DIR } from './config'
+import type { TeamConfig } from '@agentistics/core'
+import { DEFAULT_TEAM } from '@agentistics/core'
 
 export const PREFERENCES_FILE = join(CLAUDE_DIR, 'agentistics-preferences.json')
 
@@ -12,27 +14,6 @@ export interface CustomGridItem {
   minW?: number
   minH?: number
   componentId: string
-}
-
-export interface TeamConfig {
-  /** 'solo' = normal local-only behavior; 'member' = push metrics to a central */
-  mode: 'solo' | 'member'
-  /** Central base URL, e.g. "https://central.example:47291" (no trailing slash) */
-  endpoint: string
-  /** Org namespace used on the central server */
-  org: string
-  /** This developer's identity (name or email) */
-  user: string
-  /** Whether automatic delta-push is active */
-  pushEnabled: boolean
-  /** Bearer token for the central ingest endpoint (never logged) */
-  token: string
-  /**
-   * Member-side push interval preference in seconds. The effective interval
-   * is max(centralPushIntervalSec, pushIntervalSec ?? 0), then clamped.
-   * Absent or 0 means "use whatever central dictates".
-   */
-  pushIntervalSec?: number
 }
 
 export interface Preferences {
@@ -70,15 +51,6 @@ export function resolveArchiveMode(p: Preferences): ArchiveMode | undefined {
 
 export async function getArchiveMode(): Promise<ArchiveMode | undefined> {
   return resolveArchiveMode(await readPreferences())
-}
-
-const DEFAULT_TEAM: TeamConfig = {
-  mode: 'solo',
-  endpoint: '',
-  org: 'default',
-  user: '',
-  pushEnabled: false,
-  token: '',
 }
 
 const DEFAULT_PREFS: Preferences = {
