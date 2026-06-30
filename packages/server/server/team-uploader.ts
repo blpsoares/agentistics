@@ -291,8 +291,6 @@ export async function handlePushNow(_req: Request): Promise<Response> {
 
 interface TestConnectionBody {
   endpoint: string
-  org: string
-  user: string
   token: string
 }
 
@@ -300,6 +298,8 @@ interface TestConnectionResult {
   ok: boolean
   status: number
   error?: string
+  user?: string
+  org?: string
 }
 
 /**
@@ -319,18 +319,10 @@ export async function handleTeamTestConnection(req: Request): Promise<Response> 
     })
   }
 
-  const { endpoint, org, user, token } = body
+  const { endpoint, token } = body
 
   if (!endpoint) {
     const result: TestConnectionResult = { ok: false, status: 0, error: 'endpoint is required' }
-    return new Response(JSON.stringify(result), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
-
-  if (!org || !user) {
-    const result: TestConnectionResult = { ok: false, status: 0, error: 'org and user are required' }
     return new Response(JSON.stringify(result), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -344,10 +336,11 @@ export async function handleTeamTestConnection(req: Request): Promise<Response> 
 
   let result: TestConnectionResult
   try {
+    // Ping the ingest endpoint with an empty sessions array to verify connectivity.
     const res = await fetch(`${endpoint}/api/team/ingest`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ org, user, sessions: [] }),
+      body: JSON.stringify({ org: '', user: '', sessions: [] }),
     })
 
     if (res.ok) {
@@ -375,6 +368,24 @@ export async function handleTeamTestConnection(req: Request): Promise<Response> 
       status: 0,
       error: err instanceof Error ? err.message : 'Network error',
     }
+  }
+
+  // On success, resolve the member's identity from the central via whoami.
+  // The token stays server-side; plaintext is never logged.
+  if (result.ok && token) {
+    try {
+      const whoamiRes = await fetch(`${endpoint}/api/team/whoami`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` },
+        signal: AbortSignal.timeout(5_000),
+      })
+      if (whoamiRes.ok) {
+        const whoamiJson = await whoamiRes.json() as { ok?: boolean; user?: string; org?: string }
+        if (whoamiJson.ok && typeof whoamiJson.user === 'string') {
+          result = { ...result, user: whoamiJson.user, org: whoamiJson.org }
+        }
+      }
+    } catch { /* whoami is best-effort; a failed lookup does not fail the connection test */ }
   }
 
   return new Response(JSON.stringify(result), {

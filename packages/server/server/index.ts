@@ -1,7 +1,7 @@
 // embeddedDist is loaded inside server/sse.ts (conditional on SERVE_STATIC=1)
 
 import { readFile } from 'node:fs/promises'
-import { PORT, TEAM_CENTRAL, TEAM_PASSWORD } from './config'
+import { PORT, TEAM_CENTRAL, TEAM_PASSWORD, TEAM_ORG } from './config'
 import { getRates } from './rates'
 import { getVersionInfo } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
@@ -106,6 +106,7 @@ const AUTH_PUBLIC = new Set([
   '/api/team/policy',
   // WebSocket upgrade for the member→central reverse channel; auth is via
   // validateIngestToken (Bearer token in the Upgrade request headers).
+  '/api/team/whoami',
   '/api/team/agent',
 ])
 
@@ -1035,6 +1036,28 @@ Bun.serve<{ user: string; isAgent?: boolean }>({
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })
+    }
+
+
+    // ---------------------------------------------------------------------------
+    // GET /api/team/whoami — PUBLIC (token-gated): resolves identity from bearer.
+    // Members call this after a test-connection to learn their user + org.
+    // The token is validated server-side; the plaintext is never logged.
+    // ---------------------------------------------------------------------------
+    if (url.pathname === '/api/team/whoami' && req.method === 'GET') {
+      const authHeader = req.headers.get('authorization') ?? ''
+      const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+      const tokenResult = await validateIngestToken(bearer)
+      if (tokenResult.ok) {
+        return new Response(JSON.stringify({ ok: true, user: tokenResult.user, org: TEAM_ORG }), {
+          status: 200,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({ ok: false }), {
+        status: 200,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
     }
 
     // Serve embedded frontend assets (binary mode only)

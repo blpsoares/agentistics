@@ -29,6 +29,8 @@ interface TestResult {
   ok: boolean
   status: number
   error?: string
+  user?: string
+  org?: string
 }
 
 // ── i18n ──────────────────────────────────────────────────────────────────
@@ -79,6 +81,7 @@ const COPY = {
     pt: 'Esta instância roda localmente na sua máquina. Conecte-a ao central do seu time abaixo para enviar suas métricas.',
   },
   pushInterval:      { en: 'Push interval',                pt: 'Intervalo de envio' },
+  appearsAs:         { en: "You\'ll appear as:",             pt: 'Você aparece como:' },
   pushIntervalSubCentral: {
     en: 'Members push at this interval (min 15 s)',
     pt: 'Membros enviam neste intervalo (mín. 15 s)',
@@ -255,7 +258,7 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
   // ── Edit/lock state for the member connect form ──────────────────────────
   // Starts locked when already configured; starts open for fresh setup.
   const [editing, setEditing] = useState<boolean>(
-    () => !(team.endpoint && team.user && team.token),
+    () => !(team.endpoint && team.token),
   )
   // Guard: if team config arrives asynchronously after mount (e.g. from parent),
   // lock the form once it becomes configured — but never fight the user after
@@ -267,11 +270,11 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
   const userTouched = useRef(false)
   useEffect(() => {
     if (editingInitialized.current || userTouched.current) return
-    if (team.endpoint && team.user && team.token) {
+    if (team.endpoint && team.token) {
       editingInitialized.current = true
       setEditing(false)
     }
-  }, [team.endpoint, team.user, team.token])
+  }, [team.endpoint, team.token])
 
   // ── Central push-interval state (loaded from /api/team/config) ──────────
   const [centralInterval, setCentralInterval] = useState<IntervalSec>(
@@ -338,8 +341,6 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           endpoint: team.endpoint,
-          org: team.org,
-          user: team.user,
           token: team.token,
         }),
       })
@@ -358,22 +359,11 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
     setSaveResult(null)
     setTestResult(null)
     try {
-      // (a) Persist preferences
-      const putRes = await fetch('/api/preferences', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ team: { ...team, mode: 'member' } }),
-      })
-      if (!putRes.ok) {
-        setSaveResult({ ok: false, error: `Save failed (${putRes.status})` })
-        return
-      }
-
-      // (b) Test connection
+      // (a) Test connection + resolve identity from central
       const testRes = await fetch('/api/team/test-connection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ endpoint: team.endpoint, org: team.org, user: team.user, token: team.token }),
+        body: JSON.stringify({ endpoint: team.endpoint, token: team.token }),
       })
       const testData = (await testRes.json()) as TestResult
       setTestResult(testData)
@@ -381,6 +371,23 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
         setSaveResult({ ok: false, error: testData.error ?? `Connection failed (${testData.status})` })
         return
       }
+
+      // Identity (user, org) is resolved by the central via the bearer token.
+      const resolvedUser = testData.user ?? team.user
+      const resolvedOrg  = testData.org  ?? team.org
+      const teamWithIdentity: typeof team = { ...team, mode: 'member', user: resolvedUser, org: resolvedOrg }
+
+      // (b) Persist preferences with the central-resolved identity
+      const putRes = await fetch('/api/preferences', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: teamWithIdentity }),
+      })
+      if (!putRes.ok) {
+        setSaveResult({ ok: false, error: `Save failed (${putRes.status})` })
+        return
+      }
+      onChange(teamWithIdentity)
 
       // (c) Push now
       const pushRes = await fetch('/api/team/push-now', { method: 'POST' })
@@ -533,24 +540,6 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
           />
 
           <FieldInput
-            label={c('yourName', lang)}
-            sub={c('yourNameSub', lang)}
-            value={team.user}
-            onChange={v => set('user', v)}
-            placeholder="alice@example.com"
-            disabled={!editing}
-          />
-
-          <FieldInput
-            label={c('org', lang)}
-            sub={c('orgSub', lang)}
-            value={team.org}
-            onChange={v => set('org', v)}
-            placeholder="default"
-            disabled={!editing}
-          />
-
-          <FieldInput
             label={c('token', lang)}
             sub={c('tokenSub', lang)}
             value={team.token}
@@ -559,6 +548,21 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
             placeholder="••••••••"
             disabled={!editing}
           />
+
+          {/* Read-only identity resolved from the central via the bearer token */}
+          {!editing && team.user && (
+            <div style={{
+              padding: '8px 12px', borderRadius: 7, marginBottom: 14,
+              background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+              fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6,
+            }}>
+              {c('appearsAs', lang)}{' '}
+              <strong style={{ color: 'var(--text-primary)' }}>{team.user}</strong>
+              {team.org && (
+                <span style={{ color: 'var(--text-tertiary)' }}> · org: {team.org}</span>
+              )}
+            </div>
+          )}
 
           {/* ── Push interval (member) ── */}
           <PrefRow
@@ -578,15 +582,15 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
             {editing ? (
               <button
                 onClick={() => { void handleSave() }}
-                disabled={saving || !team.endpoint || !team.user}
+                disabled={saving || !team.endpoint}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6,
                   padding: '7px 18px', borderRadius: 7, fontSize: 13, fontWeight: 700,
                   border: 'none',
-                  background: saving || !team.endpoint || !team.user ? 'var(--text-tertiary)' : 'var(--anthropic-orange)',
+                  background: saving || !team.endpoint ? 'var(--text-tertiary)' : 'var(--anthropic-orange)',
                   color: '#fff',
-                  cursor: saving || !team.endpoint || !team.user ? 'default' : 'pointer',
-                  opacity: !team.endpoint || !team.user ? 0.5 : 1,
+                  cursor: saving || !team.endpoint ? 'default' : 'pointer',
+                  opacity: !team.endpoint ? 0.5 : 1,
                   fontFamily: 'inherit', transition: 'all 0.15s',
                 }}
               >
