@@ -129,7 +129,7 @@ export async function hasAnyTokens(): Promise<boolean> {
  */
 export async function validateIngestToken(
   bearer: string | null,
-): Promise<{ ok: boolean; user?: string; memberId?: string }> {
+): Promise<{ ok: true; user: string; memberId: string } | { ok: false }> {
   if (!bearer) return { ok: false }
   const id = hashToken(bearer)
   const col = await getTokensCollection()

@@ -161,12 +161,14 @@ export function TeamMembers({ lang }: Props) {
     }
   }
 
+  useEffect(() => {
+    if (renamingId) renameInputRef.current?.focus()
+  }, [renamingId])
+
   function startRename(m: TeamMember) {
     setRenamingId(m.id)
     setRenameValue(m.user)
     setRenameErr(null)
-    // Focus the input on the next paint
-    requestAnimationFrame(() => { renameInputRef.current?.focus() })
   }
 
   function cancelRename() {
@@ -322,66 +324,74 @@ export function TeamMembers({ lang }: Props) {
               >
                 {/* User cell — static or editable */}
                 {renamingId === m.id ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, paddingRight: 8 }}>
-                    <input
-                      ref={renameInputRef}
-                      type="text"
-                      value={renameValue}
-                      onChange={e => setRenameValue(e.target.value)}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter') { void handleRename(m.id) }
-                        if (e.key === 'Escape') { cancelRename() }
-                      }}
-                      disabled={renameSaving}
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        padding: '3px 6px',
-                        background: 'var(--bg-elevated)',
-                        border: '1px solid var(--anthropic-orange)',
-                        borderRadius: 5,
-                        fontSize: 12,
-                        color: 'var(--text-primary)',
-                        fontFamily: 'inherit',
-                        outline: 'none',
-                        opacity: renameSaving ? 0.6 : 1,
-                      }}
-                    />
-                    <button
-                      onClick={() => { void handleRename(m.id) }}
-                      disabled={!renameValue.trim() || renameSaving}
-                      title={t('renameSave', lang)}
-                      style={{
-                        display: 'flex', alignItems: 'center',
-                        padding: '3px 5px', borderRadius: 5,
-                        border: '1px solid rgba(34,197,94,0.4)',
-                        background: 'rgba(34,197,94,0.08)',
-                        color: !renameValue.trim() || renameSaving ? 'var(--text-tertiary)' : 'var(--accent-green)',
-                        cursor: !renameValue.trim() || renameSaving ? 'default' : 'pointer',
-                        fontFamily: 'inherit',
-                        opacity: !renameValue.trim() || renameSaving ? 0.5 : 1,
-                        flexShrink: 0,
-                      }}
-                    >
-                      <Check size={11} />
-                    </button>
-                    <button
-                      onClick={cancelRename}
-                      disabled={renameSaving}
-                      title={t('renameCancel', lang)}
-                      style={{
-                        display: 'flex', alignItems: 'center',
-                        padding: '3px 5px', borderRadius: 5,
-                        border: '1px solid var(--border)',
-                        background: 'transparent',
-                        color: 'var(--text-tertiary)',
-                        cursor: renameSaving ? 'default' : 'pointer',
-                        fontFamily: 'inherit',
-                        flexShrink: 0,
-                      }}
-                    >
-                      <X size={11} />
-                    </button>
+                  <div style={{ paddingRight: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <input
+                        ref={renameInputRef}
+                        type="text"
+                        value={renameValue}
+                        onChange={e => setRenameValue(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') { void handleRename(m.id) }
+                          if (e.key === 'Escape') { cancelRename() }
+                        }}
+                        disabled={renameSaving}
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          padding: '3px 6px',
+                          background: 'var(--bg-elevated)',
+                          border: renameErr ? '1px solid #ef4444' : '1px solid var(--anthropic-orange)',
+                          borderRadius: 5,
+                          fontSize: 12,
+                          color: 'var(--text-primary)',
+                          fontFamily: 'inherit',
+                          outline: 'none',
+                          opacity: renameSaving ? 0.6 : 1,
+                        }}
+                      />
+                      <button
+                        onClick={() => { void handleRename(m.id) }}
+                        disabled={!renameValue.trim() || renameSaving}
+                        title={t('renameSave', lang)}
+                        style={{
+                          display: 'flex', alignItems: 'center',
+                          padding: '3px 5px', borderRadius: 5,
+                          border: '1px solid rgba(34,197,94,0.4)',
+                          background: 'rgba(34,197,94,0.08)',
+                          color: !renameValue.trim() || renameSaving ? 'var(--text-tertiary)' : 'var(--accent-green)',
+                          cursor: !renameValue.trim() || renameSaving ? 'default' : 'pointer',
+                          fontFamily: 'inherit',
+                          opacity: !renameValue.trim() || renameSaving ? 0.5 : 1,
+                          flexShrink: 0,
+                        }}
+                      >
+                        <Check size={11} />
+                      </button>
+                      <button
+                        onClick={cancelRename}
+                        disabled={renameSaving}
+                        title={t('renameCancel', lang)}
+                        style={{
+                          display: 'flex', alignItems: 'center',
+                          padding: '3px 5px', borderRadius: 5,
+                          border: '1px solid var(--border)',
+                          background: 'transparent',
+                          color: 'var(--text-tertiary)',
+                          cursor: renameSaving ? 'default' : 'pointer',
+                          fontFamily: 'inherit',
+                          flexShrink: 0,
+                        }}
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
+                    {renameErr && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4, fontSize: 10, color: '#ef4444' }}>
+                        <AlertCircle size={10} />
+                        {t('renameErr', lang)} — {renameErr}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4, paddingRight: 8, minWidth: 0 }}>
@@ -456,8 +466,8 @@ export function TeamMembers({ lang }: Props) {
         </div>
       )}
 
-      {/* Rename error */}
-      {renameErr && (
+      {/* Rename error (shown below table when no row is in edit mode) */}
+      {renameErr && !renamingId && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 6,
           padding: '6px 10px', borderRadius: 7, marginBottom: 12,
@@ -465,7 +475,7 @@ export function TeamMembers({ lang }: Props) {
           fontSize: 11, color: '#ef4444',
         }}>
           <AlertCircle size={12} />
-          {t('renameErr', lang)}{renameErr ? ` — ${renameErr}` : ''}
+          {t('renameErr', lang)} — {renameErr}
         </div>
       )}
 

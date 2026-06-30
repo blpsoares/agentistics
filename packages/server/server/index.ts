@@ -820,14 +820,14 @@ Bun.serve<{ user: string; isAgent?: boolean }>({
         })
       }
       const b = body as Record<string, unknown>
-      if (typeof b.id !== 'string' || !b.id || typeof b.user !== 'string' || !b.user) {
+      if (typeof b.id !== 'string' || !b.id || typeof b.user !== 'string' || !b.user.trim()) {
         return new Response(JSON.stringify({ error: 'id and user are required strings' }), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
       const { setMemberName } = await import('./team-tokens')
-      const ok = await setMemberName(b.id, b.user)
+      const ok = await setMemberName(b.id, b.user.trim())
       return new Response(JSON.stringify({ ok }), {
         status: ok ? 200 : 404,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
