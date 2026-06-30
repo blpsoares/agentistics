@@ -1,7 +1,9 @@
 import type { SessionMeta } from '@agentistics/core'
 import { getTeamCollection } from './mongo'
 import { parseIngestBody, toTeamDoc } from './team-store'
-import { TEAM_INGEST_TOKEN } from './config'
+import { TEAM_INGEST_TOKEN, TEAM_PASSWORD } from './config'
+import { validateIngestToken, hasAnyTokens } from './team-tokens'
+import { constantTimeEqual } from './auth'
 
 // CORS headers are defined in index.ts; this module returns plain JSON and the
 // caller in index.ts spreads CORS_HEADERS, so we only set Content-Type here.
@@ -20,17 +22,51 @@ export async function ingestSessions(org: string, user: string, sessions: Sessio
   return ops.length
 }
 
-/** Route handler for POST /api/team/ingest. Validates an optional bearer token,
- *  parses the body, upserts, and returns { ok, count } or an error status. */
+/** Route handler for POST /api/team/ingest.
+ *
+ *  Authorization order (Phase 3):
+ *  1. Bearer matches a minted token in Mongo → authorized (lastSeenAt updated).
+ *  2. Legacy TEAM_INGEST_TOKEN set AND bearer matches (constant-time) → authorized.
+ *  3. Open fallback (Phase-2a behavior): no TEAM_PASSWORD, no TEAM_INGEST_TOKEN, and
+ *     no minted tokens in DB → authorized (open, as Phase 2a).
+ *  4. Otherwise → 401.
+ */
 export async function handleTeamIngest(req: Request): Promise<Response> {
-  // Optional shared-secret gate (Phase 3 replaces this with minted per-user tokens).
-  if (TEAM_INGEST_TOKEN) {
-    const auth = req.headers.get('authorization') ?? ''
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
-    if (token !== TEAM_INGEST_TOKEN) {
-      return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: JSON_HEADERS })
+  const authHeader = req.headers.get('authorization') ?? ''
+  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+
+  // 1. Try minted token lookup (hashes bearer, looks up in Mongo, updates lastSeenAt).
+  const mintedResult = await validateIngestToken(bearer)
+  if (mintedResult.ok) {
+    return handleIngestBody(req)
+  }
+
+  // 2. Legacy shared-secret fallback (constant-time compare).
+  if (TEAM_INGEST_TOKEN && bearer !== null && constantTimeEqual(bearer, TEAM_INGEST_TOKEN)) {
+    return handleIngestBody(req)
+  }
+
+  // 3. Phase-2a open fallback: no auth mechanism configured at all.
+  //    Open only when: no password gate, no legacy token, AND no minted tokens in DB.
+  if (!TEAM_PASSWORD && !TEAM_INGEST_TOKEN) {
+    try {
+      const hasTokens = await hasAnyTokens()
+      if (!hasTokens) {
+        return handleIngestBody(req)
+      }
+    } catch {
+      // If Mongo is unreachable for the count check, fall through to 401 (safe default).
     }
   }
+
+  return new Response(JSON.stringify({ error: 'unauthorized' }), {
+    status: 401,
+    headers: JSON_HEADERS,
+  })
+}
+
+/** Parse and upsert the ingest body after authorization has been verified. */
+async function handleIngestBody(req: Request): Promise<Response> {
   let raw: unknown
   try {
     raw = await req.json()

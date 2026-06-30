@@ -45,6 +45,16 @@ export const TEAM_ORG = process.env.AGENTISTICS_TEAM_ORG ?? 'default'
 export const TEAM_INGEST_TOKEN = process.env.AGENTISTICS_TEAM_INGEST_TOKEN || undefined
 
 // ---------------------------------------------------------------------------
+// Phase 3 — auth gate. When AGENTISTICS_TEAM_PASSWORD is set, the central
+// dashboard requires a valid session cookie to access all /api/* routes except
+// the public allowlist. TEAM_SESSION_SECRET defaults to the password itself.
+// TEAM_TLS=1 adds the Secure flag to the session cookie.
+// ---------------------------------------------------------------------------
+export const TEAM_PASSWORD = process.env.AGENTISTICS_TEAM_PASSWORD || undefined
+export const TEAM_SESSION_SECRET = process.env.AGENTISTICS_TEAM_SESSION_SECRET || TEAM_PASSWORD || ''
+export const TEAM_TLS = process.env.AGENTISTICS_TEAM_TLS === '1'
+
+// ---------------------------------------------------------------------------
 // Team uploader — tracks which sessions have already been pushed to the central.
 // Override with AGENTISTICS_TEAM_SENT_FILE.
 // ---------------------------------------------------------------------------

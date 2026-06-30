@@ -1,7 +1,7 @@
 // embeddedDist is loaded inside server/sse.ts (conditional on SERVE_STATIC=1)
 
 import { readFile } from 'node:fs/promises'
-import { PORT, TEAM_CENTRAL } from './config'
+import { PORT, TEAM_CENTRAL, TEAM_PASSWORD } from './config'
 import { getRates } from './rates'
 import { getVersionInfo } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
@@ -18,6 +18,7 @@ import { PROJECTS_DIR } from './config'
 import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
+import { handleLogin, handleLogout, handleSession, isAuthed } from './auth'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -105,6 +106,30 @@ Bun.serve({
 
     if (req.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS_HEADERS })
+    }
+
+    // ---------------------------------------------------------------------------
+    // Auth gate (Phase 3): when central + password set, all /api/* routes require
+    // a valid session cookie except the public allowlist below.
+    // Static assets are always served (the SPA + login UI must load without auth).
+    // ---------------------------------------------------------------------------
+    const AUTH_PUBLIC = new Set([
+      '/api/team/login',
+      '/api/team/logout',
+      '/api/team/session',
+      '/api/team/ingest',
+    ])
+    if (
+      TEAM_CENTRAL &&
+      TEAM_PASSWORD &&
+      url.pathname.startsWith('/api/') &&
+      !AUTH_PUBLIC.has(url.pathname) &&
+      !isAuthed(req)
+    ) {
+      return new Response(JSON.stringify({ error: 'auth required' }), {
+        status: 401,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
     }
 
     if (url.pathname === '/api/events' && req.method === 'GET') {
@@ -708,6 +733,62 @@ Bun.serve({
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Auth routes (public — NOT behind the gate)
+    // ---------------------------------------------------------------------------
+
+    if (url.pathname === '/api/team/login' && req.method === 'POST') {
+      const res = await handleLogin(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/team/logout' && req.method === 'POST') {
+      const res = handleLogout(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/team/session' && req.method === 'GET') {
+      const res = handleSession(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // ---------------------------------------------------------------------------
+    // Admin routes (behind the gate — index.ts gate already enforces isAuthed)
+    // ---------------------------------------------------------------------------
+
+    if (url.pathname === '/api/team/members' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleMembers } = await import('./team-admin')
+      const res = await handleMembers(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/team/tokens' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleMintToken } = await import('./team-admin')
+      const res = await handleMintToken(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/team/tokens' && req.method === 'DELETE') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleRevokeToken } = await import('./team-admin')
+      const res = await handleRevokeToken(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
     }
 
     if (url.pathname === '/api/team/test-connection' && req.method === 'POST') {
