@@ -99,6 +99,7 @@ const AUTH_PUBLIC = new Set([
   '/api/team/logout',
   '/api/team/session',
   '/api/team/ingest',
+  '/api/team/policy',
 ])
 
 // Admin routes that require a real session cookie even on a passwordless central
@@ -867,6 +868,72 @@ Bun.serve({
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
+    }
+
+    // ---------------------------------------------------------------------------
+    // GET /api/team/policy — PUBLIC: returns the central push interval.
+    // Members poll this before each push cycle to get the current cadence.
+    // Non-central instances return the default so members degrade gracefully.
+    // ---------------------------------------------------------------------------
+    if (url.pathname === '/api/team/policy' && req.method === 'GET') {
+      const { getCentralConfig } = await import('./central-config')
+      const config = await getCentralConfig()
+      return new Response(JSON.stringify({ pushIntervalSec: config.pushIntervalSec }), {
+        status: 200,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // ---------------------------------------------------------------------------
+    // GET /api/team/config — ADMIN (TEAM_CENTRAL + hasValidSession): read config.
+    // PUT /api/team/config — ADMIN: update pushIntervalSec.
+    // ---------------------------------------------------------------------------
+    if (url.pathname === '/api/team/config' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      if (!hasValidSession(req)) {
+        return new Response(JSON.stringify({ error: 'auth required' }), {
+          status: 401,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { getCentralConfig } = await import('./central-config')
+      const config = await getCentralConfig()
+      return new Response(JSON.stringify(config), {
+        status: 200,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (url.pathname === '/api/team/config' && req.method === 'PUT') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      if (!hasValidSession(req)) {
+        return new Response(JSON.stringify({ error: 'auth required' }), {
+          status: 401,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      let body: { pushIntervalSec?: unknown }
+      try {
+        body = await req.json() as { pushIntervalSec?: unknown }
+      } catch {
+        return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const raw = body.pushIntervalSec
+      if (typeof raw !== 'number') {
+        return new Response(JSON.stringify({ error: 'pushIntervalSec must be a number' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { setPushInterval } = await import('./central-config')
+      const pushIntervalSec = await setPushInterval(raw)
+      return new Response(JSON.stringify({ pushIntervalSec }), {
+        status: 200,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
     }
 
     // Serve embedded frontend assets (binary mode only)

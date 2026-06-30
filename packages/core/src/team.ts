@@ -1,5 +1,29 @@
 import type { SessionMeta, HarnessId } from './types'
 
+// ---------------------------------------------------------------------------
+// Push interval — central-controlled cadence (Phase 6)
+// ---------------------------------------------------------------------------
+
+/** Bounds and default for the push interval, in seconds. */
+export const PUSH_INTERVAL = {
+  MIN_SEC: 15,
+  MAX_SEC: 3600,
+  DEFAULT_SEC: 30,
+} as const
+
+/**
+ * Clamp a push-interval value (seconds) to the allowed range.
+ * Non-finite, NaN, or <= 0 values fall back to DEFAULT_SEC.
+ * In-range values are rounded to the nearest second.
+ */
+export function clampPushInterval(sec: number): number {
+  if (!Number.isFinite(sec) || sec <= 0) return PUSH_INTERVAL.DEFAULT_SEC
+  const rounded = Math.round(sec)
+  if (rounded < PUSH_INTERVAL.MIN_SEC) return PUSH_INTERVAL.MIN_SEC
+  if (rounded > PUSH_INTERVAL.MAX_SEC) return PUSH_INTERVAL.MAX_SEC
+  return rounded
+}
+
 /** Tag a session with its owning user (team mode). Pure — returns a new object. */
 export function tagUser(session: SessionMeta, user: string): SessionMeta {
   return { ...session, user }

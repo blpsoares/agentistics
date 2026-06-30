@@ -10,6 +10,7 @@
  */
 
 import type { SessionMeta } from '@agentistics/core'
+import { PUSH_INTERVAL, clampPushInterval } from '@agentistics/core'
 import type { Preferences } from './preferences'
 import { TEAM_SENT_FILE } from './config'
 import { loadConsolidated } from './consolidate'
@@ -156,35 +157,72 @@ let started = false
 let running = false
 
 /**
+ * Fetch the push interval (seconds) from the central policy endpoint.
+ * Falls back to PUSH_INTERVAL.DEFAULT_SEC on any network or parse error.
+ */
+async function fetchCentralInterval(endpoint: string): Promise<number> {
+  try {
+    const res = await fetch(`${endpoint}/api/team/policy`, { signal: AbortSignal.timeout(5_000) })
+    if (!res.ok) return PUSH_INTERVAL.DEFAULT_SEC
+    const json = await res.json() as { pushIntervalSec?: unknown }
+    const sec = json.pushIntervalSec
+    if (typeof sec !== 'number') return PUSH_INTERVAL.DEFAULT_SEC
+    return clampPushInterval(sec)
+  } catch {
+    return PUSH_INTERVAL.DEFAULT_SEC
+  }
+}
+
+/**
  * Start the periodic uploader. Idempotent — calling more than once is a no-op.
  * Reads preferences each cycle so toggling pushEnabled / mode takes effect
- * without a server restart. Interval: 60 s. First cycle runs ~5 s after start.
- * A `running` flag prevents overlapping cycles if a push takes longer than 60 s.
+ * without a server restart.
+ *
+ * Each cycle:
+ *   1. Reads prefs to get endpoint + member-side preference (team.pushIntervalSec).
+ *   2. Fetches GET <endpoint>/api/team/policy to get the central interval.
+ *   3. Effective interval = clampPushInterval(max(central, memberPref ?? 0)).
+ *   4. Schedules the next cycle via recursive setTimeout so the interval can
+ *      change between cycles. A `running` flag prevents overlapping cycles.
+ *
+ * First cycle runs ~5 s after start.
  */
 export function startUploader(): void {
   if (started) return
   started = true
 
-  const run = async () => {
-    if (running) return
+  const schedule = (delaySec: number) => {
+    setTimeout(() => { void cycle() }, delaySec * 1_000)
+  }
+
+  const cycle = async () => {
+    if (running) {
+      // Still busy — retry after default interval without running
+      schedule(PUSH_INTERVAL.DEFAULT_SEC)
+      return
+    }
     running = true
+    let nextIntervalSec: number = PUSH_INTERVAL.DEFAULT_SEC
     try {
       const prefs = await readPreferences()
-      if (prefs.team?.mode === 'member' && prefs.team.pushEnabled) {
-        await pushOnce(prefs.team)
+      const team = prefs.team
+      if (team?.mode === 'member' && team.pushEnabled && team.endpoint) {
+        // Determine effective interval: max(central, member preference)
+        const centralSec = await fetchCentralInterval(team.endpoint)
+        const memberPref = typeof team.pushIntervalSec === 'number' ? team.pushIntervalSec : 0
+        nextIntervalSec = clampPushInterval(Math.max(centralSec, memberPref))
+        await pushOnce(team)
       }
     } catch (err) {
       console.warn('[team-uploader] cycle error:', err instanceof Error ? err.message : String(err))
     } finally {
       running = false
+      schedule(nextIntervalSec)
     }
   }
 
-  // First cycle ~5 s after boot
-  setTimeout(() => { void run() }, 5_000)
-
-  // Subsequent cycles every 60 s
-  setInterval(() => { void run() }, 60_000)
+  // First cycle ~5 s after boot (fixed short delay, then dynamic from there)
+  setTimeout(() => { void cycle() }, 5_000)
 }
 
 // ---------------------------------------------------------------------------

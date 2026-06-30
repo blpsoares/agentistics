@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test'
 import type { SessionMeta, HarnessId } from './types'
-import { tagUser, distinctUsers, filterByUsers, filterByHarnesses } from './team'
+import { tagUser, distinctUsers, filterByUsers, filterByHarnesses, clampPushInterval, PUSH_INTERVAL } from './team'
 
 function session(id: string, user?: string): SessionMeta {
   return {
@@ -86,4 +86,44 @@ test('filterByHarnesses supports multi-select across a subset', () => {
   ]
   const result = filterByHarnesses(sessions, ['claude', 'copilot'])
   expect(result.map(s => s.session_id).sort()).toEqual(['1', '4'])
+})
+
+// ── clampPushInterval ─────────────────────────────────────────────────────
+
+test('clampPushInterval returns DEFAULT for NaN', () => {
+  expect(clampPushInterval(NaN)).toBe(PUSH_INTERVAL.DEFAULT_SEC)
+})
+
+test('clampPushInterval returns DEFAULT for 0', () => {
+  expect(clampPushInterval(0)).toBe(PUSH_INTERVAL.DEFAULT_SEC)
+})
+
+test('clampPushInterval returns DEFAULT for negative values', () => {
+  expect(clampPushInterval(-10)).toBe(PUSH_INTERVAL.DEFAULT_SEC)
+})
+
+test('clampPushInterval returns DEFAULT for Infinity', () => {
+  expect(clampPushInterval(Infinity)).toBe(PUSH_INTERVAL.DEFAULT_SEC)
+})
+
+test('clampPushInterval clamps below MIN to MIN', () => {
+  expect(clampPushInterval(1)).toBe(PUSH_INTERVAL.MIN_SEC)
+  expect(clampPushInterval(14)).toBe(PUSH_INTERVAL.MIN_SEC)
+})
+
+test('clampPushInterval clamps above MAX to MAX', () => {
+  expect(clampPushInterval(9999)).toBe(PUSH_INTERVAL.MAX_SEC)
+  expect(clampPushInterval(3601)).toBe(PUSH_INTERVAL.MAX_SEC)
+})
+
+test('clampPushInterval passes through in-range value', () => {
+  expect(clampPushInterval(30)).toBe(30)
+  expect(clampPushInterval(300)).toBe(300)
+  expect(clampPushInterval(PUSH_INTERVAL.MIN_SEC)).toBe(PUSH_INTERVAL.MIN_SEC)
+  expect(clampPushInterval(PUSH_INTERVAL.MAX_SEC)).toBe(PUSH_INTERVAL.MAX_SEC)
+})
+
+test('clampPushInterval rounds fractional seconds', () => {
+  expect(clampPushInterval(29.4)).toBe(29)
+  expect(clampPushInterval(29.6)).toBe(30)
 })

@@ -27,6 +27,12 @@ export interface TeamConfig {
   pushEnabled: boolean
   /** Bearer token for the central ingest endpoint (never logged) */
   token: string
+  /**
+   * Member-side push interval preference in seconds. The effective interval
+   * is max(centralPushIntervalSec, pushIntervalSec ?? 0), then clamped.
+   * Absent or 0 means "use whatever central dictates".
+   */
+  pushIntervalSec?: number
 }
 
 export interface Preferences {
