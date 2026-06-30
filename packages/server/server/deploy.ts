@@ -82,6 +82,10 @@ export function generateEnvFile(opts: GenerateEnvFileOpts): string {
 /**
  * Returns a platform-specific autostart snippet as a string.
  *
+ * NOTE: The client-side counterpart is AUTOSTART_SNIPPETS in
+ * packages/web/src/components/DeployCentral.tsx — keep them in sync when
+ * content changes.
+ *
  * @param platform - 'systemd' | 'launchd' | 'pm2'
  * @param execPath - absolute path to the agentop binary (or 'docker compose up -d' command)
  */

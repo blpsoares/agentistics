@@ -845,8 +845,10 @@ Bun.serve({
           sessionSecret,
           mongoUrl,
           mongoDb: 'agentistics',
-          teamOrg: 'default',
-          appPort: 47291,
+          // Read org and port from query params; the client-side counterpart is
+          // AUTOSTART_SNIPPETS in packages/web/src/components/DeployCentral.tsx
+          teamOrg: url.searchParams.get('org') || 'default',
+          appPort: parseInt(url.searchParams.get('port') || '47291', 10),
         })
 
         return new Response(JSON.stringify({

@@ -11,6 +11,8 @@ interface DeployResult {
 type OsPlatform = 'linux' | 'macos' | 'windows'
 
 // ── Static autostart snippets (member-side, keep local agentop running) ───────
+// NOTE: The server-side counterpart is autostartSnippet() in
+// packages/server/server/deploy.ts — keep them in sync when content changes.
 
 const AUTOSTART_SNIPPETS: Record<OsPlatform, (execPath: string) => string> = {
   linux: (execPath) => `# Linux — systemd user service (runs without sudo)
@@ -193,7 +195,9 @@ export function DeployCentral({ pt }: { pt: boolean }) {
     const trimmedPort = port.trim() || '47291'
     setLoading(true)
     setError(null)
-    setResult(null)
+    // Do NOT clear result here — keep previous credentials visible until the
+    // new response arrives so an in-flight or failed regenerate never destroys
+    // already-shown one-time secrets.
     try {
       const params = new URLSearchParams({ org: trimmedOrg, port: trimmedPort })
       const res = await fetch(`/api/team/deploy?${params.toString()}`)
@@ -202,6 +206,7 @@ export function DeployCentral({ pt }: { pt: boolean }) {
         throw new Error(body.error ?? `HTTP ${res.status}`)
       }
       const data = (await res.json()) as DeployResult
+      // Only replace the previous result once the new one is ready.
       setResult(data)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -209,8 +214,6 @@ export function DeployCentral({ pt }: { pt: boolean }) {
       setLoading(false)
     }
   }
-
-  const snippet = AUTOSTART_SNIPPETS[osPlatform](DEFAULT_EXEC_PATH[osPlatform])
 
   return (
     <div style={{
@@ -276,7 +279,9 @@ export function DeployCentral({ pt }: { pt: boolean }) {
         <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
         {loading
           ? (pt ? 'Gerando…' : 'Generating…')
-          : (pt ? 'Gerar configuração' : 'Generate config')}
+          : result
+            ? (pt ? 'Regenerar (novos segredos)' : 'Regenerate (new secrets)')
+            : (pt ? 'Gerar configuração' : 'Generate config')}
       </button>
 
       {/* Error */}
@@ -291,7 +296,10 @@ export function DeployCentral({ pt }: { pt: boolean }) {
       )}
 
       {/* Result */}
-      {result && (
+      {result && (() => {
+        // Derived inside the result block — only computed when credentials exist (FIX 3).
+        const snippet = AUTOSTART_SNIPPETS[osPlatform](DEFAULT_EXEC_PATH[osPlatform])
+        return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {/* One-time secret warning */}
           <div style={{
@@ -388,7 +396,8 @@ export function DeployCentral({ pt }: { pt: boolean }) {
             </div>
           </div>
         </div>
-      )}
+        )
+      })()}
 
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
