@@ -5,6 +5,7 @@ import { Layers, Cpu, RotateCcw, ChevronDown, X, CalendarDays, Check } from 'luc
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { ProjectsModal } from './ProjectsModal'
 import { UsersFilter } from './UsersFilter'
+import { HarnessFilter } from './HarnessFilter'
 import { DatePicker } from './DatePicker'
 import { format } from 'date-fns'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -20,6 +21,8 @@ interface Props {
   modelGroups?: { harness: HarnessId; models: string[] }[]
   modelsInProject?: Set<string> | null
   users: string[]
+  /** Available harnesses in the data — drives visibility (show when length > 1). */
+  harnesses?: HarnessId[]
   lang: Lang
   compact?: boolean
 }
@@ -46,7 +49,7 @@ const CTL: React.CSSProperties = {
   alignItems: 'center',
 }
 
-export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, lang, compact }: Props) {
+export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, lang, compact }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
@@ -68,9 +71,10 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
     && !filters.customStart && !filters.customEnd
     && filters.projects.length === 0 && !hasModelFilter
     && !(filters.users?.length)
+    && !(filters.harnesses?.length)
 
   const reset = () => onChange({
-    dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [], users: [],
+    dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [], users: [], harnesses: [],
   })
 
   const hasProjects = filters.projects.length > 0
@@ -229,6 +233,15 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
             users={users}
             selected={filters.users ?? []}
             onChange={u => onChange({ ...filters, users: u })}
+            lang={lang}
+          />
+        )}
+
+        {harnesses && harnesses.length > 1 && (
+          <HarnessFilter
+            harnesses={harnesses}
+            selected={filters.harnesses ?? []}
+            onChange={h => onChange({ ...filters, harnesses: h })}
             lang={lang}
           />
         )}

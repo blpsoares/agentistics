@@ -1941,6 +1941,7 @@ export default function AppLayout() {
                   modelGroups={modelGroups}
                   modelsInProject={modelsInProject}
                   users={users}
+                  harnesses={data.harnesses}
                   lang={lang}
                   compact
                 />
@@ -1979,6 +1980,7 @@ export default function AppLayout() {
               modelGroups={modelGroups}
               modelsInProject={modelsInProject}
               users={users}
+              harnesses={data.harnesses}
               lang={lang}
             />
           </div>
@@ -2024,6 +2026,7 @@ export default function AppLayout() {
           cardOrder, setCardOrder: setCardOrder as (o: string[]) => void,
           cardPrecision, setCardPrecision,
           sessionCountByProject, models, modelGroups, modelsInProject, users,
+          harnesses: data.harnesses,
         }} />
       </main>
 

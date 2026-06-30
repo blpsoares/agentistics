@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test'
-import type { SessionMeta } from './types'
-import { tagUser, distinctUsers, filterByUsers } from './team'
+import type { SessionMeta, HarnessId } from './types'
+import { tagUser, distinctUsers, filterByUsers, filterByHarnesses } from './team'
 
 function session(id: string, user?: string): SessionMeta {
   return {
@@ -43,4 +43,47 @@ test('filterByUsers supports multi-select (aggregate of a subset)', () => {
   const sessions = [session('1', 'devA'), session('2', 'devB'), session('3', 'devC')]
   const result = filterByUsers(sessions, ['devA', 'devB'])
   expect(result.map(s => s.session_id).sort()).toEqual(['1', '2'])
+})
+
+// ── filterByHarnesses ─────────────────────────────────────────────────────
+
+function harnessSession(id: string, harness?: HarnessId): SessionMeta {
+  return {
+    ...session(id),
+    harness: harness ?? 'claude',
+  }
+}
+
+test('filterByHarnesses with empty selection passes everything through', () => {
+  const sessions = [harnessSession('1', 'claude'), harnessSession('2', 'codex')]
+  expect(filterByHarnesses(sessions, [])).toHaveLength(2)
+})
+
+test('filterByHarnesses with undefined treats missing harness as claude', () => {
+  // A session created without explicit harness field (pre-team-mode legacy)
+  const s: SessionMeta = { ...session('1'), harness: undefined as unknown as 'claude' }
+  // Selecting 'claude' should include sessions with no harness field
+  const result = filterByHarnesses([s], ['claude'])
+  expect(result).toHaveLength(1)
+})
+
+test('filterByHarnesses keeps only selected harnesses', () => {
+  const sessions = [
+    harnessSession('1', 'claude'),
+    harnessSession('2', 'codex'),
+    harnessSession('3', 'gemini'),
+  ]
+  const result = filterByHarnesses(sessions, ['codex'])
+  expect(result.map(s => s.session_id)).toEqual(['2'])
+})
+
+test('filterByHarnesses supports multi-select across a subset', () => {
+  const sessions = [
+    harnessSession('1', 'claude'),
+    harnessSession('2', 'codex'),
+    harnessSession('3', 'gemini'),
+    harnessSession('4', 'copilot'),
+  ]
+  const result = filterByHarnesses(sessions, ['claude', 'copilot'])
+  expect(result.map(s => s.session_id).sort()).toEqual(['1', '4'])
 })

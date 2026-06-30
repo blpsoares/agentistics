@@ -58,4 +58,6 @@ export interface AppContext {
   modelsInProject: Set<string> | null
   /** Distinct users present in the data (team mode). Empty in Solo mode. */
   users: string[]
+  /** Harnesses present in the data. Empty in Solo mode (Claude-only). */
+  harnesses: HarnessId[]
 }

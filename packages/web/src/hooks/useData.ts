@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { AppData, Filters, DateRange, AgentInvocation, HarnessId } from '@agentistics/core'
-import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers } from '@agentistics/core'
+import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 
 export interface StageProgress {
@@ -493,7 +493,11 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const modelSet = filters.models && filters.models.length > 0 ? new Set(filters.models) : null
 
     // ── Harness filter — applied first so all downstream filters compose on top ──
-    const harnessSessions = filterByUsers(filterByHarness(data.sessions, filters.harness), users)
+    // Compose: single-harness route filter → multi-select harnesses filter → user filter
+    const harnessSessions = filterByHarnesses(
+      filterByUsers(filterByHarness(data.sessions, filters.harness), users),
+      filters.harnesses ?? [],
+    )
     const harnessActive = filters.harness != null
     const nonClaudeHarness = harnessActive && filters.harness !== 'claude'
 
@@ -571,7 +575,8 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // ── Aggregate stats ──
     // Use filteredSessions when project/model/non-claude-harness filter is active
     // (statsCache has no per-project/model/harness granularity)
-    const sessionFiltered = projectFiltered || modelSet !== null || nonClaudeHarness || userFiltered
+    const harnessesFiltered = (filters.harnesses?.length ?? 0) > 0
+    const sessionFiltered = projectFiltered || modelSet !== null || nonClaudeHarness || userFiltered || harnessesFiltered
 
     const totalMessages = sessionFiltered
       ? filteredSessions.reduce((s, sess) => s + (sess.user_message_count ?? 0) + (sess.assistant_message_count ?? 0), 0)

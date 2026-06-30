@@ -209,6 +209,7 @@ export interface Filters {
   users?: string[]     // empty/undefined = all users
   models: string[]     // empty = all models
   harness?: HarnessId
+  harnesses?: HarnessId[]  // multi-select harness filter; empty/undefined = all harnesses
 }
 
 export type Lang = 'pt' | 'en'
