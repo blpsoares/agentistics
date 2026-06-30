@@ -27,6 +27,7 @@ import { existsSync } from 'node:fs'
 import { HOME_DIR } from '../config'
 import type { ChatDriver } from './types'
 import type { ChatMessage } from '../chat-tty'
+import { findCli } from './cli-detect'
 
 // chat-drivers/ is one level deeper than chat-tty.ts, so 4 levels up to reach the repo root
 const AGENTISTICS_ROOT = path.resolve(import.meta.dir, '..', '..', '..', '..')
@@ -62,16 +63,7 @@ const CODEX_MODELS = [
 type CodexModelId = typeof CODEX_MODELS[number]['id']
 
 function codexIsAvailable(): boolean {
-  if (existsSync('/usr/local/bin/codex')) return true
-  if (existsSync('/usr/bin/codex')) return true
-  const home = HOME_DIR
-  if (existsSync(path.join(home, '.bun', 'bin', 'codex'))) return true
-  try {
-    const proc = Bun.spawnSync(['which', 'codex'], { stdout: 'pipe', stderr: 'pipe' })
-    return proc.exitCode === 0
-  } catch {
-    return false
-  }
+  return findCli('codex')
 }
 
 /**

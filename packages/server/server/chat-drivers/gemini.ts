@@ -19,6 +19,7 @@ import { existsSync } from 'node:fs'
 import { HOME_DIR } from '../config'
 import type { ChatDriver } from './types'
 import type { ChatMessage } from '../chat-tty'
+import { findCli } from './cli-detect'
 
 // chat-drivers/ is one level deeper than chat-tty.ts, so 4 levels up to reach the repo root
 const AGENTISTICS_ROOT = path.resolve(import.meta.dir, '..', '..', '..', '..')
@@ -50,16 +51,7 @@ const GEMINI_MODELS = [
 type GeminiModelId = typeof GEMINI_MODELS[number]['id']
 
 function geminiIsAvailable(): boolean {
-  if (existsSync('/usr/local/bin/gemini')) return true
-  if (existsSync('/usr/bin/gemini')) return true
-  const home = HOME_DIR
-  if (existsSync(path.join(home, '.bun', 'bin', 'gemini'))) return true
-  try {
-    const proc = Bun.spawnSync(['which', 'gemini'], { stdout: 'pipe', stderr: 'pipe' })
-    return proc.exitCode === 0
-  } catch {
-    return false
-  }
+  return findCli('gemini')
 }
 
 /**

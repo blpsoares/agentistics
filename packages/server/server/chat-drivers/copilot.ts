@@ -15,6 +15,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { HOME_DIR } from '../config'
 import type { ChatDriver, ChatDriverModel } from './types'
+import { findCli } from './cli-detect'
 
 const AGENTISTICS_ROOT = path.resolve(import.meta.dir, '..', '..', '..', '..')
 
@@ -48,14 +49,7 @@ export const COPILOT_MODELS: ChatDriverModel[] = [
 ]
 
 function copilotIsAvailable(): boolean {
-  if (existsSync('/usr/local/bin/copilot')) return true
-  if (existsSync('/usr/bin/copilot')) return true
-  try {
-    const proc = Bun.spawnSync(['which', 'copilot'], { stdout: 'pipe', stderr: 'pipe' })
-    return proc.exitCode === 0
-  } catch {
-    return false
-  }
+  return findCli('copilot')
 }
 
 /**
