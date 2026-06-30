@@ -804,6 +804,36 @@ Bun.serve<{ user: string; isAgent?: boolean }>({
       return new Response(res.body, { status: res.status, headers })
     }
 
+    // PUT /api/team/members — rename a member (update the token doc's user field).
+    // Body: { id: string, user: string }  →  Response: { ok: boolean }
+    // ADMIN-gated (already in ADMIN_PATHS). The new name is reflected at next read via
+    // getMemberNameMap() without requiring any re-ingest of existing session docs.
+    if (url.pathname === '/api/team/members' && req.method === 'PUT') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      let body: unknown
+      try {
+        body = await req.json()
+      } catch {
+        return new Response(JSON.stringify({ error: 'invalid JSON' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const b = body as Record<string, unknown>
+      if (typeof b.id !== 'string' || !b.id || typeof b.user !== 'string' || !b.user) {
+        return new Response(JSON.stringify({ error: 'id and user are required strings' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { setMemberName } = await import('./team-tokens')
+      const ok = await setMemberName(b.id, b.user)
+      return new Response(JSON.stringify({ ok }), {
+        status: ok ? 200 : 404,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (url.pathname === '/api/team/tokens' && req.method === 'POST') {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleMintToken } = await import('./team-admin')

@@ -9,13 +9,20 @@ import { constantTimeEqual } from './auth'
 // caller in index.ts spreads CORS_HEADERS, so we only set Content-Type here.
 const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
-/** Upsert every session as a team doc keyed by org:user:harness:sessionId.
- *  Idempotent: re-posting an identical session is a no-op write. Returns count. */
-export async function ingestSessions(org: string, user: string, sessions: SessionMeta[]): Promise<number> {
+/**
+ * Upsert every session as a team doc keyed by org:memberId:harness:sessionId.
+ * Idempotent: re-posting an identical session is a no-op write. Returns count.
+ *
+ * @param memberId - Stable member identity key (token hash from `validateIngestToken`,
+ *   or `legacy:<user>` for unauthenticated ingests which cannot benefit from rename-safety).
+ * @param user - Display name cached in the doc; read-time resolution via getMemberNameMap()
+ *   always takes precedence for minted-token members.
+ */
+export async function ingestSessions(org: string, memberId: string, user: string, sessions: SessionMeta[]): Promise<number> {
   if (sessions.length === 0) return 0
   const col = await getTeamCollection()
   const ops = sessions.map(s => {
-    const doc = toTeamDoc(s, org, user)
+    const doc = toTeamDoc(s, org, memberId, user)
     return { replaceOne: { filter: { _id: doc._id }, replacement: doc, upsert: true } }
   })
   await col.bulkWrite(ops, { ordered: false })
@@ -36,12 +43,13 @@ export async function handleTeamIngest(req: Request): Promise<Response> {
   const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
 
   // 1. Try minted token lookup (hashes bearer, looks up in Mongo, updates lastSeenAt).
-  //    The token's user is AUTHORITATIVE — sessions are attributed to it, ignoring the
-  //    member's self-declared name. This keeps identity stable (renaming the local name
-  //    never creates a duplicate user) and prevents one member impersonating another.
+  //    The token's memberId (hash) + user are AUTHORITATIVE — sessions are keyed by the
+  //    stable memberId, and the authoritative user name prevents one member impersonating
+  //    another. Renaming via PUT /api/team/members updates only the token doc; session
+  //    docs are resolved at read time by getMemberNameMap(), so no re-ingest is needed.
   const mintedResult = await validateIngestToken(bearer)
   if (mintedResult.ok) {
-    return handleIngestBody(req, mintedResult.user)
+    return handleIngestBody(req, mintedResult.memberId, mintedResult.user)
   }
 
   // 2. Legacy shared-secret fallback (constant-time compare).
@@ -68,10 +76,17 @@ export async function handleTeamIngest(req: Request): Promise<Response> {
   })
 }
 
-/** Parse and upsert the ingest body after authorization has been verified.
- *  When `overrideUser` is provided (the user a minted token belongs to), it is used
- *  instead of the self-declared `body.user` so identity is authoritative. */
-async function handleIngestBody(req: Request, overrideUser?: string): Promise<Response> {
+/**
+ * Parse and upsert the ingest body after authorization has been verified.
+ *
+ * @param overrideMemberId - Stable token hash from `validateIngestToken`. When absent (legacy
+ *   shared-secret or open fallback), a synthetic `legacy:<user>` memberId is used. Note:
+ *   legacy sessions keyed by `legacy:<user>` cannot benefit from rename-safety — changing the
+ *   self-declared user name in the uploader config creates a new identity in Mongo.
+ * @param overrideUser - Authoritative display name from the minted token. When absent, the
+ *   self-declared `body.user` is used (legacy/open paths only).
+ */
+async function handleIngestBody(req: Request, overrideMemberId?: string, overrideUser?: string): Promise<Response> {
   let raw: unknown
   try {
     raw = await req.json()
@@ -84,7 +99,11 @@ async function handleIngestBody(req: Request, overrideUser?: string): Promise<Re
   }
   try {
     const user = (overrideUser && overrideUser.trim()) || parsed.body.user
-    const count = await ingestSessions(parsed.body.org, user, parsed.body.sessions)
+    // For legacy/open ingest (no minted token), use a synthetic memberId so the session
+    // document is still structured consistently. These sessions cannot benefit from
+    // rename-safety: a different self-declared user creates a new memberId → new docs.
+    const memberId = overrideMemberId ?? `legacy:${user}`
+    const count = await ingestSessions(parsed.body.org, memberId, user, parsed.body.sessions)
     return new Response(JSON.stringify({ ok: true, count }), { status: 200, headers: JSON_HEADERS })
   } catch (e) {
     return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), { status: 500, headers: JSON_HEADERS })

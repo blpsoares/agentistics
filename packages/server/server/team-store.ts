@@ -1,8 +1,26 @@
 import type { SessionMeta } from '@agentistics/core'
 import { tagUser } from '@agentistics/core'
 
-/** A team session as stored in Mongo: the SessionMeta plus identity + a stable _id. */
-export type TeamSessionDoc = SessionMeta & { _id: string; org: string; user: string }
+/**
+ * A team session as stored in Mongo: the SessionMeta plus identity fields and a stable _id.
+ *
+ * `memberId` is the SHA-256 hash of the member's ingest token (the token doc's `_id`).
+ * Keying by `memberId` (not `user`) makes the document stable across member renames:
+ * changing the display name never creates a duplicate session in the collection.
+ *
+ * MIGRATION NOTE: The `_id` scheme changed from `org:user:harness:sessionId` (name-based)
+ * to `org:memberId:harness:sessionId` (token-hash-based). Operators must clear stale data
+ * once after upgrading: `db.sessions.deleteMany({})`. Legacy sessions are re-ingested on the
+ * next uploader push.
+ */
+export type TeamSessionDoc = SessionMeta & {
+  _id: string
+  org: string
+  /** Stable token identity key (SHA-256 hash of the bearer token, or `legacy:<user>`). */
+  memberId: string
+  /** Cached display name as of the last ingest; overridden at read time by getMemberNameMap(). */
+  user: string
+}
 
 export interface IngestBody {
   org: string
@@ -10,26 +28,35 @@ export interface IngestBody {
   sessions: SessionMeta[]
 }
 
-/** Stable, collision-safe Mongo _id. Mirrors the data.ts dedup key shape. */
-export function teamDocId(org: string, user: string, harness: string, sessionId: string): string {
-  return `${org}:${user}:${harness}:${sessionId}`
+/**
+ * Stable, collision-safe Mongo _id keyed by `memberId` (token hash) rather than by the
+ * display name. This means member renames never create duplicate documents.
+ */
+export function teamDocId(org: string, memberId: string, harness: string, sessionId: string): string {
+  return `${org}:${memberId}:${harness}:${sessionId}`
 }
 
-/** Map a SessionMeta + identity to a Mongo doc. Pure — does not mutate the input. */
-export function toTeamDoc(session: SessionMeta, org: string, user: string): TeamSessionDoc {
+/**
+ * Map a SessionMeta + identity to a Mongo doc. Pure — does not mutate the input.
+ *
+ * @param memberId - Stable member identity key (token hash or `legacy:<user>` for unauthenticated ingests).
+ * @param user - Display name cached in the doc; overridden at read time by getMemberNameMap().
+ */
+export function toTeamDoc(session: SessionMeta, org: string, memberId: string, user: string): TeamSessionDoc {
   const tagged = tagUser(session, user)
   return {
     ...tagged,
-    user,  // always string — overrides the optional user field from tagUser
+    user,      // always string — overrides the optional user field from tagUser
     org,
-    _id: teamDocId(org, user, tagged.harness ?? 'claude', tagged.session_id),
+    memberId,
+    _id: teamDocId(org, memberId, tagged.harness ?? 'claude', tagged.session_id),
   }
 }
 
-/** Map a Mongo doc back to a plain SessionMeta (drops _id/org, keeps user). Pure. */
+/** Map a Mongo doc back to a plain SessionMeta (drops _id/org/memberId, keeps user). Pure. */
 export function fromTeamDoc(doc: TeamSessionDoc): SessionMeta {
-  const { _id, org, ...rest } = doc
-  void _id; void org
+  const { _id, org, memberId, ...rest } = doc
+  void _id; void org; void memberId
   return rest
 }
 

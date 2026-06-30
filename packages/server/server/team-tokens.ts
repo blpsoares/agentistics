@@ -122,13 +122,14 @@ export async function hasAnyTokens(): Promise<boolean> {
 /**
  * Validate a bearer token from an ingest request:
  *   - Hashes the bearer, looks up the hash in Mongo.
- *   - If found, updates `lastSeenAt` and returns `{ ok: true, user }`.
+ *   - If found, updates `lastSeenAt` and returns `{ ok: true, user, memberId }`.
+ *   - `memberId` is the token's hash `_id` — the stable identity key used in Mongo docs.
  *   - If not found, returns `{ ok: false }`.
  * Never logs the raw bearer string.
  */
 export async function validateIngestToken(
   bearer: string | null,
-): Promise<{ ok: boolean; user?: string }> {
+): Promise<{ ok: boolean; user?: string; memberId?: string }> {
   if (!bearer) return { ok: false }
   const id = hashToken(bearer)
   const col = await getTokensCollection()
@@ -136,5 +137,32 @@ export async function validateIngestToken(
   if (!doc) return { ok: false }
   // Update last-seen — fire and forget (non-critical, must not block the caller).
   void col.updateOne({ _id: id }, { $set: { lastSeenAt: new Date().toISOString() } }).catch(() => {})
-  return { ok: true, user: doc.user }
+  return { ok: true, user: doc.user, memberId: id }
+}
+
+/**
+ * Rename a member by updating the `user` field on their token doc.
+ * Returns `true` if a document was matched (and updated), `false` if no token with that id exists.
+ * Subsequent ingests by that member will carry the new name automatically; existing session docs
+ * in the `sessions` collection are resolved at read time via `getMemberNameMap()`.
+ */
+export async function setMemberName(id: string, user: string): Promise<boolean> {
+  const col = await getTokensCollection()
+  const result = await col.updateOne({ _id: id }, { $set: { user } })
+  return result.matchedCount > 0
+}
+
+/**
+ * Returns a map of `{ [tokenId]: user }` for every token in the collection.
+ * Used by `loadTeamSessionsFromMongo` to resolve the current display name for each session
+ * at read time, so a member rename is reflected immediately without re-ingesting sessions.
+ */
+export async function getMemberNameMap(): Promise<Record<string, string>> {
+  const col = await getTokensCollection()
+  const docs = await col.find({}, { projection: { _id: 1, user: 1 } }).toArray()
+  const map: Record<string, string> = {}
+  for (const doc of docs) {
+    map[doc._id] = doc.user
+  }
+  return map
 }

@@ -16,32 +16,36 @@ function session(id: string, harness: SessionMeta['harness'] = 'claude'): Sessio
   }
 }
 
-test('teamDocId composes org:user:harness:sessionId', () => {
-  expect(teamDocId('acme', 'devA', 'claude', 's1')).toBe('acme:devA:claude:s1')
+test('teamDocId composes org:memberId:harness:sessionId', () => {
+  // id is keyed by memberId (token hash), not by display name — rename-safe
+  expect(teamDocId('acme', 'memberHash123', 'claude', 's1')).toBe('acme:memberHash123:claude:s1')
 })
 
-test('toTeamDoc tags user, sets org and _id, does not mutate input', () => {
+test('toTeamDoc tags user, sets org/memberId/_id, does not mutate input', () => {
   const s = session('s1')
-  const doc = toTeamDoc(s, 'acme', 'devA')
-  expect(doc._id).toBe('acme:devA:claude:s1')
+  const doc = toTeamDoc(s, 'acme', 'memberHash123', 'devA')
+  // _id is based on memberId, not on the display name
+  expect(doc._id).toBe('acme:memberHash123:claude:s1')
   expect(doc.org).toBe('acme')
+  expect(doc.memberId).toBe('memberHash123')
   expect(doc.user).toBe('devA')
   expect(doc.session_id).toBe('s1')
   expect(s.user).toBeUndefined() // original untouched
 })
 
-test('fromTeamDoc strips _id/org but keeps user → a plain SessionMeta', () => {
-  const doc = toTeamDoc(session('s1'), 'acme', 'devA')
+test('fromTeamDoc strips _id/org/memberId but keeps user → a plain SessionMeta', () => {
+  const doc = toTeamDoc(session('s1'), 'acme', 'memberHash123', 'devA')
   const meta = fromTeamDoc(doc)
   expect((meta as unknown as Record<string, unknown>)._id).toBeUndefined()
   expect((meta as unknown as Record<string, unknown>).org).toBeUndefined()
+  expect((meta as unknown as Record<string, unknown>).memberId).toBeUndefined()
   expect(meta.user).toBe('devA')
   expect(meta.session_id).toBe('s1')
 })
 
 test('round-trip toTeamDoc→fromTeamDoc preserves the session fields', () => {
   const s = session('s1')
-  const meta = fromTeamDoc(toTeamDoc(s, 'acme', 'devA'))
+  const meta = fromTeamDoc(toTeamDoc(s, 'acme', 'memberHash123', 'devA'))
   expect(meta.session_id).toBe(s.session_id)
   expect(meta.harness).toBe(s.harness)
   expect(meta.project_path).toBe(s.project_path)
