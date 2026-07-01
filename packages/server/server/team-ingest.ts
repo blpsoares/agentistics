@@ -92,9 +92,11 @@ export async function handleTeamLeave(req: Request): Promise<Response> {
   const col = await getTeamCollection()
 
   // 1. Minted token → memberId is authoritative.
+  const { deleteMemberStats } = await import('./team-stats')
   const minted = await validateIngestToken(bearer)
   if (minted.ok) {
     const res = await col.deleteMany({ memberId: minted.memberId })
+    await deleteMemberStats(minted.memberId)
     return new Response(JSON.stringify({ ok: true, deleted: res.deletedCount ?? 0 }), { status: 200, headers: JSON_HEADERS })
   }
 
@@ -113,6 +115,7 @@ export async function handleTeamLeave(req: Request): Promise<Response> {
     return new Response(JSON.stringify({ error: 'org and user are required' }), { status: 400, headers: JSON_HEADERS })
   }
   const res = await col.deleteMany({ org, user })
+  await deleteMemberStats(`legacy:${user}`)
   return new Response(JSON.stringify({ ok: true, deleted: res.deletedCount ?? 0 }), { status: 200, headers: JSON_HEADERS })
 }
 
@@ -144,6 +147,12 @@ async function handleIngestBody(req: Request, overrideMemberId?: string, overrid
     // rename-safety: a different self-declared user creates a new memberId → new docs.
     const memberId = overrideMemberId ?? `legacy:${user}`
     const count = await ingestSessions(parsed.body.org, memberId, user, parsed.body.sessions)
+    // Store the member's own statsCache (aggregated Claude history) so the central can
+    // reproduce its exact totals — the deep history is never present as individual sessions.
+    if (parsed.body.statsCache) {
+      const { upsertMemberStats } = await import('./team-stats')
+      await upsertMemberStats(parsed.body.org, memberId, user, parsed.body.statsCache).catch(() => {})
+    }
     return new Response(JSON.stringify({ ok: true, count }), { status: 200, headers: JSON_HEADERS })
   } catch (e) {
     return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), { status: 500, headers: JSON_HEADERS })

@@ -197,6 +197,78 @@ export interface AppData {
   healthIssues?: HealthIssue[]
   homeDir?: string
   harnesses: HarnessId[]
+  /** Team/central only: each member's own raw statsCache, keyed by resolved display name.
+   *  Lets the central reproduce the member's authoritative totals (deep Claude history that
+   *  only exists aggregated in statsCache, never as individual sessions). Absent on solo. */
+  userStatsCaches?: Record<string, StatsCache>
+}
+
+/** An empty statsCache with all zero/neutral fields. Pure. */
+export function emptyStatsCache(): StatsCache {
+  return {
+    version: 1,
+    lastComputedDate: '',
+    dailyActivity: [],
+    dailyModelTokens: [],
+    modelUsage: {},
+    totalSessions: 0,
+    totalMessages: 0,
+    longestSession: { sessionId: '', duration: 0, messageCount: 0, timestamp: '' },
+    firstSessionDate: '',
+    hourCounts: {},
+    totalSpeculationTimeSavedMs: 0,
+  }
+}
+
+/**
+ * Merge (sum) several statsCaches into one. Pure. Used by the central to combine the
+ * selected members' per-member statsCaches so KPIs match each machine exactly.
+ * - dailyActivity / dailyModelTokens / modelUsage / hourCounts: summed by key
+ * - totals: summed; longestSession: max by duration
+ * - firstSessionDate: earliest non-empty; lastComputedDate: latest
+ */
+export function mergeStatsCaches(caches: StatsCache[]): StatsCache {
+  const out = emptyStatsCache()
+  const daily = new Map<string, DailyActivity>()
+  const dmt = new Map<string, Record<string, number>>()
+
+  for (const c of caches) {
+    if (!c) continue
+    for (const d of c.dailyActivity ?? []) {
+      const cur = daily.get(d.date) ?? { date: d.date, messageCount: 0, sessionCount: 0, toolCallCount: 0 }
+      cur.messageCount += d.messageCount ?? 0
+      cur.sessionCount += d.sessionCount ?? 0
+      cur.toolCallCount += d.toolCallCount ?? 0
+      daily.set(d.date, cur)
+    }
+    for (const d of c.dailyModelTokens ?? []) {
+      const cur = dmt.get(d.date) ?? {}
+      for (const [m, t] of Object.entries(d.tokensByModel ?? {})) cur[m] = (cur[m] ?? 0) + t
+      dmt.set(d.date, cur)
+    }
+    for (const [m, u] of Object.entries(c.modelUsage ?? {})) {
+      const cur = out.modelUsage[m] ?? { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 }
+      cur.inputTokens += u.inputTokens ?? 0
+      cur.outputTokens += u.outputTokens ?? 0
+      cur.cacheReadInputTokens += u.cacheReadInputTokens ?? 0
+      cur.cacheCreationInputTokens += u.cacheCreationInputTokens ?? 0
+      cur.webSearchRequests += u.webSearchRequests ?? 0
+      cur.costUSD += u.costUSD ?? 0
+      out.modelUsage[m] = cur
+    }
+    for (const [h, n] of Object.entries(c.hourCounts ?? {})) out.hourCounts[h] = (out.hourCounts[h] ?? 0) + n
+    out.totalSessions += c.totalSessions ?? 0
+    out.totalMessages += c.totalMessages ?? 0
+    out.totalSpeculationTimeSavedMs += c.totalSpeculationTimeSavedMs ?? 0
+    if ((c.longestSession?.duration ?? 0) > out.longestSession.duration) out.longestSession = c.longestSession
+    if (c.firstSessionDate && (!out.firstSessionDate || c.firstSessionDate < out.firstSessionDate)) out.firstSessionDate = c.firstSessionDate
+    if (c.lastComputedDate && c.lastComputedDate > out.lastComputedDate) out.lastComputedDate = c.lastComputedDate
+    out.version = Math.max(out.version, c.version ?? 1)
+  }
+
+  out.dailyActivity = Array.from(daily.values()).sort((a, b) => a.date.localeCompare(b.date))
+  out.dailyModelTokens = Array.from(dmt.entries()).map(([date, tokensByModel]) => ({ date, tokensByModel })).sort((a, b) => a.date.localeCompare(b.date))
+  return out
 }
 
 export type DateRange = '7d' | '30d' | '90d' | 'all'

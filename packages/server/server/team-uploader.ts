@@ -9,12 +9,20 @@
  * Secrets: the bearer token is NEVER logged.
  */
 
-import type { SessionMeta } from '@agentistics/core'
+import type { SessionMeta, StatsCache } from '@agentistics/core'
 import { PUSH_INTERVAL, clampPushInterval } from '@agentistics/core'
 import type { Preferences } from './preferences'
-import { TEAM_SENT_FILE } from './config'
+import { TEAM_SENT_FILE, STATS_CACHE_FILE } from './config'
 import { loadConsolidated } from './consolidate'
 import { readPreferences } from './preferences'
+import { safeReadJson } from './utils'
+
+/** Read this machine's raw Claude statsCache (aggregated history) to push to the central.
+ *  Returns undefined when absent/unreadable — the push proceeds without it. */
+async function readMemberStatsCache(): Promise<StatsCache | undefined> {
+  const sc = await safeReadJson<StatsCache>(STATS_CACHE_FILE)
+  return sc ?? undefined
+}
 
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested)
@@ -112,12 +120,27 @@ export async function pushOnceDetailed(team: NonNullable<Preferences['team']>): 
     const sessions = Array.from(consolidatedMap.values())
     const sent = await loadSentState()
     const { toSend, nextSent } = selectDeltas(sessions, sent)
-
-    if (toSend.length === 0) return { count: 0 }
+    // The member's own statsCache (aggregated Claude history) is pushed so the central can
+    // reproduce exact totals; it changes as activity accrues even when no new sessions exist.
+    const statsCache = await readMemberStatsCache()
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
     if (team.token) {
       headers['Authorization'] = `Bearer ${team.token}`
+    }
+
+    if (toSend.length === 0) {
+      // No session deltas — still push the statsCache on its own so totals stay fresh.
+      if (statsCache) {
+        try {
+          await fetch(`${team.endpoint}/api/team/ingest`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ org: team.org, user: team.user, sessions: [], statsCache }),
+          })
+        } catch { /* best-effort */ }
+      }
+      return { count: 0 }
     }
 
     let pushed = 0
@@ -129,7 +152,8 @@ export async function pushOnceDetailed(team: NonNullable<Preferences['team']>): 
         res = await fetch(`${team.endpoint}/api/team/ingest`, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ org: team.org, user: team.user, sessions: batch }),
+          // Attach the statsCache to the first batch only (idempotent upsert on the central).
+          body: JSON.stringify({ org: team.org, user: team.user, sessions: batch, ...(i === 0 ? { statsCache } : {}) }),
         })
       } catch (fetchErr) {
         const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr)

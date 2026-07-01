@@ -1,4 +1,4 @@
-import type { SessionMeta } from '@agentistics/core'
+import type { SessionMeta, StatsCache } from '@agentistics/core'
 import { tagUser } from '@agentistics/core'
 
 /**
@@ -26,6 +26,9 @@ export interface IngestBody {
   org: string
   user: string
   sessions: SessionMeta[]
+  /** Optional: the member's own raw statsCache (aggregated Claude history). Stored per
+   *  member so the central can reproduce the member's exact totals. */
+  statsCache?: StatsCache
 }
 
 /**
@@ -80,5 +83,9 @@ export function parseIngestBody(raw: unknown):
     if (!org) return { ok: false, error: 'org is required' }
     if (!user) return { ok: false, error: 'user is required' }
   }
-  return { ok: true, body: { org, user, sessions: r.sessions as SessionMeta[] } }
+  // statsCache is optional and passed through as-is (stored verbatim, not re-validated here).
+  const statsCache = (typeof r.statsCache === 'object' && r.statsCache !== null)
+    ? (r.statsCache as StatsCache)
+    : undefined
+  return { ok: true, body: { org, user, sessions: r.sessions as SessionMeta[], statsCache } }
 }

@@ -1,6 +1,50 @@
 import { describe, test, expect } from 'bun:test'
-import { calcCost, getModelPrice, formatModel, getModelColor, formatProjectName, setHomeDir, HARNESS_CAPABILITIES } from './types'
-import type { ModelUsage } from './types'
+import { calcCost, getModelPrice, formatModel, getModelColor, formatProjectName, setHomeDir, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches } from './types'
+import type { ModelUsage, StatsCache } from './types'
+
+describe('mergeStatsCaches', () => {
+  function sc(over: Partial<StatsCache>): StatsCache {
+    return { ...emptyStatsCache(), ...over }
+  }
+
+  test('empty input returns an empty statsCache', () => {
+    const m = mergeStatsCaches([])
+    expect(m.totalSessions).toBe(0)
+    expect(m.dailyActivity).toEqual([])
+  })
+
+  test('sums totals, daily activity, model usage, and hour counts', () => {
+    const a = sc({
+      totalSessions: 10, totalMessages: 100,
+      dailyActivity: [{ date: '2026-01-01', messageCount: 5, sessionCount: 2, toolCallCount: 3 }],
+      modelUsage: { 'claude-x': { inputTokens: 1, outputTokens: 2, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 1.5 } },
+      hourCounts: { '9': 4 },
+      firstSessionDate: '2026-01-01', lastComputedDate: '2026-01-10',
+    })
+    const b = sc({
+      totalSessions: 5, totalMessages: 50,
+      dailyActivity: [{ date: '2026-01-01', messageCount: 1, sessionCount: 1, toolCallCount: 1 }, { date: '2026-01-02', messageCount: 9, sessionCount: 3, toolCallCount: 0 }],
+      modelUsage: { 'claude-x': { inputTokens: 3, outputTokens: 4, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 2.5 } },
+      hourCounts: { '9': 1, '10': 2 },
+      firstSessionDate: '2025-12-20', lastComputedDate: '2026-01-05',
+    })
+    const m = mergeStatsCaches([a, b])
+    expect(m.totalSessions).toBe(15)
+    expect(m.totalMessages).toBe(150)
+    // same-date daily activity summed
+    expect(m.dailyActivity.find(d => d.date === '2026-01-01')).toEqual({ date: '2026-01-01', messageCount: 6, sessionCount: 3, toolCallCount: 4 })
+    expect(m.dailyActivity).toHaveLength(2)
+    // model usage summed
+    expect(m.modelUsage['claude-x']!.inputTokens).toBe(4)
+    expect(m.modelUsage['claude-x']!.costUSD).toBeCloseTo(4)
+    // hour counts summed
+    expect(m.hourCounts['9']).toBe(5)
+    expect(m.hourCounts['10']).toBe(2)
+    // earliest first / latest last
+    expect(m.firstSessionDate).toBe('2025-12-20')
+    expect(m.lastComputedDate).toBe('2026-01-10')
+  })
+})
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

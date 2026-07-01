@@ -128,6 +128,8 @@ export async function handleRevokeToken(req: Request): Promise<Response> {
       const col = await getTeamCollection()
       const res = await col.deleteMany({ memberId: id })
       sessionsDeleted = res.deletedCount ?? 0
+      const { deleteMemberStats } = await import('./team-stats')
+      await deleteMemberStats(id)
     } catch { /* session cleanup is best-effort; the token is already revoked */ }
     return new Response(JSON.stringify({ ok: deleted, sessionsDeleted }), {
       status: 200,

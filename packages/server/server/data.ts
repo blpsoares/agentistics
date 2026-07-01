@@ -46,6 +46,8 @@ export interface ApiResponse {
   healthIssues: HealthIssue[]
   homeDir: string
   harnesses: HarnessId[]
+  /** Team/central only: each member's own statsCache, keyed by resolved display name. */
+  userStatsCaches?: Record<string, StatsCache>
 }
 
 export interface ScanResult {
@@ -688,12 +690,10 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       // selected) Cost/Tokens KPIs reflect the whole team. Safe on a dedicated
       // central (empty local statsCache → nothing to corrupt); the day<=lastComputed
       // guard inside supplementStatsCache prevents any double-count.
-      // NOTE: assumes a DEDICATED central (empty local ~/.claude). On a central
-      // that also has local activity, the per-day dailyActivity/dailyModelTokens
-      // entries are replaced (not added) for days present in both sets, which can
-      // undercount the daily chart for shared days. modelUsage (Cost/Tokens) stays
-      // correct because it is additive. Run a dedicated central to avoid this.
-      if (TEAM_CENTRAL) supplementStatsCache(statsCache, teamSessions)
+      // NOTE: the central's own `statsCache` is NOT supplemented with team sessions here.
+      // Each member's deep history is exposed separately via `userStatsCaches` (below) and
+      // aggregated per-selected-member on the frontend, so the numbers match each machine
+      // exactly. `statsCache` stays the central machine's own (used for CENTRAL_USER).
     }
 
     // Central self-contribution: the central machine's OWN local sessions have no `user`
@@ -705,6 +705,25 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       for (const s of sessions) {
         if (!s.user) s.user = CENTRAL_USER
       }
+    }
+
+    // Per-member statsCaches: each member's authoritative aggregated history, keyed by the
+    // member's CURRENT display name (resolved via the tokens table). The central's own
+    // self-contribution is added under CENTRAL_USER. The frontend merges the selected
+    // members' caches so KPIs match each machine exactly.
+    let userStatsCaches: Record<string, StatsCache> | undefined
+    if (TEAM_CENTRAL) {
+      const { loadAllMemberStats } = await import('./team-stats')
+      const { getMemberNameMap } = await import('./team-tokens')
+      const [memberStats, nameMap] = await Promise.all([
+        loadAllMemberStats().catch(() => [] as { memberId: string; user: string; statsCache: StatsCache }[]),
+        getMemberNameMap().catch(() => ({} as Record<string, string>)),
+      ])
+      userStatsCaches = {}
+      for (const m of memberStats) {
+        userStatsCaches[nameMap[m.memberId] ?? m.user] = m.statsCache
+      }
+      if (CENTRAL_USER) userStatsCaches[CENTRAL_USER] = statsCache
     }
 
     sessions.sort((a, b) => b.start_time.localeCompare(a.start_time))
@@ -723,7 +742,7 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     const totalTokens = dedupedSessions.reduce((sum, s) => sum + (s.input_tokens ?? 0) + (s.output_tokens ?? 0), 0)
     onProgress('finalizing', 1, String(totalTokens))
 
-    return { statsCache, projects, allSessions: [] as [], sessions: dedupedSessions, healthIssues, homeDir: HOME_DIR, harnesses: Array.from(harnessSet) }
+    return { statsCache, projects, allSessions: [] as [], sessions: dedupedSessions, healthIssues, homeDir: HOME_DIR, harnesses: Array.from(harnessSet), userStatsCaches }
   }
 
   return Promise.race([

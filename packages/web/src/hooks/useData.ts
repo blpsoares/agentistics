@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMeta } from '@agentistics/core'
-import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses } from '@agentistics/core'
+import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, mergeStatsCaches } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 
 export interface StageProgress {
@@ -517,18 +517,26 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const harnessActive = harnessSel.length > 0
     const nonClaudeHarness = harnessActive && !harnessSel.includes('claude')
 
-    // Team data present (a central aggregating members) — every session carries a `user`.
-    // statsCache represents ONLY the central machine's own Claude, never the members', so
-    // the unified ("all members") view MUST aggregate from per-session data, exactly like a
-    // filtered view. On a solo machine no session has a `user`, so this stays false and the
-    // statsCache fast-path is preserved.
-    const teamData = data.sessions.some(s => s.user)
+    // ── Effective statsCache — the deep aggregated Claude history for the SELECTED scope ──
+    // On a central, each member pushes its own statsCache (data.userStatsCaches). We merge the
+    // selected members' caches (or ALL of them when no user filter) so the totals match each
+    // machine exactly — the deep history only exists aggregated, never as individual sessions.
+    // Solo (no userStatsCaches) → the machine's own statsCache, unchanged.
+    const userStatsCaches = data.userStatsCaches
+    const hasUserStats = !!userStatsCaches && Object.keys(userStatsCaches).length > 0
+    const effectiveStatsCache = hasUserStats
+      ? mergeStatsCaches(
+          (users.length > 0 ? users : Object.keys(userStatsCaches!))
+            .map(u => userStatsCaches![u])
+            .filter((c): c is NonNullable<typeof c> => !!c),
+        )
+      : data.statsCache
 
     // ── Filter daily activity (date-range only — no project granularity in statsCache) ──
-    const filteredDailyActivity = (data.statsCache.dailyActivity ?? []).filter(d =>
+    const filteredDailyActivity = (effectiveStatsCache.dailyActivity ?? []).filter(d =>
       inRange(parseISO(d.date), start, end)
     )
-    const filteredDailyModelTokens = (data.statsCache.dailyModelTokens ?? []).filter(d =>
+    const filteredDailyModelTokens = (effectiveStatsCache.dailyModelTokens ?? []).filter(d =>
       inRange(parseISO(d.date), start, end)
     )
 
@@ -548,7 +556,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // in the unified view (no harness filter). When a harness filter is active OR there are
     // no non-Claude sessions, this is always empty so all addenda contribute +0.
     const nonClaudeInRange = !harnessActive
-      ? data.sessions.filter(s => (s.harness ?? 'claude') !== 'claude' && inDateRange(s))
+      ? harnessSessions.filter(s => (s.harness ?? 'claude') !== 'claude' && inDateRange(s))
       : []
 
     // ── Extend dailyActivity with sessions on days not yet in statsCache ──
@@ -576,13 +584,13 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     //  - Claude harness selected → Claude statsCache history + Claude sessions on gap days
     //  - unified (no harness filter) → Claude history+gap PLUS all non-Claude sessions
     let allTimeTotalSessions: number
-    if (nonClaudeHarness || teamData) {
+    if (nonClaudeHarness) {
       // Pure per-session count: non-Claude-only selection, or team/central data (statsCache
       // does not represent the members). harnessSessions is already user+harness scoped.
       allTimeTotalSessions = harnessSessions.length
     } else {
-      const allDailyDates = new Set((data.statsCache.dailyActivity ?? []).map(d => d.date))
-      const claudeBase = (data.statsCache.dailyActivity ?? []).reduce((s, d) => s + d.sessionCount, 0)
+      const allDailyDates = new Set((effectiveStatsCache.dailyActivity ?? []).map(d => d.date))
+      const claudeBase = (effectiveStatsCache.dailyActivity ?? []).reduce((s, d) => s + d.sessionCount, 0)
       let claudeGap = 0
       for (const s of harnessSessions) {
         if ((s.harness ?? 'claude') !== 'claude') continue
@@ -600,7 +608,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // Use filteredSessions when project/model/non-claude-harness filter is active
     // (statsCache has no per-project/model/harness granularity)
     const harnessesFiltered = (filters.harnesses?.length ?? 0) > 0
-    const sessionFiltered = projectFiltered || modelSet !== null || nonClaudeHarness || userFiltered || harnessesFiltered || teamData
+    const sessionFiltered = projectFiltered || modelSet !== null || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)
 
     const totalMessages = sessionFiltered
       ? filteredSessions.reduce((s, sess) => s + (sess.user_message_count ?? 0) + (sess.assistant_message_count ?? 0), 0)
@@ -639,7 +647,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
           return set
         })()
       : new Set([
-          ...(data.statsCache.dailyActivity ?? []).map(d => d.date),
+          ...(effectiveStatsCache.dailyActivity ?? []).map(d => d.date),
           ...(harnessSessions ?? []).filter(s => s.start_time).map(s => format(parseISO(s.start_time), 'yyyy-MM-dd')),
         ])
     const streak = calcStreak(activeDates)
@@ -700,7 +708,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
           }
         }
       } else {
-        for (const d of data.statsCache.dailyActivity ?? []) set.add(d.date)
+        for (const d of effectiveStatsCache.dailyActivity ?? []) set.add(d.date)
         for (const s of harnessSessions) {
           if (s.start_time) set.add(format(parseISO(s.start_time), 'yyyy-MM-dd'))
         }
@@ -740,12 +748,12 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     heatmapData.sort((a, b) => a.date.localeCompare(b.date))
 
     // ── Model usage — respects date + model filters ──
-    const globalModelUsage = data.statsCache.modelUsage ?? {}
+    const globalModelUsage = effectiveStatsCache.modelUsage ?? {}
     const dateFiltered = filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd
 
     let filteredModelUsage: Record<string, import('@agentistics/core').ModelUsage>
 
-    if (projectFiltered || nonClaudeHarness || userFiltered || harnessesFiltered || teamData) {
+    if (projectFiltered || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)) {
       // Build per-model breakdown from sessions that have a model field.
       // Sessions without a model field are excluded from the per-model breakdown.
       // Also used when a non-Claude harness is selected (statsCache has no harness granularity).
@@ -850,7 +858,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
 
     // ── Cost calculation ──
     let totalCostUSD = 0
-    if (projectFiltered || nonClaudeHarness || userFiltered || harnessesFiltered || teamData) {
+    if (projectFiltered || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)) {
       // Use per-session calcCost with the session's model field (includes cache tokens).
       // Also used when a non-Claude harness is selected (statsCache lacks harness granularity).
       // Sessions without a model fall back to blended rate on input+output only.
