@@ -1275,6 +1275,29 @@ export default function AppLayout() {
     return present.length > 0 ? present : data.harnesses
   }, [data, filters.users])
 
+  // Projects offered in the filter, scoped to the SELECTED users (empty = all users).
+  // On a central, filtering by member X should only list X's projects — not everyone's.
+  const availableProjects = useMemo(() => {
+    if (!data) return []
+    const sel = filters.users ?? []
+    if (sel.length === 0) return data.projects
+    const scopedPaths = new Set(
+      filterByUsers(data.sessions, sel).map(s => s.project_path).filter(Boolean),
+    )
+    const scoped = data.projects.filter(p => scopedPaths.has(p.path))
+    return scoped.length > 0 ? scoped : data.projects
+  }, [data, filters.users])
+
+  // Prune any selected project no longer available after a user-selection change.
+  useEffect(() => {
+    const sel = filters.projects ?? []
+    if (sel.length === 0) return
+    const allowed = new Set(availableProjects.map(p => p.path))
+    const pruned = sel.filter(p => allowed.has(p))
+    if (pruned.length !== sel.length) setFilters(f => ({ ...f, projects: pruned }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableProjects])
+
   // Prune any selected harness that is no longer available after a user-selection change
   // (e.g. selecting a member who never used a previously-selected harness).
   useEffect(() => {
@@ -1841,7 +1864,7 @@ export default function AppLayout() {
                 <FiltersBar
                   filters={filters}
                   onChange={setFilters}
-                  projects={data.projects}
+                  projects={availableProjects}
                   sessionCountByProject={sessionCountByProject}
                   models={models}
                   modelGroups={modelGroups}
@@ -1880,7 +1903,7 @@ export default function AppLayout() {
             <FiltersBar
               filters={filters}
               onChange={setFilters}
-              projects={data.projects}
+              projects={availableProjects}
               sessionCountByProject={sessionCountByProject}
               models={models}
               modelGroups={modelGroups}

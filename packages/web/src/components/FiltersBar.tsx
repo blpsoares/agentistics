@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import type { Filters, DateRange, Project, Lang, HarnessId } from '@agentistics/core'
 import { formatModel, formatProjectName } from '@agentistics/core'
-import { Layers, Cpu, RotateCcw, ChevronDown, X, CalendarDays, Check } from 'lucide-react'
+import { Layers, Cpu, RotateCcw, ChevronDown, X, CalendarDays, Check, Users } from 'lucide-react'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { ProjectsModal } from './ProjectsModal'
 import { UsersFilter } from './UsersFilter'
@@ -432,6 +432,40 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
           </button>
         )}
       </div>
+
+      {/* Selected member chips — removable, so it's always clear WHO is filtered */}
+      {(filters.users?.length ?? 0) > 0 && (
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', padding: compact ? '0 12px 8px' : '0 0 4px' }}>
+          {filters.users!.map(u => (
+            <span
+              key={u}
+              title={u}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                fontSize: 11, fontWeight: 600,
+                color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)',
+                border: '1px solid rgba(217,119,6,0.3)', borderRadius: 5,
+                padding: '2px 6px 2px 8px', maxWidth: 220, whiteSpace: 'nowrap',
+                overflow: 'hidden', textOverflow: 'ellipsis',
+              }}
+            >
+              <Users size={10} style={{ flexShrink: 0 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{u}</span>
+              <button
+                onClick={() => onChange({ ...filters, users: filters.users!.filter(x => x !== u) })}
+                title={lang === 'pt' ? 'Remover membro' : 'Remove member'}
+                style={{
+                  background: 'transparent', border: 'none', cursor: 'pointer', padding: 0,
+                  display: 'flex', alignItems: 'center', color: 'var(--anthropic-orange)',
+                  opacity: 0.7, flexShrink: 0,
+                }}
+              >
+                <X size={10} strokeWidth={2.5} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Selected project chips */}
       {hasProjects && (

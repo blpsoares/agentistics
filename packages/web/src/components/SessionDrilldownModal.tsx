@@ -729,8 +729,13 @@ function RemoteSessionChat({ session, pt }: { session: SessionMeta; pt: boolean 
         )}
 
         {state.status === 'loaded' && state.messages.length === 0 && (
-          <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-tertiary)', fontSize: 12 }}>
-            {pt ? 'Nenhuma mensagem' : 'No messages'}
+          <div style={{ textAlign: 'center', padding: '20px 12px', color: 'var(--text-tertiary)', fontSize: 12, lineHeight: 1.6 }}>
+            <div style={{ fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>
+              {pt ? 'Transcript indisponível' : 'Transcript unavailable'}
+            </div>
+            {pt
+              ? 'O texto bruto desta conversa não está mais no computador do membro (o Claude limpa os logs após ~30 dias). As métricas foram preservadas, mas o chat só sobrevive se o membro usar o modo de arquivo "completo".'
+              : "This conversation's raw text is no longer on the member's machine (Claude cleans up logs after ~30 days). The metrics were preserved, but the chat only survives if the member uses \"full\" archive mode."}
           </div>
         )}
 

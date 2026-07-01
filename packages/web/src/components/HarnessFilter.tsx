@@ -39,11 +39,14 @@ export function HarnessFilter({ harnesses, selected, onChange, lang }: Props) {
 
   const label = selected.length === 0 ? t.all : `${selected.length} ${t.selected}`
   const active = selected.length > 0
+  // Tooltip lists exactly which harnesses are selected (or "all" when none is).
+  const tip = selected.length === 0 ? t.all : selected.map(h => HARNESS_LABELS[h]).join(', ')
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <button
         onClick={() => setOpen(o => !o)}
+        title={tip}
         style={{
           display: 'flex', alignItems: 'center', gap: 6,
           padding: '6px 10px', borderRadius: 8,

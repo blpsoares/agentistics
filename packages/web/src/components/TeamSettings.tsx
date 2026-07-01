@@ -265,6 +265,10 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
   const [saveResult, setSaveResult] = useState<SaveResult | null>(null)
   const [leaving, setLeaving] = useState(false)
   const [confirmLeave, setConfirmLeave] = useState(false)
+  // The Display name field is hidden by default — the central resolves the name from the
+  // token (whoami) on Save. It's only revealed if the central provides no name (a shared
+  // TEAM_INGEST_TOKEN) or the user already has a self-declared name to edit.
+  const [needsName, setNeedsName] = useState<boolean>(() => false)
 
   // ── Edit/lock state for the member connect form ──────────────────────────
   // Starts locked when already configured; starts open for fresh setup.
@@ -387,7 +391,10 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
       const resolvedUser = (testData.user ?? '').trim() || team.user.trim()
       const resolvedOrg  = (testData.org  ?? '').trim() || (team.org ?? '').trim() || 'default'
       if (!resolvedUser) {
-        setSaveResult({ ok: false, error: pt ? 'Informe um nome de exibição' : 'Enter a display name' })
+        // The central did NOT resolve a name (shared TEAM_INGEST_TOKEN, not a per-member
+        // token) and none was typed. Reveal the manual field so the user can self-declare.
+        setNeedsName(true)
+        setSaveResult({ ok: false, error: pt ? 'A central não definiu um nome — informe um.' : "The central didn't set a name — enter one." })
         return
       }
       const teamWithIdentity: typeof team = { ...team, mode: 'member', user: resolvedUser, org: resolvedOrg }
@@ -610,10 +617,10 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
             disabled={!editing}
           />
 
-          {/* Display name — self-declared (used with a shared TEAM_INGEST_TOKEN). When the
-              token is a per-member minted token, the central resolves the name via whoami on
-              Save and it overrides whatever is typed here. */}
-          {editing && (
+          {/* Display name — HIDDEN by default. The central resolves the name from the token
+              (whoami) on Save. Only shown when the central provided no name (shared secret →
+              needsName) or the member already has a self-declared name to edit. */}
+          {editing && (needsName || !!team.user) && (
             <FieldInput
               label={c('yourName', lang)}
               sub={c('yourNameSub', lang)}
@@ -622,6 +629,13 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
               placeholder={pt ? 'Ex: Bryan Soares' : 'e.g. Bryan Soares'}
               disabled={!editing}
             />
+          )}
+          {editing && !needsName && !team.user && (
+            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', margin: '-4px 0 14px', lineHeight: 1.5 }}>
+              {pt
+                ? 'Seu nome vem da central pelo token — não precisa preencher nada.'
+                : 'Your name comes from the central via the token — nothing to fill in.'}
+            </div>
           )}
 
           {/* Read-only identity resolved from the central via the bearer token */}

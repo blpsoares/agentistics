@@ -1210,7 +1210,7 @@ function DataSourcesTab({ pt, harnesses }: { pt: boolean; harnesses: HarnessId[]
         </div>
       )}
 
-      <HarnessInfoPanel harness={active} />
+      <HarnessInfoPanel harness={active} lang={pt ? 'pt' : 'en'} />
     </div>
   )
 }
@@ -1306,14 +1306,16 @@ function TeamTab({ pt, central }: { pt: boolean; central: boolean | null }) {
 
 // ── Main modal ────────────────────────────────────────────────────────────
 
+// Order: general first, then Team (a primary feature — not buried at the end), then the
+// data/insight tabs, then the technical ones last.
 const TABS: { id: SettingsTab; icon: React.ReactNode; labelEn: string; labelPt: string }[] = [
   { id: 'preferences', icon: <SlidersHorizontal size={13} />, labelEn: 'Preferences', labelPt: 'Preferências' },
-  { id: 'sessions',    icon: <Archive size={13} />,           labelEn: 'Sessions',     labelPt: 'Sessões' },
-  { id: 'live',        icon: <Activity size={13} />,          labelEn: 'Live',         labelPt: 'Live' },
-  { id: 'install',     icon: <Download size={13} />,          labelEn: 'Install',      labelPt: 'Instalar' },
-  { id: 'harnesses',   icon: <Cpu size={13} />,               labelEn: 'Harnesses',    labelPt: 'Backends' },
-  { id: 'datasources', icon: <Database size={13} />,          labelEn: 'Data & sources', labelPt: 'Dados & fontes' },
   { id: 'team',        icon: <Users size={13} />,             labelEn: 'Team',         labelPt: 'Time' },
+  { id: 'live',        icon: <Activity size={13} />,          labelEn: 'Live',         labelPt: 'Live' },
+  { id: 'datasources', icon: <Database size={13} />,          labelEn: 'Data & sources', labelPt: 'Dados & fontes' },
+  { id: 'harnesses',   icon: <Cpu size={13} />,               labelEn: 'Harnesses',    labelPt: 'Backends' },
+  { id: 'sessions',    icon: <Archive size={13} />,           labelEn: 'Sessions',     labelPt: 'Sessões' },
+  { id: 'install',     icon: <Download size={13} />,          labelEn: 'Install',      labelPt: 'Instalar' },
   { id: 'environment', icon: <Code2 size={13} />,             labelEn: 'Environment',  labelPt: 'Ambiente' },
 ]
 
