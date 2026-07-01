@@ -24,6 +24,20 @@ async function readMemberStatsCache(): Promise<StatsCache | undefined> {
   return sc ?? undefined
 }
 
+// Throttle repeated "can't reach central" warnings — a member offline (e.g. a Tailscale
+// hostname that doesn't route from inside WSL) would otherwise spam the console every cycle.
+let _netErrStreak = 0
+function warnPushError(msg: string): void {
+  _netErrStreak++
+  if (_netErrStreak === 1 || _netErrStreak % 20 === 0) {
+    console.warn(`[team-uploader] cannot reach central (${_netErrStreak}x, silencing repeats): ${msg}`)
+  }
+}
+function clearPushError(): void {
+  if (_netErrStreak > 0) console.info('[team-uploader] central reachable again — resuming pushes')
+  _netErrStreak = 0
+}
+
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested)
 // ---------------------------------------------------------------------------
@@ -157,7 +171,7 @@ export async function pushOnceDetailed(team: NonNullable<Preferences['team']>): 
         })
       } catch (fetchErr) {
         const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
-        console.warn('[team-uploader] network error pushing batch:', msg)
+        warnPushError(msg)
         return { count: pushed, error: msg }
       }
 
@@ -175,6 +189,7 @@ export async function pushOnceDetailed(team: NonNullable<Preferences['team']>): 
       const current = await loadSentState()
       await saveSentState({ ...current, ...batchSent })
       pushed += batch.length
+      clearPushError()
     }
 
     return { count: pushed }
