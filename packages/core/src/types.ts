@@ -178,6 +178,10 @@ export interface Project {
   name: string
   sessions: SessionIndex[]
   git_stats?: ProjectGitStats
+  /** Team/central only: display names of the members who own sessions in this project.
+   *  Lets the frontend scope the project filter to the selected members deterministically,
+   *  instead of re-matching paths against user-filtered sessions. Absent/empty on solo. */
+  users?: string[]
 }
 
 export interface HealthIssue {

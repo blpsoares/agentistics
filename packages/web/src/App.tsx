@@ -1281,11 +1281,11 @@ export default function AppLayout() {
     if (!data) return []
     const sel = filters.users ?? []
     if (sel.length === 0) return data.projects
-    const scopedPaths = new Set(
-      filterByUsers(data.sessions, sel).map(s => s.project_path).filter(Boolean),
-    )
-    const scoped = data.projects.filter(p => scopedPaths.has(p.path))
-    return scoped.length > 0 ? scoped : data.projects
+    const selSet = new Set(sel)
+    // A project is in scope iff at least one of its owning members is selected.
+    // Projects carry an explicit `users` tag (built server-side), so this is
+    // deterministic — no path re-matching and no fallback that leaks other members' projects.
+    return data.projects.filter(p => (p.users ?? []).some(u => selSet.has(u)))
   }, [data, filters.users])
 
   // Prune any selected project no longer available after a user-selection change.

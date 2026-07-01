@@ -36,6 +36,8 @@ export interface ServerProject {
   name: string
   sessions: { sessionId: string; created: string }[]
   git_stats?: ProjectGitStats
+  /** Team/central only: display names of members who own sessions in this project. */
+  users?: string[]
 }
 
 export interface ApiResponse {
@@ -738,6 +740,22 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       seenHarnessKeys.add(key)
       return true
     })
+
+    // Tag each project with the set of members who own sessions in it, so the
+    // frontend project filter can be scoped to the selected members deterministically
+    // (no path re-matching, no fallback-to-all that leaks other members' projects).
+    // Built from the final deduped session set, where every team/central session carries `user`.
+    const pathToUsers = new Map<string, Set<string>>()
+    for (const s of dedupedSessions) {
+      if (!s.user || !s.project_path) continue
+      let set = pathToUsers.get(s.project_path)
+      if (!set) { set = new Set(); pathToUsers.set(s.project_path, set) }
+      set.add(s.user)
+    }
+    for (const p of projects) {
+      const set = pathToUsers.get(p.path)
+      if (set && set.size > 0) p.users = Array.from(set)
+    }
 
     const totalTokens = dedupedSessions.reduce((sum, s) => sum + (s.input_tokens ?? 0) + (s.output_tokens ?? 0), 0)
     onProgress('finalizing', 1, String(totalTokens))
