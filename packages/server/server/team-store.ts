@@ -66,13 +66,19 @@ export function parseIngestBody(raw: unknown):
   | { ok: false; error: string } {
   if (typeof raw !== 'object' || raw === null) return { ok: false, error: 'body must be an object' }
   const r = raw as Record<string, unknown>
-  if (typeof r.org !== 'string' || !r.org) return { ok: false, error: 'org is required' }
-  if (typeof r.user !== 'string' || !r.user) return { ok: false, error: 'user is required' }
   if (!Array.isArray(r.sessions)) return { ok: false, error: 'sessions must be an array' }
   for (const s of r.sessions) {
     if (typeof s !== 'object' || s === null || typeof (s as Record<string, unknown>).session_id !== 'string') {
       return { ok: false, error: 'each session must have a session_id' }
     }
   }
-  return { ok: true, body: { org: r.org, user: r.user, sessions: r.sessions as SessionMeta[] } }
+  const org = typeof r.org === 'string' ? r.org : ''
+  const user = typeof r.user === 'string' ? r.user : ''
+  // A body with no sessions is a connectivity ping — nothing is stored, so identity is not
+  // required. Real pushes (≥1 session) must carry both org and user.
+  if (r.sessions.length > 0) {
+    if (!org) return { ok: false, error: 'org is required' }
+    if (!user) return { ok: false, error: 'user is required' }
+  }
+  return { ok: true, body: { org, user, sessions: r.sessions as SessionMeta[] } }
 }

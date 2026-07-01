@@ -61,9 +61,21 @@ test('parseIngestBody accepts a valid body', () => {
   }
 })
 
-test('parseIngestBody rejects missing user', () => {
-  const r = parseIngestBody({ org: 'acme', sessions: [] })
+test('parseIngestBody rejects a real push missing user', () => {
+  const r = parseIngestBody({ org: 'acme', sessions: [session('s1')] })
   expect(r.ok).toBe(false)
+})
+
+test('parseIngestBody rejects a real push missing org', () => {
+  const r = parseIngestBody({ user: 'devA', sessions: [session('s1')] })
+  expect(r.ok).toBe(false)
+})
+
+test('parseIngestBody accepts an empty connectivity ping without identity', () => {
+  // A body with no sessions stores nothing, so org/user are not required — this is the
+  // connectivity check the member uses before saving.
+  const r = parseIngestBody({ org: '', user: '', sessions: [] })
+  expect(r.ok).toBe(true)
 })
 
 test('parseIngestBody rejects a non-array sessions field', () => {

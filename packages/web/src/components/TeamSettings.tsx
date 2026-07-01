@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Loader2, CheckCircle, XCircle, Users, User, Server } from 'lucide-react'
+import { Loader2, CheckCircle, XCircle, Users, User, Server, LogOut } from 'lucide-react'
 import { TeamMembers } from './TeamMembers'
 import { PUSH_INTERVAL, type TeamConfig } from '@agentistics/core'
 
@@ -38,11 +38,16 @@ interface TestResult {
 const COPY = {
   mode:              { en: 'Mode',                         pt: 'Modo' },
   solo:              { en: 'Solo',                         pt: 'Solo' },
-  member:            { en: 'Team member',                  pt: 'Membro do time' },
+  member:            { en: 'Join central',                 pt: 'Entrar na central' },
   serverUrl:         { en: 'Server URL',                   pt: 'URL do servidor' },
   serverUrlSub:      { en: 'Base URL of the central agentistics instance (no trailing slash)', pt: 'URL base da instância central do agentistics (sem barra final)' },
-  yourName:          { en: 'Your name / email',            pt: 'Seu nome / e-mail' },
-  yourNameSub:       { en: 'How this machine will appear in the team dashboard', pt: 'Como este computador aparece no dashboard do time' },
+  yourName:          { en: 'Display name',                 pt: 'Nome de exibição' },
+  yourNameSub:       { en: 'How you appear on the team dashboard. With a per-member token the central sets this for you.', pt: 'Como você aparece no dashboard do time. Com um token por membro, a central define isso por você.' },
+  leaveCentral:      { en: 'Leave central',                pt: 'Sair da central' },
+  leaving:           { en: 'Leaving…',                     pt: 'Saindo…' },
+  leaveConfirm:      { en: 'Leave & delete my data on the central?', pt: 'Sair e apagar meus dados na central?' },
+  leftOk:            { en: 'Left the central',             pt: 'Saiu da central' },
+  cancel:            { en: 'Cancel',                       pt: 'Cancelar' },
   org:               { en: 'Organization',                 pt: 'Organização' },
   orgSub:            { en: "Namespace for this member's data on the central server", pt: 'Namespace dos dados deste membro no servidor central' },
   token:             { en: 'Bearer token',                 pt: 'Token de acesso' },
@@ -254,6 +259,8 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
   const [testing, setTesting] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveResult, setSaveResult] = useState<SaveResult | null>(null)
+  const [leaving, setLeaving] = useState(false)
+  const [confirmLeave, setConfirmLeave] = useState(false)
 
   // ── Edit/lock state for the member connect form ──────────────────────────
   // Starts locked when already configured; starts open for fresh setup.
@@ -372,9 +379,15 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
         return
       }
 
-      // Identity (user, org) is resolved by the central via the bearer token.
-      const resolvedUser = testData.user ?? team.user
-      const resolvedOrg  = testData.org  ?? team.org
+      // Identity: a per-member (minted) token resolves user+org from the central via whoami;
+      // a shared TEAM_INGEST_TOKEN can't, so fall back to the self-declared name. org always
+      // defaults to 'default' so the member never has to think about it.
+      const resolvedUser = (testData.user ?? '').trim() || team.user.trim()
+      const resolvedOrg  = (testData.org  ?? '').trim() || (team.org ?? '').trim() || 'default'
+      if (!resolvedUser) {
+        setSaveResult({ ok: false, error: pt ? 'Informe um nome de exibição' : 'Enter a display name' })
+        return
+      }
       const teamWithIdentity: typeof team = { ...team, mode: 'member', user: resolvedUser, org: resolvedOrg }
 
       // (b) Persist preferences with the central-resolved identity
@@ -401,6 +414,39 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
       setSaveResult({ ok: false, error: err instanceof Error ? err.message : 'Network error' })
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleLeave() {
+    if (leaving) return
+    setConfirmLeave(false)
+    setLeaving(true)
+    setSaveResult(null)
+    try {
+      // (a) Ask the central to drop this member's data (best-effort — proxied so the token
+      //     stays server-side). A failure here still lets us reset the local machine.
+      await fetch('/api/team/leave-central', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: team.endpoint, token: team.token, org: team.org || 'default', user: team.user }),
+      }).catch(() => { /* non-fatal */ })
+
+      // (b) Reset the local config to solo and persist it (stops pushing).
+      const solo: TeamConfig = { mode: 'solo', endpoint: '', org: 'default', user: '', token: '', pushIntervalSec: team.pushIntervalSec }
+      await fetch('/api/preferences', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: solo }),
+      })
+      onChange(solo)
+      editingInitialized.current = false
+      setEditing(true)
+      // The mode visibly flips to Solo — that is the confirmation; clear any prior result.
+      setSaveResult(null)
+    } catch (err) {
+      setSaveResult({ ok: false, error: err instanceof Error ? err.message : 'Network error' })
+    } finally {
+      setLeaving(false)
     }
   }
 
@@ -549,6 +595,20 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
             disabled={!editing}
           />
 
+          {/* Display name — self-declared (used with a shared TEAM_INGEST_TOKEN). When the
+              token is a per-member minted token, the central resolves the name via whoami on
+              Save and it overrides whatever is typed here. */}
+          {editing && (
+            <FieldInput
+              label={c('yourName', lang)}
+              sub={c('yourNameSub', lang)}
+              value={team.user}
+              onChange={v => set('user', v)}
+              placeholder={pt ? 'Ex: Bryan Soares' : 'e.g. Bryan Soares'}
+              disabled={!editing}
+            />
+          )}
+
           {/* Read-only identity resolved from the central via the bearer token */}
           {!editing && team.user && (
             <div style={{
@@ -598,20 +658,63 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
                 {saving ? c('saving', lang) : c('save', lang)}
               </button>
             ) : (
-              <button
-                onClick={() => setEditing(true)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  padding: '7px 18px', borderRadius: 7, fontSize: 13, fontWeight: 700,
-                  border: '1.5px solid var(--border)',
-                  background: 'var(--bg-elevated)',
-                  color: 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  fontFamily: 'inherit', transition: 'all 0.15s',
-                }}
-              >
-                {c('edit', lang)}
-              </button>
+              <>
+                <button
+                  onClick={() => setEditing(true)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '7px 18px', borderRadius: 7, fontSize: 13, fontWeight: 700,
+                    border: '1.5px solid var(--border)',
+                    background: 'var(--bg-elevated)',
+                    color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    fontFamily: 'inherit', transition: 'all 0.15s',
+                  }}
+                >
+                  {c('edit', lang)}
+                </button>
+                {confirmLeave ? (
+                  <>
+                    <button
+                      onClick={() => { void handleLeave() }}
+                      disabled={leaving}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        padding: '7px 14px', borderRadius: 7, fontSize: 12.5, fontWeight: 700,
+                        border: 'none', background: '#ef4444', color: '#fff',
+                        cursor: leaving ? 'default' : 'pointer', fontFamily: 'inherit',
+                      }}
+                    >
+                      {leaving ? <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> : null}
+                      {leaving ? c('leaving', lang) : c('leaveConfirm', lang)}
+                    </button>
+                    <button
+                      onClick={() => setConfirmLeave(false)}
+                      disabled={leaving}
+                      style={{
+                        padding: '7px 12px', borderRadius: 7, fontSize: 12.5, fontWeight: 600,
+                        border: '1px solid var(--border)', background: 'var(--bg-elevated)',
+                        color: 'var(--text-secondary)', cursor: 'pointer', fontFamily: 'inherit',
+                      }}
+                    >
+                      {c('cancel', lang)}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => setConfirmLeave(true)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '7px 14px', borderRadius: 7, fontSize: 12.5, fontWeight: 600,
+                      border: '1px solid rgba(239,68,68,0.4)', background: 'transparent',
+                      color: '#ef4444', cursor: 'pointer', fontFamily: 'inherit',
+                    }}
+                  >
+                    <LogOut size={13} />
+                    {c('leaveCentral', lang)}
+                  </button>
+                )}
+              </>
             )}
 
             {saveResult !== null && (

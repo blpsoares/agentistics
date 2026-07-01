@@ -337,10 +337,12 @@ export async function handleTeamTestConnection(req: Request): Promise<Response> 
   let result: TestConnectionResult
   try {
     // Ping the ingest endpoint with an empty sessions array to verify connectivity.
+    // org must be non-empty to pass the central's parseIngestBody validation; the value is
+    // irrelevant here (no sessions are stored on a ping), so send the default namespace.
     const res = await fetch(`${endpoint}/api/team/ingest`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ org: '', user: '', sessions: [] }),
+      body: JSON.stringify({ org: 'default', user: '', sessions: [] }),
     })
 
     if (res.ok) {
@@ -392,4 +394,39 @@ export async function handleTeamTestConnection(req: Request): Promise<Response> 
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   })
+}
+
+/**
+ * Member-side proxy for POST /api/team/leave-central. Calls the central's
+ * /api/team/leave with the member's token so the central removes this member's data,
+ * then the web resets the local config to solo. Keeps the token server-side; never throws.
+ */
+export async function handleLeaveCentral(req: Request): Promise<Response> {
+  let body: { endpoint?: unknown; token?: unknown; org?: unknown; user?: unknown } = {}
+  try { body = (await req.json()) as typeof body } catch { /* empty ok */ }
+  const endpoint = typeof body.endpoint === 'string' ? body.endpoint : ''
+  const token = typeof body.token === 'string' ? body.token : ''
+  const org = typeof body.org === 'string' && body.org ? body.org : 'default'
+  const user = typeof body.user === 'string' ? body.user : ''
+
+  if (!endpoint) {
+    return new Response(JSON.stringify({ ok: false, error: 'endpoint is required' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  try {
+    const res = await fetch(`${endpoint}/api/team/leave`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ org, user }),
+    })
+    const data = (await res.json().catch(() => ({}))) as { deleted?: number; error?: string }
+    return new Response(JSON.stringify({ ok: res.ok, deleted: data.deleted, error: res.ok ? undefined : (data.error ?? `HTTP ${res.status}`) }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    })
+  } catch (err) {
+    return new Response(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : 'Network error' }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    })
+  }
 }

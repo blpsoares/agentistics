@@ -103,6 +103,7 @@ const AUTH_PUBLIC = new Set([
   '/api/team/logout',
   '/api/team/session',
   '/api/team/ingest',
+  '/api/team/leave',
   '/api/team/policy',
   // WebSocket upgrade for the member→central reverse channel; auth is via
   // validateIngestToken (Bearer token in the Upgrade request headers).
@@ -881,6 +882,27 @@ Bun.serve<{ user: string; isAgent?: boolean }>({
       const { handleTeamIngest } = await import('./team-ingest')
       const res = await handleTeamIngest(req)
       // Re-wrap to attach CORS headers (handler sets only Content-Type)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // POST /api/team/leave — central: a member removes ITS OWN data (token-gated).
+    if (url.pathname === '/api/team/leave' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleTeamLeave } = await import('./team-ingest')
+      const res = await handleTeamLeave(req)
+      if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // POST /api/team/leave-central — member proxy: tells the central to drop this member's
+    // data, then the web resets the local config to solo. Keeps the token server-side.
+    if (url.pathname === '/api/team/leave-central' && req.method === 'POST') {
+      const { handleLeaveCentral } = await import('./team-uploader')
+      const res = await handleLeaveCentral(req)
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })

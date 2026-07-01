@@ -76,6 +76,46 @@ export async function handleTeamIngest(req: Request): Promise<Response> {
   })
 }
 
+/** Route handler for POST /api/team/leave — a member removes ITS OWN data from the central.
+ *
+ *  Auth mirrors ingest:
+ *  1. Minted token → delete by the stable memberId (authoritative — a member can only ever
+ *     delete its own sessions, regardless of what the body claims).
+ *  2. Legacy shared secret OR open fallback → delete by the self-declared {org, user} from
+ *     the body (shared-secret trust model: the caller already holds the shared token).
+ */
+export async function handleTeamLeave(req: Request): Promise<Response> {
+  const authHeader = req.headers.get('authorization') ?? ''
+  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+  let body: { org?: unknown; user?: unknown } = {}
+  try { body = (await req.json()) as { org?: unknown; user?: unknown } } catch { /* empty body ok */ }
+  const col = await getTeamCollection()
+
+  // 1. Minted token → memberId is authoritative.
+  const minted = await validateIngestToken(bearer)
+  if (minted.ok) {
+    const res = await col.deleteMany({ memberId: minted.memberId })
+    return new Response(JSON.stringify({ ok: true, deleted: res.deletedCount ?? 0 }), { status: 200, headers: JSON_HEADERS })
+  }
+
+  // 2. Legacy shared secret or open fallback → identify the member by {org, user}.
+  const org = typeof body.org === 'string' ? body.org.trim() : ''
+  const user = typeof body.user === 'string' ? body.user.trim() : ''
+  const legacyAuthed = TEAM_INGEST_TOKEN && bearer !== null && constantTimeEqual(bearer, TEAM_INGEST_TOKEN)
+  let open = false
+  if (!TEAM_PASSWORD && !TEAM_INGEST_TOKEN) {
+    try { open = !(await hasAnyTokens()) } catch { /* DB down → not open */ }
+  }
+  if (!legacyAuthed && !open) {
+    return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: JSON_HEADERS })
+  }
+  if (!org || !user) {
+    return new Response(JSON.stringify({ error: 'org and user are required' }), { status: 400, headers: JSON_HEADERS })
+  }
+  const res = await col.deleteMany({ org, user })
+  return new Response(JSON.stringify({ ok: true, deleted: res.deletedCount ?? 0 }), { status: 200, headers: JSON_HEADERS })
+}
+
 /**
  * Parse and upsert the ingest body after authorization has been verified.
  *
