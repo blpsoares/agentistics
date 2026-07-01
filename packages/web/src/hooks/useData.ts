@@ -396,6 +396,101 @@ export function summarizeHarnessSessions(sessions: SessionMeta[], harness: Harne
  *
  * Only harnesses present in data.harnesses are included in the output.
  */
+/**
+ * Compute the Claude HarnessSummary from a given statsCache + the session list used to
+ * fill gap days. Extracted so both computeHarnessSummaries (canonical, data.statsCache)
+ * and the Compare page (user-scoped merge of data.userStatsCaches) share ONE code path,
+ * guaranteeing the Compare Claude column matches the dashboard exactly.
+ *
+ * `sc` is the authoritative aggregated Claude history (survives Claude's 30-day cleanup).
+ * `gapSessions` supplies days with Claude sessions not yet covered by sc.dailyActivity;
+ * pass the user-scoped session slice so gap days respect the selected members.
+ */
+export function claudeSummaryFromStatsCache(
+  sc: import('@agentistics/core').StatsCache,
+  gapSessions: import('@agentistics/core').SessionMeta[],
+): HarnessSummary {
+  const allDailyDates = new Set((sc.dailyActivity ?? []).map(d => d.date))
+  const claudeBase = (sc.dailyActivity ?? []).reduce((s, d) => s + d.sessionCount, 0)
+  const messageBase = (sc.dailyActivity ?? []).reduce((s, d) => s + d.messageCount, 0)
+
+  // Gap days: Claude sessions whose date is NOT in sc.dailyActivity
+  let claudeGapSessions = 0
+  let claudeGapMessages = 0
+  for (const s of gapSessions) {
+    if ((s.harness ?? 'claude') !== 'claude') continue
+    if (!s.start_time) continue
+    const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
+    if (!allDailyDates.has(day)) {
+      claudeGapSessions += 1
+      claudeGapMessages += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
+    }
+  }
+
+  // Tokens and cost from sc.modelUsage (all-time Claude totals)
+  const modelUsage = sc.modelUsage ?? {}
+  const inputTokens = Object.values(modelUsage).reduce((s, u) => s + (u.inputTokens ?? 0), 0)
+  const outputTokens = Object.values(modelUsage).reduce((s, u) => s + (u.outputTokens ?? 0), 0)
+  const costUSD = Object.entries(modelUsage).reduce((s, [modelId, u]) => s + calcCost(u, modelId), 0)
+
+  // ── Claude: per-model breakdown from sc.modelUsage ──
+  // Skip entries with empty or 'unknown' model keys — they cannot be priced.
+  const claudeModels = Object.entries(modelUsage)
+    .filter(([model]) => model && model !== 'unknown')
+    .map(([model, u]) => ({
+      model,
+      inputTokens: u.inputTokens ?? 0,
+      outputTokens: u.outputTokens ?? 0,
+      costUSD: calcCost(u, model),
+    }))
+    .sort((a, b) => b.costUSD - a.costUSD)
+
+  // ── Claude: blended cost per 1M tokens (input + output) ──
+  const claudeTokensM = (inputTokens + outputTokens) / 1e6
+  const claudeCostPerMTokens = claudeTokensM > 0 ? costUSD / claudeTokensM : null
+
+  // ── Claude: hour-of-day from sc.hourCounts ──
+  const claudeHourCounts = Array.from({ length: 24 }, (_, i) => sc.hourCounts?.[String(i)] ?? 0)
+
+  // ── Claude: dow from sc.dailyActivity ──
+  const claudeDowCounts = Array.from({ length: 7 }, () => 0)
+  for (const d of sc.dailyActivity ?? []) {
+    const dow = getDay(parseISO(d.date))
+    claudeDowCounts[dow] = (claudeDowCounts[dow] ?? 0) + d.sessionCount
+  }
+
+  // ── Claude: daily activity for sparkline ──
+  const claudeDailyActivity = (sc.dailyActivity ?? [])
+    .map(d => ({ date: d.date, sessions: d.sessionCount }))
+    .sort((a, b) => a.date.localeCompare(b.date))
+
+  // ── Claude: peak token day from sc.dailyModelTokens ──
+  let claudePeakTokenDay: { date: string; tokens: number } | null = null
+  for (const d of sc.dailyModelTokens ?? []) {
+    const tokens = Object.values(d.tokensByModel).reduce((s, t) => s + t, 0)
+    if (!claudePeakTokenDay || tokens > claudePeakTokenDay.tokens) {
+      claudePeakTokenDay = { date: d.date, tokens }
+    }
+  }
+
+  return {
+    sessions: claudeBase + claudeGapSessions,
+    messages: messageBase + claudeGapMessages,
+    inputTokens,
+    outputTokens,
+    costUSD,
+    hourCounts: claudeHourCounts,
+    peakHour: peakIndex(claudeHourCounts),
+    dowCounts: claudeDowCounts,
+    peakDow: peakIndex(claudeDowCounts),
+    dailyActivity: claudeDailyActivity,
+    peakTokenDay: claudePeakTokenDay,
+    peakSessionCost: null,  // statsCache has no per-session cost breakdown
+    models: claudeModels,
+    costPerMTokens: claudeCostPerMTokens,
+  }
+}
+
 export function computeHarnessSummaries(
   data: import('@agentistics/core').AppData,
 ): Record<HarnessId, HarnessSummary> {
@@ -403,86 +498,7 @@ export function computeHarnessSummaries(
 
   for (const harness of data.harnesses) {
     if (harness === 'claude') {
-      // ── Claude: use statsCache as canonical source (survives 30-day cleanup) ──
-      const allDailyDates = new Set((data.statsCache.dailyActivity ?? []).map(d => d.date))
-      const claudeBase = (data.statsCache.dailyActivity ?? []).reduce((s, d) => s + d.sessionCount, 0)
-      const messageBase = (data.statsCache.dailyActivity ?? []).reduce((s, d) => s + d.messageCount, 0)
-
-      // Gap days: Claude sessions in data.sessions whose date is NOT in statsCache.dailyActivity
-      let claudeGapSessions = 0
-      let claudeGapMessages = 0
-      for (const s of data.sessions) {
-        if ((s.harness ?? 'claude') !== 'claude') continue
-        if (!s.start_time) continue
-        const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
-        if (!allDailyDates.has(day)) {
-          claudeGapSessions += 1
-          claudeGapMessages += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
-        }
-      }
-
-      // Tokens and cost from statsCache.modelUsage (all-time Claude totals)
-      const modelUsage = data.statsCache.modelUsage ?? {}
-      const inputTokens = Object.values(modelUsage).reduce((s, u) => s + (u.inputTokens ?? 0), 0)
-      const outputTokens = Object.values(modelUsage).reduce((s, u) => s + (u.outputTokens ?? 0), 0)
-      const costUSD = Object.entries(modelUsage).reduce((s, [modelId, u]) => s + calcCost(u, modelId), 0)
-
-      // ── Claude: per-model breakdown from statsCache.modelUsage ──
-      // Skip entries with empty or 'unknown' model keys — they cannot be priced.
-      const claudeModels = Object.entries(modelUsage)
-        .filter(([model]) => model && model !== 'unknown')
-        .map(([model, u]) => ({
-          model,
-          inputTokens: u.inputTokens ?? 0,
-          outputTokens: u.outputTokens ?? 0,
-          costUSD: calcCost(u, model),
-        }))
-        .sort((a, b) => b.costUSD - a.costUSD)
-
-      // ── Claude: blended cost per 1M tokens (input + output) ──
-      const claudeTokensM = (inputTokens + outputTokens) / 1e6
-      const claudeCostPerMTokens = claudeTokensM > 0 ? costUSD / claudeTokensM : null
-
-      // ── Claude: hour-of-day from statsCache.hourCounts ──
-      const claudeHourCounts = Array.from({ length: 24 }, (_, i) => data.statsCache.hourCounts?.[String(i)] ?? 0)
-
-      // ── Claude: dow from statsCache.dailyActivity ──
-      const claudeDowCounts = Array.from({ length: 7 }, () => 0)
-      for (const d of data.statsCache.dailyActivity ?? []) {
-        const dow = getDay(parseISO(d.date))
-        claudeDowCounts[dow] = (claudeDowCounts[dow] ?? 0) + d.sessionCount
-      }
-
-      // ── Claude: daily activity for sparkline ──
-      const claudeDailyActivity = (data.statsCache.dailyActivity ?? [])
-        .map(d => ({ date: d.date, sessions: d.sessionCount }))
-        .sort((a, b) => a.date.localeCompare(b.date))
-
-      // ── Claude: peak token day from statsCache.dailyModelTokens ──
-      let claudePeakTokenDay: { date: string; tokens: number } | null = null
-      for (const d of data.statsCache.dailyModelTokens ?? []) {
-        const tokens = Object.values(d.tokensByModel).reduce((s, t) => s + t, 0)
-        if (!claudePeakTokenDay || tokens > claudePeakTokenDay.tokens) {
-          claudePeakTokenDay = { date: d.date, tokens }
-        }
-      }
-
-      result['claude'] = {
-        sessions: claudeBase + claudeGapSessions,
-        messages: messageBase + claudeGapMessages,
-        inputTokens,
-        outputTokens,
-        costUSD,
-        hourCounts: claudeHourCounts,
-        peakHour: peakIndex(claudeHourCounts),
-        dowCounts: claudeDowCounts,
-        peakDow: peakIndex(claudeDowCounts),
-        dailyActivity: claudeDailyActivity,
-        peakTokenDay: claudePeakTokenDay,
-        peakSessionCost: null,  // statsCache has no per-session cost breakdown
-        models: claudeModels,
-        costPerMTokens: claudeCostPerMTokens,
-      }
+      result['claude'] = claudeSummaryFromStatsCache(data.statsCache, data.sessions)
     } else {
       result[harness] = summarizeHarnessSessions(data.sessions, harness)
     }

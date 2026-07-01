@@ -5,9 +5,9 @@ import { format as formatDate, parseISO } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import type { AppContext } from '../lib/app-context'
 import type { HarnessId, Lang } from '@agentistics/core'
-import { fmt, fmtCost, formatModel, t, filterByUsers, filterByHarnesses, distinctHarnesses } from '@agentistics/core'
+import { fmt, fmtCost, formatModel, t, filterByUsers, filterByHarnesses, distinctHarnesses, mergeStatsCaches } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
-import { computeHarnessSummaries, summarizeHarnessSessions, getDateRangeFilter, type HarnessSummary } from '../hooks/useData'
+import { computeHarnessSummaries, claudeSummaryFromStatsCache, summarizeHarnessSessions, getDateRangeFilter, type HarnessSummary } from '../hooks/useData'
 
 interface HarnessAgg {
   harness: HarnessId
@@ -288,10 +288,33 @@ export default function ComparePage() {
       if (modelSet && (!s.model || !modelSet.has(s.model))) return false
       return true
     })
+
+    // Claude canonical source: on a central the deep Claude history lives only in
+    // data.userStatsCaches (aggregated, never as individual sessions). Merge the selected
+    // members' caches (or ALL when no member filter) so the Claude column matches the
+    // dashboard exactly — same rule as useDerivedStats' effectiveStatsCache. Only usable
+    // when NO slice filter is active (statsCache has no project/model/date granularity);
+    // otherwise fall back to the per-session sum.
+    const usc = data.userStatsCaches
+    const hasUserStats = !!usc && Object.keys(usc).length > 0
+    const sliceActive =
+      projects.length > 0 || modelSet !== null ||
+      filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd
+    const claudeStatsCache = hasUserStats
+      ? mergeStatsCaches(
+          (usersSel.length > 0 ? usersSel : Object.keys(usc!))
+            .map(u => usc![u])
+            .filter((c): c is NonNullable<typeof c> => !!c),
+        )
+      : data.statsCache
+    const claudeFromStatsCache = hasUserStats && !sliceActive
+
     const sums = {} as Record<HarnessId, HarnessSummary>
     const la = {} as Record<HarnessId, string | null>
     for (const h of cols) {
-      sums[h] = summarizeHarnessSessions(filtered, h)
+      sums[h] = h === 'claude' && claudeFromStatsCache
+        ? claudeSummaryFromStatsCache(claudeStatsCache, userScoped)
+        : summarizeHarnessSessions(filtered, h)
       la[h] = lastActiveFor(filtered, h)
     }
     return { activeHarnesses: cols, summaries: sums, lastActive: la }
