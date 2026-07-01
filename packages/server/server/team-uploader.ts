@@ -17,9 +17,17 @@ import { loadConsolidated } from './consolidate'
 import { readPreferences } from './preferences'
 import { safeReadJson } from './utils'
 
-/** Read this machine's raw Claude statsCache (aggregated history) to push to the central.
- *  Returns undefined when absent/unreadable — the push proceeds without it. */
+/** This machine's statsCache to push to the central — the SUPPLEMENTED one the local
+ *  dashboard actually shows (buildApiResponse gap-fills modelUsage/dailyActivity with recent
+ *  sessions past the stale lastComputedDate), NOT the raw ~/.claude/stats-cache.json (which can
+ *  lag weeks behind). buildApiResponse is memoized, so this reuses the warm /api/data build.
+ *  Falls back to the raw file if the build fails. */
 async function readMemberStatsCache(): Promise<StatsCache | undefined> {
+  try {
+    const { buildApiResponse } = await import('./data')
+    const resp = await buildApiResponse()
+    if (resp?.statsCache) return resp.statsCache
+  } catch { /* fall through to the raw file */ }
   const sc = await safeReadJson<StatsCache>(STATS_CACHE_FILE)
   return sc ?? undefined
 }
