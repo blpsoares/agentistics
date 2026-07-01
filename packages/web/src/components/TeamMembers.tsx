@@ -9,6 +9,8 @@ export interface TeamMember {
   label: string
   createdAt: string
   lastSeenAt: string | null
+  online?: boolean
+  latencyMs?: number | null
 }
 
 // ── i18n ──────────────────────────────────────────────────────────────────
@@ -18,8 +20,13 @@ const COPY = {
   sub:             { en: 'Manage API tokens for team members.',   pt: 'Gerencie tokens de acesso para membros da equipe.' },
   user:            { en: 'User',                                  pt: 'Usuário' },
   label:           { en: 'Label',                                 pt: 'Rótulo' },
+  status:          { en: 'Status',                                pt: 'Status' },
+  online:          { en: 'Online',                                pt: 'Online' },
+  offline:         { en: 'Offline',                               pt: 'Offline' },
   lastSeen:        { en: 'Last seen',                             pt: 'Último acesso' },
   never:           { en: 'Never',                                 pt: 'Nunca' },
+  includeOfflineTitle: { en: 'Show offline members’ data',   pt: 'Mostrar dados de membros offline' },
+  includeOfflineDesc:  { en: 'When off, offline members show only their name + status and are excluded from the totals by default.', pt: 'Quando desligado, membros offline mostram só o nome + status e ficam fora dos totais por padrão.' },
   revoke:          { en: 'Revoke',                                pt: 'Revogar' },
   revoking:        { en: 'Revoking…',                            pt: 'Revogando…' },
   noMembers:       { en: 'No tokens minted yet.',                 pt: 'Nenhum token criado ainda.' },
@@ -80,6 +87,10 @@ export function TeamMembers({ lang }: Props) {
   const [loading, setLoading] = useState(true)
   const [loadErr, setLoadErr] = useState<string | null>(null)
 
+  // Central policy: include offline members' data (loaded from /api/team/config)
+  const [includeOffline, setIncludeOffline] = useState<boolean | null>(null)
+  const [savingOffline, setSavingOffline] = useState(false)
+
   // Mint form state
   const [mintUser, setMintUser] = useState('')
   const [mintLabel, setMintLabel] = useState('')
@@ -99,8 +110,8 @@ export function TeamMembers({ lang }: Props) {
   const [renameErr, setRenameErr] = useState<string | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
 
-  const loadMembers = useCallback(async () => {
-    setLoading(true)
+  const loadMembers = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     setLoadErr(null)
     try {
       const res = await fetch('/api/team/members')
@@ -108,13 +119,52 @@ export function TeamMembers({ lang }: Props) {
       const data = (await res.json()) as { members: TeamMember[] }
       setMembers(data.members)
     } catch (err) {
-      setLoadErr(err instanceof Error ? err.message : String(err))
+      if (!silent) setLoadErr(err instanceof Error ? err.message : String(err))
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [])
 
   useEffect(() => { void loadMembers() }, [loadMembers])
+
+  // Live refresh of status/latency every 10s (silent — no spinner flicker).
+  useEffect(() => {
+    const id = setInterval(() => { void loadMembers(true) }, 10_000)
+    return () => clearInterval(id)
+  }, [loadMembers])
+
+  // Load the central's include-offline-data policy.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await fetch('/api/team/config')
+        if (!res.ok) return
+        const cfg = (await res.json()) as { includeOfflineData?: boolean }
+        if (!cancelled) setIncludeOffline(cfg.includeOfflineData ?? true)
+      } catch { /* leave null → toggle hidden until known */ }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  async function toggleIncludeOffline(next: boolean) {
+    setSavingOffline(true)
+    setIncludeOffline(next) // optimistic
+    try {
+      const res = await fetch('/api/team/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ includeOfflineData: next }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const cfg = (await res.json()) as { includeOfflineData?: boolean }
+      setIncludeOffline(cfg.includeOfflineData ?? next)
+    } catch {
+      setIncludeOffline(!next) // revert on failure
+    } finally {
+      setSavingOffline(false)
+    }
+  }
 
   async function handleMint(e: React.FormEvent) {
     e.preventDefault()
@@ -259,6 +309,43 @@ export function TeamMembers({ lang }: Props) {
         {t('sub', lang)}
       </p>
 
+      {/* Include-offline-data policy toggle */}
+      {includeOffline !== null && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+          padding: '10px 12px', borderRadius: 8, marginBottom: 16,
+          border: '1px solid var(--border)', background: 'var(--bg-elevated)',
+        }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
+              {t('includeOfflineTitle', lang)}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 3, lineHeight: 1.45 }}>
+              {t('includeOfflineDesc', lang)}
+            </div>
+          </div>
+          <button
+            role="switch"
+            aria-checked={includeOffline}
+            disabled={savingOffline}
+            onClick={() => { void toggleIncludeOffline(!includeOffline) }}
+            style={{
+              position: 'relative', flexShrink: 0,
+              width: 40, height: 22, borderRadius: 11, border: 'none',
+              background: includeOffline ? 'var(--anthropic-orange, #cd5d38)' : 'var(--border)',
+              cursor: savingOffline ? 'default' : 'pointer',
+              transition: 'background 0.15s', opacity: savingOffline ? 0.6 : 1,
+            }}
+          >
+            <span style={{
+              position: 'absolute', top: 2, left: includeOffline ? 20 : 2,
+              width: 18, height: 18, borderRadius: '50%', background: '#fff',
+              transition: 'left 0.15s',
+            }} />
+          </button>
+        </div>
+      )}
+
       {/* Load error */}
       {loadErr && (
         <div style={{
@@ -283,13 +370,13 @@ export function TeamMembers({ lang }: Props) {
           {/* Table header */}
           <div style={{
             display: 'grid',
-            gridTemplateColumns: '1fr 1fr 1fr auto',
+            gridTemplateColumns: 'auto 1.2fr 1fr 1fr auto',
             gap: 0,
             background: 'var(--bg-elevated)',
             borderBottom: '1px solid var(--border)',
             padding: '7px 12px',
           }}>
-            {[t('user', lang), t('label', lang), t('lastSeen', lang), ''].map((h, i) => (
+            {[t('status', lang), t('user', lang), t('label', lang), t('lastSeen', lang), ''].map((h, i) => (
               <div key={i} style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
                 {h}
               </div>
@@ -311,17 +398,31 @@ export function TeamMembers({ lang }: Props) {
                 key={m.id}
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: '1fr 1fr 1fr auto',
+                  gridTemplateColumns: 'auto 1.2fr 1fr 1fr auto',
                   gap: 0,
                   alignItems: 'center',
                   padding: '9px 12px',
                   borderBottom: i < members.length - 1 ? '1px solid var(--border)' : 'none',
                   background: 'var(--bg-card)',
                   transition: 'background 0.1s',
+                  // Offline rows are dimmed so the eye jumps to who's actually connected.
+                  opacity: m.online ? 1 : 0.5,
                 }}
                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)' }}
                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-card)' }}
               >
+                {/* Status cell — colored dot + latency (online) */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingRight: 12, whiteSpace: 'nowrap' }}>
+                  <span style={{
+                    width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                    background: m.online ? '#22c55e' : '#ef4444',
+                    boxShadow: m.online ? '0 0 6px rgba(34,197,94,0.6)' : 'none',
+                  }} />
+                  <span style={{ fontSize: 11, color: m.online ? 'var(--accent-green, #22c55e)' : 'var(--text-tertiary)', fontWeight: 500 }}>
+                    {m.online ? (m.latencyMs != null ? `${m.latencyMs}ms` : t('online', lang)) : t('offline', lang)}
+                  </span>
+                </div>
+
                 {/* User cell — static or editable */}
                 {renamingId === m.id ? (
                   <div style={{ paddingRight: 8 }}>

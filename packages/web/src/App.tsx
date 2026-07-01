@@ -1871,6 +1871,7 @@ export default function AppLayout() {
                   modelsInProject={modelsInProject}
                   users={users}
                   harnesses={availableHarnesses}
+                  presence={data?.presence}
                   lang={lang}
                   compact
                 />
@@ -1910,6 +1911,7 @@ export default function AppLayout() {
               modelsInProject={modelsInProject}
               users={users}
               harnesses={availableHarnesses}
+              presence={data?.presence}
               lang={lang}
             />
           </div>

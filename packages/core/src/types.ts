@@ -193,6 +193,16 @@ export interface HealthIssue {
   auto_fixed?: boolean
 }
 
+/** Team/central only: a member's live connection status, keyed by resolved display name. */
+export interface MemberPresence {
+  /** True when the member has a live reverse-channel socket OR a recent heartbeat push. */
+  online: boolean
+  /** ISO timestamp of the member's last contact (push/whoami), or null if never seen. */
+  lastSeenAt: string | null
+  /** Round-trip latency in ms from the last WebSocket ping/pong, or null when no live socket. */
+  latencyMs: number | null
+}
+
 export interface AppData {
   statsCache: StatsCache
   sessions: SessionMeta[]
@@ -205,6 +215,10 @@ export interface AppData {
    *  Lets the central reproduce the member's authoritative totals (deep Claude history that
    *  only exists aggregated in statsCache, never as individual sessions). Absent on solo. */
   userStatsCaches?: Record<string, StatsCache>
+  /** Team/central only: live presence per member (resolved display name → status). */
+  presence?: Record<string, MemberPresence>
+  /** Team/central only: central policy — whether offline members' data is shown by default. */
+  includeOfflineData?: boolean
 }
 
 /** An empty statsCache with all zero/neutral fields. Pure. */
@@ -286,6 +300,7 @@ export interface Filters {
   models: string[]     // empty = all models
   harness?: HarnessId
   harnesses?: HarnessId[]  // multi-select harness filter; empty/undefined = all harnesses
+  presence?: 'online' | 'offline'  // team/central: filter members by live status; undefined = policy default
 }
 
 export type Lang = 'pt' | 'en'

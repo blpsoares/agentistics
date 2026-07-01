@@ -38,6 +38,9 @@ export type MemberInfo = {
   label: string
   createdAt: string
   lastSeenAt: string | null
+  /** Live status — populated by the members endpoint from the presence snapshot. */
+  online?: boolean
+  latencyMs?: number | null
 }
 
 // ---------------------------------------------------------------------------

@@ -519,11 +519,29 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const userFiltered = users.length > 0
     const modelSet = filters.models && filters.models.length > 0 ? new Set(filters.models) : null
 
+    // ── Presence scope — team/central: restrict to online/offline members ──
+    // Effective presence: an explicit filter wins; otherwise the central policy
+    // (includeOfflineData === false → online-only by default). null = all members.
+    const presence = data.presence
+    const effectivePresence: 'online' | 'offline' | null =
+      filters.presence ?? (presence && data.includeOfflineData === false ? 'online' : null)
+    const presenceAllowedUsers: Set<string> | null =
+      effectivePresence && presence
+        ? new Set(
+            Object.entries(presence)
+              .filter(([, p]) => (effectivePresence === 'online' ? p.online : !p.online))
+              .map(([name]) => name),
+          )
+        : null
+
     // ── Harness filter — applied first so all downstream filters compose on top ──
-    // Compose (all AND predicates): legacy single-harness field (now always unset) →
-    // user filter → multi-select harnesses filter (the sole harness selection mechanism).
+    // Compose (all AND predicates): presence scope → legacy single-harness field (now always
+    // unset) → user filter → multi-select harnesses filter (the sole harness selection mechanism).
+    const presenceScoped = presenceAllowedUsers
+      ? data.sessions.filter(s => !!s.user && presenceAllowedUsers.has(s.user))
+      : data.sessions
     const harnessSessions = filterByHarnesses(
-      filterByUsers(filterByHarness(data.sessions, filters.harness), users),
+      filterByUsers(filterByHarness(presenceScoped, filters.harness), users),
       filters.harnesses ?? [],
     )
     // Harness selection comes solely from the multi-select filter (filters.harnesses).
@@ -540,9 +558,11 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // Solo (no userStatsCaches) → the machine's own statsCache, unchanged.
     const userStatsCaches = data.userStatsCaches
     const hasUserStats = !!userStatsCaches && Object.keys(userStatsCaches).length > 0
+    const statsCachePool = (users.length > 0 ? users : Object.keys(userStatsCaches ?? {}))
+      .filter(u => !presenceAllowedUsers || presenceAllowedUsers.has(u))
     const effectiveStatsCache = hasUserStats
       ? mergeStatsCaches(
-          (users.length > 0 ? users : Object.keys(userStatsCaches!))
+          statsCachePool
             .map(u => userStatsCaches![u])
             .filter((c): c is NonNullable<typeof c> => !!c),
         )

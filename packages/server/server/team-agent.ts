@@ -37,6 +37,53 @@ const agentSockets = new Map<string, Set<ServerWebSocket<AgentSocketData>>>()
 const pending = new Map<string, (response: AgentResponse) => void>()
 
 // ---------------------------------------------------------------------------
+// Liveness + latency — ping each socket periodically; a socket that misses
+// MAX_MISSED_PONGS consecutive pings is considered dead and force-closed, so a
+// hard-killed machine (no TCP FIN) still transitions to offline promptly.
+// ---------------------------------------------------------------------------
+
+const PING_INTERVAL_MS = 15_000
+const MAX_MISSED_PONGS = 2
+
+interface SockState {
+  latencyMs: number | null
+  awaitingPong: boolean
+  pingSentAt: number
+  missed: number
+}
+
+const sockState = new Map<ServerWebSocket<AgentSocketData>, SockState>()
+let pingTimer: ReturnType<typeof setInterval> | null = null
+/** Optional hook (wired by index.ts) fired when the online set changes, for live UI updates. */
+let onPresenceChange: (() => void) | null = null
+
+export function setPresenceChangeHook(fn: () => void): void {
+  onPresenceChange = fn
+}
+
+function ensurePingLoop(): void {
+  if (pingTimer) return
+  pingTimer = setInterval(() => {
+    for (const [ws, st] of sockState) {
+      if (st.awaitingPong) {
+        st.missed += 1
+        if (st.missed >= MAX_MISSED_PONGS) {
+          try { ws.close() } catch { /* close() triggers the close handler → unregisterAgent */ }
+          continue
+        }
+      }
+      st.awaitingPong = true
+      st.pingSentAt = Date.now()
+      try { ws.ping() } catch { /* dead socket; next tick escalates via missed count */ }
+    }
+  }, PING_INTERVAL_MS)
+}
+
+function stopPingLoop(): void {
+  if (pingTimer) { clearInterval(pingTimer); pingTimer = null }
+}
+
+// ---------------------------------------------------------------------------
 // WebSocket lifecycle hooks (called from index.ts websocket: {} handler)
 // ---------------------------------------------------------------------------
 
@@ -44,14 +91,47 @@ export function registerAgent(ws: ServerWebSocket<AgentSocketData>): void {
   const { user } = ws.data
   if (!agentSockets.has(user)) agentSockets.set(user, new Set())
   agentSockets.get(user)!.add(ws)
+  sockState.set(ws, { latencyMs: null, awaitingPong: false, pingSentAt: 0, missed: 0 })
+  ensurePingLoop()
+  onPresenceChange?.()
 }
 
 export function unregisterAgent(ws: ServerWebSocket<AgentSocketData>): void {
   const { user } = ws.data
+  sockState.delete(ws)
   const sockets = agentSockets.get(user)
-  if (!sockets) return
+  if (!sockets) { if (sockState.size === 0) stopPingLoop(); return }
   sockets.delete(ws)
   if (sockets.size === 0) agentSockets.delete(user)
+  if (sockState.size === 0) stopPingLoop()
+  onPresenceChange?.()
+}
+
+/** Called from the websocket `pong` handler when a member answers our ping. */
+export function onAgentPong(ws: ServerWebSocket<AgentSocketData>): void {
+  const st = sockState.get(ws)
+  if (!st) return
+  if (st.awaitingPong) st.latencyMs = Date.now() - st.pingSentAt
+  st.awaitingPong = false
+  st.missed = 0
+}
+
+/**
+ * Snapshot of currently-connected members → best (lowest) observed latency in ms,
+ * or null when no ping has completed yet. A member absent from the map has no live socket.
+ */
+export function getOnlineLatency(): Map<string, number | null> {
+  const out = new Map<string, number | null>()
+  for (const [user, socks] of agentSockets) {
+    if (socks.size === 0) continue
+    let best: number | null = null
+    for (const ws of socks) {
+      const st = sockState.get(ws)
+      if (st?.latencyMs != null) best = best == null ? st.latencyMs : Math.min(best, st.latencyMs)
+    }
+    out.set(user, best)
+  }
+  return out
 }
 
 /**

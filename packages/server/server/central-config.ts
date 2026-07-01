@@ -17,11 +17,15 @@ import { getMongoDb } from './mongo'
 
 export interface CentralConfig {
   pushIntervalSec: number
+  /** Central policy: whether offline members' data is included in aggregates by default. */
+  includeOfflineData: boolean
 }
 
-interface CentralConfigDoc extends CentralConfig {
+interface CentralConfigDoc extends Partial<CentralConfig> {
   _id: 'team'
 }
+
+const DEFAULT_INCLUDE_OFFLINE = true
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -36,12 +40,30 @@ export async function getCentralConfig(): Promise<CentralConfig> {
     const db = await getMongoDb()
     const col = db.collection<CentralConfigDoc>(COLLECTION)
     const doc = await col.findOne({ _id: DOC_ID })
-    if (!doc) return { pushIntervalSec: PUSH_INTERVAL.DEFAULT_SEC }
+    if (!doc) return { pushIntervalSec: PUSH_INTERVAL.DEFAULT_SEC, includeOfflineData: DEFAULT_INCLUDE_OFFLINE }
     // Read with the express floor so an express value (<15s) survives the round-trip.
-    return { pushIntervalSec: clampPushInterval(doc.pushIntervalSec, PUSH_INTERVAL.EXPRESS_MIN_SEC) }
+    return {
+      pushIntervalSec: clampPushInterval(doc.pushIntervalSec ?? PUSH_INTERVAL.DEFAULT_SEC, PUSH_INTERVAL.EXPRESS_MIN_SEC),
+      includeOfflineData: doc.includeOfflineData ?? DEFAULT_INCLUDE_OFFLINE,
+    }
   } catch {
     // DB unreachable — return safe defaults
-    return { pushIntervalSec: PUSH_INTERVAL.DEFAULT_SEC }
+    return { pushIntervalSec: PUSH_INTERVAL.DEFAULT_SEC, includeOfflineData: DEFAULT_INCLUDE_OFFLINE }
+  }
+}
+
+/**
+ * Set the includeOfflineData policy, upsert into Mongo, and return the stored value.
+ * If Mongo is unreachable, the value is returned without being persisted.
+ */
+export async function setIncludeOfflineData(value: boolean): Promise<boolean> {
+  try {
+    const db = await getMongoDb()
+    const col = db.collection<CentralConfigDoc>(COLLECTION)
+    await col.updateOne({ _id: DOC_ID }, { $set: { includeOfflineData: value } }, { upsert: true })
+    return value
+  } catch {
+    return value
   }
 }
 

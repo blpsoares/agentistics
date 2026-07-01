@@ -25,8 +25,15 @@ const JSON_CT = { 'Content-Type': 'application/json' } as const
  */
 export async function handleMembers(_req: Request): Promise<Response> {
   try {
-    const members = await listMembers()
-    return new Response(JSON.stringify({ members }), {
+    const [members, presence] = await Promise.all([
+      listMembers(),
+      import('./team-presence').then(m => m.computePresence()).catch(() => ({} as Record<string, { online: boolean; latencyMs: number | null }>)),
+    ])
+    const enriched = members.map(m => {
+      const p = presence[m.user]
+      return { ...m, online: p?.online ?? false, latencyMs: p?.latencyMs ?? null }
+    })
+    return new Response(JSON.stringify({ members: enriched }), {
       status: 200,
       headers: JSON_CT,
     })

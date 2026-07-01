@@ -33,10 +33,11 @@ import {
   maybeSpawnWatcher,
   serveStatic,
   SERVE_STATIC,
+  triggerSseNotification,
 } from './sse'
 import { fullSync } from './archive'
 import { getArchiveMode } from './preferences'
-import { registerAgent, unregisterAgent, onAgentMessage, handleSessionChat } from './team-agent'
+import { registerAgent, unregisterAgent, onAgentMessage, onAgentPong, setPresenceChangeHook, handleSessionChat } from './team-agent'
 import { startAgentClient } from './team-agent-client'
 import { validateIngestToken } from './team-tokens'
 
@@ -79,6 +80,9 @@ void (async () => {
 void setupFileWatcher()
 if (TEAM_CENTRAL) {
   import('./team-watch').then(m => m.startTeamWatch()).catch(err => console.error('[team-watch] failed to start:', err))
+  // Push a live SSE update when a member connects/disconnects so the dashboard's
+  // online/offline dots refresh immediately (latency numbers refresh on the next poll).
+  setPresenceChangeHook(() => triggerSseNotification())
 }
 import('./team-uploader').then(m => m.startUploader()).catch(err => console.error('[team-uploader] failed to start:', err))
 startAgentClient()
@@ -133,6 +137,7 @@ Bun.serve<{ user: string; isAgent?: boolean }>({
     data: {} as { user: string; isAgent?: boolean },
     open(ws) { if (!ws.data.isAgent) return; registerAgent(ws) },
     message(ws, msg) { if (!ws.data.isAgent) return; onAgentMessage(ws, msg) },
+    pong(ws) { if (!ws.data.isAgent) return; onAgentPong(ws) },
     close(ws) { if (!ws.data.isAgent) return; unregisterAgent(ws) },
   },
   async fetch(req, server) {
@@ -754,7 +759,21 @@ Bun.serve<{ user: string; isAgent?: boolean }>({
     if (url.pathname === '/api/data' && req.method === 'GET') {
       try {
         const data = await buildApiResponse()
-        return new Response(JSON.stringify(data), {
+        // Presence is live (in-memory sockets + heartbeat) — merge it in AFTER the cached
+        // build so online/offline + latency stay fresh without recomputing the whole response.
+        let extra: { presence?: unknown; includeOfflineData?: boolean } = {}
+        if (TEAM_CENTRAL) {
+          const [{ computePresence }, { getCentralConfig }] = await Promise.all([
+            import('./team-presence'),
+            import('./central-config'),
+          ])
+          const [presence, cfg] = await Promise.all([
+            computePresence().catch(() => ({})),
+            getCentralConfig().catch(() => null),
+          ])
+          extra = { presence, includeOfflineData: cfg?.includeOfflineData ?? true }
+        }
+        return new Response(JSON.stringify({ ...data, ...extra }), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -989,25 +1008,34 @@ Bun.serve<{ user: string; isAgent?: boolean }>({
 
     if (url.pathname === '/api/team/config' && req.method === 'PUT') {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
-      let body: { pushIntervalSec?: unknown }
+      let body: { pushIntervalSec?: unknown; includeOfflineData?: unknown }
       try {
-        body = await req.json() as { pushIntervalSec?: unknown }
+        body = await req.json() as { pushIntervalSec?: unknown; includeOfflineData?: unknown }
       } catch {
         return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
-      const raw = body.pushIntervalSec
-      if (typeof raw !== 'number') {
+      if (body.pushIntervalSec !== undefined && typeof body.pushIntervalSec !== 'number') {
         return new Response(JSON.stringify({ error: 'pushIntervalSec must be a number' }), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
-      const { setPushInterval } = await import('./central-config')
-      const pushIntervalSec = await setPushInterval(raw)
-      return new Response(JSON.stringify({ pushIntervalSec }), {
+      if (body.includeOfflineData !== undefined && typeof body.includeOfflineData !== 'boolean') {
+        return new Response(JSON.stringify({ error: 'includeOfflineData must be a boolean' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { setPushInterval, setIncludeOfflineData, getCentralConfig } = await import('./central-config')
+      if (typeof body.pushIntervalSec === 'number') await setPushInterval(body.pushIntervalSec)
+      if (typeof body.includeOfflineData === 'boolean') await setIncludeOfflineData(body.includeOfflineData)
+      const config = await getCentralConfig()
+      // A policy change (offline-data default) affects every viewer → nudge them to refetch.
+      if (typeof body.includeOfflineData === 'boolean') triggerSseNotification()
+      return new Response(JSON.stringify(config), {
         status: 200,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
