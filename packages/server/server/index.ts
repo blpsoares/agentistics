@@ -855,6 +855,8 @@ Bun.serve<{ user: string; isAgent?: boolean }>({
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleRevokeToken } = await import('./team-admin')
       const res = await handleRevokeToken(req)
+      // Revoke cascades to the member's sessions — refresh the dashboard immediately.
+      if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })

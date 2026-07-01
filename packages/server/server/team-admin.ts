@@ -11,6 +11,7 @@
  */
 
 import { listMembers, mintToken, revokeToken } from './team-tokens'
+import { getTeamCollection } from './mongo'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
 
@@ -120,7 +121,15 @@ export async function handleRevokeToken(req: Request): Promise<Response> {
 
   try {
     const deleted = await revokeToken(id)
-    return new Response(JSON.stringify({ ok: deleted }), {
+    // Cascade: remove the member's stored sessions too, so revoking a member also
+    // removes them from the dashboard (their memberId == the token's hash id).
+    let sessionsDeleted = 0
+    try {
+      const col = await getTeamCollection()
+      const res = await col.deleteMany({ memberId: id })
+      sessionsDeleted = res.deletedCount ?? 0
+    } catch { /* session cleanup is best-effort; the token is already revoked */ }
+    return new Response(JSON.stringify({ ok: deleted, sessionsDeleted }), {
       status: 200,
       headers: JSON_CT,
     })
