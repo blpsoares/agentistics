@@ -15,7 +15,10 @@ export type { TeamConfig }
 const INTERVAL_OPTIONS = ([15, 30, 60, 120, 300] as const).filter(
   (sec) => sec >= PUSH_INTERVAL.MIN_SEC && sec <= PUSH_INTERVAL.MAX_SEC,
 ) as readonly number[]
-type IntervalSec = (typeof INTERVAL_OPTIONS)[number]
+// Express mode reveals sub-15s options (down to EXPRESS_MIN_SEC) — central-only.
+const EXPRESS_OPTIONS = ([5, 10, ...INTERVAL_OPTIONS] as const).filter(
+  (sec) => sec >= PUSH_INTERVAL.EXPRESS_MIN_SEC && sec <= PUSH_INTERVAL.MAX_SEC,
+) as readonly number[]
 
 export interface Props {
   team: TeamConfig
@@ -86,6 +89,9 @@ const COPY = {
     pt: 'Esta instância roda localmente na sua máquina. Conecte-a ao central do seu time abaixo para enviar suas métricas.',
   },
   pushInterval:      { en: 'Push interval',                pt: 'Intervalo de envio' },
+  express:           { en: 'Express',                      pt: 'Express' },
+  expressHint:       { en: 'Allow intervals below 15 s (higher load on the central)', pt: 'Permite intervalos abaixo de 15 s (mais carga na central)' },
+  intervalByCentral: { en: 'Set by your team\'s central — all members follow it.', pt: 'Definido pela central do time — todos os membros seguem.' },
   appearsAs:         { en: "You\'ll appear as:",             pt: 'Você aparece como:' },
   pushIntervalSubCentral: {
     en: 'Members push at this interval (min 15 s)',
@@ -208,14 +214,12 @@ function formatInterval(sec: number): string {
 function IntervalSelect({
   value,
   onChange,
-  minSec = PUSH_INTERVAL.MIN_SEC,
-  disableBelow = false,
+  options = INTERVAL_OPTIONS,
   disabled = false,
 }: {
   value: number
   onChange: (sec: number) => void
-  minSec?: number
-  disableBelow?: boolean
+  options?: readonly number[]
   disabled?: boolean
 }) {
   return (
@@ -236,8 +240,8 @@ function IntervalSelect({
         ...(disabled ? { opacity: 0.6 } : {}),
       }}
     >
-      {(INTERVAL_OPTIONS as readonly number[]).filter(sec => disableBelow || sec >= minSec).map(sec => (
-        <option key={sec} value={sec} disabled={disableBelow && sec < minSec}>
+      {options.map(sec => (
+        <option key={sec} value={sec}>
           {formatInterval(sec)}
         </option>
       ))}
@@ -284,9 +288,9 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
   }, [team.endpoint, team.token])
 
   // ── Central push-interval state (loaded from /api/team/config) ──────────
-  const [centralInterval, setCentralInterval] = useState<IntervalSec>(
-    PUSH_INTERVAL.DEFAULT_SEC as IntervalSec,
-  )
+  const [centralInterval, setCentralInterval] = useState<number>(PUSH_INTERVAL.DEFAULT_SEC)
+  // Express mode: reveals sub-15s options. Derived from the loaded value (<15s ⇒ express).
+  const [express, setExpress] = useState(false)
   const [intervalSaving, setIntervalSaving] = useState(false)
   const [intervalSaveErr, setIntervalSaveErr] = useState<string | null>(null)
 
@@ -296,20 +300,18 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
       .then(r => (r.ok ? (r.json() as Promise<{ pushIntervalSec?: number }>) : Promise.reject()))
       .then(cfg => {
         if (typeof cfg.pushIntervalSec === 'number') {
-          // Snap to nearest option (or keep default if value is unusual)
-          const nearest = (INTERVAL_OPTIONS as readonly number[]).includes(cfg.pushIntervalSec)
-            ? (cfg.pushIntervalSec as IntervalSec)
-            : (PUSH_INTERVAL.DEFAULT_SEC as IntervalSec)
-          setCentralInterval(nearest)
+          const opts = cfg.pushIntervalSec < PUSH_INTERVAL.MIN_SEC ? EXPRESS_OPTIONS : INTERVAL_OPTIONS
+          const val = opts.includes(cfg.pushIntervalSec) ? cfg.pushIntervalSec : PUSH_INTERVAL.DEFAULT_SEC
+          setCentralInterval(val)
+          if (cfg.pushIntervalSec < PUSH_INTERVAL.MIN_SEC) setExpress(true)
         }
       })
       .catch(() => { /* ignore — server may not have the field yet */ })
   }, [central])
 
   function handleCentralIntervalChange(sec: number) {
-    const snapped = (INTERVAL_OPTIONS as readonly number[]).includes(sec)
-      ? (sec as IntervalSec)
-      : (PUSH_INTERVAL.DEFAULT_SEC as IntervalSec)
+    const opts = express ? EXPRESS_OPTIONS : INTERVAL_OPTIONS
+    const snapped = opts.includes(sec) ? sec : PUSH_INTERVAL.DEFAULT_SEC
     setCentralInterval(snapped)
     setIntervalSaving(true)
     setIntervalSaveErr(null)
@@ -483,13 +485,26 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
           label={c('pushInterval', lang)}
           sub={c('pushIntervalSubCentral', lang)}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <IntervalSelect
               value={centralInterval}
               onChange={handleCentralIntervalChange}
-              minSec={PUSH_INTERVAL.MIN_SEC}
-              disableBelow
+              options={express ? EXPRESS_OPTIONS : INTERVAL_OPTIONS}
             />
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 12, color: 'var(--text-secondary)' }} title={c('expressHint', lang)}>
+              <input
+                type="checkbox"
+                checked={express}
+                onChange={e => {
+                  const on = e.target.checked
+                  setExpress(on)
+                  // Leaving express with a sub-15s value → snap up to the normal floor and save.
+                  if (!on && centralInterval < PUSH_INTERVAL.MIN_SEC) handleCentralIntervalChange(PUSH_INTERVAL.MIN_SEC)
+                }}
+                style={{ accentColor: 'var(--anthropic-orange)', cursor: 'pointer' }}
+              />
+              {c('express', lang)}
+            </label>
             {intervalSaving && (
               <Loader2 size={12} style={{ color: 'var(--text-tertiary)', animation: 'spin 1s linear infinite' }} />
             )}
@@ -624,17 +639,14 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
             </div>
           )}
 
-          {/* ── Push interval (member) ── */}
+          {/* ── Push interval — read-only: the central is the sole authority ── */}
           <PrefRow
             label={c('pushInterval', lang)}
-            sub={c('pushIntervalSubMember', lang)}
+            sub={c('intervalByCentral', lang)}
           >
-            <IntervalSelect
-              value={team.pushIntervalSec ?? PUSH_INTERVAL.DEFAULT_SEC}
-              onChange={sec => set('pushIntervalSec', sec)}
-              minSec={PUSH_INTERVAL.MIN_SEC}
-              disabled={!editing}
-            />
+            <span style={{ fontSize: 12, color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
+              {pt ? 'definido pela central' : 'set by the central'}
+            </span>
           </PrefRow>
 
           {/* ── Save / Edit button + result area ── */}

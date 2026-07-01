@@ -144,6 +144,16 @@ test('clampPushInterval passes through in-range value', () => {
   expect(clampPushInterval(PUSH_INTERVAL.MAX_SEC)).toBe(PUSH_INTERVAL.MAX_SEC)
 })
 
+test('clampPushInterval with the express floor allows sub-15s values', () => {
+  // Central express mode: the floor drops to EXPRESS_MIN_SEC.
+  expect(clampPushInterval(5, PUSH_INTERVAL.EXPRESS_MIN_SEC)).toBe(5)
+  expect(clampPushInterval(10, PUSH_INTERVAL.EXPRESS_MIN_SEC)).toBe(10)
+  // Still floored at the express minimum, never below it.
+  expect(clampPushInterval(2, PUSH_INTERVAL.EXPRESS_MIN_SEC)).toBe(PUSH_INTERVAL.EXPRESS_MIN_SEC)
+  // MAX still enforced regardless of the floor.
+  expect(clampPushInterval(9999, PUSH_INTERVAL.EXPRESS_MIN_SEC)).toBe(PUSH_INTERVAL.MAX_SEC)
+})
+
 test('clampPushInterval rounds fractional seconds', () => {
   expect(clampPushInterval(29.4)).toBe(29)
   expect(clampPushInterval(29.6)).toBe(30)

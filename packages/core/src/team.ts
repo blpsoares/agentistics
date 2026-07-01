@@ -40,17 +40,21 @@ export const PUSH_INTERVAL = {
   MIN_SEC: 15,
   MAX_SEC: 3600,
   DEFAULT_SEC: 30,
+  // Express mode floor — the central may dictate intervals shorter than MIN_SEC
+  // (down to this value) when the admin enables express mode.
+  EXPRESS_MIN_SEC: 5,
 } as const
 
 /**
- * Clamp a push-interval value (seconds) to the allowed range.
+ * Clamp a push-interval value (seconds) to [minSec, MAX_SEC].
  * Non-finite, NaN, or <= 0 values fall back to DEFAULT_SEC.
- * In-range values are rounded to the nearest second.
+ * In-range values are rounded to the nearest second. `minSec` defaults to the
+ * normal MIN_SEC; pass EXPRESS_MIN_SEC to allow the central's express intervals.
  */
-export function clampPushInterval(sec: number): number {
+export function clampPushInterval(sec: number, minSec: number = PUSH_INTERVAL.MIN_SEC): number {
   if (!Number.isFinite(sec) || sec <= 0) return PUSH_INTERVAL.DEFAULT_SEC
   const rounded = Math.round(sec)
-  if (rounded < PUSH_INTERVAL.MIN_SEC) return PUSH_INTERVAL.MIN_SEC
+  if (rounded < minSec) return minSec
   if (rounded > PUSH_INTERVAL.MAX_SEC) return PUSH_INTERVAL.MAX_SEC
   return rounded
 }

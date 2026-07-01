@@ -189,7 +189,8 @@ async function fetchCentralInterval(endpoint: string): Promise<number> {
     const json = await res.json() as { pushIntervalSec?: unknown }
     const sec = json.pushIntervalSec
     if (typeof sec !== 'number') return PUSH_INTERVAL.DEFAULT_SEC
-    return clampPushInterval(sec)
+    // Honor express intervals (the central may dictate below the normal 15s floor).
+    return clampPushInterval(sec, PUSH_INTERVAL.EXPRESS_MIN_SEC)
   } catch {
     return PUSH_INTERVAL.DEFAULT_SEC
   }
@@ -229,10 +230,10 @@ export function startUploader(): void {
       const prefs = await readPreferences()
       const team = prefs.team
       if (team?.mode === 'member' && team.endpoint && team.user) {
-        // Determine effective interval: max(central, member preference)
+        // The central is the sole authority on the interval; members follow it (honoring
+        // express intervals below the normal 15s floor). No member-side override.
         const centralSec = await fetchCentralInterval(team.endpoint)
-        const memberPref = typeof team.pushIntervalSec === 'number' ? team.pushIntervalSec : 0
-        nextIntervalSec = clampPushInterval(Math.max(centralSec, memberPref))
+        nextIntervalSec = clampPushInterval(centralSec, PUSH_INTERVAL.EXPRESS_MIN_SEC)
         await pushOnce(team)
       }
     } catch (err) {

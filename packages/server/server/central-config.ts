@@ -37,7 +37,8 @@ export async function getCentralConfig(): Promise<CentralConfig> {
     const col = db.collection<CentralConfigDoc>(COLLECTION)
     const doc = await col.findOne({ _id: DOC_ID })
     if (!doc) return { pushIntervalSec: PUSH_INTERVAL.DEFAULT_SEC }
-    return { pushIntervalSec: clampPushInterval(doc.pushIntervalSec) }
+    // Read with the express floor so an express value (<15s) survives the round-trip.
+    return { pushIntervalSec: clampPushInterval(doc.pushIntervalSec, PUSH_INTERVAL.EXPRESS_MIN_SEC) }
   } catch {
     // DB unreachable — return safe defaults
     return { pushIntervalSec: PUSH_INTERVAL.DEFAULT_SEC }
@@ -50,7 +51,9 @@ export async function getCentralConfig(): Promise<CentralConfig> {
  * without being persisted.
  */
 export async function setPushInterval(sec: number): Promise<number> {
-  const clamped = clampPushInterval(sec)
+  // The central is the authority on the interval and may go below the normal 15s floor
+  // (down to EXPRESS_MIN_SEC) when the admin picks an express value.
+  const clamped = clampPushInterval(sec, PUSH_INTERVAL.EXPRESS_MIN_SEC)
   try {
     const db = await getMongoDb()
     const col = db.collection<CentralConfigDoc>(COLLECTION)
