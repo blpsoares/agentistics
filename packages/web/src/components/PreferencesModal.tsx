@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react'
 import {
   X, GripVertical, RotateCcw, Save, Volume2, VolumeX, Zap, Bot,
-  Globe, Monitor, Download, SlidersHorizontal, Activity, Code2,
+  Globe, Monitor, Download, SlidersHorizontal, Activity,
   Archive, Check, HardDrive, FolderClock, ExternalLink, DatabaseZap,
   Cpu, Copy, CheckCheck, AlertCircle, CircleDot, Users, Database,
 } from 'lucide-react'
@@ -30,14 +30,6 @@ export interface PrefsDraft {
   chatSoundId: string
 }
 
-interface ConfigField { key: string; default: string; description: string }
-interface ConfigResponse { config: Record<string, string>; backup: Record<string, string> | null; active: Record<string, string> }
-
-const CONFIG_FIELDS: ConfigField[] = [
-  { key: 'PORT',      default: '47291', description: 'API server port' },
-  { key: 'VITE_PORT', default: '47292', description: 'Vite dev server port' },
-]
-
 const CARD_LABELS: Record<string, { en: string; pt: string }> = {
   messages:         { en: 'Messages',        pt: 'Mensagens' },
   sessions:         { en: 'Sessions',        pt: 'Sessões' },
@@ -64,7 +56,7 @@ const BADGE_COLORS: Record<string, string> = {
   Powerful: 'var(--accent-purple)',
 }
 
-export type SettingsTab = 'preferences' | 'sessions' | 'live' | 'install' | 'environment' | 'harnesses' | 'datasources' | 'team'
+export type SettingsTab = 'preferences' | 'sessions' | 'live' | 'install' | 'harnesses' | 'datasources' | 'team'
 
 interface Props {
   initial: PrefsDraft
@@ -668,189 +660,6 @@ function LiveTab({
   )
 }
 
-// ── Tab: Environment ──────────────────────────────────────────────────────
-
-function EnvironmentTab({ pt }: { pt: boolean }) {
-  const [configData, setConfigData] = useState<ConfigResponse | null>(null)
-  const [draft, setDraft] = useState<Record<string, string>>({})
-  const [saving, setSaving] = useState(false)
-  const [savedMsg, setSavedMsg] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const loadConfig = useCallback(async () => {
-    try {
-      const res = await fetch('/api/config')
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = (await res.json()) as ConfigResponse
-      setConfigData(data); setDraft({ ...data.config })
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)) }
-  }, [])
-
-  useEffect(() => { void loadConfig() }, [loadConfig])
-
-  const handleSave = async () => {
-    setSaving(true); setError(null)
-    try {
-      const res = await fetch('/api/config', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ values: draft }),
-      })
-      if (!res.ok) { const b = (await res.json()) as { error?: string }; throw new Error(b.error ?? `HTTP ${res.status}`) }
-      const updated = (await res.json()) as { ok: boolean; config: Record<string, string> }
-      setConfigData(prev => prev ? { ...prev, config: updated.config, backup: prev.config } : null)
-      setDraft({ ...updated.config }); setSavedMsg(true); setTimeout(() => setSavedMsg(false), 3000)
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)) }
-    finally { setSaving(false) }
-  }
-
-  const handleRestore = async () => {
-    setError(null)
-    try {
-      const res = await fetch('/api/config/restore', { method: 'POST' })
-      if (!res.ok) { const b = (await res.json()) as { error?: string }; throw new Error(b.error ?? `HTTP ${res.status}`) }
-      const result = (await res.json()) as { ok: boolean; config: Record<string, string> }
-      if (result.ok) await loadConfig()
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)) }
-  }
-
-  const hasBackup = configData?.backup !== null && configData?.backup !== undefined
-  const backupSummary = hasBackup && configData?.backup
-    ? CONFIG_FIELDS.map(f => `${f.key}=${configData.backup?.[f.key] ?? f.default}`).join(', ')
-    : ''
-
-  const isTauri = typeof window !== 'undefined' &&
-    ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
-  const changeSource = async () => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const invoke = (window as any).__TAURI__?.core?.invoke
-      if (invoke) await invoke('change_source')
-    } catch { /* ignore */ }
-  }
-
-  return (
-    <>
-      {isTauri && (
-        <div style={{
-          marginBottom: 20, padding: '12px 14px', borderRadius: 8,
-          border: '1px solid var(--border)', background: 'var(--bg-elevated)',
-        }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>
-            {pt ? 'Fonte de dados (Windows / WSL)' : 'Data source (Windows / WSL)'}
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 10, lineHeight: 1.5 }}>
-            {pt
-              ? 'Escolha de qual ~/.claude ler. Os harnesses Codex/Gemini/Copilot são lidos da mesma pasta. Trocar reinicia o app e mostra o seletor de fontes.'
-              : 'Choose which ~/.claude to read from. Codex/Gemini/Copilot are read from the same folder. Switching restarts the app and shows the source picker.'}
-          </div>
-          <button
-            onClick={changeSource}
-            style={{
-              height: 32, padding: '0 14px', borderRadius: 8, cursor: 'pointer',
-              border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)',
-              color: 'var(--anthropic-orange)', fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
-            }}
-          >
-            {pt ? 'Trocar fonte…' : 'Change source…'}
-          </button>
-        </div>
-      )}
-
-      <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 20, lineHeight: 1.6 }}>
-        {pt
-          ? 'Alterações entram em vigor após reiniciar o servidor.'
-          : 'Changes take effect after restarting the server.'}
-      </div>
-
-      {error && (
-        <div style={{
-          padding: '8px 12px', background: 'rgba(239,68,68,0.1)',
-          border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8,
-          fontSize: 12, color: '#ef4444', marginBottom: 16,
-        }}>
-          {error}
-        </div>
-      )}
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 20 }}>
-        {CONFIG_FIELDS.map(field => {
-          const fileValue = configData?.config[field.key] ?? field.default
-          const activeValue = configData?.active[field.key] ?? field.default
-          const restartNeeded = fileValue !== activeValue
-          const currentDraft = draft[field.key] ?? field.default
-          return (
-            <div key={field.key}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{field.key}</span>
-                {restartNeeded && (
-                  <span title={`Running: ${activeValue} — file has: ${fileValue}`}
-                    style={{ width: 7, height: 7, borderRadius: '50%', background: '#f97316', flexShrink: 0, display: 'inline-block' }} />
-                )}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 6 }}>
-                {field.description}
-                {restartNeeded && <span style={{ color: '#f97316', marginLeft: 6 }}>(running: {activeValue})</span>}
-              </div>
-              <input
-                type="text" value={currentDraft}
-                onChange={e => setDraft(prev => ({ ...prev, [field.key]: e.target.value }))}
-                style={{
-                  width: '100%', boxSizing: 'border-box', padding: '7px 10px',
-                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                  borderRadius: 7, fontSize: 13, fontFamily: 'monospace',
-                  color: 'var(--text-primary)', outline: 'none',
-                }}
-                onFocus={e => { e.currentTarget.style.borderColor = 'var(--anthropic-orange)' }}
-                onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
-              />
-            </div>
-          )
-        })}
-      </div>
-
-      {savedMsg && (
-        <div style={{ fontSize: 12, color: 'var(--anthropic-orange)', marginBottom: 16, textAlign: 'center', fontWeight: 500 }}>
-          {pt ? 'Salvo — reinicie para aplicar' : 'Saved — restart to apply'}
-        </div>
-      )}
-
-      <div style={{ height: 1, background: 'var(--border)', marginBottom: 16 }} />
-
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        <button onClick={handleRestore} disabled={!hasBackup} title={hasBackup ? `Restore: ${backupSummary}` : 'No backup available'}
-          style={{
-            padding: '6px 12px', borderRadius: 7, border: '1px solid var(--border)',
-            background: 'transparent', color: hasBackup ? 'var(--text-secondary)' : 'var(--text-tertiary)',
-            fontSize: 12, cursor: hasBackup ? 'pointer' : 'default', opacity: hasBackup ? 1 : 0.45,
-            fontFamily: 'inherit', transition: 'all 0.15s',
-          }}
-          onMouseEnter={e => { if (hasBackup) e.currentTarget.style.color = 'var(--text-primary)' }}
-          onMouseLeave={e => { if (hasBackup) e.currentTarget.style.color = 'var(--text-secondary)' }}
-        >
-          {pt ? 'Restaurar backup' : 'Restore backup'}
-        </button>
-        <button onClick={handleSave} disabled={saving}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '6px 16px', borderRadius: 7, border: '1px solid var(--anthropic-orange)60',
-            background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
-            fontSize: 12, fontWeight: 600, cursor: saving ? 'default' : 'pointer',
-            opacity: saving ? 0.6 : 1, fontFamily: 'inherit', transition: 'all 0.15s',
-          }}
-          onMouseEnter={e => { if (!saving) e.currentTarget.style.opacity = '0.8' }}
-          onMouseLeave={e => { if (!saving) e.currentTarget.style.opacity = '1' }}
-        >
-          <Save size={12} />{saving ? (pt ? 'Salvando…' : 'Saving…') : (pt ? 'Salvar' : 'Save')}
-        </button>
-      </div>
-
-      {hasBackup && configData?.backup && (
-        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-tertiary)' }}>Backup: {backupSummary}</div>
-      )}
-    </>
-  )
-}
-
 // ── Tab: Sessions (archive mode) ───────────────────────────────────────────
 
 const ARCHIVE_DOCS_URL = 'https://code.claude.com/docs/en/settings'
@@ -1316,7 +1125,6 @@ const TABS: { id: SettingsTab; icon: React.ReactNode; labelEn: string; labelPt: 
   { id: 'harnesses',   icon: <Cpu size={13} />,               labelEn: 'Harnesses',    labelPt: 'Backends' },
   { id: 'sessions',    icon: <Archive size={13} />,           labelEn: 'Sessions',     labelPt: 'Sessões' },
   { id: 'install',     icon: <Download size={13} />,          labelEn: 'Install',      labelPt: 'Instalar' },
-  { id: 'environment', icon: <Code2 size={13} />,             labelEn: 'Environment',  labelPt: 'Ambiente' },
 ]
 
 export function PreferencesModal({
@@ -1471,7 +1279,6 @@ export function PreferencesModal({
           {activeTab === 'harnesses' && <HarnessesTab pt={pt} />}
           {activeTab === 'datasources' && <DataSourcesTab pt={pt} harnesses={harnesses} />}
           {activeTab === 'team' && <TeamTab pt={pt} central={central} />}
-          {activeTab === 'environment' && <EnvironmentTab pt={pt} />}
         </div>
 
         {/* Footer — only for Preferences tab */}
