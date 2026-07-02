@@ -23,6 +23,26 @@ export function notifySseClients() {
   }
 }
 
+/** Push a user-facing notification to all connected SSE clients (toast + bell).
+ *  Prefer `code` (localized on the frontend) with optional `meta`; `title`/`message`
+ *  are a fallback for pre-localized text. */
+export function broadcastNotification(n: {
+  type: 'error' | 'warning' | 'info' | 'success'
+  code?: string
+  meta?: Record<string, unknown>
+  title?: string
+  message?: string
+}) {
+  const payload = sseEncoder.encode(`event: notification\ndata: ${JSON.stringify(n)}\n\n`)
+  for (const ctrl of [...sseClients]) {
+    try {
+      ctrl.enqueue(payload)
+    } catch {
+      sseClients.delete(ctrl)
+    }
+  }
+}
+
 let sseDebounce: ReturnType<typeof setTimeout> | null = null
 
 export function triggerSseNotification() {

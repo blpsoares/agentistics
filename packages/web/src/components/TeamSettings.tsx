@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { Loader2, CheckCircle, XCircle, Users, User, Server, LogOut } from 'lucide-react'
 import { TeamMembers } from './TeamMembers'
 import { PUSH_INTERVAL, type TeamConfig } from '@agentistics/core'
+import { pushNotification } from '../lib/notifications'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -380,7 +381,13 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
       const testData = (await testRes.json()) as TestResult
       setTestResult(testData)
       if (!testData.ok) {
-        setSaveResult({ ok: false, error: testData.error ?? `Connection failed (${testData.status})` })
+        const err = testData.error ?? `Connection failed (${testData.status})`
+        setSaveResult({ ok: false, error: err })
+        pushNotification({
+          type: 'error',
+          title: pt ? 'Falha ao conectar na central' : 'Failed to connect to the central',
+          message: err,
+        })
         return
       }
 
@@ -391,9 +398,15 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
       if (!resolvedUser) {
         // whoami returned no name → the token isn't a per-member minted token the central
         // recognizes. The fix is on the CENTRAL (mint a token), never a name field here.
-        setSaveResult({ ok: false, error: pt
+        const err = pt
           ? 'A central não reconheceu este token. Gere um token para esta máquina no Team Manager da central.'
-          : "The central didn't recognize this token. Mint a token for this machine in the central's Team Manager." })
+          : "The central didn't recognize this token. Mint a token for this machine in the central's Team Manager."
+        setSaveResult({ ok: false, error: err })
+        pushNotification({
+          type: 'error',
+          title: pt ? 'Token não reconhecido' : 'Token not recognized',
+          message: err,
+        })
         return
       }
       const teamWithIdentity: typeof team = { ...team, mode: 'member', user: resolvedUser, org: resolvedOrg }

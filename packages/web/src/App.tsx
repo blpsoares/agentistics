@@ -24,6 +24,9 @@ import { HourChart } from './components/HourChart'
 import { ModelBreakdown } from './components/ModelBreakdown'
 import { ProjectsList } from './components/ProjectsList'
 import { FiltersBar } from './components/FiltersBar'
+import { NotificationToasts } from './components/NotificationToasts'
+import { NotificationBell } from './components/NotificationBell'
+import { useNotificationStream } from './hooks/useNotificationStream'
 import { RecentSessions } from './components/RecentSessions'
 import { HighlightsBoard } from './components/HighlightsBoard'
 import { InfoModal } from './components/InfoModal'
@@ -892,6 +895,9 @@ export default function AppLayout() {
   }, [error, teamSession?.required])
   const [theme, setThemeState] = useState<Theme>('dark')
   const [currency, setCurrencyState] = useState<'USD' | 'BRL'>('USD')
+
+  // Surface server-pushed notifications (member connection/auth errors) as toasts + bell.
+  useNotificationStream(lang)
 
   const setLang = useCallback((l: Lang) => setLangState(l), [])
   const setTheme = useCallback((t: Theme) => setThemeState(t), [])
@@ -1789,6 +1795,14 @@ export default function AppLayout() {
 
             </div>}
 
+            {/* Notifications bell — toast history (member connection/auth errors, etc.) */}
+            <NotificationBell lang={lang} buttonStyle={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 32, height: 32, borderRadius: 8,
+              border: '1px solid var(--border)', background: 'transparent',
+              color: 'var(--text-tertiary)', cursor: 'pointer', position: 'relative',
+            }} />
+
             {/* Refresh — on mobile surfaced via the "More" sheet */}
             {!isMobile && <button
               onClick={refetch}
@@ -2287,6 +2301,9 @@ export default function AppLayout() {
           </div>
         </div>
       </footer>
+
+      {/* Global notification toasts (auto-dismiss after 3s; history in the bell) */}
+      <NotificationToasts />
     </div>
   )
 }

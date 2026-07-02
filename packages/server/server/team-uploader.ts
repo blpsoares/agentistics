@@ -46,6 +46,31 @@ function clearPushError(): void {
   _netErrStreak = 0
 }
 
+// Transition-based user notifications — emit once when entering an error state (auth vs
+// network) and once on recovery, so a persistent failure never spams the toast/bell.
+// The frontend localizes by `code`; `meta` carries interpolation values (e.g. status).
+let _pushErrKind: 'auth' | 'net' | null = null
+async function notifyPushError(kind: 'auth' | 'net', meta?: Record<string, unknown>): Promise<void> {
+  if (_pushErrKind === kind) return
+  _pushErrKind = kind
+  try {
+    const { broadcastNotification } = await import('./sse')
+    broadcastNotification({
+      type: kind === 'auth' ? 'error' : 'warning',
+      code: kind === 'auth' ? 'member.auth_rejected' : 'member.unreachable',
+      meta,
+    })
+  } catch { /* best-effort */ }
+}
+async function notifyPushRecovered(): Promise<void> {
+  if (_pushErrKind === null) return
+  _pushErrKind = null
+  try {
+    const { broadcastNotification } = await import('./sse')
+    broadcastNotification({ type: 'success', code: 'member.reconnected' })
+  } catch { /* best-effort */ }
+}
+
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested)
 // ---------------------------------------------------------------------------
@@ -180,12 +205,15 @@ export async function pushOnceDetailed(team: NonNullable<Preferences['team']>): 
       } catch (fetchErr) {
         const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
         warnPushError(msg)
+        void notifyPushError('net')
         return { count: pushed, error: msg }
       }
 
       if (!res.ok) {
         const msg = `ingest returned ${res.status}`
         console.warn(`[team-uploader] ${msg}; stopping push`)
+        // 401/403 = the central rejected the token → actionable auth notification.
+        if (res.status === 401 || res.status === 403) void notifyPushError('auth', { status: res.status })
         return { count: pushed, error: msg }
       }
 
@@ -198,6 +226,7 @@ export async function pushOnceDetailed(team: NonNullable<Preferences['team']>): 
       await saveSentState({ ...current, ...batchSent })
       pushed += batch.length
       clearPushError()
+      void notifyPushRecovered()
     }
 
     return { count: pushed }
