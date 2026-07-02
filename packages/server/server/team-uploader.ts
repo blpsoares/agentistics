@@ -35,6 +35,8 @@ async function readMemberStatsCache(): Promise<StatsCache | undefined> {
 // Throttle repeated "can't reach central" warnings — a member offline (e.g. a Tailscale
 // hostname that doesn't route from inside WSL) would otherwise spam the console every cycle.
 let _netErrStreak = 0
+// Live connection state for the member-side status pill (/api/team/status).
+let _lastSuccessAt: number | null = null
 function warnPushError(msg: string): void {
   _netErrStreak++
   if (_netErrStreak === 1 || _netErrStreak % 20 === 0) {
@@ -44,6 +46,20 @@ function warnPushError(msg: string): void {
 function clearPushError(): void {
   if (_netErrStreak > 0) console.info('[team-uploader] central reachable again — resuming pushes')
   _netErrStreak = 0
+}
+/** Record a successful contact with the central (used by the status pill + recovery). */
+function markPushSuccess(): void {
+  _lastSuccessAt = Date.now()
+}
+
+export interface UploaderStatus {
+  /** ms epoch of the last successful contact with the central, or null if never. */
+  lastSuccessAt: number | null
+  /** current error state: 'auth' (rejected), 'net' (unreachable), or null (ok). */
+  errKind: 'auth' | 'net' | null
+}
+export function getUploaderStatus(): UploaderStatus {
+  return { lastSuccessAt: _lastSuccessAt, errKind: _pushErrKind }
 }
 
 // Transition-based user notifications — emit once when entering an error state (auth vs
@@ -180,12 +196,18 @@ export async function pushOnceDetailed(team: NonNullable<Preferences['team']>): 
       // No session deltas — still push the statsCache on its own so totals stay fresh.
       if (statsCache) {
         try {
-          await fetch(`${team.endpoint}/api/team/ingest`, {
+          const res = await fetch(`${team.endpoint}/api/team/ingest`, {
             method: 'POST',
             headers,
             body: JSON.stringify({ org: team.org, user: team.user, sessions: [], statsCache }),
           })
-        } catch { /* best-effort */ }
+          // A reachable central (even a non-2xx that isn't auth) counts as contact for the pill.
+          if (res.ok) { markPushSuccess(); clearPushError(); void notifyPushRecovered() }
+          else if (res.status === 401 || res.status === 403) void notifyPushError('auth', { status: res.status })
+        } catch (e) {
+          warnPushError(e instanceof Error ? e.message : String(e))
+          void notifyPushError('net')
+        }
       }
       return { count: 0 }
     }
@@ -225,6 +247,7 @@ export async function pushOnceDetailed(team: NonNullable<Preferences['team']>): 
       const current = await loadSentState()
       await saveSentState({ ...current, ...batchSent })
       pushed += batch.length
+      markPushSuccess()
       clearPushError()
       void notifyPushRecovered()
     }

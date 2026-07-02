@@ -3,6 +3,7 @@ import { Loader2, CheckCircle, XCircle, Users, User, Server, LogOut } from 'luci
 import { TeamMembers } from './TeamMembers'
 import { PUSH_INTERVAL, type TeamConfig } from '@agentistics/core'
 import { pushNotification } from '../lib/notifications'
+import { MemberConnectionStatus } from './MemberConnectionStatus'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -606,6 +607,9 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
       ) : (
         <>
           <Divider />
+
+          {/* Live connection pill — is this machine syncing to the central right now? */}
+          <MemberConnectionStatus lang={lang} />
 
           {/* ── Connection fields ── */}
           <SectionHeader label={pt ? 'Conexão' : 'Connection'} />

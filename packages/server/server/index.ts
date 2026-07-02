@@ -814,6 +814,24 @@ Bun.serve<{ user: string; isAgent?: boolean }>({
       return new Response(res.body, { status: res.status, headers })
     }
 
+    // GET /api/team/status — member-side live connection status for the status pill.
+    // Reports this machine's last successful contact with the central + current error state.
+    if (url.pathname === '/api/team/status' && req.method === 'GET') {
+      const [{ readPreferences }, { getUploaderStatus }] = await Promise.all([
+        import('./preferences'),
+        import('./team-uploader'),
+      ])
+      const team = (await readPreferences()).team
+      const st = getUploaderStatus()
+      return new Response(JSON.stringify({
+        mode: team?.mode ?? 'solo',
+        user: team?.user ?? '',
+        endpoint: team?.endpoint ?? '',
+        lastSuccessAt: st.lastSuccessAt,
+        errKind: st.errKind,
+      }), { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+    }
+
     // ---------------------------------------------------------------------------
     // Admin routes (behind the gate — index.ts gate already enforces isAuthed)
     // ---------------------------------------------------------------------------
