@@ -23,33 +23,33 @@ cd agentistics
 
 ### 2. Create your `central.env`
 
-Copy the example and fill in your secrets:
+**Easiest — interactive setup** (recommended). `central.sh` asks for each value and
+auto-generates the secrets with `openssl` (press Enter on a secret field to generate it),
+detects your Tailscale IP for the bind, and writes `central.env` with `chmod 600`:
 
 ```bash
-cp .env.example central.env
+bun run init:central     # or: ./central.sh init
 ```
+
+You'll be prompted for the port, org name, admin password, session secret, an optional
+ingest token, and the bind interface. `bun run up:central` runs this automatically the
+first time (when `central.env` is missing).
 
 > Name it `central.env`, **not** `.env`. A plain `.env` is auto-loaded by `bun run dev`
 > (a developer's local/member instance) and would make that instance wrongly think it is
 > the central. Using `central.env` keeps the two roles cleanly separated.
 
-Generate strong values for the two required secrets:
-
-```bash
-# Password (shared with your team — used to log in to the dashboard)
-openssl rand -hex 24
-
-# Session secret (never share — used to sign HMAC cookies)
-openssl rand -hex 32
-```
-
-Edit `central.env` and paste the values into:
-- `AGENTISTICS_TEAM_PASSWORD`
-- `AGENTISTICS_TEAM_SESSION_SECRET`
-
-> **Security note**: keep `AGENTISTICS_TEAM_SESSION_SECRET` strictly separate from the
+> **Security note**: the setup keeps `AGENTISTICS_TEAM_SESSION_SECRET` separate from the
 > password. If the password is ever leaked, an attacker still cannot forge session cookies
 > as long as the session secret is unknown.
+
+**Manual alternative** — copy the example and edit it yourself:
+
+```bash
+cp .env.example central.env
+openssl rand -hex 24   # → AGENTISTICS_TEAM_PASSWORD
+openssl rand -hex 32   # → AGENTISTICS_TEAM_SESSION_SECRET
+```
 
 ### 3. Start the stack
 
@@ -58,8 +58,11 @@ the project name (`-p team-mode`) and `--env-file central.env` pre-set so you do
 have to remember the flags:
 
 ```bash
-./central.sh up        # build + (re)create the containers  [most common]
+bun run up:central     # = ./central.sh up — build + (re)create the containers  [most common]
 ```
+
+The first time (no `central.env` yet) this runs the interactive setup from step 2
+automatically before deploying.
 
 The first run builds the image and initialises the MongoDB replica set. This takes about 30–60 seconds.
 
@@ -86,7 +89,8 @@ the bundled `central.env` uses `48080`).
 
 | Command | What it does |
 |---|---|
-| `./central.sh up` | Build the image and (re)create the containers (`--build --force-recreate`) |
+| `./central.sh init` | (Re)generate `central.env` interactively (auto-generates secrets with openssl) |
+| `./central.sh up` | Build the image and (re)create the containers (`--build --force-recreate`); offers `init` if `central.env` is missing |
 | `./central.sh restart` | Restart the `app` container **without** rebuilding |
 | `./central.sh logs` | Follow the `app` container logs (Ctrl-C to stop) |
 | `./central.sh status` | Show container + health status |
