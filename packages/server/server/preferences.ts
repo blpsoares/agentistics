@@ -26,6 +26,9 @@ export interface Preferences {
   cardPrecision?: Record<string, boolean>
   chatModel?: string
   chatSoundEnabled?: boolean
+  /** true once the user dismissed the install prompt with "don't show again".
+   *  Persisted server-side (not localStorage) so it survives incognito windows. */
+  installDismissed?: boolean
   /** How the app preserves session history past Claude's 30-day cleanup.
    *  `undefined` = not chosen yet (the blocking consent gate is shown).
    *    - 'consolidate' = store computed per-session metrics only (~KB, recommended)

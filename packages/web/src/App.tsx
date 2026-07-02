@@ -1020,16 +1020,21 @@ export default function AppLayout() {
 
   const INSTALL_DISMISSED_KEY = 'agentistics-install-dismissed'
   const [showInstallModal, setShowInstallModal] = useState(false)
+  // Dismissal is persisted SERVER-SIDE (survives incognito, where localStorage is wiped).
+  // undefined = prefs not loaded yet → don't show until we know; true = don't show.
+  const [installDismissedPref, setInstallDismissedPref] = useState<boolean | undefined>(undefined)
   const installModalShownRef = React.useRef(false)
   // Show install modal once after first data load, unless dismissed or already installed
   useEffect(() => {
     if (installModalShownRef.current) return
     if (!data || loading) return
     if (pwaInstalled) return
+    if (installDismissedPref === undefined) return // wait for prefs to load
+    if (installDismissedPref) return
     try { if (localStorage.getItem(INSTALL_DISMISSED_KEY) === 'true') return } catch {}
     installModalShownRef.current = true
     setShowInstallModal(true)
-  }, [data, loading, pwaInstalled])
+  }, [data, loading, pwaInstalled, installDismissedPref])
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
   const [chatSoundId, setChatSoundId] = useState('ping')
@@ -1060,8 +1065,8 @@ export default function AppLayout() {
   useEffect(() => {
     fetch('/api/preferences')
       .then(r => r.ok ? r.json() : null)
-      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean } | null) => {
-        if (!prefs) { setArchiveChoice(null); return }
+      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean } | null) => {
+        if (!prefs) { setArchiveChoice(null); setInstallDismissedPref(false); return }
         if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
         if (prefs.lang) setLangState(prefs.lang)
         if (prefs.theme) setThemeState(prefs.theme)
@@ -1069,13 +1074,14 @@ export default function AppLayout() {
         if (prefs.cardOrder) setCardOrder(mergeCardOrder(prefs.cardOrder))
         if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
         if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
+        setInstallDismissedPref(prefs.installDismissed === true)
         if ((prefs as Record<string, unknown>).chatSoundId) setChatSoundId((prefs as Record<string, unknown>).chatSoundId as string)
         // Resolve the archive mode, migrating the legacy archiveSessions boolean.
         const mode: ArchiveMode | undefined =
           prefs.archiveMode ?? (prefs.archiveSessions === true ? 'full' : prefs.archiveSessions === false ? 'off' : undefined)
         setArchiveChoice(mode ?? null)
       })
-      .catch(() => setArchiveChoice(null))
+      .catch(() => { setArchiveChoice(null); setInstallDismissedPref(false) })
   }, [])
 
   useEffect(() => {
@@ -2031,7 +2037,14 @@ export default function AppLayout() {
           onClose={(dontShowAgain) => {
             setShowInstallModal(false)
             if (dontShowAgain) {
+              setInstallDismissedPref(true)
               try { localStorage.setItem(INSTALL_DISMISSED_KEY, 'true') } catch {}
+              // Persist server-side so it survives incognito windows / a cleared localStorage.
+              fetch('/api/preferences', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ installDismissed: true }),
+              }).catch(() => {})
             }
           }}
           onPwaInstalled={() => { setPwaInstalled(true); setPwaPrompt(null) }}

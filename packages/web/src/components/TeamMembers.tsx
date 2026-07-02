@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Users, Plus, Trash2, Copy, CheckCheck, RefreshCw, AlertCircle, Pencil, Check, X } from 'lucide-react'
+import { copyText } from '../lib/clipboard'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -256,13 +257,19 @@ export function TeamMembers({ lang }: Props) {
     }
   }
 
+  const [copyFailed, setCopyFailed] = useState(false)
   async function handleCopy() {
     if (!newToken) return
-    try {
-      await navigator.clipboard.writeText(newToken)
+    const ok = await copyText(newToken)
+    if (ok) {
+      setCopyFailed(false)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    } catch { /* clipboard unavailable */ }
+    } else {
+      // Nothing worked (rare) — tell the user to select + copy the visible field manually.
+      setCopyFailed(true)
+      setTimeout(() => setCopyFailed(false), 4000)
+    }
   }
 
   const inputStyle: React.CSSProperties = {
@@ -728,6 +735,13 @@ export function TeamMembers({ lang }: Props) {
               {copied ? t('copied', lang) : t('copyToken', lang)}
             </button>
           </div>
+          {copyFailed && (
+            <div style={{ fontSize: 11, color: 'var(--anthropic-orange)', marginTop: 8 }}>
+              {lang === 'pt'
+                ? 'Não consegui copiar automaticamente — selecione o texto acima e copie (Ctrl/Cmd+C).'
+                : 'Couldn’t copy automatically — select the text above and copy it (Ctrl/Cmd+C).'}
+            </div>
+          )}
         </div>
       )}
 
