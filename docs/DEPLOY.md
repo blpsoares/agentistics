@@ -106,6 +106,7 @@ Override the defaults with env vars: `PROJECT=... ENV_FILE=... ./central.sh up`.
 | Variable | Default | Description |
 |---|---|---|
 | `APP_PORT` | `47291` | Host port published by the app container |
+| `EXTRA_BIND_IP` | `127.0.0.2` | Extra interface to bind besides `127.0.0.1`. Set to your Tailscale IP to serve peers without the wildcard `0.0.0.0`; set to `0.0.0.0` for all-interfaces exposure |
 | `MONGO_URL` | `mongodb://mongo:27017/?replicaSet=rs0` | MongoDB connection string |
 | `MONGO_DB` | `agentistics` | MongoDB database name |
 | `AGENTISTICS_TEAM_CENTRAL` | `1` | Enable central aggregator mode (always `1` in Docker) |
@@ -113,6 +114,29 @@ Override the defaults with env vars: `PROJECT=... ENV_FILE=... ./central.sh up`.
 | `AGENTISTICS_TEAM_PASSWORD` | _(required)_ | Dashboard login password |
 | `AGENTISTICS_TEAM_SESSION_SECRET` | _(required)_ | HMAC key for session cookies |
 | `AGENTISTICS_TEAM_INGEST_TOKEN` | _(empty)_ | Bearer token for `/api/team/ingest`; leave empty to allow unauthenticated ingestion |
+
+---
+
+## Network exposure (which interfaces the dashboard listens on)
+
+The app container always binds `127.0.0.1` (the local machine's browser) and one
+**extra** interface controlled by `EXTRA_BIND_IP`:
+
+| Goal | `EXTRA_BIND_IP` | Reachable from |
+|---|---|---|
+| Local machine only (default) | _unset_ → `127.0.0.2` | Just this host's browser |
+| Serve a private tailnet | your Tailscale IP (e.g. `100.x.y.z`) | This host + Tailscale peers |
+| Expose on every interface | `0.0.0.0` | Everything that can route to the host |
+
+Prefer a **specific IP** over `0.0.0.0`. Binding your Tailscale address serves remote
+teammates over Tailscale's encrypted network while leaving LAN/bridge interfaces closed —
+you get remote access without a public listener, so plain HTTP inside the tailnet is fine
+(Tailscale encrypts the transport). Only reach for a TLS reverse proxy + `AGENTISTICS_TEAM_TLS=1`
+if you must expose the dashboard **outside** Tailscale.
+
+> **WSL2 note:** `127.0.0.1` is what Windows' `localhost` forwarding connects to, so the
+> Windows browser keeps working at `http://localhost:<APP_PORT>`. Peers use the Tailscale
+> address. The old wildcard `0.0.0.0` bind is not needed for either path.
 
 ---
 

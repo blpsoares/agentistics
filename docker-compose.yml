@@ -50,7 +50,14 @@ services:
       - ${HOME}/.gemini:/host-gemini:ro
       - ${HOME}/.copilot:/host-copilot:ro
     ports:
-      - "${APP_PORT:-47291}:47291"
+      # Loopback — the local machine's browser (localhost) and its own member reach it here.
+      # On WSL2 this is also what Windows localhost-forwarding connects to.
+      - "127.0.0.1:${APP_PORT:-47291}:47291"
+      # Extra interface — set EXTRA_BIND_IP to a specific IP (e.g. your Tailscale address)
+      # to serve remote peers WITHOUT publishing the wildcard 0.0.0.0. Set it to 0.0.0.0 to
+      # deliberately expose on all interfaces. Defaults to a second loopback address so a
+      # fresh clone binds only to localhost (no external exposure, no duplicate-port clash).
+      - "${EXTRA_BIND_IP:-127.0.0.2}:${APP_PORT:-47291}:47291"
     restart: unless-stopped
 
 volumes:
