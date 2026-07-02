@@ -308,7 +308,10 @@ async function fetchCentralPolicy(endpoint: string): Promise<{ intervalSec: numb
  * A null instanceId (old/unreachable central) is treated as empty — it never spuriously resets.
  */
 async function reconcileSyncState(endpoint: string, token: string, instanceId: string | null): Promise<void> {
-  const sig = createHash('sha256').update(`${endpoint}\0${token}\0${instanceId ?? ''}`).digest('hex')
+  // Only reconcile against a KNOWN central identity. A null instanceId means the central is
+  // unreachable or predates this feature — reconciling then would falsely reset on every flap.
+  if (!instanceId) return
+  const sig = createHash('sha256').update(`${endpoint}\0${token}\0${instanceId}`).digest('hex')
   const prev = await safeReadJson<{ sig?: string }>(TEAM_SYNC_FILE)
   if (prev?.sig === sig) return // target unchanged — nothing to reconcile
 
