@@ -265,10 +265,9 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
   const [saveResult, setSaveResult] = useState<SaveResult | null>(null)
   const [leaving, setLeaving] = useState(false)
   const [confirmLeave, setConfirmLeave] = useState(false)
-  // The Display name field is hidden by default — the central resolves the name from the
-  // token (whoami) on Save. It's only revealed if the central provides no name (a shared
-  // TEAM_INGEST_TOKEN) or the user already has a self-declared name to edit.
-  const [needsName, setNeedsName] = useState<boolean>(() => false)
+  // There is NO display-name input on the machine: the CENTRAL owns the name (set on the
+  // minted token). The member resolves it from the central via whoami on Save and only
+  // ever displays it read-only.
 
   // ── Edit/lock state for the member connect form ──────────────────────────
   // Starts locked when already configured; starts open for fresh setup.
@@ -385,16 +384,16 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
         return
       }
 
-      // Identity: a per-member (minted) token resolves user+org from the central via whoami;
-      // a shared TEAM_INGEST_TOKEN can't, so fall back to the self-declared name. org always
-      // defaults to 'default' so the member never has to think about it.
-      const resolvedUser = (testData.user ?? '').trim() || team.user.trim()
-      const resolvedOrg  = (testData.org  ?? '').trim() || (team.org ?? '').trim() || 'default'
+      // Identity: the CENTRAL owns the name. A minted token resolves user+org from the central
+      // via whoami. The machine never sets its own name; org defaults to 'default'.
+      const resolvedUser = (testData.user ?? '').trim()
+      const resolvedOrg  = (testData.org  ?? '').trim() || 'default'
       if (!resolvedUser) {
-        // The central did NOT resolve a name (shared TEAM_INGEST_TOKEN, not a per-member
-        // token) and none was typed. Reveal the manual field so the user can self-declare.
-        setNeedsName(true)
-        setSaveResult({ ok: false, error: pt ? 'A central não definiu um nome — informe um.' : "The central didn't set a name — enter one." })
+        // whoami returned no name → the token isn't a per-member minted token the central
+        // recognizes. The fix is on the CENTRAL (mint a token), never a name field here.
+        setSaveResult({ ok: false, error: pt
+          ? 'A central não reconheceu este token. Gere um token para esta máquina no Team Manager da central.'
+          : "The central didn't recognize this token. Mint a token for this machine in the central's Team Manager." })
         return
       }
       const teamWithIdentity: typeof team = { ...team, mode: 'member', user: resolvedUser, org: resolvedOrg }
@@ -617,24 +616,13 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
             disabled={!editing}
           />
 
-          {/* Display name — HIDDEN by default. The central resolves the name from the token
-              (whoami) on Save. Only shown when the central provided no name (shared secret →
-              needsName) or the member already has a self-declared name to edit. */}
-          {editing && (needsName || !!team.user) && (
-            <FieldInput
-              label={c('yourName', lang)}
-              sub={c('yourNameSub', lang)}
-              value={team.user}
-              onChange={v => set('user', v)}
-              placeholder={pt ? 'Ex: Bryan Soares' : 'e.g. Bryan Soares'}
-              disabled={!editing}
-            />
-          )}
-          {editing && !needsName && !team.user && (
+          {/* NO name input — the central owns the machine's name (set on the minted token).
+              It's resolved via whoami on Save and shown read-only below. */}
+          {editing && (
             <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', margin: '-4px 0 14px', lineHeight: 1.5 }}>
               {pt
-                ? 'Seu nome vem da central pelo token — não precisa preencher nada.'
-                : 'Your name comes from the central via the token — nothing to fill in.'}
+                ? 'O nome desta máquina é definido pela central (no token). Nada a preencher aqui.'
+                : "This machine's name is set by the central (on the token). Nothing to fill in here."}
             </div>
           )}
 

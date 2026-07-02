@@ -127,10 +127,15 @@ export function TeamMembers({ lang }: Props) {
 
   useEffect(() => { void loadMembers() }, [loadMembers])
 
-  // Live refresh of status/latency every 10s (silent — no spinner flicker).
+  // Instant refresh on server events (a member connecting/disconnecting fires an
+  // immediate SSE 'change'), with a 10s poll as a fallback for latency drift.
   useEffect(() => {
+    const es = new EventSource('/api/events')
+    const onChange = () => { void loadMembers(true) }
+    es.addEventListener('change', onChange)
+    es.onerror = () => { /* browser auto-reconnects; ignore */ }
     const id = setInterval(() => { void loadMembers(true) }, 10_000)
-    return () => clearInterval(id)
+    return () => { es.removeEventListener('change', onChange); es.close(); clearInterval(id) }
   }, [loadMembers])
 
   // Load the central's include-offline-data policy.

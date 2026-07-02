@@ -34,6 +34,7 @@ import {
   serveStatic,
   SERVE_STATIC,
   triggerSseNotification,
+  notifySseClients,
 } from './sse'
 import { fullSync } from './archive'
 import { getArchiveMode } from './preferences'
@@ -80,9 +81,10 @@ void (async () => {
 void setupFileWatcher()
 if (TEAM_CENTRAL) {
   import('./team-watch').then(m => m.startTeamWatch()).catch(err => console.error('[team-watch] failed to start:', err))
-  // Push a live SSE update when a member connects/disconnects so the dashboard's
-  // online/offline dots refresh immediately (latency numbers refresh on the next poll).
-  setPresenceChangeHook(() => triggerSseNotification())
+  // Push an IMMEDIATE SSE update when a member connects/disconnects so the dashboard's
+  // online/offline dots and the members panel refresh instantly. Presence is computed fresh
+  // per request (not cached), so this needs no cache invalidation and no debounce.
+  setPresenceChangeHook(() => notifySseClients())
 }
 import('./team-uploader').then(m => m.startUploader()).catch(err => console.error('[team-uploader] failed to start:', err))
 startAgentClient()
