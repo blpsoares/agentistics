@@ -66,3 +66,5 @@ packages/web/public/*.webm
 
 # deploy env files (central.env etc.) — never commit secrets
 *.env
+*.env.bak
+central.env.*
