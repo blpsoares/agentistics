@@ -73,6 +73,10 @@ export const TEAM_TLS = process.env.AGENTISTICS_TEAM_TLS === '1'
 // Override with AGENTISTICS_TEAM_SENT_FILE.
 // ---------------------------------------------------------------------------
 export const TEAM_SENT_FILE = process.env.AGENTISTICS_TEAM_SENT_FILE ?? join(HOME_DIR, '.agentistics', 'team-sent.json')
+// Records the central "sync signature" (endpoint+token+instanceId) the sent-state was built
+// against. When it changes — new token, new central, or a wiped central DB — the uploader
+// clears the sent-state and re-pushes everything automatically.
+export const TEAM_SYNC_FILE = process.env.AGENTISTICS_TEAM_SYNC_FILE ?? join(HOME_DIR, '.agentistics', 'team-sync.json')
 
 // ---------------------------------------------------------------------------
 // Other harnesses (Phase 1: Codex). Each adapter checks its own root.

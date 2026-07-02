@@ -9,10 +9,12 @@
  * Secrets: the bearer token is NEVER logged.
  */
 
+import { createHash } from 'node:crypto'
+import { writeFile } from 'node:fs/promises'
 import type { SessionMeta, StatsCache } from '@agentistics/core'
 import { PUSH_INTERVAL, clampPushInterval } from '@agentistics/core'
 import type { Preferences } from './preferences'
-import { TEAM_SENT_FILE, STATS_CACHE_FILE } from './config'
+import { TEAM_SENT_FILE, TEAM_SYNC_FILE, STATS_CACHE_FILE } from './config'
 import { loadConsolidated } from './consolidate'
 import { readPreferences } from './preferences'
 import { safeReadJson } from './utils'
@@ -278,21 +280,54 @@ let started = false
 let running = false
 
 /**
- * Fetch the push interval (seconds) from the central policy endpoint.
- * Falls back to PUSH_INTERVAL.DEFAULT_SEC on any network or parse error.
+ * Fetch the central policy: push interval + the central's data instanceId.
+ * Falls back to the default interval / null id on any network or parse error.
  */
-async function fetchCentralInterval(endpoint: string): Promise<number> {
+async function fetchCentralPolicy(endpoint: string): Promise<{ intervalSec: number; instanceId: string | null }> {
   try {
     const res = await fetch(`${endpoint}/api/team/policy`, { signal: AbortSignal.timeout(5_000) })
-    if (!res.ok) return PUSH_INTERVAL.DEFAULT_SEC
-    const json = await res.json() as { pushIntervalSec?: unknown }
-    const sec = json.pushIntervalSec
-    if (typeof sec !== 'number') return PUSH_INTERVAL.DEFAULT_SEC
+    if (!res.ok) return { intervalSec: PUSH_INTERVAL.DEFAULT_SEC, instanceId: null }
+    const json = await res.json() as { pushIntervalSec?: unknown; instanceId?: unknown }
+    const sec = typeof json.pushIntervalSec === 'number' ? json.pushIntervalSec : PUSH_INTERVAL.DEFAULT_SEC
+    const instanceId = typeof json.instanceId === 'string' ? json.instanceId : null
     // Honor express intervals (the central may dictate below the normal 15s floor).
-    return clampPushInterval(sec, PUSH_INTERVAL.EXPRESS_MIN_SEC)
+    return { intervalSec: clampPushInterval(sec, PUSH_INTERVAL.EXPRESS_MIN_SEC), instanceId }
   } catch {
-    return PUSH_INTERVAL.DEFAULT_SEC
+    return { intervalSec: PUSH_INTERVAL.DEFAULT_SEC, instanceId: null }
   }
+}
+
+/**
+ * Auto-reconcile the sent-state with the central. The sent-state assumes the central still
+ * holds everything we pushed — but a destructive action (member revoked + re-added, a new
+ * central endpoint, or a wiped central DB) breaks that assumption silently. We fingerprint
+ * the current target as endpoint+token+instanceId; when it differs from what the sent-state
+ * was built against, we clear the sent-state so the next push re-sends the full history.
+ *
+ * Re-pushing is idempotent (the central upserts by session_id), so a reset never double-counts.
+ * A null instanceId (old/unreachable central) is treated as empty — it never spuriously resets.
+ */
+async function reconcileSyncState(endpoint: string, token: string, instanceId: string | null): Promise<void> {
+  const sig = createHash('sha256').update(`${endpoint}\0${token}\0${instanceId ?? ''}`).digest('hex')
+  const prev = await safeReadJson<{ sig?: string }>(TEAM_SYNC_FILE)
+  if (prev?.sig === sig) return // target unchanged — nothing to reconcile
+
+  // Signature changed (or first run) → the central may not have our data. Clear the sent-state
+  // so the next push re-sends everything, then record the new signature.
+  await saveSentState({})
+  _lastSuccessAt = null
+  try {
+    await writeFile(TEAM_SYNC_FILE, JSON.stringify({ sig }), 'utf-8')
+  } catch { /* best-effort — worst case we reconcile again next cycle */ }
+  if (prev?.sig) console.info('[team-uploader] central sync signature changed — re-pushing full history')
+}
+
+/** Fully reset the local sync state (sent-state + signature). Called when leaving a central,
+ *  so a later rejoin re-pushes the full history rather than trusting a now-deleted dataset. */
+async function resetSyncState(): Promise<void> {
+  await saveSentState({})
+  _lastSuccessAt = null
+  try { await writeFile(TEAM_SYNC_FILE, '{}', 'utf-8') } catch { /* best-effort */ }
 }
 
 /**
@@ -331,8 +366,11 @@ export function startUploader(): void {
       if (team?.mode === 'member' && team.endpoint && team.user) {
         // The central is the sole authority on the interval; members follow it (honoring
         // express intervals below the normal 15s floor). No member-side override.
-        const centralSec = await fetchCentralInterval(team.endpoint)
-        nextIntervalSec = clampPushInterval(centralSec, PUSH_INTERVAL.EXPRESS_MIN_SEC)
+        const policy = await fetchCentralPolicy(team.endpoint)
+        nextIntervalSec = clampPushInterval(policy.intervalSec, PUSH_INTERVAL.EXPRESS_MIN_SEC)
+        // Auto-heal a sent-state that no longer matches the central (revoke+re-add, new
+        // endpoint, or a wiped DB) BEFORE pushing, so this cycle re-sends the full history.
+        await reconcileSyncState(team.endpoint, team.token ?? '', policy.instanceId)
         await pushOnce(team)
       }
     } catch (err) {
@@ -521,6 +559,10 @@ export async function handleLeaveCentral(req: Request): Promise<Response> {
       body: JSON.stringify({ org, user }),
     })
     const data = (await res.json().catch(() => ({}))) as { deleted?: number; error?: string }
+    // Leaving deletes this member's data on the central. Reset the local sync state so a
+    // future rejoin (even same token+central) re-pushes everything instead of assuming
+    // the central still has it.
+    await resetSyncState()
     return new Response(JSON.stringify({ ok: res.ok, deleted: data.deleted, error: res.ok ? undefined : (data.error ?? `HTTP ${res.status}`) }), {
       status: 200, headers: { 'Content-Type': 'application/json' },
     })

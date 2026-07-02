@@ -8,6 +8,7 @@
  * setPushInterval(sec) — clamp + upsert pushIntervalSec, return stored value
  */
 
+import { randomBytes } from 'node:crypto'
 import { PUSH_INTERVAL, clampPushInterval } from '@agentistics/core'
 import { getMongoDb } from './mongo'
 
@@ -23,6 +24,10 @@ export interface CentralConfig {
 
 interface CentralConfigDoc extends Partial<CentralConfig> {
   _id: 'team'
+  /** Stable identity of this central's DATA store. Created once, persisted in Mongo, so it
+   *  survives redeploys — but a wiped DB (docker `down -v`) starts fresh with a NEW id.
+   *  Members compare it to detect a reset and auto re-push their full history. */
+  instanceId?: string
 }
 
 const DEFAULT_INCLUDE_OFFLINE = true
@@ -49,6 +54,32 @@ export async function getCentralConfig(): Promise<CentralConfig> {
   } catch {
     // DB unreachable — return safe defaults
     return { pushIntervalSec: PUSH_INTERVAL.DEFAULT_SEC, includeOfflineData: DEFAULT_INCLUDE_OFFLINE }
+  }
+}
+
+/**
+ * Return this central's stable data-store instanceId, creating it on first call.
+ * Persisted in Mongo, so a redeploy keeps it — but a wiped DB (`down -v`) has no doc,
+ * so a fresh id is minted. Members use it to detect a reset and re-push. Returns null
+ * if Mongo is unreachable (the member then keeps its current sync state).
+ */
+export async function getInstanceId(): Promise<string | null> {
+  try {
+    const db = await getMongoDb()
+    const col = db.collection<CentralConfigDoc>(COLLECTION)
+    const doc = await col.findOne({ _id: DOC_ID })
+    if (doc?.instanceId) return doc.instanceId
+    // Mint one atomically — only sets it if still absent, so concurrent callers converge.
+    const id = randomBytes(12).toString('hex')
+    await col.updateOne(
+      { _id: DOC_ID, instanceId: { $exists: false } },
+      { $set: { instanceId: id } },
+      { upsert: true },
+    )
+    const fresh = await col.findOne({ _id: DOC_ID })
+    return fresh?.instanceId ?? id
+  } catch {
+    return null
   }
 }
 

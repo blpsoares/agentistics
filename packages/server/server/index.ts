@@ -1004,9 +1004,9 @@ Bun.serve<{ user: string; isAgent?: boolean }>({
     // Non-central instances return the default so members degrade gracefully.
     // ---------------------------------------------------------------------------
     if (url.pathname === '/api/team/policy' && req.method === 'GET') {
-      const { getCentralConfig } = await import('./central-config')
-      const config = await getCentralConfig()
-      return new Response(JSON.stringify({ pushIntervalSec: config.pushIntervalSec }), {
+      const { getCentralConfig, getInstanceId } = await import('./central-config')
+      const [config, instanceId] = await Promise.all([getCentralConfig(), getInstanceId()])
+      return new Response(JSON.stringify({ pushIntervalSec: config.pushIntervalSec, instanceId }), {
         status: 200,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
