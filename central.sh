@@ -92,15 +92,16 @@ init_env() {
   ingest="$(ask 'Ingest token (AGENTISTICS_TEAM_INGEST_TOKEN, optional)' '')"
   [ "$ingest" = "gen" ] && { ingest="$(openssl rand -hex 24)"; echo "    → gerado: $ingest"; }
 
-  # Bind interface: default localhost-only; offer the Tailscale IP if detected.
+  # Bind interface: default 0.0.0.0 (all interfaces — works everywhere). Optionally restrict
+  # to a specific IP; offer the detected Tailscale address as a suggestion (never forced).
   ts_ip="$(detect_tailscale_ip)"
   if [ -n "$ts_ip" ]; then
-    echo "  Detected Tailscale IP: $ts_ip — bind here to serve tailnet peers (recommended)."
-    extra_bind="$(ask 'Extra bind IP (EXTRA_BIND_IP)' "$ts_ip")"
+    echo "  Bind IP: blank = 0.0.0.0 (all interfaces). To restrict, enter a specific IP —"
+    echo "           e.g. your Tailscale address $ts_ip (serves only tailnet peers)."
   else
-    echo "  Extra bind IP: blank = localhost-only; set a Tailscale IP to serve peers; 0.0.0.0 = all interfaces."
-    extra_bind="$(ask 'Extra bind IP (EXTRA_BIND_IP, optional)' '')"
+    echo "  Bind IP: blank = 0.0.0.0 (all interfaces). Enter a specific IP to restrict exposure."
   fi
+  extra_bind="$(ask 'Bind IP (BIND_IP)' '0.0.0.0')"
 
   umask 077  # central.env holds secrets → create it readable only by the owner
   cat > "$ENV_FILE" <<EOF
@@ -108,7 +109,7 @@ init_env() {
 # Holds secrets. NEVER commit this file (it is gitignored).
 
 APP_PORT=$port
-${extra_bind:+EXTRA_BIND_IP=$extra_bind}
+BIND_IP=${extra_bind:-0.0.0.0}
 
 MONGO_URL=mongodb://mongo:27017/?replicaSet=rs0
 MONGO_DB=agentistics
@@ -125,7 +126,7 @@ EOF
 
   echo
   echo "Wrote $ENV_FILE (chmod 600)."
-  [ -n "$extra_bind" ] && echo "  Bind: 127.0.0.1 + $extra_bind" || echo "  Bind: 127.0.0.1 only (localhost)"
+  echo "  Bind: ${extra_bind:-0.0.0.0}"
   echo "  Keep the password — share it with your team to log in to the dashboard."
   echo
 }

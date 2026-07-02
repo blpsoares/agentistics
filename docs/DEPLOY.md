@@ -110,7 +110,7 @@ Override the defaults with env vars: `PROJECT=... ENV_FILE=... ./central.sh up`.
 | Variable | Default | Description |
 |---|---|---|
 | `APP_PORT` | `47291` | Host port published by the app container |
-| `EXTRA_BIND_IP` | `127.0.0.2` | Extra interface to bind besides `127.0.0.1`. Set to your Tailscale IP to serve peers without the wildcard `0.0.0.0`; set to `0.0.0.0` for all-interfaces exposure |
+| `BIND_IP` | `0.0.0.0` | Interface the app binds to. Default `0.0.0.0` = all interfaces. Set to a specific IP (e.g. your Tailscale address) to restrict exposure |
 | `MONGO_URL` | `mongodb://mongo:27017/?replicaSet=rs0` | MongoDB connection string |
 | `MONGO_DB` | `agentistics` | MongoDB database name |
 | `AGENTISTICS_TEAM_CENTRAL` | `1` | Enable central aggregator mode (always `1` in Docker) |
@@ -121,26 +121,25 @@ Override the defaults with env vars: `PROJECT=... ENV_FILE=... ./central.sh up`.
 
 ---
 
-## Network exposure (which interfaces the dashboard listens on)
+## Network exposure (which interface the dashboard listens on)
 
-The app container always binds `127.0.0.1` (the local machine's browser) and one
-**extra** interface controlled by `EXTRA_BIND_IP`:
+`BIND_IP` controls the interface the app binds to:
 
-| Goal | `EXTRA_BIND_IP` | Reachable from |
+| Goal | `BIND_IP` | Reachable from |
 |---|---|---|
-| Local machine only (default) | _unset_ → `127.0.0.2` | Just this host's browser |
-| Serve a private tailnet | your Tailscale IP (e.g. `100.x.y.z`) | This host + Tailscale peers |
-| Expose on every interface | `0.0.0.0` | Everything that can route to the host |
+| Works everywhere (default) | _unset_ → `0.0.0.0` | Every interface that can route to the host |
+| Serve a private tailnet only | your Tailscale IP (e.g. `100.x.y.z`) | This host + Tailscale peers |
+| Local machine only | `127.0.0.1` | Just this host's browser |
 
-Prefer a **specific IP** over `0.0.0.0`. Binding your Tailscale address serves remote
-teammates over Tailscale's encrypted network while leaving LAN/bridge interfaces closed —
-you get remote access without a public listener, so plain HTTP inside the tailnet is fine
-(Tailscale encrypts the transport). Only reach for a TLS reverse proxy + `AGENTISTICS_TEAM_TLS=1`
-if you must expose the dashboard **outside** Tailscale.
+The default `0.0.0.0` just works. If you want to **restrict** exposure, set `BIND_IP` to a
+specific address — binding your Tailscale IP serves remote teammates over Tailscale's
+encrypted network, so plain HTTP inside the tailnet is fine (Tailscale encrypts the
+transport). Only reach for a TLS reverse proxy + `AGENTISTICS_TEAM_TLS=1` if you must
+expose the dashboard **outside** Tailscale.
 
-> **WSL2 note:** `127.0.0.1` is what Windows' `localhost` forwarding connects to, so the
-> Windows browser keeps working at `http://localhost:<APP_PORT>`. Peers use the Tailscale
-> address. The old wildcard `0.0.0.0` bind is not needed for either path.
+> **WSL2 note:** binding to a specific non-loopback IP (e.g. Tailscale) means Windows'
+> `localhost` forwarding no longer reaches the app — browse via that IP instead. The default
+> `0.0.0.0` keeps `http://localhost:<APP_PORT>` working.
 
 ---
 
