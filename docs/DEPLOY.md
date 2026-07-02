@@ -80,8 +80,7 @@ docker compose -p team-mode --env-file central.env up -d --build --force-recreat
 
 ### 4. Open the dashboard
 
-Navigate to `http://<your-host>:<APP_PORT>` (default: `http://localhost:47291`;
-the bundled `central.env` uses `48080`).
+Navigate to `http://<your-host>:<APP_PORT>` (default: `http://localhost:48080`).
 
 ---
 
@@ -109,7 +108,7 @@ Override the defaults with env vars: `PROJECT=... ENV_FILE=... ./central.sh up`.
 
 | Variable | Default | Description |
 |---|---|---|
-| `APP_PORT` | `47291` | Host port published by the app container |
+| `APP_PORT` | `48080` | Host port the central is served on (distinct from a member/dev's `47291`) |
 | `BIND_IP` | `0.0.0.0` | Interface the app binds to. Default `0.0.0.0` = all interfaces. Set to a specific IP (e.g. your Tailscale address) to restrict exposure |
 | `MONGO_URL` | `mongodb://mongo:27017/?replicaSet=rs0` | MongoDB connection string |
 | `MONGO_DB` | `agentistics` | MongoDB database name |
@@ -148,7 +147,7 @@ expose the dashboard **outside** Tailscale.
 When the server is running in central mode you can generate a pre-filled `central.env` via:
 
 ```bash
-curl -s http://localhost:47291/api/team/deploy | jq .
+curl -s http://localhost:48080/api/team/deploy | jq .
 ```
 
 The response includes:

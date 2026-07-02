@@ -52,7 +52,7 @@ services:
     ports:
       # Bind interface. Default 0.0.0.0 = all interfaces (works out of the box). Set BIND_IP
       # to a specific address (e.g. your Tailscale IP) to restrict exposure to that interface.
-      - "${BIND_IP:-0.0.0.0}:${APP_PORT:-47291}:47291"
+      - "${BIND_IP:-0.0.0.0}:${APP_PORT:-48080}:47291"
     restart: unless-stopped
 
 volumes:
