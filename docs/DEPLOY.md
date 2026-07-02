@@ -53,15 +53,51 @@ Edit `central.env` and paste the values into:
 
 ### 3. Start the stack
 
+The repo ships a helper script, **`central.sh`**, that wraps `docker compose` with
+the project name (`-p team-mode`) and `--env-file central.env` pre-set so you don't
+have to remember the flags:
+
 ```bash
-docker compose --env-file central.env up -d
+./central.sh up        # build + (re)create the containers  [most common]
 ```
 
 The first run builds the image and initialises the MongoDB replica set. This takes about 30–60 seconds.
 
+> **Why the script?** Two easy-to-forget details are baked in:
+> - `up` uses `--build --force-recreate`. A plain `docker compose up -d` does **not**
+>   recreate the container after a rebuild, so your new code silently would not run.
+> - `-p team-mode` names the stack, keeping it isolated from any other compose project
+>   on the same host.
+
+Prefer raw compose? The equivalent is:
+
+```bash
+docker compose -p team-mode --env-file central.env up -d --build --force-recreate
+```
+
 ### 4. Open the dashboard
 
-Navigate to `http://<your-host>:<APP_PORT>` (default: `http://localhost:47291`).
+Navigate to `http://<your-host>:<APP_PORT>` (default: `http://localhost:47291`;
+the bundled `central.env` uses `48080`).
+
+---
+
+## Managing the central — `central.sh`
+
+| Command | What it does |
+|---|---|
+| `./central.sh up` | Build the image and (re)create the containers (`--build --force-recreate`) |
+| `./central.sh restart` | Restart the `app` container **without** rebuilding |
+| `./central.sh logs` | Follow the `app` container logs (Ctrl-C to stop) |
+| `./central.sh status` | Show container + health status |
+| `./central.sh down` | Stop and remove the containers — **keeps** the Mongo data volume |
+| `./central.sh pull` | Rebuild from a fresh base image (run `git pull` first) |
+| `./central.sh help` | Print the usage summary |
+
+Override the defaults with env vars: `PROJECT=... ENV_FILE=... ./central.sh up`.
+
+> `down` never passes `-v`, so your stored team data survives. Only add `-v` manually
+> when you deliberately want to wipe everything.
 
 ---
 
