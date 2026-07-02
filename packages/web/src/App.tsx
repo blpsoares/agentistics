@@ -54,6 +54,9 @@ interface TeamSessionState {
   authed: boolean
   /** true when the server is running in central (hub) mode */
   central?: boolean
+  /** true when a central has NO local harness data (pure aggregator) — hide local-only UI
+   *  (archive consent gate, Nay chat) that only makes sense with a local harness installed. */
+  aggregatorOnly?: boolean
 }
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
@@ -1477,7 +1480,7 @@ export default function AppLayout() {
   if (teamSession.required && !teamSession.authed) {
     return (
       <TeamLogin
-        onAuthed={() => { setTeamSession({ required: true, authed: true }); refetch() }}
+        onAuthed={() => { setTeamSession(s => ({ ...(s ?? { required: true }), required: true, authed: true })); refetch() }}
       />
     )
   }
@@ -1548,12 +1551,14 @@ export default function AppLayout() {
     (filters.models.length > 0 ? 1 : 0) +
     (harnessFilterActive ? 1 : 0)
 
-  // Block the app until the user makes the first-run archive choice. While prefs
-  // are still loading (undefined) render a neutral background to avoid a flash.
-  if (archiveChoice === undefined) {
+  // Block the app until the user makes the first-run archive choice. While prefs OR the
+  // team-session flag are still loading render a neutral background to avoid a flash.
+  if (archiveChoice === undefined || teamSession === undefined) {
     return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
   }
-  if (archiveChoice === null) {
+  // A pure central (aggregator, no local harness data) has no local sessions to archive —
+  // never show the consent gate there.
+  if (archiveChoice === null && !teamSession.aggregatorOnly) {
     return (
       <ArchiveConsentModal
         lang={lang}
@@ -2137,25 +2142,28 @@ export default function AppLayout() {
         />
       )}
 
-      {/* TTY Chat — floating button + panel, globally available */}
-      <TtyChat
-        lang={lang}
-        chatModel={chatModel}
-        chatSoundEnabled={chatSoundEnabled}
-        chatSoundId={chatSoundId}
-        filters={filters}
-        setFilters={setFilters}
-        onPdfExport={(range) => setPdfDirectExportRange(range)}
-        isMobile={isMobile}
-        onModelSet={(model) => {
-          setChatModel(model)
-          fetch('/api/preferences', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chatModel: model }),
-          }).catch(() => {})
-        }}
-      />
+      {/* TTY Chat (Nay) — floating button + panel. Hidden on a pure central (aggregator with
+          no local harness): the chat needs a locally-installed harness to be meaningful. */}
+      {!teamSession?.aggregatorOnly && (
+        <TtyChat
+          lang={lang}
+          chatModel={chatModel}
+          chatSoundEnabled={chatSoundEnabled}
+          chatSoundId={chatSoundId}
+          filters={filters}
+          setFilters={setFilters}
+          onPdfExport={(range) => setPdfDirectExportRange(range)}
+          isMobile={isMobile}
+          onModelSet={(model) => {
+            setChatModel(model)
+            fetch('/api/preferences', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chatModel: model }),
+            }).catch(() => {})
+          }}
+        />
+      )}
 
       {/* Footer */}
       <footer style={{

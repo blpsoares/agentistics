@@ -17,7 +17,7 @@
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import { TEAM_CENTRAL, TEAM_PASSWORD, TEAM_SESSION_SECRET, TEAM_TLS } from './config'
+import { TEAM_CENTRAL, TEAM_PASSWORD, TEAM_SESSION_SECRET, TEAM_TLS, CENTRAL_USER } from './config'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -172,14 +172,17 @@ export function handleLogout(_req: Request): Response {
 
 /**
  * GET /api/team/session
- * Returns { authed: boolean, required: boolean }.
+ * Returns { authed, required, central, aggregatorOnly }.
  * `required` = a password is configured (tells the web whether to show the login screen).
+ * `aggregatorOnly` = a central with NO local harness data (no CENTRAL_USER) — a pure
+ * aggregator. The web uses it to hide local-only UI (archive consent gate, Nay chat).
  * Public — never behind the gate.
  */
 export function handleSession(req: Request): Response {
   const required = Boolean(TEAM_PASSWORD)
   const authed = isAuthed(req)
-  return new Response(JSON.stringify({ authed, required, central: TEAM_CENTRAL }), {
+  const aggregatorOnly = TEAM_CENTRAL && !CENTRAL_USER
+  return new Response(JSON.stringify({ authed, required, central: TEAM_CENTRAL, aggregatorOnly }), {
     status: 200,
     headers: JSON_CT,
   })
