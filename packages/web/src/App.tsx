@@ -1035,6 +1035,9 @@ export default function AppLayout() {
   // Show install modal once after first data load, unless dismissed or already installed
   useEffect(() => {
     if (installModalShownRef.current) return
+    // A central is a server, not an end-user machine — never prompt to install the app there
+    // (and its prefs are ephemeral/read-only in Docker, so a dismiss wouldn't persist anyway).
+    if (isCentral) return
     if (!data || loading) return
     if (pwaInstalled) return
     if (installDismissedPref === undefined) return // wait for prefs to load
@@ -1042,7 +1045,7 @@ export default function AppLayout() {
     try { if (localStorage.getItem(INSTALL_DISMISSED_KEY) === 'true') return } catch {}
     installModalShownRef.current = true
     setShowInstallModal(true)
-  }, [data, loading, pwaInstalled, installDismissedPref])
+  }, [data, loading, pwaInstalled, installDismissedPref, isCentral])
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
   const [chatSoundId, setChatSoundId] = useState('ping')
