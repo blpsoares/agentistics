@@ -234,7 +234,7 @@ agentop member leave     # notify the central and reset this machine back to sol
 
 Presence is **WebSocket-authoritative**: a member shows online in real time while its
 reverse channel is live and flips to offline within ~8s of the app being killed (a heartbeat
-covers http-only members). Members follow the **central's** push cadence (default 15s, down to
+covers http-only members). Members follow the **central's** push cadence (default 30s, 15s floor, down to
 5s in express mode) and can only go slower, plus they push on local change (debounced). If the
 central DB is wiped, the token is rotated, or the endpoint changes, the member detects the
 signature change and re-pushes its full history automatically — no manual `team-sent.json`
