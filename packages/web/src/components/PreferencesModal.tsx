@@ -1171,6 +1171,14 @@ export function PreferencesModal({
       .catch(() => { setCentral(false) })
   }, [])
 
+  // A central has nothing "live" to toggle — member pushes already refresh its dashboards in
+  // real time via SSE-on-ingest — so the Live tab is hidden there. If it was the active tab when
+  // the central flag resolves, fall back to Preferences so the body doesn't render blank.
+  const visibleTabs = central ? TABS.filter(t => t.id !== 'live') : TABS
+  useEffect(() => {
+    if (central && activeTab === 'live') setActiveTab('preferences')
+  }, [central, activeTab])
+
   function set<K extends keyof PrefsDraft>(key: K, value: PrefsDraft[K]) {
     setDraft(d => ({ ...d, [key]: value }))
   }
@@ -1223,7 +1231,7 @@ export function PreferencesModal({
           <div className="prefs-tabbar" style={{
             display: 'flex', flexWrap: 'wrap', gap: 2, borderBottom: '1px solid var(--border)', marginBottom: 0,
           }}>
-            {TABS.map(tab => {
+            {visibleTabs.map(tab => {
               const active = activeTab === tab.id
               const label = pt ? tab.labelPt : tab.labelEn
               return (
