@@ -2323,8 +2323,8 @@ export default function AppLayout() {
         </div>
       </footer>
 
-      {/* Global notification toasts (auto-dismiss after 3s; history in the bell) */}
-      <NotificationToasts />
+      {/* Global notification toasts (auto-dismiss with an exit animation; history in the bell) */}
+      <NotificationToasts lang={lang} />
     </div>
   )
 }

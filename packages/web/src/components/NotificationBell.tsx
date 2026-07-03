@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Bell, AlertCircle, AlertTriangle, Info, CheckCircle2, Trash2 } from 'lucide-react'
-import { useNotifications, markAllRead, clearNotifications, type NotificationType } from '../lib/notifications'
+import { useNotifications, markAllRead, clearNotifications, resolveNotification, type NotificationType } from '../lib/notifications'
 
 const ICON: Record<NotificationType, { color: string; Icon: typeof AlertCircle }> = {
   error:   { color: '#ef4444', Icon: AlertCircle },
@@ -104,6 +104,7 @@ export function NotificationBell({ lang, buttonStyle }: Props) {
           ) : (
             notes.map(n => {
               const { color, Icon } = ICON[n.type]
+              const { title, message } = resolveNotification(n, lang)
               return (
                 <div key={n.id} style={{
                   display: 'flex', alignItems: 'flex-start', gap: 9,
@@ -111,10 +112,10 @@ export function NotificationBell({ lang, buttonStyle }: Props) {
                 }}>
                   <Icon size={15} color={color} style={{ flexShrink: 0, marginTop: 1 }} />
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{n.title}</div>
-                    {n.message && (
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</div>
+                    {message && (
                       <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 2, lineHeight: 1.45, wordBreak: 'break-word' }}>
-                        {n.message}
+                        {message}
                       </div>
                     )}
                   </div>

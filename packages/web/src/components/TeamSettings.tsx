@@ -384,11 +384,7 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
       if (!testData.ok) {
         const err = testData.error ?? `Connection failed (${testData.status})`
         setSaveResult({ ok: false, error: err })
-        pushNotification({
-          type: 'error',
-          title: pt ? 'Falha ao conectar na central' : 'Failed to connect to the central',
-          message: err,
-        })
+        pushNotification({ type: 'error', code: 'central.connect_failed' })
         return
       }
 
@@ -403,11 +399,7 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
           ? 'A central não reconheceu este token. Gere um token para esta máquina no Team Manager da central.'
           : "The central didn't recognize this token. Mint a token for this machine in the central's Team Manager."
         setSaveResult({ ok: false, error: err })
-        pushNotification({
-          type: 'error',
-          title: pt ? 'Token não reconhecido' : 'Token not recognized',
-          message: err,
-        })
+        pushNotification({ type: 'error', code: 'central.token_unrecognized' })
         return
       }
       // Store the endpoint WITHOUT a trailing slash — otherwise URL builds produce `//api/...`

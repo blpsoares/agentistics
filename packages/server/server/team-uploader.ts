@@ -12,11 +12,11 @@
 import { createHash } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import type { SessionMeta, StatsCache } from '@agentistics/core'
-import { PUSH_INTERVAL, clampPushInterval } from '@agentistics/core'
+import { PUSH_INTERVAL, clampPushInterval, DEFAULT_TEAM } from '@agentistics/core'
 import type { Preferences } from './preferences'
 import { TEAM_SENT_FILE, TEAM_SYNC_FILE, STATS_CACHE_FILE } from './config'
 import { loadConsolidated } from './consolidate'
-import { readPreferences } from './preferences'
+import { readPreferences, writePreferences } from './preferences'
 import { safeReadJson } from './utils'
 
 /** This machine's statsCache to push to the central — the SUPPLEMENTED one the local
@@ -52,6 +52,7 @@ function clearPushError(): void {
 /** Record a successful contact with the central (used by the status pill + recovery). */
 function markPushSuccess(): void {
   _lastSuccessAt = Date.now()
+  _authErrStreak = 0 // any success clears the revoke countdown
 }
 
 export interface UploaderStatus {
@@ -87,6 +88,52 @@ async function notifyPushRecovered(): Promise<void> {
     const { broadcastNotification } = await import('./sse')
     broadcastNotification({ type: 'success', code: 'member.reconnected' })
   } catch { /* best-effort */ }
+}
+
+// A 401/403 means the central revoked/removed this member's token. Count consecutive
+// auth-error cycles; after this many the member auto-resets itself to solo (see
+// handleAuthError). One transient 401 (e.g. a mid-rotation blip) is tolerated.
+const AUTH_ERR_RESET_THRESHOLD = 2
+let _authErrStreak = 0
+
+/**
+ * Handle a persistent-auth (401/403) push failure. Emits the first-error notification
+ * (transition-guarded) and counts consecutive auth-error cycles. Once the count reaches
+ * AUTH_ERR_RESET_THRESHOLD the token is treated as revoked and the member auto-resets to
+ * solo. Reset the streak to 0 on any success (see markPushSuccess).
+ */
+async function handleAuthError(status: number): Promise<void> {
+  await notifyPushError('auth', { status })
+  _authErrStreak++
+  if (_authErrStreak >= AUTH_ERR_RESET_THRESHOLD) {
+    await autoResetOnRevoke()
+  }
+}
+
+/**
+ * The central revoked this member's token. Auto-reset so the member stops hammering a
+ * dead endpoint and the person sees a clear, actionable notification:
+ *   (i)   rewrite preferences.team back to solo (clearing endpoint/token/user),
+ *   (ii)  reset the local sync state (a future rejoin re-pushes the full history),
+ *   (iii) emit a 'member.removed' SSE notification.
+ * Idempotent — once prefs are back on solo, subsequent calls no-op.
+ */
+async function autoResetOnRevoke(): Promise<void> {
+  try {
+    const prefs = await readPreferences()
+    if (!prefs.team || prefs.team.mode !== 'member') return // already reset — don't spam
+    await writePreferences({ team: { ...DEFAULT_TEAM } })
+    await resetSyncState()
+    _authErrStreak = 0
+    _pushErrKind = null
+    console.warn('[team-uploader] central revoked this token — reset team config to solo')
+    try {
+      const { broadcastNotification } = await import('./sse')
+      broadcastNotification({ type: 'warning', code: 'member.removed' })
+    } catch { /* best-effort */ }
+  } catch (err) {
+    console.warn('[team-uploader] auto-reset on revoke failed:', err instanceof Error ? err.message : String(err))
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +252,7 @@ export async function pushOnceDetailed(team: NonNullable<Preferences['team']>): 
           })
           // A reachable central (even a non-2xx that isn't auth) counts as contact for the pill.
           if (res.ok) { markPushSuccess(); clearPushError(); void notifyPushRecovered() }
-          else if (res.status === 401 || res.status === 403) void notifyPushError('auth', { status: res.status })
+          else if (res.status === 401 || res.status === 403) void handleAuthError(res.status)
         } catch (e) {
           warnPushError(e instanceof Error ? e.message : String(e))
           void notifyPushError('net')
@@ -236,8 +283,9 @@ export async function pushOnceDetailed(team: NonNullable<Preferences['team']>): 
       if (!res.ok) {
         const msg = `ingest returned ${res.status}`
         console.warn(`[team-uploader] ${msg}; stopping push`)
-        // 401/403 = the central rejected the token → actionable auth notification.
-        if (res.status === 401 || res.status === 403) void notifyPushError('auth', { status: res.status })
+        // 401/403 = the central rejected the token → actionable auth notification (and,
+        // after repeated failures, an automatic reset to solo).
+        if (res.status === 401 || res.status === 403) void handleAuthError(res.status)
         return { count: pushed, error: msg }
       }
 
