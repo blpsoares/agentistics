@@ -120,6 +120,22 @@ export async function confirm(message: string, initial = false): Promise<boolean
   })
 }
 
+/** Wait for the user to press Enter (used to let action output be read before the panel redraws). */
+export function pause(message = 'Press Enter to go back'): Promise<void> {
+  const stdout = process.stdout
+  if (!process.stdin.isTTY) return Promise.resolve()
+  const rl = createInterface({ input: process.stdin, output: stdout })
+  rl.on('SIGINT', () => { stdout.write('\n'); rl.close(); process.exit(130) })
+  return new Promise((resolve) => {
+    rl.question(`\n  ${D}${message} ↵${R}`, () => { rl.close(); resolve() })
+  })
+}
+
+/** Clear the visible screen and home the cursor (keeps scrollback so history isn't lost). */
+export function clearScreen(): void {
+  process.stdout.write('\x1b[2J\x1b[H')
+}
+
 /** Typed text input via readline. `secret` masks nothing (readline can't) but trims the value. */
 export function input(message: string, opts: { default?: string } = {}): Promise<string> {
   const stdout = process.stdout

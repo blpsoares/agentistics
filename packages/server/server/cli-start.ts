@@ -22,7 +22,7 @@ import { readPreferences } from './preferences'
 import { runSetup } from './cli-setup'
 import { runCentral } from './cli-central'
 import { enableAutostart } from './autostart'
-import { select, confirm } from './cli-ui'
+import { select, confirm, pause, clearScreen } from './cli-ui'
 
 export type StartResult = number | 'foreground'
 
@@ -219,7 +219,7 @@ async function clearPortOrAbort(localRunning: boolean): Promise<boolean> {
 }
 
 // ── Stop submenu ───────────────────────────────────────────────────────────────
-async function stopMenu(svc: Services): Promise<void> {
+async function stopMenu(svc: Services): Promise<boolean> {
   const choices: { name: string; value: string }[] = []
   if (svc.local) choices.push({ name: `Local server ${D}(:${WEB_PORT})${R}`, value: 'local' })
   if (svc.central) choices.push({ name: `Central ${D}(docker)${R}`, value: 'central' })
@@ -228,10 +228,11 @@ async function stopMenu(svc: Services): Promise<void> {
   choices.push({ name: 'Cancel', value: 'cancel' })
 
   const pick = await select({ message: 'Stop which?', choices })
-  if (pick === 'cancel') return
+  if (pick === 'cancel') return false
   if (pick === 'local' || pick === 'all') await stopLocal()
   if (pick === 'central' || pick === 'all') await stopContainers(`label=com.docker.compose.project=${CENTRAL_PROJECT}`, 'the central container')
   if (pick === 'machine' || pick === 'all') await stopContainers(`ancestor=${MACHINE_IMAGE}`, 'the machine container')
+  return true
 }
 
 // ── main loop ─────────────────────────────────────────────────────────────────
@@ -244,6 +245,8 @@ export async function runStart(): Promise<StartResult> {
     const svc = await detectServices()
     const anyRunning = svc.local || svc.central || svc.machine
 
+    // Redraw the panel in place each iteration so navigating back never stacks copies.
+    clearScreen()
     printBanner()
     printStatus(mode, endpoint, svc)
 
@@ -262,6 +265,8 @@ export async function runStart(): Promise<StartResult> {
 
     const action = await select({ message: 'What would you like to do?', choices })
 
+    // `acted` = the action produced output worth reading before the panel redraws → pause first.
+    let acted = false
     switch (action) {
       case 'fg':
         if (!(await clearPortOrAbort(svc.local))) break
@@ -270,23 +275,28 @@ export async function runStart(): Promise<StartResult> {
         if (!(await clearPortOrAbort(svc.local))) break
         startBackground()
         await offerBoot('server')
+        acted = true
         break
       case 'central-up': {
         const code = await runCentral('up', [])
         if (code === 0) await offerBoot('central')
+        acted = true
         break
       }
       case 'docker':
         await startDocker()
+        acted = true
         break
       case 'reconfigure':
         await runSetup()
+        acted = true
         break
       case 'stop':
-        await stopMenu(svc)
+        acted = await stopMenu(svc)
         break
       case 'quit':
         return 0
     }
+    if (acted) await pause()
   }
 }
