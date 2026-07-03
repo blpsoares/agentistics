@@ -102,6 +102,32 @@ Override the defaults with env vars: `PROJECT=... ENV_FILE=... ./central.sh up`.
 > `down` never passes `-v`, so your stored team data survives. Only add `-v` manually
 > when you deliberately want to wipe everything.
 
+### The same thing from the cli — `agentop central`
+
+If you have the `agentop` binary installed, `agentop central <action>` is a thin wrapper
+that shells out to the repo's `central.sh` (it locates the script in the checkout it was
+run from, inheriting stdio so `init`'s prompts and `logs` streaming work). The actions map
+one-to-one:
+
+| central.sh | agentop equivalent | What it does |
+|---|---|---|
+| `./central.sh init` | `agentop central init` | (Re)generate `central.env` interactively |
+| `./central.sh up` | `agentop central up` | Build + `--force-recreate` the containers |
+| `./central.sh restart` | `agentop central restart` | Restart the `app` container without rebuilding |
+| `./central.sh logs` | `agentop central logs` | Follow the `app` logs |
+| `./central.sh status` | `agentop central status` | Show container + health status |
+| `./central.sh down` | `agentop central down` | Stop + remove containers (keeps the data volume) |
+| `./central.sh pull` | `agentop central pull` | Rebuild from a fresh base image |
+
+```bash
+agentop central up        # first time offers the interactive init, then deploys
+agentop central status
+agentop central logs
+```
+
+> `agentop central` needs the agentistics repo (it runs `central.sh`), so run it from
+> inside a checkout. On a machine that only has the binary, clone the repo first.
+
 ---
 
 ## Environment Variables
@@ -159,6 +185,90 @@ The response includes:
 
 ---
 
+## Connect a member
+
+A **member** is a developer's machine that pushes its *computed* metrics (never chat content)
+to the central. Membership is configured with the `agentop` binary — the central never needs
+to reach back out to the member to onboard it.
+
+### 1. Mint a token on the central
+
+Log in to the central dashboard, open **Settings → Team**, and mint a token for the new
+machine. The **machine's name is set here, on the token** — there is no name field on the
+member side; the member resolves its own name from the central via `/api/team/whoami`.
+
+From the members panel you can also **rotate** a token (issues a new credential while
+migrating that member's sessions + stats to the new identity, so history is preserved),
+**revoke** it (confirmation modal, then cascade-deletes that member's data), and **rename**
+the machine.
+
+### 2. Connect the member machine
+
+Interactive wizard (recommended for first-time setup — pick "join a central" and paste the
+endpoint + token):
+
+```bash
+agentop setup
+```
+
+Non-interactive equivalent:
+
+```bash
+agentop member connect --endpoint http://<central-host>:48080 --token <minted-token> [--org <org>]
+```
+
+`member connect` verifies the token against `GET <endpoint>/api/team/whoami` before writing
+anything — a bad token never leaves a half-written config. On success it prints
+`connected as <name>` (the name comes from the central).
+
+> Use the central's reachable address for `--endpoint`. Inside a tailnet this is the central's
+> Tailscale IP (e.g. `http://100.x.y.z:48080`). The bearer token is stored locally and never
+> logged.
+
+### 3. Check / leave
+
+```bash
+agentop member status    # mode, endpoint, org, user + last sync state
+agentop member leave     # notify the central and reset this machine back to solo
+```
+
+Presence is **WebSocket-authoritative**: a member shows online in real time while its
+reverse channel is live and flips to offline within ~8s of the app being killed (a heartbeat
+covers http-only members). Members follow the **central's** push cadence (default 15s, down to
+5s in express mode) and can only go slower, plus they push on local change (debounced). If the
+central DB is wiped, the token is rotated, or the endpoint changes, the member detects the
+signature change and re-pushes its full history automatically — no manual `team-sent.json`
+reset. A revoked machine auto-resets itself back to solo.
+
+---
+
+## Autostart with `agentop`
+
+Beyond the Docker snippets below, the `agentop` binary can register itself as a **systemd
+*user* service** (no root) so a mode starts with the system:
+
+```bash
+agentop autostart server enable      # a member/solo dashboard + daemon
+agentop autostart central enable     # the Docker central (runs central.sh up)
+agentop autostart watch enable       # the OpenTelemetry daemon only
+
+agentop autostart server disable     # stop + remove the service
+agentop autostart status             # state of every service (omit the mode to list all)
+```
+
+On Linux/WSL, `enable` writes `~/.config/systemd/user/agentop-<mode>.service`, runs
+`systemctl --user enable --now agentop-<mode>`, and sets `loginctl enable-linger <you>` so the
+service also starts at boot without an active login. It additionally installs a guarded hook in
+`~/.bashrc` that runs `agentop check-update` on every terminal open (prints a banner only when
+an update exists). macOS (launchd) and Windows (Task Scheduler) are not yet wired up — those
+platforms print the exact manual step instead.
+
+> `autostart central` runs `central.sh up`, so it needs the agentistics repo present. For a
+> production central you can use either this or the raw systemd unit in **Autostart Snippets**
+> below.
+
+---
+
 ## MongoDB Replica Set
 
 The bundled `mongo` service starts with `--replSet rs0`. The healthcheck runs an
@@ -180,7 +290,11 @@ MongoDB does **not** publish port `27017` to the host; only the `app` container 
 
 ---
 
-## Autostart Snippets
+## Autostart Snippets (raw — for the Docker central)
+
+These run the Docker central directly via the host's init system. Prefer them over
+`agentop autostart central` when the machine has no `agentop` binary or you want to manage the
+compose stack yourself.
 
 ### systemd (Linux — recommended for production servers)
 
@@ -281,13 +395,46 @@ pm2 startup   # follow the printed command
 
 ---
 
-## Upgrading
+## Staying up to date
+
+agentistics surfaces "update available" everywhere: as a banner when you run a command, via
+the `~/.bashrc` hook on terminal open/boot, and on the dashboard (a bell notification plus a
+**mode-aware** update modal with the exact command for your role). A periodic server re-check
+(every 6h) pushes the notification live over SSE.
+
+```bash
+agentop check-update   # prints the banner if outdated, nothing if current
+agentop upgrade        # download + replace the binary with the latest release
+agentop --version      # current version (also flags an update if one exists)
+```
+
+### Upgrade a central (Docker)
+
+The dashboard update modal on a **central** shows a single command:
+
+```bash
+bun run up:central     # = ./central.sh up — rebuild + --force-recreate with the new code
+```
+
+Raw-compose equivalent (from the repo, after `git pull`):
 
 ```bash
 git pull
-docker compose --env-file central.env build --pull
-docker compose --env-file central.env up -d
+docker compose -p team-mode --env-file central.env build --pull
+docker compose -p team-mode --env-file central.env up -d --force-recreate
 ```
+
+### Upgrade a member
+
+The update modal on a **member/solo** machine shows:
+
+```bash
+agentop upgrade                            # replace the binary
+systemctl --user restart agentop-server    # restart the autostart service to run the new binary
+```
+
+If you don't run `agentop server` as a systemd user service, just restart it however you
+launched it (e.g. re-run `agentop server`).
 
 ---
 
