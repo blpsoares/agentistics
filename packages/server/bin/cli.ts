@@ -12,9 +12,12 @@ const HELP = `
 Usage: agentop <command> [options]
 
 Commands:
+  setup         Interactive first-run wizard (solo / central / member)
   server        Start the web dashboard + background daemon
   tui           Start the live terminal dashboard (standalone)
   watch         Start the background metrics daemon only
+  central       Manage the team central (wraps central.sh)
+  member        Configure this machine as a team member
   upgrade       Upgrade agentop to the latest version
   autostart     Start a mode with the system (systemd user service on Linux)
   check-update  Print a notice if a newer version is available (else silent)
@@ -23,6 +26,23 @@ Options:
   --help, -h       Show this help message
   --version, -v    Show current version
   --port <n>       Port for the web server (default: 47291)  [server only]
+
+Setup:
+  agentop setup
+    Interactive wizard: pick solo, host a central, or join one as a member.
+    Running bare agentop on an unconfigured machine launches this too.
+
+Central:
+  agentop central <up|init|down|logs|status|restart|pull>
+    Thin wrapper over the repo's central.sh (needs the agentistics repo).
+
+Member:
+  agentop member connect --endpoint <url> --token <token> [--org <org>]
+    Verify the token against the central and save this machine as a member.
+  agentop member leave
+    Notify the central and reset back to solo.
+  agentop member status
+    Show the current mode/endpoint/user and last sync state.
 
 Autostart:
   agentop autostart <mode> <enable|disable|status>
@@ -33,10 +53,14 @@ Autostart:
     status   Show enabled/active state (omit mode to list all)
 
 Examples:
+  agentop setup
   agentop server
   agentop server --port 4000
   agentop tui
   agentop watch
+  agentop central up
+  agentop member connect --endpoint http://host:48080 --token abc123
+  agentop member status
   agentop upgrade
   agentop check-update
   agentop autostart server enable
@@ -86,9 +110,82 @@ async function checkVersionAndWarn(): Promise<void> {
 
 // ---------------------------------------------------------------------------
 
-if (!command || command === '--help' || command === '-h') {
+if (command === '--help' || command === '-h') {
   console.log(HELP)
   process.exit(0)
+}
+
+// Bare `agentop` (no command): if this machine isn't configured yet (no team or
+// team.mode==='solo') AND stdin is a TTY, launch the interactive setup wizard.
+// Otherwise fall back to printing HELP exactly as before.
+if (!command) {
+  let unconfigured = true
+  try {
+    const { readPreferences } = await import('../server/preferences.ts')
+    const prefs = await readPreferences()
+    unconfigured = !prefs.team || prefs.team.mode === 'solo'
+  } catch {
+    // If preferences can't be read, treat as unconfigured (wizard is safe/idempotent).
+  }
+  if (unconfigured && process.stdin.isTTY) {
+    const { runSetup } = await import('../server/cli-setup.ts')
+    const code = await runSetup()
+    process.exit(code)
+  }
+  console.log(HELP)
+  process.exit(0)
+}
+
+if (command === 'setup') {
+  const { runSetup } = await import('../server/cli-setup.ts')
+  const code = await runSetup()
+  process.exit(code)
+}
+
+if (command === 'central') {
+  const { runCentral } = await import('../server/cli-central.ts')
+  const action = args[0]
+  if (!action) {
+    console.error('Missing central action. Expected one of: up, init, down, logs, status, restart, pull.\n')
+    console.log(HELP)
+    process.exit(1)
+  }
+  const code = await runCentral(action, args.slice(1))
+  process.exit(code)
+}
+
+if (command === 'member') {
+  const sub = args[0]
+  const rest = args.slice(1)
+  if (sub === 'connect') {
+    const { memberConnect } = await import('../server/cli-member.ts')
+    const readFlag = (name: string): string | undefined => {
+      const idx = rest.indexOf(name)
+      return idx !== -1 && rest[idx + 1] ? rest[idx + 1] : undefined
+    }
+    const endpoint = readFlag('--endpoint')
+    const token = readFlag('--token')
+    const org = readFlag('--org')
+    if (!endpoint || !token) {
+      console.error('Usage: agentop member connect --endpoint <url> --token <token> [--org <org>]\n')
+      process.exit(1)
+    }
+    const code = await memberConnect({ endpoint, token, org })
+    process.exit(code)
+  }
+  if (sub === 'leave') {
+    const { memberLeave } = await import('../server/cli-member.ts')
+    const code = await memberLeave()
+    process.exit(code)
+  }
+  if (sub === 'status') {
+    const { memberStatus } = await import('../server/cli-member.ts')
+    const code = await memberStatus()
+    process.exit(code)
+  }
+  console.error(`Invalid member action: ${sub ?? '(none)'}. Expected one of: connect, leave, status.\n`)
+  console.log(HELP)
+  process.exit(1)
 }
 
 if (command === '--version' || command === '-v') {
