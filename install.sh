@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install agentop — agentistics CLI
-# Usage: curl -fsSL https://raw.githubusercontent.com/blpsoares/agentistics/main/install.sh | bash
-#        sudo curl -fsSL https://raw.githubusercontent.com/blpsoares/agentistics/main/install.sh | bash
+# Usage: curl -fsSL https://agentop.openvibes.tech/cli | bash
+#        sudo curl -fsSL https://agentop.openvibes.tech/cli | bash
 
 set -euo pipefail
 

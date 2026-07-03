@@ -76,13 +76,13 @@ Download the latest `.msi` or `.exe` (NSIS) from the [Releases page](https://git
 ### Option 2 — Pre-built binary (Linux / WSL)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/blpsoares/agentistics/main/install.sh | bash
+curl -fsSL https://agentop.openvibes.tech/cli | bash
 ```
 
 System-wide install:
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/blpsoares/agentistics/main/install.sh | bash
+sudo curl -fsSL https://agentop.openvibes.tech/cli | bash
 ```
 
 > If `~/.local/bin` is not in your `$PATH`, the installer will print the command to add it. Binaries are also on the [Releases page](https://github.com/blpsoares/agentistics/releases/latest).
