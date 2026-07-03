@@ -12,6 +12,17 @@ Versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Team mode** — an optional **central** aggregates computed usage metrics from many machines ("members"); it never receives chat content. Three roles: `solo` (local only), `central` (aggregator), `member` (pushes to a central). The central runs as a Docker service on port **48080** (distinct from the local dev/server port 47291)
+- Member admin panel (central Settings → Team): mint a token, **rotate** a token (new credential, history preserved by migrating the member's sessions + stats to the new identity), **revoke** (confirmation modal; cascade-deletes that member's data), and rename. A member's display name is set by the central on the minted token and resolved via `/api/team/whoami` — there is no name field on the machine
+- **Presence** — WebSocket-authoritative online/offline status with latency, an offline drop grace (~8s), and an http-only heartbeat fallback; an offline-data policy toggle; the central admin is notified when a machine connects
+- **Auto-reconciliation** — a member self-heals its sync when the central DB is wiped (new `instanceId`), its token is rotated/re-added, or the endpoint changes, re-pushing its full history with no manual state reset. A revoked machine auto-resets itself back to solo
+- **Push-on-change + real-time central** — the central owns the push interval (default 15s, express down to 5s; members may only go slower), plus a debounced push whenever local data changes. A member push triggers an SSE refresh so the central dashboard updates live (the "Live" toggle is hidden on a central)
+- Central-only filters: members, harnesses, projects (scoped to selected members), and presence (online/offline)
+- **Notifications** — auto-dismissing animated toasts plus a header bell with history and an unread badge, bilingual (pt/en) resolved at render time; fired on member connection/auth errors, "removed from central", "machine connected", and "update available"
+- **Unified `agentop` cli** — `setup` (interactive first-run wizard for solo/central/member with an autostart offer; bare `agentop` on a TTY when unconfigured launches it), `central <up|init|down|logs|status|restart|pull>` (wraps `central.sh`), `member <connect|leave|status>` (`connect --endpoint <url> --token <tok> [--org <org>]`), `autostart <server|central|watch> <enable|disable|status>`, and `check-update`
+- `autostart` on Linux/WSL installs a systemd **user** service, runs `loginctl enable-linger`, and adds a `~/.bashrc` hook that runs `agentop check-update` on terminal open (macOS/Windows print a manual step)
+- **Update detection everywhere** — a banner on command run, the boot/terminal `.bashrc` hook, and a dashboard bell notification with a **mode-aware** upgrade modal showing the exact command (central: `bun run up:central`; member: `agentop upgrade` then `systemctl --user restart agentop-server`); a periodic 6h server re-check pushes the notice via SSE
+- `central.sh` + `agentop central init` generate `central.env` interactively (openssl-generated secrets, detected Tailscale IP, `chmod 600`); `up` bakes in `--force-recreate`, `down` keeps the data volume
 - **Multi-harness tracking** — alongside Claude Code, agentistics now ingests **Codex CLI**, **Gemini CLI**, and **GitHub Copilot CLI** sessions via per-harness `HarnessAdapter` modules under `packages/server/server/adapters/`
 - Harness selector (shown only when >1 harness has data), generic per-harness dashboards at `/h/:harness`, and a side-by-side `/compare` page with per-harness colors and comparatives
 - `HARNESS_CAPABILITIES` in `@agentistics/core` drives "N/A" rendering for metrics a harness can't produce (e.g. Codex/Gemini/Copilot have no agent metrics or git line counts), instead of a misleading 0
@@ -21,10 +32,15 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - **MCP multi-harness support** — `agentistics_summary` / `agentistics_projects` / `agentistics_sessions` / `agentistics_costs` accept an optional `harness` filter, plus a new `agentistics_harnesses` tool for side-by-side harness comparison
 
 ### Fixed
+- A trailing slash on the member endpoint produced double-slash routes that broke ingest and presence
+- WebSocket drop is now authoritative for offline detection (killing the app marks a member offline within the drop grace, no longer waiting on heartbeat timeout)
+- The install prompt no longer appears on a central, and its dismissal now persists server-side; token copy is robust over plain http
 - iOS `position: sticky` broke under `overflow-x: hidden`; switched mobile `html/body/#root` to `overflow-x: clip`
 - Mobile Models dropdown was clipped by the filter collapse-animation wrapper's `overflow: hidden`
 
 ### Changed
+- **Security** — the session-cookie HMAC secret (`AGENTISTICS_TEAM_SESSION_SECRET`) is kept separate from the dashboard password; tokens are stored only as sha256 hashes; Mongo is not published to the host; `BIND_IP` can restrict the central to a private tailnet (default `0.0.0.0`); auth uses constant-time comparison
+- Removed the **Environment** tab from Settings
 - `stats-cache.json` is treated as Claude-only; non-Claude harnesses are aggregated purely from per-session data so Claude totals are never corrupted
 - README now describes agentistics as a multi-harness dashboard; `docs/mcp.md` documents the MCP's per-harness filtering and comparison tool
 
