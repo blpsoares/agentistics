@@ -33,6 +33,16 @@ const VALID_HARNESSES: readonly string[] = ['claude', 'codex', 'gemini', 'copilo
 /** user → set of connected member sockets */
 const agentSockets = new Map<string, Set<ServerWebSocket<AgentSocketData>>>()
 
+/** Users that have EVER held a live socket this run — so once a member's WS drops we can
+ *  trust that signal (offline after a short grace) instead of waiting out the heartbeat. */
+const everHadSocket = new Set<string>()
+/** user → ms epoch when their LAST socket dropped (cleared on reconnect). */
+const lastDropAt = new Map<string, number>()
+
+/** Grace after a socket drops before the member counts as offline — absorbs the brief WS
+ *  reconnect gap (backoff starts at 1s) without flickering, while still flipping fast on a kill. */
+const SOCKET_GRACE_MS = 8_000
+
 /** pending request id → resolve callback */
 const pending = new Map<string, (response: AgentResponse) => void>()
 
@@ -42,7 +52,7 @@ const pending = new Map<string, (response: AgentResponse) => void>()
 // hard-killed machine (no TCP FIN) still transitions to offline promptly.
 // ---------------------------------------------------------------------------
 
-const PING_INTERVAL_MS = 15_000
+const PING_INTERVAL_MS = 10_000
 const MAX_MISSED_PONGS = 2
 
 interface SockState {
@@ -92,6 +102,8 @@ export function registerAgent(ws: ServerWebSocket<AgentSocketData>): void {
   if (!agentSockets.has(user)) agentSockets.set(user, new Set())
   agentSockets.get(user)!.add(ws)
   sockState.set(ws, { latencyMs: null, awaitingPong: false, pingSentAt: 0, missed: 0 })
+  everHadSocket.add(user)
+  lastDropAt.delete(user) // reconnected → clear the drop marker
   ensurePingLoop()
   onPresenceChange?.()
 }
@@ -102,7 +114,13 @@ export function unregisterAgent(ws: ServerWebSocket<AgentSocketData>): void {
   const sockets = agentSockets.get(user)
   if (!sockets) { if (sockState.size === 0) stopPingLoop(); return }
   sockets.delete(ws)
-  if (sockets.size === 0) agentSockets.delete(user)
+  if (sockets.size === 0) {
+    agentSockets.delete(user)
+    // Record the drop; after the grace, the member counts as offline. Fire a presence update
+    // AT grace-expiry so the dashboard flips without waiting for its next poll.
+    lastDropAt.set(user, Date.now())
+    setTimeout(() => { if (!agentSockets.has(user)) onPresenceChange?.() }, SOCKET_GRACE_MS + 250)
+  }
   if (sockState.size === 0) stopPingLoop()
   onPresenceChange?.()
 }
@@ -116,20 +134,42 @@ export function onAgentPong(ws: ServerWebSocket<AgentSocketData>): void {
   st.missed = 0
 }
 
+export interface PresenceSignal {
+  /** true when the member has ≥1 live socket right now. */
+  online: boolean
+  /** best (lowest) observed WS latency in ms, or null if no live socket / no ping yet. */
+  latencyMs: number | null
+  /** true when the member has held a live socket this run (its WS is the authoritative signal). */
+  everHadSocket: boolean
+  /** whether the member is within the reconnect grace after its last socket dropped. */
+  inDropGrace: boolean
+}
+
 /**
- * Snapshot of currently-connected members → best (lowest) observed latency in ms,
- * or null when no ping has completed yet. A member absent from the map has no live socket.
+ * Per-member socket presence signals, keyed by resolved user. Includes members that are
+ * connected now AND those that have disconnected (so team-presence can decide offline vs
+ * a heartbeat fallback). `now` lets the caller share one clock across the snapshot.
  */
-export function getOnlineLatency(): Map<string, number | null> {
-  const out = new Map<string, number | null>()
-  for (const [user, socks] of agentSockets) {
-    if (socks.size === 0) continue
-    let best: number | null = null
-    for (const ws of socks) {
-      const st = sockState.get(ws)
-      if (st?.latencyMs != null) best = best == null ? st.latencyMs : Math.min(best, st.latencyMs)
+export function getPresenceSignals(now = Date.now()): Map<string, PresenceSignal> {
+  const out = new Map<string, PresenceSignal>()
+  const users = new Set<string>([...agentSockets.keys(), ...everHadSocket])
+  for (const user of users) {
+    const socks = agentSockets.get(user)
+    const online = !!socks && socks.size > 0
+    let latency: number | null = null
+    if (online) {
+      for (const ws of socks!) {
+        const st = sockState.get(ws)
+        if (st?.latencyMs != null) latency = latency == null ? st.latencyMs : Math.min(latency, st.latencyMs)
+      }
     }
-    out.set(user, best)
+    const dropAt = lastDropAt.get(user)
+    out.set(user, {
+      online,
+      latencyMs: latency,
+      everHadSocket: everHadSocket.has(user),
+      inDropGrace: !online && dropAt != null && now - dropAt <= SOCKET_GRACE_MS,
+    })
   }
   return out
 }

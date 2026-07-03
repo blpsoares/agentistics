@@ -12,34 +12,45 @@
 
 import { PUSH_INTERVAL } from '@agentistics/core'
 import type { MemberPresence } from '@agentistics/core'
-import { getOnlineLatency } from './team-agent'
+import { getPresenceSignals } from './team-agent'
 import { listMembers } from './team-tokens'
 import { getCentralConfig } from './central-config'
 import { CENTRAL_USER } from './config'
 
-/** Minimum staleness window before a heartbeat is considered offline. */
-const MIN_STALE_MS = 90_000
+/** Heartbeat staleness window for members that have NEVER held a WS (pure HTTP pushers). */
+const HEARTBEAT_MIN_MS = 45_000
 
 export async function computePresence(): Promise<Record<string, MemberPresence>> {
-  const online = getOnlineLatency()
+  const now = Date.now()
+  const signals = getPresenceSignals(now)
   const [members, cfg] = await Promise.all([
     listMembers().catch(() => []),
     getCentralConfig().catch(() => ({ pushIntervalSec: PUSH_INTERVAL.DEFAULT_SEC, includeOfflineData: true })),
   ])
 
-  // A member is heartbeat-online if its last push is within ~3 push cycles (min 90s).
-  const staleMs = Math.max(MIN_STALE_MS, cfg.pushIntervalSec * 1000 * 3)
-  const now = Date.now()
+  // Heartbeat window only applies to members that never established a WS.
+  const staleMs = Math.max(HEARTBEAT_MIN_MS, cfg.pushIntervalSec * 1000 * 2.5)
 
   const out: Record<string, MemberPresence> = {}
   for (const m of members) {
-    const socketOnline = online.has(m.user)
-    const seenMs = m.lastSeenAt ? Date.parse(m.lastSeenAt) : NaN
-    const heartbeatOnline = !Number.isNaN(seenMs) && now - seenMs < staleMs
+    const sig = signals.get(m.user)
+    let online: boolean
+    if (sig?.online) {
+      // Live WS — authoritative online.
+      online = true
+    } else if (sig?.everHadSocket) {
+      // The member's WS is the truth: once it drops (kill / disconnect), it's offline after a
+      // short grace that absorbs reconnects — NOT kept alive by a lingering heartbeat.
+      online = sig.inDropGrace
+    } else {
+      // Never had a WS (pure HTTP pusher) → fall back to the heartbeat window.
+      const seenMs = m.lastSeenAt ? Date.parse(m.lastSeenAt) : NaN
+      online = !Number.isNaN(seenMs) && now - seenMs < staleMs
+    }
     out[m.user] = {
-      online: socketOnline || heartbeatOnline,
+      online,
       lastSeenAt: m.lastSeenAt,
-      latencyMs: online.get(m.user) ?? null,
+      latencyMs: sig?.latencyMs ?? null,
     }
   }
 
