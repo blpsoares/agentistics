@@ -12,15 +12,25 @@ const HELP = `
 Usage: agentop <command> [options]
 
 Commands:
-  server      Start the web dashboard + background daemon
-  tui         Start the live terminal dashboard (standalone)
-  watch       Start the background metrics daemon only
-  upgrade     Upgrade agentop to the latest version
+  server        Start the web dashboard + background daemon
+  tui           Start the live terminal dashboard (standalone)
+  watch         Start the background metrics daemon only
+  upgrade       Upgrade agentop to the latest version
+  autostart     Start a mode with the system (systemd user service on Linux)
+  check-update  Print a notice if a newer version is available (else silent)
 
 Options:
   --help, -h       Show this help message
   --version, -v    Show current version
   --port <n>       Port for the web server (default: 47291)  [server only]
+
+Autostart:
+  agentop autostart <mode> <enable|disable|status>
+    mode ∈ { server, central, watch }
+    enable   Register + start the service at boot (also adds a terminal
+             update-check hook to ~/.bashrc)
+    disable  Stop and remove the service
+    status   Show enabled/active state (omit mode to list all)
 
 Examples:
   agentop server
@@ -28,6 +38,9 @@ Examples:
   agentop tui
   agentop watch
   agentop upgrade
+  agentop check-update
+  agentop autostart server enable
+  agentop autostart status
 `.trim()
 
 // ---------------------------------------------------------------------------
@@ -44,24 +57,28 @@ const _GR  = `${_ESC}[92m`
 const _WH  = `${_ESC}[97m`
 const _D   = `${_ESC}[2m`
 
+/** Prints the "new version available" banner for a resolved VersionInfo. */
+function printUpdateBanner(info: { current: string; latest: string }): void {
+  const sep = `${_D}${'─'.repeat(52)}${_R}`
+  process.stdout.write(
+    `\n${sep}\n` +
+    `  ${_Y}${_B}⚡ New version available!${_R}\n` +
+    `${sep}\n` +
+    `  ${_D}Current:${_R} ${_WH}v${info.current}${_R}\n` +
+    `  ${_D}Latest: ${_R} ${_GR}${_B}v${info.latest}${_R}\n` +
+    `${sep}\n` +
+    `\n` +
+    `  ${_B}Run ${_AM}agentop upgrade${_R}${_B} to update automatically.${_R}\n` +
+    `${sep}\n\n`,
+  )
+}
+
 async function checkVersionAndWarn(): Promise<void> {
   try {
     const { getVersionInfo } = await import('../server/version.ts')
     const info = await getVersionInfo()
     if (!info.hasUpdate) return
-
-    const sep = `${_D}${'─'.repeat(52)}${_R}`
-    process.stdout.write(
-      `\n${sep}\n` +
-      `  ${_Y}${_B}⚡ New version available!${_R}\n` +
-      `${sep}\n` +
-      `  ${_D}Current:${_R} ${_WH}v${info.current}${_R}\n` +
-      `  ${_D}Latest: ${_R} ${_GR}${_B}v${info.latest}${_R}\n` +
-      `${sep}\n` +
-      `\n` +
-      `  ${_B}Run ${_AM}agentop upgrade${_R}${_B} to update automatically.${_R}\n` +
-      `${sep}\n\n`,
-    )
+    printUpdateBanner(info)
   } catch {
     // Network unavailable — silently skip
   }
@@ -91,6 +108,60 @@ if (command === 'upgrade' || command === 'update') {
   const { runUpgrade } = await import('../server/upgrade.ts')
   await runUpgrade()
   process.exit(0)
+}
+
+// Lightweight boot/terminal update check — prints the banner only when a newer
+// version exists, otherwise stays completely silent. This is what the ~/.bashrc
+// hook installed by `agentop autostart ... enable` runs on every terminal open.
+if (command === 'check-update') {
+  try {
+    const { getVersionInfo } = await import('../server/version.ts')
+    const info = await getVersionInfo()
+    if (info.hasUpdate) printUpdateBanner(info)
+  } catch {
+    // Network unavailable — stay silent
+  }
+  process.exit(0)
+}
+
+if (command === 'autostart') {
+  const {
+    isAutostartMode,
+    enableAutostart,
+    disableAutostart,
+    autostartStatus,
+  } = await import('../server/autostart.ts')
+
+  const modeArg = args[0]
+  const actionArg = args[1]
+
+  // `agentop autostart status` (no mode) lists every service.
+  if (modeArg === 'status' && !actionArg) {
+    const res = await autostartStatus()
+    process.stdout.write(res.message + '\n')
+    process.exit(res.ok ? 0 : 1)
+  }
+
+  if (!modeArg || !isAutostartMode(modeArg)) {
+    console.error(`Invalid mode: ${modeArg ?? '(none)'}. Expected one of: server, central, watch.\n`)
+    console.log(HELP)
+    process.exit(1)
+  }
+
+  const action = actionArg ?? 'status'
+  if (action !== 'enable' && action !== 'disable' && action !== 'status') {
+    console.error(`Invalid action: ${action}. Expected one of: enable, disable, status.\n`)
+    console.log(HELP)
+    process.exit(1)
+  }
+
+  const res =
+    action === 'enable'  ? await enableAutostart(modeArg) :
+    action === 'disable' ? await disableAutostart(modeArg) :
+                           await autostartStatus(modeArg)
+
+  process.stdout.write(res.message + '\n')
+  process.exit(res.ok ? 0 : 1)
 }
 
 if (command === 'server') {
