@@ -12,8 +12,10 @@ const HELP = `
 Usage: agentop <command> [options]
 
 Commands:
+  start         Interactive launcher — pick mode + how to run (foreground/bg/docker/boot)
   setup         Interactive first-run wizard (solo / central / member)
-  server        Start the web dashboard + background daemon
+  server        Start the web dashboard + background daemon (non-interactive)
+  restart       Restart a running mode's service so it picks up new code/config
   tui           Start the live terminal dashboard (standalone)
   watch         Start the background metrics daemon only
   central       Manage the team central (wraps central.sh)
@@ -26,6 +28,17 @@ Options:
   --help, -h       Show this help message
   --version, -v    Show current version
   --port <n>       Port for the web server (default: 47291)  [server only]
+
+Start:
+  agentop start
+    Interactive launcher. Shows the current mode, offers to (re)configure, then asks
+    how to run: foreground, background (detached), Docker, or a boot service (systemd).
+    A central is started via its Docker flow. Non-interactive stdin runs like 'agentop server'.
+
+Restart:
+  agentop restart [server|watch|central]
+    Restart a running mode so it picks up new code (after an upgrade/pull) or config.
+    server/watch bounce the systemd user service; central rebuilds/restarts its container.
 
 Setup:
   agentop setup
@@ -53,9 +66,11 @@ Autostart:
     status   Show enabled/active state (omit mode to list all)
 
 Examples:
+  agentop start
   agentop setup
   agentop server
   agentop server --port 4000
+  agentop restart server
   agentop tui
   agentop watch
   agentop central up
@@ -261,7 +276,35 @@ if (command === 'autostart') {
   process.exit(res.ok ? 0 : 1)
 }
 
-if (command === 'server') {
+if (command === 'restart') {
+  const modeArg = args[0] ?? 'server'
+  // The central runs in Docker — delegate to its own restart (systemctl can't bounce a container).
+  if (modeArg === 'central') {
+    const { runCentral } = await import('../server/cli-central.ts')
+    const code = await runCentral('restart', [])
+    process.exit(code)
+  }
+  const { restartAutostart, isAutostartMode } = await import('../server/autostart.ts')
+  if (!isAutostartMode(modeArg)) {
+    console.error(`Invalid mode: ${modeArg}. Expected one of: server, watch, central.\n`)
+    process.exit(1)
+  }
+  const res = await restartAutostart(modeArg)
+  process.stdout.write(res.message + '\n')
+  process.exit(res.ok ? 0 : 1)
+}
+
+// `agentop start` — interactive launcher. It resolves to a run method; when the user picks
+// "foreground" (or stdin isn't a TTY) runStart returns 'foreground' and we fall through to the
+// same in-process server startup as `agentop server` below (keeping the Bun.serve alive).
+if (command === 'start') {
+  const { runStart } = await import('../server/cli-start.ts')
+  const result = await runStart()
+  if (result !== 'foreground') process.exit(result)
+  // else: fall through to the shared server startup below.
+}
+
+if (command === 'server' || command === 'start') {
   const portIdx = args.indexOf('--port')
   if (portIdx !== -1 && args[portIdx + 1]) {
     process.env.PORT = args[portIdx + 1]

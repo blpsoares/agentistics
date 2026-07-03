@@ -255,6 +255,51 @@ export async function disableAutostart(mode: AutostartMode): Promise<AutostartRe
 }
 
 /**
+ * Restarts an agentop mode so it picks up new code (after an upgrade or a local change) or a
+ * changed config. Only meaningful when the mode runs as a systemd user service — a foreground
+ * `agentop server` has no service to bounce. `central` is redirected to `agentop central restart`
+ * (that path rebuilds/restarts the Docker service, which a systemctl bounce can't do).
+ */
+export async function restartAutostart(mode: AutostartMode): Promise<AutostartResult> {
+  if (platform() !== 'linux') return notSupported('restart')
+
+  if (mode === 'central') {
+    return {
+      ok: false,
+      message:
+        'The central runs in Docker, not as a systemd service.\n' +
+        'Use `agentop central restart` to bounce it, or `agentop central up` to rebuild it after a code change.',
+    }
+  }
+
+  // A restart only makes sense when the mode is installed as a service.
+  let unitExists = true
+  try {
+    await readFile(unitPath(mode), 'utf8')
+  } catch {
+    unitExists = false
+  }
+  if (!unitExists) {
+    return {
+      ok: false,
+      message:
+        `No agentop-${mode} service is installed, so there is nothing to restart.\n` +
+        `Run it in the foreground with \`agentop ${mode}\`, or install autostart first ` +
+        `with \`agentop autostart ${mode} enable\`.`,
+    }
+  }
+
+  const res = await run(['systemctl', '--user', 'restart', `agentop-${mode}`])
+  if (res.code !== 0) {
+    return {
+      ok: false,
+      message: `systemctl --user restart agentop-${mode} failed: ${res.stderr || `exit ${res.code}`}`,
+    }
+  }
+  return { ok: true, message: `Restarted agentop-${mode} — it now runs the current code and config.` }
+}
+
+/**
  * Reports the enabled/active status of one or all agentop autostart services.
  */
 export async function autostartStatus(mode?: AutostartMode): Promise<AutostartResult> {

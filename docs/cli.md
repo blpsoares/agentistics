@@ -25,8 +25,10 @@ agentop --version    # print version (and a notice if an update exists)
 
 | Command | Purpose |
 |---------|---------|
+| [`start`](#start) | Interactive launcher — pick mode + how to run (foreground / bg / Docker / boot) |
 | [`setup`](#setup) | Interactive first-run wizard (solo / central / member) |
-| [`server`](#server) | Start the web dashboard + api + Nay + background daemon |
+| [`server`](#server) | Start the web dashboard + api + Nay + background daemon (non-interactive) |
+| [`restart`](#restart) | Restart a running mode so it picks up new code / config |
 | [`tui`](#tui) | Live terminal dashboard (no browser) |
 | [`watch`](#watch) | OpenTelemetry metrics daemon only (headless) |
 | [`central`](#central) | Manage the Team Mode central (wraps `central.sh`) |
@@ -37,6 +39,53 @@ agentop --version    # print version (and a notice if an update exists)
 
 Running **bare `agentop`** on an interactive terminal, on a machine that isn't
 configured yet, launches the [`setup`](#setup) wizard. Otherwise it prints help.
+
+---
+
+## `start`
+
+The interactive launcher — one command to bring a machine up. It shows the current mode, offers
+to (re)configure (reusing the [setup](#setup) wizard), then asks **how** to run:
+
+```bash
+agentop start
+```
+
+```
+How do you want to run this member machine?
+  1) foreground   — in this terminal
+  2) background    — detached, logs to ~/.agentistics/agentop-server.log
+  3) docker        — build & run this machine in a container (docker-compose.machine.yml)
+  4) autostart     — install a boot service (systemd) and start it
+```
+
+- A **central** is started via its Docker flow (`central up`, with an optional boot service).
+- The **docker** option runs this machine (solo/member) in a container that mounts the host's
+  harness dirs read-only — run it from the repo, and run the machine in Docker **or** natively,
+  not both. See [Machine in Docker](DEPLOY.md#machine-in-docker).
+- **Non-interactive stdin** (a pipe or a systemd unit) skips every prompt and behaves exactly
+  like [`server`](#server), so the same command works in scripts and services.
+
+Ctrl-C is non-destructive — it aborts without starting anything.
+
+---
+
+## `restart`
+
+Restart a running mode so it picks up new code (after an `upgrade` / `git pull`) or a changed
+config. Defaults to `server`.
+
+```bash
+agentop restart            # = restart server
+agentop restart server     # bounce the systemd user service (agentop-server)
+agentop restart watch      # bounce the watch service
+agentop restart central    # rebuild + restart the central's Docker container
+```
+
+`server`/`watch` bounce the installed [systemd user service](#autostart) — if none is installed it
+tells you to run it in the foreground or enable autostart first. `central` delegates to
+`central.sh restart`; to also pick up **code** changes on a central, use `agentop central up`
+(rebuilds the image) instead.
 
 ---
 

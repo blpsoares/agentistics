@@ -240,6 +240,27 @@ central DB is wiped, the token is rotated, or the endpoint changes, the member d
 signature change and re-pushes its full history automatically — no manual `team-sent.json`
 reset. A revoked machine auto-resets itself back to solo.
 
+### Machine in Docker
+
+A machine (solo or member) can also run in a container instead of natively. Configure it on the
+host first (`agentop member connect …`, which writes `~/.agentistics`), then bring the container
+up from the repo — `agentop start` offers this as the **docker** option, or run it directly:
+
+```bash
+docker compose -f docker-compose.machine.yml up -d --build   # web: http://localhost:47292
+docker compose -f docker-compose.machine.yml logs -f
+docker compose -f docker-compose.machine.yml down
+```
+
+It reuses the same image as the central (minus Mongo and central mode), mounts the host's harness
+dirs (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.copilot`) **read-only**, mounts `~/.agentistics`
+read-write (so it inherits the endpoint/token and persists the archive/sync state), and uses host
+networking so it reaches the central and opens the reverse channel.
+
+> Run the machine in Docker **or** natively — not both at once. Two members sharing the same token
+> would push the same data and flap presence. The container writes `~/.agentistics` as root; `chown`
+> it back to your user if you later switch to running natively.
+
 ---
 
 ## Autostart with `agentop`
