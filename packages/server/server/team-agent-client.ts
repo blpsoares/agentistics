@@ -167,31 +167,72 @@ function openConnection(endpoint: string, token: string): void {
 
 let started = false
 
+/** How often the runtime poll re-checks preferences for member-mode changes. */
+const POLL_INTERVAL_MS = 5_000
+
+/**
+ * Periodic reconciliation between current preferences and the socket state.
+ * Runs every POLL_INTERVAL_MS so switching to member mode at runtime (adding a
+ * central in Settings) (re)establishes the reverse-channel socket promptly,
+ * instead of waiting for the next uploader push + dashboard poll (~30s).
+ *
+ * - member mode with full credentials AND no active OPEN/CONNECTING socket → open one
+ *   (openConnection self-guards against duplicates via activeWs.readyState).
+ * - switched back to solo (mode !== 'member') with an active socket → close it.
+ *
+ * Complements the close/error reconnect-with-backoff path, which only fires once
+ * a connection has already been attempted.
+ */
+async function reconcileConnection(): Promise<void> {
+  try {
+    const prefs = await readPreferences()
+    const team = prefs.team
+    const isMember = Boolean(
+      team &&
+        team.mode === 'member' &&
+        team.endpoint &&
+        team.user &&
+        team.token,
+    )
+
+    if (isMember) {
+      // Open only when nothing is already open or in-flight.
+      const hasLiveSocket = activeWs != null && activeWs.readyState <= WebSocket.OPEN
+      if (!hasLiveSocket) {
+        openConnection(team!.endpoint, team!.token)
+      }
+    } else if (activeWs) {
+      // Switched back to solo (or credentials cleared) — tear down the socket.
+      const socket = activeWs
+      activeWs = null
+      try {
+        socket.close()
+      } catch {
+        // already closed — ignore
+      }
+    }
+  } catch {
+    // Preferences unavailable — leave current state untouched.
+  }
+}
+
 /**
  * Start the member-side agent client. Idempotent — subsequent calls are no-ops.
- * Reads team preferences; skips if mode !== 'member' or endpoint/token missing.
- * Never throws.
+ * Reads team preferences; skips connecting if mode !== 'member' or endpoint/token
+ * missing, but always starts a lightweight periodic reconciliation poll so a
+ * central added at runtime connects promptly. Never throws.
  */
 export function startAgentClient(): void {
   if (started) return
   started = true
 
-  void (async () => {
-    try {
-      const prefs = await readPreferences()
-      const team = prefs.team
-      if (
-        !team ||
-        team.mode !== 'member' ||
-        !team.endpoint ||
-        !team.user ||
-        !team.token
-      ) {
-        return
-      }
-      openConnection(team.endpoint, team.token)
-    } catch {
-      // Silently ignore — not in member mode or preferences unavailable
-    }
-  })()
+  // Initial attempt + ongoing reconciliation. reconcileConnection covers both
+  // the "connect now if already in member mode" and "connect later once a central
+  // is added" cases, so a single poll handles startup and runtime changes.
+  void reconcileConnection()
+  const timer = setInterval(() => {
+    void reconcileConnection()
+  }, POLL_INTERVAL_MS)
+  // Do not keep the process alive solely for this poll.
+  timer.unref?.()
 }
