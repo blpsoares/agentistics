@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkBreaks from 'remark-breaks'
 import { Loader, ChevronLeft, ChevronDown, ChevronUp } from 'lucide-react'
 import type { HarnessId } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
@@ -96,16 +97,22 @@ export function MessageBubble({ msg, harness, pt }: { msg: TranscriptMessage; ha
         border: isUser ? '1px solid color-mix(in srgb, var(--accent-blue, #3b82f6) 30%, transparent)' : `1px solid color-mix(in srgb, ${color} 25%, var(--border))`,
         fontSize: 13,
         color: 'var(--text-primary)',
-        whiteSpace: 'pre-wrap',
+        // NOTE: do NOT set white-space: pre-wrap here. react-markdown emits structural "\n"
+        // text nodes between block elements (list items, paragraphs); pre-wrap would render each
+        // as a visible line break, producing huge gaps between list items. remarkBreaks preserves
+        // intentional single newlines as <br> instead, so prose line breaks still survive.
         wordBreak: 'break-word',
         overflowWrap: 'anywhere',
         lineHeight: 1.55,
         overflow: 'hidden',
       }}>
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
+          remarkPlugins={[remarkGfm, remarkBreaks]}
           components={{
             p: ({ children }) => <span style={{ display: 'block', margin: '0 0 6px 0' }}>{children}</span>,
+            ul: ({ children }) => <ul style={{ margin: '2px 0 6px 0', paddingLeft: 20 }}>{children}</ul>,
+            ol: ({ children }) => <ol style={{ margin: '2px 0 6px 0', paddingLeft: 20 }}>{children}</ol>,
+            li: ({ children }) => <li style={{ margin: '1px 0' }}>{children}</li>,
             code: ({ children, className }) => {
               const isBlock = !!className
               return isBlock
