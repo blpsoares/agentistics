@@ -1,28 +1,32 @@
 /**
  * cli-start.ts — `agentop start`, the interactive launcher.
  *
- * A re-runnable control panel with arrow-key navigation (see cli-ui.ts). It prints a banner and a
- * two-part status — CONFIG (what your preferences say: solo / member → central / central) and
- * RUNNING (what's actually up right now: the native server, a central container, a machine
- * container) — then a menu of actions. Starting a native server that's already up offers to kill +
- * restart; Stop lists the running services and lets you pick which to take down (or all).
+ * A re-runnable, English-by-default (pt-BR available) control panel with arrow-key navigation.
+ * It shows a banner and a two-part status — CONFIG (what preferences say: solo / member→central /
+ * central) and RUNNING (what's actually up: agentistics on this machine, an agentistics central
+ * container, an agentistics machine container — detected live) — then lets you start
+ * "agentistics" (this machine) or "agentistics central" (the aggregator), connect/disconnect from
+ * a central, stop running services, or switch language. Naming: "agentistics" = the per-machine
+ * app, "agentistics central" = the aggregator — never "dashboard" (both have one).
  *
- * Non-interactive stdin (a pipe or a systemd unit) skips the panel and behaves exactly like
- * `agentop server`, so the same command works in scripts and services.
+ * Language follows `--lang en|pt`, else `preferences.lang` (shared with the web), else English; the
+ * in-launcher toggle persists to that same preference.
  *
- * runStart() returns a numeric exit code, or the sentinel 'foreground' meaning "the caller should
- * start the in-process server and NOT exit" (so cli.ts keeps the Bun.serve alive).
+ * Non-interactive stdin (a pipe or a systemd unit) skips the panel and behaves like `agentop
+ * server`. runStart() returns a numeric exit code or the sentinel 'foreground' (cli.ts then starts
+ * the in-process server and does not exit).
  */
 
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { PORT, WEB_PORT } from './config'
-import { readPreferences } from './preferences'
-import { runSetup } from './cli-setup'
+import { readPreferences, writePreferences } from './preferences'
 import { runCentral } from './cli-central'
+import { memberConnect, memberLeave } from './cli-member'
 import { enableAutostart } from './autostart'
-import { select, confirm, pause, clearScreen } from './cli-ui'
+import { select, confirm, input, pause, clearScreen } from './cli-ui'
+import { cliStrings, type CliLang, type CliStrings } from './cli-i18n'
 
 export type StartResult = number | 'foreground'
 
@@ -37,25 +41,35 @@ const GR = `${ESC}[92m`
 const YE = `${ESC}[33m`
 const WH = `${ESC}[97m`
 
-// The default docker-compose project name of the central (central.sh: PROJECT=${PROJECT:-team-mode})
-// and the machine container's image tag (docker-compose.machine.yml: image: agentistics-machine).
-const CENTRAL_PROJECT = 'team-mode'
-const MACHINE_IMAGE = 'agentistics-machine'
+const CENTRAL_PROJECT = 'team-mode'      // central.sh: PROJECT=${PROJECT:-team-mode}
+const MACHINE_IMAGE = 'agentistics-machine' // docker-compose.machine.yml: image
 
-// ── shell helper ──────────────────────────────────────────────────────────────
+// ── shell helpers ─────────────────────────────────────────────────────────────
 async function sh(cmd: string[]): Promise<{ code: number; out: string }> {
   try {
     const p = Bun.spawn(cmd, { stdout: 'pipe', stderr: 'ignore' })
     const out = await new Response(p.stdout).text()
-    const code = await p.exited
-    return { code, out: out.trim() }
+    return { code: await p.exited, out: out.trim() }
   } catch {
     return { code: 127, out: '' }
   }
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-// ── state + service detection ────────────────────────────────────────────────
+// ── language ───────────────────────────────────────────────────────────────────
+async function resolveLang(): Promise<CliLang> {
+  const i = process.argv.indexOf('--lang')
+  const flag = i >= 0 ? process.argv[i + 1] : undefined
+  if (flag === 'pt' || flag === 'en') return flag
+  try {
+    const prefs = await readPreferences()
+    return prefs.lang === 'pt' ? 'pt' : 'en'
+  } catch {
+    return 'en'
+  }
+}
+
+// ── state + detection ──────────────────────────────────────────────────────────
 type Mode = 'solo' | 'central' | 'member'
 
 async function loadState(): Promise<{ mode: Mode; endpoint?: string }> {
@@ -67,11 +81,7 @@ async function loadState(): Promise<{ mode: Mode; endpoint?: string }> {
   }
 }
 
-interface Services {
-  local: boolean   // native agentop server answering on the api port
-  central: boolean // a central container (docker compose project) is up
-  machine: boolean // a machine container (agentistics-machine image) is up
-}
+interface Services { local: boolean; central: boolean; machine: boolean }
 
 async function isServerRunning(): Promise<boolean> {
   try {
@@ -82,7 +92,6 @@ async function isServerRunning(): Promise<boolean> {
   }
 }
 
-/** Container ids matching a `docker ps` filter (empty when docker is absent or none match). */
 async function dockerIds(filter: string): Promise<string[]> {
   const r = await sh(['docker', 'ps', '-q', '-f', filter])
   return r.out.split(/\s+/).filter(Boolean)
@@ -91,212 +100,234 @@ async function dockerIds(filter: string): Promise<string[]> {
 async function detectServices(): Promise<Services> {
   const [local, central, machine] = await Promise.all([
     isServerRunning(),
-    dockerIds(`label=com.docker.compose.project=${CENTRAL_PROJECT}`).then((ids) => ids.length > 0),
-    dockerIds(`ancestor=${MACHINE_IMAGE}`).then((ids) => ids.length > 0),
+    dockerIds(`label=com.docker.compose.project=${CENTRAL_PROJECT}`).then((i) => i.length > 0),
+    dockerIds(`ancestor=${MACHINE_IMAGE}`).then((i) => i.length > 0),
   ])
   return { local, central, machine }
 }
 
 // ── stopping ────────────────────────────────────────────────────────────────
-/** Kill whatever native process holds the api port (by pid, then by name); wait for it to free. */
-async function stopLocal(): Promise<void> {
-  process.stdout.write(`  ${D}stopping the local server…${R}\n`)
+async function stopLocal(s: CliStrings): Promise<void> {
+  process.stdout.write(`  ${D}${s.stoppingLocal}${R}\n`)
   const lsof = await sh(['lsof', '-ti', `tcp:${PORT}`])
   const pids = lsof.out.split(/\s+/).filter(Boolean)
-  if (pids.length) {
-    for (const pid of pids) await sh(['kill', pid])
-  } else {
-    await sh(['pkill', '-f', 'agentop server'])
-  }
-  for (let i = 0; i < 20; i++) {
-    if (!(await isServerRunning())) return
-    await sleep(150)
-  }
+  if (pids.length) { for (const pid of pids) await sh(['kill', pid]) }
+  else await sh(['pkill', '-f', 'agentop server'])
+  for (let i = 0; i < 20; i++) { if (!(await isServerRunning())) return; await sleep(150) }
 }
 
-async function stopContainers(filter: string, label: string): Promise<void> {
+async function stopContainers(filter: string, msg: string): Promise<void> {
   const ids = await dockerIds(filter)
   if (!ids.length) return
-  process.stdout.write(`  ${D}stopping ${label}…${R}\n`)
+  process.stdout.write(`  ${D}${msg}${R}\n`)
   await sh(['docker', 'stop', ...ids])
 }
 
 // ── banner + status ────────────────────────────────────────────────────────────
-function printBanner(): void {
+function printBanner(s: CliStrings): void {
   const art = [
     '▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀ ▀█▀ █ █▀▀ █▀',
     '█▀█ █▄█ ██▄ █░▀█ ░█░ █ ▄█ ░█░ █ █▄▄ ▄█',
   ]
   process.stdout.write('\n')
   for (const line of art) process.stdout.write(`  ${O}${B}${line}${R}\n`)
-  process.stdout.write(`  ${D}AI coding-assistant analytics · agentop${R}\n`)
+  process.stdout.write(`  ${D}${s.tagline}${R}\n`)
 }
 
 const RULE = `  ${D}──────────────────────────────────────${R}`
 
-function printStatus(mode: Mode, endpoint: string | undefined, svc: Services): void {
+function printStatus(s: CliStrings, mode: Mode, endpoint: string | undefined, svc: Services): void {
   const config =
-    mode === 'member'
-      ? `${CY}member${R} ${D}— sends metrics to a central at${R} ${WH}${endpoint ?? '(no endpoint set)'}${R}`
-      : mode === 'central'
-        ? `${CY}central${R} ${D}— this machine hosts the team central${R}`
-        : `${CY}solo${R} ${D}— nothing leaves this machine${R}`
+    mode === 'member' ? `${CY}${s.configMember(`${WH}${endpoint ?? '(?)'}${R}${CY}`)}${R}`
+    : mode === 'central' ? `${CY}${s.configCentral}${R}`
+    : `${CY}${s.configSolo}${R}`
 
   const running: string[] = []
-  if (svc.local) running.push(`${GR}●${R} local server  ${D}http://localhost:${WEB_PORT}${R}`)
-  if (svc.central) running.push(`${GR}●${R} central       ${D}(docker)${R}`)
-  if (svc.machine) running.push(`${GR}●${R} machine       ${D}(docker)${R}`)
-  const runningLine = running.length ? running.join(`\n           `) : `${D}○ nothing running${R}`
+  if (svc.local) running.push(`${GR}●${R} ${s.runAgentistics}  ${D}http://localhost:${WEB_PORT}${R}`)
+  if (svc.central) running.push(`${GR}●${R} ${s.runCentral}`)
+  if (svc.machine) running.push(`${GR}●${R} ${s.runMachine}`)
+  const runLine = running.length ? running.join(`\n           `) : `${D}○ ${s.nothingRunning}${R}`
 
   process.stdout.write(
     `${RULE}\n` +
-    `  ${D}config${R}   ${config}\n` +
-    `  ${D}running${R}  ${runningLine}\n` +
+    `  ${D}${s.configLabel}${R}   ${config}\n` +
+    `  ${D}${s.runningLabel}${R}  ${runLine}\n` +
     `${RULE}\n`,
   )
 }
 
 // ── run methods ─────────────────────────────────────────────────────────────────
-/** Command that re-invokes agentop's `server` (binary → `<agentop> server`; source → `<bun> <cli> server`). */
 function serverReinvocation(): string {
   const script = process.argv[1]
   const fromSource = !!script && (script.endsWith('.ts') || script.endsWith('.js'))
   return fromSource ? `"${process.execPath}" "${script}" server` : `"${process.execPath}" server`
 }
 
-function startBackground(): void {
+function startBackground(s: CliStrings): void {
   const log = join(homedir(), '.agentistics', 'agentop-server.log')
-  const child = spawn('sh', ['-c', `nohup ${serverReinvocation()} >> "${log}" 2>&1 &`], {
-    stdio: 'ignore',
-    detached: true,
-  })
+  const child = spawn('sh', ['-c', `nohup ${serverReinvocation()} >> "${log}" 2>&1 &`], { stdio: 'ignore', detached: true })
   child.unref()
   process.stdout.write(
-    `\n  ${GR}started in the background.${R}\n` +
-    `  ${D}web:${R}  ${CY}http://localhost:${WEB_PORT}${R}\n` +
-    `  ${D}logs:${R} ${log}\n`,
+    `\n  ${GR}${s.startedBg}${R}\n` +
+    `  ${D}${s.webLabel}:${R}  ${CY}http://localhost:${WEB_PORT}${R}\n` +
+    `  ${D}${s.logsLabel}:${R} ${log}\n`,
   )
 }
 
-async function startDocker(): Promise<void> {
+async function startDocker(s: CliStrings): Promise<void> {
   const compose = join(process.cwd(), 'docker-compose.machine.yml')
   if (!(await Bun.file(compose).exists())) {
-    process.stderr.write(
-      `\n  ${YE}couldn't find docker-compose.machine.yml${R} in ${process.cwd()}.\n` +
-      `  Run ${WH}agentop start${R} from the agentistics repo to use Docker.\n`,
-    )
+    process.stderr.write(`\n  ${YE}${s.noComposeFrom(process.cwd())}${R}\n  ${s.runFromRepo}\n`)
     return
   }
-  process.stdout.write(`\n  ${D}building & starting the machine container…${R}\n\n`)
+  process.stdout.write(`\n  ${D}${s.buildingMachine}${R}\n\n`)
   const child = spawn('docker', ['compose', '-f', compose, 'up', '-d', '--build'], { stdio: 'inherit' })
   const code = await new Promise<number>((resolve) => child.on('exit', (c) => resolve(c ?? 1)))
   if (code === 0) {
     process.stdout.write(
-      `\n  ${GR}machine container is up.${R}\n` +
-      `  ${D}web:${R}  ${CY}http://localhost:${WEB_PORT}${R}\n` +
-      `  ${D}boot:${R} it already restarts with Docker (restart: unless-stopped)\n`,
+      `\n  ${GR}${s.containerUp}${R}\n` +
+      `  ${D}${s.webLabel}:${R}  ${CY}http://localhost:${WEB_PORT}${R}\n` +
+      `  ${D}${s.bootLabel}:${R} ${s.bootNote}\n`,
     )
   }
 }
 
-/** After a background/central start, offer to also persist across reboots (systemd user service). */
-async function offerBoot(mode: 'server' | 'central'): Promise<void> {
-  if (!(await confirm('Also start it on every boot (systemd service)?', false))) return
+async function offerBoot(s: CliStrings, mode: 'server' | 'central'): Promise<void> {
+  if (!(await confirm(s.confirmBoot, false))) return
   const res = await enableAutostart(mode)
   process.stdout.write('  ' + res.message.replace(/\n/g, '\n  ') + '\n')
 }
 
-/** A native start was chosen while a server is already up: offer to kill + restart. */
-async function clearPortOrAbort(localRunning: boolean): Promise<boolean> {
+async function clearPortOrAbort(s: CliStrings, localRunning: boolean): Promise<boolean> {
   if (!localRunning) return true
-  process.stdout.write(`\n  ${YE}A server is already running${R} on ${CY}http://localhost:${WEB_PORT}${R}.\n`)
-  if (!(await confirm('Kill it and start fresh?', false))) {
-    process.stdout.write(`  ${D}left the running server as-is.${R}\n`)
+  process.stdout.write(`\n  ${YE}${s.alreadyRunning(`${CY}http://localhost:${WEB_PORT}${R}${YE}`)}${R}\n`)
+  if (!(await confirm(s.confirmKill, false))) {
+    process.stdout.write(`  ${D}${s.leftRunning}${R}\n`)
     return false
   }
-  await stopLocal()
+  await stopLocal(s)
   return true
 }
 
-// ── Stop submenu ───────────────────────────────────────────────────────────────
-async function stopMenu(svc: Services): Promise<boolean> {
-  const choices: { name: string; value: string }[] = []
-  if (svc.local) choices.push({ name: `Local server ${D}(:${WEB_PORT})${R}`, value: 'local' })
-  if (svc.central) choices.push({ name: `Central ${D}(docker)${R}`, value: 'central' })
-  if (svc.machine) choices.push({ name: `Machine ${D}(docker)${R}`, value: 'machine' })
-  if (choices.length > 1) choices.push({ name: 'Everything', value: 'all' })
-  choices.push({ name: 'Cancel', value: 'cancel' })
+// ── connect / disconnect ──────────────────────────────────────────────────────
+async function connectFlow(s: CliStrings): Promise<void> {
+  const endpoint = await input(s.promptEndpoint)
+  const token = await input(s.promptToken)
+  const org = await input(s.promptOrg, { default: 'default' })
+  await memberConnect({ endpoint, token, org: org || undefined })
+}
 
-  const pick = await select({ message: 'Stop which?', choices })
+async function disconnectFlow(s: CliStrings): Promise<void> {
+  await memberLeave()
+  process.stdout.write(`  ${GR}${s.disconnected}${R}\n`)
+}
+
+// ── stop submenu ───────────────────────────────────────────────────────────────
+async function stopMenu(s: CliStrings, svc: Services): Promise<boolean> {
+  const choices: { name: string; value: string }[] = []
+  if (svc.local) choices.push({ name: s.stopLocal, value: 'local' })
+  if (svc.central) choices.push({ name: s.stopCentral, value: 'central' })
+  if (svc.machine) choices.push({ name: s.stopMachine, value: 'machine' })
+  if (choices.length > 1) choices.push({ name: s.stopEverything, value: 'all' })
+  choices.push({ name: s.cancel, value: 'cancel' })
+
+  const pick = await select({ message: s.stopWhich, choices })
   if (pick === 'cancel') return false
-  if (pick === 'local' || pick === 'all') await stopLocal()
-  if (pick === 'central' || pick === 'all') await stopContainers(`label=com.docker.compose.project=${CENTRAL_PROJECT}`, 'the central container')
-  if (pick === 'machine' || pick === 'all') await stopContainers(`ancestor=${MACHINE_IMAGE}`, 'the machine container')
+  if (pick === 'local' || pick === 'all') await stopLocal(s)
+  if (pick === 'central' || pick === 'all') await stopContainers(`label=com.docker.compose.project=${CENTRAL_PROJECT}`, s.stoppingCentral)
+  if (pick === 'machine' || pick === 'all') await stopContainers(`ancestor=${MACHINE_IMAGE}`, s.stoppingMachine)
   return true
+}
+
+// ── "agentistics" (this machine) → how to run ────────────────────────────────────
+async function runAgentistics(s: CliStrings, localRunning: boolean): Promise<StartResult | 'handled'> {
+  const how = await select<string>({
+    message: s.howTitle,
+    choices: [
+      { name: s.foreground, value: 'fg', hint: s.foregroundHint },
+      { name: s.background, value: 'bg', hint: s.backgroundHint },
+      { name: s.docker, value: 'docker', hint: s.dockerHint },
+      { name: s.back, value: 'back' },
+    ],
+  })
+  if (how === 'back') return 'handled'
+  if (how === 'fg') {
+    if (!(await clearPortOrAbort(s, localRunning))) return 'handled'
+    return 'foreground'
+  }
+  if (how === 'bg') {
+    if (!(await clearPortOrAbort(s, localRunning))) return 'handled'
+    startBackground(s)
+    await offerBoot(s, 'server')
+    await pause(s.pauseMsg)
+    return 'handled'
+  }
+  // docker
+  await startDocker(s)
+  await pause(s.pauseMsg)
+  return 'handled'
 }
 
 // ── main loop ─────────────────────────────────────────────────────────────────
 export async function runStart(): Promise<StartResult> {
-  // Piped / systemd / non-interactive: just be the server.
   if (!process.stdin.isTTY) return 'foreground'
 
+  let lang = await resolveLang()
+
   for (;;) {
+    const s = cliStrings(lang)
     const { mode, endpoint } = await loadState()
     const svc = await detectServices()
     const anyRunning = svc.local || svc.central || svc.machine
 
-    // Redraw the panel in place each iteration so navigating back never stacks copies.
     clearScreen()
-    printBanner()
-    printStatus(mode, endpoint, svc)
+    printBanner(s)
+    printStatus(s, mode, endpoint, svc)
 
-    // Build the action menu from the current config + what's running.
-    const choices: { name: string; value: string; hint?: string }[] = []
-    if (mode === 'central') {
-      choices.push({ name: 'Start / rebuild the central', value: 'central-up', hint: 'Docker' })
-    } else {
-      choices.push({ name: 'Start the dashboard — foreground', value: 'fg', hint: 'this terminal' })
-      choices.push({ name: 'Start the dashboard — background', value: 'bg', hint: 'detached' })
-    }
-    choices.push({ name: 'Run this machine in Docker', value: 'docker', hint: 'container' })
-    choices.push({ name: 'Reconfigure mode', value: 'reconfigure', hint: 'solo / central / member' })
-    if (anyRunning) choices.push({ name: 'Stop a running service…', value: 'stop' })
-    choices.push({ name: 'Quit', value: 'quit' })
+    const choices: { name: string; value: string; hint?: string }[] = [
+      { name: s.itemAgentistics, value: 'agentistics', hint: s.itemAgentisticsHint },
+      { name: s.itemCentral, value: 'central', hint: s.itemCentralHint },
+    ]
+    if (mode === 'member') choices.push({ name: s.itemDisconnect, value: 'disconnect', hint: s.itemDisconnectHint })
+    else choices.push({ name: s.itemConnect, value: 'connect', hint: s.itemConnectHint })
+    if (anyRunning) choices.push({ name: s.itemStop, value: 'stop' })
+    choices.push({ name: s.itemLanguage, value: 'language' })
+    choices.push({ name: s.quit, value: 'quit' })
 
-    const action = await select({ message: 'What would you like to do?', choices })
+    const action = await select({ message: s.menuTitle, choices })
 
-    // `acted` = the action produced output worth reading before the panel redraws → pause first.
     let acted = false
     switch (action) {
-      case 'fg':
-        if (!(await clearPortOrAbort(svc.local))) break
-        return 'foreground'
-      case 'bg':
-        if (!(await clearPortOrAbort(svc.local))) break
-        startBackground()
-        await offerBoot('server')
-        acted = true
+      case 'agentistics': {
+        const r = await runAgentistics(s, svc.local)
+        if (r === 'foreground') return 'foreground'
+        // 'handled' → the submenu already paused where needed; just redraw.
         break
-      case 'central-up': {
+      }
+      case 'central': {
         const code = await runCentral('up', [])
-        if (code === 0) await offerBoot('central')
+        if (code === 0) await offerBoot(s, 'central')
         acted = true
         break
       }
-      case 'docker':
-        await startDocker()
+      case 'connect':
+        await connectFlow(s)
         acted = true
         break
-      case 'reconfigure':
-        await runSetup()
+      case 'disconnect':
+        await disconnectFlow(s)
         acted = true
         break
       case 'stop':
-        acted = await stopMenu(svc)
+        acted = await stopMenu(s, svc)
+        break
+      case 'language':
+        lang = lang === 'en' ? 'pt' : 'en'
+        try { await writePreferences({ lang }) } catch { /* best-effort */ }
         break
       case 'quit':
         return 0
     }
-    if (acted) await pause()
+    if (acted) await pause(s.pauseMsg)
   }
 }

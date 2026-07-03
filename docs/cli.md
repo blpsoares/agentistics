@@ -45,11 +45,13 @@ configured yet, launches the [`setup`](#setup) wizard. Otherwise it prints help.
 ## `start`
 
 The interactive launcher — a **re-runnable control panel** with **arrow-key navigation** (↑/↓ +
-Enter; you only type in text fields like an endpoint or token). It prints a banner and a two-part
-status, then a menu. Run it as often as you like; it always reflects the current state.
+Enter; you only type in text fields like an endpoint or token). **English by default, with a pt-BR
+toggle.** It prints a banner and a two-part status, then a menu. Run it as often as you like; it
+always reflects the current state.
 
 ```bash
 agentop start
+agentop start --lang pt      # force Portuguese for this run
 ```
 
 ```
@@ -58,37 +60,44 @@ agentop start
   AI coding-assistant analytics · agentop
   ──────────────────────────────────────
   config   member — sends metrics to a central at http://host:48080
-  running  ● local server  http://localhost:47292
-           ● central       (docker)
+  running  ● agentistics    (this machine)   http://localhost:47292
+           ● agentistics central    (docker)
   ──────────────────────────────────────
 
-  What would you like to do?
-  ❯ Start the dashboard — foreground  this terminal
-    Start the dashboard — background  detached
-    Run this machine in Docker  container
-    Reconfigure mode  solo / central / member
+  What would you like to start?
+  ❯ agentistics            this machine
+    agentistics central    team aggregator · :48080
+    Disconnect from the central    back to solo
     Stop a running service…
+    Switch to Português
     Quit
 ```
+
+**Naming:** `agentistics` is the per-machine app; `agentistics central` is the team aggregator.
+Both serve a web dashboard, so neither is labelled "the dashboard".
 
 The status is split in two, because they're independent:
 
 - **config** — what your preferences say: `solo` (nothing leaves), `member — sends metrics to a
-  central at <url>`, or `central` (this machine hosts one). Change it any time here (**Reconfigure
-  mode**) or from the web UI (**Settings → Team**).
-- **running** — what's actually up right now, detected live: the native **local server**, a
-  **central** container, and/or a **machine** container. A machine can be several at once.
+  central at <url>`, or `central` (this machine hosts one).
+- **running** — what's actually up right now, detected live: `agentistics` (native local server),
+  an `agentistics central` container, and/or an `agentistics` machine container. A machine can be
+  several at once.
 
-Behavior:
+Menu:
 
-- **Already running?** Picking a foreground/background start while a server is already up warns you
-  and offers to **kill it and start fresh** (done automatically on yes).
+- **agentistics** → choose how to run: **Foreground** / **Background** / **Docker**. Starting while
+  one is already up warns you and offers to **kill it and start fresh**. Background/central starts
+  then offer to also **start on boot** (systemd).
+- **agentistics central** → builds & starts the aggregator (Docker, bundles MongoDB, `:48080`).
+- **Connect to a central** (or **Disconnect** when already a member) — become/stop being a member;
+  you can also do this from the web UI (**Settings → Team**).
 - **Stop a running service…** (shown only when something is up) lists exactly what's running and
-  lets you pick which to stop — the local server, the central container, the machine container, or
-  **Everything**.
-- **Background** / **central** starts then offer to also **start on boot** (systemd).
-- The **Docker** option runs this machine (solo/member) in a container — run the machine in Docker
-  **or** natively, not both. See [Machine in Docker](DEPLOY.md#machine-in-docker).
+  lets you take down one — or **Everything**.
+- **Switch to Português / English** — flips the language and persists it (shared with the web
+  `lang` preference).
+- The **Docker** option mounts the host's harness dirs read-only — run the machine in Docker **or**
+  natively, not both. See [Machine in Docker](DEPLOY.md#machine-in-docker).
 - **Non-interactive stdin** (a pipe or a systemd unit) skips the panel and behaves exactly like
   [`server`](#server).
 
