@@ -46,6 +46,10 @@ export const NOTIFICATION_TEXT: Record<string, { pt: Localized; en: Localized }>
     pt: { title: 'Token não reconhecido', message: 'A central não reconheceu este token. Gere um token para esta máquina no Team Manager da central.' },
     en: { title: 'Token not recognized', message: "The central didn't recognize this token. Mint a token for this machine in the central's Team Manager." },
   },
+  'central.member_connected': {
+    pt: { title: 'Máquina conectada', message: '{user} conectou à central.' },
+    en: { title: 'Machine connected', message: '{user} connected to the central.' },
+  },
 }
 
 /** Resolve a notification to display strings in the CURRENT language. Localizes by
@@ -55,6 +59,10 @@ export function resolveNotification(n: AppNotification, lang: 'pt' | 'en'): Loca
   const loc = n.code ? NOTIFICATION_TEXT[n.code]?.[lang] : undefined
   const title = loc?.title ?? n.title ?? ''
   let message = loc?.message ?? n.message
+  // Interpolate {user} from meta (e.g. "{user} connected to the central").
+  if (message && n.meta?.user) {
+    message = message.replace('{user}', String(n.meta.user))
+  }
   // Append the HTTP status to the auth-rejected message when the central provided one.
   if (n.code === 'member.auth_rejected' && n.meta?.status && message) {
     message = `${message} (HTTP ${n.meta.status})`

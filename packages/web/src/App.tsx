@@ -604,7 +604,7 @@ function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): st
 }
 
 function MobileBottomNav({
-  lang, harnesses, onSettings, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues,
+  lang, harnesses, onSettings, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues, isCentral,
 }: {
   lang: Lang
   harnesses?: HarnessId[]
@@ -614,6 +614,8 @@ function MobileBottomNav({
   onToggleLive: () => void
   updateInterval: number
   healthIssues?: HealthIssue[]
+  /** A central updates in real time via SSE — no Live toggle. */
+  isCentral?: boolean
 }) {
   const location = useLocation()
   const navigate = useNavigate()
@@ -650,11 +652,12 @@ function MobileBottomNav({
   ]
   const activeIssueCount = healthIssues?.length ?? 0
   const actionTiles: Tile[] = [
-    {
+    // Live toggle — hidden on a central (real-time via SSE, nothing to toggle).
+    ...(isCentral ? [] : [{
       key: 'live', label: pt ? 'Ao vivo' : 'Live', icon: Activity,
       onClick: () => onToggleLive(), accent: liveUpdates,
       badge: liveUpdates ? (updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`) : undefined,
-    },
+    } as Tile]),
     { key: 'refresh', label: pt ? 'Atualizar' : 'Refresh', icon: RefreshCw, onClick: () => { onRefresh(); setMoreOpen(false) } },
     { key: 'settings', label: pt ? 'Ajustes' : 'Settings', icon: SlidersHorizontal, onClick: () => { onSettings(); setMoreOpen(false) } },
     ...(activeIssueCount > 0
@@ -901,6 +904,11 @@ export default function AppLayout() {
 
   // Surface server-pushed notifications (member connection/auth errors) as toasts + bell.
   useNotificationStream(lang)
+
+  // A central updates in real time via SSE (presence + ingest), so it hides the Live toggle
+  // and keeps live updates always on (the SSE 'change' subscription is gated on liveUpdates).
+  const isCentral = teamSession?.central === true
+  useEffect(() => { if (isCentral) setLiveUpdates(true) }, [isCentral, setLiveUpdates])
 
   const setLang = useCallback((l: Lang) => setLangState(l), [])
   const setTheme = useCallback((t: Theme) => setThemeState(t), [])
@@ -1762,8 +1770,9 @@ export default function AppLayout() {
               <HealthWarnings issues={data.healthIssues} lang={lang} />
             )}
 
-            {/* Live updates pill — on mobile surfaced via the "More" sheet */}
-            {!isMobile && <div style={{
+            {/* Live updates pill — hidden on a central (it updates in real time via SSE-on-ingest,
+                so there's nothing to toggle). On mobile it's surfaced via the "More" sheet. */}
+            {!isMobile && !isCentral && <div style={{
               display: 'flex', alignItems: 'center', gap: 6,
               padding: '0 4px 0 10px',
               height: 32,
@@ -2152,6 +2161,7 @@ export default function AppLayout() {
           onToggleLive={() => setLiveUpdates(v => !v)}
           updateInterval={updateInterval}
           healthIssues={data.healthIssues}
+          isCentral={isCentral}
         />
       )}
 

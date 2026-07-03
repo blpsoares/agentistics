@@ -153,6 +153,10 @@ async function handleIngestBody(req: Request, overrideMemberId?: string, overrid
       const { upsertMemberStats } = await import('./team-stats')
       await upsertMemberStats(parsed.body.org, memberId, user, parsed.body.statsCache).catch(() => {})
     }
+    // Real-time central: a member push changed the aggregate → nudge the central's dashboards
+    // via SSE (debounced) so they refresh live, without the viewer polling. This is what makes
+    // the "Live" toggle unnecessary on a central.
+    try { (await import('./sse')).triggerSseNotification() } catch { /* best-effort */ }
     return new Response(JSON.stringify({ ok: true, count }), { status: 200, headers: JSON_HEADERS })
   } catch (e) {
     return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), { status: 500, headers: JSON_HEADERS })

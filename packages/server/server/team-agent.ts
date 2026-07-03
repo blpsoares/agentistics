@@ -38,6 +38,10 @@ const agentSockets = new Map<string, Set<ServerWebSocket<AgentSocketData>>>()
 const everHadSocket = new Set<string>()
 /** user → ms epoch when their LAST socket dropped (cleared on reconnect). */
 const lastDropAt = new Map<string, number>()
+/** user → ms epoch of the last "member connected" notification, to suppress reconnect spam. */
+const lastConnectNotifyAt = new Map<string, number>()
+/** Don't re-announce the same member connecting more than once per this window. */
+const CONNECT_NOTIFY_THROTTLE_MS = 5 * 60_000
 
 /** Grace after a socket drops before the member counts as offline — absorbs the brief WS
  *  reconnect gap (backoff starts at 1s) without flickering, while still flipping fast on a kill. */
@@ -99,6 +103,8 @@ function stopPingLoop(): void {
 
 export function registerAgent(ws: ServerWebSocket<AgentSocketData>): void {
   const { user } = ws.data
+  // Was this member offline (no live socket) before this connection?
+  const wasOffline = !agentSockets.has(user) || agentSockets.get(user)!.size === 0
   if (!agentSockets.has(user)) agentSockets.set(user, new Set())
   agentSockets.get(user)!.add(ws)
   sockState.set(ws, { latencyMs: null, awaitingPong: false, pingSentAt: 0, missed: 0 })
@@ -106,6 +112,17 @@ export function registerAgent(ws: ServerWebSocket<AgentSocketData>): void {
   lastDropAt.delete(user) // reconnected → clear the drop marker
   ensurePingLoop()
   onPresenceChange?.()
+
+  // Announce a genuine connect on the central (throttled so a flapping reconnect never spams).
+  if (wasOffline) {
+    const now = Date.now()
+    if (now - (lastConnectNotifyAt.get(user) ?? 0) > CONNECT_NOTIFY_THROTTLE_MS) {
+      lastConnectNotifyAt.set(user, now)
+      void import('./sse').then(m => m.broadcastNotification({
+        type: 'info', code: 'central.member_connected', meta: { user },
+      })).catch(() => { /* best-effort */ })
+    }
+  }
 }
 
 export function unregisterAgent(ws: ServerWebSocket<AgentSocketData>): void {
