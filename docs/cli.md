@@ -44,9 +44,9 @@ configured yet, launches the [`setup`](#setup) wizard. Otherwise it prints help.
 
 ## `start`
 
-The interactive launcher — a **re-runnable control panel**. It prints a banner + live status
-(current mode, and whether a server is already running), then lists what you can do. Run it as
-often as you like; it always reflects the current state.
+The interactive launcher — a **re-runnable control panel** with **arrow-key navigation** (↑/↓ +
+Enter; you only type in text fields like an endpoint or token). It prints a banner and a two-part
+status, then a menu. Run it as often as you like; it always reflects the current state.
 
 ```bash
 agentop start
@@ -56,31 +56,41 @@ agentop start
   ▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀ ▀█▀ █ █▀▀ █▀
   █▀█ █▄█ ██▄ █░▀█ ░█░ █ ▄█ ░█░ █ █▄▄ ▄█
   AI coding-assistant analytics · agentop
-  ────────────────────────────────────
-  mode    member → http://host:48080
-  server  ● running  web http://localhost:47292
-  ────────────────────────────────────
+  ──────────────────────────────────────
+  config   member — sends metrics to a central at http://host:48080
+  running  ● local server  http://localhost:47292
+           ● central       (docker)
+  ──────────────────────────────────────
 
   What would you like to do?
-    1) Start — foreground (this terminal)
-    2) Start — background (detached)
-    3) Start — Docker (container)
-    4) Autostart — install a boot service
-    5) Reconfigure mode (solo / central / member)
-    6) Stop the running server
-    0) Quit
+  ❯ Start the dashboard — foreground  this terminal
+    Start the dashboard — background  detached
+    Run this machine in Docker  container
+    Reconfigure mode  solo / central / member
+    Stop a running service…
+    Quit
 ```
 
-- **Already running?** Picking a Start action when a server is already up warns you and offers to
-  **kill it and start fresh** — on yes, it stops the old one and starts the new one automatically.
-- A **central** gets its own menu (Start / rebuild via Docker, autostart, reconfigure, stop).
-- The **Docker** option runs this machine (solo/member) in a container that mounts the host's
-  harness dirs read-only — run the machine in Docker **or** natively, not both.
-  See [Machine in Docker](DEPLOY.md#machine-in-docker).
-- **Reconfigure mode** reuses the [setup](#setup) wizard; the mode is just a preference you can
-  also change from the web UI (**Settings → Team**) at any time.
+The status is split in two, because they're independent:
+
+- **config** — what your preferences say: `solo` (nothing leaves), `member — sends metrics to a
+  central at <url>`, or `central` (this machine hosts one). Change it any time here (**Reconfigure
+  mode**) or from the web UI (**Settings → Team**).
+- **running** — what's actually up right now, detected live: the native **local server**, a
+  **central** container, and/or a **machine** container. A machine can be several at once.
+
+Behavior:
+
+- **Already running?** Picking a foreground/background start while a server is already up warns you
+  and offers to **kill it and start fresh** (done automatically on yes).
+- **Stop a running service…** (shown only when something is up) lists exactly what's running and
+  lets you pick which to stop — the local server, the central container, the machine container, or
+  **Everything**.
+- **Background** / **central** starts then offer to also **start on boot** (systemd).
+- The **Docker** option runs this machine (solo/member) in a container — run the machine in Docker
+  **or** natively, not both. See [Machine in Docker](DEPLOY.md#machine-in-docker).
 - **Non-interactive stdin** (a pipe or a systemd unit) skips the panel and behaves exactly like
-  [`server`](#server), so the same command works in scripts and services.
+  [`server`](#server).
 
 Ctrl-C is non-destructive — it aborts without starting anything.
 

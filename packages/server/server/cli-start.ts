@@ -1,17 +1,19 @@
 /**
  * cli-start.ts — `agentop start`, the interactive launcher.
  *
- * A re-runnable control panel: it prints a banner + live status (current mode, whether a server
- * is already running), then lists what you can do. Starting a server that's already up isn't
- * silently duplicated — it warns and offers to kill + restart. Non-interactive stdin (a pipe or a
- * systemd unit) skips all of this and behaves exactly like `agentop server`, so the same command
- * works in scripts and services.
+ * A re-runnable control panel with arrow-key navigation (see cli-ui.ts). It prints a banner and a
+ * two-part status — CONFIG (what your preferences say: solo / member → central / central) and
+ * RUNNING (what's actually up right now: the native server, a central container, a machine
+ * container) — then a menu of actions. Starting a native server that's already up offers to kill +
+ * restart; Stop lists the running services and lets you pick which to take down (or all).
+ *
+ * Non-interactive stdin (a pipe or a systemd unit) skips the panel and behaves exactly like
+ * `agentop server`, so the same command works in scripts and services.
  *
  * runStart() returns a numeric exit code, or the sentinel 'foreground' meaning "the caller should
  * start the in-process server and NOT exit" (so cli.ts keeps the Bun.serve alive).
  */
 
-import { createInterface, type Interface } from 'readline'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -20,6 +22,7 @@ import { readPreferences } from './preferences'
 import { runSetup } from './cli-setup'
 import { runCentral } from './cli-central'
 import { enableAutostart } from './autostart'
+import { select, confirm } from './cli-ui'
 
 export type StartResult = number | 'foreground'
 
@@ -28,28 +31,16 @@ const ESC = '\x1b'
 const R = `${ESC}[0m`
 const B = `${ESC}[1m`
 const D = `${ESC}[2m`
-const O = `${ESC}[38;5;208m` // Anthropic orange
+const O = `${ESC}[38;5;208m`
 const CY = `${ESC}[96m`
 const GR = `${ESC}[92m`
 const YE = `${ESC}[33m`
 const WH = `${ESC}[97m`
 
-// ── readline helpers ──────────────────────────────────────────────────────────
-function ask(rl: Interface, question: string): Promise<string> {
-  return new Promise((resolve) => rl.question(question, (a) => resolve(a.trim())))
-}
-
-/** One-shot prompt: open a readline, ask, close. Ctrl-C aborts the whole launcher cleanly. */
-async function prompt(question: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout })
-  rl.on('SIGINT', () => { process.stdout.write('\n'); rl.close(); process.exit(130) })
-  try {
-    return await ask(rl, question)
-  } finally {
-    rl.close()
-  }
-}
-function isYes(a: string): boolean { return /^y(es)?$/i.test(a.trim()) }
+// The default docker-compose project name of the central (central.sh: PROJECT=${PROJECT:-team-mode})
+// and the machine container's image tag (docker-compose.machine.yml: image: agentistics-machine).
+const CENTRAL_PROJECT = 'team-mode'
+const MACHINE_IMAGE = 'agentistics-machine'
 
 // ── shell helper ──────────────────────────────────────────────────────────────
 async function sh(cmd: string[]): Promise<{ code: number; out: string }> {
@@ -64,7 +55,7 @@ async function sh(cmd: string[]): Promise<{ code: number; out: string }> {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-// ── state ─────────────────────────────────────────────────────────────────────
+// ── state + service detection ────────────────────────────────────────────────
 type Mode = 'solo' | 'central' | 'member'
 
 async function loadState(): Promise<{ mode: Mode; endpoint?: string }> {
@@ -76,7 +67,12 @@ async function loadState(): Promise<{ mode: Mode; endpoint?: string }> {
   }
 }
 
-/** Is a local agentop server already answering on the api port? */
+interface Services {
+  local: boolean   // native agentop server answering on the api port
+  central: boolean // a central container (docker compose project) is up
+  machine: boolean // a machine container (agentistics-machine image) is up
+}
+
 async function isServerRunning(): Promise<boolean> {
   try {
     const res = await fetch(`http://localhost:${PORT}/api/health`, { signal: AbortSignal.timeout(600) })
@@ -86,9 +82,25 @@ async function isServerRunning(): Promise<boolean> {
   }
 }
 
-/** Kill whatever holds the api port (by pid), falling back to a name match; wait for it to free. */
-async function stopServer(): Promise<void> {
-  process.stdout.write(`  ${D}stopping the running server…${R}\n`)
+/** Container ids matching a `docker ps` filter (empty when docker is absent or none match). */
+async function dockerIds(filter: string): Promise<string[]> {
+  const r = await sh(['docker', 'ps', '-q', '-f', filter])
+  return r.out.split(/\s+/).filter(Boolean)
+}
+
+async function detectServices(): Promise<Services> {
+  const [local, central, machine] = await Promise.all([
+    isServerRunning(),
+    dockerIds(`label=com.docker.compose.project=${CENTRAL_PROJECT}`).then((ids) => ids.length > 0),
+    dockerIds(`ancestor=${MACHINE_IMAGE}`).then((ids) => ids.length > 0),
+  ])
+  return { local, central, machine }
+}
+
+// ── stopping ────────────────────────────────────────────────────────────────
+/** Kill whatever native process holds the api port (by pid, then by name); wait for it to free. */
+async function stopLocal(): Promise<void> {
+  process.stdout.write(`  ${D}stopping the local server…${R}\n`)
   const lsof = await sh(['lsof', '-ti', `tcp:${PORT}`])
   const pids = lsof.out.split(/\s+/).filter(Boolean)
   if (pids.length) {
@@ -102,21 +114,11 @@ async function stopServer(): Promise<void> {
   }
 }
 
-/**
- * A start action was chosen. If a server is already up, warn and offer to kill + restart.
- * Returns true when it's safe to proceed (nothing running, or the user agreed to kill).
- */
-async function clearPortOrAbort(running: boolean): Promise<boolean> {
-  if (!running) return true
-  process.stdout.write(
-    `\n  ${YE}A server is already running${R} on ${CY}http://localhost:${WEB_PORT}${R}.\n`,
-  )
-  if (!isYes(await prompt(`  Kill it and start fresh? [y/N]: `))) {
-    process.stdout.write(`  ${D}left the running server as-is.${R}\n`)
-    return false
-  }
-  await stopServer()
-  return true
+async function stopContainers(filter: string, label: string): Promise<void> {
+  const ids = await dockerIds(filter)
+  if (!ids.length) return
+  process.stdout.write(`  ${D}stopping ${label}…${R}\n`)
+  await sh(['docker', 'stop', ...ids])
 }
 
 // ── banner + status ────────────────────────────────────────────────────────────
@@ -130,19 +132,27 @@ function printBanner(): void {
   process.stdout.write(`  ${D}AI coding-assistant analytics · agentop${R}\n`)
 }
 
-function printStatus(mode: Mode, endpoint: string | undefined, running: boolean): void {
-  const modeLabel =
-    mode === 'member' ? `member ${D}→ ${endpoint ?? '(no endpoint)'}${R}${CY}` :
-    mode === 'central' ? 'central' :
-    `solo ${D}(nothing leaves this machine)${R}`
-  const server = running
-    ? `${GR}● running${R} ${D}web http://localhost:${WEB_PORT}${R}`
-    : `${D}○ not running${R}`
+const RULE = `  ${D}──────────────────────────────────────${R}`
+
+function printStatus(mode: Mode, endpoint: string | undefined, svc: Services): void {
+  const config =
+    mode === 'member'
+      ? `${CY}member${R} ${D}— sends metrics to a central at${R} ${WH}${endpoint ?? '(no endpoint set)'}${R}`
+      : mode === 'central'
+        ? `${CY}central${R} ${D}— this machine hosts the team central${R}`
+        : `${CY}solo${R} ${D}— nothing leaves this machine${R}`
+
+  const running: string[] = []
+  if (svc.local) running.push(`${GR}●${R} local server  ${D}http://localhost:${WEB_PORT}${R}`)
+  if (svc.central) running.push(`${GR}●${R} central       ${D}(docker)${R}`)
+  if (svc.machine) running.push(`${GR}●${R} machine       ${D}(docker)${R}`)
+  const runningLine = running.length ? running.join(`\n           `) : `${D}○ nothing running${R}`
+
   process.stdout.write(
-    `  ${D}────────────────────────────────────${R}\n` +
-    `  ${D}mode${R}    ${CY}${modeLabel}${R}\n` +
-    `  ${D}server${R}  ${server}\n` +
-    `  ${D}────────────────────────────────────${R}\n`,
+    `${RULE}\n` +
+    `  ${D}config${R}   ${config}\n` +
+    `  ${D}running${R}  ${runningLine}\n` +
+    `${RULE}\n`,
   )
 }
 
@@ -184,36 +194,44 @@ async function startDocker(): Promise<void> {
     process.stdout.write(
       `\n  ${GR}machine container is up.${R}\n` +
       `  ${D}web:${R}  ${CY}http://localhost:${WEB_PORT}${R}\n` +
-      `  ${D}stop:${R} docker compose -f docker-compose.machine.yml down\n`,
+      `  ${D}boot:${R} it already restarts with Docker (restart: unless-stopped)\n`,
     )
   }
 }
 
-// ── menus (numbered; each returns the chosen action key) ─────────────────────────
-async function soloMemberMenu(running: boolean): Promise<string> {
-  process.stdout.write(
-    `\n  ${B}What would you like to do?${R}\n` +
-    `    ${O}1${R}) Start — foreground ${D}(this terminal)${R}\n` +
-    `    ${O}2${R}) Start — background ${D}(detached)${R}\n` +
-    `    ${O}3${R}) Start — Docker ${D}(container)${R}\n` +
-    `    ${O}4${R}) Autostart — install a boot service\n` +
-    `    ${O}5${R}) Reconfigure mode ${D}(solo / central / member)${R}\n` +
-    (running ? `    ${O}6${R}) Stop the running server\n` : '') +
-    `    ${O}0${R}) Quit\n\n`,
-  )
-  return prompt(`  ${D}choose${R} [1]: `)
+/** After a background/central start, offer to also persist across reboots (systemd user service). */
+async function offerBoot(mode: 'server' | 'central'): Promise<void> {
+  if (!(await confirm('Also start it on every boot (systemd service)?', false))) return
+  const res = await enableAutostart(mode)
+  process.stdout.write('  ' + res.message.replace(/\n/g, '\n  ') + '\n')
 }
 
-async function centralMenu(running: boolean): Promise<string> {
-  process.stdout.write(
-    `\n  ${B}What would you like to do?${R}\n` +
-    `    ${O}1${R}) Start / rebuild the central ${D}(Docker)${R}\n` +
-    `    ${O}2${R}) Autostart — start the central on boot\n` +
-    `    ${O}3${R}) Reconfigure mode ${D}(solo / central / member)${R}\n` +
-    (running ? `    ${O}4${R}) Stop the central\n` : '') +
-    `    ${O}0${R}) Quit\n\n`,
-  )
-  return prompt(`  ${D}choose${R} [1]: `)
+/** A native start was chosen while a server is already up: offer to kill + restart. */
+async function clearPortOrAbort(localRunning: boolean): Promise<boolean> {
+  if (!localRunning) return true
+  process.stdout.write(`\n  ${YE}A server is already running${R} on ${CY}http://localhost:${WEB_PORT}${R}.\n`)
+  if (!(await confirm('Kill it and start fresh?', false))) {
+    process.stdout.write(`  ${D}left the running server as-is.${R}\n`)
+    return false
+  }
+  await stopLocal()
+  return true
+}
+
+// ── Stop submenu ───────────────────────────────────────────────────────────────
+async function stopMenu(svc: Services): Promise<void> {
+  const choices: { name: string; value: string }[] = []
+  if (svc.local) choices.push({ name: `Local server ${D}(:${WEB_PORT})${R}`, value: 'local' })
+  if (svc.central) choices.push({ name: `Central ${D}(docker)${R}`, value: 'central' })
+  if (svc.machine) choices.push({ name: `Machine ${D}(docker)${R}`, value: 'machine' })
+  if (choices.length > 1) choices.push({ name: 'Everything', value: 'all' })
+  choices.push({ name: 'Cancel', value: 'cancel' })
+
+  const pick = await select({ message: 'Stop which?', choices })
+  if (pick === 'cancel') return
+  if (pick === 'local' || pick === 'all') await stopLocal()
+  if (pick === 'central' || pick === 'all') await stopContainers(`label=com.docker.compose.project=${CENTRAL_PROJECT}`, 'the central container')
+  if (pick === 'machine' || pick === 'all') await stopContainers(`ancestor=${MACHINE_IMAGE}`, 'the machine container')
 }
 
 // ── main loop ─────────────────────────────────────────────────────────────────
@@ -221,58 +239,54 @@ export async function runStart(): Promise<StartResult> {
   // Piped / systemd / non-interactive: just be the server.
   if (!process.stdin.isTTY) return 'foreground'
 
-  // Re-runnable control panel. Terminal actions (foreground start, quit) return; everything else
-  // loops back so the refreshed status reflects what just happened.
   for (;;) {
     const { mode, endpoint } = await loadState()
-    const running = await isServerRunning()
+    const svc = await detectServices()
+    const anyRunning = svc.local || svc.central || svc.machine
+
     printBanner()
-    printStatus(mode, endpoint, running)
+    printStatus(mode, endpoint, svc)
 
+    // Build the action menu from the current config + what's running.
+    const choices: { name: string; value: string; hint?: string }[] = []
     if (mode === 'central') {
-      const choice = await centralMenu(running)
-      switch (choice) {
-        case '': case '1': {
-          const code = await runCentral('up', [])
-          if (code !== 0) return code
-          break
-        }
-        case '2': {
-          const res = await enableAutostart('central')
-          process.stdout.write('\n  ' + res.message.replace(/\n/g, '\n  ') + '\n')
-          break
-        }
-        case '3': await runSetup(); break
-        case '4': if (running) await runCentral('down', []); break
-        case '0': case 'q': return 0
-        default: process.stdout.write(`  ${YE}unrecognized choice.${R}\n`)
-      }
-      continue
+      choices.push({ name: 'Start / rebuild the central', value: 'central-up', hint: 'Docker' })
+    } else {
+      choices.push({ name: 'Start the dashboard — foreground', value: 'fg', hint: 'this terminal' })
+      choices.push({ name: 'Start the dashboard — background', value: 'bg', hint: 'detached' })
     }
+    choices.push({ name: 'Run this machine in Docker', value: 'docker', hint: 'container' })
+    choices.push({ name: 'Reconfigure mode', value: 'reconfigure', hint: 'solo / central / member' })
+    if (anyRunning) choices.push({ name: 'Stop a running service…', value: 'stop' })
+    choices.push({ name: 'Quit', value: 'quit' })
 
-    // solo / member
-    const choice = await soloMemberMenu(running)
-    switch (choice) {
-      case '': case '1': // foreground
-        if (!(await clearPortOrAbort(running))) break
+    const action = await select({ message: 'What would you like to do?', choices })
+
+    switch (action) {
+      case 'fg':
+        if (!(await clearPortOrAbort(svc.local))) break
         return 'foreground'
-      case '2': // background
-        if (!(await clearPortOrAbort(running))) break
+      case 'bg':
+        if (!(await clearPortOrAbort(svc.local))) break
         startBackground()
+        await offerBoot('server')
         break
-      case '3': // docker
-        if (!(await clearPortOrAbort(running))) break
+      case 'central-up': {
+        const code = await runCentral('up', [])
+        if (code === 0) await offerBoot('central')
+        break
+      }
+      case 'docker':
         await startDocker()
         break
-      case '4': { // autostart
-        const res = await enableAutostart('server')
-        process.stdout.write('\n  ' + res.message.replace(/\n/g, '\n  ') + '\n')
+      case 'reconfigure':
+        await runSetup()
         break
-      }
-      case '5': await runSetup(); break
-      case '6': if (running) await stopServer(); break
-      case '0': case 'q': return 0
-      default: process.stdout.write(`  ${YE}unrecognized choice.${R}\n`)
+      case 'stop':
+        await stopMenu(svc)
+        break
+      case 'quit':
+        return 0
     }
   }
 }
