@@ -21,9 +21,15 @@ packages/
 
 ```
 packages/server/bin/cli.ts  (binary entry point — agentop)
-  ├── agentop server  → server/index.ts + server/otel-watcher.ts (always together)
-  ├── agentop tui     → ../../web/src/tui/index.ts (standalone)
-  └── agentop watch   → server/otel-watcher.ts (daemon only)
+  ├── agentop setup        → server/cli-setup.ts (interactive solo/central/member wizard; bare `agentop` on a TTY when unconfigured)
+  ├── agentop server       → server/index.ts + server/otel-watcher.ts (always together)
+  ├── agentop tui          → ../../web/src/tui/index.ts (standalone)
+  ├── agentop watch        → server/otel-watcher.ts (daemon only)
+  ├── agentop central …    → server/cli-central.ts (wraps central.sh: up/init/down/logs/status/restart/pull)
+  ├── agentop member …     → server/cli-member.ts (connect/leave/status; whoami-verified, no browser)
+  ├── agentop autostart …  → server/autostart.ts (systemd user service + linger + ~/.bashrc update-check hook)
+  ├── agentop upgrade      → server/upgrade.ts
+  └── agentop check-update → server/version.ts (prints a banner only when outdated; silent otherwise)
 
 packages/server/server/index.ts (Bun, port 47291) — thin entry point
   └── delegates to server/ modules (see below)
@@ -41,6 +47,19 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── data.ts              → loadSessionMetas, scanProjects, buildApiResponse (main orchestrator)
   ├── agent-metrics.ts     → extractAgentMetrics (parses Agent tool_use from JSONL)
   ├── otel-watcher.ts      → chokidar file watcher + OTLP metrics export daemon
+  ├── preferences.ts       → ~/.agentistics prefs incl. team config (mode/endpoint/token/user)
+  ├── version.ts           → getVersionInfo (current vs latest); drives update banners/notifications
+  ├── autostart.ts         → systemd user service + loginctl linger + ~/.bashrc update-check hook
+  ├── cli-setup.ts / cli-central.ts / cli-member.ts → the agentop setup/central/member command handlers
+  ├── team-tokens.ts       → mint / rotate / revoke / validate tokens (stored as sha256 hashes only)
+  ├── team-store.ts / team-stats.ts → Mongo team-session doc shape + per-member statsCache store
+  ├── team-ingest.ts       → POST /api/team/ingest → upsert + triggerSseNotification (real-time central)
+  ├── team-source.ts / team-admin.ts → central-side team read for buildApiResponse + members-panel admin routes
+  ├── team-uploader.ts     → member→central push: sent-state, sync-signature auto-reconcile, push-on-change (notifyDataChanged), auto-reset on revoke, /api/team/status pill
+  ├── team-watch.ts        → central watches the team collection → SSE refresh (fallback)
+  ├── team-agent.ts / team-agent-client.ts → reverse-channel WebSocket: WS-authoritative presence signals, ping/pong latency, on-demand chat fetch
+  ├── team-presence.ts     → computePresence (WS-authoritative online/offline + latency; heartbeat only for pure-HTTP members)
+  ├── central-config.ts    → Mongo central config: instanceId + pushIntervalSec + includeOfflineData
   ├── adapters/types.ts    → HarnessAdapter contract + getEnabledAdapters() (async, memoized) registry + harnessEnabled(id)
   ├── adapters/claude.ts   → wraps the existing Claude pipeline behind the HarnessAdapter contract (zero behavior change)
   ├── adapters/codex.ts    → Codex CLI reader (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl)
@@ -56,6 +75,7 @@ packages/web/src/ (React + Vite, port 47292 in dev)
   │   ├── componentCatalog.tsx  → catalog of all components available in the custom layout builder
   │   ├── chatModels.ts         → web-only model list
   │   ├── chatSounds.ts         → 5 synthesized notification sounds via Web Audio API (Ping, Chime, Soft, Bell, Pop)
+  │   ├── notifications.ts      → notification store (useSyncExternalStore) + render-time pt/en i18n (NOTIFICATION_TEXT keyed by code, interpolates meta)
   │   └── harness.ts            → HARNESS_LABELS, HARNESS_COLORS, capable(harness, metric), HARNESS_INFO (data-source/contains/missing/note metadata for HarnessInfoPanel)
   ├── hooks/
   │   ├── useData.ts            → fetches /api/data + SSE subscription + useDerivedStats() + computeHarnessSummaries()
@@ -72,7 +92,10 @@ packages/web/src/ (React + Vite, port 47292 in dev)
   │   └── index.ts              → terminal TUI (live stats in the terminal, no browser needed)
   └── components/               → UI (charts, cards, heatmap, modals, PDF export)
       ├── HarnessInfoPanel.tsx  → inline panel explaining each harness's data sources / what's captured / what's missing (and why) / caveats; driven by HARNESS_INFO in lib/harness.ts
-      └── PreferencesModal.tsx  → unified Settings modal with tabs: Preferences / Live / Install / Environment
+      ├── PreferencesModal.tsx  → unified Settings modal with tabs: Preferences / Live / Install (Environment tab removed)
+      ├── TeamLogin.tsx / TeamMembers.tsx / TeamSettings.tsx → central: password login, members panel (mint/rotate/revoke/rename + presence), team settings (interval/express, offline-data policy)
+      ├── DeployCentral.tsx / PresenceFilter.tsx / MemberConnectionStatus.tsx → central deploy help, online/offline member filter, member-side connection pill
+      └── NotificationToasts.tsx / NotificationBell.tsx / UpdateModal.tsx → auto-dismiss toasts, header bell (history + unread badge), mode-aware upgrade modal
 
 packages/core/src/              — shared across server + web + mcp (import as @agentistics/core)
   ├── types.ts              → all shared types + pricing functions (single source of truth)
@@ -127,6 +150,46 @@ The consolidate store is namespaced by harness: `~/.agentistics/sessions/<harnes
 - **Phase 3** (planned): Gemini OTel integration for real token/cost data.
 
 See `docs/superpowers/specs/2026-06-19-multi-harness-tracking-design.md` for the full design.
+
+---
+
+## Team mode
+
+One machine ("central") aggregates coding-assistant usage metrics from many machines ("members"). Members push **computed metrics only** (session/agent/token/cost aggregates + their statsCache) — **never chat** (raw chat is fetched on demand over a reverse WebSocket, never stored centrally). The central runs as a Docker service (`central.sh` at the repo root, default port `48080`, Mongo **not** published to the host). See `docs/architecture.md` for the full write-up.
+
+### Roles — `preferences.team.mode`
+
+- **solo** — local only, nothing leaves the machine (default).
+- **central** — the aggregator; serves the team dashboard behind a password.
+- **member** — pushes computed metrics to a central's `/api/team/ingest`.
+
+### Push model — central owns the cadence
+
+The **central owns the interval** (`central-config.ts`, `pushIntervalSec`; normal floor 15s, default 30s, express down to 5s = `EXPRESS_MIN_SEC`). Members read it from `GET /api/team/policy` and can only follow it — no member-side override that goes faster. Plus **push-on-change**: the file watcher calls `notifyDataChanged()` in `team-uploader.ts` → a debounced push floored by the central's interval. Members push their **supplemented** statsCache (the one the local dashboard shows, gap-filled past the stale `lastComputedDate`), never the raw `~/.claude/stats-cache.json`, so central totals match the member exactly. A member push triggers `triggerSseNotification()` on the central → dashboards refresh live, which is why the **"Live" toggle is hidden on a central**.
+
+### Member identity
+
+The display **name is set by the central** on the minted token — there is no name field on the machine; the member resolves it via `GET /api/team/whoami`. Sessions are keyed centrally by a stable `memberId` (token sha256 hash), so renames preserve history. `agentop member connect` never writes a half-config on a bad token.
+
+### Presence — WebSocket-authoritative
+
+`team-presence.ts` computes online/offline from the reverse-channel WS registry in `team-agent.ts`: online while the socket is live, **offline within ~8s** of a kill (`SOCKET_GRACE_MS`); once a member has ever held a socket that signal is trusted; a heartbeat window is only the fallback for pure-HTTP members. Latency comes from WS ping/pong RTT.
+
+### Auto-reconciliation (self-healing sync)
+
+`team-uploader.ts` fingerprints the target as `sha256(endpoint \0 token \0 instanceId)`. When it changes — central DB wiped (`down -v` → new `instanceId`), token revoked+re-added, or endpoint changed — the member clears its sent-state and **re-pushes its full history** (idempotent upserts, no double-count). No manual `team-sent.json` deletion. A persistent 401/403 (revoked token) auto-resets the member back to **solo** and fires a "removed from central" notification. A `null` instanceId (old/unreachable central) never triggers a spurious reset.
+
+### Notifications
+
+`web/src/lib/notifications.ts` is an external store rendered by `NotificationToasts` (auto-dismiss) + `NotificationBell` (history + unread badge). Notifications carry a `code` (+ `meta`) and are localized **at render time** (`NOTIFICATION_TEXT`, pt/en). The server emits them over SSE via `broadcastNotification()`.
+
+### Team-mode rules
+
+- **Members never push chat** — only computed metrics + statsCache; raw chat is on-demand over the WebSocket.
+- **Tokens are stored only as sha256 hashes** (`team-tokens.ts`) and never logged; the central's session-cookie secret is **separate** from the dashboard password; auth compares are constant-time.
+- **Non-Claude team metrics still come from per-session sums** — `stats-cache.json` remains Claude-only, on the central too (Compare-page Claude totals match the dashboard).
+- **The central is the sole authority on the push interval** — members clamp to `max(central, EXPRESS_MIN_SEC)`; there is no faster member override.
+- **`agentop central` needs the repo** — it wraps `central.sh`; the compiled binary alone can't host a central.
 
 ---
 
