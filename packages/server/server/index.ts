@@ -144,6 +144,11 @@ Bun.serve<{ user: string; isAgent?: boolean }>({
   },
   async fetch(req, server) {
     const url = new URL(req.url)
+    // Collapse repeated slashes in the path. A member whose endpoint has a trailing slash
+    // builds URLs like `//api/team/ingest` / `//api/team/agent`; without this they'd miss the
+    // exact-match API routes and silently fall through to the static handler (200, no ingest)
+    // or fail the WS upgrade — making pushes/presence look fine while nothing lands.
+    if (url.pathname.includes('//')) url.pathname = url.pathname.replace(/\/{2,}/g, '/')
 
     if (req.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS_HEADERS })

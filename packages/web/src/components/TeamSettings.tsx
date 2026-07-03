@@ -410,7 +410,9 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
         })
         return
       }
-      const teamWithIdentity: typeof team = { ...team, mode: 'member', user: resolvedUser, org: resolvedOrg }
+      // Store the endpoint WITHOUT a trailing slash — otherwise URL builds produce `//api/...`
+      // which misses the central's exact-match routes (pushes hit static, WS won't upgrade).
+      const teamWithIdentity: typeof team = { ...team, mode: 'member', user: resolvedUser, org: resolvedOrg, endpoint: team.endpoint.replace(/\/+$/, '') }
 
       // (b) Persist preferences with the central-resolved identity
       const putRes = await fetch('/api/preferences', {

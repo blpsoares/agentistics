@@ -366,6 +366,9 @@ export function startUploader(): void {
     try {
       const prefs = await readPreferences()
       const team = prefs.team
+      // Trim any trailing slash so URL builds don't produce `//api/...` (which misses the
+      // central's exact-match routes and silently hits the static handler instead of ingest).
+      if (team?.endpoint) team.endpoint = team.endpoint.replace(/\/+$/, '')
       if (team?.mode === 'member' && team.endpoint && team.user) {
         // The central is the sole authority on the interval; members follow it (honoring
         // express intervals below the normal 15s floor). No member-side override.
@@ -545,7 +548,7 @@ export async function handleTeamTestConnection(req: Request): Promise<Response> 
 export async function handleLeaveCentral(req: Request): Promise<Response> {
   let body: { endpoint?: unknown; token?: unknown; org?: unknown; user?: unknown } = {}
   try { body = (await req.json()) as typeof body } catch { /* empty ok */ }
-  const endpoint = typeof body.endpoint === 'string' ? body.endpoint : ''
+  const endpoint = typeof body.endpoint === 'string' ? body.endpoint.replace(/\/+$/, '') : ''
   const token = typeof body.token === 'string' ? body.token : ''
   const org = typeof body.org === 'string' && body.org ? body.org : 'default'
   const user = typeof body.user === 'string' ? body.user : ''

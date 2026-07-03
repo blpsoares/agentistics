@@ -81,9 +81,11 @@ function openConnection(endpoint: string, token: string): void {
   // Skip if there is already an open or connecting socket
   if (activeWs && activeWs.readyState <= WebSocket.OPEN) return
 
-  // Convert http(s) → ws(s) and append the agent endpoint
+  // Convert http(s) → ws(s) and append the agent endpoint. Trim any trailing slash first —
+  // otherwise `http://host/` yields `ws://host//api/team/agent`, whose double slash misses
+  // the server's exact-match upgrade route and the WS never connects.
   const wsUrl =
-    endpoint.replace(/^https/, 'wss').replace(/^http/, 'ws') + '/api/team/agent'
+    endpoint.replace(/\/+$/, '').replace(/^https/, 'wss').replace(/^http/, 'ws') + '/api/team/agent'
 
   let socket: WebSocket
   try {
