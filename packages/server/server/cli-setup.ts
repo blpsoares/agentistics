@@ -50,9 +50,10 @@ export async function runSetup(): Promise<number> {
 
   try {
     process.stdout.write('\nagentop setup — how should this machine track usage?\n\n')
-    process.stdout.write('  1) solo     — local only, nothing leaves this machine\n')
+    process.stdout.write('  1) solo     — local only, nothing ever leaves this machine\n')
     process.stdout.write('  2) central  — host the team central (Docker) on this machine\n')
-    process.stdout.write('  3) member   — push this machine\'s metrics to a team central\n\n')
+    process.stdout.write('  3) member   — everything solo does, plus push computed metrics\n')
+    process.stdout.write('               (never chat) to a team central\n\n')
 
     const choice = await ask(rl, 'Choose [1]: ')
     const mode = choice || '1'

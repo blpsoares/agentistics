@@ -44,27 +44,43 @@ configured yet, launches the [`setup`](#setup) wizard. Otherwise it prints help.
 
 ## `start`
 
-The interactive launcher — one command to bring a machine up. It shows the current mode, offers
-to (re)configure (reusing the [setup](#setup) wizard), then asks **how** to run:
+The interactive launcher — a **re-runnable control panel**. It prints a banner + live status
+(current mode, and whether a server is already running), then lists what you can do. Run it as
+often as you like; it always reflects the current state.
 
 ```bash
 agentop start
 ```
 
 ```
-How do you want to run this member machine?
-  1) foreground   — in this terminal
-  2) background    — detached, logs to ~/.agentistics/agentop-server.log
-  3) docker        — build & run this machine in a container (docker-compose.machine.yml)
-  4) autostart     — install a boot service (systemd) and start it
+  ▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀ ▀█▀ █ █▀▀ █▀
+  █▀█ █▄█ ██▄ █░▀█ ░█░ █ ▄█ ░█░ █ █▄▄ ▄█
+  AI coding-assistant analytics · agentop
+  ────────────────────────────────────
+  mode    member → http://host:48080
+  server  ● running  web http://localhost:47292
+  ────────────────────────────────────
+
+  What would you like to do?
+    1) Start — foreground (this terminal)
+    2) Start — background (detached)
+    3) Start — Docker (container)
+    4) Autostart — install a boot service
+    5) Reconfigure mode (solo / central / member)
+    6) Stop the running server
+    0) Quit
 ```
 
-- A **central** is started via its Docker flow (`central up`, with an optional boot service).
-- The **docker** option runs this machine (solo/member) in a container that mounts the host's
-  harness dirs read-only — run it from the repo, and run the machine in Docker **or** natively,
-  not both. See [Machine in Docker](DEPLOY.md#machine-in-docker).
-- **Non-interactive stdin** (a pipe or a systemd unit) skips every prompt and behaves exactly
-  like [`server`](#server), so the same command works in scripts and services.
+- **Already running?** Picking a Start action when a server is already up warns you and offers to
+  **kill it and start fresh** — on yes, it stops the old one and starts the new one automatically.
+- A **central** gets its own menu (Start / rebuild via Docker, autostart, reconfigure, stop).
+- The **Docker** option runs this machine (solo/member) in a container that mounts the host's
+  harness dirs read-only — run the machine in Docker **or** natively, not both.
+  See [Machine in Docker](DEPLOY.md#machine-in-docker).
+- **Reconfigure mode** reuses the [setup](#setup) wizard; the mode is just a preference you can
+  also change from the web UI (**Settings → Team**) at any time.
+- **Non-interactive stdin** (a pipe or a systemd unit) skips the panel and behaves exactly like
+  [`server`](#server), so the same command works in scripts and services.
 
 Ctrl-C is non-destructive — it aborts without starting anything.
 
