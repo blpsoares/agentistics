@@ -1,7 +1,8 @@
 // embeddedDist is loaded inside server/sse.ts (conditional on SERVE_STATIC=1)
 
 import { readFile } from 'node:fs/promises'
-import { PORT, TEAM_CENTRAL, TEAM_PASSWORD, TEAM_ORG } from './config'
+import { PORT, WEB_PORT, TEAM_CENTRAL, TEAM_PASSWORD, TEAM_ORG } from './config'
+import type { Server, ServerWebSocket } from 'bun'
 import { getRates } from './rates'
 import { getVersionInfo, startVersionRecheck } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
@@ -134,19 +135,18 @@ const ADMIN_PATHS = new Set([
 // Bun HTTP server
 // ---------------------------------------------------------------------------
 
-try {
-Bun.serve<{ user: string; isAgent?: boolean }>({
-  port: PORT,
-  idleTimeout: 60,
-  websocket: {
-    // Inform TypeScript of the ws.data shape (see Bun docs — TS #26242 workaround).
-    data: {} as { user: string; isAgent?: boolean },
-    open(ws) { if (!ws.data.isAgent) return; registerAgent(ws) },
-    message(ws, msg) { if (!ws.data.isAgent) return; onAgentMessage(ws, msg) },
-    pong(ws) { if (!ws.data.isAgent) return; onAgentPong(ws) },
-    close(ws) { if (!ws.data.isAgent) return; unregisterAgent(ws) },
-  },
-  async fetch(req, server) {
+type WSData = { user: string; isAgent?: boolean }
+
+// Shared WS + request handlers, so the binary can bind the SAME logic to two ports below:
+// PORT (47291 = api + mcp) and WEB_PORT (47292 = the web dashboard you open).
+const _wsHandlers = {
+  open(ws: ServerWebSocket<WSData>) { if (!ws.data.isAgent) return; registerAgent(ws) },
+  message(ws: ServerWebSocket<WSData>, msg: string | Buffer) { if (!ws.data.isAgent) return; onAgentMessage(ws, msg) },
+  pong(ws: ServerWebSocket<WSData>) { if (!ws.data.isAgent) return; onAgentPong(ws) },
+  close(ws: ServerWebSocket<WSData>) { if (!ws.data.isAgent) return; unregisterAgent(ws) },
+}
+
+async function handleRequest(req: Request, server: Server<WSData>): Promise<Response | undefined> {
     const url = new URL(req.url)
     // Collapse repeated slashes in the path. A member whose endpoint has a trailing slash
     // builds URLs like `//api/team/ingest` / `//api/team/agent`; without this they'd miss the
@@ -1165,8 +1165,17 @@ Bun.serve<{ user: string; isAgent?: boolean }>({
       status: 404,
       headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     })
-  },
-})
+}
+
+try {
+// PORT (47291) is always the api + mcp endpoint.
+Bun.serve<WSData>({ port: PORT, idleTimeout: 60, websocket: _wsHandlers, fetch: handleRequest })
+// Binary mode also serves the web dashboard on WEB_PORT (47292) — that's the URL you open.
+// Same handler → the SPA's same-origin `/api/*` calls resolve against 47292 and just work,
+// while 47291 stays the dedicated api + mcp port.
+if (SERVE_STATIC) {
+  Bun.serve<WSData>({ port: WEB_PORT, idleTimeout: 60, websocket: _wsHandlers, fetch: handleRequest })
+}
 
 const _ESC = '\x1b'
 const _R   = `${_ESC}[0m`
@@ -1182,15 +1191,15 @@ const _DOT = `${_EM}●${_R}`
 const _URL = (u: string) => `${_CY}${_B}${u}${_R}`
 
 const _UI_PORT = process.env.VITE_PORT ?? '47292'
-const _UI_URL  = SERVE_STATIC ? `http://localhost:${PORT}` : `http://localhost:${_UI_PORT}`
-const _UI_TAG  = SERVE_STATIC ? ` ${_D}embedded${_R}` : ''
+// Binary mode: the web dashboard has its own port (WEB_PORT, 47292). Dev: Vite's port.
+const _WEB_URL = SERVE_STATIC ? `http://localhost:${WEB_PORT}` : `http://localhost:${_UI_PORT}`
 
 process.stdout.write(
   `\n${_SEP}\n` +
   `  ${_B}${_AM}agentistics${_R}\n` +
   `${_SEP}\n` +
+  `  ${_WH}web${_R}  ${_DOT}  ${_URL(_WEB_URL)}\n` +
   `  ${_WH}api${_R}  ${_DOT}  ${_URL(`http://localhost:${PORT}`)}\n` +
-  `  ${_WH} ui${_R}  ${_DOT}  ${_URL(_UI_URL)}${_UI_TAG}\n` +
   `  ${_WH}mcp${_R}  ${_DOT}  ${_D}agentistics (stdio → http://localhost:${PORT})${_R}\n` +
   `${_SEP}\n\n`
 )

@@ -14,6 +14,10 @@ export const PROJECTS_DIR = join(CLAUDE_DIR, 'projects')
 export const SESSION_META_DIR = join(CLAUDE_DIR, 'usage-data', 'session-meta')
 export const STATS_CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json')
 export const PORT = parseInt(process.env.PORT ?? '47291', 10)
+// The web dashboard is served on WEB_PORT (PORT + 1 by default → 47292). In binary mode the
+// server binds BOTH: PORT (47291) is always the api + mcp endpoint, WEB_PORT (47292) is what you
+// open. They share one request handler, so the SPA's same-origin `/api/*` calls just work.
+export const WEB_PORT = parseInt(process.env.WEB_PORT ?? String(PORT + 1), 10)
 
 // ---------------------------------------------------------------------------
 // Archive mirror — Claude Code silently deletes session transcripts older than

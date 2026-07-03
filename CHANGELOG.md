@@ -47,6 +47,7 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - `stats-cache.json` is treated as Claude-only; non-Claude harnesses are aggregated purely from per-session data so Claude totals are never corrupted
 - README now describes agentistics as a multi-harness dashboard; `docs/mcp.md` documents the MCP's per-harness filtering and comparison tool
 - The one-line installer now uses the vanity URL: `curl -fsSL https://agentop.openvibes.tech/cli | bash` (a Cloudflare redirect to the repo's `install.sh`), so the documented command survives any future move of the script
+- **Ports** — `agentop server` now serves the **web dashboard on 47292** (the URL you open) and keeps the **api + mcp on 47291**; both ports share one request handler so the dashboard's same-origin `/api/*` calls just work. The startup log renames `ui` → `web` and lists it above `api`
 
 ---
 

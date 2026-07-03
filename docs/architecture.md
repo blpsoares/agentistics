@@ -217,9 +217,9 @@ bun run build:assets    →  packages/server/server/embedded-dist.generated.ts
 bun build --compile     →  release/agentop                                 (self-contained binary)
 ```
 
-The binary embeds the full Bun runtime + all JS/TS code + frontend assets. No external dependencies needed — `agentop server` serves both API and frontend on port 47291.
+The binary embeds the full Bun runtime + all JS/TS code + frontend assets. No external dependencies needed — `agentop server` binds two ports with one shared request handler: the **web dashboard on 47292** (the URL you open) and the **api + mcp on 47291**. Because both ports run the same handler, the dashboard served from 47292 makes same-origin `/api/*` calls that resolve locally.
 
-In dev mode, the API runs on port 47291 and Vite serves the frontend with hot reload on port 47292.
+In dev mode, the API runs on port 47291 and Vite serves the frontend with hot reload on port 47292 — the same web-on-92 / api-on-91 split.
 
 ## Windows desktop app
 
@@ -238,7 +238,7 @@ CI builds the installer on `windows-latest` after the Linux runner cross-compile
 Ports are configured in `.env.config` at the repository root:
 
 ```ini
-PORT=47291      # API server + embedded frontend (binary mode)
+PORT=47291      # api + mcp (binary mode also binds PORT+1 = 47292 for the web dashboard)
 VITE_PORT=47292 # Vite dev server (dev mode only)
 ```
 

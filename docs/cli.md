@@ -13,8 +13,9 @@ agentop --help       # full usage
 agentop --version    # print version (and a notice if an update exists)
 ```
 
-> **Ports:** a solo/member/dev instance serves the dashboard + api on **47291**
-> (Vite dev server on 47292). A Team Mode **central** runs in Docker on **48080**
+> **Ports:** a solo/member instance serves the **web dashboard on 47292** (the URL you open) and
+> the **api + mcp on 47291** (in dev, Vite serves the web on 47292 and the api runs on 47291 — same split).
+> A Team Mode **central** runs in Docker on **48080**
 > by default. These are intentionally distinct so a member and a central can
 > coexist on the same host.
 
@@ -60,16 +61,17 @@ preferences. For non-interactive/scripted member onboarding, use
 ## `server`
 
 Starts the web dashboard, api, Nay chat, MCP registration, and the OTel daemon —
-everything in one process. Serves the embedded frontend on the api port.
+everything in one process. Binds two ports: the **web dashboard on 47292** (open this) and the
+**api + mcp on 47291**. They share one request handler, so the dashboard's `/api/*` calls just work.
 
 ```bash
-agentop server              # http://localhost:47291
-agentop server --port 4000  # custom port
+agentop server              # web: http://localhost:47292 · api/mcp: http://localhost:47291
+agentop server --port 4000  # api on 4000, web on 4001
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port <n>` | `47291` | Port for the web server + embedded frontend |
+| `--port <n>` | `47291` | The **api + mcp** port; the web dashboard is served on this + 1 (default 47292) |
 
 ---
 
