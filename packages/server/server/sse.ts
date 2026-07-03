@@ -49,6 +49,9 @@ export function triggerSseNotification() {
   invalidateCache()
   if (sseDebounce) clearTimeout(sseDebounce)
   sseDebounce = setTimeout(notifySseClients, 2000)
+  // Member push-on-change: local data changed → nudge a debounced push to the central so its
+  // aggregate stays fresh while you work. No-op on a central/solo instance.
+  import('./team-uploader').then(m => m.notifyDataChanged()).catch(() => {})
 }
 
 export async function setupFileWatcher() {

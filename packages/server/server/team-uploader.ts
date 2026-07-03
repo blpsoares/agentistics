@@ -395,6 +395,70 @@ async function resetSyncState(): Promise<void> {
  *
  * First cycle runs ~5 s after start.
  */
+// Push-on-change: coalesce a burst of local file changes into a single push, and never push
+// more often than the central's interval floor — so data reaches the central promptly while
+// you work, without hammering it. The periodic timer below remains as a fallback.
+let _centralIntervalSec: number = PUSH_INTERVAL.DEFAULT_SEC
+let _onChangeTimer: ReturnType<typeof setTimeout> | null = null
+const ON_CHANGE_DEBOUNCE_MS = 2_000
+
+/** One push cycle's core: read prefs → central policy → reconcile → push. Returns the next
+ *  interval (seconds) and records the central floor for the on-change debounce. Shared by the
+ *  periodic timer AND the on-change trigger so both go through identical logic. No-op push when
+ *  not a member. */
+async function pushCycleCore(): Promise<number> {
+  let nextIntervalSec: number = PUSH_INTERVAL.DEFAULT_SEC
+  const prefs = await readPreferences()
+  const team = prefs.team
+  // Trim any trailing slash so URL builds don't produce `//api/...` (which misses the
+  // central's exact-match routes and silently hits the static handler instead of ingest).
+  if (team?.endpoint) team.endpoint = team.endpoint.replace(/\/+$/, '')
+  if (team?.mode === 'member' && team.endpoint && team.user) {
+    // The central is the sole authority on the interval; members follow it (honoring express
+    // intervals below the normal 15s floor). No member-side override.
+    const policy = await fetchCentralPolicy(team.endpoint)
+    nextIntervalSec = clampPushInterval(policy.intervalSec, PUSH_INTERVAL.EXPRESS_MIN_SEC)
+    _centralIntervalSec = nextIntervalSec
+    // Auto-heal a sent-state that no longer matches the central (revoke+re-add, new endpoint,
+    // or a wiped DB) BEFORE pushing, so this cycle re-sends the full history.
+    await reconcileSyncState(team.endpoint, team.token ?? '', policy.instanceId)
+    await pushOnce(team)
+  }
+  return nextIntervalSec
+}
+
+/** Fire an extra push now (between timer ticks). The `running` guard prevents overlap with the
+ *  timer cycle; it does NOT reschedule the timer (the timer manages its own cadence). */
+async function triggerPush(): Promise<void> {
+  if (running) return
+  running = true
+  try {
+    await pushCycleCore()
+  } catch (err) {
+    console.warn('[team-uploader] on-change push error:', err instanceof Error ? err.message : String(err))
+  } finally {
+    running = false
+  }
+}
+
+/**
+ * Signal that local data changed (called by the file watcher). Schedules a DEBOUNCED push:
+ * coalesces a burst of file events into one push and never pushes sooner than the central's
+ * interval since the last successful push. No-op until the uploader has started; safe to call
+ * on a central/solo instance (pushCycleCore just no-ops when not a member).
+ */
+export function notifyDataChanged(): void {
+  if (!started || _onChangeTimer) return // not running, or a push is already scheduled → coalesce
+  const floorMs = _centralIntervalSec * 1_000
+  const sinceLast = _lastSuccessAt ? Date.now() - _lastSuccessAt : Infinity
+  const delay = Math.max(ON_CHANGE_DEBOUNCE_MS, floorMs - sinceLast)
+  _onChangeTimer = setTimeout(() => {
+    _onChangeTimer = null
+    void triggerPush()
+  }, delay)
+  _onChangeTimer.unref?.()
+}
+
 export function startUploader(): void {
   if (started) return
   started = true
@@ -412,21 +476,7 @@ export function startUploader(): void {
     running = true
     let nextIntervalSec: number = PUSH_INTERVAL.DEFAULT_SEC
     try {
-      const prefs = await readPreferences()
-      const team = prefs.team
-      // Trim any trailing slash so URL builds don't produce `//api/...` (which misses the
-      // central's exact-match routes and silently hits the static handler instead of ingest).
-      if (team?.endpoint) team.endpoint = team.endpoint.replace(/\/+$/, '')
-      if (team?.mode === 'member' && team.endpoint && team.user) {
-        // The central is the sole authority on the interval; members follow it (honoring
-        // express intervals below the normal 15s floor). No member-side override.
-        const policy = await fetchCentralPolicy(team.endpoint)
-        nextIntervalSec = clampPushInterval(policy.intervalSec, PUSH_INTERVAL.EXPRESS_MIN_SEC)
-        // Auto-heal a sent-state that no longer matches the central (revoke+re-add, new
-        // endpoint, or a wiped DB) BEFORE pushing, so this cycle re-sends the full history.
-        await reconcileSyncState(team.endpoint, team.token ?? '', policy.instanceId)
-        await pushOnce(team)
-      }
+      nextIntervalSec = await pushCycleCore()
     } catch (err) {
       console.warn('[team-uploader] cycle error:', err instanceof Error ? err.message : String(err))
     } finally {
