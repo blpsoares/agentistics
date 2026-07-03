@@ -30,9 +30,12 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - Archive modes (`off` / `consolidate` / `full`) that survive Claude's 30-day transcript cleanup, gated by a first-run consent modal
 - **Full mobile/responsive support** — responsive layouts gated on `useIsMobile()`, a bottom nav with a square-tile "More" sheet (hosting settings/live/refresh/warnings), a collapsible sticky filter bar, full-screen modals on mobile, and iOS-aware PWA install guidance
 - **MCP multi-harness support** — `agentistics_summary` / `agentistics_projects` / `agentistics_sessions` / `agentistics_costs` accept an optional `harness` filter, plus a new `agentistics_harnesses` tool for side-by-side harness comparison
+- **Session titles** — sessions now display the Claude-generated title (parsed from the transcript's `ai-title`, or legacy `summary`, line) instead of the raw first prompt; a shared `sessionLabel()` helper also strips `<local-command-caveat>`/`<command-name>` wrappers from the first-prompt fallback so untitled sessions no longer look broken
 
 ### Fixed
 - A trailing slash on the member endpoint produced double-slash routes that broke ingest and presence
+- Viewing a remote member's **Claude chat on the central** returned empty — the encoded project directory wasn't sent to the member's transcript reader, which locates the file by `<encodedDir>/<sessionId>.jsonl`
+- The **Live** tab is now hidden in the central's Settings (a central is real-time via SSE-on-ingest, so there's nothing to toggle)
 - WebSocket drop is now authoritative for offline detection (killing the app marks a member offline within the drop grace, no longer waiting on heartbeat timeout)
 - The install prompt no longer appears on a central, and its dismissal now persists server-side; token copy is robust over plain http
 - iOS `position: sticky` broke under `overflow-x: hidden`; switched mobile `html/body/#root` to `overflow-x: clip`
@@ -43,6 +46,7 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - Removed the **Environment** tab from Settings
 - `stats-cache.json` is treated as Claude-only; non-Claude harnesses are aggregated purely from per-session data so Claude totals are never corrupted
 - README now describes agentistics as a multi-harness dashboard; `docs/mcp.md` documents the MCP's per-harness filtering and comparison tool
+- The one-line installer now uses the vanity URL: `curl -fsSL https://agentop.openvibes.tech/cli | bash` (a Cloudflare redirect to the repo's `install.sh`), so the documented command survives any future move of the script
 
 ---
 
