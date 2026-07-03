@@ -115,7 +115,7 @@ export async function parseSessionJsonl(
     return makeEmptySession(sessionId, fallbackPath, '', '', source)
   }
 
-  let cwd = '', startTime = '', lastTime = '', firstPrompt = '', modelId = ''
+  let cwd = '', startTime = '', lastTime = '', firstPrompt = '', modelId = '', sessionTitle = ''
   let userMsgs = 0, assistantMsgs = 0, inputTokens = 0, outputTokens = 0
   let cacheReadTokens = 0, cacheCreationTokens = 0
   let gitCommits = 0, gitPushes = 0
@@ -146,6 +146,18 @@ export async function parseSessionJsonl(
       if (!startTime) startTime = ts
       lastTime = ts
       try { messageHours.push(new Date(ts).getHours()) } catch { /* skip */ }
+    }
+
+    // Claude writes the auto-generated session title as an `ai-title` line (current format)
+    // or a `summary` line (legacy). ai-title can be regenerated as the chat grows, so the last
+    // one wins; summary only fills the gap when no ai-title is present.
+    if (e.type === 'ai-title' && typeof e.aiTitle === 'string' && e.aiTitle.trim()) {
+      sessionTitle = e.aiTitle.trim()
+      continue
+    }
+    if (e.type === 'summary' && typeof e.summary === 'string' && e.summary.trim()) {
+      if (!sessionTitle) sessionTitle = e.summary.trim()
+      continue
     }
 
     if (e.type === 'user') {
@@ -304,6 +316,7 @@ export async function parseSessionJsonl(
     cache_read_input_tokens: cacheReadTokens,
     cache_creation_input_tokens: cacheCreationTokens,
     first_prompt: firstPrompt,
+    title: sessionTitle || undefined,
     user_interruptions: userInterruptions,
     user_response_times: userResponseTimes,
     tool_errors: toolErrors,

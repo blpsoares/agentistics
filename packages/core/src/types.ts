@@ -80,6 +80,10 @@ export interface SessionMeta {
   cache_read_input_tokens?: number
   cache_creation_input_tokens?: number
   first_prompt: string
+  /** Human-readable session title. Claude writes an `ai-title` (or legacy `summary`) line into
+   *  the transcript; we surface it as the session's display name. Falls back to `first_prompt`
+   *  in the UI when absent (older sessions, non-Claude harnesses). */
+  title?: string
   user_interruptions: number
   user_response_times: number[]
   tool_errors: number

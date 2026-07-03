@@ -22,6 +22,25 @@ export function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1):
   return `USD ${usd.toFixed(2)}`
 }
 
+/**
+ * Human-readable label for a session: its title if set, otherwise the first prompt with
+ * Claude's local-command/command wrappers stripped (those show up as noisy
+ * `<local-command-caveat>…` blocks that make untitled sessions look broken). Returns '' when
+ * there's nothing usable, so callers can supply their own localized placeholder.
+ */
+export function sessionLabel(s: { title?: string; first_prompt?: string }): string {
+  const title = (s.title ?? '').trim()
+  if (title) return title
+  const fp = (s.first_prompt ?? '').trim()
+  const cleaned = fp
+    .replace(/<local-command-[a-z]*>[\s\S]*?<\/local-command-[a-z]*>/gi, ' ')
+    .replace(/<command-[a-z]+>[\s\S]*?<\/command-[a-z]+>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return cleaned || ''
+}
+
 export function fmtFull(n: number): string {
   return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
 }

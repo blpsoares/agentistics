@@ -5,7 +5,7 @@ import {
   CheckCircle, XCircle, Globe, Server, ExternalLink, Loader,
 } from 'lucide-react'
 import type { SessionMeta, Lang } from '@agentistics/core'
-import { formatProjectName, formatModel, calcCost, getModelColor } from '@agentistics/core'
+import { formatProjectName, formatModel, calcCost, getModelColor, sessionLabel } from '@agentistics/core'
 import { blendedCostPerToken } from '../hooks/useData'
 import { fmtFull } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
@@ -230,6 +230,11 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
                 </span>
               )}
             </div>
+            {sessionLabel(session) && (
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4, wordBreak: 'break-word' }}>
+                {sessionLabel(session)}
+              </div>
+            )}
             <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'ui-monospace, monospace', marginBottom: 4 }}>
               {session.session_id}
             </div>
@@ -632,6 +637,12 @@ function RemoteSessionChat({ session, pt }: { session: SessionMeta; pt: boolean 
       sessionId: session.session_id,
       harness: session.harness,
     })
+    // Claude's member-side reader locates the transcript by <encodedDir>/<sessionId>.jsonl, so it
+    // REQUIRES the encoded project dir — without it the member returns [] and the chat looks empty.
+    // Match Claude's folder encoding: every non-alphanumeric char → '-' (same as the transcript btn).
+    if (session.harness === 'claude' && session.project_path) {
+      qs.set('encodedDir', session.project_path.replace(/[^a-zA-Z0-9-]/g, '-'))
+    }
 
     fetch(`/api/team/session-chat?${qs.toString()}`, { signal: controller.signal })
       .then(r => {
