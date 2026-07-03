@@ -121,6 +121,7 @@ const AUTH_PUBLIC = new Set([
 const ADMIN_PATHS = new Set([
   '/api/team/members',
   '/api/team/tokens',
+  '/api/team/tokens/rotate',
   '/api/team/config',
   // on-demand session chat proxy — ADMIN-gated so only the dashboard can call it
   '/api/team/session-chat',
@@ -900,6 +901,17 @@ Bun.serve<{ user: string; isAgent?: boolean }>({
       const { handleRevokeToken } = await import('./team-admin')
       const res = await handleRevokeToken(req)
       // Revoke cascades to the member's sessions — refresh the dashboard immediately.
+      if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/team/tokens/rotate' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleRotateToken } = await import('./team-admin')
+      const res = await handleRotateToken(req)
+      // Rotation migrates the member's history to the new identity key — refresh the dashboard.
       if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)

@@ -19,6 +19,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { Collection } from 'mongodb'
 import { getMongoDb } from './mongo'
+import { teamDocId, type TeamSessionDoc } from './team-store'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -95,6 +96,63 @@ export async function revokeToken(id: string): Promise<boolean> {
   const col = await getTokensCollection()
   const result = await col.deleteOne({ _id: id })
   return result.deletedCount > 0
+}
+
+/**
+ * Rotate a member's token: mint a fresh token while preserving all of the member's
+ * history. Returns the new plaintext token (shown once), or `null` if no token with
+ * `oldId` exists.
+ *
+ * The member's identity key is the token hash (`memberId`), so rotating the token
+ * changes that key. To keep history, every doc keyed by the old id is migrated to the
+ * new id:
+ *   - `sessions`     — each TeamSessionDoc is re-inserted with the new memberId and a
+ *                      recomputed _id (teamDocId), then the old docs are removed.
+ *   - `memberStats`  — the per-member aggregate (keyed by _id = memberId) is copied.
+ *   - `tokens`       — the token doc is replaced (new hash id, same metadata).
+ */
+export async function rotateToken(oldId: string): Promise<string | null> {
+  const col = await getTokensCollection()
+  const doc = await col.findOne({ _id: oldId })
+  if (!doc) return null
+
+  const token = randomBytes(32).toString('hex')
+  const newId = hashToken(token)
+
+  const db = await getMongoDb()
+
+  // Migrate sessions: rebuild each doc under the new memberId + _id.
+  const sessions = db.collection<TeamSessionDoc>('sessions')
+  const oldSessions = await sessions.find({ memberId: oldId }).toArray()
+  if (oldSessions.length > 0) {
+    const migrated = oldSessions.map(d => ({
+      ...d,
+      memberId: newId,
+      _id: teamDocId(d.org, newId, d.harness ?? 'claude', d.session_id),
+    }))
+    await sessions.insertMany(migrated, { ordered: false }).catch(() => {})
+    await sessions.deleteMany({ memberId: oldId })
+  }
+
+  // Migrate memberStats: keyed by _id = memberId.
+  const memberStats = db.collection<{ _id: string }>('memberStats')
+  const statsDoc = await memberStats.findOne({ _id: oldId })
+  if (statsDoc) {
+    await memberStats.insertOne({ ...statsDoc, _id: newId }).catch(() => {})
+    await memberStats.deleteOne({ _id: oldId })
+  }
+
+  // Replace the token doc (new hash id, same metadata).
+  await col.insertOne({
+    _id: newId,
+    user: doc.user,
+    label: doc.label,
+    createdAt: doc.createdAt,
+    lastSeenAt: doc.lastSeenAt,
+  })
+  await col.deleteOne({ _id: oldId })
+
+  return token
 }
 
 /**

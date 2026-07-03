@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { Users, Plus, Trash2, Copy, CheckCheck, RefreshCw, AlertCircle, Pencil, Check, X } from 'lucide-react'
+import { Users, Plus, Trash2, Copy, CheckCheck, RefreshCw, AlertCircle, Pencil, Check, X, RotateCw } from 'lucide-react'
 import { copyText } from '../lib/clipboard'
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -50,6 +50,15 @@ const COPY = {
   renameCancel:    { en: 'Cancel',                               pt: 'Cancelar' },
   renameSave:      { en: 'Save',                                 pt: 'Salvar' },
   renameErr:       { en: 'Failed to rename member.',            pt: 'Falha ao renomear membro.' },
+  rotate:          { en: 'Rotate',                               pt: 'Rotacionar' },
+  rotating:        { en: 'Rotating…',                           pt: 'Rotacionando…' },
+  rotateErr:       { en: 'Failed to rotate token.',             pt: 'Falha ao rotacionar token.' },
+  cancel:          { en: 'Cancel',                               pt: 'Cancelar' },
+  confirm:         { en: 'Confirm',                              pt: 'Confirmar' },
+  revokeConfirmTitle: { en: 'Remove this machine?',              pt: 'Remover esta máquina?' },
+  revokeConfirmBody:  { en: 'This revokes the token and deletes ALL of this machine\'s data on the central. The machine will be disconnected.', pt: 'Isso revoga o token e apaga TODOS os dados dessa máquina na central. A máquina será desconectada.' },
+  rotateConfirmTitle: { en: 'Rotate token?',                     pt: 'Rotacionar token?' },
+  rotateConfirmBody:  { en: 'This machine\'s current token stops working; it will need the new token. History is preserved.', pt: 'O token atual desta máquina para de funcionar; ela precisará do novo token. O histórico é preservado.' },
 } satisfies Record<string, { en: string; pt: string }>
 
 function t(key: keyof typeof COPY, lang: 'en' | 'pt'): string {
@@ -103,6 +112,14 @@ export function TeamMembers({ lang }: Props) {
   // Per-row revoke state (id → true when revoking)
   const [revoking, setRevoking] = useState<Record<string, boolean>>({})
   const [revokeErr, setRevokeErr] = useState<string | null>(null)
+  // Id pending revoke confirmation (modal open when non-null).
+  const [confirmRevokeId, setConfirmRevokeId] = useState<string | null>(null)
+
+  // Per-row rotate state
+  const [rotating, setRotating] = useState<Record<string, boolean>>({})
+  const [rotateErr, setRotateErr] = useState<string | null>(null)
+  // Id pending rotate confirmation (modal open when non-null).
+  const [confirmRotateId, setConfirmRotateId] = useState<string | null>(null)
 
   // Per-row rename state
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -214,6 +231,29 @@ export function TeamMembers({ lang }: Props) {
       setRevokeErr(err instanceof Error ? err.message : String(err))
     } finally {
       setRevoking(prev => ({ ...prev, [id]: false }))
+    }
+  }
+
+  async function handleRotate(id: string) {
+    if (rotating[id]) return
+    setRotating(prev => ({ ...prev, [id]: true }))
+    setRotateErr(null)
+    setNewToken(null)
+    try {
+      const res = await fetch('/api/team/tokens/rotate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = (await res.json()) as { token: string }
+      setNewToken(data.token)
+      // The member's identity key changed — reload the list to pick up the new id.
+      void loadMembers()
+    } catch (err) {
+      setRotateErr(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRotating(prev => ({ ...prev, [id]: false }))
     }
   }
 
@@ -539,27 +579,50 @@ export function TeamMembers({ lang }: Props) {
                 <div style={{ fontSize: 11, color: 'var(--text-tertiary)', paddingRight: 8 }}>
                   {m.lastSeenAt ? relativeTime(m.lastSeenAt, lang) : t('never', lang)}
                 </div>
-                <button
-                  onClick={() => { void handleRevoke(m.id) }}
-                  disabled={revoking[m.id] || renamingId === m.id}
-                  title={t('revoke', lang)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 4,
-                    padding: '4px 8px', borderRadius: 6,
-                    border: '1px solid rgba(239,68,68,0.3)',
-                    background: 'rgba(239,68,68,0.06)',
-                    color: revoking[m.id] || renamingId === m.id ? 'var(--text-tertiary)' : '#ef4444',
-                    fontSize: 11, fontWeight: 600,
-                    cursor: revoking[m.id] || renamingId === m.id ? 'default' : 'pointer',
-                    fontFamily: 'inherit',
-                    transition: 'all 0.15s',
-                    opacity: revoking[m.id] || renamingId === m.id ? 0.5 : 1,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  <Trash2 size={10} />
-                  {revoking[m.id] ? t('revoking', lang) : t('revoke', lang)}
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={() => { setRotateErr(null); setConfirmRotateId(m.id) }}
+                    disabled={rotating[m.id] || renamingId === m.id}
+                    title={t('rotate', lang)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 4,
+                      padding: '4px 8px', borderRadius: 6,
+                      border: '1px solid var(--border)',
+                      background: 'transparent',
+                      color: rotating[m.id] || renamingId === m.id ? 'var(--text-tertiary)' : 'var(--text-secondary)',
+                      fontSize: 11, fontWeight: 600,
+                      cursor: rotating[m.id] || renamingId === m.id ? 'default' : 'pointer',
+                      fontFamily: 'inherit',
+                      transition: 'all 0.15s',
+                      opacity: rotating[m.id] || renamingId === m.id ? 0.5 : 1,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <RotateCw size={10} style={{ animation: rotating[m.id] ? 'spin 1s linear infinite' : 'none' }} />
+                    {rotating[m.id] ? t('rotating', lang) : t('rotate', lang)}
+                  </button>
+                  <button
+                    onClick={() => { setRevokeErr(null); setConfirmRevokeId(m.id) }}
+                    disabled={revoking[m.id] || renamingId === m.id}
+                    title={t('revoke', lang)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 4,
+                      padding: '4px 8px', borderRadius: 6,
+                      border: '1px solid rgba(239,68,68,0.3)',
+                      background: 'rgba(239,68,68,0.06)',
+                      color: revoking[m.id] || renamingId === m.id ? 'var(--text-tertiary)' : '#ef4444',
+                      fontSize: 11, fontWeight: 600,
+                      cursor: revoking[m.id] || renamingId === m.id ? 'default' : 'pointer',
+                      fontFamily: 'inherit',
+                      transition: 'all 0.15s',
+                      opacity: revoking[m.id] || renamingId === m.id ? 0.5 : 1,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <Trash2 size={10} />
+                    {revoking[m.id] ? t('revoking', lang) : t('revoke', lang)}
+                  </button>
+                </div>
               </div>
             ))
           )}
@@ -576,6 +639,19 @@ export function TeamMembers({ lang }: Props) {
         }}>
           <AlertCircle size={12} />
           {t('revokeErr', lang)}{revokeErr ? ` — ${revokeErr}` : ''}
+        </div>
+      )}
+
+      {/* Rotate error */}
+      {rotateErr && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '6px 10px', borderRadius: 7, marginBottom: 12,
+          background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+          fontSize: 11, color: '#ef4444',
+        }}>
+          <AlertCircle size={12} />
+          {t('rotateErr', lang)}{rotateErr ? ` — ${rotateErr}` : ''}
         </div>
       )}
 
@@ -745,8 +821,113 @@ export function TeamMembers({ lang }: Props) {
         </div>
       )}
 
+      {/* Revoke confirmation modal */}
+      {confirmRevokeId && (
+        <ConfirmModal
+          title={t('revokeConfirmTitle', lang)}
+          body={t('revokeConfirmBody', lang)}
+          cancelLabel={t('cancel', lang)}
+          confirmLabel={t('confirm', lang)}
+          danger
+          onCancel={() => setConfirmRevokeId(null)}
+          onConfirm={() => {
+            const id = confirmRevokeId
+            setConfirmRevokeId(null)
+            void handleRevoke(id)
+          }}
+        />
+      )}
+
+      {/* Rotate confirmation modal */}
+      {confirmRotateId && (
+        <ConfirmModal
+          title={t('rotateConfirmTitle', lang)}
+          body={t('rotateConfirmBody', lang)}
+          cancelLabel={t('cancel', lang)}
+          confirmLabel={t('confirm', lang)}
+          onCancel={() => setConfirmRotateId(null)}
+          onConfirm={() => {
+            const id = confirmRotateId
+            setConfirmRotateId(null)
+            void handleRotate(id)
+          }}
+        />
+      )}
+
       {/* Spinner keyframe */}
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  )
+}
+
+// ── Confirmation modal ──────────────────────────────────────────────────────
+
+interface ConfirmModalProps {
+  title: string
+  body: string
+  cancelLabel: string
+  confirmLabel: string
+  danger?: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}
+
+function ConfirmModal({ title, body, cancelLabel, confirmLabel, danger, onCancel, onConfirm }: ConfirmModalProps) {
+  return (
+    <div
+      onClick={onCancel}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.5)', padding: 16,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: '100%', maxWidth: 400,
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border)',
+          borderRadius: 12,
+          padding: 20,
+          boxShadow: '0 12px 40px rgba(0,0,0,0.35)',
+        }}
+      >
+        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 10 }}>
+          {title}
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 18 }}>
+          {body}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button
+            onClick={onCancel}
+            style={{
+              padding: '7px 14px', borderRadius: 7,
+              border: '1px solid var(--border)',
+              background: 'transparent',
+              color: 'var(--text-secondary)',
+              fontSize: 12, fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'inherit',
+            }}
+          >
+            {cancelLabel}
+          </button>
+          <button
+            onClick={onConfirm}
+            style={{
+              padding: '7px 14px', borderRadius: 7,
+              border: danger ? '1px solid rgba(239,68,68,0.5)' : '1px solid var(--anthropic-orange)',
+              background: danger ? '#ef4444' : 'var(--anthropic-orange-dim)',
+              color: danger ? '#fff' : 'var(--anthropic-orange)',
+              fontSize: 12, fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'inherit',
+            }}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

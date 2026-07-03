@@ -10,7 +10,7 @@
  * each handler sets Content-Type only.
  */
 
-import { listMembers, mintToken, revokeToken } from './team-tokens'
+import { listMembers, mintToken, revokeToken, rotateToken } from './team-tokens'
 import { getTeamCollection } from './mongo'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
@@ -139,6 +139,58 @@ export async function handleRevokeToken(req: Request): Promise<Response> {
       await deleteMemberStats(id)
     } catch { /* session cleanup is best-effort; the token is already revoked */ }
     return new Response(JSON.stringify({ ok: deleted, sessionsDeleted }), {
+      status: 200,
+      headers: JSON_CT,
+    })
+  } catch (e) {
+    return new Response(
+      JSON.stringify({ error: e instanceof Error ? e.message : String(e) }),
+      { status: 500, headers: JSON_CT },
+    )
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/team/tokens/rotate  → { token: string }
+// ---------------------------------------------------------------------------
+
+/**
+ * Rotate a member's token by its hash id. Mints a fresh token and migrates the
+ * member's history (sessions + stats) to the new identity key.
+ * Body: { id: string }  — `id` is the SHA-256 hash of the current token.
+ * Response: { token: string }  — the new plaintext token; store it now, it is not saved.
+ * Returns 404 { error: 'not found' } if no token with that id exists.
+ */
+export async function handleRotateToken(req: Request): Promise<Response> {
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return new Response(JSON.stringify({ error: 'invalid JSON' }), {
+      status: 400,
+      headers: JSON_CT,
+    })
+  }
+
+  const raw = body as Record<string, unknown>
+  const id = typeof raw?.id === 'string' ? raw.id.trim() : ''
+
+  if (!id) {
+    return new Response(JSON.stringify({ error: 'id required' }), {
+      status: 400,
+      headers: JSON_CT,
+    })
+  }
+
+  try {
+    const token = await rotateToken(id)
+    if (token === null) {
+      return new Response(JSON.stringify({ error: 'not found' }), {
+        status: 404,
+        headers: JSON_CT,
+      })
+    }
+    return new Response(JSON.stringify({ token }), {
       status: 200,
       headers: JSON_CT,
     })
