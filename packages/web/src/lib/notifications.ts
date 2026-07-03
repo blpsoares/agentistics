@@ -50,6 +50,10 @@ export const NOTIFICATION_TEXT: Record<string, { pt: Localized; en: Localized }>
     pt: { title: 'Máquina conectada', message: '{user} conectou à central.' },
     en: { title: 'Machine connected', message: '{user} connected to the central.' },
   },
+  'app.update_available': {
+    pt: { title: 'Atualização disponível', message: 'Uma nova versão do agentistics ({version}) está disponível.' },
+    en: { title: 'Update available', message: 'A new version of agentistics ({version}) is available.' },
+  },
 }
 
 /** Resolve a notification to display strings in the CURRENT language. Localizes by
@@ -62,6 +66,10 @@ export function resolveNotification(n: AppNotification, lang: 'pt' | 'en'): Loca
   // Interpolate {user} from meta (e.g. "{user} connected to the central").
   if (message && n.meta?.user) {
     message = message.replace('{user}', String(n.meta.user))
+  }
+  // Interpolate {version} from meta (e.g. "A new version ({version}) is available").
+  if (message && n.meta?.version) {
+    message = message.replace('{version}', `v${String(n.meta.version).replace(/^v/, '')}`)
   }
   // Append the HTTP status to the auth-rejected message when the central provided one.
   if (n.code === 'member.auth_rejected' && n.meta?.status && message) {

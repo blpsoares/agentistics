@@ -3,7 +3,7 @@
 import { readFile } from 'node:fs/promises'
 import { PORT, TEAM_CENTRAL, TEAM_PASSWORD, TEAM_ORG } from './config'
 import { getRates } from './rates'
-import { getVersionInfo } from './version'
+import { getVersionInfo, startVersionRecheck } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
 import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, type ChatMessage, type ChatModelId, type ChatAttachment } from './chat-tty'
@@ -89,6 +89,9 @@ if (TEAM_CENTRAL) {
 import('./team-uploader').then(m => m.startUploader()).catch(err => console.error('[team-uploader] failed to start:', err))
 startAgentClient()
 maybeSpawnWatcher()
+// Periodic best-effort re-check so a long-running daemon surfaces new releases
+// without a page reload (broadcasts an SSE notification when an update appears).
+try { startVersionRecheck() } catch (err) { console.warn('[version] recheck failed to start:', String(err)) }
 ensureNayChat(PORT).catch(err => console.error('[nay-chat] failed to initialize:', err))
 ensureClaudeChat().catch(err => console.error('[claude-chat] failed to initialize:', err))
 

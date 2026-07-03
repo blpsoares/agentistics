@@ -27,6 +27,7 @@ import { FiltersBar } from './components/FiltersBar'
 import { NotificationToasts } from './components/NotificationToasts'
 import { NotificationBell } from './components/NotificationBell'
 import { useNotificationStream } from './hooks/useNotificationStream'
+import { pushNotification } from './lib/notifications'
 import { RecentSessions } from './components/RecentSessions'
 import { HighlightsBoard } from './components/HighlightsBoard'
 import { InfoModal } from './components/InfoModal'
@@ -885,12 +886,22 @@ export default function AppLayout() {
   // ── Team session gate ────────────────────────────────────────────────────
   // undefined = not yet fetched, TeamSessionState after fetch
   const [teamSession, setTeamSession] = useState<TeamSessionState | undefined>(undefined)
+  // true when this instance is a team member pushing to a central (mode === 'member').
+  // Used only to tailor the upgrade command shown in the UpdateModal.
+  const [isMember, setIsMember] = useState(false)
 
   useEffect(() => {
     fetch('/api/team/session')
       .then(r => r.ok ? (r.json() as Promise<TeamSessionState>) : null)
       .then(s => setTeamSession(s ?? { required: false, authed: true }))
       .catch(() => setTeamSession({ required: false, authed: true }))
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/team/status')
+      .then(r => r.ok ? (r.json() as Promise<{ mode?: string }>) : null)
+      .then(s => setIsMember(s?.mode === 'member'))
+      .catch(() => {})
   }, [])
 
   // Flip to login screen when any API call returns 401 (team password set but cookie expired)
@@ -1095,11 +1106,21 @@ export default function AppLayout() {
       .catch(() => { setArchiveChoice(null); setInstallDismissedPref(false) })
   }, [])
 
+  // Tracks which latest version we've already surfaced as a toast/bell notification,
+  // so re-renders (or an SSE re-check for the same version) don't re-push it.
+  const notifiedVersionRef = useRef<string | null>(null)
   useEffect(() => {
     fetch('/api/version')
       .then(r => r.ok ? r.json() : null)
       .then((info: { current: string; latest: string; hasUpdate: boolean } | null) => {
-        if (info?.hasUpdate) setUpdateInfo({ current: info.current, latest: info.latest })
+        if (info?.hasUpdate) {
+          setUpdateInfo({ current: info.current, latest: info.latest })
+          // Also surface it in the toast + bell (once per detected version).
+          if (notifiedVersionRef.current !== info.latest) {
+            notifiedVersionRef.current = info.latest
+            pushNotification({ type: 'info', code: 'app.update_available', meta: { version: info.latest } })
+          }
+        }
       })
       .catch(() => {})
   }, [])
@@ -2069,6 +2090,8 @@ export default function AppLayout() {
           current={updateInfo.current}
           latest={updateInfo.latest}
           lang={lang}
+          isCentral={isCentral}
+          isMember={isMember}
           onClose={() => setUpdateInfo(null)}
         />
       )}
