@@ -90,15 +90,21 @@ sudo curl -fsSL https://agentop.openvibes.tech/cli | bash
 **Start:**
 
 ```bash
-agentop server        # Dashboard + API + Nay + watcher — everything in one command
+agentop start         # interactive launcher — pick what to run and how (recommended)
+agentop server        # non-interactive: web + API + Nay + watcher in one command
 ```
 
-Open **http://localhost:47291** in your browser.
+`agentop start` is a re-runnable, arrow-key control panel (English by default, pt-BR toggle) that
+shows what's configured and running, then lets you start **agentistics** (this machine) or
+**agentistics central** (the aggregator), connect to a central, or stop services. Open the web
+dashboard at **http://localhost:47292** (the api + MCP stay on **47291**).
 
 | Command | What it starts |
 |---------|---------------|
+| `agentop start` | Interactive launcher — pick mode + how to run (foreground / background / Docker / boot) |
 | `agentop setup` | Interactive first-run wizard (solo / central / member) |
-| `agentop server` | API + embedded frontend + Nay + OTel daemon |
+| `agentop server` | web (47292) + api + MCP (47291) + Nay + OTel daemon (non-interactive) |
+| `agentop restart …` | Restart a running mode so it picks up new code / config |
 | `agentop tui` | Terminal dashboard (no browser needed) |
 | `agentop watch` | OTel daemon only (headless) |
 | `agentop central …` | Manage the Team Mode central (Docker) |

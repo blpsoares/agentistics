@@ -21,8 +21,10 @@ packages/
 
 ```
 packages/server/bin/cli.ts  (binary entry point — agentop)
+  ├── agentop start        → server/cli-start.ts (interactive arrow-key launcher; EN default + pt-BR toggle; non-TTY stdin falls through to `server`)
   ├── agentop setup        → server/cli-setup.ts (interactive solo/central/member wizard; bare `agentop` on a TTY when unconfigured)
   ├── agentop server       → server/index.ts + server/otel-watcher.ts (always together)
+  ├── agentop restart …    → server/autostart.ts restartAutostart (bounce a mode's systemd service; `central` → central.sh restart)
   ├── agentop tui          → ../../web/src/tui/index.ts (standalone)
   ├── agentop watch        → server/otel-watcher.ts (daemon only)
   ├── agentop central …    → server/cli-central.ts (wraps central.sh: up/init/down/logs/status/restart/pull)
@@ -35,7 +37,7 @@ packages/server/server/index.ts (Bun, port 47291) — thin entry point
   └── delegates to server/ modules (see below)
 
 packages/server/server/          — server-side modules (never bundled by Vite)
-  ├── config.ts            → path constants + PORT env var
+  ├── config.ts            → path constants + PORT (api+mcp, 47291) + WEB_PORT (dashboard, PORT+1=47292); binary mode binds BOTH
   ├── utils.ts             → createLimiter, safeReadJson, safeReadDir, safeStat
   ├── git.ts               → decodeProjectDir, getGitFileStats, getProjectGitStats
   ├── jsonl.ts             → parseSessionJsonl, makeEmptySession, classifyAgentFile, EXT_TO_LANG
@@ -51,6 +53,9 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── version.ts           → getVersionInfo (current vs latest); drives update banners/notifications
   ├── autostart.ts         → systemd user service + loginctl linger + ~/.bashrc update-check hook
   ├── cli-setup.ts / cli-central.ts / cli-member.ts → the agentop setup/central/member command handlers
+  ├── cli-start.ts         → the `agentop start` interactive launcher (config vs running status, start agentistics / agentistics central, connect/disconnect, stop, language)
+  ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
+  ├── cli-i18n.ts          → EN/PT strings for the launcher (CLI is English by default; language follows --lang / preferences.lang / the in-launcher toggle)
   ├── team-tokens.ts       → mint / rotate / revoke / validate tokens (stored as sha256 hashes only)
   ├── team-store.ts / team-stats.ts → Mongo team-session doc shape + per-member statsCache store
   ├── team-ingest.ts       → POST /api/team/ingest → upsert + triggerSseNotification (real-time central)
@@ -312,11 +317,13 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
 - **`stats-cache.json`** has no project-level granularity — project filters are computed by summing individual sessions
 - **Tokens per model/day**: `dailyModelTokens` only stores totals; input/output split uses global statsCache proportions as an approximation when filtering by date
 - **Sessions have an optional `model` field** — extracted from the JSONL file by `server/data.ts` when not already present in session-meta. Use `blendedCostPerToken` as fallback when `model` is unknown (e.g. per-session cost column in PDF export)
+- **Sessions have an optional `title` field** — the Claude-generated session title, parsed from the transcript's `ai-title` line (or legacy `summary`) by `server/jsonl.ts`. The UI displays it via the shared `sessionLabel()` helper (`@agentistics/core`), which falls back to `first_prompt` with `<local-command-caveat>`/`<command-name>` wrappers stripped — never render `first_prompt` raw as a title
 - **Agent metrics** are only available for sessions whose JSONL files are accessible; `_source: 'meta'`-only sessions won't have them
 - **Streak**: counts backwards from today; if today has no activity, starts from yesterday — intentional behavior so users are not penalized for not having worked yet today
 - **BRL costs**: conversion via `/api/rates` (fetches live exchange rate); falls back to a fixed rate if the API fails
 - **Session sources**: `_source: 'meta'` sessions are the most complete; `'jsonl'` and `'subdir'` are fallbacks with partial data (no git line counts, no cache tokens)
-- **Binary mode**: `agentop server` sets `SERVE_STATIC=1`; server.ts serves the embedded frontend on the same port as the API
+- **Binary mode**: `agentop server` sets `SERVE_STATIC=1`; `index.ts` then binds **two ports with one shared request handler** — `PORT` (47291) is the api + mcp endpoint, `WEB_PORT` (47292) serves the web dashboard (the URL you open). Same handler → the SPA on 47292 makes same-origin `/api/*` calls that resolve locally, so 91 stays api+mcp and 92 is the dashboard. The startup log lists `web` (92) above `api` (91)
+- **Machine in Docker**: `docker-compose.machine.yml` (repo root) runs a solo/member machine in a container — reuses the central image (minus Mongo/central mode), mounts the host harness dirs read-only + `~/.agentistics` read-write, host networking. Offered as the `docker` option in `agentop start`. Run the machine in Docker **or** natively, never both
 - **`packages/server/server/embedded-dist.generated.ts`** is in `.gitignore` — auto-generated, never commit it
 - **`packages/server/` modules** are server-only — never import them from `packages/web/src/` (Vite would try to bundle them and fail on Node/Bun APIs)
 - **`@agentistics/core`** is the shared package — import types, pricing, and formatters from there; never duplicate them inline

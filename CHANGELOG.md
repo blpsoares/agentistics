@@ -36,6 +36,7 @@ Versions follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 - A trailing slash on the member endpoint produced double-slash routes that broke ingest and presence
 - Viewing a remote member's **Claude chat on the central** returned empty — the encoded project directory wasn't sent to the member's transcript reader, which locates the file by `<encodedDir>/<sessionId>.jsonl`
+- **Transcript rendering** — huge vertical gaps between list items/paragraphs in the chat view: the message bubble mixed `white-space: pre-wrap` with react-markdown's structural newlines, so each rendered as a visible line break. Dropped pre-wrap, added `remark-breaks` (soft newlines → `<br>`, so prose line breaks survive) and compact list margins
 - The **Live** tab is now hidden in the central's Settings (a central is real-time via SSE-on-ingest, so there's nothing to toggle)
 - WebSocket drop is now authoritative for offline detection (killing the app marks a member offline within the drop grace, no longer waiting on heartbeat timeout)
 - The install prompt no longer appears on a central, and its dismissal now persists server-side; token copy is robust over plain http
