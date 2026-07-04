@@ -1,17 +1,21 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react'
 import {
   X, GripVertical, RotateCcw, Save, Volume2, VolumeX, Zap, Bot,
-  Globe, Monitor, Download, SlidersHorizontal, Activity, Code2,
+  Globe, Monitor, Download, SlidersHorizontal, Activity,
   Archive, Check, HardDrive, FolderClock, ExternalLink, DatabaseZap,
-  Cpu, Copy, CheckCheck, AlertCircle, CircleDot,
+  Cpu, Copy, CheckCheck, AlertCircle, CircleDot, Users, Database,
 } from 'lucide-react'
-import type { Lang, Theme } from '@agentistics/core'
+import type { Lang, Theme, HarnessId } from '@agentistics/core'
+import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
+import { HarnessInfoPanel } from './HarnessInfoPanel'
 import type { ArchiveMode } from './ArchiveConsentModal'
 import { CHAT_MODELS, type ChatModelId, DEFAULT_CHAT_MODEL } from '../lib/chatModels'
 import { LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from '../hooks/useData'
 import { CHAT_SOUNDS, DEFAULT_CHAT_SOUND_ID, findChatSound } from '../lib/chatSounds'
 import { useChatHarnesses, type HarnessChatStatus } from '../hooks/useChatHarnesses'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { TeamSettings, type TeamConfig } from './TeamSettings'
+import { DeployCentral } from './DeployCentral'
 
 type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
 
@@ -25,14 +29,6 @@ export interface PrefsDraft {
   chatSoundEnabled: boolean
   chatSoundId: string
 }
-
-interface ConfigField { key: string; default: string; description: string }
-interface ConfigResponse { config: Record<string, string>; backup: Record<string, string> | null; active: Record<string, string> }
-
-const CONFIG_FIELDS: ConfigField[] = [
-  { key: 'PORT',      default: '47291', description: 'API server port' },
-  { key: 'VITE_PORT', default: '47292', description: 'Vite dev server port' },
-]
 
 const CARD_LABELS: Record<string, { en: string; pt: string }> = {
   messages:         { en: 'Messages',        pt: 'Mensagens' },
@@ -60,7 +56,7 @@ const BADGE_COLORS: Record<string, string> = {
   Powerful: 'var(--accent-purple)',
 }
 
-export type SettingsTab = 'preferences' | 'sessions' | 'live' | 'install' | 'environment' | 'harnesses'
+export type SettingsTab = 'preferences' | 'sessions' | 'live' | 'install' | 'harnesses' | 'datasources' | 'team'
 
 interface Props {
   initial: PrefsDraft
@@ -78,6 +74,8 @@ interface Props {
   highlightUpdates: boolean
   setHighlightUpdates: (v: boolean) => void
   defaultTab?: SettingsTab
+  /** Harnesses present in the data — drives the "Data & sources" tab content. */
+  harnesses?: HarnessId[]
 }
 
 // ── Shared primitives ──────────────────────────────────────────────────────
@@ -369,11 +367,12 @@ function PreferencesTab({ draft, set, pt, previewSound }: {
 
 // ── Tab: Install ──────────────────────────────────────────────────────────
 
-function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose }: {
+function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose, central }: {
   pt: boolean
   pwaPrompt?: PwaPrompt | null
   onPwaInstalled?: () => void
   onClose: () => void
+  central: boolean | null
 }) {
   // iOS Safari has no beforeinstallprompt — install is always Share → "Add to Home Screen".
   const isIOS = /ipad|iphone|ipod/i.test(navigator.userAgent)
@@ -557,6 +556,20 @@ function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose }: {
           ? 'O App Web é mais rápido de instalar e funciona em qualquer plataforma. O App Desktop oferece integração nativa no Windows com ícone na barra de tarefas.'
           : 'The Web App is faster to install and works on any platform. The Desktop App offers native Windows integration with a taskbar icon.'}
       </div>
+
+      {central === true && (
+        <>
+          {/* Deploy a team central — only shown on the central instance */}
+          <div style={{ height: 1, background: 'var(--border)', margin: '4px 0 4px' }} />
+          <div style={{
+            fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)',
+            letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 10,
+          }}>
+            {pt ? 'Para equipes' : 'For teams'}
+          </div>
+          <DeployCentral pt={pt} />
+        </>
+      )}
     </div>
   )
 }
@@ -643,189 +656,6 @@ function LiveTab({
       >
         <Toggle on={highlightUpdates} onToggle={() => setHighlightUpdates(!highlightUpdates)} />
       </PrefRow>
-    </>
-  )
-}
-
-// ── Tab: Environment ──────────────────────────────────────────────────────
-
-function EnvironmentTab({ pt }: { pt: boolean }) {
-  const [configData, setConfigData] = useState<ConfigResponse | null>(null)
-  const [draft, setDraft] = useState<Record<string, string>>({})
-  const [saving, setSaving] = useState(false)
-  const [savedMsg, setSavedMsg] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const loadConfig = useCallback(async () => {
-    try {
-      const res = await fetch('/api/config')
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = (await res.json()) as ConfigResponse
-      setConfigData(data); setDraft({ ...data.config })
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)) }
-  }, [])
-
-  useEffect(() => { void loadConfig() }, [loadConfig])
-
-  const handleSave = async () => {
-    setSaving(true); setError(null)
-    try {
-      const res = await fetch('/api/config', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ values: draft }),
-      })
-      if (!res.ok) { const b = (await res.json()) as { error?: string }; throw new Error(b.error ?? `HTTP ${res.status}`) }
-      const updated = (await res.json()) as { ok: boolean; config: Record<string, string> }
-      setConfigData(prev => prev ? { ...prev, config: updated.config, backup: prev.config } : null)
-      setDraft({ ...updated.config }); setSavedMsg(true); setTimeout(() => setSavedMsg(false), 3000)
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)) }
-    finally { setSaving(false) }
-  }
-
-  const handleRestore = async () => {
-    setError(null)
-    try {
-      const res = await fetch('/api/config/restore', { method: 'POST' })
-      if (!res.ok) { const b = (await res.json()) as { error?: string }; throw new Error(b.error ?? `HTTP ${res.status}`) }
-      const result = (await res.json()) as { ok: boolean; config: Record<string, string> }
-      if (result.ok) await loadConfig()
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)) }
-  }
-
-  const hasBackup = configData?.backup !== null && configData?.backup !== undefined
-  const backupSummary = hasBackup && configData?.backup
-    ? CONFIG_FIELDS.map(f => `${f.key}=${configData.backup?.[f.key] ?? f.default}`).join(', ')
-    : ''
-
-  const isTauri = typeof window !== 'undefined' &&
-    ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
-  const changeSource = async () => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const invoke = (window as any).__TAURI__?.core?.invoke
-      if (invoke) await invoke('change_source')
-    } catch { /* ignore */ }
-  }
-
-  return (
-    <>
-      {isTauri && (
-        <div style={{
-          marginBottom: 20, padding: '12px 14px', borderRadius: 8,
-          border: '1px solid var(--border)', background: 'var(--bg-elevated)',
-        }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>
-            {pt ? 'Fonte de dados (Windows / WSL)' : 'Data source (Windows / WSL)'}
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 10, lineHeight: 1.5 }}>
-            {pt
-              ? 'Escolha de qual ~/.claude ler. Os harnesses Codex/Gemini/Copilot são lidos da mesma pasta. Trocar reinicia o app e mostra o seletor de fontes.'
-              : 'Choose which ~/.claude to read from. Codex/Gemini/Copilot are read from the same folder. Switching restarts the app and shows the source picker.'}
-          </div>
-          <button
-            onClick={changeSource}
-            style={{
-              height: 32, padding: '0 14px', borderRadius: 8, cursor: 'pointer',
-              border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)',
-              color: 'var(--anthropic-orange)', fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
-            }}
-          >
-            {pt ? 'Trocar fonte…' : 'Change source…'}
-          </button>
-        </div>
-      )}
-
-      <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 20, lineHeight: 1.6 }}>
-        {pt
-          ? 'Alterações entram em vigor após reiniciar o servidor.'
-          : 'Changes take effect after restarting the server.'}
-      </div>
-
-      {error && (
-        <div style={{
-          padding: '8px 12px', background: 'rgba(239,68,68,0.1)',
-          border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8,
-          fontSize: 12, color: '#ef4444', marginBottom: 16,
-        }}>
-          {error}
-        </div>
-      )}
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 20 }}>
-        {CONFIG_FIELDS.map(field => {
-          const fileValue = configData?.config[field.key] ?? field.default
-          const activeValue = configData?.active[field.key] ?? field.default
-          const restartNeeded = fileValue !== activeValue
-          const currentDraft = draft[field.key] ?? field.default
-          return (
-            <div key={field.key}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{field.key}</span>
-                {restartNeeded && (
-                  <span title={`Running: ${activeValue} — file has: ${fileValue}`}
-                    style={{ width: 7, height: 7, borderRadius: '50%', background: '#f97316', flexShrink: 0, display: 'inline-block' }} />
-                )}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 6 }}>
-                {field.description}
-                {restartNeeded && <span style={{ color: '#f97316', marginLeft: 6 }}>(running: {activeValue})</span>}
-              </div>
-              <input
-                type="text" value={currentDraft}
-                onChange={e => setDraft(prev => ({ ...prev, [field.key]: e.target.value }))}
-                style={{
-                  width: '100%', boxSizing: 'border-box', padding: '7px 10px',
-                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                  borderRadius: 7, fontSize: 13, fontFamily: 'monospace',
-                  color: 'var(--text-primary)', outline: 'none',
-                }}
-                onFocus={e => { e.currentTarget.style.borderColor = 'var(--anthropic-orange)' }}
-                onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
-              />
-            </div>
-          )
-        })}
-      </div>
-
-      {savedMsg && (
-        <div style={{ fontSize: 12, color: 'var(--anthropic-orange)', marginBottom: 16, textAlign: 'center', fontWeight: 500 }}>
-          {pt ? 'Salvo — reinicie para aplicar' : 'Saved — restart to apply'}
-        </div>
-      )}
-
-      <div style={{ height: 1, background: 'var(--border)', marginBottom: 16 }} />
-
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        <button onClick={handleRestore} disabled={!hasBackup} title={hasBackup ? `Restore: ${backupSummary}` : 'No backup available'}
-          style={{
-            padding: '6px 12px', borderRadius: 7, border: '1px solid var(--border)',
-            background: 'transparent', color: hasBackup ? 'var(--text-secondary)' : 'var(--text-tertiary)',
-            fontSize: 12, cursor: hasBackup ? 'pointer' : 'default', opacity: hasBackup ? 1 : 0.45,
-            fontFamily: 'inherit', transition: 'all 0.15s',
-          }}
-          onMouseEnter={e => { if (hasBackup) e.currentTarget.style.color = 'var(--text-primary)' }}
-          onMouseLeave={e => { if (hasBackup) e.currentTarget.style.color = 'var(--text-secondary)' }}
-        >
-          {pt ? 'Restaurar backup' : 'Restore backup'}
-        </button>
-        <button onClick={handleSave} disabled={saving}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '6px 16px', borderRadius: 7, border: '1px solid var(--anthropic-orange)60',
-            background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
-            fontSize: 12, fontWeight: 600, cursor: saving ? 'default' : 'pointer',
-            opacity: saving ? 0.6 : 1, fontFamily: 'inherit', transition: 'all 0.15s',
-          }}
-          onMouseEnter={e => { if (!saving) e.currentTarget.style.opacity = '0.8' }}
-          onMouseLeave={e => { if (!saving) e.currentTarget.style.opacity = '1' }}
-        >
-          <Save size={12} />{saving ? (pt ? 'Salvando…' : 'Saving…') : (pt ? 'Salvar' : 'Save')}
-        </button>
-      </div>
-
-      {hasBackup && configData?.backup && (
-        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-tertiary)' }}>Backup: {backupSummary}</div>
-      )}
     </>
   )
 }
@@ -1130,6 +960,70 @@ function HarnessCard({ h }: { h: HarnessChatStatus }) {
   )
 }
 
+// ── Tab: Data & sources ───────────────────────────────────────────────────
+// Explains, per harness present in the data, where its metrics come from, what is
+// captured, and what is missing (and why). Replaces the old per-harness /h/:harness
+// "Data & sources" tab now that harness selection lives entirely in the filter.
+
+function DataSourcesTab({ pt, harnesses }: { pt: boolean; harnesses: HarnessId[] }) {
+  const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
+  const present = order.filter(h => harnesses.includes(h))
+  const [selected, setSelected] = useState<HarnessId>(present[0] ?? 'claude')
+
+  if (present.length === 0) {
+    return (
+      <div style={{ fontSize: 13, color: 'var(--text-tertiary)', textAlign: 'center', padding: '24px 0' }}>
+        {pt ? 'Nenhum harness com dados ainda.' : 'No harness data yet.'}
+      </div>
+    )
+  }
+
+  const active = present.includes(selected) ? selected : present[0]!
+
+  return (
+    <div>
+      <SectionHeader label={pt ? 'Dados & fontes' : 'Data & sources'} />
+      <p style={{ fontSize: 12.5, color: 'var(--text-tertiary)', lineHeight: 1.55, margin: '0 0 14px' }}>
+        {pt
+          ? 'De onde vêm as métricas de cada harness, o que é capturado e o que falta (e por quê).'
+          : 'Where each harness’s metrics come from, what is captured, and what is missing (and why).'}
+      </p>
+
+      {/* Per-harness selector — only shown when more than one harness has data */}
+      {present.length > 1 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
+          {present.map(h => {
+            const isActive = h === active
+            const color = HARNESS_COLORS[h]
+            return (
+              <button
+                key={h}
+                onClick={() => setSelected(h)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '6px 12px', borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 12, fontWeight: 600,
+                  border: `1px solid ${isActive ? color : 'var(--border)'}`,
+                  background: isActive ? `${color}1f` : 'var(--bg-elevated)',
+                  color: isActive ? color : 'var(--text-secondary)',
+                }}
+              >
+                <span style={{
+                  display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                  background: color, flexShrink: 0,
+                }} />
+                {HARNESS_LABELS[h]}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      <HarnessInfoPanel harness={active} lang={pt ? 'pt' : 'en'} />
+    </div>
+  )
+}
+
 function HarnessesTab({ pt }: { pt: boolean }) {
   const { harnesses, loading } = useChatHarnesses()
   const readyCount = harnesses.filter(h => h.ready).length
@@ -1171,15 +1065,66 @@ function HarnessesTab({ pt }: { pt: boolean }) {
   )
 }
 
+// ── Tab: Team ─────────────────────────────────────────────────────────────
+
+const DEFAULT_TEAM_CONFIG: TeamConfig = {
+  mode: 'solo',
+  endpoint: '',
+  org: 'default',
+  user: '',
+  token: '',
+}
+
+function TeamTab({ pt, central }: { pt: boolean; central: boolean | null }) {
+  const lang: 'pt' | 'en' = pt ? 'pt' : 'en'
+  const [team, setTeam] = useState<TeamConfig>(DEFAULT_TEAM_CONFIG)
+  const [loadErr, setLoadErr] = useState<string | null>(null)
+
+  // Load team preferences on mount
+  useEffect(() => {
+    fetch('/api/preferences')
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((prefs: { team?: Partial<TeamConfig> }) => {
+        if (prefs.team) {
+          setTeam({ ...DEFAULT_TEAM_CONFIG, ...prefs.team })
+        }
+      })
+      .catch(err => { setLoadErr(err instanceof Error ? err.message : String(err)) })
+  }, [])
+
+  if (loadErr) {
+    return (
+      <div style={{
+        padding: '10px 14px', borderRadius: 8,
+        background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+        fontSize: 12, color: '#ef4444',
+      }}>
+        {loadErr}
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {/* TeamSettings handles saving explicitly via its Save button (member mode)
+          or its own interval control (central mode). onChange just syncs local state. */}
+      <TeamSettings team={team} onChange={setTeam} lang={lang} central={central} />
+    </div>
+  )
+}
+
 // ── Main modal ────────────────────────────────────────────────────────────
 
+// Order: general first, then Team (a primary feature — not buried at the end), then the
+// data/insight tabs, then the technical ones last.
 const TABS: { id: SettingsTab; icon: React.ReactNode; labelEn: string; labelPt: string }[] = [
   { id: 'preferences', icon: <SlidersHorizontal size={13} />, labelEn: 'Preferences', labelPt: 'Preferências' },
-  { id: 'sessions',    icon: <Archive size={13} />,           labelEn: 'Sessions',     labelPt: 'Sessões' },
+  { id: 'team',        icon: <Users size={13} />,             labelEn: 'Team',         labelPt: 'Time' },
   { id: 'live',        icon: <Activity size={13} />,          labelEn: 'Live',         labelPt: 'Live' },
-  { id: 'install',     icon: <Download size={13} />,          labelEn: 'Install',      labelPt: 'Instalar' },
+  { id: 'datasources', icon: <Database size={13} />,          labelEn: 'Data & sources', labelPt: 'Dados & fontes' },
   { id: 'harnesses',   icon: <Cpu size={13} />,               labelEn: 'Harnesses',    labelPt: 'Backends' },
-  { id: 'environment', icon: <Code2 size={13} />,             labelEn: 'Environment',  labelPt: 'Ambiente' },
+  { id: 'sessions',    icon: <Archive size={13} />,           labelEn: 'Sessions',     labelPt: 'Sessões' },
+  { id: 'install',     icon: <Download size={13} />,          labelEn: 'Install',      labelPt: 'Instalar' },
 ]
 
 export function PreferencesModal({
@@ -1187,7 +1132,7 @@ export function PreferencesModal({
   pwaPrompt, onPwaInstalled,
   liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval,
   riskyMode, setRiskyMode, highlightUpdates, setHighlightUpdates,
-  defaultTab = 'preferences',
+  defaultTab = 'preferences', harnesses = [],
 }: Props) {
   const isMobile = useIsMobile()
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab)
@@ -1200,6 +1145,7 @@ export function PreferencesModal({
     chatSoundId: initial.chatSoundId ?? DEFAULT_CHAT_SOUND_ID,
   })
   const pt = draft.lang === 'pt'
+  const [central, setCentral] = useState<boolean | null>(null)
   const previewCtxRef = useRef<AudioContext | null>(null)
 
   const previewSound = useCallback((id: string) => {
@@ -1214,6 +1160,24 @@ export function PreferencesModal({
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
   }, [onClose])
+
+  // Fetch central flag once on mount — used by Install tab to gate DeployCentral
+  useEffect(() => {
+    fetch('/api/team/session')
+      .then(r => (r.ok ? r.json() : null))
+      .then((sess: { central?: boolean } | null) => {
+        setCentral(sess?.central === true ? true : false)
+      })
+      .catch(() => { setCentral(false) })
+  }, [])
+
+  // A central has nothing "live" to toggle — member pushes already refresh its dashboards in
+  // real time via SSE-on-ingest — so the Live tab is hidden there. If it was the active tab when
+  // the central flag resolves, fall back to Preferences so the body doesn't render blank.
+  const visibleTabs = central ? TABS.filter(t => t.id !== 'live') : TABS
+  useEffect(() => {
+    if (central && activeTab === 'live') setActiveTab('preferences')
+  }, [central, activeTab])
 
   function set<K extends keyof PrefsDraft>(key: K, value: PrefsDraft[K]) {
     setDraft(d => ({ ...d, [key]: value }))
@@ -1234,7 +1198,7 @@ export function PreferencesModal({
           background: 'var(--bg-surface)',
           border: isMobile ? 'none' : '1px solid var(--border)',
           borderRadius: isMobile ? 0 : 'var(--radius-lg)',
-          width: isMobile ? '100%' : 560,
+          width: isMobile ? '100%' : 'min(840px, 94vw)',
           maxWidth: '100%',
           height: isMobile ? '100%' : 'min(680px, 90vh)',
           display: 'flex',
@@ -1261,13 +1225,13 @@ export function PreferencesModal({
             </button>
           </div>
 
-          {/* Tab bar — scrolls horizontally (desktop + mobile) so the tabs never
-              overflow the modal width; scrollbar hidden via .prefs-tabbar in css */}
+          {/* Tab bar — wraps to a second row when the tabs don't fit (the modal is
+              wide enough for all tabs on desktop), so they are never hidden behind a
+              horizontal scroll that users may not notice. */}
           <div className="prefs-tabbar" style={{
-            display: 'flex', gap: 2, borderBottom: '1px solid var(--border)', marginBottom: 0,
-            overflowX: 'auto', scrollbarWidth: 'none' as const,
+            display: 'flex', flexWrap: 'wrap', gap: 2, borderBottom: '1px solid var(--border)', marginBottom: 0,
           }}>
-            {TABS.map(tab => {
+            {visibleTabs.map(tab => {
               const active = activeTab === tab.id
               const label = pt ? tab.labelPt : tab.labelEn
               return (
@@ -1317,10 +1281,12 @@ export function PreferencesModal({
             <InstallTab
               pt={pt}
               pwaPrompt={pwaPrompt} onPwaInstalled={onPwaInstalled} onClose={onClose}
+              central={central}
             />
           )}
           {activeTab === 'harnesses' && <HarnessesTab pt={pt} />}
-          {activeTab === 'environment' && <EnvironmentTab pt={pt} />}
+          {activeTab === 'datasources' && <DataSourcesTab pt={pt} harnesses={harnesses} />}
+          {activeTab === 'team' && <TeamTab pt={pt} central={central} />}
         </div>
 
         {/* Footer — only for Preferences tab */}

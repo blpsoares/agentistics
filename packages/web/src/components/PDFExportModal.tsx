@@ -4,7 +4,7 @@ import {
 } from 'lucide-react'
 import { format, parseISO, subDays } from 'date-fns'
 import type { AppData, Filters, Lang, ModelUsage, SessionMeta } from '@agentistics/core'
-import { formatModel, formatProjectName, calcCost } from '@agentistics/core'
+import { formatModel, formatProjectName, calcCost, sessionLabel } from '@agentistics/core'
 import { useDerivedStats, blendedCostPerToken } from '../hooks/useData'
 import { HARNESS_LABELS } from '../lib/harness'
 
@@ -553,7 +553,7 @@ function MiniHighlightsSection({ sessions, c, lang }: {
       label: pt ? 'Sessão mais longa' : 'Longest session',
       value: fmtDuration(longestSession.duration_minutes ?? 0),
       badge: multiplier(longestSession.duration_minutes ?? 0, avgDuration),
-      prompt: truncate(longestSession.first_prompt, 80),
+      prompt: truncate(sessionLabel(longestSession), 80),
       project: formatProjectName(longestSession.project_path ?? ''),
       accent: '#a855f7',
     },
@@ -561,7 +561,7 @@ function MiniHighlightsSection({ sessions, c, lang }: {
       label: pt ? 'Mais tokens de entrada' : 'Most input tokens',
       value: fmtN(mostInputTokens.input_tokens ?? 0),
       badge: multiplier(mostInputTokens.input_tokens ?? 0, avgInput),
-      prompt: truncate(mostInputTokens.first_prompt, 80),
+      prompt: truncate(sessionLabel(mostInputTokens), 80),
       project: formatProjectName(mostInputTokens.project_path ?? ''),
       accent: '#3b82f6',
     },
@@ -569,7 +569,7 @@ function MiniHighlightsSection({ sessions, c, lang }: {
       label: pt ? 'Mais tokens de saída' : 'Most output tokens',
       value: fmtN(mostOutputTokens.output_tokens ?? 0),
       badge: multiplier(mostOutputTokens.output_tokens ?? 0, avgOutput),
-      prompt: truncate(mostOutputTokens.first_prompt, 80),
+      prompt: truncate(sessionLabel(mostOutputTokens), 80),
       project: formatProjectName(mostOutputTokens.project_path ?? ''),
       accent: '#8b5cf6',
     },
@@ -577,7 +577,7 @@ function MiniHighlightsSection({ sessions, c, lang }: {
       label: pt ? 'Mais mensagens' : 'Most messages',
       value: fmtN((mostMessages.user_message_count ?? 0) + (mostMessages.assistant_message_count ?? 0)),
       badge: multiplier((mostMessages.user_message_count ?? 0) + (mostMessages.assistant_message_count ?? 0), avgMessages),
-      prompt: truncate(mostMessages.first_prompt, 80),
+      prompt: truncate(sessionLabel(mostMessages), 80),
       project: formatProjectName(mostMessages.project_path ?? ''),
       accent: '#e8690b',
     },
@@ -585,7 +585,7 @@ function MiniHighlightsSection({ sessions, c, lang }: {
       label: pt ? 'Mais chamadas de ferramentas' : 'Most tool calls',
       value: fmtN(Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0)),
       badge: multiplier(Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0), avgTools),
-      prompt: truncate(mostToolCalls.first_prompt, 80),
+      prompt: truncate(sessionLabel(mostToolCalls), 80),
       project: formatProjectName(mostToolCalls.project_path ?? ''),
       accent: '#10b981',
     },

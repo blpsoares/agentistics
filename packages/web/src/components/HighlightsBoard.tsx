@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { Clock, Download, Upload, MessageSquare, Wrench, FolderOpen } from 'lucide-react'
 import type { SessionMeta, Project, HarnessId } from '@agentistics/core'
-import { formatProjectName } from '@agentistics/core'
+import { formatProjectName, sessionLabel } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { NAtag } from './NAtag'
 import { capable } from '../lib/harness'
@@ -160,7 +160,7 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
           accent="#a855f7"
           value={fmtDuration(longestSession.duration_minutes ?? 0)}
           comparison={multiplier(longestSession.duration_minutes ?? 0, avgDuration)}
-          prompt={truncate(longestSession.first_prompt, 90)}
+          prompt={truncate(sessionLabel(longestSession), 90)}
           project={formatProjectName(longestSession.project_path ?? '')}
         />
 
@@ -170,7 +170,7 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
           accent="#3b82f6"
           value={fmt(mostInputTokens.input_tokens ?? 0)}
           comparison={multiplier(mostInputTokens.input_tokens ?? 0, avgInput)}
-          prompt={truncate(mostInputTokens.first_prompt, 90)}
+          prompt={truncate(sessionLabel(mostInputTokens), 90)}
           project={formatProjectName(mostInputTokens.project_path ?? '')}
         />
 
@@ -180,7 +180,7 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
           accent="#8b5cf6"
           value={fmt(mostOutputTokens.output_tokens ?? 0)}
           comparison={multiplier(mostOutputTokens.output_tokens ?? 0, avgOutput)}
-          prompt={truncate(mostOutputTokens.first_prompt, 90)}
+          prompt={truncate(sessionLabel(mostOutputTokens), 90)}
           project={formatProjectName(mostOutputTokens.project_path ?? '')}
         />
 
@@ -193,7 +193,7 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
             (mostMessages.user_message_count ?? 0) + (mostMessages.assistant_message_count ?? 0),
             avgMessages
           )}
-          prompt={truncate(mostMessages.first_prompt, 90)}
+          prompt={truncate(sessionLabel(mostMessages), 90)}
           project={formatProjectName(mostMessages.project_path ?? '')}
         />
 
@@ -209,7 +209,7 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
               Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0),
               avgTools
             )}
-            prompt={truncate(mostToolCalls.first_prompt, 90)}
+            prompt={truncate(sessionLabel(mostToolCalls), 90)}
             project={formatProjectName(mostToolCalls.project_path ?? '')}
             style={topProjectEntry ? {} : lastStyle}
           />

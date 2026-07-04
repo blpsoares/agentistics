@@ -4,11 +4,20 @@ import { loadEnvConfig } from './env-config'
 loadEnvConfig()
 
 export const HOME_DIR = process.env.HOME ?? process.env.USERPROFILE ?? ''
-export const CLAUDE_DIR = process.env.CLAUDE_DIR ?? join(HOME_DIR, '.claude')
+// A "self-contributing" central (TEAM_CENTRAL + AGENTISTICS_CENTRAL_USER set) reads the
+// host's ~/.claude that docker-compose mounts read-only at /host-claude, so the machine
+// running the central also shows its own usage. Explicit CLAUDE_DIR always wins.
+const _selfContributingCentral =
+  process.env.AGENTISTICS_TEAM_CENTRAL === '1' && !!(process.env.AGENTISTICS_CENTRAL_USER || '')
+export const CLAUDE_DIR = process.env.CLAUDE_DIR ?? (_selfContributingCentral ? '/host-claude' : join(HOME_DIR, '.claude'))
 export const PROJECTS_DIR = join(CLAUDE_DIR, 'projects')
 export const SESSION_META_DIR = join(CLAUDE_DIR, 'usage-data', 'session-meta')
 export const STATS_CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json')
 export const PORT = parseInt(process.env.PORT ?? '47291', 10)
+// The web dashboard is served on WEB_PORT (PORT + 1 by default → 47292). In binary mode the
+// server binds BOTH: PORT (47291) is always the api + mcp endpoint, WEB_PORT (47292) is what you
+// open. They share one request handler, so the SPA's same-origin `/api/*` calls just work.
+export const WEB_PORT = parseInt(process.env.WEB_PORT ?? String(PORT + 1), 10)
 
 // ---------------------------------------------------------------------------
 // Archive mirror — Claude Code silently deletes session transcripts older than
@@ -25,19 +34,68 @@ export const ARCHIVE_STATS_DIR = join(ARCHIVE_DIR, 'stats-cache')
 export const CONSOLIDATED_DIR = join(HOME_DIR, '.agentistics', 'sessions')
 
 // ---------------------------------------------------------------------------
+// Team mode (Phase 1: folder union). When AGENTISTICS_TEAM=1 the server unions
+// per-user consolidated SessionMeta JSONs from TEAM_DIR/<user>/sessions/*.json
+// and tags each session with its owning user. Off by default (Solo behavior).
+// ---------------------------------------------------------------------------
+export const TEAM_MODE = process.env.AGENTISTICS_TEAM === '1'
+export const TEAM_DIR = process.env.AGENTISTICS_TEAM_DIR ?? join(HOME_DIR, '.agentistics', 'team')
+
+// ---------------------------------------------------------------------------
+// Phase 2 — central aggregator. When AGENTISTICS_TEAM_CENTRAL=1 the instance
+// sources team sessions from MongoDB (not the folder) and accepts pushed
+// sessions on POST /api/team/ingest. MONGO_URL/MONGO_DB point at the store;
+// TEAM_ORG namespaces docs; TEAM_INGEST_TOKEN (optional) gates ingestion.
+// ---------------------------------------------------------------------------
+export const TEAM_CENTRAL = process.env.AGENTISTICS_TEAM_CENTRAL === '1'
+export const MONGO_URL = process.env.MONGO_URL ?? 'mongodb://localhost:27017'
+export const MONGO_DB = process.env.MONGO_DB ?? 'agentistics'
+export const TEAM_ORG = process.env.AGENTISTICS_TEAM_ORG ?? 'default'
+export const TEAM_INGEST_TOKEN = process.env.AGENTISTICS_TEAM_INGEST_TOKEN || undefined
+// Self-contribution: when set on a central, the central machine's own local sessions
+// (read from the mounted host ~/.claude) are attributed to this user, so one instance
+// can be both the central AND a contributing member. Unset = isolated central.
+export const CENTRAL_USER = process.env.AGENTISTICS_CENTRAL_USER || undefined
+
+// ---------------------------------------------------------------------------
+// Phase 3 — auth gate. When AGENTISTICS_TEAM_PASSWORD is set, the central
+// dashboard requires a valid session cookie to access all /api/* routes except
+// the public allowlist. TEAM_SESSION_SECRET defaults to the password itself.
+// TEAM_TLS=1 adds the Secure flag to the session cookie.
+// ---------------------------------------------------------------------------
+export const TEAM_PASSWORD = process.env.AGENTISTICS_TEAM_PASSWORD || undefined
+// SECURITY NOTE: When AGENTISTICS_TEAM_SESSION_SECRET is unset, it falls back to
+// TEAM_PASSWORD. This means a password leak also enables session-cookie forgery,
+// since the HMAC key equals the password. Operators should always set a separate
+// AGENTISTICS_TEAM_SESSION_SECRET (e.g. `openssl rand -hex 32`) to isolate the two
+// secrets, especially when the password is shared with team members.
+export const TEAM_SESSION_SECRET = process.env.AGENTISTICS_TEAM_SESSION_SECRET || TEAM_PASSWORD || ''
+export const TEAM_TLS = process.env.AGENTISTICS_TEAM_TLS === '1'
+
+// ---------------------------------------------------------------------------
+// Team uploader — tracks which sessions have already been pushed to the central.
+// Override with AGENTISTICS_TEAM_SENT_FILE.
+// ---------------------------------------------------------------------------
+export const TEAM_SENT_FILE = process.env.AGENTISTICS_TEAM_SENT_FILE ?? join(HOME_DIR, '.agentistics', 'team-sent.json')
+// Records the central "sync signature" (endpoint+token+instanceId) the sent-state was built
+// against. When it changes — new token, new central, or a wiped central DB — the uploader
+// clears the sent-state and re-pushes everything automatically.
+export const TEAM_SYNC_FILE = process.env.AGENTISTICS_TEAM_SYNC_FILE ?? join(HOME_DIR, '.agentistics', 'team-sync.json')
+
+// ---------------------------------------------------------------------------
 // Other harnesses (Phase 1: Codex). Each adapter checks its own root.
 // Override with CODEX_DIR; disable with AGENTISTICS_HARNESS_CODEX=0.
 // ---------------------------------------------------------------------------
-export const CODEX_DIR = process.env.CODEX_DIR ?? join(HOME_DIR, '.codex')
+export const CODEX_DIR = process.env.CODEX_DIR ?? (_selfContributingCentral ? '/host-codex' : join(HOME_DIR, '.codex'))
 export const CODEX_SESSIONS_DIR = join(CODEX_DIR, 'sessions')
 
 // ---------------------------------------------------------------------------
 // Gemini CLI harness. Override with GEMINI_DIR; disable with AGENTISTICS_HARNESS_GEMINI=0.
 // ---------------------------------------------------------------------------
-export const GEMINI_DIR = process.env.GEMINI_DIR ?? join(HOME_DIR, '.gemini')
+export const GEMINI_DIR = process.env.GEMINI_DIR ?? (_selfContributingCentral ? '/host-gemini' : join(HOME_DIR, '.gemini'))
 
 // ---------------------------------------------------------------------------
 // GitHub Copilot CLI harness. Override with COPILOT_DIR; disable with
 // AGENTISTICS_HARNESS_COPILOT=0.
 // ---------------------------------------------------------------------------
-export const COPILOT_DIR = process.env.COPILOT_DIR ?? join(HOME_DIR, '.copilot')
+export const COPILOT_DIR = process.env.COPILOT_DIR ?? (_selfContributingCentral ? '/host-copilot' : join(HOME_DIR, '.copilot'))

@@ -1,9 +1,13 @@
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import type { Filters, DateRange, Project, Lang, HarnessId } from '@agentistics/core'
 import { formatModel, formatProjectName } from '@agentistics/core'
-import { Layers, Cpu, RotateCcw, ChevronDown, X, CalendarDays, Check } from 'lucide-react'
+import { Layers, Cpu, RotateCcw, ChevronDown, X, CalendarDays, Check, Users } from 'lucide-react'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { ProjectsModal } from './ProjectsModal'
+import { UsersFilter } from './UsersFilter'
+import { HarnessFilter } from './HarnessFilter'
+import { PresenceFilter } from './PresenceFilter'
+import type { MemberPresence } from '@agentistics/core'
 import { DatePicker } from './DatePicker'
 import { format } from 'date-fns'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -18,6 +22,11 @@ interface Props {
    *  unified view; a single group when a harness filter is active. */
   modelGroups?: { harness: HarnessId; models: string[] }[]
   modelsInProject?: Set<string> | null
+  users: string[]
+  /** Available harnesses in the data — drives visibility (show when length > 1). */
+  harnesses?: HarnessId[]
+  /** Team/central: live presence per member — drives the online/offline filter pill. */
+  presence?: Record<string, MemberPresence>
   lang: Lang
   compact?: boolean
 }
@@ -44,7 +53,7 @@ const CTL: React.CSSProperties = {
   alignItems: 'center',
 }
 
-export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, lang, compact }: Props) {
+export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
@@ -65,9 +74,11 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
   const isDefault = filters.dateRange === 'all'
     && !filters.customStart && !filters.customEnd
     && filters.projects.length === 0 && !hasModelFilter
+    && !(filters.users?.length)
+    && !(filters.harnesses?.length)
 
   const reset = () => onChange({
-    dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [],
+    dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [], users: [], harnesses: [],
   })
 
   const hasProjects = filters.projects.length > 0
@@ -220,6 +231,34 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
 
         {/* Divider */}
         {!compact && <div style={{ width: 1, height: 20, background: 'var(--border)', flexShrink: 0 }} />}
+
+        {users.length > 0 && (
+          <UsersFilter
+            users={users}
+            selected={filters.users ?? []}
+            onChange={u => onChange({ ...filters, users: u })}
+            lang={lang}
+          />
+        )}
+
+        {harnesses && harnesses.length > 1 && (
+          <HarnessFilter
+            harnesses={harnesses}
+            selected={filters.harnesses ?? []}
+            onChange={h => onChange({ ...filters, harnesses: h })}
+            lang={lang}
+          />
+        )}
+
+        {presence && Object.keys(presence).length > 0 && (
+          <PresenceFilter
+            value={filters.presence}
+            onChange={p => onChange({ ...filters, presence: p })}
+            onlineCount={Object.values(presence).filter(p => p.online).length}
+            offlineCount={Object.values(presence).filter(p => !p.online).length}
+            lang={lang}
+          />
+        )}
 
         {/* Projects */}
         <button
@@ -408,6 +447,40 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         )}
       </div>
 
+      {/* Selected member chips — removable, so it's always clear WHO is filtered */}
+      {(filters.users?.length ?? 0) > 0 && (
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', padding: compact ? '0 12px 8px' : '0 0 4px' }}>
+          {filters.users!.map(u => (
+            <span
+              key={u}
+              title={u}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                fontSize: 11, fontWeight: 600,
+                color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)',
+                border: '1px solid rgba(217,119,6,0.3)', borderRadius: 5,
+                padding: '2px 6px 2px 8px', maxWidth: 220, whiteSpace: 'nowrap',
+                overflow: 'hidden', textOverflow: 'ellipsis',
+              }}
+            >
+              <Users size={10} style={{ flexShrink: 0 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{u}</span>
+              <button
+                onClick={() => onChange({ ...filters, users: filters.users!.filter(x => x !== u) })}
+                title={lang === 'pt' ? 'Remover membro' : 'Remove member'}
+                style={{
+                  background: 'transparent', border: 'none', cursor: 'pointer', padding: 0,
+                  display: 'flex', alignItems: 'center', color: 'var(--anthropic-orange)',
+                  opacity: 0.7, flexShrink: 0,
+                }}
+              >
+                <X size={10} strokeWidth={2.5} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Selected project chips */}
       {hasProjects && (
         <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', padding: compact ? '0 12px 8px' : '0 0 4px' }}>
@@ -453,6 +526,56 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               </button>
             </span>
           ))}
+        </div>
+      )}
+
+      {/* Selected harness chips — each in its harness color, removable (mirrors project chips) */}
+      {(filters.harnesses?.length ?? 0) > 0 && (
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', padding: compact ? '0 12px 8px' : '0 0 4px' }}>
+          {filters.harnesses!.map(h => {
+            const color = HARNESS_COLORS[h]
+            return (
+              <span
+                key={h}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color,
+                  background: `${color}1f`,
+                  border: `1px solid ${color}55`,
+                  borderRadius: 5,
+                  padding: '2px 6px 2px 8px',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <span style={{
+                  display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+                  background: color, flexShrink: 0,
+                }} />
+                {HARNESS_LABELS[h]}
+                <button
+                  onClick={() => onChange({ ...filters, harnesses: filters.harnesses!.filter(x => x !== h) })}
+                  title={lang === 'pt' ? 'Remover harness' : 'Remove harness'}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    color,
+                    opacity: 0.7,
+                    flexShrink: 0,
+                  }}
+                >
+                  <X size={10} strokeWidth={2.5} />
+                </button>
+              </span>
+            )
+          })}
         </div>
       )}
 

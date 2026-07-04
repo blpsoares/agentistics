@@ -76,13 +76,13 @@ Download the latest `.msi` or `.exe` (NSIS) from the [Releases page](https://git
 ### Option 2 — Pre-built binary (Linux / WSL)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/blpsoares/agentistics/main/install.sh | bash
+curl -fsSL https://agentop.openvibes.tech/cli | bash
 ```
 
 System-wide install:
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/blpsoares/agentistics/main/install.sh | bash
+sudo curl -fsSL https://agentop.openvibes.tech/cli | bash
 ```
 
 > If `~/.local/bin` is not in your `$PATH`, the installer will print the command to add it. Binaries are also on the [Releases page](https://github.com/blpsoares/agentistics/releases/latest).
@@ -90,16 +90,29 @@ sudo curl -fsSL https://raw.githubusercontent.com/blpsoares/agentistics/main/ins
 **Start:**
 
 ```bash
-agentop server        # Dashboard + API + Nay + watcher — everything in one command
+agentop start         # interactive launcher — pick what to run and how (recommended)
+agentop server        # non-interactive: web + API + Nay + watcher in one command
 ```
 
-Open **http://localhost:47291** in your browser.
+`agentop start` is a re-runnable, arrow-key control panel (English by default, pt-BR toggle) that
+shows what's configured and running, then lets you start **agentistics** (this machine) or
+**agentistics central** (the aggregator), connect to a central, or stop services. Open the web
+dashboard at **http://localhost:47292** (the api + MCP stay on **47291**).
 
 | Command | What it starts |
 |---------|---------------|
-| `agentop server` | API + embedded frontend + Nay + OTel daemon |
+| `agentop start` | Interactive launcher — pick mode + how to run (foreground / background / Docker / boot) |
+| `agentop setup` | Interactive first-run wizard (solo / central / member) |
+| `agentop server` | web (47292) + api + MCP (47291) + Nay + OTel daemon (non-interactive) |
+| `agentop restart …` | Restart a running mode so it picks up new code / config |
 | `agentop tui` | Terminal dashboard (no browser needed) |
 | `agentop watch` | OTel daemon only (headless) |
+| `agentop central …` | Manage the Team Mode central (Docker) |
+| `agentop member …` | Join / leave / inspect a Team Mode central |
+| `agentop autostart …` | Start a mode with the system (systemd user service) |
+| `agentop upgrade` | Upgrade `agentop` to the latest release |
+
+> Full command reference: [docs/cli.md](docs/cli.md).
 
 ---
 
@@ -177,6 +190,75 @@ Once registered, you can use these tools from **any Claude Code session** — no
 
 ---
 
+## Team Mode
+
+Run agentistics for a whole team. A **central** aggregates coding-assistant usage
+metrics from many machines (**members**); each member pushes only **computed
+metrics** — never chat content or raw transcripts. Every machine has a role:
+
+- **solo** — local only, nothing leaves the machine (the default)
+- **central** — the aggregator, runs as a Docker service on port **48080**
+- **member** — pushes its metrics to a central
+
+The central dashboard adds a **Team Manager** (Settings → Team) to mint / rotate /
+revoke / rename member tokens, live **presence** (WebSocket-authoritative
+online/offline + latency), and filters by member, harness, project, and presence.
+Members self-heal: if the central is wiped, the token is rotated, or the endpoint
+changes, a member detects it and re-pushes its full history automatically — no
+manual reset. A revoked machine resets itself back to solo.
+
+**Quickstart — host a central** (from an agentistics checkout):
+
+```bash
+agentop central init    # generate central.env (interactive, openssl secrets)
+agentop central up      # build + start the Docker stack → http://localhost:48080
+# or, without the CLI: bun run up:central
+```
+
+**Quickstart — join as a member:**
+
+```bash
+agentop member connect --endpoint http://<central-host>:48080 --token <token>
+agentop member status   # verify mode / endpoint / last sync
+```
+
+Or just run `agentop setup` and pick a role — the wizard wires up the rest.
+
+> **Security:** tokens are stored only as sha256 hashes, the session secret is
+> kept separate from the dashboard password, Mongo is never published to the host,
+> and `BIND_IP` can restrict the central to a private tailnet (e.g. Tailscale).
+
+→ **CLI reference:** [docs/cli.md](docs/cli.md) · **Deployment:** [docs/DEPLOY.md](docs/DEPLOY.md)
+
+---
+
+## CLI — `agentop`
+
+`agentop` is the single binary behind everything: the dashboard, the terminal TUI,
+the OTel daemon, Team Mode, autostart, and updates.
+
+```bash
+agentop setup                                              # first-run wizard
+agentop server --port 4000                                 # dashboard on a custom port
+agentop central up                                         # host a Team Mode central
+agentop autostart server enable                            # start the dashboard at boot
+```
+
+| Command | Purpose |
+|---------|---------|
+| `setup` | Interactive first-run wizard (solo / central / member) |
+| `server` | Dashboard + api + Nay + OTel daemon (port 47291) |
+| `tui` | Live terminal dashboard |
+| `watch` | OTel metrics daemon only |
+| `central` | Manage the Team Mode central (Docker) |
+| `member` | Join / leave / inspect a central |
+| `autostart` | Start a mode with the system (systemd user service) |
+| `upgrade` · `check-update` | Update `agentop` / print an update notice |
+
+→ **Full reference:** [docs/cli.md](docs/cli.md)
+
+---
+
 ## Dashboard features
 
 ### Pages
@@ -242,6 +324,8 @@ VITE_PORT=47292  # Vite dev server (dev mode only)
 
 | Doc | Contents |
 |-----|----------|
+| [docs/cli.md](docs/cli.md) | `agentop` CLI — every command, flags, examples, autostart, updates |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | Team Mode central — Docker deployment, `central.sh`, env vars |
 | [docs/nay.md](docs/nay.md) | Nay AI chat — how it works, quota warning, behavior rules |
 | [docs/mcp.md](docs/mcp.md) | MCP server — tool reference, parameters, usage from Claude Code |
 | [docs/data-sources.md](docs/data-sources.md) | Data sources, JSONL parsing, SessionMeta structure |

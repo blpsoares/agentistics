@@ -1,0 +1,38 @@
+# Run THIS machine (solo or member) in Docker.
+#
+# Reuses the same image as the central (see Dockerfile), but without Mongo and without central
+# mode: it reads the host's harness dirs read-only and serves the dashboard. Configure the machine
+# on the HOST first (`agentop member connect …` writes ~/.agentistics), then bring the container up —
+# it mounts that same ~/.agentistics, so it inherits the endpoint/token.
+#
+#   agentop start           # pick "docker" in the launcher, or:
+#   docker compose -f docker-compose.machine.yml up -d --build
+#
+# Run the machine in Docker OR natively — not both at once (two members with the same token would
+# push the same data and flap presence).
+services:
+  machine:
+    build: .
+    image: agentistics-machine
+    environment:
+      # Read the HOST harness dirs mounted below, never the container's own home.
+      CLAUDE_DIR: /host-claude
+      CODEX_DIR: /host-codex
+      GEMINI_DIR: /host-gemini
+      COPILOT_DIR: /host-copilot
+      # This is a machine, not a central — override the image's central-mode default.
+      AGENTISTICS_TEAM_CENTRAL: ""
+      # PORT (api + mcp) 47291; the server also binds 47292 for the web dashboard.
+      PORT: "47291"
+      SERVE_STATIC: "1"
+    volumes:
+      - ${HOME}/.claude:/host-claude:ro
+      - ${HOME}/.codex:/host-codex:ro
+      - ${HOME}/.gemini:/host-gemini:ro
+      - ${HOME}/.copilot:/host-copilot:ro
+      # Read-write: preferences (team endpoint/token), the consolidate/archive store, sync state.
+      - ${HOME}/.agentistics:/root/.agentistics
+    # Host networking so the member reaches the central (localhost or a tailnet address) and opens
+    # the reverse-channel WebSocket, and so the web (47292) + api (47291) land directly on the host.
+    network_mode: host
+    restart: unless-stopped

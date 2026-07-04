@@ -15,7 +15,7 @@ import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
 import type { Filters, HarnessId, HealthIssue } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { formatProjectName, setHomeDir, MODEL_PRICING } from '@agentistics/core'
+import { formatProjectName, setHomeDir, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers } from '@agentistics/core'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
 import { ActivityHeatmap } from './components/ActivityHeatmap'
@@ -24,6 +24,10 @@ import { HourChart } from './components/HourChart'
 import { ModelBreakdown } from './components/ModelBreakdown'
 import { ProjectsList } from './components/ProjectsList'
 import { FiltersBar } from './components/FiltersBar'
+import { NotificationToasts } from './components/NotificationToasts'
+import { NotificationBell } from './components/NotificationBell'
+import { useNotificationStream } from './hooks/useNotificationStream'
+import { pushNotification } from './lib/notifications'
 import { RecentSessions } from './components/RecentSessions'
 import { HighlightsBoard } from './components/HighlightsBoard'
 import { InfoModal } from './components/InfoModal'
@@ -40,9 +44,21 @@ import { TtyChat } from './components/TtyChat'
 import { UpdateModal } from './components/UpdateModal'
 import { InstallModal } from './components/InstallModal'
 import { ArchiveConsentModal, type ArchiveMode } from './components/ArchiveConsentModal'
+import { TeamLogin } from './components/TeamLogin'
 import { type ChatModelId } from './lib/chatModels'
-import { HARNESS_LABELS, HARNESS_COLORS } from './lib/harness'
+import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
+
+// ── Team session state ────────────────────────────────────────────────────
+interface TeamSessionState {
+  required: boolean
+  authed: boolean
+  /** true when the server is running in central (hub) mode */
+  central?: boolean
+  /** true when a central has NO local harness data (pure aggregator) — hide local-only UI
+   *  (archive consent gate, Nay chat) that only makes sense with a local harness installed. */
+  aggregatorOnly?: boolean
+}
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
 const LOAD_STAGES: { key: string; labelPt: string; labelEn: string; icon: React.ReactNode; phase: 1 | 2 | 3 }[] = [
@@ -589,7 +605,7 @@ function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): st
 }
 
 function MobileBottomNav({
-  lang, harnesses, onSettings, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues,
+  lang, harnesses, onSettings, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues, isCentral,
 }: {
   lang: Lang
   harnesses?: HarnessId[]
@@ -599,6 +615,8 @@ function MobileBottomNav({
   onToggleLive: () => void
   updateInterval: number
   healthIssues?: HealthIssue[]
+  /** A central updates in real time via SSE — no Live toggle. */
+  isCentral?: boolean
 }) {
   const location = useLocation()
   const navigate = useNavigate()
@@ -635,11 +653,12 @@ function MobileBottomNav({
   ]
   const activeIssueCount = healthIssues?.length ?? 0
   const actionTiles: Tile[] = [
-    {
+    // Live toggle — hidden on a central (real-time via SSE, nothing to toggle).
+    ...(isCentral ? [] : [{
       key: 'live', label: pt ? 'Ao vivo' : 'Live', icon: Activity,
       onClick: () => onToggleLive(), accent: liveUpdates,
       badge: liveUpdates ? (updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`) : undefined,
-    },
+    } as Tile]),
     { key: 'refresh', label: pt ? 'Atualizar' : 'Refresh', icon: RefreshCw, onClick: () => { onRefresh(); setMoreOpen(false) } },
     { key: 'settings', label: pt ? 'Ajustes' : 'Settings', icon: SlidersHorizontal, onClick: () => { onSettings(); setMoreOpen(false) } },
     ...(activeIssueCount > 0
@@ -792,128 +811,6 @@ function MobileBottomNav({
   )
 }
 
-function HarnessSelector({ harnesses, lang, isMobile }: { harnesses: HarnessId[]; lang: Lang; isMobile?: boolean }) {
-  const location = useLocation()
-  const navigate = useNavigate()
-
-  // Only render when there is more than one harness present in the data
-  if (harnesses.length <= 1) return null
-
-  const harnessMatch = location.pathname.match(/^\/h\/([^/]+)$/)
-  const currentHarness: HarnessId | null = harnessMatch
-    ? (harnessMatch[1] as HarnessId)
-    : null
-
-  const handleSelect = (harness: HarnessId | null) => {
-    if (harness === null) {
-      navigate('/')
-    } else {
-      navigate(`/h/${harness}`)
-    }
-  }
-
-  const allOption = { id: null as HarnessId | null, label: lang === 'pt' ? 'Todos' : 'All' }
-  const options = [
-    allOption,
-    ...harnesses.map(h => ({ id: h as HarnessId | null, label: HARNESS_LABELS[h] })),
-  ]
-
-  // Mobile: always-visible chips/pills — one tap to switch harness, no dropdown.
-  // Short labels (first word) + flex-grow so the chips fill each row evenly
-  // instead of leaving a ragged gap on the right.
-  if (isMobile) {
-    return (
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-        {options.map(opt => {
-          const active = opt.id === currentHarness
-          const color = opt.id ? HARNESS_COLORS[opt.id] : 'var(--anthropic-orange)'
-          const shortLabel = opt.id ? opt.label.split(' ')[0] : opt.label
-          return (
-            <button
-              key={opt.id ?? '__all__'}
-              onClick={() => handleSelect(opt.id)}
-              style={{
-                flex: '1 1 auto',
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5,
-                padding: '6px 11px', borderRadius: 999,
-                border: active ? `1px solid ${color}` : '1px solid var(--border)',
-                background: active
-                  ? (opt.id ? `${color}22` : 'var(--anthropic-orange-dim)')
-                  : 'var(--bg-elevated)',
-                color: active ? color : 'var(--text-secondary)',
-                fontSize: 12, fontWeight: active ? 700 : 500, fontFamily: 'inherit',
-                cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all 0.15s',
-              }}
-            >
-              {opt.id && (
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
-              )}
-              {shortLabel}
-            </button>
-          )
-        })}
-      </div>
-    )
-  }
-
-  // Desktop: horizontal pills in the nav bar
-  return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: 4,
-      marginLeft: 12,
-      padding: '0 12px',
-      borderLeft: '1px solid var(--border)',
-    }}>
-      {options.map(opt => {
-        const active = opt.id === currentHarness
-        const color = opt.id ? HARNESS_COLORS[opt.id] : undefined
-        return (
-          <button
-            key={opt.id ?? '__all__'}
-            onClick={() => handleSelect(opt.id)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 5,
-              padding: '5px 10px',
-              borderRadius: 7,
-              border: active
-                ? `1px solid ${color ? `${color}50` : 'var(--anthropic-orange)30'}`
-                : '1px solid transparent',
-              background: active
-                ? color ? `${color}18` : 'var(--anthropic-orange-dim)'
-                : 'transparent',
-              color: active
-                ? color ?? 'var(--anthropic-orange)'
-                : 'var(--text-tertiary)',
-              fontSize: 12,
-              fontWeight: active ? 700 : 500,
-              fontFamily: 'inherit',
-              cursor: 'pointer',
-              transition: 'all 0.15s',
-              whiteSpace: 'nowrap',
-            }}
-            onMouseEnter={e => {
-              if (!active) {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
-                ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-elevated)'
-              }
-            }}
-            onMouseLeave={e => {
-              if (!active) {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'
-                ;(e.currentTarget as HTMLButtonElement).style.background = 'transparent'
-              }
-            }}
-          >
-            {opt.label}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
 function NavTabs({ lang, harnesses }: { lang: Lang; harnesses?: HarnessId[] }) {
   const location = useLocation()
   const pt = lang === 'pt'
@@ -985,8 +882,44 @@ export default function AppLayout() {
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
   const [lang, setLangState] = useState<Lang>('en')
+
+  // ── Team session gate ────────────────────────────────────────────────────
+  // undefined = not yet fetched, TeamSessionState after fetch
+  const [teamSession, setTeamSession] = useState<TeamSessionState | undefined>(undefined)
+  // true when this instance is a team member pushing to a central (mode === 'member').
+  // Used only to tailor the upgrade command shown in the UpdateModal.
+  const [isMember, setIsMember] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/team/session')
+      .then(r => r.ok ? (r.json() as Promise<TeamSessionState>) : null)
+      .then(s => setTeamSession(s ?? { required: false, authed: true }))
+      .catch(() => setTeamSession({ required: false, authed: true }))
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/team/status')
+      .then(r => r.ok ? (r.json() as Promise<{ mode?: string }>) : null)
+      .then(s => setIsMember(s?.mode === 'member'))
+      .catch(() => {})
+  }, [])
+
+  // Flip to login screen when any API call returns 401 (team password set but cookie expired)
+  useEffect(() => {
+    if (error && error.includes('401') && teamSession?.required) {
+      setTeamSession({ required: true, authed: false })
+    }
+  }, [error, teamSession?.required])
   const [theme, setThemeState] = useState<Theme>('dark')
   const [currency, setCurrencyState] = useState<'USD' | 'BRL'>('USD')
+
+  // Surface server-pushed notifications (member connection/auth errors) as toasts + bell.
+  useNotificationStream(lang)
+
+  // A central updates in real time via SSE (presence + ingest), so it hides the Live toggle
+  // and keeps live updates always on (the SSE 'change' subscription is gated on liveUpdates).
+  const isCentral = teamSession?.central === true
+  useEffect(() => { if (isCentral) setLiveUpdates(true) }, [isCentral, setLiveUpdates])
 
   const setLang = useCallback((l: Lang) => setLangState(l), [])
   const setTheme = useCallback((t: Theme) => setThemeState(t), [])
@@ -1106,16 +1039,24 @@ export default function AppLayout() {
 
   const INSTALL_DISMISSED_KEY = 'agentistics-install-dismissed'
   const [showInstallModal, setShowInstallModal] = useState(false)
+  // Dismissal is persisted SERVER-SIDE (survives incognito, where localStorage is wiped).
+  // undefined = prefs not loaded yet → don't show until we know; true = don't show.
+  const [installDismissedPref, setInstallDismissedPref] = useState<boolean | undefined>(undefined)
   const installModalShownRef = React.useRef(false)
   // Show install modal once after first data load, unless dismissed or already installed
   useEffect(() => {
     if (installModalShownRef.current) return
+    // A central is a server, not an end-user machine — never prompt to install the app there
+    // (and its prefs are ephemeral/read-only in Docker, so a dismiss wouldn't persist anyway).
+    if (isCentral) return
     if (!data || loading) return
     if (pwaInstalled) return
+    if (installDismissedPref === undefined) return // wait for prefs to load
+    if (installDismissedPref) return
     try { if (localStorage.getItem(INSTALL_DISMISSED_KEY) === 'true') return } catch {}
     installModalShownRef.current = true
     setShowInstallModal(true)
-  }, [data, loading, pwaInstalled])
+  }, [data, loading, pwaInstalled, installDismissedPref, isCentral])
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
   const [chatSoundId, setChatSoundId] = useState('ping')
@@ -1146,8 +1087,8 @@ export default function AppLayout() {
   useEffect(() => {
     fetch('/api/preferences')
       .then(r => r.ok ? r.json() : null)
-      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean } | null) => {
-        if (!prefs) { setArchiveChoice(null); return }
+      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean } | null) => {
+        if (!prefs) { setArchiveChoice(null); setInstallDismissedPref(false); return }
         if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
         if (prefs.lang) setLangState(prefs.lang)
         if (prefs.theme) setThemeState(prefs.theme)
@@ -1155,20 +1096,31 @@ export default function AppLayout() {
         if (prefs.cardOrder) setCardOrder(mergeCardOrder(prefs.cardOrder))
         if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
         if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
+        setInstallDismissedPref(prefs.installDismissed === true)
         if ((prefs as Record<string, unknown>).chatSoundId) setChatSoundId((prefs as Record<string, unknown>).chatSoundId as string)
         // Resolve the archive mode, migrating the legacy archiveSessions boolean.
         const mode: ArchiveMode | undefined =
           prefs.archiveMode ?? (prefs.archiveSessions === true ? 'full' : prefs.archiveSessions === false ? 'off' : undefined)
         setArchiveChoice(mode ?? null)
       })
-      .catch(() => setArchiveChoice(null))
+      .catch(() => { setArchiveChoice(null); setInstallDismissedPref(false) })
   }, [])
 
+  // Tracks which latest version we've already surfaced as a toast/bell notification,
+  // so re-renders (or an SSE re-check for the same version) don't re-push it.
+  const notifiedVersionRef = useRef<string | null>(null)
   useEffect(() => {
     fetch('/api/version')
       .then(r => r.ok ? r.json() : null)
       .then((info: { current: string; latest: string; hasUpdate: boolean } | null) => {
-        if (info?.hasUpdate) setUpdateInfo({ current: info.current, latest: info.latest })
+        if (info?.hasUpdate) {
+          setUpdateInfo({ current: info.current, latest: info.latest })
+          // Also surface it in the toast + bell (once per detected version).
+          if (notifiedVersionRef.current !== info.latest) {
+            notifiedVersionRef.current = info.latest
+            pushNotification({ type: 'info', code: 'app.update_available', meta: { version: info.latest } })
+          }
+        }
       })
       .catch(() => {})
   }, [])
@@ -1299,11 +1251,14 @@ export default function AppLayout() {
     const add = (h: HarnessId, m?: string) => { if (!m) return; (byH[h] ??= new Set<string>()).add(m) }
     for (const id of Object.keys(data.statsCache.modelUsage ?? {})) add('claude', id)
     for (const s of data.sessions) add((s.harness ?? 'claude') as HarnessId, s.model)
-    const harnesses = filters.harness ? [filters.harness] : order
+    // When the harness filter is active, only the selected harnesses' models are offered;
+    // in the unified view all harnesses are shown as sections.
+    const sel = filters.harnesses ?? []
+    const harnesses = sel.length > 0 ? order.filter(h => sel.includes(h)) : order
     return harnesses
       .filter(h => byH[h] && byH[h]!.size > 0)
       .map(h => ({ harness: h, models: Array.from(byH[h]!).sort() }))
-  }, [data, filters.harness])
+  }, [data, filters.harnesses])
 
   // Live update highlight detection
   useEffect(() => {
@@ -1353,6 +1308,59 @@ export default function AppLayout() {
     }
     return counts
   }, [data])
+
+  const users = useMemo(() => (data ? distinctUsers(data.sessions) : []), [data])
+
+  // Harnesses available in the harness filter, scoped to the SELECTED users (empty = all
+  // users). So picking one member narrows the harness options to the harnesses that member
+  // actually used; "All members" shows the union. Falls back to all harnesses in the data
+  // when the scoped slice is empty (e.g. a selected member has no sessions yet).
+  const availableHarnesses = useMemo<HarnessId[]>(() => {
+    if (!data) return []
+    const scoped = filterByUsers(data.sessions, filters.users ?? [])
+    const present = distinctHarnesses(scoped)
+    return present.length > 0 ? present : data.harnesses
+  }, [data, filters.users])
+
+  // Projects offered in the filter, scoped to the SELECTED users (empty = all users).
+  // On a central, filtering by member X should only list X's projects — not everyone's.
+  const availableProjects = useMemo(() => {
+    if (!data) return []
+    const sel = filters.users ?? []
+    if (sel.length === 0) return data.projects
+    const selSet = new Set(sel)
+    // A project is in scope iff at least one of its owning members is selected.
+    // Projects carry an explicit `users` tag (built server-side), so this is
+    // deterministic — no path re-matching and no fallback that leaks other members' projects.
+    return data.projects.filter(p => (p.users ?? []).some(u => selSet.has(u)))
+  }, [data, filters.users])
+
+  // Prune any selected project no longer available after a user-selection change.
+  useEffect(() => {
+    const sel = filters.projects ?? []
+    if (sel.length === 0) return
+    const allowed = new Set(availableProjects.map(p => p.path))
+    const pruned = sel.filter(p => allowed.has(p))
+    if (pruned.length !== sel.length) setFilters(f => ({ ...f, projects: pruned }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableProjects])
+
+  // Prune any selected harness that is no longer available after a user-selection change
+  // (e.g. selecting a member who never used a previously-selected harness).
+  useEffect(() => {
+    const sel = filters.harnesses ?? []
+    if (sel.length === 0) return
+    const allowed = new Set(availableHarnesses)
+    const pruned = sel.filter(h => allowed.has(h))
+    if (pruned.length !== sel.length) setFilters(f => ({ ...f, harnesses: pruned }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableHarnesses])
+
+  // When exactly one harness is selected, the header mirrors the old per-harness view
+  // (derived first/last dates + harness label). With 0 or >1 selected it uses the
+  // statsCache (Claude-canonical) dates, matching the unified dashboard.
+  const singleHarness: HarnessId | undefined =
+    (filters.harnesses?.length === 1) ? filters.harnesses[0] : undefined
 
   // ── Info items for all 8 stat cards ──────────────────────────────────────────
   const infoItems = useMemo(() => {
@@ -1500,6 +1508,21 @@ export default function AppLayout() {
     ]
   }, [filters.projects.length, lang])
 
+  // Team auth gate takes precedence over the data loading/error states below:
+  // on a gated central /api/data returns 401 until the operator logs in, so we
+  // must resolve the session and show the login screen FIRST — otherwise the
+  // expected 401 surfaces as a "failed to load" error and the login never shows.
+  if (teamSession === undefined) {
+    return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
+  }
+  if (teamSession.required && !teamSession.authed) {
+    return (
+      <TeamLogin
+        onAuthed={() => { setTeamSession(s => ({ ...(s ?? { required: true }), required: true, authed: true })); refetch() }}
+      />
+    )
+  }
+
   if (loading) {
     return <LoadingScreen lang={lang} loadProgress={loadProgress} />
   }
@@ -1566,12 +1589,14 @@ export default function AppLayout() {
     (filters.models.length > 0 ? 1 : 0) +
     (harnessFilterActive ? 1 : 0)
 
-  // Block the app until the user makes the first-run archive choice. While prefs
-  // are still loading (undefined) render a neutral background to avoid a flash.
-  if (archiveChoice === undefined) {
+  // Block the app until the user makes the first-run archive choice. While prefs OR the
+  // team-session flag are still loading render a neutral background to avoid a flash.
+  if (archiveChoice === undefined || teamSession === undefined) {
     return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
   }
-  if (archiveChoice === null) {
+  // A pure central (aggregator, no local harness data) has no local sessions to archive —
+  // never show the consent gate there.
+  if (archiveChoice === null && !teamSession.aggregatorOnly) {
     return (
       <ArchiveConsentModal
         lang={lang}
@@ -1619,25 +1644,25 @@ export default function AppLayout() {
             />
             {!isMobile && <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
               {lang === 'pt' ? 'Atualizado em' : 'Updated'}{' '}
-              {filters.harness && filters.harness !== 'claude'
+              {singleHarness && singleHarness !== 'claude'
                 ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : lang === 'pt' ? 'hoje' : 'today')
                 : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : lang === 'pt' ? 'hoje' : 'today')}
             </div>}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 10 }}>
-            {!isMobile && (filters.harness ? derived.firstSessionDate : statsCache.firstSessionDate) && (
+            {!isMobile && (singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate) && (
               <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'right' }}>
                 <div>
                   {lang === 'pt' ? 'Desde' : 'Since'}{' '}
                   {format(
-                    filters.harness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!),
+                    singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!),
                     'MMM d, yyyy'
                   )}
                 </div>
                 <div style={{ color: 'var(--text-secondary)' }}>
                   {derived.allTimeTotalSessions.toLocaleString()} {lang === 'pt' ? 'sessões' : 'sessions'}
-                  {filters.harness ? ` · ${HARNESS_LABELS[filters.harness]}` : ''}
+                  {singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}
                 </div>
               </div>
             )}
@@ -1769,8 +1794,9 @@ export default function AppLayout() {
               <HealthWarnings issues={data.healthIssues} lang={lang} />
             )}
 
-            {/* Live updates pill — on mobile surfaced via the "More" sheet */}
-            {!isMobile && <div style={{
+            {/* Live updates pill — hidden on a central (it updates in real time via SSE-on-ingest,
+                so there's nothing to toggle). On mobile it's surfaced via the "More" sheet. */}
+            {!isMobile && !isCentral && <div style={{
               display: 'flex', alignItems: 'center', gap: 6,
               padding: '0 4px 0 10px',
               height: 32,
@@ -1812,6 +1838,14 @@ export default function AppLayout() {
               )}
 
             </div>}
+
+            {/* Notifications bell — toast history (member connection/auth errors, etc.) */}
+            <NotificationBell lang={lang} buttonStyle={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 32, height: 32, borderRadius: 8,
+              border: '1px solid var(--border)', background: 'transparent',
+              color: 'var(--text-tertiary)', cursor: 'pointer', position: 'relative',
+            }} />
 
             {/* Refresh — on mobile surfaced via the "More" sheet */}
             {!isMobile && <button
@@ -1885,19 +1919,17 @@ export default function AppLayout() {
               onTransitionEnd={() => { if (!filtersCollapsed) setFiltersClip(false) }}
             >
               <div style={{ overflow: (filtersCollapsed || filtersClip) ? 'hidden' : 'visible', minHeight: 0 }}>
-                {data.harnesses && data.harnesses.length > 1 && (
-                  <div style={{ padding: '10px 12px 0' }}>
-                    <HarnessSelector harnesses={data.harnesses} lang={lang} isMobile />
-                  </div>
-                )}
                 <FiltersBar
                   filters={filters}
                   onChange={setFilters}
-                  projects={data.projects}
+                  projects={availableProjects}
                   sessionCountByProject={sessionCountByProject}
                   models={models}
                   modelGroups={modelGroups}
                   modelsInProject={modelsInProject}
+                  users={users}
+                  harnesses={availableHarnesses}
+                  presence={data?.presence}
                   lang={lang}
                   compact
                 />
@@ -1930,11 +1962,14 @@ export default function AppLayout() {
             <FiltersBar
               filters={filters}
               onChange={setFilters}
-              projects={data.projects}
+              projects={availableProjects}
               sessionCountByProject={sessionCountByProject}
               models={models}
               modelGroups={modelGroups}
               modelsInProject={modelsInProject}
+              users={users}
+              harnesses={availableHarnesses}
+              presence={data?.presence}
               lang={lang}
             />
           </div>
@@ -1953,7 +1988,6 @@ export default function AppLayout() {
             alignItems: 'center',
           }}>
             <NavTabs lang={lang} harnesses={data.harnesses} />
-            <HarnessSelector harnesses={data.harnesses} lang={lang} />
           </div>
         )}
       </header>
@@ -1979,7 +2013,8 @@ export default function AppLayout() {
           infoItems,
           cardOrder, setCardOrder: setCardOrder as (o: string[]) => void,
           cardPrecision, setCardPrecision,
-          sessionCountByProject, models, modelGroups, modelsInProject,
+          sessionCountByProject, models, modelGroups, modelsInProject, users,
+          harnesses: data.harnesses,
         }} />
       </main>
 
@@ -2023,7 +2058,8 @@ export default function AppLayout() {
           setRiskyMode={setRiskyMode}
           highlightUpdates={highlightUpdates}
           setHighlightUpdates={setHighlightUpdates}
-        />
+          harnesses={data.harnesses}
+          />
       )}
 
       {/* Install Modal — shown once after first data load */}
@@ -2034,7 +2070,14 @@ export default function AppLayout() {
           onClose={(dontShowAgain) => {
             setShowInstallModal(false)
             if (dontShowAgain) {
+              setInstallDismissedPref(true)
               try { localStorage.setItem(INSTALL_DISMISSED_KEY, 'true') } catch {}
+              // Persist server-side so it survives incognito windows / a cleared localStorage.
+              fetch('/api/preferences', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ installDismissed: true }),
+              }).catch(() => {})
             }
           }}
           onPwaInstalled={() => { setPwaInstalled(true); setPwaPrompt(null) }}
@@ -2047,6 +2090,8 @@ export default function AppLayout() {
           current={updateInfo.current}
           latest={updateInfo.latest}
           lang={lang}
+          isCentral={isCentral}
+          isMember={isMember}
           onClose={() => setUpdateInfo(null)}
         />
       )}
@@ -2111,6 +2156,7 @@ export default function AppLayout() {
           currency={currency}
           brlRate={brlRate}
           lang={lang}
+          central={teamSession?.central === true}
           onClose={() => setSelectedSession(null)}
         />
       )}
@@ -2141,28 +2187,32 @@ export default function AppLayout() {
           onToggleLive={() => setLiveUpdates(v => !v)}
           updateInterval={updateInterval}
           healthIssues={data.healthIssues}
+          isCentral={isCentral}
         />
       )}
 
-      {/* TTY Chat — floating button + panel, globally available */}
-      <TtyChat
-        lang={lang}
-        chatModel={chatModel}
-        chatSoundEnabled={chatSoundEnabled}
-        chatSoundId={chatSoundId}
-        filters={filters}
-        setFilters={setFilters}
-        onPdfExport={(range) => setPdfDirectExportRange(range)}
-        isMobile={isMobile}
-        onModelSet={(model) => {
-          setChatModel(model)
-          fetch('/api/preferences', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chatModel: model }),
-          }).catch(() => {})
-        }}
-      />
+      {/* TTY Chat (Nay) — floating button + panel. Hidden on a pure central (aggregator with
+          no local harness): the chat needs a locally-installed harness to be meaningful. */}
+      {!teamSession?.aggregatorOnly && (
+        <TtyChat
+          lang={lang}
+          chatModel={chatModel}
+          chatSoundEnabled={chatSoundEnabled}
+          chatSoundId={chatSoundId}
+          filters={filters}
+          setFilters={setFilters}
+          onPdfExport={(range) => setPdfDirectExportRange(range)}
+          isMobile={isMobile}
+          onModelSet={(model) => {
+            setChatModel(model)
+            fetch('/api/preferences', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chatModel: model }),
+            }).catch(() => {})
+          }}
+        />
+      )}
 
       {/* Footer */}
       <footer style={{
@@ -2308,6 +2358,9 @@ export default function AppLayout() {
           </div>
         </div>
       </footer>
+
+      {/* Global notification toasts (auto-dismiss with an exit animation; history in the bell) */}
+      <NotificationToasts lang={lang} />
     </div>
   )
 }

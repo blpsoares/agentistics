@@ -1044,6 +1044,8 @@ export default function CustomPage() {
               models={ctx.models}
               modelGroups={ctx.modelGroups}
               modelsInProject={ctx.modelsInProject}
+              users={ctx.users}
+              harnesses={ctx.harnesses}
               lang={lang}
               compact
             />

@@ -23,12 +23,35 @@ export function notifySseClients() {
   }
 }
 
+/** Push a user-facing notification to all connected SSE clients (toast + bell).
+ *  Prefer `code` (localized on the frontend) with optional `meta`; `title`/`message`
+ *  are a fallback for pre-localized text. */
+export function broadcastNotification(n: {
+  type: 'error' | 'warning' | 'info' | 'success'
+  code?: string
+  meta?: Record<string, unknown>
+  title?: string
+  message?: string
+}) {
+  const payload = sseEncoder.encode(`event: notification\ndata: ${JSON.stringify(n)}\n\n`)
+  for (const ctrl of [...sseClients]) {
+    try {
+      ctrl.enqueue(payload)
+    } catch {
+      sseClients.delete(ctrl)
+    }
+  }
+}
+
 let sseDebounce: ReturnType<typeof setTimeout> | null = null
 
 export function triggerSseNotification() {
   invalidateCache()
   if (sseDebounce) clearTimeout(sseDebounce)
   sseDebounce = setTimeout(notifySseClients, 2000)
+  // Member push-on-change: local data changed → nudge a debounced push to the central so its
+  // aggregate stays fresh while you work. No-op on a central/solo instance.
+  import('./team-uploader').then(m => m.notifyDataChanged()).catch(() => {})
 }
 
 export async function setupFileWatcher() {

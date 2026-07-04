@@ -1,0 +1,59 @@
+services:
+  mongo:
+    image: mongo:7
+    command: --replSet rs0
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - |
+          try {
+            rs.status();
+          } catch (e) {
+            rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] });
+          }
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    # mongo does NOT publish 27017 to the host — only the app service reaches it
+    volumes:
+      - mongo_data:/data/db
+
+  app:
+    build: .
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_URL: ${MONGO_URL:-mongodb://mongo:27017/?replicaSet=rs0}
+      MONGO_DB: ${MONGO_DB:-agentistics}
+      AGENTISTICS_TEAM_CENTRAL: "1"
+      AGENTISTICS_TEAM_ORG: ${AGENTISTICS_TEAM_ORG:-default}
+      AGENTISTICS_TEAM_PASSWORD: ${AGENTISTICS_TEAM_PASSWORD:-}
+      AGENTISTICS_TEAM_SESSION_SECRET: ${AGENTISTICS_TEAM_SESSION_SECRET:-}
+      AGENTISTICS_TEAM_INGEST_TOKEN: ${AGENTISTICS_TEAM_INGEST_TOKEN:-}
+      # Self-contribution: set this to the central machine's own identity to also show
+      # this machine's Claude usage in the dashboard (one instance = central + member).
+      # When set, the app reads the host ~/.claude mounted read-only at /host-claude.
+      AGENTISTICS_CENTRAL_USER: ${AGENTISTICS_CENTRAL_USER:-}
+      PORT: "47291"
+      SERVE_STATIC: "1"
+    volumes:
+      # Host harness dirs mounted read-only — only read when AGENTISTICS_CENTRAL_USER is
+      # set (self-contribution). Harmless (and unused) on a dedicated central; remove these
+      # lines if you prefer not to expose the host directories to the container at all.
+      - ${HOME}/.claude:/host-claude:ro
+      - ${HOME}/.codex:/host-codex:ro
+      - ${HOME}/.gemini:/host-gemini:ro
+      - ${HOME}/.copilot:/host-copilot:ro
+    ports:
+      # Bind interface. Default 0.0.0.0 = all interfaces (works out of the box). Set BIND_IP
+      # to a specific address (e.g. your Tailscale IP) to restrict exposure to that interface.
+      - "${BIND_IP:-0.0.0.0}:${APP_PORT:-48080}:47291"
+    restart: unless-stopped
+
+volumes:
+  mongo_data:

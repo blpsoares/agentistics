@@ -1,0 +1,17 @@
+node_modules
+.git
+.claude
+dist
+**/embedded-dist.generated.ts
+docs/superpowers
+*.log
+.env
+release/
+packages/web/dev-dist/
+.scion/
+grafana/
+.github/
+.husky/
+coverage/
+*.lcov
+*.tsbuildinfo

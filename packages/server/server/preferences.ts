@@ -1,5 +1,7 @@
 import { join } from 'path'
 import { CLAUDE_DIR } from './config'
+import type { TeamConfig } from '@agentistics/core'
+import { DEFAULT_TEAM } from '@agentistics/core'
 
 export const PREFERENCES_FILE = join(CLAUDE_DIR, 'agentistics-preferences.json')
 
@@ -24,6 +26,9 @@ export interface Preferences {
   cardPrecision?: Record<string, boolean>
   chatModel?: string
   chatSoundEnabled?: boolean
+  /** true once the user dismissed the install prompt with "don't show again".
+   *  Persisted server-side (not localStorage) so it survives incognito windows. */
+  installDismissed?: boolean
   /** How the app preserves session history past Claude's 30-day cleanup.
    *  `undefined` = not chosen yet (the blocking consent gate is shown).
    *    - 'consolidate' = store computed per-session metrics only (~KB, recommended)
@@ -32,6 +37,8 @@ export interface Preferences {
   archiveMode?: 'off' | 'consolidate' | 'full'
   /** @deprecated legacy boolean — read by resolveArchiveMode for migration only */
   archiveSessions?: boolean
+  /** Team mode configuration. Absent / mode=solo means solo behavior (no push). */
+  team?: TeamConfig
 }
 
 export type ArchiveMode = 'off' | 'consolidate' | 'full'
@@ -51,6 +58,7 @@ export async function getArchiveMode(): Promise<ArchiveMode | undefined> {
 
 const DEFAULT_PREFS: Preferences = {
   customLayout: [],
+  team: DEFAULT_TEAM,
 }
 
 export async function readPreferences(): Promise<Preferences> {

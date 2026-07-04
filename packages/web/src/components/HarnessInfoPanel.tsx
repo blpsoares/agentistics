@@ -1,11 +1,9 @@
 import { Check } from 'lucide-react'
-import { useOutletContext } from 'react-router-dom'
 import { t } from '@agentistics/core'
-import type { HarnessId, HarnessCapabilities } from '@agentistics/core'
+import type { HarnessId, HarnessCapabilities, Lang } from '@agentistics/core'
 import { HARNESS_INFO, HARNESS_LABELS, HARNESS_COLORS, HARNESS_PROVIDERS, capable } from '../lib/harness'
 import { useChatHarnesses } from '../hooks/useChatHarnesses'
 import { useIsMobile } from '../hooks/useIsMobile'
-import type { AppContext } from '../lib/app-context'
 
 /** Polished mono font stack — used only for paths and shell commands. */
 const MONO = `ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace`
@@ -32,13 +30,14 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 interface Props {
   harness: HarnessId
+  lang: Lang
 }
 
 /** Inline panel (no overlay) explaining a harness's data: where it comes from,
- *  what is captured, what is not, and any caveats. Rendered inside the harness
- *  page's "Data & sources" tab. */
-export function HarnessInfoPanel({ harness }: Props) {
-  const { lang } = useOutletContext<AppContext>()
+ *  what is captured, what is not, and any caveats. Rendered inside the Settings
+ *  "Data & sources" tab. `lang` is passed in (this can render outside the router
+ *  Outlet, so it cannot use useOutletContext). */
+export function HarnessInfoPanel({ harness, lang }: Props) {
   const isMobile = useIsMobile()
   const info = HARNESS_INFO[harness]
   const label = HARNESS_LABELS[harness]

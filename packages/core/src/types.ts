@@ -80,6 +80,10 @@ export interface SessionMeta {
   cache_read_input_tokens?: number
   cache_creation_input_tokens?: number
   first_prompt: string
+  /** Human-readable session title. Claude writes an `ai-title` (or legacy `summary`) line into
+   *  the transcript; we surface it as the session's display name. Falls back to `first_prompt`
+   *  in the UI when absent (older sessions, non-Claude harnesses). */
+  title?: string
   user_interruptions: number
   user_response_times: number[]
   tool_errors: number
@@ -95,6 +99,8 @@ export interface SessionMeta {
   user_message_timestamps: string[]
   model?: string
   harness: HarnessId
+  /** Owning user in team mode. Undefined for local/Solo sessions. */
+  user?: string
   _source?: 'meta' | 'jsonl' | 'subdir'
   agentMetrics?: SessionAgentMetrics
   /** Number of MCP tool calls recorded in this session (Copilot adapter). */
@@ -176,6 +182,10 @@ export interface Project {
   name: string
   sessions: SessionIndex[]
   git_stats?: ProjectGitStats
+  /** Team/central only: display names of the members who own sessions in this project.
+   *  Lets the frontend scope the project filter to the selected members deterministically,
+   *  instead of re-matching paths against user-filtered sessions. Absent/empty on solo. */
+  users?: string[]
 }
 
 export interface HealthIssue {
@@ -187,6 +197,16 @@ export interface HealthIssue {
   auto_fixed?: boolean
 }
 
+/** Team/central only: a member's live connection status, keyed by resolved display name. */
+export interface MemberPresence {
+  /** True when the member has a live reverse-channel socket OR a recent heartbeat push. */
+  online: boolean
+  /** ISO timestamp of the member's last contact (push/whoami), or null if never seen. */
+  lastSeenAt: string | null
+  /** Round-trip latency in ms from the last WebSocket ping/pong, or null when no live socket. */
+  latencyMs: number | null
+}
+
 export interface AppData {
   statsCache: StatsCache
   sessions: SessionMeta[]
@@ -195,6 +215,82 @@ export interface AppData {
   healthIssues?: HealthIssue[]
   homeDir?: string
   harnesses: HarnessId[]
+  /** Team/central only: each member's own raw statsCache, keyed by resolved display name.
+   *  Lets the central reproduce the member's authoritative totals (deep Claude history that
+   *  only exists aggregated in statsCache, never as individual sessions). Absent on solo. */
+  userStatsCaches?: Record<string, StatsCache>
+  /** Team/central only: live presence per member (resolved display name → status). */
+  presence?: Record<string, MemberPresence>
+  /** Team/central only: central policy — whether offline members' data is shown by default. */
+  includeOfflineData?: boolean
+}
+
+/** An empty statsCache with all zero/neutral fields. Pure. */
+export function emptyStatsCache(): StatsCache {
+  return {
+    version: 1,
+    lastComputedDate: '',
+    dailyActivity: [],
+    dailyModelTokens: [],
+    modelUsage: {},
+    totalSessions: 0,
+    totalMessages: 0,
+    longestSession: { sessionId: '', duration: 0, messageCount: 0, timestamp: '' },
+    firstSessionDate: '',
+    hourCounts: {},
+    totalSpeculationTimeSavedMs: 0,
+  }
+}
+
+/**
+ * Merge (sum) several statsCaches into one. Pure. Used by the central to combine the
+ * selected members' per-member statsCaches so KPIs match each machine exactly.
+ * - dailyActivity / dailyModelTokens / modelUsage / hourCounts: summed by key
+ * - totals: summed; longestSession: max by duration
+ * - firstSessionDate: earliest non-empty; lastComputedDate: latest
+ */
+export function mergeStatsCaches(caches: StatsCache[]): StatsCache {
+  const out = emptyStatsCache()
+  const daily = new Map<string, DailyActivity>()
+  const dmt = new Map<string, Record<string, number>>()
+
+  for (const c of caches) {
+    if (!c) continue
+    for (const d of c.dailyActivity ?? []) {
+      const cur = daily.get(d.date) ?? { date: d.date, messageCount: 0, sessionCount: 0, toolCallCount: 0 }
+      cur.messageCount += d.messageCount ?? 0
+      cur.sessionCount += d.sessionCount ?? 0
+      cur.toolCallCount += d.toolCallCount ?? 0
+      daily.set(d.date, cur)
+    }
+    for (const d of c.dailyModelTokens ?? []) {
+      const cur = dmt.get(d.date) ?? {}
+      for (const [m, t] of Object.entries(d.tokensByModel ?? {})) cur[m] = (cur[m] ?? 0) + t
+      dmt.set(d.date, cur)
+    }
+    for (const [m, u] of Object.entries(c.modelUsage ?? {})) {
+      const cur = out.modelUsage[m] ?? { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 }
+      cur.inputTokens += u.inputTokens ?? 0
+      cur.outputTokens += u.outputTokens ?? 0
+      cur.cacheReadInputTokens += u.cacheReadInputTokens ?? 0
+      cur.cacheCreationInputTokens += u.cacheCreationInputTokens ?? 0
+      cur.webSearchRequests += u.webSearchRequests ?? 0
+      cur.costUSD += u.costUSD ?? 0
+      out.modelUsage[m] = cur
+    }
+    for (const [h, n] of Object.entries(c.hourCounts ?? {})) out.hourCounts[h] = (out.hourCounts[h] ?? 0) + n
+    out.totalSessions += c.totalSessions ?? 0
+    out.totalMessages += c.totalMessages ?? 0
+    out.totalSpeculationTimeSavedMs += c.totalSpeculationTimeSavedMs ?? 0
+    if ((c.longestSession?.duration ?? 0) > out.longestSession.duration) out.longestSession = c.longestSession
+    if (c.firstSessionDate && (!out.firstSessionDate || c.firstSessionDate < out.firstSessionDate)) out.firstSessionDate = c.firstSessionDate
+    if (c.lastComputedDate && c.lastComputedDate > out.lastComputedDate) out.lastComputedDate = c.lastComputedDate
+    out.version = Math.max(out.version, c.version ?? 1)
+  }
+
+  out.dailyActivity = Array.from(daily.values()).sort((a, b) => a.date.localeCompare(b.date))
+  out.dailyModelTokens = Array.from(dmt.entries()).map(([date, tokensByModel]) => ({ date, tokensByModel })).sort((a, b) => a.date.localeCompare(b.date))
+  return out
 }
 
 export type DateRange = '7d' | '30d' | '90d' | 'all'
@@ -204,8 +300,11 @@ export interface Filters {
   customStart: string
   customEnd: string
   projects: string[]   // empty = all projects
+  users?: string[]     // empty/undefined = all users
   models: string[]     // empty = all models
   harness?: HarnessId
+  harnesses?: HarnessId[]  // multi-select harness filter; empty/undefined = all harnesses
+  presence?: 'online' | 'offline'  // team/central: filter members by live status; undefined = policy default
 }
 
 export type Lang = 'pt' | 'en'

@@ -81,3 +81,36 @@ export async function getVersionInfo(): Promise<VersionInfo> {
     return { current: CURRENT_VERSION, latest: CURRENT_VERSION, hasUpdate: false }
   }
 }
+
+const RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1000 // 6 hours
+let _recheckTimer: ReturnType<typeof setInterval> | null = null
+/** Latest version we've already broadcast, so we don't re-notify every tick. */
+let _lastBroadcastVersion: string | null = null
+
+/**
+ * Starts a best-effort periodic re-check (default every 6h) so a long-running
+ * daemon surfaces new releases without a page reload. Each tick refreshes the
+ * cache via getVersionInfo and, when an update is newly available (a version we
+ * haven't broadcast yet), pushes an SSE `app.update_available` notification to
+ * connected dashboards. Idempotent — calling twice is a no-op. Never throws.
+ */
+export function startVersionRecheck(intervalMs: number = RECHECK_INTERVAL_MS): void {
+  if (_recheckTimer) return
+  const tick = async () => {
+    try {
+      const info = await getVersionInfo()
+      if (info.hasUpdate && info.latest !== _lastBroadcastVersion) {
+        _lastBroadcastVersion = info.latest
+        const { broadcastNotification } = await import('./sse')
+        broadcastNotification({ type: 'info', code: 'app.update_available', meta: { version: info.latest } })
+      }
+    } catch { /* best-effort — never crash the daemon */ }
+  }
+  _recheckTimer = setInterval(() => { void tick() }, intervalMs)
+  // Don't keep the process alive solely for this timer.
+  if (typeof _recheckTimer === 'object' && _recheckTimer && 'unref' in _recheckTimer) {
+    ;(_recheckTimer as { unref: () => void }).unref()
+  }
+  // Kick off an initial check shortly after boot (deferred so startup isn't blocked).
+  setTimeout(() => { void tick() }, 30_000)
+}

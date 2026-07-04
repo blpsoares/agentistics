@@ -1,0 +1,229 @@
+/**
+ * team-tokens.ts — Mongo-backed ingest token store for Team Mode Phase 3.
+ *
+ * Only SHA-256 hashes of tokens are stored; the plaintext is returned once
+ * at mint time and never persisted or logged.
+ *
+ * Collection: `tokens` (separate from `sessions`).
+ * Document schema:
+ *   { _id: <sha256(token) hex>,  // the hash IS the lookup key
+ *     user: string,
+ *     label: string,
+ *     createdAt: string,         // ISO 8601
+ *     lastSeenAt: string | null  // updated on every valid ingest request
+ *   }
+ *
+ * Pure helper: hashToken (unit-tested in team-tokens.test.ts, no Mongo needed).
+ */
+
+import { createHash, randomBytes } from 'node:crypto'
+import type { Collection } from 'mongodb'
+import { getMongoDb } from './mongo'
+import { teamDocId, type TeamSessionDoc } from './team-store'
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface TokenDoc {
+  _id: string
+  user: string
+  label: string
+  createdAt: string
+  lastSeenAt: string | null
+}
+
+export type MemberInfo = {
+  id: string
+  user: string
+  label: string
+  createdAt: string
+  lastSeenAt: string | null
+  /** Live status — populated by the members endpoint from the presence snapshot. */
+  online?: boolean
+  latencyMs?: number | null
+}
+
+// ---------------------------------------------------------------------------
+// PURE helper (no side effects — unit-tested without Mongo)
+// ---------------------------------------------------------------------------
+
+/**
+ * Deterministic SHA-256 hash of a token, returned as a 64-character hex string.
+ * This is the `_id` stored in Mongo; the plaintext is never persisted.
+ */
+export function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
+}
+
+// ---------------------------------------------------------------------------
+// Internal
+// ---------------------------------------------------------------------------
+
+async function getTokensCollection(): Promise<Collection<TokenDoc>> {
+  const db = await getMongoDb()
+  return db.collection<TokenDoc>('tokens')
+}
+
+// ---------------------------------------------------------------------------
+// Public async API
+// ---------------------------------------------------------------------------
+
+/**
+ * Mint a new random ingest token. Stores only the SHA-256 hash in Mongo.
+ * Returns the plaintext token (shown once; never stored or logged here).
+ */
+export async function mintToken(user: string, label: string): Promise<string> {
+  // 32 random bytes → 64-char hex string (256 bits of entropy)
+  const token = randomBytes(32).toString('hex')
+  const id = hashToken(token)
+  const doc: TokenDoc = {
+    _id: id,
+    user,
+    label,
+    createdAt: new Date().toISOString(),
+    lastSeenAt: null,
+  }
+  const col = await getTokensCollection()
+  await col.insertOne(doc)
+  return token
+}
+
+/**
+ * Revoke a token by its hash id. Returns true if a document was deleted.
+ */
+export async function revokeToken(id: string): Promise<boolean> {
+  const col = await getTokensCollection()
+  const result = await col.deleteOne({ _id: id })
+  return result.deletedCount > 0
+}
+
+/**
+ * Rotate a member's token: mint a fresh token while preserving all of the member's
+ * history. Returns the new plaintext token (shown once), or `null` if no token with
+ * `oldId` exists.
+ *
+ * The member's identity key is the token hash (`memberId`), so rotating the token
+ * changes that key. To keep history, every doc keyed by the old id is migrated to the
+ * new id:
+ *   - `sessions`     — each TeamSessionDoc is re-inserted with the new memberId and a
+ *                      recomputed _id (teamDocId), then the old docs are removed.
+ *   - `memberStats`  — the per-member aggregate (keyed by _id = memberId) is copied.
+ *   - `tokens`       — the token doc is replaced (new hash id, same metadata).
+ */
+export async function rotateToken(oldId: string): Promise<string | null> {
+  const col = await getTokensCollection()
+  const doc = await col.findOne({ _id: oldId })
+  if (!doc) return null
+
+  const token = randomBytes(32).toString('hex')
+  const newId = hashToken(token)
+
+  const db = await getMongoDb()
+
+  // Migrate sessions: rebuild each doc under the new memberId + _id.
+  const sessions = db.collection<TeamSessionDoc>('sessions')
+  const oldSessions = await sessions.find({ memberId: oldId }).toArray()
+  if (oldSessions.length > 0) {
+    const migrated = oldSessions.map(d => ({
+      ...d,
+      memberId: newId,
+      _id: teamDocId(d.org, newId, d.harness ?? 'claude', d.session_id),
+    }))
+    await sessions.insertMany(migrated, { ordered: false }).catch(() => {})
+    await sessions.deleteMany({ memberId: oldId })
+  }
+
+  // Migrate memberStats: keyed by _id = memberId.
+  const memberStats = db.collection<{ _id: string }>('memberStats')
+  const statsDoc = await memberStats.findOne({ _id: oldId })
+  if (statsDoc) {
+    await memberStats.insertOne({ ...statsDoc, _id: newId }).catch(() => {})
+    await memberStats.deleteOne({ _id: oldId })
+  }
+
+  // Replace the token doc (new hash id, same metadata).
+  await col.insertOne({
+    _id: newId,
+    user: doc.user,
+    label: doc.label,
+    createdAt: doc.createdAt,
+    lastSeenAt: doc.lastSeenAt,
+  })
+  await col.deleteOne({ _id: oldId })
+
+  return token
+}
+
+/**
+ * List all minted tokens as safe member records (hash id only; no plaintext).
+ */
+export async function listMembers(): Promise<MemberInfo[]> {
+  const col = await getTokensCollection()
+  const docs = await col.find({}).sort({ createdAt: 1 }).toArray()
+  return docs.map(d => ({
+    id: d._id,
+    user: d.user,
+    label: d.label,
+    createdAt: d.createdAt,
+    lastSeenAt: d.lastSeenAt,
+  }))
+}
+
+/**
+ * Returns whether any tokens are stored in the collection.
+ * Used by team-ingest.ts to decide whether the "open" Phase-2a fallback applies.
+ */
+export async function hasAnyTokens(): Promise<boolean> {
+  const col = await getTokensCollection()
+  const count = await col.estimatedDocumentCount()
+  return count > 0
+}
+
+/**
+ * Validate a bearer token from an ingest request:
+ *   - Hashes the bearer, looks up the hash in Mongo.
+ *   - If found, updates `lastSeenAt` and returns `{ ok: true, user, memberId }`.
+ *   - `memberId` is the token's hash `_id` — the stable identity key used in Mongo docs.
+ *   - If not found, returns `{ ok: false }`.
+ * Never logs the raw bearer string.
+ */
+export async function validateIngestToken(
+  bearer: string | null,
+): Promise<{ ok: true; user: string; memberId: string } | { ok: false }> {
+  if (!bearer) return { ok: false }
+  const id = hashToken(bearer)
+  const col = await getTokensCollection()
+  const doc = await col.findOne({ _id: id })
+  if (!doc) return { ok: false }
+  // Update last-seen — fire and forget (non-critical, must not block the caller).
+  void col.updateOne({ _id: id }, { $set: { lastSeenAt: new Date().toISOString() } }).catch(() => {})
+  return { ok: true, user: doc.user, memberId: id }
+}
+
+/**
+ * Rename a member by updating the `user` field on their token doc.
+ * Returns `true` if a document was matched (and updated), `false` if no token with that id exists.
+ * Subsequent ingests by that member will carry the new name automatically; existing session docs
+ * in the `sessions` collection are resolved at read time via `getMemberNameMap()`.
+ */
+export async function setMemberName(id: string, user: string): Promise<boolean> {
+  const col = await getTokensCollection()
+  const result = await col.updateOne({ _id: id }, { $set: { user } })
+  return result.matchedCount > 0
+}
+
+/**
+ * Returns a map of `{ [tokenId]: user }` for every token in the collection.
+ * Used by `loadTeamSessionsFromMongo` to resolve the current display name for each session
+ * at read time, so a member rename is reflected immediately without re-ingesting sessions.
+ */
+export async function getMemberNameMap(): Promise<Record<string, string>> {
+  const col = await getTokensCollection()
+  const docs = await col.find({}, { projection: { _id: 1, user: 1 } }).toArray()
+  const map: Record<string, string> = {}
+  for (const doc of docs) {
+    map[doc._id] = doc.user
+  }
+  return map
+}

@@ -1,13 +1,13 @@
 import React, { useMemo } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { GitCompare } from 'lucide-react'
-import { format as formatDate } from 'date-fns'
+import { format as formatDate, parseISO } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import type { AppContext } from '../lib/app-context'
 import type { HarnessId, Lang } from '@agentistics/core'
-import { fmt, fmtCost, formatModel, t } from '@agentistics/core'
+import { fmt, fmtCost, formatModel, t, filterByUsers, filterByHarnesses, distinctHarnesses, mergeStatsCaches } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
-import { computeHarnessSummaries } from '../hooks/useData'
+import { computeHarnessSummaries, claudeSummaryFromStatsCache, summarizeHarnessSessions, getDateRangeFilter, type HarnessSummary } from '../hooks/useData'
 
 interface HarnessAgg {
   harness: HarnessId
@@ -229,10 +229,96 @@ function SectionCard({ title, children }: { title: string; children: React.React
   )
 }
 
-export default function ComparePage() {
-  const { data, currency, brlRate, lang } = useOutletContext<AppContext>()
+/** Most recent activity timestamp for one harness in a session list (end_time, else start_time). */
+function lastActiveFor(sessions: { harness?: HarnessId; start_time?: string; end_time?: string }[], harness: HarnessId): string | null {
+  return sessions
+    .filter(s => (s.harness ?? 'claude') === harness)
+    .reduce<string | null>((best, s) => {
+      const ts = s.end_time ?? s.start_time
+      return ts && (!best || ts > best) ? ts : best
+    }, null)
+}
 
-  const summaries = useMemo(() => computeHarnessSummaries(data), [data])
+export default function ComparePage() {
+  const { data, currency, brlRate, lang, filters } = useOutletContext<AppContext>()
+
+  // Compare respects the active filters (users, harnesses, date, projects, models): the
+  // columns shown AND every metric reflect exactly the filtered slice — same behavior as the
+  // main dashboard. With NO filter active we keep the statsCache-canonical Claude totals
+  // (computeHarnessSummaries) so the default view matches the dashboard's all-time KPIs.
+  const { activeHarnesses, summaries, lastActive } = useMemo(() => {
+    const usersSel = filters.users ?? []
+    const harnessSel = filters.harnesses ?? []
+    const projects = filters.projects ?? []
+    const projectSet = new Set(projects)
+    const modelSet = filters.models && filters.models.length > 0 ? new Set(filters.models) : null
+    const { start, end } = getDateRangeFilter(filters.dateRange, filters.customStart, filters.customEnd)
+
+    // Team data present (a central) → always aggregate per-session: statsCache only
+    // represents the central machine's own Claude, never the members'.
+    const teamData = data.sessions.some(s => s.user)
+    const anyFilter =
+      teamData ||
+      usersSel.length > 0 || harnessSel.length > 0 || projects.length > 0 ||
+      modelSet !== null || filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd
+
+    // Columns: the explicitly selected harnesses, else the harnesses the selected users used
+    // (so picking a member narrows the columns), else every harness in the data.
+    const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
+    const userScoped = filterByUsers(data.sessions, usersSel)
+    const scopedHarnesses = distinctHarnesses(userScoped)
+    const cols: HarnessId[] = harnessSel.length > 0
+      ? order.filter(h => harnessSel.includes(h))
+      : (scopedHarnesses.length > 0 ? scopedHarnesses : data.harnesses)
+
+    if (!anyFilter) {
+      const sums = computeHarnessSummaries(data)
+      const la = {} as Record<HarnessId, string | null>
+      for (const h of cols) la[h] = lastActiveFor(data.sessions, h)
+      return { activeHarnesses: cols, summaries: sums, lastActive: la }
+    }
+
+    // Filtered per-session view — every harness (incl. Claude) summarized from sessions,
+    // since statsCache has no per-user/-harness/-date granularity.
+    const filtered = filterByHarnesses(userScoped, harnessSel).filter(s => {
+      if (!s.start_time) return false
+      const d = parseISO(s.start_time)
+      if (d < start || d > end) return false
+      if (projects.length > 0 && !projectSet.has(s.project_path)) return false
+      if (modelSet && (!s.model || !modelSet.has(s.model))) return false
+      return true
+    })
+
+    // Claude canonical source: on a central the deep Claude history lives only in
+    // data.userStatsCaches (aggregated, never as individual sessions). Merge the selected
+    // members' caches (or ALL when no member filter) so the Claude column matches the
+    // dashboard exactly — same rule as useDerivedStats' effectiveStatsCache. Only usable
+    // when NO slice filter is active (statsCache has no project/model/date granularity);
+    // otherwise fall back to the per-session sum.
+    const usc = data.userStatsCaches
+    const hasUserStats = !!usc && Object.keys(usc).length > 0
+    const sliceActive =
+      projects.length > 0 || modelSet !== null ||
+      filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd
+    const claudeStatsCache = hasUserStats
+      ? mergeStatsCaches(
+          (usersSel.length > 0 ? usersSel : Object.keys(usc!))
+            .map(u => usc![u])
+            .filter((c): c is NonNullable<typeof c> => !!c),
+        )
+      : data.statsCache
+    const claudeFromStatsCache = hasUserStats && !sliceActive
+
+    const sums = {} as Record<HarnessId, HarnessSummary>
+    const la = {} as Record<HarnessId, string | null>
+    for (const h of cols) {
+      sums[h] = h === 'claude' && claudeFromStatsCache
+        ? claudeSummaryFromStatsCache(claudeStatsCache, userScoped)
+        : summarizeHarnessSessions(filtered, h)
+      la[h] = lastActiveFor(filtered, h)
+    }
+    return { activeHarnesses: cols, summaries: sums, lastActive: la }
+  }, [data, filters])
 
   // Localized short day-of-week labels (Sunday-first to match getDay()).
   const dowLabels = useMemo(() => [
@@ -246,15 +332,8 @@ export default function ComparePage() {
   ], [lang])
 
   const aggs = useMemo<HarnessAgg[]>(() => {
-    return data.harnesses.map(harness => {
+    return activeHarnesses.map(harness => {
       const s = summaries[harness] ?? { sessions: 0, messages: 0, inputTokens: 0, outputTokens: 0, costUSD: 0 }
-      // lastActive is still derived from raw sessions (per-session field, no statsCache equivalent)
-      const lastActive = data.sessions
-        .filter(sess => (sess.harness ?? 'claude') === harness)
-        .reduce<string | null>((best, sess) => {
-          const t = sess.end_time ?? sess.start_time
-          return t && (!best || t > best) ? t : best
-        }, null)
       return {
         harness,
         sessions: s.sessions,
@@ -262,10 +341,10 @@ export default function ComparePage() {
         inputTokens: capable(harness, 'tokens') ? s.inputTokens : 0,
         outputTokens: capable(harness, 'tokens') ? s.outputTokens : 0,
         costUSD: capable(harness, 'cost') ? s.costUSD : 0,
-        lastActive,
+        lastActive: lastActive[harness] ?? null,
       }
     })
-  }, [data, summaries])
+  }, [activeHarnesses, summaries, lastActive])
 
   const colors = HARNESS_COLORS
 
@@ -273,7 +352,7 @@ export default function ComparePage() {
   // earliest→latest active day across ALL harnesses so they are comparable.
   const { minMs, maxMs } = useMemo(() => {
     let mn = Infinity, mx = -Infinity
-    for (const h of data.harnesses) {
+    for (const h of activeHarnesses) {
       for (const d of summaries[h]?.dailyActivity ?? []) {
         const t = new Date(d.date).getTime()
         if (Number.isNaN(t)) continue
@@ -282,7 +361,7 @@ export default function ComparePage() {
       }
     }
     return { minMs: mn === Infinity ? 0 : mn, maxMs: mx === -Infinity ? 0 : mx }
-  }, [data.harnesses, summaries])
+  }, [activeHarnesses, summaries])
 
   const tokensValues = aggs.map(a => ({
     harness: a.harness,

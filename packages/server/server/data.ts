@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { readFile } from 'fs/promises'
 import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue, HarnessId } from '@agentistics/core'
-import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR } from './config'
+import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL, CENTRAL_USER } from './config'
 import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
@@ -36,6 +36,8 @@ export interface ServerProject {
   name: string
   sessions: { sessionId: string; created: string }[]
   git_stats?: ProjectGitStats
+  /** Team/central only: display names of members who own sessions in this project. */
+  users?: string[]
 }
 
 export interface ApiResponse {
@@ -46,6 +48,8 @@ export interface ApiResponse {
   healthIssues: HealthIssue[]
   homeDir: string
   harnesses: HarnessId[]
+  /** Team/central only: each member's own statsCache, keyed by resolved display name. */
+  userStatsCaches?: Record<string, StatsCache>
 }
 
 export interface ScanResult {
@@ -97,6 +101,7 @@ export async function loadSessionMetas(roots: string[] = [SESSION_META_DIR]): Pr
             input_tokens: (data.input_tokens as number) ?? 0,
             output_tokens: (data.output_tokens as number) ?? 0,
             first_prompt: (data.first_prompt as string) ?? '',
+            title: (data.title as string) ?? (data.summary as string) ?? undefined,
             user_interruptions: (data.user_interruptions as number) ?? 0,
             user_response_times: (data.user_response_times as number[]) ?? [],
             tool_errors: (data.tool_errors as number) ?? 0,
@@ -628,12 +633,14 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     // MUST run AFTER supplementStatsCache so non-Claude sessions never corrupt Claude totals.
     const { getEnabledAdapters } = await import('./adapters/types')
     const harnessSet = new Set<HarnessId>(['claude'])
+    const extraHarnessSessions: SessionMeta[] = []
     for (const adapter of await getEnabledAdapters()) {
       if (adapter.id === 'claude') continue // already loaded above
       const extra = await adapter.loadSessions().catch(() => [] as SessionMeta[])
       for (const s of extra) {
         // Key by (harness, session_id) so IDs never collide across harnesses
         sessions.push(s)
+        extraHarnessSessions.push(s)
         harnessSet.add(s.harness)
         // surface as a project too
         const existing = projects.find(p => p.path === s.project_path && p.path)
@@ -648,6 +655,80 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
         }
       }
     }
+    // Persist non-Claude sessions to the consolidate store too. The Claude-only
+    // writeConsolidated() above runs before this merge, so without this the store
+    // (and therefore the team uploader, which pushes loadConsolidated()) would only
+    // ever carry Claude — a central would never receive Codex/Gemini/Copilot data.
+    // The store is namespaced per harness and writeConsolidated dedups by
+    // (harness, session_id), so this never collides with the Claude entries.
+    if (mode !== 'off' && extraHarnessSessions.length > 0) {
+      await writeConsolidated(extraHarnessSessions)
+    }
+
+    // --- Team sessions: central reads Mongo (Phase 2); else folder union (Phase 1) ---
+    if (TEAM_MODE || TEAM_CENTRAL) {
+      let teamSessions: SessionMeta[] = []
+      if (TEAM_CENTRAL) {
+        const { loadTeamSessionsFromMongo } = await import('./team-source')
+        teamSessions = await loadTeamSessionsFromMongo().catch(() => [] as SessionMeta[])
+      } else {
+        const { loadTeamSessions } = await import('./team-source')
+        teamSessions = await loadTeamSessions().catch(() => [] as SessionMeta[])
+      }
+      for (const s of teamSessions) {
+        sessions.push(s)
+        harnessSet.add(s.harness)
+        const existing = projects.find(p => p.path === s.project_path && p.path)
+        if (existing) {
+          existing.sessions.push({ sessionId: s.session_id, created: s.start_time })
+        } else if (s.project_path) {
+          projects.push({
+            path: s.project_path,
+            name: s.project_path.split('/').filter(Boolean).pop() ?? s.project_path,
+            sessions: [{ sessionId: s.session_id, created: s.start_time }],
+          })
+        }
+      }
+      // Central: fold team sessions into statsCache so the unfiltered (no user
+      // selected) Cost/Tokens KPIs reflect the whole team. Safe on a dedicated
+      // central (empty local statsCache → nothing to corrupt); the day<=lastComputed
+      // guard inside supplementStatsCache prevents any double-count.
+      // NOTE: the central's own `statsCache` is NOT supplemented with team sessions here.
+      // Each member's deep history is exposed separately via `userStatsCaches` (below) and
+      // aggregated per-selected-member on the frontend, so the numbers match each machine
+      // exactly. `statsCache` stays the central machine's own (used for CENTRAL_USER).
+    }
+
+    // Central self-contribution: the central machine's OWN local sessions have no `user`
+    // (team sessions from Mongo always do). When AGENTISTICS_CENTRAL_USER is set, tag those
+    // untagged sessions with it so the machine running the central also appears as a member
+    // in the dashboard's user filter — one instance, both roles. No double-count: the
+    // central never pushes itself to Mongo; it reads its own ~/.claude live.
+    if (TEAM_CENTRAL && CENTRAL_USER) {
+      for (const s of sessions) {
+        if (!s.user) s.user = CENTRAL_USER
+      }
+    }
+
+    // Per-member statsCaches: each member's authoritative aggregated history, keyed by the
+    // member's CURRENT display name (resolved via the tokens table). The central's own
+    // self-contribution is added under CENTRAL_USER. The frontend merges the selected
+    // members' caches so KPIs match each machine exactly.
+    let userStatsCaches: Record<string, StatsCache> | undefined
+    if (TEAM_CENTRAL) {
+      const { loadAllMemberStats } = await import('./team-stats')
+      const { getMemberNameMap } = await import('./team-tokens')
+      const [memberStats, nameMap] = await Promise.all([
+        loadAllMemberStats().catch(() => [] as { memberId: string; user: string; statsCache: StatsCache }[]),
+        getMemberNameMap().catch(() => ({} as Record<string, string>)),
+      ])
+      userStatsCaches = {}
+      for (const m of memberStats) {
+        userStatsCaches[nameMap[m.memberId] ?? m.user] = m.statsCache
+      }
+      if (CENTRAL_USER) userStatsCaches[CENTRAL_USER] = statsCache
+    }
+
     sessions.sort((a, b) => b.start_time.localeCompare(a.start_time))
 
     // Final safety net: dedup by (harness, session_id). A no-op today (each session
@@ -655,16 +736,32 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     // revived from the consolidate store in addition to the live adapter merge.
     const seenHarnessKeys = new Set<string>()
     const dedupedSessions = sessions.filter(s => {
-      const key = `${s.harness ?? 'claude'}:${s.session_id}`
+      const key = `${s.user ?? ''}:${s.harness ?? 'claude'}:${s.session_id}`
       if (seenHarnessKeys.has(key)) return false
       seenHarnessKeys.add(key)
       return true
     })
 
+    // Tag each project with the set of members who own sessions in it, so the
+    // frontend project filter can be scoped to the selected members deterministically
+    // (no path re-matching, no fallback-to-all that leaks other members' projects).
+    // Built from the final deduped session set, where every team/central session carries `user`.
+    const pathToUsers = new Map<string, Set<string>>()
+    for (const s of dedupedSessions) {
+      if (!s.user || !s.project_path) continue
+      let set = pathToUsers.get(s.project_path)
+      if (!set) { set = new Set(); pathToUsers.set(s.project_path, set) }
+      set.add(s.user)
+    }
+    for (const p of projects) {
+      const set = pathToUsers.get(p.path)
+      if (set && set.size > 0) p.users = Array.from(set)
+    }
+
     const totalTokens = dedupedSessions.reduce((sum, s) => sum + (s.input_tokens ?? 0) + (s.output_tokens ?? 0), 0)
     onProgress('finalizing', 1, String(totalTokens))
 
-    return { statsCache, projects, allSessions: [] as [], sessions: dedupedSessions, healthIssues, homeDir: HOME_DIR, harnesses: Array.from(harnessSet) }
+    return { statsCache, projects, allSessions: [] as [], sessions: dedupedSessions, healthIssues, homeDir: HOME_DIR, harnesses: Array.from(harnessSet), userStatsCaches }
   }
 
   return Promise.race([

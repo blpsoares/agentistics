@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react'
 import type { SessionMeta } from '@agentistics/core'
-import { formatProjectName } from '@agentistics/core'
+import { formatProjectName, sessionLabel } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { format, parseISO } from 'date-fns'
 import {
@@ -297,6 +297,7 @@ export function RecentSessions({ sessions, lang, onSelect }: Props) {
       const q = search.trim().toLowerCase()
       list = list.filter(
         s =>
+          (s.title ?? '').toLowerCase().includes(q) ||
           (s.first_prompt ?? '').toLowerCase().includes(q) ||
           (s.project_path ?? '').toLowerCase().includes(q)
       )
@@ -491,7 +492,7 @@ export function RecentSessions({ sessions, lang, onSelect }: Props) {
                         wordBreak: 'break-word',
                       }}
                     >
-                      {s.first_prompt ? truncate(s.first_prompt, 120) : '(no prompt)'}
+                      {(() => { const label = sessionLabel(s); return label ? truncate(label, 120) : '(no prompt)' })()}
                     </div>
                   </div>
 

@@ -33,6 +33,8 @@
     "preview": "bun run --cwd packages/web preview",
     "watch": "bun run --cwd packages/server server/otel-watcher.ts",
     "watch:cli": "bun run packages/web/src/tui/index.ts",
+    "up:central": "bash central.sh up",
+    "init:central": "bash central.sh init",
     "stub": "bun run packages/server/scripts/ensure-type-stub.ts",
     "test": "bun test",
     "prepare": "husky",
