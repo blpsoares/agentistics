@@ -40,7 +40,7 @@ import {
 import { fullSync } from './archive'
 import { getArchiveMode } from './preferences'
 import { registerAgent, unregisterAgent, onAgentMessage, onAgentPong, setPresenceChangeHook, handleSessionChat } from './team-agent'
-import { startAgentClient } from './team-agent-client'
+import { startAgentClient, reconcileNow } from './team-agent-client'
 import { validateIngestToken } from './team-tokens'
 
 // ---------------------------------------------------------------------------
@@ -314,6 +314,14 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           if (body.archiveMode !== 'off') {
             buildApiResponse().catch(err => console.warn('[archive] post-consent consolidation failed:', String(err)))
           }
+        }
+        // When the team config changes (e.g. connecting to a central from the web), don't wait
+        // for the next poll/timer: open the reverse-channel WebSocket now so the member shows
+        // up online on the central within ~a second, and kick an immediate push so its metrics
+        // land right away instead of ~5 s later.
+        if (body.team !== undefined) {
+          reconcileNow()
+          import('./team-uploader').then(m => m.pushNow()).catch(() => {})
         }
         const updated = await readPreferences()
         return new Response(JSON.stringify(updated), {

@@ -18,7 +18,7 @@ Commands:
   restart       Restart a running mode's service so it picks up new code/config
   tui           Start the live terminal dashboard (standalone)
   watch         Start the background metrics daemon only
-  central       Manage the team central (wraps central.sh)
+  central       Manage the team central (Docker; runs from anywhere)
   member        Configure this machine as a team member
   upgrade       Upgrade agentop to the latest version
   autostart     Start a mode with the system (systemd user service on Linux)
@@ -47,7 +47,9 @@ Setup:
 
 Central:
   agentop central <up|init|down|logs|status|restart|pull>
-    Thin wrapper over the repo's central.sh (needs the agentistics repo).
+    Manage the team central via Docker. In a repo checkout it uses central.sh; from the
+    standalone binary it pulls the published image (ghcr.io/blpsoares/agentistics) and
+    materializes a compose in ~/.agentistics/central — no clone required.
 
 Member:
   agentop member connect --endpoint <url> --token <token> [--org <org>]

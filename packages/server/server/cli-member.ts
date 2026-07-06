@@ -8,8 +8,25 @@
  */
 
 import { DEFAULT_TEAM } from '@agentistics/core'
-import { readPreferences, writePreferences } from './preferences'
+import { PORT } from './config'
+import { readPreferences, writePreferences, type Preferences } from './preferences'
 import { getUploaderStatus } from './team-uploader'
+
+/**
+ * If a server is already running on this machine, nudge it to act on a just-changed team config
+ * immediately: PUT the team block so its handler opens the reverse-channel WebSocket and pushes
+ * now, instead of waiting for the next ~5 s poll. Best-effort — a no-op when no server is up.
+ */
+async function nudgeLocalServer(team: NonNullable<Preferences['team']>): Promise<void> {
+  try {
+    await fetch(`http://localhost:${PORT}/api/preferences`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team }),
+      signal: AbortSignal.timeout(3_000),
+    })
+  } catch { /* no local server running (or unreachable) — the config on disk still takes effect */ }
+}
 
 export interface MemberConnectOptions {
   endpoint: string
@@ -68,16 +85,17 @@ export async function memberConnect(opts: MemberConnectOptions): Promise<number>
   const resolvedUser = whoami.user
   const resolvedOrg = opts.org?.trim() || whoami.org || 'default'
 
-  await writePreferences({
-    team: {
-      ...DEFAULT_TEAM,
-      mode: 'member',
-      endpoint,
-      token,
-      org: resolvedOrg,
-      user: resolvedUser,
-    },
-  })
+  const team: NonNullable<Preferences['team']> = {
+    ...DEFAULT_TEAM,
+    mode: 'member',
+    endpoint,
+    token,
+    org: resolvedOrg,
+    user: resolvedUser,
+  }
+  await writePreferences({ team })
+  // If a server is already running locally, make it connect + push immediately.
+  await nudgeLocalServer(team)
 
   process.stdout.write(`connected as ${resolvedUser}\n`)
   return 0

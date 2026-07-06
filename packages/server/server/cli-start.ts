@@ -23,6 +23,7 @@ import { homedir } from 'node:os'
 import { PORT, WEB_PORT } from './config'
 import { readPreferences, writePreferences } from './preferences'
 import { runCentral } from './cli-central'
+import { ensureArchiveModeChosen } from './cli-setup'
 import { memberConnect, memberLeave } from './cli-member'
 import { enableAutostart } from './autostart'
 import { select, confirm, input, pause, clearScreen } from './cli-ui'
@@ -253,10 +254,14 @@ async function runAgentistics(s: CliStrings, localRunning: boolean): Promise<Sta
   if (how === 'back') return 'handled'
   if (how === 'fg') {
     if (!(await clearPortOrAbort(s, localRunning))) return 'handled'
+    // First-run: pick how history is preserved before the server starts (CLI mirror of the
+    // web consent gate). No-op once chosen. The Docker path uses the web gate instead.
+    await ensureArchiveModeChosen()
     return 'foreground'
   }
   if (how === 'bg') {
     if (!(await clearPortOrAbort(s, localRunning))) return 'handled'
+    await ensureArchiveModeChosen()
     startBackground(s)
     await offerBoot(s, 'server')
     await pause(s.pauseMsg)

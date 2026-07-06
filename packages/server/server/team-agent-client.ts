@@ -236,3 +236,15 @@ export function startAgentClient(): void {
   // Do not keep the process alive solely for this poll.
   timer.unref?.()
 }
+
+/**
+ * Reconcile the reverse-channel socket against current preferences RIGHT NOW, instead of
+ * waiting up to POLL_INTERVAL_MS. Call this the moment the team config changes at runtime
+ * (e.g. the PUT /api/preferences handler when a member connects via the web) so the member
+ * shows up as online on the central within ~a second rather than after the next poll. Never
+ * throws. No-op if the client hasn't been started yet (startup already reconciles).
+ */
+export function reconcileNow(): void {
+  if (!started) return
+  void reconcileConnection()
+}
