@@ -485,8 +485,19 @@ export function startUploader(): void {
     }
   }
 
-  // First cycle ~5 s after boot (fixed short delay, then dynamic from there)
-  setTimeout(() => { void cycle() }, 5_000)
+  // First cycle ~800 ms after boot — short enough that a member that starts already
+  // configured pushes (and shows up on the central) almost immediately, then the cadence
+  // becomes dynamic from the central's policy.
+  setTimeout(() => { void cycle() }, 800)
+}
+
+/**
+ * Kick an immediate push cycle out of band (e.g. right after `member connect`), without
+ * waiting for the next timer tick. Idempotent-safe: the `running` guard in triggerPush
+ * prevents overlap with the periodic cycle. No-op when not a member.
+ */
+export async function pushNow(): Promise<void> {
+  await triggerPush()
 }
 
 

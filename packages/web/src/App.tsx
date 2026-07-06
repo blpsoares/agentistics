@@ -44,6 +44,7 @@ import { TtyChat } from './components/TtyChat'
 import { UpdateModal } from './components/UpdateModal'
 import { InstallModal } from './components/InstallModal'
 import { ArchiveConsentModal, type ArchiveMode } from './components/ArchiveConsentModal'
+import { resolveArchiveChoice } from './lib/archive'
 import { TeamLogin } from './components/TeamLogin'
 import { type ChatModelId } from './lib/chatModels'
 import { HARNESS_LABELS } from './lib/harness'
@@ -1085,25 +1086,43 @@ export default function AppLayout() {
   const liveFlashFirstRunRef = useRef(true)
 
   useEffect(() => {
-    fetch('/api/preferences')
-      .then(r => r.ok ? r.json() : null)
-      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean } | null) => {
-        if (!prefs) { setArchiveChoice(null); setInstallDismissedPref(false); return }
-        if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
-        if (prefs.lang) setLangState(prefs.lang)
-        if (prefs.theme) setThemeState(prefs.theme)
-        if (prefs.currency) setCurrencyState(prefs.currency)
-        if (prefs.cardOrder) setCardOrder(mergeCardOrder(prefs.cardOrder))
-        if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
-        if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
-        setInstallDismissedPref(prefs.installDismissed === true)
-        if ((prefs as Record<string, unknown>).chatSoundId) setChatSoundId((prefs as Record<string, unknown>).chatSoundId as string)
-        // Resolve the archive mode, migrating the legacy archiveSessions boolean.
-        const mode: ArchiveMode | undefined =
-          prefs.archiveMode ?? (prefs.archiveSessions === true ? 'full' : prefs.archiveSessions === false ? 'off' : undefined)
-        setArchiveChoice(mode ?? null)
-      })
-      .catch(() => { setArchiveChoice(null); setInstallDismissedPref(false) })
+    // Load preferences resiliently. CRITICAL: a failed load (network hiccup, 5xx, server
+    // still booting) must NEVER be collapsed into the "not chosen yet" sentinel — doing so
+    // re-shows the first-run archive gate AND the install prompt on every transient failure,
+    // even though the user already chose. `archiveChoice === null` means "genuinely unset";
+    // only a real 200 response with no archiveMode may set it. On failure we retry with
+    // backoff and leave state at `undefined` (neutral loading bg) so nothing false-gates.
+    let cancelled = false
+    const apply = (prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean }) => {
+      if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
+      if (prefs.lang) setLangState(prefs.lang)
+      if (prefs.theme) setThemeState(prefs.theme)
+      if (prefs.currency) setCurrencyState(prefs.currency)
+      if (prefs.cardOrder) setCardOrder(mergeCardOrder(prefs.cardOrder))
+      if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
+      if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
+      setInstallDismissedPref(prefs.installDismissed === true)
+      if ((prefs as Record<string, unknown>).chatSoundId) setChatSoundId((prefs as Record<string, unknown>).chatSoundId as string)
+      // Resolve the archive mode (migrates the legacy archiveSessions boolean). Only reached on
+      // a successful load — a failed fetch is retried in `load`, never funneled through here.
+      setArchiveChoice(resolveArchiveChoice(prefs))
+    }
+    const load = async (attempt = 0) => {
+      try {
+        const r = await fetch('/api/preferences')
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const prefs = await r.json()
+        if (!cancelled) apply(prefs)
+      } catch {
+        if (cancelled) return
+        // Keep archiveChoice/installDismissedPref at their loading values and retry with
+        // capped backoff, so a transient failure never wipes the user's saved choice.
+        const delay = Math.min(1000 * 2 ** attempt, 15000)
+        setTimeout(() => { if (!cancelled) void load(attempt + 1) }, delay)
+      }
+    }
+    void load()
+    return () => { cancelled = true }
   }, [])
 
   // Tracks which latest version we've already surfaced as a toast/bell notification,

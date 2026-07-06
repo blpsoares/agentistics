@@ -33,6 +33,31 @@ ENV_FILE="${ENV_FILE:-central.env}"
 
 compose() { docker compose -p "$PROJECT" --env-file "$ENV_FILE" "$@"; }
 
+# Print the dashboard access URL(s) after the central is up. Reads APP_PORT / BIND_IP from
+# the env file; when bound to all interfaces (0.0.0.0) also suggests the LAN / Tailscale IP so
+# teammates know where to point their members.
+print_access_url() {
+  [ -f "$ENV_FILE" ] || return 0
+  local port bind
+  port="$(grep -E '^APP_PORT=' "$ENV_FILE" | tail -1 | cut -d= -f2-)"
+  bind="$(grep -E '^BIND_IP=' "$ENV_FILE" | tail -1 | cut -d= -f2-)"
+  port="${port:-48080}"
+  bind="${bind:-0.0.0.0}"
+  echo
+  echo "Dashboard / central endpoint:"
+  if [ "$bind" = "0.0.0.0" ] || [ -z "$bind" ]; then
+    echo "  local:     http://localhost:$port"
+    local lan_ip ts_ip
+    lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    ts_ip="$(detect_tailscale_ip)"
+    [ -n "$lan_ip" ] && echo "  LAN:       http://$lan_ip:$port"
+    [ -n "$ts_ip" ]  && echo "  Tailscale: http://$ts_ip:$port"
+    echo "  Members connect to one of the reachable URLs above (e.g. agentop member connect --endpoint …)."
+  else
+    echo "  http://$bind:$port"
+  fi
+}
+
 # ── Interactive helpers ──────────────────────────────────────────────────────
 
 # Prompt for a plain value with a default. Usage: v=$(ask "Label" "default")
@@ -163,9 +188,11 @@ case "$cmd" in
     compose up -d --build --force-recreate
     echo
     compose ps
+    print_access_url
     ;;
   restart)
     compose restart app
+    print_access_url
     ;;
   logs)
     docker compose -p "$PROJECT" logs -f app
