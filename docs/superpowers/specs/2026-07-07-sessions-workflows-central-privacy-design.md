@@ -153,6 +153,24 @@ Workflow runs are Claude-only in practice (the Workflow tool is a Claude Code fe
 
 ---
 
+## Block 4 — Presence-coupled members filter (central bugfix)
+
+### Purpose
+
+On the central, the `UsersFilter` ("All members") dropdown lists every member regardless of the active presence filter. When the user filters by **Online** (via `PresenceFilter`), the members list should show only online members (and only offline when filtering Offline). The default "All members" label should also become more intuitive/legible — reflecting the active presence with a colored dot instead of the flat "All members".
+
+### Changes
+
+- `web/src/components/UsersFilter.tsx`: accept an optional `presence?: Record<string, MemberPresence>` and the active `presenceFilter?: 'online' | 'offline'`. When `presenceFilter` is set, show only members whose presence matches. Change the trigger label/dot:
+  - no presence filter → "All members" (neutral dot)
+  - `online` → "Online members" with a green dot (`#22c55e`)
+  - `offline` → "Offline members" with a red dot (`#ef4444`)
+  - Keep the "N members" label when a manual selection is active (unchanged).
+- `web/src/components/FiltersBar.tsx` (~line 236): pass `presence={presence}` and `presenceFilter={filters.presence}` into `UsersFilter`.
+- Behavior guard: "Select all" selects only the currently-visible (presence-filtered) members.
+
+This is a frontend-only change; no server/data changes.
+
 ## Out of scope (explicit)
 
 - No new member→central push fields; the central gains nothing from Blocks 1 & 3.
