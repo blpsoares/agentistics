@@ -646,6 +646,7 @@ function MobileBottomNav({
     badge?: string
   }
   const navTiles: Tile[] = [
+    ...(isCentral ? [] : [{ key: 'sessions', label: pt ? 'Sessões' : 'Sessions', icon: Clock, onClick: () => { setMoreOpen(false); navigate('/sessions') }, active: location.pathname.startsWith('/sessions') } as Tile]),
     { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { setMoreOpen(false); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
     { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { setMoreOpen(false); navigate('/export') }, active: location.pathname.startsWith('/export') },
     ...(harnesses && harnesses.length > 1
@@ -812,12 +813,13 @@ function MobileBottomNav({
   )
 }
 
-function NavTabs({ lang, harnesses }: { lang: Lang; harnesses?: HarnessId[] }) {
+function NavTabs({ lang, harnesses, isCentral }: { lang: Lang; harnesses?: HarnessId[]; isCentral?: boolean }) {
   const location = useLocation()
   const pt = lang === 'pt'
 
   const tabs: { to: string; labelPt: string; labelEn: string; icon: React.ReactNode }[] = [
     { to: '/',          labelPt: 'Home',         labelEn: 'Home',         icon: <Home size={12} /> },
+    ...(isCentral ? [] : [{ to: '/sessions', labelPt: 'Sessões', labelEn: 'Sessions', icon: <Clock size={12} /> }]),
     { to: '/costs',     labelPt: 'Custos',       labelEn: 'Costs',        icon: <DollarSign size={12} /> },
     { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={12} /> },
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={12} /> },
@@ -2006,7 +2008,7 @@ export default function AppLayout() {
             display: 'flex',
             alignItems: 'center',
           }}>
-            <NavTabs lang={lang} harnesses={data.harnesses} />
+            <NavTabs lang={lang} harnesses={data.harnesses} isCentral={isCentral} />
           </div>
         )}
       </header>

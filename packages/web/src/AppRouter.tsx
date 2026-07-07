@@ -9,6 +9,7 @@ const ToolsPage = lazy(() => import('./pages/ToolsPage'))
 const CustomPage = lazy(() => import('./pages/CustomPage'))
 const ComparePage = lazy(() => import('./pages/ComparePage'))
 const ExportPage = lazy(() => import('./pages/ExportPage'))
+const SessionsPage = lazy(() => import('./pages/SessionsPage'))
 
 function PageFallback() {
   return (
@@ -28,6 +29,7 @@ export default function AppRouter() {
         <Route element={<AppLayout />}>
           <Route index element={<Suspense fallback={<PageFallback />}><HomePage /></Suspense>} />
           <Route path="costs" element={<Suspense fallback={<PageFallback />}><CostsPage /></Suspense>} />
+          <Route path="sessions" element={<Suspense fallback={<PageFallback />}><SessionsPage /></Suspense>} />
           <Route path="projects" element={<Suspense fallback={<PageFallback />}><ProjectsPage /></Suspense>} />
           <Route path="tools" element={<Suspense fallback={<PageFallback />}><ToolsPage /></Suspense>} />
           <Route path="custom" element={<Suspense fallback={<PageFallback />}><CustomPage /></Suspense>} />
