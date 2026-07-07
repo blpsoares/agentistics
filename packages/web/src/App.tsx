@@ -2078,6 +2078,7 @@ export default function AppLayout() {
           highlightUpdates={highlightUpdates}
           setHighlightUpdates={setHighlightUpdates}
           harnesses={data.harnesses}
+          presence={data?.presence}
           />
       )}
 

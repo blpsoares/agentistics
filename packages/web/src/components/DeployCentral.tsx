@@ -178,7 +178,7 @@ function InputField({
 
 export function DeployCentral({ pt }: { pt: boolean }) {
   const [org, setOrg] = useState('default')
-  const [port, setPort] = useState('47291')
+  const [port, setPort] = useState('48080')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<DeployResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -192,7 +192,7 @@ export function DeployCentral({ pt }: { pt: boolean }) {
 
   async function generate() {
     const trimmedOrg = org.trim() || 'default'
-    const trimmedPort = port.trim() || '47291'
+    const trimmedPort = port.trim() || '48080'
     setLoading(true)
     setError(null)
     // Do NOT clear result here — keep previous credentials visible until the
