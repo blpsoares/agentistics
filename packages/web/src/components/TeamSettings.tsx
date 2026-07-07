@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Loader2, CheckCircle, XCircle, Users, User, Server, LogOut } from 'lucide-react'
 import { TeamMembers } from './TeamMembers'
-import { PUSH_INTERVAL, type TeamConfig } from '@agentistics/core'
+import { PUSH_INTERVAL, type TeamConfig, type MemberPresence } from '@agentistics/core'
 import { pushNotification } from '../lib/notifications'
 import { MemberConnectionStatus } from './MemberConnectionStatus'
 
@@ -28,6 +28,9 @@ export interface Props {
   lang: 'pt' | 'en'
   /** When true, this instance is the team central — show admin panel, hide member connect fields */
   central: boolean | null
+  /** Shared dashboard presence (/api/data), threaded to the members panel so it can't diverge
+   *  from the FiltersBar presence pill. */
+  presence?: Record<string, MemberPresence>
 }
 
 interface TestResult {
@@ -259,7 +262,7 @@ interface SaveResult {
   error?: string
 }
 
-export function TeamSettings({ team, onChange, lang, central }: Props) {
+export function TeamSettings({ team, onChange, lang, central, presence }: Props) {
   const pt = lang === 'pt'
   const [testResult, setTestResult] = useState<TestResult | null>(null)
   const [testing, setTesting] = useState(false)
@@ -530,7 +533,7 @@ export function TeamSettings({ team, onChange, lang, central }: Props) {
 
         <Divider />
 
-        <TeamMembers lang={lang} />
+        <TeamMembers lang={lang} presence={presence} />
 
         {/* Inline keyframe for spinner */}
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>

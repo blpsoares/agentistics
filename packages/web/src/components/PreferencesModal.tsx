@@ -5,7 +5,7 @@ import {
   Archive, Check, HardDrive, FolderClock, ExternalLink, DatabaseZap,
   Cpu, Copy, CheckCheck, AlertCircle, CircleDot, Users, Database,
 } from 'lucide-react'
-import type { Lang, Theme, HarnessId } from '@agentistics/core'
+import type { Lang, Theme, HarnessId, MemberPresence } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { HarnessInfoPanel } from './HarnessInfoPanel'
 import type { ArchiveMode } from './ArchiveConsentModal'
@@ -76,6 +76,9 @@ interface Props {
   defaultTab?: SettingsTab
   /** Harnesses present in the data — drives the "Data & sources" tab content. */
   harnesses?: HarnessId[]
+  /** Shared dashboard presence (/api/data), threaded to the team members panel so it stays in
+   *  sync with the FiltersBar presence pill. */
+  presence?: Record<string, MemberPresence>
 }
 
 // ── Shared primitives ──────────────────────────────────────────────────────
@@ -557,9 +560,9 @@ function InstallTab({ pt, pwaPrompt, onPwaInstalled, onClose, central }: {
           : 'The Web App is faster to install and works on any platform. The Desktop App offers native Windows integration with a taskbar icon.'}
       </div>
 
-      {central === true && (
+      {central === false && (
         <>
-          {/* Deploy a team central — only shown on the central instance */}
+          {/* Deploy a team central — only shown on non-central instances */}
           <div style={{ height: 1, background: 'var(--border)', margin: '4px 0 4px' }} />
           <div style={{
             fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)',
@@ -1075,7 +1078,7 @@ const DEFAULT_TEAM_CONFIG: TeamConfig = {
   token: '',
 }
 
-function TeamTab({ pt, central }: { pt: boolean; central: boolean | null }) {
+function TeamTab({ pt, central, presence }: { pt: boolean; central: boolean | null; presence?: Record<string, MemberPresence> }) {
   const lang: 'pt' | 'en' = pt ? 'pt' : 'en'
   const [team, setTeam] = useState<TeamConfig>(DEFAULT_TEAM_CONFIG)
   const [loadErr, setLoadErr] = useState<string | null>(null)
@@ -1108,7 +1111,7 @@ function TeamTab({ pt, central }: { pt: boolean; central: boolean | null }) {
     <div>
       {/* TeamSettings handles saving explicitly via its Save button (member mode)
           or its own interval control (central mode). onChange just syncs local state. */}
-      <TeamSettings team={team} onChange={setTeam} lang={lang} central={central} />
+      <TeamSettings team={team} onChange={setTeam} lang={lang} central={central} presence={presence} />
     </div>
   )
 }
@@ -1133,6 +1136,7 @@ export function PreferencesModal({
   liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval,
   riskyMode, setRiskyMode, highlightUpdates, setHighlightUpdates,
   defaultTab = 'preferences', harnesses = [],
+  presence,
 }: Props) {
   const isMobile = useIsMobile()
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab)
@@ -1286,7 +1290,7 @@ export function PreferencesModal({
           )}
           {activeTab === 'harnesses' && <HarnessesTab pt={pt} />}
           {activeTab === 'datasources' && <DataSourcesTab pt={pt} harnesses={harnesses} />}
-          {activeTab === 'team' && <TeamTab pt={pt} central={central} />}
+          {activeTab === 'team' && <TeamTab pt={pt} central={central} presence={presence} />}
         </div>
 
         {/* Footer — only for Preferences tab */}

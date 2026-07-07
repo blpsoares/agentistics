@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Users, Plus, Trash2, Copy, CheckCheck, RefreshCw, AlertCircle, Pencil, Check, X, RotateCw } from 'lucide-react'
+import type { MemberPresence } from '@agentistics/core'
 import { copyText } from '../lib/clipboard'
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -90,9 +91,13 @@ function relativeTime(isoStr: string, lang: 'en' | 'pt'): string {
 
 interface Props {
   lang: 'en' | 'pt'
+  /** Shared presence from the dashboard's /api/data (SSE-refreshed), keyed by member user.
+   *  When present it overrides this component's own /api/team/members online/latency so the
+   *  members panel and the FiltersBar presence pill can never diverge. */
+  presence?: Record<string, MemberPresence>
 }
 
-export function TeamMembers({ lang }: Props) {
+export function TeamMembers({ lang, presence }: Props) {
   const [members, setMembers] = useState<TeamMember[]>([])
   const [loading, setLoading] = useState(true)
   const [loadErr, setLoadErr] = useState<string | null>(null)
@@ -445,7 +450,13 @@ export function TeamMembers({ lang }: Props) {
               {t('noMembers', lang)}
             </div>
           ) : (
-            members.map((m, i) => (
+            members.map((m, i) => {
+              // Prefer the shared dashboard presence (SSE-refreshed) so this panel and the
+              // FiltersBar pill can never disagree; fall back to this component's own fetch.
+              const p = presence?.[m.user]
+              const online = p ? p.online : m.online
+              const latencyMs = p ? p.latencyMs : m.latencyMs
+              return (
               <div
                 key={m.id}
                 style={{
@@ -458,7 +469,7 @@ export function TeamMembers({ lang }: Props) {
                   background: 'var(--bg-card)',
                   transition: 'background 0.1s',
                   // Offline rows are dimmed so the eye jumps to who's actually connected.
-                  opacity: m.online ? 1 : 0.5,
+                  opacity: online ? 1 : 0.5,
                 }}
                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)' }}
                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-card)' }}
@@ -467,11 +478,11 @@ export function TeamMembers({ lang }: Props) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingRight: 12, whiteSpace: 'nowrap' }}>
                   <span style={{
                     width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                    background: m.online ? '#22c55e' : '#ef4444',
-                    boxShadow: m.online ? '0 0 6px rgba(34,197,94,0.6)' : 'none',
+                    background: online ? '#22c55e' : '#ef4444',
+                    boxShadow: online ? '0 0 6px rgba(34,197,94,0.6)' : 'none',
                   }} />
-                  <span style={{ fontSize: 11, color: m.online ? 'var(--accent-green, #22c55e)' : 'var(--text-tertiary)', fontWeight: 500 }}>
-                    {m.online ? (m.latencyMs != null ? `${m.latencyMs}ms` : t('online', lang)) : t('offline', lang)}
+                  <span style={{ fontSize: 11, color: online ? 'var(--accent-green, #22c55e)' : 'var(--text-tertiary)', fontWeight: 500 }}>
+                    {online ? (latencyMs != null ? `${latencyMs}ms` : t('online', lang)) : t('offline', lang)}
                   </span>
                 </div>
 
@@ -624,7 +635,8 @@ export function TeamMembers({ lang }: Props) {
                   </button>
                 </div>
               </div>
-            ))
+              )
+            })
           )}
         </div>
       )}

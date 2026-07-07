@@ -1,10 +1,10 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { FileDown, Download, Sun, Moon, Check, Calendar, Cpu } from 'lucide-react'
+import { FileDown, Download, Sun, Moon, Check, Calendar, Cpu, FolderOpen, Users } from 'lucide-react'
 import { format } from 'date-fns'
 import type { AppContext } from '../lib/app-context'
 import type { HarnessId, Filters, Lang } from '@agentistics/core'
-import { t, formatModel } from '@agentistics/core'
+import { t, formatModel, formatProjectName, distinctUsers } from '@agentistics/core'
 import { useDerivedStats, blendedCostPerToken, computeHarnessSummaries } from '../hooks/useData'
 import { useIsMobile } from '../hooks/useIsMobile'
 import {
@@ -475,6 +475,8 @@ export default function ExportPage() {
   const [chartOverlayAll, setChartOverlayAll] = useState(false)
   const [dateRange, setDateRange] = useState<Filters['dateRange']>(appFilters.dateRange)
   const [selectedModels, setSelectedModels] = useState<string[]>([])
+  const [selectedProjects, setSelectedProjects] = useState<string[]>([])
+  const [selectedUsers, setSelectedUsers] = useState<string[]>([])
 
   // Export state
   const [exporting, setExporting] = useState(false)
@@ -508,12 +510,13 @@ export default function ExportPage() {
       dateRange,
       customStart: '',
       customEnd: '',
-      projects: [],
+      projects: selectedProjects,
+      users: selectedUsers,
       models: selectedModels,
     }
     if (scope === 'all' || scope === 'compare') return base
     return { ...base, harness: scope as HarnessId }
-  }, [scope, dateRange, selectedModels])
+  }, [scope, dateRange, selectedModels, selectedProjects, selectedUsers])
 
   // Derive stats for All/harness scopes (unused for Compare scope, but harmless)
   const derived = useDerivedStats(data, pdfFilters)
@@ -540,6 +543,38 @@ export default function ExportPage() {
       .filter(h => byH[h] && byH[h]!.size > 0)
       .map(h => ({ harness: h, models: Array.from(byH[h]!).sort() }))
   }, [data, scope])
+
+  // Members available to scope the export by — only populated on a central (solo
+  // sessions carry no `user` tag). Sourced the same way the dashboard filter is.
+  const availableUsers = useMemo(() => distinctUsers(data.sessions), [data])
+
+  // Session count per project, used to order the project list (busiest first).
+  const projectCounts = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const s of data.sessions) {
+      if (s.project_path) m[s.project_path] = (m[s.project_path] ?? 0) + 1
+    }
+    return m
+  }, [data])
+
+  // Projects offered in the picker, scoped to the SELECTED members (empty = all
+  // members) so on a central picking member X only lists X's projects, then sorted
+  // by session count. Mirrors App.tsx's availableProjects.
+  const availableProjects = useMemo(() => {
+    const base = selectedUsers.length === 0
+      ? data.projects
+      : data.projects.filter(p => (p.users ?? []).some(u => selectedUsers.includes(u)))
+    return [...base].sort((a, b) => (projectCounts[b.path] ?? 0) - (projectCounts[a.path] ?? 0))
+  }, [data, selectedUsers, projectCounts])
+
+  // Prune any selected project no longer available after a member-selection change.
+  useEffect(() => {
+    if (selectedProjects.length === 0) return
+    const allowed = new Set(availableProjects.map(p => p.path))
+    const pruned = selectedProjects.filter(p => allowed.has(p))
+    if (pruned.length !== selectedProjects.length) setSelectedProjects(pruned)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableProjects])
 
   // Filename based on scope
   const pdfFilename = useMemo(() => {
@@ -753,6 +788,84 @@ export default function ExportPage() {
                 ))}
                 {selectedModels.length > 0 && (
                   <button onClick={() => setSelectedModels([])} style={{
+                    fontSize: 10, color: 'var(--text-tertiary)', background: 'transparent',
+                    border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: '3px 0', textAlign: 'left',
+                  }}>
+                    {t('export.clearSelection', lang)}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Member filter — central only (solo sessions carry no user tag); hidden for Compare */}
+          {scope !== 'compare' && availableUsers.length > 0 && (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                <Users size={11} color="var(--text-tertiary)" />
+                <ConfigLabel text={pt ? 'Membros' : 'Members'} />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 180, overflowY: 'auto' }}>
+                {availableUsers.map(u => {
+                  const sel = selectedUsers.includes(u)
+                  return (
+                    <button key={u} onClick={() => setSelectedUsers(prev =>
+                      prev.includes(u) ? prev.filter(x => x !== u) : [...prev, u]
+                    )} style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '5px 8px', borderRadius: 6, cursor: 'pointer',
+                      fontFamily: 'inherit', fontSize: 11, textAlign: 'left',
+                      background: sel ? 'var(--anthropic-orange-dim)' : 'transparent',
+                      border: sel ? '1px solid var(--anthropic-orange)30' : '1px solid transparent',
+                      color: sel ? 'var(--text-primary)' : 'var(--text-secondary)',
+                      fontWeight: sel ? 600 : 400, transition: 'all 0.12s',
+                    }}>
+                      <div style={{ width: 7, height: 7, borderRadius: '50%', background: sel ? 'var(--anthropic-orange)' : 'var(--border)', flexShrink: 0 }} />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u}</span>
+                    </button>
+                  )
+                })}
+                {selectedUsers.length > 0 && (
+                  <button onClick={() => setSelectedUsers([])} style={{
+                    fontSize: 10, color: 'var(--text-tertiary)', background: 'transparent',
+                    border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: '3px 0', textAlign: 'left',
+                  }}>
+                    {t('export.clearSelection', lang)}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Project filter — scope the report to specific projects; hidden for Compare */}
+          {scope !== 'compare' && availableProjects.length > 0 && (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                <FolderOpen size={11} color="var(--text-tertiary)" />
+                <ConfigLabel text={t('filter.project', lang)} />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 200, overflowY: 'auto' }}>
+                {availableProjects.map(p => {
+                  const sel = selectedProjects.includes(p.path)
+                  return (
+                    <button key={p.path} onClick={() => setSelectedProjects(prev =>
+                      prev.includes(p.path) ? prev.filter(x => x !== p.path) : [...prev, p.path]
+                    )} style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '5px 8px', borderRadius: 6, cursor: 'pointer',
+                      fontFamily: 'inherit', fontSize: 11, textAlign: 'left',
+                      background: sel ? 'var(--anthropic-orange-dim)' : 'transparent',
+                      border: sel ? '1px solid var(--anthropic-orange)30' : '1px solid transparent',
+                      color: sel ? 'var(--text-primary)' : 'var(--text-secondary)',
+                      fontWeight: sel ? 600 : 400, transition: 'all 0.12s',
+                    }} title={p.path}>
+                      <div style={{ width: 7, height: 7, borderRadius: '50%', background: sel ? 'var(--anthropic-orange)' : 'var(--border)', flexShrink: 0 }} />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatProjectName(p.path)}</span>
+                    </button>
+                  )
+                })}
+                {selectedProjects.length > 0 && (
+                  <button onClick={() => setSelectedProjects([])} style={{
                     fontSize: 10, color: 'var(--text-tertiary)', background: 'transparent',
                     border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: '3px 0', textAlign: 'left',
                   }}>

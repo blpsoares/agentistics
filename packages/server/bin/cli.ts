@@ -16,6 +16,7 @@ Commands:
   setup         Interactive first-run wizard (solo / central / member)
   server        Start the web dashboard + background daemon (non-interactive)
   restart       Restart a running mode's service so it picks up new code/config
+  status        Show services (server/central/member) + health
   tui           Start the live terminal dashboard (standalone)
   watch         Start the background metrics daemon only
   central       Manage the team central (Docker; runs from anywhere)
@@ -276,6 +277,11 @@ if (command === 'autostart') {
 
   process.stdout.write(res.message + '\n')
   process.exit(res.ok ? 0 : 1)
+}
+
+if (command === 'status') {
+  const { runStatus } = await import('../server/cli-status.ts')
+  process.exit(await runStatus())
 }
 
 if (command === 'restart') {
