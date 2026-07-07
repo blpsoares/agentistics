@@ -14,7 +14,7 @@ const COUNT_KEY = 'agentistics-sessions-recent-count'
 
 export default function SessionsPage() {
   const ctx = useOutletContext<AppContext>()
-  const { derived, lang, setSelectedSession } = ctx
+  const { derived, lang, setSelectedSession, isCentral } = ctx
   const pt = lang === 'pt'
 
   const [count, setCount] = useState<number>(() => {
@@ -35,6 +35,26 @@ export default function SessionsPage() {
     () => sorted.filter(s => !liveIds.has(s.session_id)).slice(0, count),
     [sorted, count],
   )
+
+  if (isCentral) {
+    return (
+      <>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 4 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>
+            <span style={{ color: 'var(--anthropic-orange)' }}><Clock size={16} /></span>
+            {pt ? 'Sessões' : 'Sessions'}
+          </div>
+        </div>
+        <Section flashId="sessions-central-empty" title={<><Clock size={14} /> {pt ? 'Sessões' : 'Sessions'}</>}>
+          <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>
+            {pt
+              ? 'A aba Sessões é local a cada máquina e não é exibida em um central.'
+              : 'The Sessions tab is local to each machine and is not shown on a central.'}
+          </div>
+        </Section>
+      </>
+    )
+  }
 
   return (
     <>

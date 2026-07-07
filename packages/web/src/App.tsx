@@ -2036,6 +2036,7 @@ export default function AppLayout() {
           cardPrecision, setCardPrecision,
           sessionCountByProject, models, modelGroups, modelsInProject, users,
           harnesses: data.harnesses,
+          isCentral,
         }} />
       </main>
 
