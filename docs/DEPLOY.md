@@ -14,6 +14,11 @@ This guide covers running **agentistics Team Mode** as a central aggregator usin
 
 ## Quick Start
 
+> **No repo? Use the binary.** If you have the `agentop` binary installed, you can skip cloning
+> entirely: `agentop central up` pulls the published image and runs the central from any
+> directory (see [`agentop central`](#the-same-thing-from-the-cli--agentop-central)). The steps
+> below are the repo-based flow (builds the image from source).
+
 ### 1. Clone the repository and enter the project root
 
 ```bash
@@ -104,20 +109,27 @@ Override the defaults with env vars: `PROJECT=... ENV_FILE=... ./central.sh up`.
 
 ### The same thing from the cli — `agentop central`
 
-If you have the `agentop` binary installed, `agentop central <action>` is a thin wrapper
-that shells out to the repo's `central.sh` (it locates the script in the checkout it was
-run from, inheriting stdio so `init`'s prompts and `logs` streaming work). The actions map
-one-to-one:
+`agentop central <action>` manages the central via Docker. It picks its path automatically:
+
+- **In a repo checkout** — it shells out to the repo's `central.sh` (locating it in the
+  checkout, inheriting stdio so `init`'s prompts and `logs` streaming work). The image is
+  built from source (`build: .`).
+- **From the standalone binary (no repo)** — it materializes a Compose file that **pulls**
+  the published image `ghcr.io/blpsoares/agentistics:<version>` into `~/.agentistics/central/`,
+  generates `central.env` interactively on first `up`, and drives `docker compose` directly.
+  No clone required — run it from any directory.
+
+The actions map one-to-one:
 
 | central.sh | agentop equivalent | What it does |
 |---|---|---|
 | `./central.sh init` | `agentop central init` | (Re)generate `central.env` interactively |
-| `./central.sh up` | `agentop central up` | Build + `--force-recreate` the containers |
+| `./central.sh up` | `agentop central up` | Deploy: build (repo) or pull (standalone) + `--force-recreate` |
 | `./central.sh restart` | `agentop central restart` | Restart the `app` container without rebuilding |
 | `./central.sh logs` | `agentop central logs` | Follow the `app` logs |
 | `./central.sh status` | `agentop central status` | Show container + health status |
 | `./central.sh down` | `agentop central down` | Stop + remove containers (keeps the data volume) |
-| `./central.sh pull` | `agentop central pull` | Rebuild from a fresh base image |
+| `./central.sh pull` | `agentop central pull` | Pull a fresh image and recreate |
 
 ```bash
 agentop central up        # first time offers the interactive init, then deploys
@@ -125,8 +137,12 @@ agentop central status
 agentop central logs
 ```
 
-> `agentop central` needs the agentistics repo (it runs `central.sh`), so run it from
-> inside a checkout. On a machine that only has the binary, clone the repo first.
+> **Standalone requirements:** the published image must be reachable. It's public on GHCR by
+> default (no auth needed); if the package is private, run `docker login ghcr.io` first. Pin a
+> specific build with `AGENTISTICS_IMAGE=ghcr.io/blpsoares/agentistics:<tag>` (defaults to the
+> binary's own version). The standalone Compose runs a dedicated central and does **not** mount
+> the host harness dirs — for a self-contributing central (one machine = central + member), use
+> the repo `central.sh` with `AGENTISTICS_CENTRAL_USER` set.
 
 ---
 
@@ -165,6 +181,32 @@ expose the dashboard **outside** Tailscale.
 > **WSL2 note:** binding to a specific non-loopback IP (e.g. Tailscale) means Windows'
 > `localhost` forwarding no longer reaches the app — browse via that IP instead. The default
 > `0.0.0.0` keeps `http://localhost:<APP_PORT>` working.
+
+### WSL2 + Tailscale: use `tailscale serve` (recommended)
+
+Running the central in **Docker inside WSL2** and exposing it over Tailscale is flaky with a
+raw published port: `http://localhost:<APP_PORT>` works, but hitting the machine's Tailscale
+IP (`http://100.x.y.z:<APP_PORT>`) often hangs or "works, then stops". The cause is packets
+arriving on the `tailscale0` interface having to traverse Docker's DNAT/FORWARD inside WSL2 —
+that path is unreliable in WSL2's NAT networking. It is **not** an agentistics or container
+problem (localhost proves the app is fine).
+
+The robust fix is to let `tailscaled` proxy the port instead of relying on the Docker/interface
+path — `tailscale serve` accepts the tailnet connection in-process and forwards to
+`127.0.0.1:<APP_PORT>` (which always works):
+
+```bash
+sudo tailscale set --operator=$USER      # once — lets you run serve without sudo afterwards
+tailscale serve --bg <APP_PORT>          # e.g. 48080
+tailscale serve status                   # confirm: https://<host>.<tailnet>.ts.net → 127.0.0.1:<APP_PORT>
+```
+
+Everyone then uses the **HTTPS MagicDNS URL with no port** — e.g.
+`https://your-host.your-tailnet.ts.net` — both in the browser and as the member endpoint
+(`agentop member connect --endpoint https://your-host.your-tailnet.ts.net …`). `serve` proxies
+the reverse-channel WebSocket (`/api/team/agent`) too, so presence and on-demand chat keep
+working. Undo with `tailscale serve reset`. (Requires HTTPS certificates enabled for your
+tailnet — the default on modern Tailscale.)
 
 ---
 

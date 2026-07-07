@@ -29,6 +29,7 @@ agentop --version    # print version (and a notice if an update exists)
 | [`setup`](#setup) | Interactive first-run wizard (solo / central / member) |
 | [`server`](#server) | Start the web dashboard + api + Nay + background daemon (non-interactive) |
 | [`restart`](#restart) | Restart a running mode so it picks up new code / config |
+| [`status`](#status) | At-a-glance: mode, services (server/central/machine) + health |
 | [`tui`](#tui) | Live terminal dashboard (no browser) |
 | [`watch`](#watch) | OpenTelemetry metrics daemon only (headless) |
 | [`central`](#central) | Manage the Team Mode central (wraps `central.sh`) |
@@ -121,6 +122,24 @@ agentop restart central    # rebuild + restart the central's Docker container
 tells you to run it in the foreground or enable autostart first. `central` delegates to
 `central.sh restart`; to also pick up **code** changes on a central, use `agentop central up`
 (rebuilds the image) instead.
+
+---
+
+## `status`
+
+Non-interactive, at-a-glance report of this machine. Prints three blocks:
+
+- **CONFIG** — the team mode (`solo` / `central` / `member`) and, for a member, the
+  central endpoint (from preferences).
+- **SERVICES** — detected live: the local server (`http://localhost:47291/api/health`;
+  shows the dashboard URL when up), the central container, and the machine container.
+- **HEALTH** — a one-line summary from `/api/health` when the server is up, else `n/a`.
+
+```bash
+agentop status
+```
+
+Handy for a quick "is everything up and healthy?" without opening the dashboard.
 
 ---
 
