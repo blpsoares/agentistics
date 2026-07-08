@@ -2,23 +2,19 @@ import React, { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Workflow as WorkflowIcon, ChevronDown, ChevronRight } from 'lucide-react'
 import type { WorkflowRun } from '@agentistics/core'
-import { getModelPrice } from '@agentistics/core'
+import { getModelPrice, fmtCost } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { Section } from '../components/Section'
 
-function brl(usd: number, rate: number) {
-  return `R$ ${(usd * rate).toFixed(2)}`
-}
-
-/** Average of input/output USD-per-1M-token rates, converted to BRL. */
-function perMillionBRL(model: string, rate: number) {
+/** Average of input/output USD-per-1M-token rates. */
+function perMillionUSD(model: string) {
   const p = getModelPrice(model)
-  return `R$ ${(((p.input + p.output) / 2) * rate).toFixed(2)}`
+  return (p.input + p.output) / 2
 }
 
 export default function WorkflowsPage() {
   const ctx = useOutletContext<AppContext>()
-  const { data, lang, brlRate } = ctx
+  const { data, lang, brlRate, currency } = ctx
   const pt = lang === 'pt'
   const runs = data.workflows ?? []
 
@@ -42,7 +38,7 @@ export default function WorkflowsPage() {
         )
         : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {runs.map(run => <RunBlock key={run.runId} run={run} pt={pt} rate={brlRate} />)}
+            {runs.map(run => <RunBlock key={run.runId} run={run} pt={pt} rate={brlRate} currency={currency} />)}
           </div>
         )}
     </>
@@ -61,7 +57,7 @@ function PageHeader({ icon, title, subtitle }: { icon: React.ReactNode; title: s
   )
 }
 
-function RunBlock({ run, pt, rate }: { run: WorkflowRun; pt: boolean; rate: number }) {
+function RunBlock({ run, pt, rate, currency }: { run: WorkflowRun; pt: boolean; rate: number; currency: 'USD' | 'BRL' }) {
   const [open, setOpen] = useState(true)
   const statusColor = run.status === 'completed' ? '#22c55e' : run.status === 'partial' ? '#eab308' : '#ef4444'
   return (
@@ -73,7 +69,7 @@ function RunBlock({ run, pt, rate }: { run: WorkflowRun; pt: boolean; rate: numb
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: statusColor }} />
           {run.name}
           <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 400 }}>
-            · {run.totals.agentCount} {pt ? 'agentes' : 'agents'} · {(run.totals.tokensIn + run.totals.tokensOut).toLocaleString()} tkn · {brl(run.totals.costUSD, rate)}
+            · {run.totals.agentCount} {pt ? 'agentes' : 'agents'} · {(run.totals.tokensIn + run.totals.tokensOut).toLocaleString()} tkn · {fmtCost(run.totals.costUSD, currency, rate)}
           </span>
         </span>
       }
@@ -93,8 +89,8 @@ function RunBlock({ run, pt, rate }: { run: WorkflowRun; pt: boolean; rate: numb
                       <th style={cell}>{pt ? 'Modelo' : 'Model'}</th>
                       <th style={cellR}>In</th>
                       <th style={cellR}>Out</th>
-                      <th style={cellR}>R$</th>
-                      <th style={cellR}>R$/M</th>
+                      <th style={cellR}>{pt ? 'Custo' : 'Cost'}</th>
+                      <th style={cellR}>{pt ? 'Custo/M' : 'Cost/M'}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -104,8 +100,8 @@ function RunBlock({ run, pt, rate }: { run: WorkflowRun; pt: boolean; rate: numb
                         <td style={cell}>{a.model || '—'}</td>
                         <td style={cellR}>{a.tokensIn.toLocaleString()}</td>
                         <td style={cellR}>{a.tokensOut.toLocaleString()}</td>
-                        <td style={cellR}>{brl(a.costUSD, rate)}</td>
-                        <td style={cellR}>{a.model ? perMillionBRL(a.model, rate) : '—'}</td>
+                        <td style={cellR}>{fmtCost(a.costUSD, currency, rate)}</td>
+                        <td style={cellR}>{a.model ? fmtCost(perMillionUSD(a.model), currency, rate) : '—'}</td>
                       </tr>
                     ))}
                   </tbody>
