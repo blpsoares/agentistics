@@ -141,6 +141,39 @@ export interface SessionAgentMetrics {
   totalCostUSD: number
 }
 
+export interface WorkflowAgent {
+  label: string
+  phase: string
+  model: string
+  status: 'completed' | 'failed' | 'skipped'
+  tokensIn: number
+  tokensOut: number
+  cacheRead: number
+  cacheWrite: number
+  costUSD: number
+  toolStats?: {
+    readCount: number; searchCount: number; bashCount: number
+    editFileCount: number; linesAdded: number; linesRemoved: number; otherToolCount: number
+  }
+}
+
+export interface WorkflowPhase {
+  title: string
+  agentCount: number
+}
+
+export interface WorkflowRun {
+  runId: string
+  name: string
+  sessionId: string
+  status: 'completed' | 'failed' | 'partial'
+  startedAt: string        // ISO; '' if unknown
+  durationMs: number
+  phases: WorkflowPhase[]
+  agents: WorkflowAgent[]
+  totals: { agentCount: number; tokensIn: number; tokensOut: number; costUSD: number; durationMs: number; toolUses: number }
+}
+
 export interface PriceEntry {
   input: number
   output: number
@@ -223,6 +256,7 @@ export interface AppData {
   presence?: Record<string, MemberPresence>
   /** Team/central only: central policy — whether offline members' data is shown by default. */
   includeOfflineData?: boolean
+  workflows?: WorkflowRun[]
 }
 
 /** An empty statsCache with all zero/neutral fields. Pure. */
