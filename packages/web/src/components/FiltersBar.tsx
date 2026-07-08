@@ -238,6 +238,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
             selected={filters.users ?? []}
             onChange={u => onChange({ ...filters, users: u })}
             lang={lang}
+            presence={presence}
+            presenceFilter={filters.presence}
           />
         )}
 

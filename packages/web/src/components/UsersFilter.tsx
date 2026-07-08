@@ -1,19 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Users, Check, ChevronDown } from 'lucide-react'
+import type { MemberPresence } from '@agentistics/core'
 
 interface Props {
   users: string[]
   selected: string[]
   onChange: (users: string[]) => void
   lang: 'pt' | 'en'
+  presence?: Record<string, MemberPresence>
+  presenceFilter?: 'online' | 'offline'
 }
 
 const T = {
-  pt: { all: 'Todos os membros', selected: 'membros', selectAll: 'Selecionar tudo', clear: 'Limpar' },
-  en: { all: 'All members', selected: 'members', selectAll: 'Select all', clear: 'Clear' },
+  pt: { all: 'Todos os membros', online: 'Membros online', offline: 'Membros offline', selected: 'membros', selectAll: 'Selecionar tudo', clear: 'Limpar' },
+  en: { all: 'All members', online: 'Online members', offline: 'Offline members', selected: 'members', selectAll: 'Select all', clear: 'Clear' },
 } as const
 
-export function UsersFilter({ users, selected, onChange, lang }: Props) {
+export function UsersFilter({ users, selected, onChange, lang, presence, presenceFilter }: Props) {
   const t = T[lang]
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -26,15 +29,22 @@ export function UsersFilter({ users, selected, onChange, lang }: Props) {
     return () => window.removeEventListener('mousedown', handler)
   }, [])
 
+  // Restrict the list to the active presence filter.
+  const visibleUsers = presenceFilter && presence
+    ? users.filter(u => (presence[u]?.online ?? false) === (presenceFilter === 'online'))
+    : users
+
   function toggle(user: string) {
     if (selected.includes(user)) onChange(selected.filter(u => u !== user))
     else onChange([...selected, user])
   }
 
-  const label = selected.length === 0 ? t.all : `${selected.length} ${t.selected}`
+  const defaultLabel = presenceFilter === 'online' ? t.online : presenceFilter === 'offline' ? t.offline : t.all
+  const defaultDot = presenceFilter === 'online' ? '#22c55e' : presenceFilter === 'offline' ? '#ef4444' : 'var(--text-secondary)'
+  const label = selected.length === 0 ? defaultLabel : `${selected.length} ${t.selected}`
   const active = selected.length > 0
-  // Tooltip lists exactly who is selected (or "all" when none is).
-  const tip = selected.length === 0 ? t.all : selected.join(', ')
+  // Tooltip lists exactly who is selected (or the default label when none is).
+  const tip = selected.length === 0 ? defaultLabel : selected.join(', ')
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
@@ -51,6 +61,10 @@ export function UsersFilter({ users, selected, onChange, lang }: Props) {
         }}
       >
         <Users size={14} />
+        <span style={{
+          width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+          background: active ? 'var(--anthropic-orange, #cd5d38)' : defaultDot,
+        }} />
         <span>{label}</span>
         <ChevronDown size={13} />
       </button>
@@ -64,7 +78,7 @@ export function UsersFilter({ users, selected, onChange, lang }: Props) {
         }}>
           <div style={{ display: 'flex', gap: 6, padding: '4px 6px 8px' }}>
             <button
-              onClick={() => onChange(users)}
+              onClick={() => onChange(visibleUsers)}
               style={miniBtn}
             >{t.selectAll}</button>
             <button
@@ -72,7 +86,7 @@ export function UsersFilter({ users, selected, onChange, lang }: Props) {
               style={miniBtn}
             >{t.clear}</button>
           </div>
-          {users.map(user => {
+          {visibleUsers.map(user => {
             const isSel = selected.includes(user)
             return (
               <div
