@@ -39,7 +39,7 @@ import {
 } from './sse'
 import { fullSync } from './archive'
 import { getArchiveMode } from './preferences'
-import { registerAgent, unregisterAgent, onAgentMessage, onAgentPong, setPresenceChangeHook, handleSessionChat } from './team-agent'
+import { registerAgent, unregisterAgent, onAgentMessage, onAgentPong, setPresenceChangeHook } from './team-agent'
 import { startAgentClient, reconcileNow } from './team-agent-client'
 import { validateIngestToken } from './team-tokens'
 
@@ -127,8 +127,6 @@ const ADMIN_PATHS = new Set([
   '/api/team/tokens',
   '/api/team/tokens/rotate',
   '/api/team/config',
-  // on-demand session chat proxy — ADMIN-gated so only the dashboard can call it
-  '/api/team/session-chat',
 ])
 
 // ---------------------------------------------------------------------------
@@ -1120,22 +1118,14 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     }
 
     // ---------------------------------------------------------------------------
-    // GET /api/team/session-chat — on-demand session message proxy (ADMIN-gated)
-    // Tries local FS first; proxies to the member's reverse-channel socket otherwise.
-    // Query: user, sessionId, harness (default 'claude'), encodedDir (Claude-only)
-    // Response: { ok: true, messages: unknown[] } | { ok: false, error: string }
+    // GET /api/team/session-chat — REMOVED. Central no longer views member chat;
+    // always returns 410 Gone regardless of TEAM_CENTRAL.
     // ---------------------------------------------------------------------------
     if (url.pathname === '/api/team/session-chat' && req.method === 'GET') {
-      if (!TEAM_CENTRAL) {
-        return new Response(JSON.stringify({ error: 'not found' }), {
-          status: 404,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-        })
-      }
-      const res = await handleSessionChat(req)
-      const headers = new Headers(res.headers)
-      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
-      return new Response(res.body, { status: res.status, headers })
+      return new Response(JSON.stringify({ ok: false, error: 'chat_disabled' }), {
+        status: 410,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
     }
 
 
