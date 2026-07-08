@@ -157,6 +157,11 @@ async function scanProjectDir(
   // Dedup sessions across roots — a session present in the live root is never
   // re-processed from the archive root (roots are scanned live-first).
   const seen = new Set<string>()
+  // Sibling dedup for workflow discovery, which (per the NOTE below) must run
+  // BEFORE `seen` is checked/set for Format B — so it needs its own guard to
+  // avoid re-reading + re-extracting the same session's workflows when its
+  // `<id>/subagents/workflows/` dir is mirrored across both live and archive roots.
+  const seenWorkflowSessions = new Set<string>()
 
   // rootDirPaths is this encoded dir resolved across PROJECTS_ROOTS, live first.
   for (const projDirPath of rootDirPaths) {
@@ -239,15 +244,18 @@ async function scanProjectDir(
     // a `<id>.jsonl` (Format A, processed earlier in this same Promise.all) AND this `<id>/`
     // directory (Format B), and Format A already marks `sessionId` as seen. If workflow
     // discovery were gated on `seen`, it would silently never run for such sessions.
-    const workflowsDir = join(subagentsDir, 'workflows')
-    const wfDirs = await safeReadDir(workflowsDir)
-    if (wfDirs.length > 0) {
-      const mainJsonl = join(projDirPath, `${sessionId}.jsonl`)
-      const mainContent = await readFile(mainJsonl, 'utf-8').catch(() => '')
-      if (mainContent) {
-        const { extractWorkflowRuns } = await import('./workflow-metrics')
-        const runs = await extractWorkflowRuns(mainContent.split('\n'), sessionId, workflowsDir)
-        workflowRuns.push(...runs)
+    if (!seenWorkflowSessions.has(sessionId)) {
+      seenWorkflowSessions.add(sessionId)
+      const workflowsDir = join(subagentsDir, 'workflows')
+      const wfDirs = await safeReadDir(workflowsDir)
+      if (wfDirs.length > 0) {
+        const mainJsonl = join(projDirPath, `${sessionId}.jsonl`)
+        const mainContent = await readFile(mainJsonl, 'utf-8').catch(() => '')
+        if (mainContent) {
+          const { extractWorkflowRuns } = await import('./workflow-metrics')
+          const runs = await extractWorkflowRuns(mainContent.split('\n'), sessionId, workflowsDir)
+          workflowRuns.push(...runs)
+        }
       }
     }
 
@@ -625,10 +633,12 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
 
     // Persist discovered workflow runs so they survive Claude's transcript cleanup,
     // then union with the store (live wins by runId) so revived runs from vanished
-    // sessions still surface after the 30-day sweep.
+    // sessions still surface after the 30-day sweep. Gated on archive mode, same as
+    // session consolidation above — 'off' means nothing is written or revived, but
+    // live discovery (collectedWorkflowRuns, from scanProjects) always runs regardless.
     const liveWorkflows = collectedWorkflowRuns
-    await writeWorkflowRuns(liveWorkflows)
-    const storedWorkflows = await loadWorkflowRuns()
+    if (mode !== 'off') await writeWorkflowRuns(liveWorkflows)
+    const storedWorkflows = mode !== 'off' ? await loadWorkflowRuns() : new Map<string, WorkflowRun>()
     const workflowsById = new Map(storedWorkflows)
     for (const r of liveWorkflows) workflowsById.set(r.runId, r)
     const workflows = [...workflowsById.values()].sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''))
