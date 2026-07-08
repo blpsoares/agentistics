@@ -7,7 +7,7 @@ function s(harness: HarnessId): SessionMeta {
 }
 
 test('claude yields cd + claude --resume', () => {
-  expect(resumeCommand(s('claude'))).toBe('cd /home/u/proj && claude --resume abc-123')
+  expect(resumeCommand(s('claude'))).toBe("cd '/home/u/proj' && claude --resume abc-123")
 })
 
 test('non-claude harnesses yield null', () => {

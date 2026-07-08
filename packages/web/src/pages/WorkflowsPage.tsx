@@ -1,8 +1,8 @@
 import React, { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Workflow as WorkflowIcon, ChevronDown, ChevronRight } from 'lucide-react'
-import type { WorkflowRun } from '@agentistics/core'
-import { getModelPrice, fmtCost } from '@agentistics/core'
+import type { WorkflowRun, SessionMeta } from '@agentistics/core'
+import { getModelPrice, fmtCost, sessionLabel } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { Section } from '../components/Section'
 
@@ -38,7 +38,16 @@ export default function WorkflowsPage() {
         )
         : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {runs.map(run => <RunBlock key={run.runId} run={run} pt={pt} rate={brlRate} currency={currency} />)}
+            {runs.map(run => (
+              <RunBlock
+                key={run.runId}
+                run={run}
+                pt={pt}
+                rate={brlRate}
+                currency={currency}
+                sessions={data.sessions}
+              />
+            ))}
           </div>
         )}
     </>
@@ -57,9 +66,14 @@ function PageHeader({ icon, title, subtitle }: { icon: React.ReactNode; title: s
   )
 }
 
-function RunBlock({ run, pt, rate, currency }: { run: WorkflowRun; pt: boolean; rate: number; currency: 'USD' | 'BRL' }) {
+function RunBlock({ run, pt, rate, currency, sessions }: { run: WorkflowRun; pt: boolean; rate: number; currency: 'USD' | 'BRL'; sessions: SessionMeta[] }) {
   const [open, setOpen] = useState(true)
   const statusColor = run.status === 'completed' ? '#22c55e' : run.status === 'partial' ? '#eab308' : '#ef4444'
+  const phaseTitles = new Set(run.phases.map(ph => ph.title))
+  const otherAgents = run.agents.filter(a => !a.phase || !phaseTitles.has(a.phase))
+  const matchedSession = sessions.find(s => s.session_id === run.sessionId)
+  const sessionDisplay = matchedSession ? sessionLabel(matchedSession) : run.sessionId.slice(0, 8)
+
   return (
     <Section
       flashId={`wf-${run.runId}`}
@@ -71,6 +85,9 @@ function RunBlock({ run, pt, rate, currency }: { run: WorkflowRun; pt: boolean; 
           <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 400 }}>
             · {run.totals.agentCount} {pt ? 'agentes' : 'agents'} · {(run.totals.tokensIn + run.totals.tokensOut).toLocaleString()} tkn · {fmtCost(run.totals.costUSD, currency, rate)}
           </span>
+          <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 400 }}>
+            · {pt ? 'sessão' : 'session'}: {sessionDisplay}
+          </span>
         </span>
       }
     >
@@ -81,42 +98,55 @@ function RunBlock({ run, pt, rate, currency }: { run: WorkflowRun; pt: boolean; 
               <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
                 {ph.title} <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>({ph.agentCount})</span>
               </div>
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                  <thead>
-                    <tr style={{ color: 'var(--text-tertiary)', textAlign: 'left' }}>
-                      <th style={cell}>{pt ? 'Agente' : 'Agent'}</th>
-                      <th style={cell}>{pt ? 'Modelo' : 'Model'}</th>
-                      <th style={cellR}>In</th>
-                      <th style={cellR}>Out</th>
-                      <th style={cellR}>{pt ? 'Custo' : 'Cost'}</th>
-                      <th style={cellR}>{pt ? 'Custo/M' : 'Cost/M'}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {run.agents.filter(a => a.phase === ph.title).map((a, i) => (
-                      <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
-                        <td style={cell}>{a.label}</td>
-                        <td style={cell}>{a.model || '—'}</td>
-                        <td style={cellR}>{a.tokensIn.toLocaleString()}</td>
-                        <td style={cellR}>{a.tokensOut.toLocaleString()}</td>
-                        <td style={cellR}>{fmtCost(a.costUSD, currency, rate)}</td>
-                        <td style={cellR}>{a.model ? fmtCost(perMillionUSD(a.model), currency, rate) : '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <AgentTable agents={run.agents.filter(a => a.phase === ph.title)} pt={pt} rate={rate} currency={currency} />
             </div>
           ))}
-          {run.agents.some(a => !a.phase) && (
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-              {pt ? 'Alguns agentes sem fase identificada.' : 'Some agents without an identified phase.'}
+          {otherAgents.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                {run.phases.length === 0
+                  ? (pt ? 'Agentes' : 'Agents')
+                  : (pt ? 'Outros agentes' : 'Other agents')}
+                {' '}
+                <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>({otherAgents.length})</span>
+              </div>
+              <AgentTable agents={otherAgents} pt={pt} rate={rate} currency={currency} />
             </div>
           )}
         </div>
       )}
     </Section>
+  )
+}
+
+function AgentTable({ agents, pt, rate, currency }: { agents: WorkflowRun['agents']; pt: boolean; rate: number; currency: 'USD' | 'BRL' }) {
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead>
+          <tr style={{ color: 'var(--text-tertiary)', textAlign: 'left' }}>
+            <th style={cell}>{pt ? 'Agente' : 'Agent'}</th>
+            <th style={cell}>{pt ? 'Modelo' : 'Model'}</th>
+            <th style={cellR}>In</th>
+            <th style={cellR}>Out</th>
+            <th style={cellR}>{pt ? 'Custo' : 'Cost'}</th>
+            <th style={cellR}>{pt ? 'Custo/M' : 'Cost/M'}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {agents.map((a, i) => (
+            <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+              <td style={cell}>{a.label}</td>
+              <td style={cell}>{a.model || '—'}</td>
+              <td style={cellR}>{a.tokensIn.toLocaleString()}</td>
+              <td style={cellR}>{a.tokensOut.toLocaleString()}</td>
+              <td style={cellR}>{fmtCost(a.costUSD, currency, rate)}</td>
+              <td style={cellR}>{a.model ? fmtCost(perMillionUSD(a.model), currency, rate) : '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
