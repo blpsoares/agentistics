@@ -28,3 +28,21 @@ test('extracts agent label/phase/model with defaults', () => {
 test('empty script yields empty shape', () => {
   expect(parseWorkflowScript('')).toEqual({ name: '', phases: [], agents: [] })
 })
+
+test('tolerates prompts containing braces and template literals', () => {
+  const script = "await agent(`fix function f() {} in ${file}`, { label: 'braces', phase: 'Review', model: 'claude-sonnet-5' })"
+  const r = parseWorkflowScript(script)
+  expect(r.agents).toEqual([{ label: 'braces', phase: 'Review', model: 'claude-sonnet-5' }])
+})
+
+test('option-less agent call does not steal the next call options', () => {
+  const script = [
+    "await agent('just a prompt')",
+    "await agent('second', { label: 'b', phase: 'Verify', model: 'claude-haiku-4-5' })",
+  ].join('\n')
+  const r = parseWorkflowScript(script)
+  expect(r.agents).toEqual([
+    { label: '', phase: '', model: '' },
+    { label: 'b', phase: 'Verify', model: 'claude-haiku-4-5' },
+  ])
+})

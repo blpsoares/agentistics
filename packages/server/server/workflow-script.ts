@@ -19,17 +19,23 @@ export function parseWorkflowScript(script: string): {
     while ((m = re.exec(phasesBlock[1]!)) !== null) phases.push(m[1]!)
   }
 
-  // agent(<prompt>, { ...opts }) — scan each opts object for label/phase/model literals.
+  // Split the script into chunks, one per agent() call: from each `agent(`
+  // occurrence to just before the next. We read label/phase/model string
+  // literals from within the chunk instead of brace-matching the options
+  // object — tolerant of prompts that contain code snippets or template
+  // literals with stray { } }) characters. One entry per call keeps the list
+  // index-aligned with the actual agent invocations.
   const agents: { label: string; phase: string; model: string }[] = []
-  const agentRe = /agent\s*\([\s\S]*?\{([\s\S]*?)\}\s*\)/g
-  let a: RegExpExecArray | null
-  while ((a = agentRe.exec(script)) !== null) {
-    const opts = a[1]!
-    const pick = (k: string) => opts.match(new RegExp(k + "\\s*:\\s*['\"`]([^'\"`]+)['\"`]"))?.[1] ?? ''
-    const label = pick('label')
-    const phase = pick('phase')
-    const model = pick('model')
-    if (label || phase || model) agents.push({ label, phase, model })
+  const callStarts: number[] = []
+  const callRe = /\bagent\s*\(/g
+  let c: RegExpExecArray | null
+  while ((c = callRe.exec(script)) !== null) callStarts.push(c.index)
+  for (let i = 0; i < callStarts.length; i++) {
+    const start = callStarts[i]!
+    const end = i + 1 < callStarts.length ? callStarts[i + 1]! : script.length
+    const chunk = script.slice(start, end)
+    const pick = (k: string) => chunk.match(new RegExp('\\b' + k + "\\s*:\\s*['\"`]([^'\"`]+)['\"`]"))?.[1] ?? ''
+    agents.push({ label: pick('label'), phase: pick('phase'), model: pick('model') })
   }
 
   return { name, phases, agents }
