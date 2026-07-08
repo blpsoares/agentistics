@@ -8,7 +8,7 @@ import {
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, Workflow as WorkflowIcon,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -606,7 +606,7 @@ function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): st
 }
 
 function MobileBottomNav({
-  lang, harnesses, onSettings, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues, isCentral,
+  lang, harnesses, onSettings, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues, isCentral, hasWorkflows,
 }: {
   lang: Lang
   harnesses?: HarnessId[]
@@ -618,6 +618,7 @@ function MobileBottomNav({
   healthIssues?: HealthIssue[]
   /** A central updates in real time via SSE — no Live toggle. */
   isCentral?: boolean
+  hasWorkflows?: boolean
 }) {
   const location = useLocation()
   const navigate = useNavigate()
@@ -647,6 +648,9 @@ function MobileBottomNav({
   }
   const navTiles: Tile[] = [
     ...(isCentral ? [] : [{ key: 'sessions', label: pt ? 'Sessões' : 'Sessions', icon: Clock, onClick: () => { setMoreOpen(false); navigate('/sessions') }, active: location.pathname.startsWith('/sessions') } as Tile]),
+    ...(hasWorkflows
+      ? [{ key: 'workflows', label: pt ? 'Workflows' : 'Workflows', icon: WorkflowIcon, onClick: () => { setMoreOpen(false); navigate('/workflows') }, active: location.pathname.startsWith('/workflows') } as Tile]
+      : []),
     { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { setMoreOpen(false); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
     { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { setMoreOpen(false); navigate('/export') }, active: location.pathname.startsWith('/export') },
     ...(harnesses && harnesses.length > 1
@@ -813,7 +817,7 @@ function MobileBottomNav({
   )
 }
 
-function NavTabs({ lang, harnesses, isCentral }: { lang: Lang; harnesses?: HarnessId[]; isCentral?: boolean }) {
+function NavTabs({ lang, harnesses, isCentral, hasWorkflows }: { lang: Lang; harnesses?: HarnessId[]; isCentral?: boolean; hasWorkflows?: boolean }) {
   const location = useLocation()
   const pt = lang === 'pt'
 
@@ -823,6 +827,9 @@ function NavTabs({ lang, harnesses, isCentral }: { lang: Lang; harnesses?: Harne
     { to: '/costs',     labelPt: 'Custos',       labelEn: 'Costs',        icon: <DollarSign size={12} /> },
     { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={12} /> },
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={12} /> },
+    ...(hasWorkflows
+      ? [{ to: '/workflows', labelPt: 'Workflows', labelEn: 'Workflows', icon: <WorkflowIcon size={12} /> }]
+      : []),
     { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={12} /> },
     { to: '/export',    labelPt: 'Exportar',     labelEn: 'Export',       icon: <FileDown size={12} /> },
     ...(harnesses && harnesses.length > 1
@@ -2008,7 +2015,7 @@ export default function AppLayout() {
             display: 'flex',
             alignItems: 'center',
           }}>
-            <NavTabs lang={lang} harnesses={data.harnesses} isCentral={isCentral} />
+            <NavTabs lang={lang} harnesses={data.harnesses} isCentral={isCentral} hasWorkflows={(data.workflows?.length ?? 0) > 0} />
           </div>
         )}
       </header>
@@ -2211,6 +2218,7 @@ export default function AppLayout() {
           updateInterval={updateInterval}
           healthIssues={data.healthIssues}
           isCentral={isCentral}
+          hasWorkflows={(data.workflows?.length ?? 0) > 0}
         />
       )}
 
