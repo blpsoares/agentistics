@@ -35,6 +35,10 @@ export function discoverWorkflowLaunches(lines: string[]): DiscoveredRun[] {
       })
     }
 
+    // NOTE: when a session launches >=2 workflows concurrently and a
+    // task-notification lacks a parseable runId, we cannot safely attribute it,
+    // so its usage is left empty for that run. Single-workflow sessions use the
+    // unambiguous fallback below. This is an accepted limitation (rare case).
     // Completion notification: a message whose text contains <task-notification> with a runId.
     const text = extractText(e)
     if (text && text.includes('<task-notification>')) {
@@ -49,6 +53,19 @@ export function discoverWorkflowLaunches(lines: string[]): DiscoveredRun[] {
     }
   }
   return [...byRunId.values()]
+}
+
+/** Sort agent-<n>.jsonl files by their numeric index so agent-2 precedes agent-10.
+ *  Files without a parseable index sort last, stably, by name. */
+export function sortAgentFiles(files: string[]): string[] {
+  const idx = (f: string): number => {
+    const m = f.match(/agent-(\d+)/)
+    return m ? parseInt(m[1]!, 10) : Number.POSITIVE_INFINITY
+  }
+  return [...files].sort((a, b) => {
+    const d = idx(a) - idx(b)
+    return d !== 0 ? d : a.localeCompare(b)
+  })
 }
 
 function extractText(e: Record<string, unknown>): string {
@@ -88,7 +105,7 @@ export async function extractWorkflowRuns(
     const parsed = parseWorkflowScript(scriptText)
 
     // Per-agent transcripts: agent-*.jsonl in the run dir.
-    const agentFiles = files.filter(f => /^agent-.*\.jsonl$/.test(f))
+    const agentFiles = sortAgentFiles(files.filter(f => /^agent-.*\.jsonl$/.test(f)))
     const agents: WorkflowAgent[] = []
     for (let i = 0; i < agentFiles.length; i++) {
       const content = await readFile(join(runDir, agentFiles[i]!), 'utf-8').catch(() => '')
@@ -98,6 +115,11 @@ export async function extractWorkflowRuns(
         label: meta?.label ?? agentFiles[i]!.replace(/\.jsonl$/, ''),
         phase: meta?.phase ?? '',
         model: agg.model || (meta?.model ?? ''),
+        // NOTE: per-agent status is a best-effort 'completed'. The available data
+        // (journal.jsonl + the task-notification <usage> counts) reports how many
+        // agents errored/were skipped, but not WHICH agent — so a specific agent's
+        // failure cannot be reliably attributed here. Top-level run status still
+        // reflects errors via parseWorkflowUsage.
         status: 'completed',
         tokensIn: agg.tokensIn, tokensOut: agg.tokensOut,
         cacheRead: agg.cacheRead, cacheWrite: agg.cacheWrite,
