@@ -8,7 +8,7 @@ import {
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, GitBranch,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -821,6 +821,7 @@ function NavTabs({ lang, harnesses }: { lang: Lang; harnesses?: HarnessId[] }) {
     { to: '/costs',     labelPt: 'Custos',       labelEn: 'Costs',        icon: <DollarSign size={12} /> },
     { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={12} /> },
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={12} /> },
+    { to: '/traces',    labelPt: 'Pipelines',    labelEn: 'Pipelines',    icon: <GitBranch size={12} /> },
     { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={12} /> },
     { to: '/export',    labelPt: 'Exportar',     labelEn: 'Export',       icon: <FileDown size={12} /> },
     ...(harnesses && harnesses.length > 1

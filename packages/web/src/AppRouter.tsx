@@ -6,6 +6,7 @@ const HomePage = lazy(() => import('./pages/HomePage'))
 const CostsPage = lazy(() => import('./pages/CostsPage'))
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage'))
 const ToolsPage = lazy(() => import('./pages/ToolsPage'))
+const TracesPage = lazy(() => import('./pages/TracesPage'))
 const CustomPage = lazy(() => import('./pages/CustomPage'))
 const ComparePage = lazy(() => import('./pages/ComparePage'))
 const ExportPage = lazy(() => import('./pages/ExportPage'))
@@ -30,6 +31,7 @@ export default function AppRouter() {
           <Route path="costs" element={<Suspense fallback={<PageFallback />}><CostsPage /></Suspense>} />
           <Route path="projects" element={<Suspense fallback={<PageFallback />}><ProjectsPage /></Suspense>} />
           <Route path="tools" element={<Suspense fallback={<PageFallback />}><ToolsPage /></Suspense>} />
+          <Route path="traces" element={<Suspense fallback={<PageFallback />}><TracesPage /></Suspense>} />
           <Route path="custom" element={<Suspense fallback={<PageFallback />}><CustomPage /></Suspense>} />
           <Route path="compare" element={<Suspense fallback={<PageFallback />}><ComparePage /></Suspense>} />
           <Route path="export" element={<Suspense fallback={<PageFallback />}><ExportPage /></Suspense>} />
