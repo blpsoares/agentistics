@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { createPortal } from 'react-dom'
 import { version } from '../../../package.json'
 import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
@@ -812,6 +813,35 @@ function MobileBottomNav({
 const SIDEBAR_W = 248
 const SIDEBAR_W_COLLAPSED = 64
 
+/** Themed hover tooltip for the collapsed sidebar (icons only). Renders via a portal so it
+ *  escapes the sidebar's overflow clipping. Active only when `show` is true (i.e. collapsed);
+ *  when expanded the label is already visible, so it just renders its child untouched. */
+function CollapsedTip({ label, show, children }: { label: string; show: boolean; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  if (!show) return <>{children}</>
+  return (
+    <div
+      ref={ref}
+      style={{ position: 'relative' }}
+      onMouseEnter={() => { const r = ref.current?.getBoundingClientRect(); if (r) setPos({ top: r.top + r.height / 2, left: r.right + 10 }) }}
+      onMouseLeave={() => setPos(null)}
+    >
+      {children}
+      {pos && createPortal(
+        <div role="tooltip" style={{
+          position: 'fixed', top: pos.top, left: pos.left, transform: 'translateY(-50%)',
+          background: 'var(--bg-card)', color: 'var(--text-primary)',
+          border: '1px solid var(--border)', borderRadius: 7, padding: '5px 10px',
+          fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
+          boxShadow: '0 6px 20px rgba(0,0,0,0.35)', zIndex: 500, pointerEvents: 'none',
+        }}>{label}</div>,
+        document.body,
+      )}
+    </div>
+  )
+}
+
 function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle, updatedText, sinceText, theme, onToggleTheme, onToggleLang, onSettings, onExport }: {
   lang: Lang; harnesses?: HarnessId[]; isCentral?: boolean; hasWorkflows?: boolean
   collapsed: boolean; onToggle: () => void; updatedText: string; sinceText?: string
@@ -861,27 +891,29 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
       <nav style={{ display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
         {items.map(item => {
           const active = item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to)
+          const label = pt ? item.labelPt : item.labelEn
           return (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              title={collapsed ? (pt ? item.labelPt : item.labelEn) : undefined}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 11,
-                padding: collapsed ? '10px 0' : '10px 12px', justifyContent: collapsed ? 'center' : 'flex-start',
-                borderRadius: 9, textDecoration: 'none',
-                fontSize: 13.5, fontWeight: active ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap',
-                color: active ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                background: active ? 'var(--anthropic-orange-dim)' : 'transparent',
-                transition: 'background 0.15s, color 0.15s',
-              }}
-              onMouseEnter={e => { if (!active) { const t = e.currentTarget as HTMLAnchorElement; t.style.color = 'var(--text-primary)'; t.style.background = 'var(--bg-elevated)' } }}
-              onMouseLeave={e => { if (!active) { const t = e.currentTarget as HTMLAnchorElement; t.style.color = 'var(--text-secondary)'; t.style.background = 'transparent' } }}
-            >
-              <span style={{ flexShrink: 0, display: 'flex' }}>{item.icon}</span>
-              {!collapsed && (pt ? item.labelPt : item.labelEn)}
-            </NavLink>
+            <CollapsedTip key={item.to} label={label} show={collapsed}>
+              <NavLink
+                to={item.to}
+                end={item.to === '/'}
+                aria-label={collapsed ? label : undefined}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 11,
+                  padding: collapsed ? '10px 0' : '10px 12px', justifyContent: collapsed ? 'center' : 'flex-start',
+                  borderRadius: 9, textDecoration: 'none',
+                  fontSize: 13.5, fontWeight: active ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap',
+                  color: active ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+                  background: active ? 'var(--anthropic-orange-dim)' : 'transparent',
+                  transition: 'background 0.15s, color 0.15s',
+                }}
+                onMouseEnter={e => { if (!active) { const t = e.currentTarget as HTMLAnchorElement; t.style.color = 'var(--text-primary)'; t.style.background = 'var(--bg-elevated)' } }}
+                onMouseLeave={e => { if (!active) { const t = e.currentTarget as HTMLAnchorElement; t.style.color = 'var(--text-secondary)'; t.style.background = 'transparent' } }}
+              >
+                <span style={{ flexShrink: 0, display: 'flex' }}>{item.icon}</span>
+                {!collapsed && label}
+              </NavLink>
+            </CollapsedTip>
           )
         })}
       </nav>
@@ -891,26 +923,34 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
         display: 'flex', flexWrap: 'wrap', gap: 6, paddingTop: 10, marginTop: 6,
         borderTop: '1px solid var(--border)', justifyContent: collapsed ? 'center' : 'flex-start',
       }}>
-        <button onClick={onSettings} title={pt ? 'Configurações' : 'Settings'} style={footBtn}
-          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
-          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
-          <SlidersHorizontal size={15} />
-        </button>
-        <button onClick={onToggleTheme} title={theme === 'dark' ? (pt ? 'Tema claro' : 'Light theme') : (pt ? 'Tema escuro' : 'Dark theme')} style={footBtn}
-          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
-          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
-          {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
-        </button>
-        <button onClick={onToggleLang} title={pt ? 'Switch to English' : 'Mudar para Português'} style={{ ...footBtn, width: 'auto', padding: '0 10px', gap: 5, fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}
-          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
-          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
-          <Globe size={14} />{!collapsed && (pt ? 'EN' : 'PT')}
-        </button>
+        <CollapsedTip label={pt ? 'Configurações' : 'Settings'} show={collapsed}>
+          <button onClick={onSettings} aria-label={pt ? 'Configurações' : 'Settings'} title={collapsed ? undefined : (pt ? 'Configurações' : 'Settings')} style={footBtn}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
+            <SlidersHorizontal size={15} />
+          </button>
+        </CollapsedTip>
+        <CollapsedTip label={pt ? 'Tema' : 'Theme'} show={collapsed}>
+          <button onClick={onToggleTheme} aria-label={pt ? 'Tema' : 'Theme'} title={collapsed ? undefined : (theme === 'dark' ? (pt ? 'Tema claro' : 'Light theme') : (pt ? 'Tema escuro' : 'Dark theme'))} style={footBtn}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
+            {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+          </button>
+        </CollapsedTip>
+        <CollapsedTip label={pt ? 'Idioma' : 'Language'} show={collapsed}>
+          <button onClick={onToggleLang} aria-label={pt ? 'Idioma' : 'Language'} title={collapsed ? undefined : (pt ? 'Switch to English' : 'Mudar para Português')} style={{ ...footBtn, width: 'auto', padding: '0 10px', gap: 5, fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
+            <Globe size={14} />{!collapsed && (pt ? 'EN' : 'PT')}
+          </button>
+        </CollapsedTip>
         {/* Export (PDF) — kept last so the orange download action sits at the right end. */}
-        <button onClick={onExport} title={pt ? 'Exportar relatório PDF' : 'Export PDF report'}
-          style={{ ...footBtn, marginLeft: collapsed ? undefined : 'auto', borderColor: 'var(--anthropic-orange)50', color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)' }}>
-          <Download size={15} />
-        </button>
+        <CollapsedTip label={pt ? 'Exportar' : 'Export'} show={collapsed}>
+          <button onClick={onExport} aria-label={pt ? 'Exportar relatório PDF' : 'Export PDF report'} title={collapsed ? undefined : (pt ? 'Exportar relatório PDF' : 'Export PDF report')}
+            style={{ ...footBtn, marginLeft: collapsed ? undefined : 'auto', borderColor: 'var(--anthropic-orange)50', color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)' }}>
+            <Download size={15} />
+          </button>
+        </CollapsedTip>
       </div>
     </aside>
   )
