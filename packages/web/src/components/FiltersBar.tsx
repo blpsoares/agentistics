@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import type { Filters, DateRange, Project, Lang, HarnessId } from '@agentistics/core'
 import { formatModel, formatProjectName } from '@agentistics/core'
-import { Layers, Cpu, RotateCcw, ChevronDown, X, CalendarDays, Check, Users } from 'lucide-react'
+import { Layers, Cpu, ChevronDown, X, CalendarDays, Check, Users } from 'lucide-react'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { ProjectsModal } from './ProjectsModal'
 import { UsersFilter } from './UsersFilter'
@@ -70,16 +70,6 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
 
   const selectedModels = filters.models ?? []
   const hasModelFilter = selectedModels.length > 0
-
-  const isDefault = filters.dateRange === 'all'
-    && !filters.customStart && !filters.customEnd
-    && filters.projects.length === 0 && !hasModelFilter
-    && !(filters.users?.length)
-    && !(filters.harnesses?.length)
-
-  const reset = () => onChange({
-    dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [], users: [], harnesses: [],
-  })
 
   const hasProjects = filters.projects.length > 0
   const projectLabel = lang === 'pt'
@@ -432,154 +422,77 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
           )}
         </div>
 
-        {/* Reset */}
-        {!isDefault && (
-          <button
-            onClick={reset}
-            title={lang === 'pt' ? 'Resetar filtros' : 'Reset filters'}
-            style={{
-              ...CTL,
-              gap: 5,
-              color: 'var(--text-secondary)',
-            }}
-          >
-            <RotateCcw size={11} />
-            {lang === 'pt' ? 'Resetar' : 'Reset'}
-          </button>
-        )}
+        {/* Reset button removed — clear individual chips via their × instead. */}
       </div>
 
-      {/* Selected member chips — removable, so it's always clear WHO is filtered */}
-      {(filters.users?.length ?? 0) > 0 && (
-        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', padding: compact ? '0 12px 8px' : '0 0 4px' }}>
-          {filters.users!.map(u => (
-            <span
-              key={u}
-              title={u}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 5,
-                fontSize: 11, fontWeight: 600,
-                color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)',
-                border: '1px solid rgba(217,119,6,0.3)', borderRadius: 5,
-                padding: '2px 6px 2px 8px', maxWidth: 220, whiteSpace: 'nowrap',
-                overflow: 'hidden', textOverflow: 'ellipsis',
-              }}
-            >
-              <Users size={10} style={{ flexShrink: 0 }} />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{u}</span>
-              <button
-                onClick={() => onChange({ ...filters, users: filters.users!.filter(x => x !== u) })}
-                title={lang === 'pt' ? 'Remover membro' : 'Remove member'}
-                style={{
-                  background: 'transparent', border: 'none', cursor: 'pointer', padding: 0,
-                  display: 'flex', alignItems: 'center', color: 'var(--anthropic-orange)',
-                  opacity: 0.7, flexShrink: 0,
-                }}
-              >
-                <X size={10} strokeWidth={2.5} />
-              </button>
-            </span>
-          ))}
+      {/* Active-filter chips — a bar that slides down (top→bottom) when filters are applied
+          and collapses with animation when the last chip is cleared, so the chips never grow
+          into and break the controls row above. */}
+      <div style={{
+        display: 'grid',
+        gridTemplateRows: ((filters.users?.length ?? 0) > 0 || hasProjects || (filters.harnesses?.length ?? 0) > 0 || hasModelFilter) ? '1fr' : '0fr',
+        transition: 'grid-template-rows 0.28s cubic-bezier(0.22, 1, 0.36, 1)',
+      }}>
+        <div style={{ overflow: 'hidden', minHeight: 0 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: compact ? '2px 12px 8px' : '6px 0 2px' }}>
+            {/* Members */}
+            {(filters.users?.length ?? 0) > 0 && (
+              <ChipRow label={lang === 'pt' ? 'Membros' : 'Members'}>
+                {filters.users!.map(u => (
+                  <FilterChip key={`u:${u}`} title={u} onRemove={() => onChange({ ...filters, users: filters.users!.filter(x => x !== u) })} removeTitle={lang === 'pt' ? 'Remover membro' : 'Remove member'}>
+                    <Users size={10} style={{ flexShrink: 0 }} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{u}</span>
+                  </FilterChip>
+                ))}
+              </ChipRow>
+            )}
+            {/* Projects */}
+            {hasProjects && (
+              <ChipRow label={lang === 'pt' ? 'Projetos' : 'Projects'}>
+                {filters.projects.map(path => (
+                  <FilterChip key={`p:${path}`} title={path} onRemove={() => onChange({ ...filters, projects: filters.projects.filter(p => p !== path), models: [] })} removeTitle={lang === 'pt' ? 'Remover projeto' : 'Remove project'}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatProjectName(path)}</span>
+                  </FilterChip>
+                ))}
+              </ChipRow>
+            )}
+            {/* Harnesses */}
+            {(filters.harnesses?.length ?? 0) > 0 && (
+              <ChipRow label={lang === 'pt' ? 'Harnesses' : 'Harnesses'}>
+                {filters.harnesses!.map(h => {
+                  const color = HARNESS_COLORS[h]
+                  return (
+                    <span key={`h:${h}`} style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+                      color, background: `${color}1f`, border: `1px solid ${color}55`, borderRadius: 5,
+                      padding: '2px 6px 2px 8px', whiteSpace: 'nowrap',
+                    }}>
+                      <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                      {HARNESS_LABELS[h]}
+                      <button onClick={() => onChange({ ...filters, harnesses: filters.harnesses!.filter(x => x !== h) })}
+                        title={lang === 'pt' ? 'Remover harness' : 'Remove harness'}
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color, opacity: 0.7, flexShrink: 0 }}>
+                        <X size={10} strokeWidth={2.5} />
+                      </button>
+                    </span>
+                  )
+                })}
+              </ChipRow>
+            )}
+            {/* Models */}
+            {hasModelFilter && (
+              <ChipRow label={lang === 'pt' ? 'Modelos' : 'Models'}>
+                {selectedModels.map(m => (
+                  <FilterChip key={`m:${m}`} title={m} onRemove={() => onChange({ ...filters, models: selectedModels.filter(x => x !== m) })} removeTitle={lang === 'pt' ? 'Remover modelo' : 'Remove model'}>
+                    <Cpu size={10} style={{ flexShrink: 0 }} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatModel(m)}</span>
+                  </FilterChip>
+                ))}
+              </ChipRow>
+            )}
+          </div>
         </div>
-      )}
-
-      {/* Selected project chips */}
-      {hasProjects && (
-        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', padding: compact ? '0 12px 8px' : '0 0 4px' }}>
-          {filters.projects.map(path => (
-            <span
-              key={path}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                fontSize: 11,
-                fontWeight: 500,
-                color: 'var(--anthropic-orange)',
-                background: 'var(--anthropic-orange-dim)',
-                border: '1px solid rgba(217,119,6,0.3)',
-                borderRadius: 5,
-                padding: '2px 6px 2px 8px',
-                maxWidth: 260,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }} title={path}>
-                {formatProjectName(path)}
-              </span>
-              <button
-                onClick={() => onChange({ ...filters, projects: filters.projects.filter(p => p !== path), models: [] })}
-                title={lang === 'pt' ? 'Remover projeto' : 'Remove project'}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  padding: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  color: 'var(--anthropic-orange)',
-                  opacity: 0.7,
-                  flexShrink: 0,
-                }}
-              >
-                <X size={10} strokeWidth={2.5} />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Selected harness chips — each in its harness color, removable (mirrors project chips) */}
-      {(filters.harnesses?.length ?? 0) > 0 && (
-        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', padding: compact ? '0 12px 8px' : '0 0 4px' }}>
-          {filters.harnesses!.map(h => {
-            const color = HARNESS_COLORS[h]
-            return (
-              <span
-                key={h}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  fontSize: 11,
-                  fontWeight: 600,
-                  color,
-                  background: `${color}1f`,
-                  border: `1px solid ${color}55`,
-                  borderRadius: 5,
-                  padding: '2px 6px 2px 8px',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                <span style={{
-                  display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
-                  background: color, flexShrink: 0,
-                }} />
-                {HARNESS_LABELS[h]}
-                <button
-                  onClick={() => onChange({ ...filters, harnesses: filters.harnesses!.filter(x => x !== h) })}
-                  title={lang === 'pt' ? 'Remover harness' : 'Remove harness'}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    cursor: 'pointer',
-                    padding: 0,
-                    display: 'flex',
-                    alignItems: 'center',
-                    color,
-                    opacity: 0.7,
-                    flexShrink: 0,
-                  }}
-                >
-                  <X size={10} strokeWidth={2.5} />
-                </button>
-              </span>
-            )
-          })}
-        </div>
-      )}
+      </div>
 
       {showProjectsModal && (
         <ProjectsModal
@@ -595,5 +508,33 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         />
       )}
     </>
+  )
+}
+
+/** One labeled row of active-filter chips (e.g. "Projetos: [a] [b]"). */
+function ChipRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+      <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, paddingTop: 4, minWidth: 62, flexShrink: 0 }}>{label}</span>
+      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>{children}</div>
+    </div>
+  )
+}
+
+/** A removable orange filter chip (members, projects, models). */
+function FilterChip({ title, onRemove, removeTitle, children }: { title?: string; onRemove: () => void; removeTitle: string; children: React.ReactNode }) {
+  return (
+    <span title={title} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+      color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)',
+      border: '1px solid rgba(217,119,6,0.3)', borderRadius: 5,
+      padding: '2px 6px 2px 8px', maxWidth: 260, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+    }}>
+      {children}
+      <button onClick={onRemove} title={removeTitle}
+        style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color: 'var(--anthropic-orange)', opacity: 0.7, flexShrink: 0 }}>
+        <X size={10} strokeWidth={2.5} />
+      </button>
+    </span>
   )
 }
