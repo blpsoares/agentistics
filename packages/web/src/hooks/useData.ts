@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMeta } from '@agentistics/core'
-import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, mergeStatsCaches } from '@agentistics/core'
+import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, distinctHarnesses, mergeStatsCaches } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 
 export interface StageProgress {
@@ -505,6 +505,105 @@ export function computeHarnessSummaries(
   }
 
   return result
+}
+
+/** Most recent activity timestamp for one harness in a session list (end_time, else start_time). */
+export function lastActiveFor(sessions: { harness?: HarnessId; start_time?: string; end_time?: string }[], harness: HarnessId): string | null {
+  return sessions
+    .filter(s => (s.harness ?? 'claude') === harness)
+    .reduce<string | null>((best, s) => {
+      const ts = s.end_time ?? s.start_time
+      return ts && (!best || ts > best) ? ts : best
+    }, null)
+}
+
+export interface FilteredHarnessSummaries {
+  activeHarnesses: HarnessId[]
+  summaries: Record<HarnessId, HarnessSummary>
+  lastActive: Record<HarnessId, string | null>
+}
+
+/**
+ * Compute per-harness comparison summaries scoped by the GLOBAL filters (users, harnesses,
+ * date, projects, models) — same semantics as the main dashboard / Compare page. With NO
+ * filter active this returns the statsCache-canonical Claude totals (computeHarnessSummaries)
+ * so the default view matches the dashboard's all-time KPIs; the moment any filter narrows the
+ * scope, every harness (incl. Claude) is summarized from the filtered per-session slice, since
+ * statsCache has no per-user/-harness/-date/-project granularity. Pure — shared by ComparePage
+ * and the PDF Export page's Compare section so both always agree.
+ */
+export function computeFilteredHarnessSummaries(data: AppData, filters: Filters): FilteredHarnessSummaries {
+  const usersSel = filters.users ?? []
+  const harnessSel = filters.harnesses ?? []
+  const projects = filters.projects ?? []
+  const projectSet = new Set(projects)
+  const modelSet = filters.models && filters.models.length > 0 ? new Set(filters.models) : null
+  const { start, end } = getDateRangeFilter(filters.dateRange, filters.customStart, filters.customEnd)
+
+  // Team data present (a central) → always aggregate per-session: statsCache only
+  // represents the central machine's own Claude, never the members'.
+  const teamData = data.sessions.some(s => s.user)
+  const anyFilter =
+    teamData ||
+    usersSel.length > 0 || harnessSel.length > 0 || projects.length > 0 ||
+    modelSet !== null || filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd
+
+  // Columns: the explicitly selected harnesses, else the harnesses the selected users used
+  // (so picking a member narrows the columns), else every harness in the data.
+  const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
+  const userScoped = filterByUsers(data.sessions, usersSel)
+  const scopedHarnesses = distinctHarnesses(userScoped)
+  const cols: HarnessId[] = harnessSel.length > 0
+    ? order.filter(h => harnessSel.includes(h))
+    : (scopedHarnesses.length > 0 ? scopedHarnesses : data.harnesses)
+
+  if (!anyFilter) {
+    const sums = computeHarnessSummaries(data)
+    const la = {} as Record<HarnessId, string | null>
+    for (const h of cols) la[h] = lastActiveFor(data.sessions, h)
+    return { activeHarnesses: cols, summaries: sums, lastActive: la }
+  }
+
+  // Filtered per-session view — every harness (incl. Claude) summarized from sessions,
+  // since statsCache has no per-user/-harness/-date granularity.
+  const filtered = filterByHarnesses(userScoped, harnessSel).filter(s => {
+    if (!s.start_time) return false
+    const d = parseISO(s.start_time)
+    if (d < start || d > end) return false
+    if (projects.length > 0 && !projectSet.has(s.project_path)) return false
+    if (modelSet && (!s.model || !modelSet.has(s.model))) return false
+    return true
+  })
+
+  // Claude canonical source: on a central the deep Claude history lives only in
+  // data.userStatsCaches (aggregated, never as individual sessions). Merge the selected
+  // members' caches (or ALL when no member filter) so the Claude column matches the
+  // dashboard exactly — same rule as useDerivedStats' effectiveStatsCache. Only usable
+  // when NO slice filter is active (statsCache has no project/model/date granularity);
+  // otherwise fall back to the per-session sum.
+  const usc = data.userStatsCaches
+  const hasUserStats = !!usc && Object.keys(usc).length > 0
+  const sliceActive =
+    projects.length > 0 || modelSet !== null ||
+    filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd
+  const claudeStatsCache = hasUserStats
+    ? mergeStatsCaches(
+        (usersSel.length > 0 ? usersSel : Object.keys(usc!))
+          .map(u => usc![u])
+          .filter((c): c is NonNullable<typeof c> => !!c),
+      )
+    : data.statsCache
+  const claudeFromStatsCache = hasUserStats && !sliceActive
+
+  const sums = {} as Record<HarnessId, HarnessSummary>
+  const la = {} as Record<HarnessId, string | null>
+  for (const h of cols) {
+    sums[h] = h === 'claude' && claudeFromStatsCache
+      ? claudeSummaryFromStatsCache(claudeStatsCache, userScoped)
+      : summarizeHarnessSessions(filtered, h)
+    la[h] = lastActiveFor(filtered, h)
+  }
+  return { activeHarnesses: cols, summaries: sums, lastActive: la }
 }
 
 export function useDerivedStats(data: AppData | null, filters: Filters) {
