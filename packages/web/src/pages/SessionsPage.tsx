@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Clock, Radio, Copy, Check } from 'lucide-react'
 import type { SessionMeta } from '@agentistics/core'
@@ -6,45 +6,46 @@ import { sessionLabel } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { Section } from '../components/Section'
 import { RecentSessions } from '../components/RecentSessions'
-import { isLive, lastActivityMs, LIVE_THRESHOLD_MIN } from '../lib/sessionLive'
+import { lastActivityMs } from '../lib/sessionLive'
 import { resumeCommand } from '../lib/resumeCommand'
 
-const COUNT_OPTIONS = [5, 10, 20, 50] as const
-const COUNT_KEY = 'agentistics-sessions-recent-count'
+const LIVE_POLL_MS = 4000
 
 export default function SessionsPage() {
   const ctx = useOutletContext<AppContext>()
-  const { derived, lang, setSelectedSession, isCentral } = ctx
+  const { data, derived, lang, setSelectedSession, isCentral } = ctx
   const pt = lang === 'pt'
 
-  const [count, setCount] = useState<number>(() => {
-    const raw = Number(localStorage.getItem(COUNT_KEY))
-    return COUNT_OPTIONS.includes(raw as 5) ? raw : 5
-  })
-  function pickCount(n: number) { setCount(n); localStorage.setItem(COUNT_KEY, String(n)) }
+  // Real-time open-session detection. The full /api/data only refetches on file events, but
+  // opening/closing a `claude` tab fires none — so poll the lightweight endpoint directly.
+  const [liveIdList, setLiveIdList] = useState<string[]>(data.liveSessionIds ?? [])
+  useEffect(() => {
+    if (isCentral) return
+    let alive = true
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/live-sessions')
+        if (!res.ok) return
+        const json = await res.json() as { liveSessionIds?: string[] }
+        if (alive && Array.isArray(json.liveSessionIds)) setLiveIdList(json.liveSessionIds)
+      } catch { /* transient — keep last known */ }
+    }
+    poll()
+    const id = setInterval(poll, LIVE_POLL_MS)
+    return () => { alive = false; clearInterval(id) }
+  }, [isCentral])
 
-  const nowMs = Date.now()
+  const liveIds = useMemo(() => new Set(liveIdList), [liveIdList])
   const sorted = useMemo(
     () => [...derived.filteredSessions].sort((a, b) => lastActivityMs(b) - lastActivityMs(a)),
     [derived.filteredSessions],
   )
-  const live = useMemo(() => sorted.filter(s => isLive(s, nowMs, LIVE_THRESHOLD_MIN)), [sorted, nowMs])
-  // Recent excludes the ones already shown as live (no duplication).
-  const liveIds = new Set(live.map(s => s.session_id))
-  const recent = useMemo(
-    () => sorted.filter(s => !liveIds.has(s.session_id)).slice(0, count),
-    [sorted, count],
-  )
+  const live = useMemo(() => sorted.filter(s => liveIds.has(s.session_id)), [sorted, liveIds])
 
   if (isCentral) {
     return (
       <>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 4 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>
-            <span style={{ color: 'var(--anthropic-orange)' }}><Clock size={16} /></span>
-            {pt ? 'Sessões' : 'Sessions'}
-          </div>
-        </div>
+        <PageHead pt={pt} />
         <Section flashId="sessions-central-empty" title={<><Clock size={14} /> {pt ? 'Sessões' : 'Sessions'}</>}>
           <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>
             {pt
@@ -58,45 +59,36 @@ export default function SessionsPage() {
 
   return (
     <>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 4 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>
-          <span style={{ color: 'var(--anthropic-orange)' }}><Clock size={16} /></span>
-          {pt ? 'Sessões' : 'Sessions'}
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
-          {pt
-            ? `Sessões ao vivo (ativas nos últimos ${LIVE_THRESHOLD_MIN} min) e as mais recentes, com comando para retomar.`
-            : `Live sessions (active in the last ${LIVE_THRESHOLD_MIN} min) and your most recent ones, with a resume command.`}
-        </div>
-      </div>
+      <PageHead pt={pt} />
 
-      <Section flashId="live-sessions" title={<><Radio size={14} /> {pt ? 'Ao vivo' : 'Live'} {live.length > 0 && <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>({live.length})</span>}</>}>
+      <Section flashId="live-sessions" title={<><Radio size={14} /> {pt ? 'Abertas agora' : 'Open now'} {live.length > 0 && <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>({live.length})</span>}</>}>
         {live.length === 0
-          ? <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>{pt ? 'Nenhuma sessão ativa agora.' : 'No active sessions right now.'}</div>
+          ? <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>{pt ? 'Nenhuma sessão aberta agora.' : 'No sessions open right now.'}</div>
           : <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {live.map(s => <LiveCard key={s.session_id} s={s} pt={pt} onOpen={() => setSelectedSession(s)} />)}
             </div>}
       </Section>
 
-      <Section
-        flashId="recent-sessions"
-        title={<><Clock size={14} /> {pt ? 'Recentes' : 'Recent'}</>}
-        action={
-          <div style={{ display: 'flex', gap: 4 }}>
-            {COUNT_OPTIONS.map(n => (
-              <button key={n} onClick={() => pickCount(n)} style={{
-                padding: '3px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit',
-                border: '1px solid var(--border)',
-                background: count === n ? 'var(--anthropic-orange-dim, rgba(205,93,56,0.12))' : 'var(--bg-elevated)',
-                color: count === n ? 'var(--anthropic-orange, #cd5d38)' : 'var(--text-secondary)',
-              }}>{n}</button>
-            ))}
-          </div>
-        }
-      >
-        <RecentSessions sessions={recent} lang={lang} onSelect={setSelectedSession} />
+      <Section flashId="recent-sessions" title={<><Clock size={14} /> {pt ? 'Últimas sessões' : 'Latest sessions'}</>}>
+        <RecentSessions sessions={derived.filteredSessions} lang={lang} onSelect={setSelectedSession} pinnedIds={liveIds} />
       </Section>
     </>
+  )
+}
+
+function PageHead({ pt }: { pt: boolean }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>
+        <span style={{ color: 'var(--anthropic-orange)' }}><Clock size={16} /></span>
+        {pt ? 'Sessões' : 'Sessions'}
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+        {pt
+          ? 'Sessões abertas agora (em tempo real) e as últimas sessões, com comando para retomar.'
+          : 'Sessions open right now (real time) and your latest sessions, with a resume command.'}
+      </div>
+    </div>
   )
 }
 

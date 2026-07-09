@@ -257,6 +257,9 @@ export interface AppData {
   /** Team/central only: central policy — whether offline members' data is shown by default. */
   includeOfflineData?: boolean
   workflows?: WorkflowRun[]
+  /** session_ids open in a live `claude` process right now (computed per-request, not cached).
+   *  Empty/absent when live detection is unavailable (e.g. non-Linux host). */
+  liveSessionIds?: string[]
 }
 
 /** An empty statsCache with all zero/neutral fields. Pure. */

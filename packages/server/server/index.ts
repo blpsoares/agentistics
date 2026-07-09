@@ -773,6 +773,26 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       }
     }
 
+    // Lightweight real-time poll: just the open-session ids, computed from live `claude`
+    // processes against the cached build. Cheap enough to poll every few seconds so the
+    // Sessions tab reflects opening/closing a session without a full data refetch.
+    if (url.pathname === '/api/live-sessions' && req.method === 'GET') {
+      try {
+        const data = await buildApiResponse()
+        const { getLiveSessionIds } = await import('./live-sessions')
+        const liveSessionIds = await getLiveSessionIds(data.sessions).catch(() => [])
+        return new Response(JSON.stringify({ liveSessionIds }), {
+          status: 200,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch {
+        return new Response(JSON.stringify({ liveSessionIds: [] }), {
+          status: 200,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
     if (url.pathname === '/api/data' && req.method === 'GET') {
       try {
         const data = await buildApiResponse()
@@ -790,7 +810,11 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           ])
           extra = { presence, includeOfflineData: cfg?.includeOfflineData ?? true }
         }
-        return new Response(JSON.stringify({ ...data, ...extra }), {
+        // Live open-session detection — computed per request (not part of the cached build)
+        // so it reflects `claude` processes in real time.
+        const { getLiveSessionIds } = await import('./live-sessions')
+        const liveSessionIds = await getLiveSessionIds(data.sessions).catch(() => [])
+        return new Response(JSON.stringify({ ...data, liveSessionIds, ...extra }), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
