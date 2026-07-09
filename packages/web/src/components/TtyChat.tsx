@@ -1924,7 +1924,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
           </div>
 
           {/* Input area */}
-          <div style={{ borderTop: '1px solid var(--border)', background: 'var(--bg-card)', flexShrink: 0 }}>
+          <div style={{ borderTop: '1px solid var(--border)', background: 'var(--bg-card)', flexShrink: 0, position: 'relative', zIndex: 30 }}>
             {/* Attachment strip */}
             {nayAttachments.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, padding: '6px 12px 0' }}>
@@ -1985,7 +1985,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
                 </button>
                 {showNayHarnessPicker && (
                   <div style={{
-                    position: 'absolute', bottom: 'calc(100% + 4px)', right: 0, zIndex: 10, minWidth: 200,
+                    position: 'absolute', bottom: 'calc(100% + 4px)', right: 0, zIndex: 50, minWidth: 200,
                     background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10,
                     boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden',
                   }}>
@@ -2050,7 +2050,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
               </button>
               {showNayModelPicker && (
                 <div style={{
-                  position: 'absolute', bottom: 'calc(100% + 4px)', right: 0, zIndex: 10, minWidth: 180,
+                  position: 'absolute', bottom: 'calc(100% + 4px)', right: 0, zIndex: 50, minWidth: 180,
                   background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10,
                   boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden',
                 }}>

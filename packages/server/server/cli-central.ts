@@ -106,6 +106,7 @@ services:
   mongo:
     image: mongo:7
     command: --replSet rs0
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status() } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }) }"]
       interval: 10s

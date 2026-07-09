@@ -11,13 +11,27 @@
 
 import { createHash } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
-import type { SessionMeta, StatsCache } from '@agentistics/core'
+import type { SessionMeta, StatsCache, WorkflowRun } from '@agentistics/core'
 import { PUSH_INTERVAL, clampPushInterval, DEFAULT_TEAM } from '@agentistics/core'
 import type { Preferences } from './preferences'
 import { TEAM_SENT_FILE, TEAM_SYNC_FILE, STATS_CACHE_FILE } from './config'
 import { loadConsolidated } from './consolidate'
+import { loadWorkflowRuns } from './workflow-store'
 import { readPreferences, writePreferences } from './preferences'
 import { safeReadJson } from './utils'
+
+/** This machine's local workflow runs (computed metrics only — no chat/prompt text) to push
+ *  to the central. Mirrors readMemberStatsCache: best-effort, never throws. Full-set push
+ *  (not delta) is acceptable — the central upserts idempotently by runId, so re-pushing the
+ *  same set never double-counts. */
+async function readMemberWorkflows(): Promise<WorkflowRun[]> {
+  try {
+    const map = await loadWorkflowRuns()
+    return Array.from(map.values())
+  } catch {
+    return []
+  }
+}
 
 /** This machine's statsCache to push to the central — the SUPPLEMENTED one the local
  *  dashboard actually shows (buildApiResponse gap-fills modelUsage/dailyActivity with recent
@@ -235,6 +249,10 @@ export async function pushOnceDetailed(team: NonNullable<Preferences['team']>): 
     // The member's own statsCache (aggregated Claude history) is pushed so the central can
     // reproduce exact totals; it changes as activity accrues even when no new sessions exist.
     const statsCache = await readMemberStatsCache()
+    // Local workflow runs (computed metrics only — no chat/prompt text, same privacy contract
+    // as sessions). Pushed as a full set each cycle; the central upserts idempotently by
+    // runId, so this never double-counts.
+    const workflows = await readMemberWorkflows()
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
     if (team.token) {
@@ -242,13 +260,14 @@ export async function pushOnceDetailed(team: NonNullable<Preferences['team']>): 
     }
 
     if (toSend.length === 0) {
-      // No session deltas — still push the statsCache on its own so totals stay fresh.
-      if (statsCache) {
+      // No session deltas — still push the statsCache/workflows on their own so totals
+      // and workflow runs stay fresh.
+      if (statsCache || workflows.length > 0) {
         try {
           const res = await fetch(`${team.endpoint}/api/team/ingest`, {
             method: 'POST',
             headers,
-            body: JSON.stringify({ org: team.org, user: team.user, sessions: [], statsCache }),
+            body: JSON.stringify({ org: team.org, user: team.user, sessions: [], statsCache, workflows }),
           })
           // A reachable central (even a non-2xx that isn't auth) counts as contact for the pill.
           if (res.ok) { markPushSuccess(); clearPushError(); void notifyPushRecovered() }
@@ -270,8 +289,8 @@ export async function pushOnceDetailed(team: NonNullable<Preferences['team']>): 
         res = await fetch(`${team.endpoint}/api/team/ingest`, {
           method: 'POST',
           headers,
-          // Attach the statsCache to the first batch only (idempotent upsert on the central).
-          body: JSON.stringify({ org: team.org, user: team.user, sessions: batch, ...(i === 0 ? { statsCache } : {}) }),
+          // Attach the statsCache/workflows to the first batch only (idempotent upsert on the central).
+          body: JSON.stringify({ org: team.org, user: team.user, sessions: batch, ...(i === 0 ? { statsCache, workflows } : {}) }),
         })
       } catch (fetchErr) {
         const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr)

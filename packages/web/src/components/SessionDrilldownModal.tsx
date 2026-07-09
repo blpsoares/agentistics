@@ -1,8 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import {
   X, Clock, FileCode, GitCommit, Wrench, MessageSquare, Bot, Zap, AlertTriangle,
-  CheckCircle, XCircle, Globe, Server, ExternalLink, Loader,
+  CheckCircle, XCircle, Globe, Server, ExternalLink,
 } from 'lucide-react'
 import type { SessionMeta, Lang } from '@agentistics/core'
 import { formatProjectName, formatModel, calcCost, getModelColor, sessionLabel } from '@agentistics/core'
@@ -11,7 +11,6 @@ import { fmtFull } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { PrecisionToggle } from './PrecisionToggle'
 import { useIsMobile } from '../hooks/useIsMobile'
-import { MessageBubble, type TranscriptMessage } from './HarnessChat'
 
 // ─── splitInlinedHistory ──────────────────────────────────────────────────────
 // Non-Claude harnesses sometimes concatenate a whole conversation into a single
@@ -247,35 +246,37 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-            <button
-              onClick={() => {
-                const isNay = session.project_path.includes('.agentistics/nay-chat')
-                if (isNay) {
-                  window.dispatchEvent(new CustomEvent('agentistics:open-nay-chat', {
-                    detail: { sessionId: session.session_id },
-                  }))
-                } else {
-                  const harness = session.harness ?? 'claude'
-                  // Match Claude's folder encoding: every non-alphanumeric char → '-'
-                  const encodedDir = session.project_path.replace(/[^a-zA-Z0-9-]/g, '-')
-                  window.dispatchEvent(new CustomEvent('agentistics:open-transcript', {
-                    detail: { harness, sessionId: session.session_id, project: { path: session.project_path, name: session.project_path.split('/').pop() ?? session.project_path, encodedDir } },
-                  }))
-                }
-              }}
-              title={session.project_path.includes('.agentistics/nay-chat') ? 'Open in Nay Chat' : 'View transcript'}
-              style={{
-                height: 30, padding: '0 10px',
-                display: 'flex', alignItems: 'center', gap: 5,
-                border: '1px solid var(--border)', borderRadius: 8,
-                background: 'transparent',
-                color: session.project_path.includes('.agentistics/nay-chat') ? 'var(--anthropic-orange)' : HARNESS_COLORS[session.harness ?? 'claude'],
-                cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 500,
-              }}
-            >
-              <ExternalLink size={12} />
-              {session.project_path.includes('.agentistics/nay-chat') ? 'Nay' : HARNESS_LABELS[session.harness ?? 'claude']}
-            </button>
+            {!central && (
+              <button
+                onClick={() => {
+                  const isNay = session.project_path.includes('.agentistics/nay-chat')
+                  if (isNay) {
+                    window.dispatchEvent(new CustomEvent('agentistics:open-nay-chat', {
+                      detail: { sessionId: session.session_id },
+                    }))
+                  } else {
+                    const harness = session.harness ?? 'claude'
+                    // Match Claude's folder encoding: every non-alphanumeric char → '-'
+                    const encodedDir = session.project_path.replace(/[^a-zA-Z0-9-]/g, '-')
+                    window.dispatchEvent(new CustomEvent('agentistics:open-transcript', {
+                      detail: { harness, sessionId: session.session_id, project: { path: session.project_path, name: session.project_path.split('/').pop() ?? session.project_path, encodedDir } },
+                    }))
+                  }
+                }}
+                title={session.project_path.includes('.agentistics/nay-chat') ? 'Open in Nay Chat' : 'View transcript'}
+                style={{
+                  height: 30, padding: '0 10px',
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  border: '1px solid var(--border)', borderRadius: 8,
+                  background: 'transparent',
+                  color: session.project_path.includes('.agentistics/nay-chat') ? 'var(--anthropic-orange)' : HARNESS_COLORS[session.harness ?? 'claude'],
+                  cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 500,
+                }}
+              >
+                <ExternalLink size={12} />
+                {session.project_path.includes('.agentistics/nay-chat') ? 'Nay' : HARNESS_LABELS[session.harness ?? 'claude']}
+              </button>
+            )}
             <button
               onClick={onClose}
               style={{
@@ -601,167 +602,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
             </div>
           )}
 
-          {/* Remote member chat — central only, session must have a user */}
-          {central && session.user && (
-            <RemoteSessionChat session={session} pt={pt} />
-          )}
         </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── RemoteSessionChat ────────────────────────────────────────────────────────
-// Fetches a remote member's chat transcript from the central hub and renders it
-// using the same MessageBubble component as HarnessChat (local transcript view).
-
-type RemoteChatState =
-  | { status: 'loading' }
-  | { status: 'loaded'; messages: TranscriptMessage[] }
-  | { status: 'error' }
-
-function RemoteSessionChat({ session, pt }: { session: SessionMeta; pt: boolean }) {
-  const [state, setState] = useState<RemoteChatState>({ status: 'loading' })
-  const chatRef = useRef<HTMLDivElement>(null)
-  const mountedRef = useRef(true)
-  const harness = session.harness
-
-  useEffect(() => {
-    mountedRef.current = true
-    setState({ status: 'loading' })
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 10_000)
-
-    const qs = new URLSearchParams({
-      user: session.user ?? '',
-      sessionId: session.session_id,
-      harness: session.harness,
-    })
-    // Claude's member-side reader locates the transcript by <encodedDir>/<sessionId>.jsonl, so it
-    // REQUIRES the encoded project dir — without it the member returns [] and the chat looks empty.
-    // Match Claude's folder encoding: every non-alphanumeric char → '-' (same as the transcript btn).
-    if (session.harness === 'claude' && session.project_path) {
-      qs.set('encodedDir', session.project_path.replace(/[^a-zA-Z0-9-]/g, '-'))
-    }
-
-    fetch(`/api/team/session-chat?${qs.toString()}`, { signal: controller.signal })
-      .then(r => {
-        if (r.status === 404) throw new Error('not-found')
-        if (!r.ok) throw new Error(`http-${r.status}`)
-        return r.json() as Promise<{ ok: boolean; messages?: unknown[]; error?: string }>
-      })
-      .then(data => {
-        if (!data.ok) throw new Error(data.error ?? 'offline')
-        const messages = (data.messages ?? []).filter(
-          (m): m is TranscriptMessage =>
-            typeof m === 'object' && m !== null &&
-            ((m as Record<string, unknown>).role === 'user' || (m as Record<string, unknown>).role === 'assistant') &&
-            (typeof (m as Record<string, unknown>).content === 'string'),
-        )
-        if (mountedRef.current) setState({ status: 'loaded', messages })
-      })
-      .catch(() => {
-        if (mountedRef.current) setState({ status: 'error' })
-      })
-
-    return () => {
-      mountedRef.current = false
-      clearTimeout(timeoutId)
-      controller.abort()
-    }
-  }, [session.session_id, session.user, session.harness])
-
-  // Scroll to bottom when messages load
-  useEffect(() => {
-    if (state.status === 'loaded' && chatRef.current) {
-      chatRef.current.scrollTop = chatRef.current.scrollHeight
-    }
-  }, [state])
-
-  const harnessColor = HARNESS_COLORS[harness] ?? 'var(--text-secondary)'
-
-  return (
-    <div style={{
-      border: '1px solid var(--border)',
-      borderRadius: 10,
-      overflow: 'hidden',
-    }}>
-      {/* Section header */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 7,
-        padding: '8px 12px',
-        borderBottom: '1px solid var(--border)',
-        background: 'var(--bg-elevated)',
-      }}>
-        <div style={{ width: 8, height: 8, borderRadius: '50%', background: harnessColor, flexShrink: 0 }} />
-        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', flex: 1 }}>
-          {pt ? 'Chat do membro' : 'Member chat'}
-        </span>
-        {state.status === 'loaded' && state.messages.length > 0 && (
-          <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
-            {state.messages.length} {pt ? 'msgs' : 'msgs'}
-          </span>
-        )}
-      </div>
-
-      {/* Body */}
-      <div
-        ref={chatRef}
-        style={{
-          maxHeight: 420,
-          overflowY: 'auto',
-          padding: '12px 14px',
-          background: 'var(--bg-surface)',
-        }}
-      >
-        {state.status === 'loading' && (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px 0', gap: 8 }}>
-            <Loader size={14} style={{ animation: 'ttyChatSpin 1s linear infinite', color: harnessColor }} />
-            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-              {pt ? 'Carregando…' : 'Loading…'}
-            </span>
-          </div>
-        )}
-
-        {state.status === 'error' && (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            padding: '14px 0',
-            color: 'var(--text-tertiary)',
-            fontSize: 12,
-          }}>
-            <AlertTriangle size={14} style={{ color: '#f59e0b', flexShrink: 0 }} />
-            <span>
-              {pt ? 'Membro offline — chat indisponível' : 'Member offline — chat unavailable'}
-            </span>
-          </div>
-        )}
-
-        {state.status === 'loaded' && state.messages.length === 0 && (
-          <div style={{ textAlign: 'center', padding: '20px 12px', color: 'var(--text-tertiary)', fontSize: 12, lineHeight: 1.6 }}>
-            <div style={{ fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>
-              {pt ? 'Transcript indisponível' : 'Transcript unavailable'}
-            </div>
-            {pt
-              ? 'O texto bruto desta conversa não está mais no computador do membro (o Claude limpa os logs após ~30 dias). As métricas foram preservadas, mas o chat só sobrevive se o membro usar o modo de arquivo "completo".'
-              : "This conversation's raw text is no longer on the member's machine (Claude cleans up logs after ~30 days). The metrics were preserved, but the chat only survives if the member uses \"full\" archive mode."}
-          </div>
-        )}
-
-        {state.status === 'loaded' && state.messages.length > 0 &&
-          state.messages.flatMap((msg, i) =>
-            splitInlinedHistory(msg.role, msg.content).map((split, j) => (
-              <MessageBubble
-                key={`${i}-${j}`}
-                msg={{ ...msg, role: split.role, content: split.content }}
-                harness={harness}
-                pt={pt}
-              />
-            ))
-          )
-        }
       </div>
     </div>
   )

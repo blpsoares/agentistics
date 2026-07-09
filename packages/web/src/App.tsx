@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { createPortal } from 'react-dom'
 import { version } from '../../../package.json'
 import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
@@ -8,7 +9,7 @@ import {
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Workflow as WorkflowIcon,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -606,7 +607,7 @@ function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): st
 }
 
 function MobileBottomNav({
-  lang, harnesses, onSettings, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues, isCentral,
+  lang, harnesses, onSettings, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues, isCentral, hasWorkflows,
 }: {
   lang: Lang
   harnesses?: HarnessId[]
@@ -618,6 +619,7 @@ function MobileBottomNav({
   healthIssues?: HealthIssue[]
   /** A central updates in real time via SSE — no Live toggle. */
   isCentral?: boolean
+  hasWorkflows?: boolean
 }) {
   const location = useLocation()
   const navigate = useNavigate()
@@ -646,6 +648,10 @@ function MobileBottomNav({
     badge?: string
   }
   const navTiles: Tile[] = [
+    { key: 'sessions', label: pt ? 'Sessões' : 'Sessions', icon: Clock, onClick: () => { setMoreOpen(false); navigate('/sessions') }, active: location.pathname.startsWith('/sessions') },
+    ...(hasWorkflows
+      ? [{ key: 'workflows', label: pt ? 'Workflows' : 'Workflows', icon: WorkflowIcon, onClick: () => { setMoreOpen(false); navigate('/workflows') }, active: location.pathname.startsWith('/workflows') } as Tile]
+      : []),
     { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { setMoreOpen(false); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
     { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { setMoreOpen(false); navigate('/export') }, active: location.pathname.startsWith('/export') },
     ...(harnesses && harnesses.length > 1
@@ -662,9 +668,7 @@ function MobileBottomNav({
     } as Tile]),
     { key: 'refresh', label: pt ? 'Atualizar' : 'Refresh', icon: RefreshCw, onClick: () => { onRefresh(); setMoreOpen(false) } },
     { key: 'settings', label: pt ? 'Ajustes' : 'Settings', icon: SlidersHorizontal, onClick: () => { onSettings(); setMoreOpen(false) } },
-    ...(activeIssueCount > 0
-      ? [{ key: 'warnings', label: pt ? 'Avisos' : 'Warnings', icon: AlertTriangle, onClick: () => { setMoreOpen(false); onSettings() }, accent: true, badge: String(activeIssueCount) } as Tile]
-      : []),
+    // Health warnings moved next to the notification bell in the mobile top bar (its own popover).
   ]
   const allTiles = [...navTiles, ...actionTiles]
 
@@ -701,14 +705,14 @@ function MobileBottomNav({
       <div
         onClick={() => setMoreOpen(false)}
         style={{
-          position: 'fixed', inset: 0, zIndex: 210, background: 'rgba(0,0,0,0.45)',
+          position: 'fixed', inset: 0, zIndex: 310, background: 'rgba(0,0,0,0.45)',
           opacity: moreOpen ? 1 : 0,
           pointerEvents: moreOpen ? 'auto' : 'none',
           transition: 'opacity 0.25s ease',
         }}
       />
       <div style={{
-        position: 'fixed', left: 0, right: 0, bottom: 56, zIndex: 220,
+        position: 'fixed', left: 0, right: 0, bottom: 56, zIndex: 320,
         background: 'var(--bg-surface)', borderTop: '1px solid var(--border)',
         borderRadius: '16px 16px 0 0', boxShadow: '0 -8px 30px rgba(0,0,0,0.35)',
         padding: '8px 12px 16px',
@@ -769,7 +773,7 @@ function MobileBottomNav({
           bottom: 0,
           left: 0,
           right: 0,
-          zIndex: 230,
+          zIndex: 330,
           background: 'var(--bg-surface)',
           borderTop: '1px solid var(--border)',
           display: 'flex',
@@ -798,12 +802,6 @@ function MobileBottomNav({
         <button onClick={() => setMoreOpen(v => !v)} style={itemStyle(navAction || moreOpen)}>
           <div style={{ position: 'relative' }}>
             <MoreHorizontal size={18} />
-            {activeIssueCount > 0 && !moreOpen && (
-              <span style={{
-                position: 'absolute', top: -4, right: -6,
-                width: 8, height: 8, borderRadius: '50%', background: '#f59e0b',
-              }} />
-            )}
           </div>
           <span style={labelStyle}>{pt ? 'Mais' : 'More'}</span>
         </button>
@@ -812,66 +810,149 @@ function MobileBottomNav({
   )
 }
 
-function NavTabs({ lang, harnesses }: { lang: Lang; harnesses?: HarnessId[] }) {
+const SIDEBAR_W = 248
+const SIDEBAR_W_COLLAPSED = 64
+
+/** Themed hover tooltip for the collapsed sidebar (icons only). Renders via a portal so it
+ *  escapes the sidebar's overflow clipping. Active only when `show` is true (i.e. collapsed);
+ *  when expanded the label is already visible, so it just renders its child untouched. */
+function CollapsedTip({ label, show, children }: { label: string; show: boolean; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  if (!show) return <>{children}</>
+  return (
+    <div
+      ref={ref}
+      style={{ position: 'relative' }}
+      onMouseEnter={() => { const r = ref.current?.getBoundingClientRect(); if (r) setPos({ top: r.top + r.height / 2, left: r.right + 10 }) }}
+      onMouseLeave={() => setPos(null)}
+    >
+      {children}
+      {pos && createPortal(
+        <div role="tooltip" style={{
+          position: 'fixed', top: pos.top, left: pos.left, transform: 'translateY(-50%)',
+          background: 'var(--bg-card)', color: 'var(--text-primary)',
+          border: '1px solid var(--border)', borderRadius: 7, padding: '5px 10px',
+          fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
+          boxShadow: '0 6px 20px rgba(0,0,0,0.35)', zIndex: 500, pointerEvents: 'none',
+        }}>{label}</div>,
+        document.body,
+      )}
+    </div>
+  )
+}
+
+function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle, updatedText, sinceText, theme, onToggleTheme, onToggleLang, onSettings, onExport }: {
+  lang: Lang; harnesses?: HarnessId[]; isCentral?: boolean; hasWorkflows?: boolean
+  collapsed: boolean; onToggle: () => void; updatedText: string; sinceText?: string
+  theme: Theme; onToggleTheme: () => void; onToggleLang: () => void; onSettings: () => void; onExport: () => void
+}) {
   const location = useLocation()
   const pt = lang === 'pt'
-
-  const tabs: { to: string; labelPt: string; labelEn: string; icon: React.ReactNode }[] = [
-    { to: '/',          labelPt: 'Home',         labelEn: 'Home',         icon: <Home size={12} /> },
-    { to: '/costs',     labelPt: 'Custos',       labelEn: 'Costs',        icon: <DollarSign size={12} /> },
-    { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={12} /> },
-    { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={12} /> },
-    { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={12} /> },
-    { to: '/export',    labelPt: 'Exportar',     labelEn: 'Export',       icon: <FileDown size={12} /> },
-    ...(harnesses && harnesses.length > 1
-      ? [{ to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={12} /> }]
-      : []),
+  const items: { to: string; labelPt: string; labelEn: string; icon: React.ReactNode }[] = [
+    { to: '/',          labelPt: 'Home',         labelEn: 'Home',         icon: <Home size={17} /> },
+    { to: '/sessions', labelPt: 'Sessões', labelEn: 'Sessions', icon: <Clock size={17} /> },
+    { to: '/costs',     labelPt: 'Custos',       labelEn: 'Costs',        icon: <DollarSign size={17} /> },
+    { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={17} /> },
+    { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={17} /> },
+    ...(hasWorkflows ? [{ to: '/workflows', labelPt: 'Workflows', labelEn: 'Workflows', icon: <WorkflowIcon size={17} /> }] : []),
+    { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={17} /> },
+    ...(harnesses && harnesses.length > 1 ? [{ to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={17} /> }] : []),
   ]
-
+  const footBtn: React.CSSProperties = {
+    width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    borderRadius: 8, border: '1px solid var(--border)', background: 'transparent',
+    color: 'var(--text-secondary)', cursor: 'pointer', transition: 'all 0.15s',
+  }
   return (
-    <nav style={{ display: 'flex', gap: 2, height: 42, alignItems: 'center', overflowX: 'auto' }}>
-      {tabs.map(tab => {
-        const active = tab.to === '/'
-          ? location.pathname === '/'
-          : location.pathname.startsWith(tab.to)
-        return (
-          <NavLink
-            key={tab.to}
-            to={tab.to}
-            end={tab.to === '/'}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '7px 12px',
-              borderRadius: 8,
-              textDecoration: 'none',
-              fontSize: 12,
-              fontWeight: active ? 700 : 500,
-              fontFamily: 'inherit',
-              color: active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-              background: active ? 'var(--anthropic-orange-dim)' : 'transparent',
-              border: active ? '1px solid var(--anthropic-orange)30' : '1px solid transparent',
-              transition: 'all 0.15s',
-              whiteSpace: 'nowrap',
-            }}
-            onMouseEnter={e => {
-              if (!active) {
-                ;(e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-primary)'
-                ;(e.currentTarget as HTMLAnchorElement).style.background = 'var(--bg-elevated)'
-              }
-            }}
-            onMouseLeave={e => {
-              if (!active) {
-                ;(e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-tertiary)'
-                ;(e.currentTarget as HTMLAnchorElement).style.background = 'transparent'
-              }
-            }}
-          >
-            {tab.icon}
-            {pt ? tab.labelPt : tab.labelEn}
-          </NavLink>
-        )
-      })}
-    </nav>
+    <aside style={{
+      position: 'fixed', top: 0, left: 0, bottom: 0, width: collapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W, zIndex: 200,
+      background: 'var(--bg-surface)', borderRight: '1px solid var(--border)',
+      display: 'flex', flexDirection: 'column', padding: '14px 12px', boxSizing: 'border-box',
+      transition: 'width 0.22s cubic-bezier(0.22, 1, 0.36, 1)', overflow: 'hidden',
+    }}>
+      {/* Logo + collapse toggle, then the "updated / since / sessions" summary */}
+      <div style={{ padding: '0 4px 12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 44 }}>
+          {!collapsed && <img src='/minimalistLogo.png' alt="agentistics" style={{ height: 40, width: 'auto', flexShrink: 0 }} />}
+          <button onClick={onToggle} title={collapsed ? (pt ? 'Expandir' : 'Expand') : (pt ? 'Recolher' : 'Collapse')}
+            style={{ ...footBtn, marginLeft: 'auto', width: 30, height: 30 }}>
+            {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+          </button>
+        </div>
+        {!collapsed && (updatedText || sinceText) && (
+          <div style={{ marginTop: 6, fontSize: 10.5, lineHeight: 1.55 }}>
+            {updatedText && <div style={{ color: 'var(--text-tertiary)' }}>{updatedText}</div>}
+            {sinceText && <div style={{ color: 'var(--text-secondary)' }}>{sinceText}</div>}
+          </div>
+        )}
+      </div>
+
+      <nav style={{ display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
+        {items.map(item => {
+          const active = item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to)
+          const label = pt ? item.labelPt : item.labelEn
+          return (
+            <CollapsedTip key={item.to} label={label} show={collapsed}>
+              <NavLink
+                to={item.to}
+                end={item.to === '/'}
+                aria-label={collapsed ? label : undefined}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 11,
+                  padding: collapsed ? '10px 0' : '10px 12px', justifyContent: collapsed ? 'center' : 'flex-start',
+                  borderRadius: 9, textDecoration: 'none',
+                  fontSize: 13.5, fontWeight: active ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap',
+                  color: active ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+                  background: active ? 'var(--anthropic-orange-dim)' : 'transparent',
+                  transition: 'background 0.15s, color 0.15s',
+                }}
+                onMouseEnter={e => { if (!active) { const t = e.currentTarget as HTMLAnchorElement; t.style.color = 'var(--text-primary)'; t.style.background = 'var(--bg-elevated)' } }}
+                onMouseLeave={e => { if (!active) { const t = e.currentTarget as HTMLAnchorElement; t.style.color = 'var(--text-secondary)'; t.style.background = 'transparent' } }}
+              >
+                <span style={{ flexShrink: 0, display: 'flex' }}>{item.icon}</span>
+                {!collapsed && label}
+              </NavLink>
+            </CollapsedTip>
+          )
+        })}
+      </nav>
+
+      {/* Footer — config controls */}
+      <div style={{
+        display: 'flex', flexWrap: 'wrap', gap: 6, paddingTop: 10, marginTop: 6,
+        borderTop: '1px solid var(--border)', justifyContent: collapsed ? 'center' : 'flex-start',
+      }}>
+        <CollapsedTip label={pt ? 'Configurações' : 'Settings'} show={collapsed}>
+          <button onClick={onSettings} aria-label={pt ? 'Configurações' : 'Settings'} title={collapsed ? undefined : (pt ? 'Configurações' : 'Settings')} style={footBtn}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
+            <SlidersHorizontal size={15} />
+          </button>
+        </CollapsedTip>
+        <CollapsedTip label={pt ? 'Tema' : 'Theme'} show={collapsed}>
+          <button onClick={onToggleTheme} aria-label={pt ? 'Tema' : 'Theme'} title={collapsed ? undefined : (theme === 'dark' ? (pt ? 'Tema claro' : 'Light theme') : (pt ? 'Tema escuro' : 'Dark theme'))} style={footBtn}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
+            {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+          </button>
+        </CollapsedTip>
+        <CollapsedTip label={pt ? 'Idioma' : 'Language'} show={collapsed}>
+          <button onClick={onToggleLang} aria-label={pt ? 'Idioma' : 'Language'} title={collapsed ? undefined : (pt ? 'Switch to English' : 'Mudar para Português')} style={{ ...footBtn, width: 'auto', padding: '0 10px', gap: 5, fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
+            <Globe size={14} />{!collapsed && (pt ? 'EN' : 'PT')}
+          </button>
+        </CollapsedTip>
+        {/* Export (PDF) — kept last so the orange download action sits at the right end. */}
+        <CollapsedTip label={pt ? 'Exportar' : 'Export'} show={collapsed}>
+          <button onClick={onExport} aria-label={pt ? 'Exportar relatório PDF' : 'Export PDF report'} title={collapsed ? undefined : (pt ? 'Exportar relatório PDF' : 'Export PDF report')}
+            style={{ ...footBtn, marginLeft: collapsed ? undefined : 'auto', borderColor: 'var(--anthropic-orange)50', color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)' }}>
+            <Download size={15} />
+          </button>
+        </CollapsedTip>
+      </div>
+    </aside>
   )
 }
 
@@ -995,6 +1076,14 @@ export default function AppLayout() {
   // Mobile-only: lets the user minimize the sticky filter bar while scrolling so
   // it doesn't eat the viewport on small screens. Expanded by default.
   const [filtersCollapsed, setFiltersCollapsed] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem('agentistics-sidebar-collapsed') === '1' } catch { return false }
+  })
+  const toggleSidebar = useCallback(() => setSidebarCollapsed(v => {
+    const next = !v
+    try { localStorage.setItem('agentistics-sidebar-collapsed', next ? '1' : '0') } catch { /* ignore */ }
+    return next
+  }), [])
   // The collapse animation needs `overflow: hidden` to clip the sliding panel,
   // but that also clips the Models dropdown popover. Keep it clipped only while
   // animating/collapsed; once an expand transition finishes, switch to visible
@@ -1633,7 +1722,29 @@ export default function AppLayout() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg-base)', paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W), transition: 'padding-left 0.22s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+      {/* Left sidebar nav — desktop only (mobile uses the bottom nav) */}
+      {!isMobile && <SideNav
+        lang={lang}
+        harnesses={data.harnesses}
+        isCentral={isCentral}
+        hasWorkflows={(data.workflows?.length ?? 0) > 0}
+        collapsed={sidebarCollapsed}
+        onToggle={toggleSidebar}
+        updatedText={`${lang === 'pt' ? 'Atualizado em' : 'Updated'} ${
+          singleHarness && singleHarness !== 'claude'
+            ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+            : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+        }`}
+        sinceText={(singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate)
+          ? `${lang === 'pt' ? 'Desde' : 'Since'} ${format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')} · ${derived.allTimeTotalSessions.toLocaleString()} ${lang === 'pt' ? 'sessões' : 'sessions'}${singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}`
+          : undefined}
+        theme={theme}
+        onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+        onToggleLang={() => { const next = lang === 'pt' ? 'en' : 'pt'; setLang(next); if (next === 'pt') setCurrency('BRL'); else if (currency === 'BRL') setCurrency('USD') }}
+        onSettings={() => setShowPrefsModal(true)}
+        onExport={() => navigate('/export')}
+      />}
       {/* Header */}
       <header style={{
         background: 'var(--bg-surface)',
@@ -1646,253 +1757,28 @@ export default function AppLayout() {
         borderBottom: '1px solid var(--border)',
         transition: 'box-shadow 0.25s ease',
       }}>
-        <div style={{
-          maxWidth: 1400,
-          margin: '0 auto',
-          padding: isMobile ? '0 16px' : '0 32px',
-          height: isMobile ? 48 : 56,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <img
-              src='/minimalistLogo.png'
-              alt="agentistics"
-              style={{ height: isMobile ? 44 : 64, width: 'auto' }}
-            />
-            {!isMobile && <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
-              {lang === 'pt' ? 'Atualizado em' : 'Updated'}{' '}
-              {singleHarness && singleHarness !== 'claude'
-                ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : lang === 'pt' ? 'hoje' : 'today')
-                : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : lang === 'pt' ? 'hoje' : 'today')}
-            </div>}
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 10 }}>
-            {!isMobile && (singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate) && (
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'right' }}>
-                <div>
-                  {lang === 'pt' ? 'Desde' : 'Since'}{' '}
-                  {format(
-                    singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!),
-                    'MMM d, yyyy'
-                  )}
-                </div>
-                <div style={{ color: 'var(--text-secondary)' }}>
-                  {derived.allTimeTotalSessions.toLocaleString()} {lang === 'pt' ? 'sessões' : 'sessions'}
-                  {singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}
-                </div>
-              </div>
-            )}
-
-            {/* Language toggle — hidden on mobile (accessible via preferences) */}
-            {!isMobile && <button
-              onClick={() => {
-                const next = lang === 'pt' ? 'en' : 'pt'
-                setLang(next)
-                if (next === 'pt') setCurrency('BRL')
-                else if (currency === 'BRL') setCurrency('USD')
-              }}
-              style={{
-                height: 32,
-                padding: '0 10px',
-                display: 'flex', alignItems: 'center', gap: 5,
-                borderRadius: 8,
-                border: '1px solid var(--border)',
-                background: 'transparent',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                fontSize: 12,
-                fontFamily: 'inherit',
-                fontWeight: 500,
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--text-tertiary)'
-              }}
-              onMouseLeave={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
-              }}
-              title={lang === 'pt' ? 'Switch to English' : 'Mudar para Português'}
-            >
-              <Globe size={13} />
-              {lang === 'pt' ? 'EN' : 'PT'}
-            </button>}
-
-            {/* Theme toggle — hidden on mobile (accessible via preferences) */}
-            {!isMobile && <button
-              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              style={{
-                width: 32, height: 32,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRadius: 8,
-                border: '1px solid var(--border)',
-                background: 'transparent',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--text-tertiary)'
-              }}
-              onMouseLeave={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
-              }}
-              title={theme === 'dark' ? (lang === 'pt' ? 'Tema claro' : 'Light theme') : (lang === 'pt' ? 'Tema escuro' : 'Dark theme')}
-            >
-              {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
-            </button>}
-
-            {/* Export report — hidden on mobile; navigates to /export page */}
-            {!isMobile && <button
-              onClick={() => navigate('/export')}
-              style={{
-                height: 32,
-                padding: '0 12px',
-                display: 'flex', alignItems: 'center', gap: 6,
-                borderRadius: 8,
-                border: '1px solid var(--anthropic-orange)50',
-                background: 'var(--anthropic-orange-dim)',
-                color: 'var(--anthropic-orange)',
-                cursor: 'pointer',
-                fontSize: 12,
-                fontFamily: 'inherit',
-                fontWeight: 600,
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--anthropic-orange-dim)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--anthropic-orange)'
-                ;(e.currentTarget as HTMLButtonElement).style.opacity = '0.85'
-              }}
-              onMouseLeave={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--anthropic-orange-dim)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--anthropic-orange)50'
-                ;(e.currentTarget as HTMLButtonElement).style.opacity = '1'
-              }}
-              title={lang === 'pt' ? 'Exportar relatório PDF' : 'Export PDF report'}
-            >
-              <Download size={13} />
-              {lang === 'pt' ? 'Exportar' : 'Export'}
-            </button>}
-
-            {/* Settings — unified modal (Preferences + Live + Environment).
-                On mobile this lives in the bottom "More" sheet instead. */}
-            {!isMobile && <button
-              onClick={() => setShowPrefsModal(true)}
-              style={{
-                width: 32, height: 32,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRadius: 8,
-                border: '1px solid var(--border)',
-                background: 'transparent',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--text-tertiary)'
-              }}
-              onMouseLeave={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
-              }}
-              title={lang === 'pt' ? 'Configurações' : 'Settings'}
-            >
-              <SlidersHorizontal size={14} />
-            </button>}
-
-            {/* Health warnings — on mobile surfaced via the "More" sheet */}
-            {!isMobile && data?.healthIssues && data.healthIssues.length > 0 && (
-              <HealthWarnings issues={data.healthIssues} lang={lang} />
-            )}
-
-            {/* Live updates pill — hidden on a central (it updates in real time via SSE-on-ingest,
-                so there's nothing to toggle). On mobile it's surfaced via the "More" sheet. */}
-            {!isMobile && !isCentral && <div style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '0 4px 0 10px',
-              height: 32,
-              borderRadius: 8,
-              border: '1px solid var(--border)',
-              background: 'var(--bg-secondary)',
-            }}>
-              {!isMobile && <Activity size={12} style={{ color: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', flexShrink: 0, transition: 'color 0.2s' }} />}
-              {!isMobile && <span style={{ fontSize: 11, fontWeight: 500, color: liveUpdates ? 'var(--text-primary)' : 'var(--text-tertiary)', whiteSpace: 'nowrap', transition: 'color 0.2s', userSelect: 'none' }}>
-                Live
-              </span>}
-
-              {/* iPhone-style toggle */}
-              <button
-                onClick={() => setLiveUpdates(v => !v)}
-                title={liveUpdates ? 'Pause live updates' : 'Enable live updates'}
-                style={{
-                  position: 'relative', width: 28, height: 16, borderRadius: 8,
-                  border: 'none', background: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-                  cursor: 'pointer', padding: 0, transition: 'background 0.2s', flexShrink: 0,
-                }}
-              >
-                <span style={{
-                  position: 'absolute', top: 2, left: liveUpdates ? 14 : 2,
-                  width: 12, height: 12, borderRadius: '50%', background: '#fff',
-                  transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
-                }} />
-              </button>
-
-              {/* Interval badge — visible when live is on */}
-              {liveUpdates && (
-                <span style={{
-                  fontSize: 10, fontWeight: 700,
-                  color: riskyMode && updateInterval < 10 ? '#ef4444' : 'var(--anthropic-orange)',
-                  userSelect: 'none',
-                }}>
-                  {riskyMode && updateInterval < 10 ? `⚡ ${updateInterval}s` : `${updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`}`}
-                </span>
+        {/* Mobile top bar — logo + bell. On desktop the header is a single row (the filters
+            bar below), with the sidebar carrying identity/config and the filters row carrying
+            live/alerts, so there are no longer two stacked header rows. */}
+        {isMobile && (
+          <div style={{
+            maxWidth: 1400, margin: '0 auto', padding: '0 16px', height: 48,
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
+            <img src='/minimalistLogo.png' alt="agentistics" style={{ height: 44, width: 'auto' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {data?.healthIssues && data.healthIssues.length > 0 && (
+                <HealthWarnings issues={data.healthIssues} lang={lang} />
               )}
-
-            </div>}
-
-            {/* Notifications bell — toast history (member connection/auth errors, etc.) */}
-            <NotificationBell lang={lang} buttonStyle={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              width: 32, height: 32, borderRadius: 8,
-              border: '1px solid var(--border)', background: 'transparent',
-              color: 'var(--text-tertiary)', cursor: 'pointer', position: 'relative',
-            }} />
-
-            {/* Refresh — on mobile surfaced via the "More" sheet */}
-            {!isMobile && <button
-              onClick={refetch}
-              style={{
-                width: 32, height: 32,
+              <NotificationBell lang={lang} buttonStyle={{
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRadius: 8,
-                border: '1px solid var(--border)',
-                background: 'transparent',
-                color: 'var(--text-tertiary)',
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--text-tertiary)'
-              }}
-              onMouseLeave={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
-              }}
-              title={lang === 'pt' ? 'Atualizar' : 'Refresh'}
-            >
-              <RefreshCw size={14} />
-            </button>}
+                width: 32, height: 32, borderRadius: 8,
+                border: '1px solid var(--border)', background: 'transparent',
+                color: 'var(--text-tertiary)', cursor: 'pointer', position: 'relative',
+              }} />
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Filters — full bar, fixed in the sticky header so it's reachable at any
             scroll position. Hidden on /custom. On mobile the bar is collapsible
@@ -1971,44 +1857,74 @@ export default function AppLayout() {
         )}
         {data && !isCustomPage && !isMobile && (
           <div style={{
-            borderTop: '1px solid var(--border)',
-            maxWidth: 1400,
-            margin: '0 auto',
-            padding: '0 32px',
-            width: '100%',
-            boxSizing: 'border-box',
+            maxWidth: 1400, margin: '0 auto', padding: '5px 32px', width: '100%', boxSizing: 'border-box',
+            display: 'flex', alignItems: 'flex-start', gap: 14,
           }}>
-            <FiltersBar
-              filters={filters}
-              onChange={setFilters}
-              projects={availableProjects}
-              sessionCountByProject={sessionCountByProject}
-              models={models}
-              modelGroups={modelGroups}
-              modelsInProject={modelsInProject}
-              users={users}
-              harnesses={availableHarnesses}
-              presence={data?.presence}
-              lang={lang}
-            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <FiltersBar
+                filters={filters}
+                onChange={setFilters}
+                projects={availableProjects}
+                sessionCountByProject={sessionCountByProject}
+                models={models}
+                modelGroups={modelGroups}
+                modelsInProject={modelsInProject}
+                users={users}
+                harnesses={availableHarnesses}
+                presence={data?.presence}
+                lang={lang}
+              />
+            </div>
+
+            {/* Right cluster: alerts (warnings + notifications), live toggle, refresh —
+                consolidated here so the header is a single row. Pinned to the top (flex-start
+                on the parent) so it stays in front of the filter controls and doesn't drift
+                down when the active-filter chip bar expands below. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, paddingTop: 3 }}>
+              {data?.healthIssues && data.healthIssues.length > 0 && (
+                <HealthWarnings issues={data.healthIssues} lang={lang} />
+              )}
+              <NotificationBell lang={lang} buttonStyle={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 32, height: 32, borderRadius: 8,
+                border: '1px solid var(--border)', background: 'transparent',
+                color: 'var(--text-tertiary)', cursor: 'pointer', position: 'relative',
+              }} />
+              {!isCentral && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 6, padding: '0 8px 0 10px', height: 32,
+                  borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-secondary)',
+                }}>
+                  <Activity size={12} style={{ color: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', flexShrink: 0, transition: 'color 0.2s' }} />
+                  <span style={{ fontSize: 11, fontWeight: 500, color: liveUpdates ? 'var(--text-primary)' : 'var(--text-tertiary)', whiteSpace: 'nowrap', userSelect: 'none' }}>Live</span>
+                  <button
+                    onClick={() => setLiveUpdates(v => !v)}
+                    title={liveUpdates ? 'Pause live updates' : 'Enable live updates'}
+                    style={{ position: 'relative', width: 28, height: 16, borderRadius: 8, border: 'none', background: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', cursor: 'pointer', padding: 0, transition: 'background 0.2s', flexShrink: 0 }}
+                  >
+                    <span style={{ position: 'absolute', top: 2, left: liveUpdates ? 14 : 2, width: 12, height: 12, borderRadius: '50%', background: '#fff', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
+                  </button>
+                  {liveUpdates && (
+                    <span style={{ fontSize: 10, fontWeight: 700, color: riskyMode && updateInterval < 10 ? '#ef4444' : 'var(--anthropic-orange)', userSelect: 'none' }}>
+                      {riskyMode && updateInterval < 10 ? `⚡ ${updateInterval}s` : `${updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`}`}
+                    </span>
+                  )}
+                </div>
+              )}
+              <button
+                onClick={refetch}
+                title={lang === 'pt' ? 'Atualizar' : 'Refresh'}
+                style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', transition: 'all 0.15s' }}
+                onMouseEnter={e => { const t = e.currentTarget as HTMLButtonElement; t.style.color = 'var(--text-primary)'; t.style.borderColor = 'var(--text-tertiary)' }}
+                onMouseLeave={e => { const t = e.currentTarget as HTMLButtonElement; t.style.color = 'var(--text-tertiary)'; t.style.borderColor = 'var(--border)' }}
+              >
+                <RefreshCw size={14} />
+              </button>
+            </div>
           </div>
         )}
 
-        {/* Nav tabs — third row of sticky header (desktop only; mobile uses bottom nav) */}
-        {!isMobile && (
-          <div style={{
-            borderTop: '1px solid var(--border)',
-            maxWidth: 1400,
-            margin: '0 auto',
-            padding: '0 32px',
-            width: '100%',
-            boxSizing: 'border-box',
-            display: 'flex',
-            alignItems: 'center',
-          }}>
-            <NavTabs lang={lang} harnesses={data.harnesses} />
-          </div>
-        )}
+        {/* Nav moved to the left sidebar (SideNav) on desktop; mobile uses the bottom nav. */}
       </header>
 
       {/* Main content — routed pages render here via <Outlet /> */}
@@ -2034,6 +1950,7 @@ export default function AppLayout() {
           cardPrecision, setCardPrecision,
           sessionCountByProject, models, modelGroups, modelsInProject, users,
           harnesses: data.harnesses,
+          isCentral,
         }} />
       </main>
 
@@ -2208,6 +2125,7 @@ export default function AppLayout() {
           updateInterval={updateInterval}
           healthIssues={data.healthIssues}
           isCentral={isCentral}
+          hasWorkflows={(data.workflows?.length ?? 0) > 0}
         />
       )}
 

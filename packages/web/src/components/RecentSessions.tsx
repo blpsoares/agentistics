@@ -22,6 +22,8 @@ interface Props {
   sessions: SessionMeta[]
   lang: 'pt' | 'en'
   onSelect?: (session: SessionMeta) => void
+  /** session_ids to pin to the top of the list (e.g. live/open sessions), regardless of sort. */
+  pinnedIds?: Set<string>
 }
 
 type SortKey = 'date' | 'tokens' | 'messages' | 'tools' | 'files'
@@ -275,7 +277,7 @@ function openSession(s: SessionMeta, e: React.MouseEvent) {
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50]
 
-export function RecentSessions({ sessions, lang, onSelect }: Props) {
+export function RecentSessions({ sessions, lang, onSelect, pinnedIds }: Props) {
   const t = T[lang]
 
   // Sort state
@@ -303,8 +305,13 @@ export function RecentSessions({ sessions, lang, onSelect }: Props) {
       )
     }
 
-    // Sort
+    // Sort — pinned (e.g. live/open) sessions always float to the top, regardless of sortKey.
     list.sort((a, b) => {
+      if (pinnedIds) {
+        const pa = pinnedIds.has(a.session_id) ? 1 : 0
+        const pb = pinnedIds.has(b.session_id) ? 1 : 0
+        if (pa !== pb) return pb - pa
+      }
       switch (sortKey) {
         case 'date':
           return new Date(b.start_time).getTime() - new Date(a.start_time).getTime()
@@ -322,7 +329,7 @@ export function RecentSessions({ sessions, lang, onSelect }: Props) {
     })
 
     return list
-  }, [sessions, search, sortKey])
+  }, [sessions, search, sortKey, pinnedIds])
 
   // Reset to page 0 when filters/sort/pageSize change
   const totalItems = processed.length

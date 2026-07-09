@@ -506,6 +506,7 @@ launched it (e.g. re-run `agentop server`).
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `MongoServerError: not primary` | Replica set not yet initialised | Wait for the `mongo` healthcheck to turn green (`docker compose ps`) |
+| Dashboard shows **zero members** after a host reboot | `mongo` container stayed down (e.g. OOM-killed on boot) while `app` came back | `docker start team-mode-mongo-1` — the `mongo_data` volume is intact, no data is lost. Permanent fix ships via the `restart: unless-stopped` policy on `mongo`; migrate an old deploy with `agentop central up` or `docker update --restart unless-stopped team-mode-mongo-1` |
 | Dashboard shows 401 on every request | Password set but no session cookie | Navigate to the login page at `/login` |
 | Port already in use | Another process on the host port | Change `APP_PORT` in `.env` |
 | Container exits immediately | Missing required env var | Check `docker compose logs app` |

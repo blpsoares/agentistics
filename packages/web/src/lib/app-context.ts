@@ -60,4 +60,6 @@ export interface AppContext {
   users: string[]
   /** Harnesses present in the data. Empty in Solo mode (Claude-only). */
   harnesses: HarnessId[]
+  /** True when this instance is running as a team-mode central (aggregator). */
+  isCentral: boolean
 }

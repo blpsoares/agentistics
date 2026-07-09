@@ -1,18 +1,18 @@
 import React, { useRef, useState, useMemo, useEffect } from 'react'
 import {
-  BarChart2, TrendingUp, Clock, Wrench, FolderOpen, List, LayoutGrid, Trophy, Bot, Cpu,
+  BarChart2, TrendingUp, Clock, Wrench, FolderOpen, List, LayoutGrid, Trophy, Bot, Cpu, GitCompare,
 } from 'lucide-react'
 import { format, parseISO, subDays } from 'date-fns'
-import type { AppData, Filters, Lang, ModelUsage, SessionMeta } from '@agentistics/core'
-import { formatModel, formatProjectName, calcCost, sessionLabel } from '@agentistics/core'
-import { useDerivedStats, blendedCostPerToken } from '../hooks/useData'
-import { HARNESS_LABELS } from '../lib/harness'
+import type { AppData, Filters, Lang, ModelUsage, SessionMeta, HarnessId } from '@agentistics/core'
+import { formatModel, formatProjectName, calcCost, sessionLabel, fmt, fmtCost, fmtFull } from '@agentistics/core'
+import { useDerivedStats, blendedCostPerToken, type HarnessSummary } from '../hooks/useData'
+import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type PDFTheme = 'light' | 'dark'
 
-export const SECTION_IDS = ['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools', 'sessions', 'highlights', 'agents'] as const
+export const SECTION_IDS = ['summary', 'activity', 'heatmap', 'hours', 'models', 'projects', 'tools', 'sessions', 'highlights', 'agents', 'compare'] as const
 export type SectionId = typeof SECTION_IDS[number]
 
 interface Colors {
@@ -49,6 +49,7 @@ export const SECTIONS: { id: SectionId; labelPt: string; labelEn: string; Icon: 
   { id: 'sessions',   labelPt: 'Sessões',      labelEn: 'Sessions',   Icon: List        },
   { id: 'highlights', labelPt: 'Recordes',     labelEn: 'Highlights', Icon: Trophy      },
   { id: 'agents',     labelPt: 'Agentes',      labelEn: 'Agents',     Icon: Bot         },
+  { id: 'compare',    labelPt: 'Comparação',   labelEn: 'Compare',    Icon: GitCompare  },
 ]
 
 export const DATE_OPTIONS = [
@@ -59,28 +60,40 @@ export const DATE_OPTIONS = [
 ] as const
 
 // ── Helper formatters ──────────────────────────────────────────────────────────
-
-function fmtN(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
-}
-
-function fmtCostStr(usd: number, currency: 'USD' | 'BRL', rate: number): string {
-  if (currency === 'BRL') {
-    const brl = usd * rate
-    if (brl < 0.05) return '<R$0,05'
-    return `R$${brl.toFixed(2).replace('.', ',')}`
-  }
-  if (usd < 0.01) return '<USD 0.01'
-  return `USD ${usd.toFixed(2)}`
-}
+// Token/count values go through the shared `fmt()` (K/M abbreviated) and costs
+// through the shared `fmtCost()` (thousands-separated, e.g. "USD 4,729.65") from
+// @agentistics/core — never inline ad-hoc formatting here.
 
 function fmtDur(min: number): string {
   const h = Math.floor(min / 60)
   const m = Math.round(min % 60)
   if (h > 0) return `${h}h ${m}m`
   return `${m}m`
+}
+
+/** Distribute daily session counts into n equal-width time buckets over a shared
+ *  [minMs, maxMs] axis so sparklines across harnesses are temporally comparable. */
+function bucketize(
+  daily: { date: string; sessions: number }[],
+  minMs: number,
+  maxMs: number,
+  n: number,
+): number[] {
+  const buckets = new Array<number>(n).fill(0)
+  if (daily.length === 0 || maxMs <= minMs) {
+    for (const d of daily) buckets[0] = (buckets[0] ?? 0) + d.sessions
+    return buckets
+  }
+  const span = maxMs - minMs
+  for (const d of daily) {
+    const ts = new Date(d.date).getTime()
+    if (Number.isNaN(ts)) continue
+    let idx = Math.floor(((ts - minMs) / span) * n)
+    if (idx < 0) idx = 0
+    if (idx >= n) idx = n - 1
+    buckets[idx] = (buckets[idx] ?? 0) + d.sessions
+  }
+  return buckets
 }
 
 // ── Mini chart components (all use inline styles + actual hex colors) ──────────
@@ -239,7 +252,7 @@ function MiniLineChart({ data, c, metric = 'messages', overlay = null, overlayAl
         return (
           <g key={pct}>
             <line x1={padL} y1={y} x2={padL + innerW} y2={y} stroke={c.border} strokeWidth={0.5} strokeDasharray="2,2" />
-            <text x={padL - 4} y={y + 3.5} fontSize={8} fill={c.textTer} textAnchor="end">{Math.round(pct * max)}</text>
+            <text x={padL - 4} y={y + 3.5} fontSize={8} fill={c.textTer} textAnchor="end">{fmt(Math.round(pct * max))}</text>
           </g>
         )
       })}
@@ -377,7 +390,7 @@ function MiniModelBars({ modelUsage, c, currency, brlRate }: {
         <div key={id}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
             <span style={{ fontSize: 11, fontWeight: 600, color: c.text }}>{formatModel(id)}</span>
-            <span style={{ fontSize: 10, color: c.textSec }}>{fmtCostStr(cost, currency, brlRate)} · {fmtN(tokens)} tokens</span>
+            <span style={{ fontSize: 10, color: c.textSec }}>{fmtCost(cost, currency, brlRate)} · {fmt(tokens)} tokens</span>
           </div>
           <div style={{ height: 7, background: c.bgElevated, borderRadius: 4, overflow: 'hidden' }}>
             <div style={{ height: '100%', width: `${(cost / maxCost) * 100}%`, background: c.orange, borderRadius: 4 }} />
@@ -435,8 +448,8 @@ function MiniProjectsList({ projectStats, c, lang }: {
               {formatProjectName(path)}
             </div>
             <div style={{ color: c.orange, fontWeight: 600 }}>{stats.sessions}</div>
-            <div style={{ color: c.textSec }}>{fmtN(stats.messages)}</div>
-            <div style={{ color: c.textSec }}>{fmtN(stats.tools)}</div>
+            <div style={{ color: c.textSec }}>{fmt(stats.messages)}</div>
+            <div style={{ color: c.textSec }}>{fmt(stats.tools)}</div>
           </div>
           <div style={{ height: 3, background: c.bgElevated, borderRadius: 2, overflow: 'hidden' }}>
             <div style={{ height: '100%', width: `${(stats.sessions / maxS) * 100}%`, background: c.orange, opacity: 0.5, borderRadius: 2 }} />
@@ -479,7 +492,7 @@ function MiniSessionsTable({ sessions, c, lang, currency, brlRate, blendedRates 
             <div style={{ color: c.textSec }}>{s.duration_minutes ? fmtDur(s.duration_minutes) : '—'}</div>
             <div style={{ color: c.orange, fontWeight: 600 }}>{msgs}</div>
             <div style={{ color: c.textSec }}>{tools}</div>
-            <div style={{ color: c.textSec }}>{fmtCostStr(costUSD, currency, brlRate)}</div>
+            <div style={{ color: c.textSec }}>{fmtCost(costUSD, currency, brlRate)}</div>
           </div>
         )
       })}
@@ -559,7 +572,7 @@ function MiniHighlightsSection({ sessions, c, lang }: {
     },
     {
       label: pt ? 'Mais tokens de entrada' : 'Most input tokens',
-      value: fmtN(mostInputTokens.input_tokens ?? 0),
+      value: fmt(mostInputTokens.input_tokens ?? 0),
       badge: multiplier(mostInputTokens.input_tokens ?? 0, avgInput),
       prompt: truncate(sessionLabel(mostInputTokens), 80),
       project: formatProjectName(mostInputTokens.project_path ?? ''),
@@ -567,7 +580,7 @@ function MiniHighlightsSection({ sessions, c, lang }: {
     },
     {
       label: pt ? 'Mais tokens de saída' : 'Most output tokens',
-      value: fmtN(mostOutputTokens.output_tokens ?? 0),
+      value: fmt(mostOutputTokens.output_tokens ?? 0),
       badge: multiplier(mostOutputTokens.output_tokens ?? 0, avgOutput),
       prompt: truncate(sessionLabel(mostOutputTokens), 80),
       project: formatProjectName(mostOutputTokens.project_path ?? ''),
@@ -575,7 +588,7 @@ function MiniHighlightsSection({ sessions, c, lang }: {
     },
     {
       label: pt ? 'Mais mensagens' : 'Most messages',
-      value: fmtN((mostMessages.user_message_count ?? 0) + (mostMessages.assistant_message_count ?? 0)),
+      value: fmt((mostMessages.user_message_count ?? 0) + (mostMessages.assistant_message_count ?? 0)),
       badge: multiplier((mostMessages.user_message_count ?? 0) + (mostMessages.assistant_message_count ?? 0), avgMessages),
       prompt: truncate(sessionLabel(mostMessages), 80),
       project: formatProjectName(mostMessages.project_path ?? ''),
@@ -583,7 +596,7 @@ function MiniHighlightsSection({ sessions, c, lang }: {
     },
     {
       label: pt ? 'Mais chamadas de ferramentas' : 'Most tool calls',
-      value: fmtN(Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0)),
+      value: fmt(Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0)),
       badge: multiplier(Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0), avgTools),
       prompt: truncate(sessionLabel(mostToolCalls), 80),
       project: formatProjectName(mostToolCalls.project_path ?? ''),
@@ -781,6 +794,357 @@ export function PDFDirectExporter({ data, range, currentFilters, lang, currency,
   )
 }
 
+// ── Compare section — rendered INSIDE the unified report when the "compare"
+// section is enabled. Content mirrors the harness-comparison view (overview
+// cards, comparison table, usage by hour/dow, activity, peaks, cost by model)
+// but as one section among others, not a standalone whole-page mode. Always
+// fed the same filtered summaries as the rest of the report (see ExportPage). ──
+
+function CompareSectionContent({ summaries, harnesses, c, pt, currency, brlRate }: {
+  summaries: Record<HarnessId, HarnessSummary>
+  harnesses: HarnessId[]
+  c: Colors
+  pt: boolean
+  currency: 'USD' | 'BRL'
+  brlRate: number
+}) {
+  const fmtCostInline = (usd: number): string => fmtCost(usd, currency, brlRate)
+
+  const fmtDate = (raw: string | null | undefined): string => {
+    if (!raw) return '—'
+    const d = new Date(raw)
+    if (isNaN(d.getTime())) return '—'
+    return format(d, pt ? 'dd/MM/yyyy' : 'MMM d, yyyy')
+  }
+
+  // Shared time axis for sparklines
+  let minMs = Infinity, maxMs = -Infinity
+  for (const h of harnesses) {
+    for (const d of summaries[h]?.dailyActivity ?? []) {
+      const ts = new Date(d.date).getTime()
+      if (Number.isNaN(ts)) continue
+      if (ts < minMs) minMs = ts
+      if (ts > maxMs) maxMs = ts
+    }
+  }
+  if (minMs === Infinity) minMs = 0
+  if (maxMs === -Infinity) maxMs = 0
+
+  // Per-harness bar chart SVG (inline, CSS-var-free for html2canvas)
+  const renderMiniBar = (values: number[], color: string, peakIndex: number | null, svgWidth: number, height = 28) => {
+    const max = Math.max(...values, 1)
+    const n = values.length
+    const bw = Math.max(1, Math.floor((svgWidth - n) / n))
+    return (
+      <svg width={svgWidth} height={height} style={{ display: 'block' }}>
+        {values.map((v, i) => {
+          const barH = max > 0 ? Math.max((v / max) * (height - 2), v > 0 ? 2 : 0) : 0
+          const isPeak = i === peakIndex
+          return (
+            <rect
+              key={i}
+              x={i * (bw + 1)}
+              y={height - barH}
+              width={bw}
+              height={barH}
+              rx={1}
+              fill={color}
+              opacity={isPeak ? 1 : 0.4}
+            />
+          )
+        })}
+      </svg>
+    )
+  }
+
+  // Content area: 698px (matches the rest of the report)
+  const CONTENT_W = 698
+  const colBarW = Math.floor((CONTENT_W - 16 * (harnesses.length - 1)) / Math.max(1, harnesses.length))
+
+  const dayLabels = pt
+    ? ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
+    : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+  const SubTitle = ({ title }: { title: string }) => (
+    <div style={{ fontSize: 9, fontWeight: 700, color: c.textSec, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+      {title}
+    </div>
+  )
+
+  return (
+    <div>
+      {/* Harness overview cards */}
+      <div style={{ marginBottom: 20 }}>
+        <SubTitle title={pt ? 'Visão geral' : 'Overview'} />
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${harnesses.length}, 1fr)`, gap: 12 }}>
+          {harnesses.map(h => {
+            const s = summaries[h]
+            const hColor = HARNESS_COLORS[h]
+            return (
+              <div key={h} style={{
+                background: c.bgCard, border: `1px solid ${c.border}`,
+                borderRadius: 8, padding: '12px 14px', borderTop: `3px solid ${hColor}`,
+              }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: hColor, marginBottom: 8 }}>
+                  {HARNESS_LABELS[h]}
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: c.text, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
+                  {fmt(s?.sessions ?? 0)}
+                </div>
+                <div style={{ fontSize: 9, color: c.textSec, marginTop: 2 }}>{pt ? 'sessões' : 'sessions'}</div>
+                <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                  <div>
+                    <div style={{ fontSize: 8, color: c.textTer, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{pt ? 'Mensagens' : 'Messages'}</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: c.text }}>{fmt(s?.messages ?? 0)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 8, color: c.textTer, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{pt ? 'Tokens' : 'Tokens'}</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: capable(h, 'tokens') ? c.blue : c.textTer }}>
+                      {capable(h, 'tokens') ? fmt((s?.inputTokens ?? 0) + (s?.outputTokens ?? 0)) : 'N/A'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 8, color: c.textTer, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{pt ? 'Custo' : 'Cost'}</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: capable(h, 'cost') ? c.orange : c.textTer }}>
+                      {capable(h, 'cost') ? fmtCostInline(s?.costUSD ?? 0) : 'N/A'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 8, color: c.textTer, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{pt ? '/ 1M tok' : '/ 1M tok'}</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: (capable(h, 'cost') && capable(h, 'tokens')) ? c.green : c.textTer }}>
+                      {(capable(h, 'cost') && capable(h, 'tokens') && s?.costPerMTokens != null)
+                        ? fmtCostInline(s.costPerMTokens)
+                        : 'N/A'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Comparison table */}
+      <div style={{ marginBottom: 20 }}>
+        <SubTitle title={pt ? 'Tabela comparativa' : 'Comparison table'} />
+        {[
+          { label: pt ? 'Sessões' : 'Sessions', getValue: (h: HarnessId) => ({ val: fmt(summaries[h]?.sessions ?? 0), na: false }) },
+          { label: pt ? 'Mensagens' : 'Messages', getValue: (h: HarnessId) => ({ val: fmt(summaries[h]?.messages ?? 0), na: false }) },
+          { label: pt ? 'Total de tokens' : 'Total tokens', getValue: (h: HarnessId) => capable(h, 'tokens') ? { val: fmt((summaries[h]?.inputTokens ?? 0) + (summaries[h]?.outputTokens ?? 0)), na: false } : { val: 'N/A', na: true } },
+          { label: pt ? 'Custo estimado' : 'Estimated cost', getValue: (h: HarnessId) => capable(h, 'cost') ? { val: fmtCostInline(summaries[h]?.costUSD ?? 0), na: false } : { val: 'N/A', na: true } },
+          { label: pt ? 'Custo / 1M tokens' : 'Cost / 1M tokens', getValue: (h: HarnessId) => (capable(h, 'cost') && capable(h, 'tokens') && summaries[h]?.costPerMTokens != null) ? { val: `${fmtCostInline(summaries[h]!.costPerMTokens!)}`, na: false } : { val: 'N/A', na: true } },
+        ].map(row => (
+          <div key={row.label} style={{
+            display: 'grid',
+            gridTemplateColumns: `140px ${harnesses.map(() => '1fr').join(' ')}`,
+            gap: 8, padding: '8px 0', borderBottom: `1px solid ${c.border}40`,
+          }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: c.textSec }}>{row.label}</div>
+            {harnesses.map(h => {
+              const { val, na } = row.getValue(h)
+              return (
+                <div key={h} style={{ fontSize: 12, fontWeight: 700, color: na ? c.textTer : c.text }}>
+                  {val}
+                </div>
+              )
+            })}
+          </div>
+        ))}
+      </div>
+
+      {/* Usage by hour of day */}
+      <div style={{ marginBottom: 20 }}>
+        <SubTitle title={pt ? 'Uso por hora do dia' : 'Usage by hour of day'} />
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${harnesses.length}, 1fr)`, gap: 16 }}>
+          {harnesses.map(h => {
+            const s = summaries[h]
+            const hColor = HARNESS_COLORS[h]
+            const totalMsgs = s?.hourCounts.reduce((a, v) => a + v, 0) ?? 0
+            return (
+              <div key={h}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: hColor, marginBottom: 6 }}>
+                  {HARNESS_LABELS[h]}
+                  {s?.peakHour != null && (
+                    <span style={{ fontWeight: 400, color: c.textTer, marginLeft: 6 }}>
+                      {pt ? `Pico ${String(s.peakHour).padStart(2, '0')}:00` : `Peak ${String(s.peakHour).padStart(2, '0')}:00`}
+                    </span>
+                  )}
+                </div>
+                {totalMsgs === 0 ? (
+                  <div style={{ height: 28, display: 'flex', alignItems: 'center', fontSize: 9, color: c.textTer }}>N/A</div>
+                ) : renderMiniBar(s?.hourCounts ?? Array(24).fill(0), hColor, s?.peakHour ?? null, colBarW, 28)}
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
+                  <span style={{ fontSize: 7, color: c.textTer }}>0h</span>
+                  <span style={{ fontSize: 7, color: c.textTer }}>12h</span>
+                  <span style={{ fontSize: 7, color: c.textTer }}>23h</span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Busiest day of week */}
+      <div style={{ marginBottom: 20 }}>
+        <SubTitle title={pt ? 'Dia da semana mais movimentado' : 'Busiest day of week'} />
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${harnesses.length}, 1fr)`, gap: 16 }}>
+          {harnesses.map(h => {
+            const s = summaries[h]
+            const hColor = HARNESS_COLORS[h]
+            const hasData = s && s.dowCounts.some(v => v > 0)
+            return (
+              <div key={h}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: hColor, marginBottom: 6 }}>
+                  {HARNESS_LABELS[h]}
+                  {s?.peakDow != null && (
+                    <span style={{ fontWeight: 400, color: c.textTer, marginLeft: 6 }}>
+                      {pt ? `Pico: ${dayLabels[s.peakDow]}` : `Peak: ${dayLabels[s.peakDow]}`}
+                    </span>
+                  )}
+                </div>
+                {!hasData ? (
+                  <div style={{ height: 28, display: 'flex', alignItems: 'center', fontSize: 9, color: c.textTer }}>N/A</div>
+                ) : renderMiniBar(s?.dowCounts ?? Array(7).fill(0), hColor, s?.peakDow ?? null, colBarW, 28)}
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
+                  {dayLabels.map((d, i) => (
+                    <span key={i} style={{ fontSize: 7, color: i === s?.peakDow ? hColor : c.textTer, fontWeight: i === s?.peakDow ? 700 : 400 }}>
+                      {d.slice(0, 1)}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Activity over time */}
+      <div style={{ marginBottom: 20 }}>
+        <SubTitle title={pt ? 'Atividade ao longo do tempo' : 'Activity over time'} />
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${harnesses.length}, 1fr)`, gap: 16 }}>
+          {harnesses.map(h => {
+            const s = summaries[h]
+            const hColor = HARNESS_COLORS[h]
+            const daily = s?.dailyActivity ?? []
+            const BUCKETS = 40
+            const bkts = bucketize(daily, minMs, maxMs, BUCKETS)
+            const bkMax = Math.max(...bkts, 1)
+            const bw = Math.max(1, Math.floor((colBarW - BUCKETS) / BUCKETS))
+            return (
+              <div key={h}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: hColor, marginBottom: 6 }}>
+                  {HARNESS_LABELS[h]}
+                </div>
+                {daily.length === 0 ? (
+                  <div style={{ height: 28, display: 'flex', alignItems: 'center', fontSize: 9, color: c.textTer }}>
+                    {pt ? 'Sem dados' : 'No data'}
+                  </div>
+                ) : (
+                  <svg width={colBarW} height={28} style={{ display: 'block' }}>
+                    {bkts.map((v, i) => {
+                      const barH = v > 0 ? Math.max((v / bkMax) * 24, 3) : 0
+                      return <rect key={i} x={i * (bw + 1)} y={28 - barH} width={bw} height={barH} rx={1} fill={hColor} opacity={0.75} />
+                    })}
+                  </svg>
+                )}
+                <div style={{ fontSize: 7, color: c.textTer, marginTop: 2 }}>
+                  {daily.length > 0
+                    ? `${fmtDate(daily[0]?.date)} – ${fmtDate(daily[daily.length - 1]?.date)}`
+                    : ''}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Peaks table */}
+      <div style={{ marginBottom: 20 }}>
+        <SubTitle title={pt ? 'Picos' : 'Peaks'} />
+        {[
+          {
+            label: pt ? 'Dia de maior uso de tokens' : 'Busiest token day',
+            getValue: (h: HarnessId) => {
+              if (!capable(h, 'tokens')) return { val: 'N/A', na: true }
+              const ptd = summaries[h]?.peakTokenDay
+              if (!ptd) return { val: '—', na: false }
+              return { val: `${fmt(ptd.tokens)} (${fmtDate(ptd.date)})`, na: false }
+            },
+          },
+          {
+            label: pt ? 'Maior custo de sessão' : 'Peak session cost',
+            getValue: (h: HarnessId) => {
+              if (!capable(h, 'cost')) return { val: 'N/A', na: true }
+              const psc = summaries[h]?.peakSessionCost
+              if (psc == null) return { val: '—', na: false }
+              return { val: fmtCostInline(psc), na: false }
+            },
+          },
+        ].map(row => (
+          <div key={row.label} style={{
+            display: 'grid',
+            gridTemplateColumns: `140px ${harnesses.map(() => '1fr').join(' ')}`,
+            gap: 8, padding: '8px 0', borderBottom: `1px solid ${c.border}40`,
+          }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: c.textSec }}>{row.label}</div>
+            {harnesses.map(h => {
+              const { val, na } = row.getValue(h)
+              return (
+                <div key={h} style={{ fontSize: 12, fontWeight: 700, color: na ? c.textTer : c.text }}>
+                  {val}
+                </div>
+              )
+            })}
+          </div>
+        ))}
+      </div>
+
+      {/* Cost by model */}
+      <div>
+        <SubTitle title={pt ? 'Custo por modelo' : 'Cost by model'} />
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${harnesses.length}, 1fr)`, gap: 16 }}>
+          {harnesses.map(h => {
+            const hColor = HARNESS_COLORS[h]
+            const s = summaries[h]
+            const showModels = capable(h, 'cost') && capable(h, 'model')
+            const models = showModels ? (s?.models ?? []).slice(0, 5) : []
+            return (
+              <div key={h}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: hColor, marginBottom: 6 }}>
+                  {HARNESS_LABELS[h]}
+                </div>
+                {!showModels ? (
+                  <div style={{ fontSize: 9, color: c.textTer }}>N/A</div>
+                ) : models.length === 0 ? (
+                  <div style={{ fontSize: 9, color: c.textTer }}>{pt ? 'Sem dados' : 'No data'}</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {models.map(m => {
+                      const totalTok = m.inputTokens + m.outputTokens
+                      const maxTok = Math.max(...models.map(x => x.inputTokens + x.outputTokens), 1)
+                      return (
+                        <div key={m.model}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                            <span style={{ fontSize: 8, fontWeight: 600, color: c.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{formatModel(m.model)}</span>
+                            <span style={{ fontSize: 8, color: c.orange, fontWeight: 600 }}>{fmtCostInline(m.costUSD)}</span>
+                          </div>
+                          <div style={{ height: 4, background: c.bgElevated, borderRadius: 2, overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${Math.round((totalTok / maxTok) * 100)}%`, background: hColor, opacity: 0.6, borderRadius: 2 }} />
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── PDF Content (the exportable A4 page, 794px wide) ─────────────────────────
 
 export interface PDFContentProps {
@@ -796,9 +1160,14 @@ export interface PDFContentProps {
   chartOverlay: ChartMetric | null
   chartOverlayAll: boolean
   logoDataUri: string
+  /** Per-harness comparison summaries, scoped by the same filters as the rest of the
+   *  report. Only used when the 'compare' section is enabled; omit/undefined otherwise. */
+  compareSummaries?: Record<HarnessId, HarnessSummary>
+  /** Harness columns to show in the compare section (already filtered/ordered). */
+  compareHarnesses?: HarnessId[]
 }
 
-export function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currency, brlRate, blendedRates, chartMetric, chartOverlay, chartOverlayAll, logoDataUri }: PDFContentProps) {
+export function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, currency, brlRate, blendedRates, chartMetric, chartOverlay, chartOverlayAll, logoDataUri, compareSummaries, compareHarnesses }: PDFContentProps) {
   if (!derived) return null
   const c = COLORS[pdfTheme]
   const pt = lang === 'pt'
@@ -856,16 +1225,16 @@ export function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, 
             <div key="summary" style={{ marginBottom: 28 }}>
               <SectionTitle title={pt ? 'Resumo' : 'Summary'} c={c} />
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 10 }}>
-                <KPICard label={pt ? 'Mensagens' : 'Messages'} value={fmtN(derived.totalMessages)} sub={pt ? 'no período' : 'in period'} accent={c.orange} c={c} />
-                <KPICard label={pt ? 'Sessões' : 'Sessions'} value={fmtN(derived.totalSessions)} sub={`avg ${derived.totalSessions > 0 ? Math.round(derived.totalMessages / derived.totalSessions) : 0} msgs`} accent={c.blue} c={c} />
-                <KPICard label="Tool calls" value={fmtN(derived.totalToolCalls)} sub={pt ? 'execuções' : 'executions'} accent={c.green} c={c} />
-                <KPICard label={pt ? 'Custo est.' : 'Est. cost'} value={fmtCostStr(derived.totalCostUSD, currency, brlRate)} sub="Anthropic pricing" accent={c.orange} c={c} />
+                <KPICard label={pt ? 'Mensagens' : 'Messages'} value={fmt(derived.totalMessages)} sub={pt ? 'no período' : 'in period'} accent={c.orange} c={c} />
+                <KPICard label={pt ? 'Sessões' : 'Sessions'} value={fmt(derived.totalSessions)} sub={`avg ${derived.totalSessions > 0 ? Math.round(derived.totalMessages / derived.totalSessions) : 0} msgs`} accent={c.blue} c={c} />
+                <KPICard label="Tool calls" value={fmt(derived.totalToolCalls)} sub={pt ? 'execuções' : 'executions'} accent={c.green} c={c} />
+                <KPICard label={pt ? 'Custo est.' : 'Est. cost'} value={fmtCost(derived.totalCostUSD, currency, brlRate)} sub="Anthropic pricing" accent={c.orange} c={c} />
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
                 <KPICard label={pt ? 'Sequência' : 'Streak'} value={`${derived.streak}d`} sub={pt ? 'dias consec.' : 'consecutive'} accent={c.red} c={c} />
                 <KPICard label={pt ? 'Sessão mais longa' : 'Longest session'} value={derived.longestSession?.duration_minutes ? fmtDur(derived.longestSession.duration_minutes) : '—'} sub="" accent={c.purple} c={c} />
-                <KPICard label="Commits" value={String(derived.gitCommits)} sub={derived.gitPushes > 0 ? `${derived.gitPushes} pushes` : `via ${harnessTitle}`} accent={c.cyan} c={c} />
-                <KPICard label={pt ? 'Arquivos' : 'Files'} value={String(derived.filesModified)} sub={`+${fmtN(derived.linesAdded)} / -${fmtN(derived.linesRemoved)}`} accent={c.green} c={c} />
+                <KPICard label="Commits" value={fmt(derived.gitCommits)} sub={derived.gitPushes > 0 ? `${fmt(derived.gitPushes)} pushes` : `via ${harnessTitle}`} accent={c.cyan} c={c} />
+                <KPICard label={pt ? 'Arquivos' : 'Files'} value={fmt(derived.filesModified)} sub={`+${fmt(derived.linesAdded)} / -${fmt(derived.linesRemoved)}`} accent={c.green} c={c} />
               </div>
             </div>
           )
@@ -941,9 +1310,9 @@ export function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, 
                 <>
                   {/* Summary KPI row */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
-                    <KPICard label={pt ? 'Invocações' : 'Invocations'} value={String(derived.totalAgentInvocations)} sub={pt ? 'total de agentes' : 'total agent calls'} accent={c.purple} c={c} />
-                    <KPICard label={pt ? 'Tokens agentes' : 'Agent tokens'} value={(() => { const n = derived.totalAgentTokens; return n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1000 ? `${(n/1000).toFixed(1)}K` : String(n) })()} sub={`avg ${(() => { const a = Math.round(derived.totalAgentTokens / Math.max(1, derived.totalAgentInvocations)); return a >= 1000 ? `${(a/1000).toFixed(1)}K` : String(a) })()} / call`} accent={c.blue} c={c} />
-                    <KPICard label={pt ? 'Custo agentes' : 'Agent cost'} value={currency === 'BRL' ? `R$${(derived.totalAgentCostUSD * brlRate).toFixed(2).replace('.', ',')}` : `$${derived.totalAgentCostUSD.toFixed(3)}`} sub="Anthropic pricing" accent={c.orange} c={c} />
+                    <KPICard label={pt ? 'Invocações' : 'Invocations'} value={fmt(derived.totalAgentInvocations)} sub={pt ? 'total de agentes' : 'total agent calls'} accent={c.purple} c={c} />
+                    <KPICard label={pt ? 'Tokens agentes' : 'Agent tokens'} value={fmt(derived.totalAgentTokens)} sub={`avg ${fmt(Math.round(derived.totalAgentTokens / Math.max(1, derived.totalAgentInvocations)))} / call`} accent={c.blue} c={c} />
+                    <KPICard label={pt ? 'Custo agentes' : 'Agent cost'} value={fmtCost(derived.totalAgentCostUSD, currency, brlRate)} sub="Anthropic pricing" accent={c.orange} c={c} />
                     <KPICard label={pt ? 'Dur. média' : 'Avg duration'} value={(() => { const ms = derived.totalAgentDurationMs / Math.max(1, derived.totalAgentInvocations); const s = Math.round(ms/1000); return s < 60 ? `${s}s` : `${Math.floor(s/60)}m ${s%60}s` })()} sub={pt ? 'por invocação' : 'per invocation'} accent={c.green} c={c} />
                   </div>
                   {/* Agent type breakdown */}
@@ -965,8 +1334,8 @@ export function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, 
                                 <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${(stats.count / maxC) * 100}%`, background: c.purple, borderRadius: 3, opacity: 0.6 }} />
                               </div>
                               <span style={{ fontSize: 9, color: c.text, fontWeight: 700, textAlign: 'right' }}>{stats.count}×</span>
-                              <span style={{ fontSize: 9, color: c.textSec, textAlign: 'right' }}>{stats.tokens >= 1000 ? `${(stats.tokens/1000).toFixed(1)}K` : stats.tokens} tok</span>
-                              <span style={{ fontSize: 9, color: c.orange, textAlign: 'right' }}>{currency === 'BRL' ? `R$${(stats.costUSD * brlRate).toFixed(2).replace('.', ',')}` : `$${stats.costUSD.toFixed(3)}`}</span>
+                              <span style={{ fontSize: 9, color: c.textSec, textAlign: 'right' }}>{fmt(stats.tokens)} tok</span>
+                              <span style={{ fontSize: 9, color: c.orange, textAlign: 'right' }}>{fmtCost(stats.costUSD, currency, brlRate)}</span>
                             </div>
                           )
                         })}
@@ -987,13 +1356,32 @@ export function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, 
                       <div key={inv.toolUseId || i} style={{ display: 'grid', gridTemplateColumns: '130px 1fr 55px 55px 70px', gap: 8, padding: '5px 10px', borderTop: `1px solid ${c.border}`, background: i % 2 === 0 ? 'transparent' : c.bgCard }}>
                         <span style={{ fontSize: 8, fontWeight: 600, color: c.purple, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inv.agentType}</span>
                         <span style={{ fontSize: 8, color: c.textSec, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inv.description || '—'}</span>
-                        <span style={{ fontSize: 8, color: c.text, textAlign: 'right' }}>{inv.totalTokens >= 1000 ? `${(inv.totalTokens/1000).toFixed(1)}K` : inv.totalTokens}</span>
+                        <span style={{ fontSize: 8, color: c.text, textAlign: 'right' }}>{fmt(inv.totalTokens)}</span>
                         <span style={{ fontSize: 8, color: c.textSec, textAlign: 'right' }}>{(() => { const s = Math.round(inv.totalDurationMs/1000); return s < 60 ? `${s}s` : `${Math.floor(s/60)}m` })()} </span>
-                        <span style={{ fontSize: 8, color: c.orange, textAlign: 'right' }}>{currency === 'BRL' ? `R$${(inv.costUSD * brlRate).toFixed(2).replace('.', ',')}` : `$${inv.costUSD.toFixed(3)}`}</span>
+                        <span style={{ fontSize: 8, color: c.orange, textAlign: 'right' }}>{fmtCost(inv.costUSD, currency, brlRate)}</span>
                       </div>
                     ))}
                   </div>
                 </>
+              )}
+            </div>
+          )
+          case 'compare': return (
+            <div key="compare" style={{ marginBottom: 28 }}>
+              <SectionTitle title={pt ? 'Comparação de harnesses' : 'Harness comparison'} c={c} />
+              {!compareSummaries || !compareHarnesses || compareHarnesses.length < 2 ? (
+                <div style={{ fontSize: 10, color: c.textTer, fontStyle: 'italic', padding: '12px 0' }}>
+                  {pt ? 'Nenhum dado de comparação disponível para o período selecionado.' : 'No comparison data available for the selected period.'}
+                </div>
+              ) : (
+                <CompareSectionContent
+                  summaries={compareSummaries}
+                  harnesses={compareHarnesses}
+                  c={c}
+                  pt={pt}
+                  currency={currency}
+                  brlRate={brlRate}
+                />
               )}
             </div>
           )
@@ -1004,7 +1392,7 @@ export function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, 
       <div style={{ marginTop: 24, paddingTop: 14, borderTop: `1px solid ${c.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ fontSize: 8, color: c.textTer }}>{harnessTitle} · {pt ? 'Gerado automaticamente' : 'Auto-generated'}</div>
         <div style={{ fontSize: 8, color: c.textTer }}>
-          {derived.totalSessions.toLocaleString()} {pt ? 'sessões analisadas' : 'sessions analyzed'}
+          {fmtFull(derived.totalSessions)} {pt ? 'sessões analisadas' : 'sessions analyzed'}
         </div>
       </div>
     </div>

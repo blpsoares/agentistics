@@ -1,10 +1,11 @@
 import { join } from 'path'
-import type { SessionMeta } from '@agentistics/core'
+import type { SessionMeta, WorkflowRun } from '@agentistics/core'
 import { tagUser } from '@agentistics/core'
 import { safeReadDir, safeReadJson } from './utils'
 import { TEAM_DIR } from './config'
 import { getTeamCollection } from './mongo'
 import { fromTeamDoc } from './team-store'
+import { loadAllTeamWorkflows } from './team-workflows'
 import { getMemberNameMap } from './team-tokens'
 
 /**
@@ -50,4 +51,15 @@ export async function loadTeamSessionsFromMongo(): Promise<SessionMeta[]> {
     const resolved = { ...doc, user: nameMap[doc.memberId] ?? doc.user }
     return fromTeamDoc(resolved)
   })
+}
+
+/**
+ * Phase 2 central read: load every team workflow run from Mongo. Mirrors
+ * loadTeamSessionsFromMongo — same live-name resolution via getMemberNameMap(), so
+ * renaming a member (PUT /api/team/members) is reflected immediately without re-ingest.
+ * Never throws (best-effort — name-map lookup falls back to {} on failure).
+ */
+export async function loadTeamWorkflowsFromMongo(): Promise<WorkflowRun[]> {
+  const nameMap = await getMemberNameMap().catch(() => ({} as Record<string, string>))
+  return loadAllTeamWorkflows(nameMap)
 }

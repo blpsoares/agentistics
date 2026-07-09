@@ -32,6 +32,8 @@ export const ARCHIVE_SESSION_META_DIR = join(ARCHIVE_DIR, 'usage-data', 'session
 export const ARCHIVE_STATS_DIR = join(ARCHIVE_DIR, 'stats-cache')
 // Consolidated per-session metrics (mode 'consolidate'): ~/.agentistics/sessions/<id>.json
 export const CONSOLIDATED_DIR = join(HOME_DIR, '.agentistics', 'sessions')
+// Persisted workflow runs (survive Claude's transcript cleanup): ~/.agentistics/workflows/<runId>.json
+export const WORKFLOWS_STORE_DIR = join(HOME_DIR, '.agentistics', 'workflows')
 
 // ---------------------------------------------------------------------------
 // Team mode (Phase 1: folder union). When AGENTISTICS_TEAM=1 the server unions

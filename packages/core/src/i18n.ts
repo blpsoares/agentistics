@@ -222,6 +222,15 @@ export const translations: Record<Lang, Record<string, string>> = {
     'export.chart.messages_abbr': 'Msgs',
     'export.chart.sessions_abbr': 'Sess.',
     'export.chart.tools_abbr': 'Tools',
+    'export.usesHeaderFilters': 'Este relatório usa os filtros do cabeçalho',
+    'export.usesHeaderFiltersDetail': 'Período, projetos, modelos e membros vêm da barra de filtros no topo do painel. Ajuste-os por lá para mudar o que entra no PDF.',
+    'export.activeFilters': 'Filtros ativos',
+    'export.filters.allTime': 'Todo o período',
+    'export.filters.projects': 'projeto(s)',
+    'export.filters.models': 'modelo(s)',
+    'export.filters.members': 'membro(s)',
+    'export.filters.harnesses': 'harness(es)',
+    'export.filters.none': 'Nenhum filtro aplicado',
 
     // HarnessInfoPanel — UI labels
     'harness.panel.data_label': 'dados',
@@ -475,6 +484,15 @@ export const translations: Record<Lang, Record<string, string>> = {
     'export.chart.messages_abbr': 'Msgs',
     'export.chart.sessions_abbr': 'Sess.',
     'export.chart.tools_abbr': 'Tools',
+    'export.usesHeaderFilters': 'This report uses the header filters',
+    'export.usesHeaderFiltersDetail': 'Date range, projects, models, and members come from the filter bar at the top of the dashboard. Adjust them there to change what goes into the PDF.',
+    'export.activeFilters': 'Active filters',
+    'export.filters.allTime': 'All time',
+    'export.filters.projects': 'project(s)',
+    'export.filters.models': 'model(s)',
+    'export.filters.members': 'member(s)',
+    'export.filters.harnesses': 'harness(es)',
+    'export.filters.none': 'No filters applied',
 
     // HarnessInfoPanel — UI labels
     'harness.panel.data_label': 'data',

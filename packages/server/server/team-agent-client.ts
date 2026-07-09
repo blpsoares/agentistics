@@ -1,21 +1,15 @@
 // team-agent-client.ts — member-side WebSocket client for the reverse channel (Phase 7)
 //
 // Opens a persistent WebSocket from the member to the central's /api/team/agent
-// endpoint. On receiving a 'fetch-chat' request from the central, reads local
-// session messages using the matching get<Harness>SessionMessages reader and
-// replies with a 'chat-result' message.
+// endpoint. On-demand chat retrieval (the former 'fetch-chat' request /
+// 'chat-result' reply) has been removed — the member never sends chat content
+// to the central over this channel.
 //
 // Reconnects with exponential backoff on close/error.
 // startAgentClient() is idempotent — safe to call multiple times.
 // Never throws; all errors are swallowed internally.
 
-import path from 'node:path'
-import type { AgentRequest, AgentResponse, HarnessId } from '@agentistics/core'
 import { readPreferences } from './preferences'
-import { getClaudeSessionMessages } from './claude-sessions'
-import { getCodexSessionMessages } from './codex-sessions'
-import { getGeminiSessionMessages } from './gemini-sessions'
-import { getCopilotSessionMessages } from './copilot-sessions'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -23,34 +17,6 @@ import { getCopilotSessionMessages } from './copilot-sessions'
 
 /** Reconnect backoff delays in milliseconds. */
 const BACKOFF_MS: number[] = [1_000, 2_000, 5_000, 10_000, 30_000]
-
-const VALID_HARNESSES: readonly string[] = ['claude', 'codex', 'gemini', 'copilot']
-
-// ---------------------------------------------------------------------------
-// Local message reader — dispatches to the correct harness reader
-// ---------------------------------------------------------------------------
-
-async function fetchLocalMessages(request: AgentRequest): Promise<unknown[]> {
-  const { harness, sessionId, encodedDir } = request
-  try {
-    if (harness === 'claude') {
-      if (!encodedDir || encodedDir.includes('..') || path.isAbsolute(encodedDir)) return []
-      return (await getClaudeSessionMessages(encodedDir, sessionId)) as unknown[]
-    }
-    if (harness === 'codex') {
-      return (await getCodexSessionMessages(sessionId)) as unknown[]
-    }
-    if (harness === 'gemini') {
-      return (await getGeminiSessionMessages(sessionId)) as unknown[]
-    }
-    if (harness === 'copilot') {
-      return (await getCopilotSessionMessages(sessionId)) as unknown[]
-    }
-  } catch {
-    // ignore — return empty array
-  }
-  return []
-}
 
 // ---------------------------------------------------------------------------
 // Connection management
@@ -106,49 +72,9 @@ function openConnection(endpoint: string, token: string): void {
     backoffIdx = 0 // successful open — reset backoff
   })
 
-  socket.addEventListener('message', (event: MessageEvent) => {
-    void (async () => {
-      let req: unknown
-      try {
-        const raw =
-          typeof event.data === 'string' ? event.data : String(event.data)
-        req = JSON.parse(raw)
-      } catch {
-        return
-      }
-      if (typeof req !== 'object' || req === null) return
-      const r = req as Record<string, unknown>
-      if (r['type'] !== 'fetch-chat' || typeof r['id'] !== 'string') return
-
-      const agentReq: AgentRequest = {
-        type: 'fetch-chat',
-        id: r['id'],
-        sessionId: typeof r['sessionId'] === 'string' ? r['sessionId'] : '',
-        harness: (VALID_HARNESSES.includes(r['harness'] as string)
-          ? r['harness']
-          : 'claude') as HarnessId,
-        encodedDir:
-          typeof r['encodedDir'] === 'string' ? r['encodedDir'] : undefined,
-      }
-
-      const messages = await fetchLocalMessages(agentReq)
-
-      const response: AgentResponse = {
-        type: 'chat-result',
-        id: agentReq.id,
-        ok: true,
-        messages,
-      }
-
-      try {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify(response))
-        }
-      } catch {
-        // socket closed mid-send — ignore
-      }
-    })()
-  })
+  // No inbound message types are currently handled — the central no longer
+  // requests chat over this channel, and liveness is carried entirely by the
+  // WebSocket ping/pong protocol frames (handled by the runtime, not here).
 
   socket.addEventListener('close', () => {
     if (activeWs === socket) activeWs = null

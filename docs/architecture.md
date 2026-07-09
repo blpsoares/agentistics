@@ -160,6 +160,14 @@ Every machine picks one role, persisted at `preferences.team.mode`:
 
 `central.env` variables: `APP_PORT` (default `48080`), `BIND_IP` (default `0.0.0.0`; set to a Tailscale IP to restrict exposure to a private tailnet without a public listener), `AGENTISTICS_TEAM_PASSWORD` (dashboard login), `AGENTISTICS_TEAM_SESSION_SECRET` (HMAC cookie key — kept **separate** from the password), `AGENTISTICS_TEAM_ORG`, `AGENTISTICS_TEAM_INGEST_TOKEN` (optional shared secret), `AGENTISTICS_CENTRAL_USER` (set when the central also contributes its own machine's data).
 
+### Restart policy — both services survive a host reboot
+
+Both the `app` **and** the `mongo` services carry `restart: unless-stopped` (in `docker-compose.yml` and the standalone compose materialized by `cli-central.ts`). Without it on `mongo`, a host reboot that crashes Mongo (e.g. an OOM kill under WSL) leaves the `app` back up but pointed at a dead database — the dashboard then shows **zero members** even though the data volume (`mongo_data`) is intact.
+
+**Migrating an already-running central** (the policy only takes effect once the container is recreated):
+- After upgrading, run `agentop central up` once — it re-materializes the compose and `--force-recreate`s Mongo with the policy baked in.
+- Or apply it live, without any recreate or downtime: `docker update --restart unless-stopped team-mode-mongo-1`.
+
 ### Member identity
 
 A member does **not** name itself — the display name is set by the central when it mints the token, and the member resolves it via `GET /api/team/whoami` (`server/cli-member.ts`, `memberConnect`). Sessions are keyed centrally by a stable `memberId` (the token's sha256 hash), so renaming a member keeps history. `agentop member connect` never writes a half-config: it only persists `preferences.team` after whoami accepts the token.

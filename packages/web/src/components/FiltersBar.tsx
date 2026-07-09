@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import type { Filters, DateRange, Project, Lang, HarnessId } from '@agentistics/core'
 import { formatModel, formatProjectName } from '@agentistics/core'
-import { Layers, Cpu, RotateCcw, ChevronDown, X, CalendarDays, Check, Users } from 'lucide-react'
+import { Layers, Cpu, ChevronDown, X, CalendarDays, Check, Users } from 'lucide-react'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { ProjectsModal } from './ProjectsModal'
 import { UsersFilter } from './UsersFilter'
@@ -71,16 +71,6 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
   const selectedModels = filters.models ?? []
   const hasModelFilter = selectedModels.length > 0
 
-  const isDefault = filters.dateRange === 'all'
-    && !filters.customStart && !filters.customEnd
-    && filters.projects.length === 0 && !hasModelFilter
-    && !(filters.users?.length)
-    && !(filters.harnesses?.length)
-
-  const reset = () => onChange({
-    dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [], users: [], harnesses: [],
-  })
-
   const hasProjects = filters.projects.length > 0
   const projectLabel = lang === 'pt'
     ? hasProjects ? `${filters.projects.length} projeto${filters.projects.length > 1 ? 's' : ''}` : 'Projetos'
@@ -110,19 +100,26 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [showModelDropdown])
 
-  // Clamp the popover so it never overflows the right (or left) edge of the viewport.
+  // Clamp the popover so it never overflows the viewport (which would give the whole page a
+  // horizontal scrollbar). First cap its width to the viewport, then shift it left if its
+  // right edge still spills over — keeping the left edge at least 8px from the viewport edge.
   useLayoutEffect(() => {
     if (!showModelDropdown || !popoverRef.current || !modelDropdownRef.current) return
+    const MARGIN = 8
     const container = modelDropdownRef.current.getBoundingClientRect()
     const popover = popoverRef.current
     // Reset any previous adjustment before measuring.
     popover.style.left = '0'
     popover.style.right = 'auto'
+    // Never let the popover be wider than the viewport (minus margins).
+    popover.style.maxWidth = `${window.innerWidth - MARGIN * 2}px`
     const popoverWidth = popover.offsetWidth
     const rightEdge = container.left + popoverWidth
-    const overflow = rightEdge - window.innerWidth + 8 // 8px safe margin
+    const overflow = rightEdge - window.innerWidth + MARGIN
     if (overflow > 0) {
-      popover.style.left = `-${Math.min(overflow, container.left)}px`
+      // Cap the shift so the popover's left edge never crosses the viewport's left margin.
+      const maxShift = Math.max(0, container.left - MARGIN)
+      popover.style.left = `-${Math.min(overflow, maxShift)}px`
     }
   }, [showModelDropdown])
 
@@ -238,6 +235,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
             selected={filters.users ?? []}
             onChange={u => onChange({ ...filters, users: u })}
             lang={lang}
+            presence={presence}
+            presenceFilter={filters.presence}
           />
         )}
 
@@ -318,9 +317,11 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               // On mobile, cap to 92vw so it never exceeds the viewport;
               // on desktop, 80vw keeps the existing generous maximum.
               width: isMobile ? 'min(92vw, 360px)' : undefined,
-              maxWidth: isMobile ? undefined : '80vw',
+              maxWidth: isMobile ? undefined : 'min(80vw, 720px)',
               maxHeight: '70vh',
               overflowY: 'auto',
+              overflowX: 'auto',
+              boxSizing: 'border-box',
               padding: 6,
             }}>
               {/* Harness groups laid out as side-by-side columns (a grid), so the
@@ -329,7 +330,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               <div style={{
                 display: 'grid',
                 gridTemplateColumns: isMobile
-                  ? `repeat(${Math.min(groups.length, 2)}, minmax(0, 1fr))`
+                  ? `repeat(${Math.min(groups.length, 2)}, minmax(130px, 1fr))`
                   : `repeat(${Math.min(groups.length, 4)}, minmax(150px, 1fr))`,
                 gap: 2,
                 alignItems: 'start',
@@ -430,154 +431,65 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
           )}
         </div>
 
-        {/* Reset */}
-        {!isDefault && (
-          <button
-            onClick={reset}
-            title={lang === 'pt' ? 'Resetar filtros' : 'Reset filters'}
-            style={{
-              ...CTL,
-              gap: 5,
-              color: 'var(--text-secondary)',
-            }}
-          >
-            <RotateCcw size={11} />
-            {lang === 'pt' ? 'Resetar' : 'Reset'}
-          </button>
-        )}
+        {/* Reset button removed — clear individual chips via their × instead. */}
       </div>
 
-      {/* Selected member chips — removable, so it's always clear WHO is filtered */}
-      {(filters.users?.length ?? 0) > 0 && (
-        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', padding: compact ? '0 12px 8px' : '0 0 4px' }}>
-          {filters.users!.map(u => (
-            <span
-              key={u}
-              title={u}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 5,
-                fontSize: 11, fontWeight: 600,
-                color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)',
-                border: '1px solid rgba(217,119,6,0.3)', borderRadius: 5,
-                padding: '2px 6px 2px 8px', maxWidth: 220, whiteSpace: 'nowrap',
-                overflow: 'hidden', textOverflow: 'ellipsis',
-              }}
-            >
-              <Users size={10} style={{ flexShrink: 0 }} />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{u}</span>
-              <button
-                onClick={() => onChange({ ...filters, users: filters.users!.filter(x => x !== u) })}
-                title={lang === 'pt' ? 'Remover membro' : 'Remove member'}
-                style={{
-                  background: 'transparent', border: 'none', cursor: 'pointer', padding: 0,
-                  display: 'flex', alignItems: 'center', color: 'var(--anthropic-orange)',
-                  opacity: 0.7, flexShrink: 0,
-                }}
-              >
-                <X size={10} strokeWidth={2.5} />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Selected project chips */}
-      {hasProjects && (
-        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', padding: compact ? '0 12px 8px' : '0 0 4px' }}>
-          {filters.projects.map(path => (
-            <span
-              key={path}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                fontSize: 11,
-                fontWeight: 500,
-                color: 'var(--anthropic-orange)',
-                background: 'var(--anthropic-orange-dim)',
-                border: '1px solid rgba(217,119,6,0.3)',
-                borderRadius: 5,
-                padding: '2px 6px 2px 8px',
-                maxWidth: 260,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }} title={path}>
-                {formatProjectName(path)}
-              </span>
-              <button
-                onClick={() => onChange({ ...filters, projects: filters.projects.filter(p => p !== path), models: [] })}
-                title={lang === 'pt' ? 'Remover projeto' : 'Remove project'}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  padding: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  color: 'var(--anthropic-orange)',
-                  opacity: 0.7,
-                  flexShrink: 0,
-                }}
-              >
-                <X size={10} strokeWidth={2.5} />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Selected harness chips — each in its harness color, removable (mirrors project chips) */}
-      {(filters.harnesses?.length ?? 0) > 0 && (
-        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', padding: compact ? '0 12px 8px' : '0 0 4px' }}>
-          {filters.harnesses!.map(h => {
-            const color = HARNESS_COLORS[h]
-            return (
-              <span
-                key={h}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  fontSize: 11,
-                  fontWeight: 600,
-                  color,
-                  background: `${color}1f`,
-                  border: `1px solid ${color}55`,
-                  borderRadius: 5,
-                  padding: '2px 6px 2px 8px',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                <span style={{
-                  display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
-                  background: color, flexShrink: 0,
-                }} />
-                {HARNESS_LABELS[h]}
-                <button
-                  onClick={() => onChange({ ...filters, harnesses: filters.harnesses!.filter(x => x !== h) })}
-                  title={lang === 'pt' ? 'Remover harness' : 'Remove harness'}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    cursor: 'pointer',
-                    padding: 0,
-                    display: 'flex',
-                    alignItems: 'center',
-                    color,
-                    opacity: 0.7,
-                    flexShrink: 0,
-                  }}
-                >
-                  <X size={10} strokeWidth={2.5} />
-                </button>
-              </span>
-            )
-          })}
-        </div>
-      )}
+      {/* Active-filter chips — each category (members/projects/harnesses/models) is its own
+          row that slides in/out INDEPENDENTLY, so adding a second filter type animates the new
+          line too (not just the first). Rows are always mounted; their grid-rows toggle. */}
+      <div style={{ display: 'flex', flexDirection: 'column', padding: compact ? '0 12px' : 0 }}>
+        <AnimatedRow show={(filters.users?.length ?? 0) > 0}>
+          <ChipRow label={lang === 'pt' ? 'Membros' : 'Members'}>
+            {(filters.users ?? []).map(u => (
+              <FilterChip key={`u:${u}`} title={u} onRemove={() => onChange({ ...filters, users: filters.users!.filter(x => x !== u) })} removeTitle={lang === 'pt' ? 'Remover membro' : 'Remove member'}>
+                <Users size={10} style={{ flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{u}</span>
+              </FilterChip>
+            ))}
+          </ChipRow>
+        </AnimatedRow>
+        <AnimatedRow show={hasProjects}>
+          <ChipRow label={lang === 'pt' ? 'Projetos' : 'Projects'}>
+            {filters.projects.map(path => (
+              <FilterChip key={`p:${path}`} title={path} onRemove={() => onChange({ ...filters, projects: filters.projects.filter(p => p !== path), models: [] })} removeTitle={lang === 'pt' ? 'Remover projeto' : 'Remove project'}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatProjectName(path)}</span>
+              </FilterChip>
+            ))}
+          </ChipRow>
+        </AnimatedRow>
+        <AnimatedRow show={(filters.harnesses?.length ?? 0) > 0}>
+          <ChipRow label={lang === 'pt' ? 'Harnesses' : 'Harnesses'}>
+            {(filters.harnesses ?? []).map(h => {
+              const color = HARNESS_COLORS[h]
+              return (
+                <span key={`h:${h}`} style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+                  color, background: `${color}1f`, border: `1px solid ${color}55`, borderRadius: 5,
+                  padding: '2px 6px 2px 8px', whiteSpace: 'nowrap',
+                }}>
+                  <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                  {HARNESS_LABELS[h]}
+                  <button onClick={() => onChange({ ...filters, harnesses: filters.harnesses!.filter(x => x !== h) })}
+                    title={lang === 'pt' ? 'Remover harness' : 'Remove harness'}
+                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color, opacity: 0.7, flexShrink: 0 }}>
+                    <X size={10} strokeWidth={2.5} />
+                  </button>
+                </span>
+              )
+            })}
+          </ChipRow>
+        </AnimatedRow>
+        <AnimatedRow show={hasModelFilter}>
+          <ChipRow label={lang === 'pt' ? 'Modelos' : 'Models'}>
+            {selectedModels.map(m => (
+              <FilterChip key={`m:${m}`} title={m} onRemove={() => onChange({ ...filters, models: selectedModels.filter(x => x !== m) })} removeTitle={lang === 'pt' ? 'Remover modelo' : 'Remove model'}>
+                <Cpu size={10} style={{ flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatModel(m)}</span>
+              </FilterChip>
+            ))}
+          </ChipRow>
+        </AnimatedRow>
+      </div>
 
       {showProjectsModal && (
         <ProjectsModal
@@ -593,5 +505,45 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         />
       )}
     </>
+  )
+}
+
+/** A row that slides open/closed on its own (grid-rows 0fr↔1fr) so each filter category
+ *  animates in/out independently. Always mounted; only its height animates. */
+function AnimatedRow({ show, children }: { show: boolean; children: React.ReactNode }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateRows: show ? '1fr' : '0fr', transition: 'grid-template-rows 0.25s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+      <div style={{ overflow: 'hidden', minHeight: 0 }}>
+        <div style={{ padding: '3px 0' }}>{children}</div>
+      </div>
+    </div>
+  )
+}
+
+/** One labeled row of active-filter chips (e.g. "Projetos: [a] [b]"). */
+function ChipRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+      <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, paddingTop: 4, minWidth: 62, flexShrink: 0 }}>{label}</span>
+      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>{children}</div>
+    </div>
+  )
+}
+
+/** A removable orange filter chip (members, projects, models). */
+function FilterChip({ title, onRemove, removeTitle, children }: { title?: string; onRemove: () => void; removeTitle: string; children: React.ReactNode }) {
+  return (
+    <span title={title} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+      color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)',
+      border: '1px solid rgba(217,119,6,0.3)', borderRadius: 5,
+      padding: '2px 6px 2px 8px', maxWidth: 260, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+    }}>
+      {children}
+      <button onClick={onRemove} title={removeTitle}
+        style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color: 'var(--anthropic-orange)', opacity: 0.7, flexShrink: 0 }}>
+        <X size={10} strokeWidth={2.5} />
+      </button>
+    </span>
   )
 }
