@@ -1,6 +1,7 @@
 import { MongoClient, type Db, type Collection } from 'mongodb'
 import { MONGO_URL, MONGO_DB } from './config'
 import type { TeamSessionDoc } from './team-store'
+import type { TeamWorkflowDoc } from './team-workflows'
 
 let client: MongoClient | null = null
 let db: Db | null = null
@@ -18,6 +19,12 @@ export async function getMongoDb(): Promise<Db> {
 export async function getTeamCollection(): Promise<Collection<TeamSessionDoc>> {
   const database = await getMongoDb()
   return database.collection<TeamSessionDoc>('sessions')
+}
+
+/** The team workflow-runs collection, typed. */
+export async function getWorkflowsCollection(): Promise<Collection<TeamWorkflowDoc>> {
+  const database = await getMongoDb()
+  return database.collection<TeamWorkflowDoc>('workflows')
 }
 
 /** Close the connection (tests / shutdown). Safe to call when never opened. */

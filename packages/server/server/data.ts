@@ -641,7 +641,9 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     const storedWorkflows = mode !== 'off' ? await loadWorkflowRuns() : new Map<string, WorkflowRun>()
     const workflowsById = new Map(storedWorkflows)
     for (const r of liveWorkflows) workflowsById.set(r.runId, r)
-    const workflows = [...workflowsById.values()].sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''))
+    // `workflows` stays mutable — team/central workflow runs (from Mongo) are unioned in
+    // below, after the team-sessions block, then a final sort is applied.
+    let workflows: WorkflowRun[] = [...workflowsById.values()]
     if (mode === 'consolidate') {
       const stored = await loadConsolidated()
       const liveIds = new Set(sessions.map(s => s.session_id))
@@ -755,6 +757,27 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
         if (!s.user) s.user = CENTRAL_USER
       }
     }
+
+    // --- Team workflow runs: central reads Mongo, unioned with local runs ---
+    // Mirrors the team-sessions block above: each member pushes its own local
+    // WorkflowRun[] (computed metrics only — no chat/prompt text) to the central via
+    // team-uploader.ts → POST /api/team/ingest, stored per (org, memberId, runId) in
+    // team-workflows.ts. Keyed by runId here too, so a run pushed by its own member never
+    // collides with the central's own local discovery of the same run.
+    if (TEAM_CENTRAL) {
+      const { loadTeamWorkflowsFromMongo } = await import('./team-source')
+      const teamWorkflows = await loadTeamWorkflowsFromMongo().catch(() => [] as WorkflowRun[])
+      const merged = new Map(workflows.map(w => [w.runId, w]))
+      for (const w of teamWorkflows) merged.set(w.runId, w)
+      workflows = [...merged.values()]
+      // Same self-contribution as sessions: the central's own local runs have no `user` yet
+      // (team runs from Mongo always do) — tag them with CENTRAL_USER so they surface under
+      // the central machine's own member entry too.
+      if (CENTRAL_USER) {
+        workflows = workflows.map(w => (w.user ? w : { ...w, user: CENTRAL_USER }))
+      }
+    }
+    workflows.sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''))
 
     // Per-member statsCaches: each member's authoritative aggregated history, keyed by the
     // member's CURRENT display name (resolved via the tokens table). The central's own

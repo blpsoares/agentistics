@@ -166,6 +166,8 @@ export interface WorkflowRun {
   runId: string
   name: string
   sessionId: string
+  /** Owning user in team mode (set by the central on ingest). Undefined for local runs. */
+  user?: string
   status: 'completed' | 'failed' | 'partial'
   startedAt: string        // ISO; '' if unknown
   durationMs: number

@@ -1,4 +1,4 @@
-import type { SessionMeta, StatsCache } from '@agentistics/core'
+import type { SessionMeta, StatsCache, WorkflowRun } from '@agentistics/core'
 import { tagUser } from '@agentistics/core'
 
 /**
@@ -29,6 +29,9 @@ export interface IngestBody {
   /** Optional: the member's own raw statsCache (aggregated Claude history). Stored per
    *  member so the central can reproduce the member's exact totals. */
   statsCache?: StatsCache
+  /** Optional: the member's local workflow runs (computed metrics only — no chat/prompt
+   *  text, same privacy contract as sessions). Upserted per (org, memberId, runId). */
+  workflows?: WorkflowRun[]
 }
 
 /**
@@ -87,5 +90,16 @@ export function parseIngestBody(raw: unknown):
   const statsCache = (typeof r.statsCache === 'object' && r.statsCache !== null)
     ? (r.statsCache as StatsCache)
     : undefined
-  return { ok: true, body: { org, user, sessions: r.sessions as SessionMeta[], statsCache } }
+  // workflows is optional; each entry must at least carry a runId (same shallow validation
+  // level as sessions' session_id check above — full shape is trusted, not re-validated).
+  let workflows: WorkflowRun[] | undefined
+  if (Array.isArray(r.workflows)) {
+    for (const w of r.workflows) {
+      if (typeof w !== 'object' || w === null || typeof (w as Record<string, unknown>).runId !== 'string') {
+        return { ok: false, error: 'each workflow must have a runId' }
+      }
+    }
+    workflows = r.workflows as WorkflowRun[]
+  }
+  return { ok: true, body: { org, user, sessions: r.sessions as SessionMeta[], statsCache, workflows } }
 }

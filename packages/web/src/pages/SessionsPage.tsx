@@ -42,32 +42,21 @@ export default function SessionsPage() {
   )
   const live = useMemo(() => sorted.filter(s => liveIds.has(s.session_id)), [sorted, liveIds])
 
-  if (isCentral) {
-    return (
-      <>
-        <PageHead pt={pt} />
-        <Section flashId="sessions-central-empty" title={<><Clock size={14} /> {pt ? 'Sessões' : 'Sessions'}</>}>
-          <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>
-            {pt
-              ? 'A aba Sessões é local a cada máquina e não é exibida em um central.'
-              : 'The Sessions tab is local to each machine and is not shown on a central.'}
-          </div>
-        </Section>
-      </>
-    )
-  }
-
   return (
     <>
-      <PageHead pt={pt} />
+      <PageHead pt={pt} central={isCentral} />
 
-      <Section flashId="live-sessions" title={<><Radio size={14} /> {pt ? 'Abertas agora' : 'Open now'} {live.length > 0 && <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>({live.length})</span>}</>}>
-        {live.length === 0
-          ? <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>{pt ? 'Nenhuma sessão aberta agora.' : 'No sessions open right now.'}</div>
-          : <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {live.map(s => <LiveCard key={s.session_id} s={s} pt={pt} onOpen={() => setSelectedSession(s)} />)}
-            </div>}
-      </Section>
+      {/* "Open now" is real-time process detection on the local machine, so it only applies
+          to this machine's own sessions — hidden on a central (member processes aren't visible). */}
+      {!isCentral && (
+        <Section flashId="live-sessions" title={<><Radio size={14} /> {pt ? 'Abertas agora' : 'Open now'} {live.length > 0 && <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>({live.length})</span>}</>}>
+          {live.length === 0
+            ? <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>{pt ? 'Nenhuma sessão aberta agora.' : 'No sessions open right now.'}</div>
+            : <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {live.map(s => <LiveCard key={s.session_id} s={s} pt={pt} onOpen={() => setSelectedSession(s)} />)}
+              </div>}
+        </Section>
+      )}
 
       <Section flashId="recent-sessions" title={<><Clock size={14} /> {pt ? 'Últimas sessões' : 'Latest sessions'}</>}>
         <RecentSessions sessions={derived.filteredSessions} lang={lang} onSelect={setSelectedSession} pinnedIds={liveIds} />
@@ -76,7 +65,7 @@ export default function SessionsPage() {
   )
 }
 
-function PageHead({ pt }: { pt: boolean }) {
+function PageHead({ pt, central }: { pt: boolean; central?: boolean }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 4 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>
@@ -84,9 +73,13 @@ function PageHead({ pt }: { pt: boolean }) {
         {pt ? 'Sessões' : 'Sessions'}
       </div>
       <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
-        {pt
-          ? 'Sessões abertas agora (em tempo real) e as últimas sessões, com comando para retomar.'
-          : 'Sessions open right now (real time) and your latest sessions, with a resume command.'}
+        {central
+          ? (pt
+              ? 'Últimas sessões do time (metadados, sem chat) — reativo aos filtros, inclusive por membro.'
+              : "The team's latest sessions (metadata, no chat) — reactive to the filters, including by member.")
+          : (pt
+              ? 'Sessões abertas agora (em tempo real) e as últimas sessões, com comando para retomar.'
+              : 'Sessions open right now (real time) and your latest sessions, with a resume command.')}
       </div>
     </div>
   )
