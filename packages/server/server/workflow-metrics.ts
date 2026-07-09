@@ -143,7 +143,9 @@ export async function extractWorkflowRuns(
       phases,
       agents,
       totals: {
-        agentCount: usage?.agentCount ?? agents.length,
+        // The real agent transcripts are the source of truth; the <usage> count can be
+        // missing/0 for some runs, so never let it under-report the agents we actually found.
+        agentCount: Math.max(agents.length, usage?.agentCount ?? 0),
         tokensIn: agents.reduce((s, a) => s + a.tokensIn, 0),
         tokensOut: agents.reduce((s, a) => s + a.tokensOut, 0),
         costUSD: agents.reduce((s, a) => s + a.costUSD, 0),
