@@ -362,6 +362,7 @@ export default function CustomPage() {
   // Duplicate layout modal
   interface DupState { newName: string; pinned: string[] }
   const [dupModal, setDupModal] = useState<DupState | null>(null)
+  const [confirmDeleteName, setConfirmDeleteName] = useState<string | null>(null)
 
   // Manage layouts modal (bulk delete)
   const [manageOpen, setManageOpen] = useState(false)
@@ -513,11 +514,7 @@ export default function CustomPage() {
   }
 
   function handleDeleteLayout() {
-    const hasItems = items.length > 0
-    const msg = pt
-      ? `Deletar o layout "${activeLayout}"?${hasItems ? ' Todos os componentes serão removidos.' : ''}`
-      : `Delete layout "${activeLayout}"?${hasItems ? ' All components will be removed.' : ''}`
-    if (confirm(msg)) deleteLayout(activeLayout)
+    setConfirmDeleteName(activeLayout)
   }
 
   function handleExport() {
@@ -1314,6 +1311,41 @@ export default function CustomPage() {
                 style={{ padding: '8px 20px', background: dupModal.newName.trim() ? 'var(--anthropic-orange)' : 'var(--bg-elevated)', border: 'none', borderRadius: 8, cursor: dupModal.newName.trim() ? 'pointer' : 'not-allowed', fontSize: 12, color: dupModal.newName.trim() ? '#fff' : 'var(--text-tertiary)', fontFamily: 'inherit', fontWeight: 600, transition: 'background 0.15s' }}
               >
                 {pt ? 'Duplicar' : 'Duplicate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Delete-layout confirmation modal ─── */}
+      {confirmDeleteName !== null && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)', padding: isMobile ? 16 : 0 }}
+          onClick={e => { if (e.target === e.currentTarget) setConfirmDeleteName(null) }}
+        >
+          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-xl,16px)', padding: 24, width: 420, maxWidth: '100%', display: 'flex', flexDirection: 'column', gap: 16, boxShadow: '0 20px 60px rgba(0,0,0,0.4)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
+                {pt ? 'Excluir layout' : 'Delete layout'}
+              </div>
+              <button className="icon-btn" onClick={() => setConfirmDeleteName(null)} style={{ width: 26, height: 26 }}><X size={12} /></button>
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              {pt
+                ? <>Tem certeza que deseja excluir o layout <strong style={{ color: 'var(--text-primary)' }}>“{confirmDeleteName}”</strong>?{items.length > 0 ? ' Todos os componentes serão removidos.' : ''} Esta ação não pode ser desfeita.</>
+                : <>Are you sure you want to delete the layout <strong style={{ color: 'var(--text-primary)' }}>“{confirmDeleteName}”</strong>?{items.length > 0 ? ' All components will be removed.' : ''} This cannot be undone.</>}
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setConfirmDeleteName(null)} style={{ padding: '8px 16px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, cursor: 'pointer', fontSize: 12, color: 'var(--text-secondary)', fontFamily: 'inherit', fontWeight: 500 }}>
+                {pt ? 'Cancelar' : 'Cancel'}
+              </button>
+              <button
+                onClick={() => { deleteLayout(confirmDeleteName); setConfirmDeleteName(null) }}
+                style={{ padding: '8px 20px', background: '#ef4444', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 12, color: '#fff', fontFamily: 'inherit', fontWeight: 600, transition: 'background 0.15s' }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#dc2626' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#ef4444' }}
+              >
+                {pt ? 'Excluir' : 'Delete'}
               </button>
             </div>
           </div>

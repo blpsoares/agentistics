@@ -40,12 +40,18 @@ export function useCustomLayout() {
       .then(prefs => {
         if (!prefs) return
         const pinnedProjects = prefs.pinnedProjects ?? {}
-        if (prefs.layouts && Object.keys(prefs.layouts).length > 0) {
+        if (prefs.layouts) {
           const names = Object.keys(prefs.layouts)
-          const active: string = (prefs.activeLayout && prefs.layouts[prefs.activeLayout])
-            ? prefs.activeLayout
-            : names[0]!
-          setState({ layouts: prefs.layouts, pinnedProjects, active })
+          if (names.length > 0) {
+            const active: string = (prefs.activeLayout && prefs.layouts[prefs.activeLayout])
+              ? prefs.activeLayout
+              : names[0]!
+            setState({ layouts: prefs.layouts, pinnedProjects, active })
+          } else {
+            // `layouts` present but empty = the user deleted them all. Respect the empty
+            // state instead of resurrecting the default "Layout 1" on the next load.
+            setState({ layouts: {}, pinnedProjects, active: '' })
+          }
         } else if (prefs.customLayout && Array.isArray(prefs.customLayout)) {
           // Migrate legacy single-layout format
           setState({ layouts: { [INIT_NAME]: prefs.customLayout }, pinnedProjects, active: INIT_NAME })
@@ -78,14 +84,29 @@ export function useCustomLayout() {
     saveTimer.current = setTimeout(() => { persist(s); saveTimer.current = null }, 500)
   }, [persist])
 
-  // All mutations go through this to ensure saves are triggered
-  const update = useCallback((updater: (prev: LayoutState) => LayoutState) => {
+  // Keep the latest state reachable so we can flush a pending save on unmount.
+  const stateRef = useRef<LayoutState>(state)
+  stateRef.current = state
+  useEffect(() => () => {
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; persist(stateRef.current) }
+  }, [persist])
+
+  // All mutations go through this to ensure saves are triggered. Discrete structural
+  // changes (create/rename/delete/duplicate/switch) pass immediate=true so they persist
+  // right away — a debounced save can be lost/raced when the page unmounts on a tab switch,
+  // which made deleted layouts reappear.
+  const update = useCallback((updater: (prev: LayoutState) => LayoutState, immediate = false) => {
     setState(prev => {
       const next = updater(prev)
-      scheduleSave(next)
+      if (immediate) {
+        if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null }
+        persist(next)
+      } else {
+        scheduleSave(next)
+      }
       return next
     })
-  }, [scheduleSave])
+  }, [scheduleSave, persist])
 
   // Items for the active layout
   const items = state.layouts[state.active] ?? []
@@ -126,7 +147,7 @@ export function useCustomLayout() {
   const layoutNames = Object.keys(state.layouts)
 
   const switchLayout = useCallback((name: string) => {
-    update(prev => prev.layouts[name] ? { ...prev, active: name } : prev)
+    update(prev => prev.layouts[name] ? { ...prev, active: name } : prev, true)
   }, [update])
 
   const createLayout = useCallback((name: string) => {
@@ -135,7 +156,7 @@ export function useCustomLayout() {
     update(prev => {
       if (prev.layouts[trimmed]) return { ...prev, active: trimmed }
       return { ...prev, layouts: { ...prev.layouts, [trimmed]: [] }, active: trimmed }
-    })
+    }, true)
   }, [update])
 
   const renameLayout = useCallback((oldName: string, newName: string) => {
@@ -152,7 +173,7 @@ export function useCustomLayout() {
         pinnedProjects: oldPinned.length > 0 ? { ...restPinned, [trimmed]: oldPinned } : restPinned,
         active,
       }
-    })
+    }, true)
   }, [update])
 
   const deleteLayout = useCallback((name: string) => {
@@ -162,7 +183,7 @@ export function useCustomLayout() {
       const remaining = Object.keys(restLayouts)
       const active = prev.active === name ? (remaining[0] ?? '') : prev.active
       return { layouts: restLayouts, pinnedProjects: restPinned, active }
-    })
+    }, true)
   }, [update])
 
   const deleteLayouts = useCallback((names: string[]) => {
@@ -177,7 +198,7 @@ export function useCustomLayout() {
       }
       const active = toDelete.has(prev.active) ? (remaining[0] ?? '') : prev.active
       return { layouts: newLayouts, pinnedProjects: newPinned, active }
-    })
+    }, true)
   }, [update])
 
   const duplicateLayout = useCallback((sourceName: string, newName: string, newPinned: string[]) => {
@@ -192,7 +213,7 @@ export function useCustomLayout() {
         ? { ...prev.pinnedProjects, [trimmed]: newPinned }
         : { ...prev.pinnedProjects }
       return { layouts: newLayouts, pinnedProjects: newPinnedMap, active: trimmed }
-    })
+    }, true)
   }, [update])
 
   return {

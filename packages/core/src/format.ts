@@ -19,7 +19,8 @@ export function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1):
     return `R$${(intPart ?? '0').replace(/\B(?=(\d{3})+$)/g, '.')},${decPart}`
   }
   if (usd < 0.01) return '<USD 0.01'
-  return `USD ${usd.toFixed(2)}`
+  const [intPart, decPart] = usd.toFixed(2).split('.')
+  return `USD ${(intPart ?? '0').replace(/\B(?=(\d{3})+$)/g, ',')}.${decPart}`
 }
 
 /**

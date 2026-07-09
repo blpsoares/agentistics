@@ -1,9 +1,10 @@
 import { join } from 'path'
 import { readFile } from 'fs/promises'
-import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue, HarnessId } from '@agentistics/core'
+import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue, HarnessId, WorkflowRun } from '@agentistics/core'
 import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL, CENTRAL_USER } from './config'
 import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
+import { writeWorkflowRuns, loadWorkflowRuns } from './workflow-store'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
 import { UUID_RE, decodeProjectDir, getProjectGitStats } from './git'
 import { parseSessionJsonl } from './jsonl'
@@ -50,11 +51,13 @@ export interface ApiResponse {
   harnesses: HarnessId[]
   /** Team/central only: each member's own statsCache, keyed by resolved display name. */
   userStatsCaches?: Record<string, StatsCache>
+  workflows?: WorkflowRun[]
 }
 
 export interface ScanResult {
   projects: ServerProject[]
   extraSessions: SessionMeta[]
+  workflowRuns: WorkflowRun[]
 }
 
 export async function loadSessionMetas(roots: string[] = [SESSION_META_DIR]): Promise<Map<string, SessionMeta>> {
@@ -142,17 +145,23 @@ async function scanProjectDir(
   knownIds: Set<string>,
   metaMap: Map<string, SessionMeta>,
   fileLimit: ReturnType<typeof createLimiter>
-): Promise<{ project: ServerProject; extraSessions: SessionMeta[] } | null> {
+): Promise<{ project: ServerProject; extraSessions: SessionMeta[]; workflowRuns: WorkflowRun[] } | null> {
   // Fallback path (ambiguous for dir names that contain dashes)
   const fallbackPath = decodeProjectDir(projDir)
 
   const projectSessions: { sessionId: string; created: string }[] = []
   const extraSessions: SessionMeta[] = []
+  const workflowRuns: WorkflowRun[] = []
   // Count CWD occurrences to pick the canonical project path (majority wins)
   const cwdCounts: Record<string, number> = { [fallbackPath]: 0 }
   // Dedup sessions across roots — a session present in the live root is never
   // re-processed from the archive root (roots are scanned live-first).
   const seen = new Set<string>()
+  // Sibling dedup for workflow discovery, which (per the NOTE below) must run
+  // BEFORE `seen` is checked/set for Format B — so it needs its own guard to
+  // avoid re-reading + re-extracting the same session's workflows when its
+  // `<id>/subagents/workflows/` dir is mirrored across both live and archive roots.
+  const seenWorkflowSessions = new Set<string>()
 
   // rootDirPaths is this encoded dir resolved across PROJECTS_ROOTS, live first.
   for (const projDirPath of rootDirPaths) {
@@ -227,6 +236,29 @@ async function scanProjectDir(
     if (!entryStat?.isDirectory()) return
 
     const sessionId = entry
+    const subagentsDir = join(entryPath, 'subagents')
+
+    // Discover workflow runs (superpowers-style local workflows) launched from this session.
+    // Requires the main session JSONL (not the subagent files) to find launch/completion events.
+    // NOTE: this must run BEFORE the `seen` dedup check below — a session commonly has BOTH
+    // a `<id>.jsonl` (Format A, processed earlier in this same Promise.all) AND this `<id>/`
+    // directory (Format B), and Format A already marks `sessionId` as seen. If workflow
+    // discovery were gated on `seen`, it would silently never run for such sessions.
+    if (!seenWorkflowSessions.has(sessionId)) {
+      seenWorkflowSessions.add(sessionId)
+      const workflowsDir = join(subagentsDir, 'workflows')
+      const wfDirs = await safeReadDir(workflowsDir)
+      if (wfDirs.length > 0) {
+        const mainJsonl = join(projDirPath, `${sessionId}.jsonl`)
+        const mainContent = await readFile(mainJsonl, 'utf-8').catch(() => '')
+        if (mainContent) {
+          const { extractWorkflowRuns } = await import('./workflow-metrics')
+          const runs = await extractWorkflowRuns(mainContent.split('\n'), sessionId, workflowsDir)
+          workflowRuns.push(...runs)
+        }
+      }
+    }
+
     if (seen.has(sessionId)) return
     seen.add(sessionId)
     let created = ''
@@ -237,7 +269,6 @@ async function scanProjectDir(
       cwdCounts[metaEntry.project_path] = (cwdCounts[metaEntry.project_path] ?? 0) + 1
     }
 
-    const subagentsDir = join(entryPath, 'subagents')
     // Read only the FIRST agent file to get cwd/timestamp
     const agentFiles = (await safeReadDir(subagentsDir))
       .filter(f => f.endsWith('.jsonl'))
@@ -287,6 +318,7 @@ async function scanProjectDir(
       git_stats,
     },
     extraSessions,
+    workflowRuns,
   }
 }
 
@@ -326,17 +358,19 @@ export async function scanProjects(
 
   const projects: ServerProject[] = []
   const extraSessions: SessionMeta[] = []
+  const workflowRuns: WorkflowRun[] = []
 
   for (const result of results) {
     if (!result) continue
     projects.push(result.project)
     extraSessions.push(...result.extraSessions)
+    workflowRuns.push(...result.workflowRuns)
   }
 
   // Sort projects by session count descending
   projects.sort((a, b) => b.sessions.length - a.sessions.length)
 
-  return { projects, extraSessions }
+  return { projects, extraSessions, workflowRuns }
 }
 
 export function enrichProjectSessions(projects: ServerProject[], metaMap: Map<string, SessionMeta>): void {
@@ -558,7 +592,7 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
 
     onProgress('projects', 0)
     const knownIds = new Set(metaMap.keys())
-    const { projects, extraSessions } = await scanProjects(
+    const { projects, extraSessions, workflowRuns: collectedWorkflowRuns } = await scanProjects(
       knownIds,
       metaMap,
       projectRoots,
@@ -596,6 +630,20 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       // you MUST keep the (harness, session_id) dedup at the end or codex double-counts.
       await writeConsolidated(sessions)
     }
+
+    // Persist discovered workflow runs so they survive Claude's transcript cleanup,
+    // then union with the store (live wins by runId) so revived runs from vanished
+    // sessions still surface after the 30-day sweep. Gated on archive mode, same as
+    // session consolidation above — 'off' means nothing is written or revived, but
+    // live discovery (collectedWorkflowRuns, from scanProjects) always runs regardless.
+    const liveWorkflows = collectedWorkflowRuns
+    if (mode !== 'off') await writeWorkflowRuns(liveWorkflows)
+    const storedWorkflows = mode !== 'off' ? await loadWorkflowRuns() : new Map<string, WorkflowRun>()
+    const workflowsById = new Map(storedWorkflows)
+    for (const r of liveWorkflows) workflowsById.set(r.runId, r)
+    // `workflows` stays mutable — team/central workflow runs (from Mongo) are unioned in
+    // below, after the team-sessions block, then a final sort is applied.
+    let workflows: WorkflowRun[] = [...workflowsById.values()]
     if (mode === 'consolidate') {
       const stored = await loadConsolidated()
       const liveIds = new Set(sessions.map(s => s.session_id))
@@ -710,6 +758,27 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       }
     }
 
+    // --- Team workflow runs: central reads Mongo, unioned with local runs ---
+    // Mirrors the team-sessions block above: each member pushes its own local
+    // WorkflowRun[] (computed metrics only — no chat/prompt text) to the central via
+    // team-uploader.ts → POST /api/team/ingest, stored per (org, memberId, runId) in
+    // team-workflows.ts. Keyed by runId here too, so a run pushed by its own member never
+    // collides with the central's own local discovery of the same run.
+    if (TEAM_CENTRAL) {
+      const { loadTeamWorkflowsFromMongo } = await import('./team-source')
+      const teamWorkflows = await loadTeamWorkflowsFromMongo().catch(() => [] as WorkflowRun[])
+      const merged = new Map(workflows.map(w => [w.runId, w]))
+      for (const w of teamWorkflows) merged.set(w.runId, w)
+      workflows = [...merged.values()]
+      // Same self-contribution as sessions: the central's own local runs have no `user` yet
+      // (team runs from Mongo always do) — tag them with CENTRAL_USER so they surface under
+      // the central machine's own member entry too.
+      if (CENTRAL_USER) {
+        workflows = workflows.map(w => (w.user ? w : { ...w, user: CENTRAL_USER }))
+      }
+    }
+    workflows.sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''))
+
     // Per-member statsCaches: each member's authoritative aggregated history, keyed by the
     // member's CURRENT display name (resolved via the tokens table). The central's own
     // self-contribution is added under CENTRAL_USER. The frontend merges the selected
@@ -761,7 +830,7 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     const totalTokens = dedupedSessions.reduce((sum, s) => sum + (s.input_tokens ?? 0) + (s.output_tokens ?? 0), 0)
     onProgress('finalizing', 1, String(totalTokens))
 
-    return { statsCache, projects, allSessions: [] as [], sessions: dedupedSessions, healthIssues, homeDir: HOME_DIR, harnesses: Array.from(harnessSet), userStatsCaches }
+    return { statsCache, projects, allSessions: [] as [], sessions: dedupedSessions, healthIssues, homeDir: HOME_DIR, harnesses: Array.from(harnessSet), userStatsCaches, workflows }
   }
 
   return Promise.race([
