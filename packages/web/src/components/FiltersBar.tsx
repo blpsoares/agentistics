@@ -100,19 +100,26 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [showModelDropdown])
 
-  // Clamp the popover so it never overflows the right (or left) edge of the viewport.
+  // Clamp the popover so it never overflows the viewport (which would give the whole page a
+  // horizontal scrollbar). First cap its width to the viewport, then shift it left if its
+  // right edge still spills over — keeping the left edge at least 8px from the viewport edge.
   useLayoutEffect(() => {
     if (!showModelDropdown || !popoverRef.current || !modelDropdownRef.current) return
+    const MARGIN = 8
     const container = modelDropdownRef.current.getBoundingClientRect()
     const popover = popoverRef.current
     // Reset any previous adjustment before measuring.
     popover.style.left = '0'
     popover.style.right = 'auto'
+    // Never let the popover be wider than the viewport (minus margins).
+    popover.style.maxWidth = `${window.innerWidth - MARGIN * 2}px`
     const popoverWidth = popover.offsetWidth
     const rightEdge = container.left + popoverWidth
-    const overflow = rightEdge - window.innerWidth + 8 // 8px safe margin
+    const overflow = rightEdge - window.innerWidth + MARGIN
     if (overflow > 0) {
-      popover.style.left = `-${Math.min(overflow, container.left)}px`
+      // Cap the shift so the popover's left edge never crosses the viewport's left margin.
+      const maxShift = Math.max(0, container.left - MARGIN)
+      popover.style.left = `-${Math.min(overflow, maxShift)}px`
     }
   }, [showModelDropdown])
 
@@ -310,9 +317,11 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               // On mobile, cap to 92vw so it never exceeds the viewport;
               // on desktop, 80vw keeps the existing generous maximum.
               width: isMobile ? 'min(92vw, 360px)' : undefined,
-              maxWidth: isMobile ? undefined : '80vw',
+              maxWidth: isMobile ? undefined : 'min(80vw, 720px)',
               maxHeight: '70vh',
               overflowY: 'auto',
+              overflowX: 'auto',
+              boxSizing: 'border-box',
               padding: 6,
             }}>
               {/* Harness groups laid out as side-by-side columns (a grid), so the
@@ -321,7 +330,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               <div style={{
                 display: 'grid',
                 gridTemplateColumns: isMobile
-                  ? `repeat(${Math.min(groups.length, 2)}, minmax(0, 1fr))`
+                  ? `repeat(${Math.min(groups.length, 2)}, minmax(130px, 1fr))`
                   : `repeat(${Math.min(groups.length, 4)}, minmax(150px, 1fr))`,
                 gap: 2,
                 alignItems: 'start',
@@ -425,73 +434,61 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         {/* Reset button removed — clear individual chips via their × instead. */}
       </div>
 
-      {/* Active-filter chips — a bar that slides down (top→bottom) when filters are applied
-          and collapses with animation when the last chip is cleared, so the chips never grow
-          into and break the controls row above. */}
-      <div style={{
-        display: 'grid',
-        gridTemplateRows: ((filters.users?.length ?? 0) > 0 || hasProjects || (filters.harnesses?.length ?? 0) > 0 || hasModelFilter) ? '1fr' : '0fr',
-        transition: 'grid-template-rows 0.28s cubic-bezier(0.22, 1, 0.36, 1)',
-      }}>
-        <div style={{ overflow: 'hidden', minHeight: 0 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: compact ? '2px 12px 8px' : '6px 0 2px' }}>
-            {/* Members */}
-            {(filters.users?.length ?? 0) > 0 && (
-              <ChipRow label={lang === 'pt' ? 'Membros' : 'Members'}>
-                {filters.users!.map(u => (
-                  <FilterChip key={`u:${u}`} title={u} onRemove={() => onChange({ ...filters, users: filters.users!.filter(x => x !== u) })} removeTitle={lang === 'pt' ? 'Remover membro' : 'Remove member'}>
-                    <Users size={10} style={{ flexShrink: 0 }} />
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{u}</span>
-                  </FilterChip>
-                ))}
-              </ChipRow>
-            )}
-            {/* Projects */}
-            {hasProjects && (
-              <ChipRow label={lang === 'pt' ? 'Projetos' : 'Projects'}>
-                {filters.projects.map(path => (
-                  <FilterChip key={`p:${path}`} title={path} onRemove={() => onChange({ ...filters, projects: filters.projects.filter(p => p !== path), models: [] })} removeTitle={lang === 'pt' ? 'Remover projeto' : 'Remove project'}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatProjectName(path)}</span>
-                  </FilterChip>
-                ))}
-              </ChipRow>
-            )}
-            {/* Harnesses */}
-            {(filters.harnesses?.length ?? 0) > 0 && (
-              <ChipRow label={lang === 'pt' ? 'Harnesses' : 'Harnesses'}>
-                {filters.harnesses!.map(h => {
-                  const color = HARNESS_COLORS[h]
-                  return (
-                    <span key={`h:${h}`} style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
-                      color, background: `${color}1f`, border: `1px solid ${color}55`, borderRadius: 5,
-                      padding: '2px 6px 2px 8px', whiteSpace: 'nowrap',
-                    }}>
-                      <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
-                      {HARNESS_LABELS[h]}
-                      <button onClick={() => onChange({ ...filters, harnesses: filters.harnesses!.filter(x => x !== h) })}
-                        title={lang === 'pt' ? 'Remover harness' : 'Remove harness'}
-                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color, opacity: 0.7, flexShrink: 0 }}>
-                        <X size={10} strokeWidth={2.5} />
-                      </button>
-                    </span>
-                  )
-                })}
-              </ChipRow>
-            )}
-            {/* Models */}
-            {hasModelFilter && (
-              <ChipRow label={lang === 'pt' ? 'Modelos' : 'Models'}>
-                {selectedModels.map(m => (
-                  <FilterChip key={`m:${m}`} title={m} onRemove={() => onChange({ ...filters, models: selectedModels.filter(x => x !== m) })} removeTitle={lang === 'pt' ? 'Remover modelo' : 'Remove model'}>
-                    <Cpu size={10} style={{ flexShrink: 0 }} />
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatModel(m)}</span>
-                  </FilterChip>
-                ))}
-              </ChipRow>
-            )}
-          </div>
-        </div>
+      {/* Active-filter chips — each category (members/projects/harnesses/models) is its own
+          row that slides in/out INDEPENDENTLY, so adding a second filter type animates the new
+          line too (not just the first). Rows are always mounted; their grid-rows toggle. */}
+      <div style={{ display: 'flex', flexDirection: 'column', padding: compact ? '0 12px' : 0 }}>
+        <AnimatedRow show={(filters.users?.length ?? 0) > 0}>
+          <ChipRow label={lang === 'pt' ? 'Membros' : 'Members'}>
+            {(filters.users ?? []).map(u => (
+              <FilterChip key={`u:${u}`} title={u} onRemove={() => onChange({ ...filters, users: filters.users!.filter(x => x !== u) })} removeTitle={lang === 'pt' ? 'Remover membro' : 'Remove member'}>
+                <Users size={10} style={{ flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{u}</span>
+              </FilterChip>
+            ))}
+          </ChipRow>
+        </AnimatedRow>
+        <AnimatedRow show={hasProjects}>
+          <ChipRow label={lang === 'pt' ? 'Projetos' : 'Projects'}>
+            {filters.projects.map(path => (
+              <FilterChip key={`p:${path}`} title={path} onRemove={() => onChange({ ...filters, projects: filters.projects.filter(p => p !== path), models: [] })} removeTitle={lang === 'pt' ? 'Remover projeto' : 'Remove project'}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatProjectName(path)}</span>
+              </FilterChip>
+            ))}
+          </ChipRow>
+        </AnimatedRow>
+        <AnimatedRow show={(filters.harnesses?.length ?? 0) > 0}>
+          <ChipRow label={lang === 'pt' ? 'Harnesses' : 'Harnesses'}>
+            {(filters.harnesses ?? []).map(h => {
+              const color = HARNESS_COLORS[h]
+              return (
+                <span key={`h:${h}`} style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+                  color, background: `${color}1f`, border: `1px solid ${color}55`, borderRadius: 5,
+                  padding: '2px 6px 2px 8px', whiteSpace: 'nowrap',
+                }}>
+                  <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                  {HARNESS_LABELS[h]}
+                  <button onClick={() => onChange({ ...filters, harnesses: filters.harnesses!.filter(x => x !== h) })}
+                    title={lang === 'pt' ? 'Remover harness' : 'Remove harness'}
+                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color, opacity: 0.7, flexShrink: 0 }}>
+                    <X size={10} strokeWidth={2.5} />
+                  </button>
+                </span>
+              )
+            })}
+          </ChipRow>
+        </AnimatedRow>
+        <AnimatedRow show={hasModelFilter}>
+          <ChipRow label={lang === 'pt' ? 'Modelos' : 'Models'}>
+            {selectedModels.map(m => (
+              <FilterChip key={`m:${m}`} title={m} onRemove={() => onChange({ ...filters, models: selectedModels.filter(x => x !== m) })} removeTitle={lang === 'pt' ? 'Remover modelo' : 'Remove model'}>
+                <Cpu size={10} style={{ flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatModel(m)}</span>
+              </FilterChip>
+            ))}
+          </ChipRow>
+        </AnimatedRow>
       </div>
 
       {showProjectsModal && (
@@ -508,6 +505,18 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         />
       )}
     </>
+  )
+}
+
+/** A row that slides open/closed on its own (grid-rows 0fr↔1fr) so each filter category
+ *  animates in/out independently. Always mounted; only its height animates. */
+function AnimatedRow({ show, children }: { show: boolean; children: React.ReactNode }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateRows: show ? '1fr' : '0fr', transition: 'grid-template-rows 0.25s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+      <div style={{ overflow: 'hidden', minHeight: 0 }}>
+        <div style={{ padding: '3px 0' }}>{children}</div>
+      </div>
+    </div>
   )
 }
 

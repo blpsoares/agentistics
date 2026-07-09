@@ -647,7 +647,7 @@ function MobileBottomNav({
     badge?: string
   }
   const navTiles: Tile[] = [
-    ...(isCentral ? [] : [{ key: 'sessions', label: pt ? 'Sessões' : 'Sessions', icon: Clock, onClick: () => { setMoreOpen(false); navigate('/sessions') }, active: location.pathname.startsWith('/sessions') } as Tile]),
+    { key: 'sessions', label: pt ? 'Sessões' : 'Sessions', icon: Clock, onClick: () => { setMoreOpen(false); navigate('/sessions') }, active: location.pathname.startsWith('/sessions') },
     ...(hasWorkflows
       ? [{ key: 'workflows', label: pt ? 'Workflows' : 'Workflows', icon: WorkflowIcon, onClick: () => { setMoreOpen(false); navigate('/workflows') }, active: location.pathname.startsWith('/workflows') } as Tile]
       : []),
@@ -821,7 +821,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
   const pt = lang === 'pt'
   const items: { to: string; labelPt: string; labelEn: string; icon: React.ReactNode }[] = [
     { to: '/',          labelPt: 'Home',         labelEn: 'Home',         icon: <Home size={17} /> },
-    ...(isCentral ? [] : [{ to: '/sessions', labelPt: 'Sessões', labelEn: 'Sessions', icon: <Clock size={17} /> }]),
+    { to: '/sessions', labelPt: 'Sessões', labelEn: 'Sessions', icon: <Clock size={17} /> },
     { to: '/costs',     labelPt: 'Custos',       labelEn: 'Costs',        icon: <DollarSign size={17} /> },
     { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={17} /> },
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={17} /> },
