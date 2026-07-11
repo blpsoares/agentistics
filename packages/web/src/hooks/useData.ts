@@ -778,7 +778,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // Use filteredSessions when project/model/non-claude-harness filter is active
     // (statsCache has no per-project/model/harness granularity)
     const harnessesFiltered = (filters.harnesses?.length ?? 0) > 0
-    const sessionFiltered = projectFiltered || modelSet !== null || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)
+    const sessionFiltered = projectFiltered || repoFiltered || modelSet !== null || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)
 
     const totalMessages = sessionFiltered
       ? filteredSessions.reduce((s, sess) => s + (sess.user_message_count ?? 0) + (sess.assistant_message_count ?? 0), 0)
