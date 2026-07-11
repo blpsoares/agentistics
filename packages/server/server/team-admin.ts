@@ -11,6 +11,7 @@
  */
 
 import { listMembers, mintToken, revokeToken, rotateToken } from './team-tokens'
+import { registerRepo, listRepos, unregisterRepo } from './team-repos'
 import { getTeamCollection } from './mongo'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
@@ -201,5 +202,74 @@ export async function handleRotateToken(req: Request): Promise<Response> {
       JSON.stringify({ error: e instanceof Error ? e.message : String(e) }),
       { status: 500, headers: JSON_CT },
     )
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Repositories — GitHub Actions registration (central admin only)
+// ---------------------------------------------------------------------------
+
+/** GET /api/team/repos → { repos: RepoInfo[] } */
+export async function handleListRepos(_req: Request): Promise<Response> {
+  try {
+    const repos = await listRepos()
+    return new Response(JSON.stringify({ repos }), { status: 200, headers: JSON_CT })
+  } catch (e) {
+    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), { status: 500, headers: JSON_CT })
+  }
+}
+
+/**
+ * POST /api/team/repos — register a repository and mint its CI ingest token.
+ * Body: { url: string, name?: string }  — `url` is any git remote form (https/ssh/scp).
+ * Response: { token: string, remote: string } — the token is shown once; store it as the
+ * repo's GitHub Actions secret. Re-registering an existing repo rotates its token.
+ */
+export async function handleRegisterRepo(req: Request): Promise<Response> {
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return new Response(JSON.stringify({ error: 'invalid JSON' }), { status: 400, headers: JSON_CT })
+  }
+  const raw = body as Record<string, unknown>
+  const url = typeof raw?.url === 'string' ? raw.url.trim() : ''
+  const name = typeof raw?.name === 'string' ? raw.name.trim() : undefined
+  if (!url) {
+    return new Response(JSON.stringify({ error: 'url required' }), { status: 400, headers: JSON_CT })
+  }
+  try {
+    const result = await registerRepo(url, name)
+    if (!result.ok) {
+      return new Response(JSON.stringify({ error: result.error }), { status: 400, headers: JSON_CT })
+    }
+    return new Response(JSON.stringify({ token: result.token, remote: result.remote }), { status: 200, headers: JSON_CT })
+  } catch (e) {
+    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), { status: 500, headers: JSON_CT })
+  }
+}
+
+/**
+ * DELETE /api/team/repos — unregister a repository (revokes its CI token + CI sessions).
+ * Body: { remote: string }  — any remote form; normalized server-side.
+ * Response: { ok: boolean }
+ */
+export async function handleUnregisterRepo(req: Request): Promise<Response> {
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return new Response(JSON.stringify({ error: 'invalid JSON' }), { status: 400, headers: JSON_CT })
+  }
+  const raw = body as Record<string, unknown>
+  const remote = typeof raw?.remote === 'string' ? raw.remote.trim() : ''
+  if (!remote) {
+    return new Response(JSON.stringify({ error: 'remote required' }), { status: 400, headers: JSON_CT })
+  }
+  try {
+    const ok = await unregisterRepo(remote)
+    return new Response(JSON.stringify({ ok }), { status: ok ? 200 : 404, headers: JSON_CT })
+  } catch (e) {
+    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), { status: 500, headers: JSON_CT })
   }
 }

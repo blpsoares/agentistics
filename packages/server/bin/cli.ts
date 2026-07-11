@@ -60,6 +60,12 @@ Member:
   agentop member status
     Show the current mode/endpoint/user and last sync state.
 
+CI (GitHub Actions):
+  agentop ci-push --endpoint <url> --token <ci-token> [--org <org>]
+    One-shot push of this runner's metrics to a central. Reads
+    AGENTISTICS_CENTRAL_URL / AGENTISTICS_CI_TOKEN / AGENTISTICS_TEAM_ORG
+    when the flags are omitted. Never fails the job on a push error.
+
 Autostart:
   agentop autostart <mode> <enable|disable|status>
     mode ∈ { server, central, watch }
@@ -204,6 +210,21 @@ if (command === 'member') {
   console.error(`Invalid member action: ${sub ?? '(none)'}. Expected one of: connect, leave, status.\n`)
   console.log(HELP)
   process.exit(1)
+}
+
+if (command === 'ci-push') {
+  // One-shot push of this (ephemeral GitHub Actions) runner's metrics to a central.
+  const readFlag = (name: string): string | undefined => {
+    const idx = args.indexOf(name)
+    return idx !== -1 && args[idx + 1] ? args[idx + 1] : undefined
+  }
+  const { runCiPush } = await import('../server/ci-push.ts')
+  const code = await runCiPush({
+    endpoint: readFlag('--endpoint'),
+    token: readFlag('--token'),
+    org: readFlag('--org'),
+  })
+  process.exit(code)
 }
 
 if (command === '--version' || command === '-v') {

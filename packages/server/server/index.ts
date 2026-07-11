@@ -126,6 +126,7 @@ const ADMIN_PATHS = new Set([
   '/api/team/members',
   '/api/team/tokens',
   '/api/team/tokens/rotate',
+  '/api/team/repos',
   '/api/team/config',
 ])
 
@@ -945,6 +946,35 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       const { handleRotateToken } = await import('./team-admin')
       const res = await handleRotateToken(req)
       // Rotation migrates the member's history to the new identity key — refresh the dashboard.
+      if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // Repositories — GitHub Actions registration (admin-gated on the central).
+    if (url.pathname === '/api/team/repos' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleListRepos } = await import('./team-admin')
+      const res = await handleListRepos(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/team/repos' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleRegisterRepo } = await import('./team-admin')
+      const res = await handleRegisterRepo(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/team/repos' && req.method === 'DELETE') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleUnregisterRepo } = await import('./team-admin')
+      const res = await handleUnregisterRepo(req)
       if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
