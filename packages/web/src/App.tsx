@@ -10,6 +10,7 @@ import {
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Workflow as WorkflowIcon,
+  GitBranch,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -649,6 +650,7 @@ function MobileBottomNav({
   }
   const navTiles: Tile[] = [
     { key: 'sessions', label: pt ? 'Sessões' : 'Sessions', icon: Clock, onClick: () => { setMoreOpen(false); navigate('/sessions') }, active: location.pathname.startsWith('/sessions') },
+    { key: 'repositories', label: pt ? 'Repositórios' : 'Repositories', icon: GitBranch, onClick: () => { setMoreOpen(false); navigate('/repositories') }, active: location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo') },
     ...(hasWorkflows
       ? [{ key: 'workflows', label: pt ? 'Workflows' : 'Workflows', icon: WorkflowIcon, onClick: () => { setMoreOpen(false); navigate('/workflows') }, active: location.pathname.startsWith('/workflows') } as Tile]
       : []),
@@ -854,6 +856,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
     { to: '/sessions', labelPt: 'Sessões', labelEn: 'Sessions', icon: <Clock size={17} /> },
     { to: '/costs',     labelPt: 'Custos',       labelEn: 'Costs',        icon: <DollarSign size={17} /> },
     { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={17} /> },
+    { to: '/repositories', labelPt: 'Repositórios', labelEn: 'Repositories', icon: <GitBranch size={17} /> },
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={17} /> },
     ...(hasWorkflows ? [{ to: '/workflows', labelPt: 'Workflows', labelEn: 'Workflows', icon: <WorkflowIcon size={17} /> }] : []),
     { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={17} /> },
@@ -892,8 +895,13 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
         {items.map(item => {
           const active = item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to)
           const label = pt ? item.labelPt : item.labelEn
+          // The Repositories section owns an "Actions" (GitHub Actions) submenu, revealed while
+          // anywhere inside repositories/ or a repo detail page.
+          const inRepoSection = item.to === '/repositories' && (location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo'))
+          const actionsActive = location.pathname.startsWith('/repositories/actions')
           return (
-            <CollapsedTip key={item.to} label={label} show={collapsed}>
+            <React.Fragment key={item.to}>
+            <CollapsedTip label={label} show={collapsed}>
               <NavLink
                 to={item.to}
                 end={item.to === '/'}
@@ -914,6 +922,23 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
                 {!collapsed && label}
               </NavLink>
             </CollapsedTip>
+            {inRepoSection && !collapsed && (
+              <NavLink
+                to="/repositories/actions"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 9, marginLeft: 22,
+                  padding: '7px 12px', borderRadius: 8, textDecoration: 'none',
+                  fontSize: 12.5, fontWeight: actionsActive ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap',
+                  color: actionsActive ? 'var(--accent-blue)' : 'var(--text-tertiary)',
+                  background: actionsActive ? 'var(--bg-elevated)' : 'transparent',
+                }}
+                onMouseEnter={e => { if (!actionsActive) (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-secondary)' }}
+                onMouseLeave={e => { if (!actionsActive) (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-tertiary)' }}
+              >
+                <Zap size={14} style={{ flexShrink: 0 }} /> Actions
+              </NavLink>
+            )}
+            </React.Fragment>
           )
         })}
       </nav>

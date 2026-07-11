@@ -106,6 +106,9 @@ export interface SessionMeta {
    *  (or authoritatively from a repo-bound token on CI ingest). Empty/undefined when the
    *  project is not a git repo or has no origin remote. See `normalizeGitRemote`. */
   git_remote?: string
+  /** True when this session was produced by a CI runner (Claude Code GitHub Actions), stamped
+   *  authoritatively by the central on ingest via a repo-bound token. Powers the Actions view. */
+  ci?: boolean
   _source?: 'meta' | 'jsonl' | 'subdir'
   agentMetrics?: SessionAgentMetrics
   /** Number of MCP tool calls recorded in this session (Copilot adapter). */
@@ -347,6 +350,7 @@ export interface Filters {
   customStart: string
   customEnd: string
   projects: string[]   // empty = all projects
+  repos?: string[]     // empty/undefined = all repos; [''] targets the "no linked repo" bucket
   users?: string[]     // empty/undefined = all users
   models: string[]     // empty = all models
   harness?: HarnessId
