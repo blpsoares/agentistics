@@ -3,6 +3,7 @@ import { promisify } from 'util'
 import { readdir } from 'fs/promises'
 import { join } from 'path'
 import type { ProjectGitStats } from '@agentistics/core'
+import { normalizeGitRemote } from '@agentistics/core'
 
 const execAsync = promisify(exec)
 
@@ -60,6 +61,27 @@ export async function getGitFileStats(
     return { linesAdded, linesRemoved, filesModified: filesSeen.size }
   } catch {
     return empty
+  }
+}
+
+/**
+ * Read a repo's `origin` remote URL and return it normalized (`host/org/repo`, no protocol),
+ * or `undefined` when the path isn't a git repo or has no origin remote. Reuses the same
+ * `gitCmd` (Windows/WSL) split and no-prompt env guard as the stats helpers so a misconfigured
+ * remote can never hang the scan. This is the local-machine source of the group-by-repo key.
+ */
+export async function getGitRemote(projectPath: string): Promise<string | undefined> {
+  const gitEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' }
+  const cmd = gitCmd(projectPath)
+  try {
+    const { stdout } = await execAsync(
+      `${cmd} -C "${projectPath}" config --get remote.origin.url`,
+      { timeout: 3000, env: gitEnv }
+    )
+    const normalized = normalizeGitRemote(stdout.trim())
+    return normalized || undefined
+  } catch {
+    return undefined
   }
 }
 
