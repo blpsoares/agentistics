@@ -83,10 +83,45 @@ Open **Repositories** → click the repo → **Actions** tab, or **Repositories 
 cross-repo view. CI runs are counted separately (`user = github-actions`) but roll up into the
 same per-repo totals as your local sessions.
 
+## Networking — how a cloud runner reaches the central
+
+GitHub-hosted runners live in the cloud, so the central must be reachable from wherever the
+runner runs. **Do not expose your full dashboard to the public internet** — it holds sensitive
+data (repo names, member names, the first 200 chars of each prompt, titles). Pick one:
+
+### Option A — private runner (nothing exposed)
+Use a **self-hosted runner** inside your network / tailnet and point it at the private central
+(`http://localhost:48080`, a LAN IP, or a Tailscale MagicDNS URL). Set `runs-on: self-hosted`.
+The central never touches the public internet. Best for sensitive data.
+
+### Option B — a public **ingest-only** central (for cloud runners)
+Run a **second** central instance in **ingest-only mode** that shares the same MongoDB as your
+private dashboard instance. Set `AGENTISTICS_INGEST_ONLY=1`: it serves **only**
+`POST /api/team/ingest` and returns **404 for everything else** — no dashboard, no `/api/data`,
+no login, no static assets. Exposing it is low-risk: an attacker finds only a token-gated write
+endpoint with nothing to read.
+
+```
+        cloud runner ── POST /api/team/ingest ──▶  ingest-only central   ┐
+                                                   (AGENTISTICS_INGEST_ONLY=1)  │  same
+                                                                                ├─ MongoDB
+   you (private) ──────── dashboard ─────────────▶  private central       ┘
+                                                   (Tailscale / LAN, not public)
+```
+
+Harden the exposed instance further:
+- **IP-allowlist** GitHub's runner ranges at the proxy (`actions` field of
+  `https://api.github.com/meta`).
+- Terminate **TLS** (a Cloudflare Tunnel / Tailscale Funnel gives HTTPS for free; or a reverse
+  proxy + `AGENTISTICS_TEAM_TLS=1`).
+
 ## Security notes
 
 - The CI token is stored only as a **SHA-256 hash** on the central (like every ingest token) and
-  is used as `Authorization: Bearer`. Treat it like any secret; rotate by re-registering the repo.
+  is used as `Authorization: Bearer`. Treat it like any secret; rotate by re-registering the repo,
+  revoke by removing the repo (both delete that repo's CI data).
 - The token is **repo-scoped for attribution** but, like all ingest tokens, can write sessions to
   the central — only register repos you control and keep the secret in GitHub's secret store.
-- Prefer a self-hosted runner or an authenticated reverse proxy if your central is not public.
+- On a public central, always set a strong `AGENTISTICS_TEAM_PASSWORD` + a separate
+  `AGENTISTICS_TEAM_SESSION_SECRET`, and prefer the ingest-only pattern above so the dashboard is
+  never the exposed surface.

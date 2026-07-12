@@ -199,6 +199,11 @@ stored as a GitHub secret). On ingest the central **authoritatively stamps** `gi
 registered remote) + `ci: true` + `user = github-actions` via `stampCiSessions` — a runner cannot
 mis-report its repo. `ci === true` sessions power the **Repositories → Actions** view.
 
+Cloud runners need the central reachable without exposing the dashboard. `AGENTISTICS_INGEST_ONLY=1`
+(config.ts) makes a central serve **only** `POST /api/team/ingest` (404 for everything else, checked
+right after the OPTIONS handler in `index.ts`) — run it as a public ingest instance sharing Mongo
+with a separate private dashboard instance. See `docs/github-actions.md`.
+
 ### Repository rules
 
 - **`normalizeGitRemote` is the only way to key a repo** — never parse `project_path` strings.

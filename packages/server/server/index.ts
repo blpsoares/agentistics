@@ -1,7 +1,7 @@
 // embeddedDist is loaded inside server/sse.ts (conditional on SERVE_STATIC=1)
 
 import { readFile } from 'node:fs/promises'
-import { PORT, WEB_PORT, TEAM_CENTRAL, TEAM_PASSWORD, TEAM_ORG } from './config'
+import { PORT, WEB_PORT, TEAM_CENTRAL, TEAM_PASSWORD, TEAM_ORG, INGEST_ONLY } from './config'
 import type { Server, ServerWebSocket } from 'bun'
 import { getRates } from './rates'
 import { getVersionInfo, startVersionRecheck } from './version'
@@ -155,6 +155,16 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
 
     if (req.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS_HEADERS })
+    }
+
+    // ---------------------------------------------------------------------------
+    // Ingest-only hardening: a public-facing central that accepts CI pushes but
+    // exposes nothing else. Everything except POST /api/team/ingest → 404, so an
+    // exposed instance leaks no dashboard, no data, no login — only a token-gated
+    // write endpoint. Pair with a separate PRIVATE dashboard instance on the same Mongo.
+    // ---------------------------------------------------------------------------
+    if (INGEST_ONLY && !(url.pathname === '/api/team/ingest' && req.method === 'POST')) {
+      return new Response('Not found', { status: 404, headers: CORS_HEADERS })
     }
 
     // ---------------------------------------------------------------------------
