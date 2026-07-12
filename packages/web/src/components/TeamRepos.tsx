@@ -28,44 +28,30 @@ const COPY = {
   tokenNote:  { en: 'Copy this CI token now — it is shown only once.', pt: 'Copie este token de CI agora — ele só aparece uma vez.' },
   step1:      { en: '1 · Store the token as a repo secret',       pt: '1 · Guarde o token como secret do repo' },
   step2:      { en: '2 · Point it at your central',               pt: '2 · Aponte para a sua central' },
-  step3:      { en: '3 · Paste this workflow',                    pt: '3 · Cole este workflow' },
+  step3:      { en: '3 · Add this step to your Claude workflow',   pt: '3 · Adicione este step ao seu workflow do Claude' },
   centralUrl: { en: 'Central URL (reachable from the runner)',    pt: 'URL da central (acessível pelo runner)' },
   copyToken:  { en: 'Copy token',                     pt: 'Copiar token' },
   copySetup:  { en: 'Copy setup commands',            pt: 'Copiar comandos de setup' },
-  copyYaml:   { en: 'Copy workflow',                  pt: 'Copiar workflow' },
+  copyYaml:   { en: 'Copy step',                      pt: 'Copiar step' },
   copied:     { en: 'Copied!',                        pt: 'Copiado!' },
   refresh:    { en: 'Refresh',                        pt: 'Atualizar' },
 }
 const t = (k: keyof typeof COPY, lang: 'en' | 'pt') => COPY[k][lang]
 
-/** Ready-to-paste workflow that runs Claude Code and pushes metrics to the central. */
-function buildWorkflow(remote: string): string {
-  return `# .github/workflows/agentistics.yml — ${repoShortName(remote)}
-name: Claude Code
-on:
-  issue_comment:
-    types: [created]
-jobs:
-  claude:
-    if: contains(github.event.comment.body, '@claude')
-    runs-on: ubuntu-latest
-    permissions: { contents: write, pull-requests: write, issues: write }
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - name: Run Claude Code
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: \${{ secrets.ANTHROPIC_API_KEY }}
-      - name: Push agentistics metrics
-        if: always()
-        env:
-          AGENTISTICS_CENTRAL_URL: \${{ vars.AGENTISTICS_CENTRAL_URL }}
-          AGENTISTICS_CI_TOKEN: \${{ secrets.AGENTISTICS_CI_TOKEN }}
-        run: |
-          curl -fsSL "https://github.com/blpsoares/agentistics/releases/latest/download/agentop" -o agentop
-          chmod +x agentop
-          ./agentop ci-push`
+/** Ready-to-paste STEP for an existing Claude Code job — add it as the last step so it pushes
+ *  this run's metrics after Claude finishes. It does NOT run Claude itself (the workflow already
+ *  does that). `if: always()` reports usage even when the Claude step failed. */
+function buildStep(): string {
+  return `# Add as the LAST step of the job that already runs Claude Code.
+- name: Push agentistics metrics
+  if: always()
+  env:
+    AGENTISTICS_CENTRAL_URL: \${{ vars.AGENTISTICS_CENTRAL_URL }}
+    AGENTISTICS_CI_TOKEN: \${{ secrets.AGENTISTICS_CI_TOKEN }}
+  run: |
+    curl -fsSL "https://github.com/blpsoares/agentistics/releases/latest/download/agentop" -o agentop
+    chmod +x agentop
+    ./agentop ci-push`
 }
 
 /** Local `gh` commands that store the secret + central URL on the repo (token embedded, never committed). */
@@ -241,8 +227,8 @@ export function TeamRepos({ lang }: Props) {
 
           {/* Step 3 — workflow YAML */}
           <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>{t('step3', lang)}</div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>{copyBtn('yaml', buildWorkflow(result.remote), t('copyYaml', lang))}</div>
-          <pre style={codeBox}>{buildWorkflow(result.remote)}</pre>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>{copyBtn('yaml', buildStep(), t('copyYaml', lang))}</div>
+          <pre style={codeBox}>{buildStep()}</pre>
         </div>
       )}
     </div>
