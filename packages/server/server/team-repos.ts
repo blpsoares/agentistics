@@ -13,7 +13,7 @@
  */
 
 import type { Collection } from 'mongodb'
-import { normalizeGitRemote, repoShortName } from '@agentistics/core'
+import { normalizeGitRemote } from '@agentistics/core'
 import { getMongoDb } from './mongo'
 import { mintToken, revokeToken } from './team-tokens'
 import { ciMemberId } from './team-oidc'
@@ -21,15 +21,14 @@ import { ciMemberId } from './team-oidc'
 export interface RepoDoc {
   _id: string        // the normalized remote (host/org/repo) — also the dedup key
   remote: string     // same as _id, explicit for reads
-  name: string       // display name (defaults to org/repo)
   tokenId: string    // sha256 hash of the CI token (memberId of pushed sessions)
   createdAt: string
 }
 
-/** Safe repo record for listing (no token material). */
+/** Safe repo record for listing (no token material). The display name is always derived from
+ *  the remote (`repoShortName`) client-side — there is no separately-stored name. */
 export interface RepoInfo {
   remote: string
-  name: string
   createdAt: string
 }
 
@@ -47,7 +46,6 @@ async function getReposCollection(): Promise<Collection<RepoDoc>> {
  */
 export async function registerRepo(
   rawUrl: string,
-  name?: string,
 ): Promise<{ ok: true; token: string; remote: string } | { ok: false; error: string }> {
   const remote = normalizeGitRemote(rawUrl)
   if (!remote) return { ok: false, error: 'invalid or unrecognized git remote URL' }
@@ -65,14 +63,13 @@ export async function registerRepo(
     } catch { /* best-effort cleanup */ }
   }
 
-  const displayName = (name && name.trim()) || repoShortName(remote)
   const token = await mintToken('github-actions', `CI · ${remote}`, { repo: remote, ci: true })
   const { hashToken } = await import('./team-tokens')
   const tokenId = hashToken(token)
 
   await col.replaceOne(
     { _id: remote },
-    { remote, name: displayName, tokenId, createdAt: new Date().toISOString() },
+    { remote, tokenId, createdAt: new Date().toISOString() },
     { upsert: true },
   )
   return { ok: true, token, remote }
@@ -92,7 +89,7 @@ export async function isRepoRegistered(remote: string): Promise<boolean> {
 export async function listRepos(): Promise<RepoInfo[]> {
   const col = await getReposCollection()
   const docs = await col.find({}).sort({ createdAt: 1 }).toArray()
-  return docs.map(d => ({ remote: d.remote, name: d.name, createdAt: d.createdAt }))
+  return docs.map(d => ({ remote: d.remote, createdAt: d.createdAt }))
 }
 
 /**

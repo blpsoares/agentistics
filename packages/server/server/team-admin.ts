@@ -234,12 +234,11 @@ export async function handleRegisterRepo(req: Request): Promise<Response> {
   }
   const raw = body as Record<string, unknown>
   const url = typeof raw?.url === 'string' ? raw.url.trim() : ''
-  const name = typeof raw?.name === 'string' ? raw.name.trim() : undefined
   if (!url) {
     return new Response(JSON.stringify({ error: 'url required' }), { status: 400, headers: JSON_CT })
   }
   try {
-    const result = await registerRepo(url, name)
+    const result = await registerRepo(url)
     if (!result.ok) {
       return new Response(JSON.stringify({ error: result.error }), { status: 400, headers: JSON_CT })
     }

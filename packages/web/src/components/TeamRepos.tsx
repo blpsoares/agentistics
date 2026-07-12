@@ -5,7 +5,6 @@ import { copyText } from '../lib/clipboard'
 
 export interface RepoInfo {
   remote: string
-  name: string
   createdAt: string
 }
 
@@ -16,8 +15,6 @@ const COPY = {
   registered: { en: 'Registered',                     pt: 'Registrado' },
   urlLabel:   { en: 'Git remote URL',                 pt: 'URL do remote git' },
   urlPlaceholder: { en: 'git@github.com:org/repo.git', pt: 'git@github.com:org/repo.git' },
-  nameLabel:  { en: 'Name (optional)',                pt: 'Nome (opcional)' },
-  namePlaceholder: { en: 'org/repo',                  pt: 'org/repo' },
   register:   { en: 'Register repository',            pt: 'Registrar repositório' },
   registering:{ en: 'Registering…',                   pt: 'Registrando…' },
   regErr:     { en: 'Failed to register repository.', pt: 'Falha ao registrar repositório.' },
@@ -88,7 +85,6 @@ export function TeamRepos({ lang }: Props) {
   const [repos, setRepos] = useState<RepoInfo[]>([])
   const [loadErr, setLoadErr] = useState<string | null>(null)
   const [url, setUrl] = useState('')
-  const [name, setName] = useState('')
   const [registering, setRegistering] = useState(false)
   const [regErr, setRegErr] = useState<string | null>(null)
   const [result, setResult] = useState<{ token: string; remote: string } | null>(null)
@@ -117,12 +113,12 @@ export function TeamRepos({ lang }: Props) {
     try {
       const res = await fetch('/api/team/repos', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim(), name: name.trim() || undefined }),
+        body: JSON.stringify({ url: url.trim() }),
       })
       const body = (await res.json()) as { token?: string; remote?: string; error?: string }
       if (!res.ok || !body.token || !body.remote) throw new Error(body.error || `HTTP ${res.status}`)
       setResult({ token: body.token, remote: body.remote })
-      setUrl(''); setName('')
+      setUrl('')
       void load()
     } catch (e) { setRegErr(e instanceof Error ? e.message : t('regErr', lang)) }
     finally { setRegistering(false) }
@@ -185,7 +181,7 @@ export function TeamRepos({ lang }: Props) {
             <div key={r.remote} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 8 }}>
               <GitBranch size={13} color="var(--text-tertiary)" style={{ flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name || repoShortName(r.remote)}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{repoShortName(r.remote)}</div>
                 <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.remote}</div>
               </div>
               <button onClick={() => handleRemove(r.remote)} disabled={removing[r.remote]} title={t('remove', lang)} style={{
@@ -202,15 +198,9 @@ export function TeamRepos({ lang }: Props) {
 
       {/* Register form */}
       <form onSubmit={handleRegister} style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 9 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-          <div>
-            <label style={{ fontSize: 10.5, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('urlLabel', lang)}</label>
-            <input value={url} onChange={e => setUrl(e.target.value)} placeholder={t('urlPlaceholder', lang)} style={{ ...input, marginTop: 4 }} />
-          </div>
-          <div>
-            <label style={{ fontSize: 10.5, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('nameLabel', lang)}</label>
-            <input value={name} onChange={e => setName(e.target.value)} placeholder={t('namePlaceholder', lang)} style={{ ...input, marginTop: 4 }} />
-          </div>
+        <div>
+          <label style={{ fontSize: 10.5, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('urlLabel', lang)}</label>
+          <input value={url} onChange={e => setUrl(e.target.value)} placeholder={t('urlPlaceholder', lang)} style={{ ...input, marginTop: 4 }} />
         </div>
         {regErr && <div style={{ fontSize: 12, color: '#ef4444' }}>{regErr}</div>}
         <button type="submit" disabled={registering || !url.trim()} style={{

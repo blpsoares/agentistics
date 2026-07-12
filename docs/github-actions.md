@@ -45,8 +45,9 @@ OIDC it just **allowlists** the repo — no secret is stored.
 curl -sS -X POST "$CENTRAL_URL/api/team/repos" \
   -H 'Content-Type: application/json' \
   -H "Cookie: $ADMIN_SESSION_COOKIE" \
-  -d '{ "url": "git@github.com:org/repo.git", "name": "org/repo" }'
+  -d '{ "url": "git@github.com:org/repo.git" }'
 # → { "token": "<static token — only needed for the fallback path>", "remote": "github.com/org/repo" }
+# (the display name is always derived from the remote — org/repo — there is no name field)
 ```
 
 `url` accepts any remote form (https / ssh / scp); it is normalized to `github.com/org/repo`.
