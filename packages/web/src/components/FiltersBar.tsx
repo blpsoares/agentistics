@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
 import type { Filters, DateRange, Project, Lang, HarnessId } from '@agentistics/core'
 import { formatModel, formatProjectName, repoShortName } from '@agentistics/core'
-import { Layers, Cpu, ChevronDown, X, CalendarDays, Check, Users, GitBranch } from 'lucide-react'
+import { Layers, Cpu, ChevronDown, X, CalendarDays, Check, Users, GitBranch, Search } from 'lucide-react'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { ProjectsModal } from './ProjectsModal'
 import { UsersFilter } from './UsersFilter'
@@ -64,6 +64,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
   const [showProjectsModal, setShowProjectsModal] = useState(false)
   const [showModelDropdown, setShowModelDropdown] = useState(false)
   const [showRepoDropdown, setShowRepoDropdown] = useState(false)
+  const [repoQuery, setRepoQuery] = useState('')
   const repoDropdownRef = useRef<HTMLDivElement>(null)
   const modelDropdownRef = useRef<HTMLDivElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
@@ -110,6 +111,11 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
   }, [projects, sessionCountByProject, lang])
   // Only expose the filter once there's an actual repo dimension (≥1 linked remote).
   const showRepoFilter = repoOptions.some(o => o.linked)
+  const repoFilteredOptions = useMemo(() => {
+    const q = repoQuery.trim().toLowerCase()
+    if (!q) return repoOptions
+    return repoOptions.filter(o => `${o.label} ${o.value}`.toLowerCase().includes(q))
+  }, [repoOptions, repoQuery])
   const repoLabel = hasRepoFilter
     ? selectedRepos.length === 1
       ? (repoOptions.find(o => o.value === selectedRepos[0])?.label ?? (selectedRepos[0] === '' ? (lang === 'pt' ? 'Sem repositório' : 'No repository') : repoShortName(selectedRepos[0]!)))
@@ -305,7 +311,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         {showRepoFilter && (
           <div ref={repoDropdownRef} style={{ position: 'relative', flex: isMobile ? '1 1 0' : undefined }}>
             <button
-              onClick={() => setShowRepoDropdown(v => !v)}
+              onClick={() => { setShowRepoDropdown(v => !v); setRepoQuery('') }}
               title={lang === 'pt' ? 'Filtrar por repositório' : 'Filter by repository'}
               style={{
                 ...CTL,
@@ -329,10 +335,31 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                 position: 'absolute', top: 'calc(100% + 4px)', left: 0,
                 background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8,
                 boxShadow: '0 4px 16px rgba(0,0,0,0.25)', zIndex: 1000,
-                width: isMobile ? 'min(92vw, 320px)' : 280, maxHeight: '60vh', overflowY: 'auto',
-                boxSizing: 'border-box', padding: 6,
+                width: isMobile ? 'min(92vw, 320px)' : 280, maxHeight: '60vh',
+                display: 'flex', flexDirection: 'column', boxSizing: 'border-box', padding: 6,
               }}>
-                {repoOptions.map(opt => {
+                {/* Search box — filters the repo list, mirroring the Projects filter */}
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center', marginBottom: 4, flexShrink: 0 }}>
+                  <Search size={13} color="var(--text-tertiary)" style={{ position: 'absolute', left: 8, pointerEvents: 'none' }} />
+                  <input
+                    value={repoQuery}
+                    onChange={e => setRepoQuery(e.target.value)}
+                    autoFocus
+                    placeholder={lang === 'pt' ? 'Buscar repositório…' : 'Search repository…'}
+                    style={{
+                      width: '100%', boxSizing: 'border-box', fontSize: 12, fontFamily: 'inherit',
+                      color: 'var(--text-primary)', background: 'var(--bg-card)', border: '1px solid var(--border)',
+                      borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
+                    }}
+                  />
+                </div>
+                <div style={{ overflowY: 'auto', minHeight: 0 }}>
+                {repoFilteredOptions.length === 0 && (
+                  <div style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '8px 10px', textAlign: 'center' }}>
+                    {lang === 'pt' ? 'Nenhum repositório' : 'No repositories'}
+                  </div>
+                )}
+                {repoFilteredOptions.map(opt => {
                   const selected = selectedRepos.includes(opt.value)
                   return (
                     <button
@@ -359,6 +386,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                     </button>
                   )
                 })}
+                </div>
               </div>
             )}
           </div>
