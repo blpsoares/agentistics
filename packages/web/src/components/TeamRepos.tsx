@@ -23,34 +23,38 @@ const COPY = {
   removing:   { en: 'Removing…',                      pt: 'Removendo…' },
   removeConfirm: { en: 'Remove this repo? Its CI token is revoked and all its Actions data is deleted.', pt: 'Remover este repo? O token de CI é revogado e todos os dados de Actions dele são apagados.' },
   registeredOk: { en: 'Registered — keyless (GitHub OIDC), no secret to store or leak.', pt: 'Registrado — keyless (GitHub OIDC), sem secret pra guardar ou vazar.' },
-  keylessDesc: { en: 'The runner presents a short-lived GitHub-signed token; the central verifies it and trusts the repository. Nothing secret is stored.', pt: 'O runner apresenta um token curto assinado pelo GitHub; a central verifica e confia no repositório. Nada de secret armazenado.' },
-  stepA:      { en: '1 · Point the repo at your central',          pt: '1 · Aponte o repo para a sua central' },
-  stepANote:  { en: 'On the central, set AGENTISTICS_OIDC_AUDIENCE to this same URL to enable keyless.', pt: 'Na central, defina AGENTISTICS_OIDC_AUDIENCE com esta mesma URL pra habilitar o keyless.' },
-  stepB:      { en: '2 · Add this step to your Claude workflow',   pt: '2 · Adicione este step ao seu workflow do Claude' },
+  keylessDesc: { en: 'Add the 3 blocks below to the workflow that already runs Claude Code. No secret needed.', pt: 'Adicione os 3 blocos abaixo no workflow que já roda o Claude Code. Nenhum secret necessário.' },
+  stepA:      { en: '1 · Set this repo variable (Settings → Variables)', pt: '1 · Crie esta variável no repo (Settings → Variables)' },
+  stepANote:  { en: 'On the central, set AGENTISTICS_OIDC_AUDIENCE to this SAME URL.', pt: 'Na central, defina AGENTISTICS_OIDC_AUDIENCE com esta MESMA URL.' },
+  stepPerm:   { en: "2 · Add this line under the job's  permissions:", pt: '2 · Adicione esta linha no  permissions:  do job' },
+  stepPermNote: { en: 'Alongside the permissions Claude already uses (contents, pull-requests…).', pt: 'Junto das permissões que o Claude já usa (contents, pull-requests…).' },
+  stepB:      { en: '3 · Add as the LAST step of that job',        pt: '3 · Adicione como ÚLTIMO step desse job' },
   centralUrl: { en: 'Central URL (reachable from the runner)',    pt: 'URL da central (acessível pelo runner)' },
   fallbackTitle: { en: 'No OIDC? Use a static token instead',      pt: 'Sem OIDC? Use um token estático' },
   tokenNote:  { en: 'Copy this CI token now — it is shown only once.', pt: 'Copie este token de CI agora — ele só aparece uma vez.' },
   copyToken:  { en: 'Copy token',                     pt: 'Copiar token' },
-  copySetup:  { en: 'Copy setup commands',            pt: 'Copiar comandos de setup' },
+  copySetup:  { en: 'Copy command',                   pt: 'Copiar comando' },
+  copyLine:   { en: 'Copy line',                      pt: 'Copiar linha' },
   copyYaml:   { en: 'Copy step',                      pt: 'Copiar step' },
   copied:     { en: 'Copied!',                        pt: 'Copiado!' },
   refresh:    { en: 'Refresh',                        pt: 'Atualizar' },
 }
 const t = (k: keyof typeof COPY, lang: 'en' | 'pt') => COPY[k][lang]
 
-/** Keyless step (RECOMMENDED) — GitHub OIDC, no stored secret. Add as the last step of the job
- *  that already runs Claude Code. Requires `id-token: write` on the job's permissions. */
+/** The one permission line to add to the existing job's `permissions:` (enables keyless OIDC). */
+const OIDC_PERM_LINE = `      id-token: write`
+
+/** Keyless step (RECOMMENDED) — GitHub OIDC, no stored secret. Just the step; the permission and
+ *  the repo variable are shown as separate blocks so it's obvious what to add where. */
 function buildStepOidc(): string {
-  return `# Add as the LAST step of the job that already runs Claude Code.
-# Keyless via GitHub OIDC — no secret. Ensure the job has:  permissions: { id-token: write }
-- name: Push agentistics metrics
-  if: always()
-  env:
-    AGENTISTICS_CENTRAL_URL: \${{ vars.AGENTISTICS_CENTRAL_URL }}
-  run: |
-    curl -fsSL "https://github.com/blpsoares/agentistics/releases/latest/download/agentop" -o agentop
-    chmod +x agentop
-    ./agentop ci-push`
+  return `      - name: Push agentistics metrics
+        if: always()
+        env:
+          AGENTISTICS_CENTRAL_URL: \${{ vars.AGENTISTICS_CENTRAL_URL }}
+        run: |
+          curl -fsSL "https://github.com/blpsoares/agentistics/releases/latest/download/agentop" -o agentop
+          chmod +x agentop
+          ./agentop ci-push`
 }
 
 /** Static-token fallback step (when OIDC can't be used, e.g. non-GitHub CI). */
@@ -224,18 +228,30 @@ export function TeamRepos({ lang }: Props) {
           </div>
           <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, marginBottom: 14 }}>{t('keylessDesc', lang)}</div>
 
-          {/* Step A — central URL variable (no secret) */}
+          {/* Block 1 — repo variable (the central URL) */}
           <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>{t('stepA', lang)}</div>
           <label style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>{t('centralUrl', lang)}</label>
           <input value={centralUrl} onChange={e => setCentralUrl(e.target.value)} style={{ ...input, marginTop: 4, marginBottom: 6 }} />
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>{copyBtn('setupOidc', buildSetupOidc(result.remote, centralUrl), t('copySetup', lang))}</div>
           <pre style={{ ...codeBox, marginBottom: 6 }}>{buildSetupOidc(result.remote, centralUrl)}</pre>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 14 }}>
-            <AlertCircle size={11} color="var(--text-tertiary)" style={{ flexShrink: 0 }} />
-            <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>{t('stepANote', lang)}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16 }}>
+            <AlertCircle size={11} color="var(--anthropic-orange)" style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: 10.5, color: 'var(--anthropic-orange)' }}>{t('stepANote', lang)}</span>
           </div>
 
-          {/* Step B — keyless workflow step */}
+          {/* Block 2 — the one permission line */}
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>{t('stepPerm', lang)}</div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>{copyBtn('perm', OIDC_PERM_LINE.trim(), t('copyLine', lang))}</div>
+          <pre style={codeBox}>{`jobs:
+  <your-job>:
+    permissions:
+${OIDC_PERM_LINE}        # ← add this line`}</pre>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, marginBottom: 16 }}>
+            <AlertCircle size={11} color="var(--text-tertiary)" style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>{t('stepPermNote', lang)}</span>
+          </div>
+
+          {/* Block 3 — the step */}
           <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>{t('stepB', lang)}</div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>{copyBtn('stepOidc', buildStepOidc(), t('copyYaml', lang))}</div>
           <pre style={codeBox}>{buildStepOidc()}</pre>
