@@ -1,7 +1,7 @@
-import React, { useState, useRef, useEffect, useLayoutEffect } from 'react'
+import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
 import type { Filters, DateRange, Project, Lang, HarnessId } from '@agentistics/core'
-import { formatModel, formatProjectName } from '@agentistics/core'
-import { Layers, Cpu, ChevronDown, X, CalendarDays, Check, Users } from 'lucide-react'
+import { formatModel, formatProjectName, repoShortName } from '@agentistics/core'
+import { Layers, Cpu, ChevronDown, X, CalendarDays, Check, Users, GitBranch } from 'lucide-react'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { ProjectsModal } from './ProjectsModal'
 import { UsersFilter } from './UsersFilter'
@@ -63,6 +63,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
   const isMobile = useIsMobile()
   const [showProjectsModal, setShowProjectsModal] = useState(false)
   const [showModelDropdown, setShowModelDropdown] = useState(false)
+  const [showRepoDropdown, setShowRepoDropdown] = useState(false)
+  const repoDropdownRef = useRef<HTMLDivElement>(null)
   const modelDropdownRef = useRef<HTMLDivElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const today = format(new Date(), 'yyyy-MM-dd')
@@ -89,6 +91,35 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
     onChange({ ...filters, models: next })
   }
 
+  // ── Repository filter (group-by-remote) — options derived from projects[].gitRemote ──
+  // Unlinked projects collapse into a single '' bucket (matches the Repositories page).
+  const selectedRepos = filters.repos ?? []
+  const hasRepoFilter = selectedRepos.length > 0
+  const repoOptions = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const p of projects) {
+      const key = p.gitRemote || ''
+      counts[key] = (counts[key] ?? 0) + (sessionCountByProject[p.path] ?? 0)
+    }
+    return Object.entries(counts)
+      .map(([value, count]) => ({
+        value, count, linked: value !== '',
+        label: value !== '' ? repoShortName(value) : (lang === 'pt' ? 'Sem repositório' : 'No repository'),
+      }))
+      .sort((a, b) => (a.linked === b.linked ? b.count - a.count : a.linked ? -1 : 1))
+  }, [projects, sessionCountByProject, lang])
+  // Only expose the filter once there's an actual repo dimension (≥1 linked remote).
+  const showRepoFilter = repoOptions.some(o => o.linked)
+  const repoLabel = hasRepoFilter
+    ? selectedRepos.length === 1
+      ? (repoOptions.find(o => o.value === selectedRepos[0])?.label ?? (selectedRepos[0] === '' ? (lang === 'pt' ? 'Sem repositório' : 'No repository') : repoShortName(selectedRepos[0]!)))
+      : `${selectedRepos.length} ${lang === 'pt' ? 'repositórios' : 'repos'}`
+    : lang === 'pt' ? 'Repositórios' : 'Repos'
+  const toggleRepo = (v: string) => {
+    const next = selectedRepos.includes(v) ? selectedRepos.filter(x => x !== v) : [...selectedRepos, v]
+    onChange({ ...filters, repos: next })
+  }
+
   useEffect(() => {
     if (!showModelDropdown) return
     function handleClickOutside(e: MouseEvent) {
@@ -99,6 +130,17 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [showModelDropdown])
+
+  useEffect(() => {
+    if (!showRepoDropdown) return
+    function handleClickOutside(e: MouseEvent) {
+      if (repoDropdownRef.current && !repoDropdownRef.current.contains(e.target as Node)) {
+        setShowRepoDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showRepoDropdown])
 
   // Clamp the popover so it never overflows the viewport (which would give the whole page a
   // horizontal scrollbar). First cap its width to the viewport, then shift it left if its
@@ -257,6 +299,69 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
             offlineCount={Object.values(presence).filter(p => !p.online).length}
             lang={lang}
           />
+        )}
+
+        {/* Repositories (group-by-remote) — only when a repo dimension exists */}
+        {showRepoFilter && (
+          <div ref={repoDropdownRef} style={{ position: 'relative', flex: isMobile ? '1 1 0' : undefined }}>
+            <button
+              onClick={() => setShowRepoDropdown(v => !v)}
+              title={lang === 'pt' ? 'Filtrar por repositório' : 'Filter by repository'}
+              style={{
+                ...CTL,
+                gap: 5,
+                width: isMobile ? '100%' : undefined,
+                border: hasRepoFilter ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
+                background: hasRepoFilter ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+                color: hasRepoFilter ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+                minWidth: isMobile ? 0 : 120,
+                justifyContent: 'space-between',
+              }}
+            >
+              <GitBranch size={11} style={{ flexShrink: 0 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
+                {repoLabel}
+              </span>
+              <ChevronDown size={11} style={{ flexShrink: 0, opacity: 0.5, transform: showRepoDropdown ? 'rotate(180deg)' : undefined, transition: 'transform 0.15s' }} />
+            </button>
+            {showRepoDropdown && (
+              <div style={{
+                position: 'absolute', top: 'calc(100% + 4px)', left: 0,
+                background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.25)', zIndex: 1000,
+                width: isMobile ? 'min(92vw, 320px)' : 280, maxHeight: '60vh', overflowY: 'auto',
+                boxSizing: 'border-box', padding: 6,
+              }}>
+                {repoOptions.map(opt => {
+                  const selected = selectedRepos.includes(opt.value)
+                  return (
+                    <button
+                      key={opt.value || '__none__'}
+                      onClick={() => toggleRepo(opt.value)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                        padding: '7px 10px', borderRadius: 6, border: 'none', cursor: 'pointer',
+                        background: selected ? 'var(--anthropic-orange-dim)' : 'transparent',
+                        color: selected ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+                        fontSize: 12, fontFamily: 'inherit', textAlign: 'left',
+                      }}
+                      onMouseEnter={e => { if (!selected) (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-card-hover)' }}
+                      onMouseLeave={e => { if (!selected) (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
+                    >
+                      <span style={{ width: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {selected && <Check size={12} strokeWidth={3} />}
+                      </span>
+                      {opt.linked
+                        ? <GitBranch size={11} style={{ flexShrink: 0, opacity: 0.6 }} />
+                        : <X size={11} style={{ flexShrink: 0, opacity: 0.6 }} />}
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: opt.linked ? undefined : 'var(--text-tertiary)' }}>{opt.label}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>{opt.count}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
         )}
 
         {/* Projects */}
@@ -453,6 +558,16 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
             {filters.projects.map(path => (
               <FilterChip key={`p:${path}`} title={path} onRemove={() => onChange({ ...filters, projects: filters.projects.filter(p => p !== path), models: [] })} removeTitle={lang === 'pt' ? 'Remover projeto' : 'Remove project'}>
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatProjectName(path)}</span>
+              </FilterChip>
+            ))}
+          </ChipRow>
+        </AnimatedRow>
+        <AnimatedRow show={hasRepoFilter}>
+          <ChipRow label={lang === 'pt' ? 'Repositórios' : 'Repos'}>
+            {selectedRepos.map(v => (
+              <FilterChip key={`r:${v}`} title={v || undefined} onRemove={() => onChange({ ...filters, repos: selectedRepos.filter(x => x !== v) })} removeTitle={lang === 'pt' ? 'Remover repositório' : 'Remove repository'}>
+                <GitBranch size={10} style={{ flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{v === '' ? (lang === 'pt' ? 'Sem repositório' : 'No repository') : repoShortName(v)}</span>
               </FilterChip>
             ))}
           </ChipRow>

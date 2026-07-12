@@ -5,13 +5,12 @@ import {
   Clock, GitCommit,
 } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
-import { repoShortName, fmt, fmtCost } from '@agentistics/core'
+import { repoShortName, fmt, fmtCost, formatProjectName } from '@agentistics/core'
 import { useDerivedStats } from '../hooks/useData'
 import { Section } from '../components/Section'
 import { ModelBreakdown } from '../components/ModelBreakdown'
 import { ActivityChart } from '../components/ActivityChart'
 import { RecentSessions } from '../components/RecentSessions'
-import { NO_REPO_ID } from '../components/RepositoriesList'
 
 type Tab = 'overview' | 'members' | 'actions' | 'sessions' | 'workflows'
 
@@ -22,14 +21,21 @@ export default function RepoDetailPage() {
   const navigate = useNavigate()
   const pt = lang === 'pt'
 
-  // Route id → remote key. NO_REPO_ID targets the "no linked repo" bucket ('').
-  const remote = id === NO_REPO_ID ? '' : (id ?? '')
-  const linked = remote !== ''
+  // Route id → scope. A `folder:<path>` id is an unlinked project folder (scoped by its
+  // project_path); anything else is a normalized remote (scoped by the repos filter).
+  const rawId = id ?? ''
+  const isFolder = rawId.startsWith('folder:')
+  const folderPath = isFolder ? rawId.slice('folder:'.length) : ''
+  const remote = isFolder ? '' : rawId
+  const linked = !isFolder
 
-  // Scope every metric to this repo by overriding the repos filter, WITHOUT mutating the
-  // global filter (so leaving the page leaves the FiltersBar untouched). All other active
+  // Scope every metric to this repo/folder by overriding the relevant filter WITHOUT mutating
+  // the global filter (so leaving the page leaves the FiltersBar untouched). All other active
   // filters (date/harness/models/users/presence) still compose because we spread `filters`.
-  const scopedFilters = useMemo(() => ({ ...filters, repos: [remote] }), [filters, remote])
+  const scopedFilters = useMemo(
+    () => (isFolder ? { ...filters, projects: [folderPath] } : { ...filters, repos: [remote] }),
+    [filters, isFolder, folderPath, remote],
+  )
   const scoped = useDerivedStats(data, scopedFilters)
   const [tab, setTab] = useState<Tab>('overview')
   // All hooks must run before any early return (rules of hooks); guard on scoped safely inside.
@@ -44,7 +50,7 @@ export default function RepoDetailPage() {
   const ciSessions = sessions.filter(s => s.ci)
   const workflows = (data.workflows ?? []).filter(w => sessionIds.has(w.sessionId))
 
-  const title = linked ? repoShortName(remote) : (pt ? 'Sem repositório vinculado' : 'No linked repository')
+  const title = linked ? repoShortName(remote) : (folderPath.split('/').filter(Boolean).pop() || (pt ? 'Sem repositório' : 'No repository'))
   const host = linked ? remote.split('/')[0]! : ''
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode; show: boolean; badge?: number }[] = [
@@ -84,6 +90,12 @@ export default function RepoDetailPage() {
             </a>
           )}
         </div>
+        {/* Full folder path subtitle — shown for every repo/folder */}
+        {(folderPath || scoped.repoStats[0]?.path) && (
+          <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+            {formatProjectName(folderPath || scoped.repoStats[0]!.path)}
+          </span>
+        )}
       </div>
 
       {/* KPI row */}

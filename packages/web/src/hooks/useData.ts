@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMeta } from '@agentistics/core'
-import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, distinctHarnesses, mergeStatsCaches } from '@agentistics/core'
+import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, distinctHarnesses, mergeStatsCaches, repoShortName } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 
 export interface StageProgress {
@@ -13,8 +13,15 @@ export interface StageProgress {
  *  `remote === ''` is the "no linked repository" bucket. `_users`/`_harnesses` are internal
  *  accumulators; consumers read the finalized `members`/`harnesses` arrays. */
 export interface RepoStat {
+  /** Routing/identity key: the normalized remote for linked repos, or `folder:<project_path>`
+   *  for unlinked folders (each unlinked folder is its own card). */
+  id: string
   remote: string
   linked: boolean
+  /** Display name: `org/repo` for linked, the folder basename for unlinked. */
+  name: string
+  /** Representative local folder path (most common project_path) — the card subtitle for all. */
+  path: string
   sessions: number
   messages: number
   tools: number
@@ -35,6 +42,7 @@ export interface RepoStat {
   activityByDay: Record<string, number>
   _users: Set<string>
   _harnesses: Set<HarnessId>
+  _paths: Record<string, number>
 }
 
 export type LoadProgress = Record<string, StageProgress>
@@ -1194,19 +1202,23 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
 
     const repoStatsMap: Record<string, RepoStat> = {}
     for (const s of filteredSessions) {
-      const key = s.git_remote || ''
+      const linked = !!s.git_remote
+      // Linked sessions group by remote; unlinked sessions group per project folder so each
+      // shows up as its own card (folder name + path), never lumped into one bucket.
+      const key = linked ? s.git_remote! : `folder:${s.project_path || 'Unknown'}`
       let r = repoStatsMap[key]
       if (!r) {
         r = repoStatsMap[key] = {
-          remote: key, linked: key !== '',
+          id: key, remote: linked ? s.git_remote! : '', linked, name: '', path: '',
           sessions: 0, messages: 0, tools: 0, costUSD: 0,
           inputTokens: 0, outputTokens: 0,
           gitCommits: 0, linesAdded: 0, linesRemoved: 0, filesModified: 0,
           ciSessions: 0, members: [], harnesses: [],
           firstActive: '', lastActive: '', activityByDay: {},
-          _users: new Set<string>(), _harnesses: new Set<HarnessId>(),
+          _users: new Set<string>(), _harnesses: new Set<HarnessId>(), _paths: {},
         }
       }
+      if (s.project_path) r._paths[s.project_path] = (r._paths[s.project_path] ?? 0) + 1
       r.sessions++
       r.messages += (s.user_message_count ?? 0)
       r.tools += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
@@ -1227,10 +1239,15 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
         r.activityByDay[day] = (r.activityByDay[day] ?? 0) + 1
       }
     }
-    // Finalize Set-backed fields into plain arrays for a serializable, render-friendly shape.
+    // Finalize Set-backed fields into plain arrays + resolve the representative folder path/name.
     for (const r of Object.values(repoStatsMap)) {
       r.members = Array.from(r._users).sort()
       r.harnesses = Array.from(r._harnesses)
+      const topPath = Object.entries(r._paths).sort((a, b) => b[1] - a[1])[0]?.[0] ?? ''
+      r.path = topPath
+      r.name = r.linked
+        ? repoShortName(r.remote)
+        : (topPath.split('/').filter(Boolean).pop() || topPath)
     }
     const repoStats = Object.values(repoStatsMap).sort((a, b) => b.costUSD - a.costUSD || b.sessions - a.sessions)
 

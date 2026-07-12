@@ -1,6 +1,6 @@
 import React from 'react'
 import { GitBranch, Users, Zap, GitCommit, Clock, Link2Off } from 'lucide-react'
-import { repoShortName, fmt, fmtCost } from '@agentistics/core'
+import { fmt, fmtCost, formatProjectName } from '@agentistics/core'
 import type { RepoStat } from '../hooks/useData'
 
 interface Props {
@@ -11,9 +11,6 @@ interface Props {
   lang: 'pt' | 'en'
   onOpen: (repo: RepoStat) => void
 }
-
-/** Reserved route id for the "no linked repository" bucket (remote === ''). */
-export const NO_REPO_ID = '__none__'
 
 /** Colour a host chip by its provider so github / gitlab / bitbucket read at a glance. */
 function hostColor(host: string): string {
@@ -76,11 +73,12 @@ export function RepositoriesList({ repos, isCentral, currency = 'USD', brlRate =
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
       {repos.map(r => {
         const host = r.linked ? r.remote.split('/')[0]! : ''
-        const title = r.linked ? repoShortName(r.remote) : (pt ? 'Sem repositório vinculado' : 'No linked repository')
+        const title = r.name || (pt ? 'Sem repositório' : 'No repository')
+        const subtitle = r.path ? formatProjectName(r.path) : ''
         const accent = r.linked ? 'var(--anthropic-orange)' : 'var(--text-tertiary)'
         return (
           <div
-            key={r.remote || NO_REPO_ID}
+            key={r.id}
             onClick={() => onOpen(r)}
             role="button"
             tabIndex={0}
@@ -97,21 +95,29 @@ export function RepositoriesList({ repos, isCentral, currency = 'USD', brlRate =
             onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.borderColor = accent + '80' }}
             onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.borderColor = r.linked ? 'var(--border)' : 'var(--border)' }}
           >
-            {/* Header: icon + title + host chip */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-              {r.linked
-                ? <GitBranch size={15} color={accent} style={{ flexShrink: 0 }} />
-                : <Link2Off size={15} color={accent} style={{ flexShrink: 0 }} />}
-              <span title={r.linked ? r.remote : undefined} style={{
-                fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)',
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
-              }}>{title}</span>
-              {host && (
-                <span style={{
-                  marginLeft: 'auto', flexShrink: 0, fontSize: 9.5, fontWeight: 600,
-                  color: hostColor(host), background: 'var(--bg-elevated)',
-                  padding: '2px 6px', borderRadius: 5, whiteSpace: 'nowrap',
-                }}>{host}</span>
+            {/* Header: icon + title + host chip, with a full-path subtitle for every card */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                {r.linked
+                  ? <GitBranch size={15} color={accent} style={{ flexShrink: 0 }} />
+                  : <Link2Off size={15} color={accent} style={{ flexShrink: 0 }} />}
+                <span title={r.linked ? r.remote : r.path} style={{
+                  fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+                }}>{title}</span>
+                {host && (
+                  <span style={{
+                    marginLeft: 'auto', flexShrink: 0, fontSize: 9.5, fontWeight: 600,
+                    color: hostColor(host), background: 'var(--bg-elevated)',
+                    padding: '2px 6px', borderRadius: 5, whiteSpace: 'nowrap',
+                  }}>{host}</span>
+                )}
+              </div>
+              {subtitle && (
+                <span title={r.path} style={{
+                  fontSize: 10.5, color: 'var(--text-tertiary)', paddingLeft: 23,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+                }}>{subtitle}</span>
               )}
             </div>
 

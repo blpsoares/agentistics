@@ -68,7 +68,7 @@ export default function ActionsPage() {
               return (
                 <div
                   key={g.remote || '__none__'}
-                  onClick={() => navigate(linked ? `/repo/${encodeURIComponent(g.remote)}` : '/repo/__none__')}
+                  onClick={() => navigate(linked ? `/repo/${encodeURIComponent(g.remote)}` : '/repositories')}
                   style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', background: 'var(--bg-elevated)', borderRadius: 9, border: '1px solid var(--border-subtle)', cursor: 'pointer' }}
                 >
                   <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6 }}>

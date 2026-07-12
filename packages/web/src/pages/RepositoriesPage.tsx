@@ -4,7 +4,7 @@ import { GitBranch, Search, Zap } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import type { RepoStat } from '../hooks/useData'
 import { Section } from '../components/Section'
-import { RepositoriesList, NO_REPO_ID } from '../components/RepositoriesList'
+import { RepositoriesList } from '../components/RepositoriesList'
 
 export default function RepositoriesPage() {
   const ctx = useOutletContext<AppContext>()
@@ -18,15 +18,15 @@ export default function RepositoriesPage() {
     const q = query.trim().toLowerCase()
     if (!q) return repos
     return repos.filter(r =>
-      (r.linked ? r.remote.toLowerCase() : (pt ? 'sem repositório' : 'no linked repository')).includes(q),
+      `${r.name} ${r.remote} ${r.path}`.toLowerCase().includes(q),
     )
-  }, [repos, query, pt])
+  }, [repos, query])
 
   const linkedCount = repos.filter(r => r.linked).length
   const ciTotal = repos.reduce((a, r) => a + r.ciSessions, 0)
 
   const openRepo = (r: RepoStat) => {
-    navigate(r.linked ? `/repo/${encodeURIComponent(r.remote)}` : `/repo/${NO_REPO_ID}`)
+    navigate(`/repo/${encodeURIComponent(r.id)}`)
   }
 
   return (

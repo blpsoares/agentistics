@@ -851,6 +851,11 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
 }) {
   const location = useLocation()
   const pt = lang === 'pt'
+  // Repositories owns a collapsible "Actions" submenu. It auto-expands when you enter the
+  // section, but the chevron lets you open/close it manually (with animation).
+  const inReposSection = location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo')
+  const [reposExpanded, setReposExpanded] = useState(inReposSection)
+  useEffect(() => { if (inReposSection) setReposExpanded(true) }, [inReposSection])
   const items: { to: string; labelPt: string; labelEn: string; icon: React.ReactNode }[] = [
     { to: '/',          labelPt: 'Home',         labelEn: 'Home',         icon: <Home size={17} /> },
     { to: '/sessions', labelPt: 'Sessões', labelEn: 'Sessions', icon: <Clock size={17} /> },
@@ -895,19 +900,19 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
         {items.map(item => {
           const active = item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to)
           const label = pt ? item.labelPt : item.labelEn
-          // The Repositories section owns an "Actions" (GitHub Actions) submenu, revealed while
-          // anywhere inside repositories/ or a repo detail page.
-          const inRepoSection = item.to === '/repositories' && (location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo'))
+          // The Repositories item owns a collapsible "Actions" (GitHub Actions) submenu.
+          const hasSubmenu = item.to === '/repositories'
           const actionsActive = location.pathname.startsWith('/repositories/actions')
           return (
             <React.Fragment key={item.to}>
             <CollapsedTip label={label} show={collapsed}>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
               <NavLink
                 to={item.to}
                 end={item.to === '/'}
                 aria-label={collapsed ? label : undefined}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 11,
+                  display: 'flex', alignItems: 'center', gap: 11, flex: 1, minWidth: 0,
                   padding: collapsed ? '10px 0' : '10px 12px', justifyContent: collapsed ? 'center' : 'flex-start',
                   borderRadius: 9, textDecoration: 'none',
                   fontSize: 13.5, fontWeight: active ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap',
@@ -921,22 +926,44 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
                 <span style={{ flexShrink: 0, display: 'flex' }}>{item.icon}</span>
                 {!collapsed && label}
               </NavLink>
+              {hasSubmenu && !collapsed && (
+                <button
+                  onClick={() => setReposExpanded(v => !v)}
+                  aria-label={reposExpanded ? (pt ? 'Recolher submenu' : 'Collapse submenu') : (pt ? 'Expandir submenu' : 'Expand submenu')}
+                  aria-expanded={reposExpanded}
+                  style={{
+                    position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+                    width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)', borderRadius: 6,
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)' }}
+                >
+                  <ChevronRight size={14} style={{ transform: reposExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s ease' }} />
+                </button>
+              )}
+              </div>
             </CollapsedTip>
-            {inRepoSection && !collapsed && (
-              <NavLink
-                to="/repositories/actions"
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 9, marginLeft: 22,
-                  padding: '7px 12px', borderRadius: 8, textDecoration: 'none',
-                  fontSize: 12.5, fontWeight: actionsActive ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap',
-                  color: actionsActive ? 'var(--accent-blue)' : 'var(--text-tertiary)',
-                  background: actionsActive ? 'var(--bg-elevated)' : 'transparent',
-                }}
-                onMouseEnter={e => { if (!actionsActive) (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-secondary)' }}
-                onMouseLeave={e => { if (!actionsActive) (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-tertiary)' }}
-              >
-                <Zap size={14} style={{ flexShrink: 0 }} /> Actions
-              </NavLink>
+            {hasSubmenu && !collapsed && (
+              <div style={{ display: 'grid', gridTemplateRows: reposExpanded ? '1fr' : '0fr', transition: 'grid-template-rows 0.25s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+                <div style={{ overflow: 'hidden', minHeight: 0 }}>
+                  <NavLink
+                    to="/repositories/actions"
+                    tabIndex={reposExpanded ? 0 : -1}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 9, marginLeft: 22, marginTop: 2,
+                      padding: '7px 12px', borderRadius: 8, textDecoration: 'none',
+                      fontSize: 12.5, fontWeight: actionsActive ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap',
+                      color: actionsActive ? 'var(--accent-blue)' : 'var(--text-tertiary)',
+                      background: actionsActive ? 'var(--bg-elevated)' : 'transparent',
+                    }}
+                    onMouseEnter={e => { if (!actionsActive) (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-secondary)' }}
+                    onMouseLeave={e => { if (!actionsActive) (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-tertiary)' }}
+                  >
+                    <Zap size={14} style={{ flexShrink: 0 }} /> Actions
+                  </NavLink>
+                </div>
+              </div>
             )}
             </React.Fragment>
           )
