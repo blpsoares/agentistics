@@ -61,10 +61,12 @@ Member:
     Show the current mode/endpoint/user and last sync state.
 
 CI (GitHub Actions):
-  agentop ci-push --endpoint <url> --token <ci-token> [--org <org>]
-    One-shot push of this runner's metrics to a central. Reads
-    AGENTISTICS_CENTRAL_URL / AGENTISTICS_CI_TOKEN / AGENTISTICS_TEAM_ORG
-    when the flags are omitted. Never fails the job on a push error.
+  agentop ci-push [--endpoint <url>] [--token <ci-token>] [--org <org>]
+    One-shot push of this runner's metrics to a central. Prefers keyless
+    GitHub OIDC (needs permissions: id-token: write); falls back to a
+    static token. Reads AGENTISTICS_CENTRAL_URL / AGENTISTICS_CI_TOKEN /
+    AGENTISTICS_OIDC_AUDIENCE / AGENTISTICS_TEAM_ORG when flags are omitted.
+    Never fails the job on a push error.
 
 Autostart:
   agentop autostart <mode> <enable|disable|status>

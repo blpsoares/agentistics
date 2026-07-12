@@ -42,6 +42,28 @@ export async function handleTeamIngest(req: Request): Promise<Response> {
   const authHeader = req.headers.get('authorization') ?? ''
   const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
 
+  // 0. GitHub Actions OIDC (keyless) — preferred for CI. The bearer is a short-lived,
+  //    GitHub-signed JWT (three dotted segments; our static tokens are hex, so no collision).
+  //    We verify it against GitHub's JWKS, require the `repository` to be a registered repo
+  //    (admin allowlist), and stamp git_remote + ci + user authoritatively from the VERIFIED
+  //    claim — no secret is ever stored. A JWT that fails OIDC falls through to the token paths.
+  const { oidcEnabled, looksLikeJwt } = await import('./team-oidc')
+  if (oidcEnabled() && looksLikeJwt(bearer)) {
+    const { verifyCiOidc, ciMemberId } = await import('./team-oidc')
+    const oidc = await verifyCiOidc(bearer!)
+    if (oidc.ok) {
+      const { normalizeGitRemote } = await import('@agentistics/core')
+      const remote = normalizeGitRemote(`github.com/${oidc.claims.repository}`)
+      const { isRepoRegistered } = await import('./team-repos')
+      if (remote && await isRepoRegistered(remote)) {
+        return handleIngestBody(req, ciMemberId(remote), 'github-actions', remote, true)
+      }
+      return new Response(JSON.stringify({ error: 'repository not registered on this central' }), { status: 403, headers: JSON_HEADERS })
+    }
+    // else: fall through — a dotted bearer that isn't a valid OIDC token won't match a hex token
+    // either, so the tiers below will return 401.
+  }
+
   // 1. Try minted token lookup (hashes bearer, looks up in Mongo, updates lastSeenAt).
   //    The token's memberId (hash) + user are AUTHORITATIVE — sessions are keyed by the
   //    stable memberId, and the authoritative user name prevents one member impersonating

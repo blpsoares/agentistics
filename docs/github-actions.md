@@ -10,29 +10,35 @@ This builds on the [repository dimension](./architecture.md): every session carr
 `git_remote` (`host/org/repo`, no protocol), and CI runs are additionally flagged `ci: true` and
 surfaced under **Repositories → Actions**.
 
-## How it works
+## How it works — keyless (GitHub OIDC), recommended
 
 ```
 GitHub Actions runner (ephemeral)
   ├── Claude Code Action runs  → writes ~/.claude
-  └── agentop ci-push          → POST /api/team/ingest  (Bearer <repo CI token>)
+  └── agentop ci-push          → GitHub mints a short-lived OIDC JWT (repository claim)
+                                  → POST /api/team/ingest  (Bearer <OIDC JWT>)
                                         ↓
-                            Central (Mongo) stamps git_remote + ci=true
+                    Central verifies the JWT vs GitHub's JWKS (issuer/audience/expiry),
+                    checks `repository` ∈ registered repos, then stamps git_remote + ci=true
                                         ↓
                             Repositories → Actions  (per repo, cross-user)
 ```
 
-- **Attribution is authoritative on the central.** The CI token is *bound to a repository*, so
-  the central stamps `git_remote` (the registered remote) and `user = github-actions` itself — a
-  runner cannot mis-report which repo it belongs to.
-- **No chat leaves the runner** — the same privacy contract as team members: computed metrics
-  only (sessions/tokens/cost aggregates + statsCache), never raw transcripts.
-- **`ci-push` never fails your job.** A push error (central down, bad token) logs and exits 0.
+- **Keyless — no secret to store or leak.** GitHub signs a short-lived token identifying the exact
+  `repository`; the central verifies it cryptographically. There is no long-lived secret in the repo.
+- **Attribution is authoritative on the central.** `git_remote`, `ci: true`, and
+  `user = github-actions` are stamped from the *verified* claim — a runner cannot mis-report its repo.
+- **No chat leaves the runner** — computed metrics only (sessions/tokens/cost aggregates +
+  statsCache), never raw transcripts.
+- **`ci-push` never fails your job.** A push error (central down, unverifiable token) logs and exits 0.
+
+A **static repo token** is also supported as a fallback (non-GitHub CI, or when OIDC is unavailable) —
+see the end of this page.
 
 ## 1. Register the repository on the central
 
-Registration is an **admin action** on the central (behind the dashboard password). It mints a
-long repo-bound CI token — shown once — that you store as a GitHub Actions secret.
+Registration is an **admin action** (central Team settings → Repositories, or the API). For keyless
+OIDC it just **allowlists** the repo — no secret is stored.
 
 ```bash
 # From an authenticated admin session on the central (cookie from the dashboard login):
@@ -40,42 +46,51 @@ curl -sS -X POST "$CENTRAL_URL/api/team/repos" \
   -H 'Content-Type: application/json' \
   -H "Cookie: $ADMIN_SESSION_COOKIE" \
   -d '{ "url": "git@github.com:org/repo.git", "name": "org/repo" }'
-# → { "token": "<96-char CI token — store as a secret>", "remote": "github.com/org/repo" }
+# → { "token": "<static token — only needed for the fallback path>", "remote": "github.com/org/repo" }
 ```
 
 `url` accepts any remote form (https / ssh / scp); it is normalized to `github.com/org/repo`.
-Re-registering the same repo **rotates** its token (the old one is revoked).
+(List/unregister: `GET /api/team/repos`, `DELETE /api/team/repos { "remote": … }`.)
 
-Then add the token to the repo's secrets:
+Then enable OIDC on the central by setting an **audience** (any stable value; using the central URL
+is natural and unique per central):
 
 ```bash
-gh secret set AGENTISTICS_CI_TOKEN --repo org/repo --body '<the token>'
+AGENTISTICS_OIDC_AUDIENCE="https://central.example.com"   # central env; the workflow requests this same audience
 ```
 
-(You can also list/unregister: `GET /api/team/repos`, `DELETE /api/team/repos { "remote": … }`.)
+## 2. Add the push step to your workflow (keyless)
 
-## 2. Add the push step to your workflow
-
-Drop this step at the **end** of the job that runs Claude Code (see the full template in
-[`docs/examples/agentistics-actions.yml`](./examples/agentistics-actions.yml)):
+The job needs `id-token: write` so GitHub will mint an OIDC token; add the push as the **last** step
+of the job that already runs Claude Code (it does **not** run Claude — your workflow already does):
 
 ```yaml
-      # ... your existing Claude Code Action step runs first ...
+jobs:
+  claude:
+    permissions:
+      id-token: write        # ← lets the runner request a GitHub OIDC token
+      contents: write        # (your existing Claude permissions)
+    steps:
+      # ... your existing Claude Code Action step ...
 
       - name: Push agentistics metrics
-        if: always()   # report usage even if the Claude step failed
+        if: always()          # report usage even if the Claude step failed
         env:
           AGENTISTICS_CENTRAL_URL: ${{ vars.AGENTISTICS_CENTRAL_URL }}
-          AGENTISTICS_CI_TOKEN: ${{ secrets.AGENTISTICS_CI_TOKEN }}
         run: |
           curl -fsSL "https://github.com/blpsoares/agentistics/releases/latest/download/agentop" -o agentop
           chmod +x agentop
           ./agentop ci-push
 ```
 
-`ci-push` reads `AGENTISTICS_CENTRAL_URL` and `AGENTISTICS_CI_TOKEN` from the environment (or
-takes `--endpoint` / `--token` / `--org` flags). The central must be reachable from the runner
-(a public URL or a self-hosted runner on your network).
+`ci-push` requests the OIDC token itself (audience defaults to `AGENTISTICS_CENTRAL_URL`), so the
+only repo config is the `AGENTISTICS_CENTRAL_URL` **variable** — no secret:
+
+```bash
+gh variable set AGENTISTICS_CENTRAL_URL --repo org/repo --body 'https://central.example.com'
+```
+
+The central must be reachable from the runner (see Networking below).
 
 ## 3. See it in the dashboard
 
@@ -115,13 +130,31 @@ Harden the exposed instance further:
 - Terminate **TLS** (a Cloudflare Tunnel / Tailscale Funnel gives HTTPS for free; or a reverse
   proxy + `AGENTISTICS_TEAM_TLS=1`).
 
+## Static-token fallback (non-GitHub CI, or no OIDC)
+
+If OIDC isn't available, use the repo-bound static token from registration. Store it as a secret
+and add it to the step's env — `ci-push` uses it when no OIDC token can be fetched:
+
+```bash
+gh secret set AGENTISTICS_CI_TOKEN --repo org/repo --body '<the token>'
+```
+```yaml
+        env:
+          AGENTISTICS_CENTRAL_URL: ${{ vars.AGENTISTICS_CENTRAL_URL }}
+          AGENTISTICS_CI_TOKEN: ${{ secrets.AGENTISTICS_CI_TOKEN }}
+```
+
+Re-registering the repo **rotates** the token; removing the repo revokes it (both delete that
+repo's CI data).
+
 ## Security notes
 
-- The CI token is stored only as a **SHA-256 hash** on the central (like every ingest token) and
-  is used as `Authorization: Bearer`. Treat it like any secret; rotate by re-registering the repo,
-  revoke by removing the repo (both delete that repo's CI data).
-- The token is **repo-scoped for attribution** but, like all ingest tokens, can write sessions to
-  the central — only register repos you control and keep the secret in GitHub's secret store.
+- **Prefer keyless OIDC** — it stores no long-lived secret, so there is nothing to leak or rotate.
+  The token is short-lived, GitHub-signed, and cryptographically bound to the `repository`.
+- The static fallback token is stored only as a **SHA-256 hash** on the central and used as
+  `Authorization: Bearer`; treat it like any secret.
+- A repo must be **registered** (allowlisted) on the central before either path is accepted — a
+  valid OIDC token for an unregistered repo is rejected (403).
 - On a public central, always set a strong `AGENTISTICS_TEAM_PASSWORD` + a separate
   `AGENTISTICS_TEAM_SESSION_SECRET`, and prefer the ingest-only pattern above so the dashboard is
   never the exposed surface.

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { GitBranch, Plus, Trash2, Copy, CheckCheck, AlertCircle, RefreshCw, Zap } from 'lucide-react'
+import { GitBranch, Plus, Trash2, Copy, CheckCheck, AlertCircle, RefreshCw, Zap, ShieldCheck, ChevronRight } from 'lucide-react'
 import { repoShortName } from '@agentistics/core'
 import { copyText } from '../lib/clipboard'
 
@@ -25,11 +25,14 @@ const COPY = {
   remove:     { en: 'Remove',                         pt: 'Remover' },
   removing:   { en: 'Removing…',                      pt: 'Removendo…' },
   removeConfirm: { en: 'Remove this repo? Its CI token is revoked and all its Actions data is deleted.', pt: 'Remover este repo? O token de CI é revogado e todos os dados de Actions dele são apagados.' },
-  tokenNote:  { en: 'Copy this CI token now — it is shown only once.', pt: 'Copie este token de CI agora — ele só aparece uma vez.' },
-  step1:      { en: '1 · Store the token as a repo secret',       pt: '1 · Guarde o token como secret do repo' },
-  step2:      { en: '2 · Point it at your central',               pt: '2 · Aponte para a sua central' },
-  step3:      { en: '3 · Add this step to your Claude workflow',   pt: '3 · Adicione este step ao seu workflow do Claude' },
+  registeredOk: { en: 'Registered — keyless (GitHub OIDC), no secret to store or leak.', pt: 'Registrado — keyless (GitHub OIDC), sem secret pra guardar ou vazar.' },
+  keylessDesc: { en: 'The runner presents a short-lived GitHub-signed token; the central verifies it and trusts the repository. Nothing secret is stored.', pt: 'O runner apresenta um token curto assinado pelo GitHub; a central verifica e confia no repositório. Nada de secret armazenado.' },
+  stepA:      { en: '1 · Point the repo at your central',          pt: '1 · Aponte o repo para a sua central' },
+  stepANote:  { en: 'On the central, set AGENTISTICS_OIDC_AUDIENCE to this same URL to enable keyless.', pt: 'Na central, defina AGENTISTICS_OIDC_AUDIENCE com esta mesma URL pra habilitar o keyless.' },
+  stepB:      { en: '2 · Add this step to your Claude workflow',   pt: '2 · Adicione este step ao seu workflow do Claude' },
   centralUrl: { en: 'Central URL (reachable from the runner)',    pt: 'URL da central (acessível pelo runner)' },
+  fallbackTitle: { en: 'No OIDC? Use a static token instead',      pt: 'Sem OIDC? Use um token estático' },
+  tokenNote:  { en: 'Copy this CI token now — it is shown only once.', pt: 'Copie este token de CI agora — ele só aparece uma vez.' },
   copyToken:  { en: 'Copy token',                     pt: 'Copiar token' },
   copySetup:  { en: 'Copy setup commands',            pt: 'Copiar comandos de setup' },
   copyYaml:   { en: 'Copy step',                      pt: 'Copiar step' },
@@ -38,11 +41,24 @@ const COPY = {
 }
 const t = (k: keyof typeof COPY, lang: 'en' | 'pt') => COPY[k][lang]
 
-/** Ready-to-paste STEP for an existing Claude Code job — add it as the last step so it pushes
- *  this run's metrics after Claude finishes. It does NOT run Claude itself (the workflow already
- *  does that). `if: always()` reports usage even when the Claude step failed. */
-function buildStep(): string {
+/** Keyless step (RECOMMENDED) — GitHub OIDC, no stored secret. Add as the last step of the job
+ *  that already runs Claude Code. Requires `id-token: write` on the job's permissions. */
+function buildStepOidc(): string {
   return `# Add as the LAST step of the job that already runs Claude Code.
+# Keyless via GitHub OIDC — no secret. Ensure the job has:  permissions: { id-token: write }
+- name: Push agentistics metrics
+  if: always()
+  env:
+    AGENTISTICS_CENTRAL_URL: \${{ vars.AGENTISTICS_CENTRAL_URL }}
+  run: |
+    curl -fsSL "https://github.com/blpsoares/agentistics/releases/latest/download/agentop" -o agentop
+    chmod +x agentop
+    ./agentop ci-push`
+}
+
+/** Static-token fallback step (when OIDC can't be used, e.g. non-GitHub CI). */
+function buildStepToken(): string {
+  return `# Fallback (no OIDC): add as the LAST step of the job that runs Claude Code.
 - name: Push agentistics metrics
   if: always()
   env:
@@ -54,8 +70,13 @@ function buildStep(): string {
     ./agentop ci-push`
 }
 
-/** Local `gh` commands that store the secret + central URL on the repo (token embedded, never committed). */
-function buildSetup(remote: string, token: string, centralUrl: string): string {
+/** Keyless setup: only a repo variable (the central URL). No secret is stored. */
+function buildSetupOidc(remote: string, centralUrl: string): string {
+  return `gh variable set AGENTISTICS_CENTRAL_URL --repo ${repoShortName(remote)} --body '${centralUrl}'`
+}
+
+/** Fallback setup: store the static token as a secret + the central URL as a variable. */
+function buildSetupToken(remote: string, token: string, centralUrl: string): string {
   const slug = repoShortName(remote)
   return `gh secret set AGENTISTICS_CI_TOKEN --repo ${slug} --body '${token}'
 gh variable set AGENTISTICS_CENTRAL_URL --repo ${slug} --body '${centralUrl}'`
@@ -72,6 +93,7 @@ export function TeamRepos({ lang }: Props) {
   const [regErr, setRegErr] = useState<string | null>(null)
   const [result, setResult] = useState<{ token: string; remote: string } | null>(null)
   const [centralUrl, setCentralUrl] = useState('')
+  const [showFallback, setShowFallback] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
   const [removing, setRemoving] = useState<Record<string, boolean>>({})
 
@@ -200,35 +222,59 @@ export function TeamRepos({ lang }: Props) {
         </button>
       </form>
 
-      {/* Result: token + generated snippet */}
+      {/* Result: keyless (OIDC) primary + static-token fallback */}
       {result && (
         <div style={{ marginTop: 14, padding: 14, borderRadius: 9, background: 'rgba(217,119,6,0.06)', border: '1px solid rgba(217,119,6,0.35)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, fontSize: 11.5, fontWeight: 700, color: 'var(--anthropic-orange)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 11.5, fontWeight: 700, color: 'var(--anthropic-orange)' }}>
             <Zap size={13} /> {repoShortName(result.remote)} <span style={{ color: 'var(--text-tertiary)', fontWeight: 500 }}>· {result.remote}</span>
           </div>
-
-          {/* Step 1 — token */}
-          <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>{t('step1', lang)}</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-            <AlertCircle size={12} color="var(--anthropic-orange)" style={{ flexShrink: 0 }} />
-            <span style={{ fontSize: 11, color: 'var(--anthropic-orange)' }}>{t('tokenNote', lang)}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+            <ShieldCheck size={13} color="#22c55e" style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#22c55e' }}>{t('registeredOk', lang)}</span>
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14 }}>
-            <code style={{ ...codeBox, flex: 1, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', padding: '8px 10px' }}>{result.token}</code>
-            {copyBtn('token', result.token, t('copyToken', lang))}
-          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, marginBottom: 14 }}>{t('keylessDesc', lang)}</div>
 
-          {/* Step 2 — central URL + setup commands */}
-          <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>{t('step2', lang)}</div>
+          {/* Step A — central URL variable (no secret) */}
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>{t('stepA', lang)}</div>
           <label style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>{t('centralUrl', lang)}</label>
-          <input value={centralUrl} onChange={e => setCentralUrl(e.target.value)} style={{ ...input, marginTop: 4, marginBottom: 8 }} />
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>{copyBtn('setup', buildSetup(result.remote, result.token, centralUrl), t('copySetup', lang))}</div>
-          <pre style={{ ...codeBox, marginBottom: 14 }}>{buildSetup(result.remote, result.token, centralUrl)}</pre>
+          <input value={centralUrl} onChange={e => setCentralUrl(e.target.value)} style={{ ...input, marginTop: 4, marginBottom: 6 }} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>{copyBtn('setupOidc', buildSetupOidc(result.remote, centralUrl), t('copySetup', lang))}</div>
+          <pre style={{ ...codeBox, marginBottom: 6 }}>{buildSetupOidc(result.remote, centralUrl)}</pre>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 14 }}>
+            <AlertCircle size={11} color="var(--text-tertiary)" style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>{t('stepANote', lang)}</span>
+          </div>
 
-          {/* Step 3 — workflow YAML */}
-          <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>{t('step3', lang)}</div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>{copyBtn('yaml', buildStep(), t('copyYaml', lang))}</div>
-          <pre style={codeBox}>{buildStep()}</pre>
+          {/* Step B — keyless workflow step */}
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6 }}>{t('stepB', lang)}</div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>{copyBtn('stepOidc', buildStepOidc(), t('copyYaml', lang))}</div>
+          <pre style={codeBox}>{buildStepOidc()}</pre>
+
+          {/* Fallback — static token (collapsible) */}
+          <button onClick={() => setShowFallback(v => !v)} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 14, fontSize: 11.5, fontWeight: 600, fontFamily: 'inherit',
+            color: 'var(--text-secondary)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0,
+          }}>
+            <ChevronRight size={13} style={{ transform: showFallback ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s' }} /> {t('fallbackTitle', lang)}
+          </button>
+          <div style={{ display: 'grid', gridTemplateRows: showFallback ? '1fr' : '0fr', transition: 'grid-template-rows 0.25s cubic-bezier(0.22,1,0.36,1)' }}>
+            <div style={{ overflow: 'hidden', minHeight: 0 }}>
+              <div style={{ paddingTop: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                  <AlertCircle size={12} color="var(--anthropic-orange)" style={{ flexShrink: 0 }} />
+                  <span style={{ fontSize: 11, color: 'var(--anthropic-orange)' }}>{t('tokenNote', lang)}</span>
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+                  <code style={{ ...codeBox, flex: 1, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', padding: '8px 10px' }}>{result.token}</code>
+                  {copyBtn('token', result.token, t('copyToken', lang))}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>{copyBtn('setupTok', buildSetupToken(result.remote, result.token, centralUrl), t('copySetup', lang))}</div>
+                <pre style={{ ...codeBox, marginBottom: 10 }}>{buildSetupToken(result.remote, result.token, centralUrl)}</pre>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>{copyBtn('stepTok', buildStepToken(), t('copyYaml', lang))}</div>
+                <pre style={codeBox}>{buildStepToken()}</pre>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

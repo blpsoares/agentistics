@@ -64,7 +64,8 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── team-uploader.ts     → member→central push: sent-state, sync-signature auto-reconcile, push-on-change (notifyDataChanged), auto-reset on revoke, /api/team/status pill
   ├── team-watch.ts        → central watches the team collection → SSE refresh (fallback)
   ├── team-repos.ts        → central repo registry (`repos` collection): registerRepo (mints a repo-bound CI token + records name/remote; re-register rotates), listRepos, unregisterRepo
-  ├── ci-push.ts           → `agentop ci-push`: one-shot push of an ephemeral GitHub Actions runner's ~/.claude metrics to a central; never fails the CI job on a push error
+  ├── ci-push.ts           → `agentop ci-push`: one-shot push of an ephemeral GitHub Actions runner's ~/.claude metrics to a central; prefers keyless OIDC (fetches the runner's id-token), falls back to a static token; never fails the CI job on a push error
+  ├── team-oidc.ts         → verifies GitHub Actions OIDC JWTs (jose createRemoteJWKSet + jwtVerify; issuer/audience/expiry) for keyless CI ingest; pure helpers pickCiClaims/looksLikeJwt/ciMemberId
   ├── team-agent.ts / team-agent-client.ts → reverse-channel WebSocket: WS-authoritative presence signals, ping/pong latency, on-demand chat fetch
   ├── team-presence.ts     → computePresence (WS-authoritative online/offline + latency; heartbeat only for pure-HTTP members)
   ├── central-config.ts    → Mongo central config: instanceId + pushIntervalSec + includeOfflineData
@@ -194,10 +195,14 @@ preserved. Returns `''` for local paths / `file://` / junk. **Never key repos by
 ### GitHub Actions — `SessionMeta.ci` + repo-bound tokens
 
 An ephemeral Claude Code Actions runner pushes its metrics via `agentop ci-push` →
-`POST /api/team/ingest` with a **repo-bound CI token** (minted by admin `POST /api/team/repos`,
-stored as a GitHub secret). On ingest the central **authoritatively stamps** `git_remote` (the
-registered remote) + `ci: true` + `user = github-actions` via `stampCiSessions` — a runner cannot
-mis-report its repo. `ci === true` sessions power the **Repositories → Actions** view.
+`POST /api/team/ingest`. Auth is **keyless GitHub OIDC** (preferred): the runner presents a
+short-lived GitHub-signed JWT, the central verifies it against GitHub's JWKS (`team-oidc.ts`, uses
+`jose`) and checks the `repository` claim against the **registered repos allowlist** — no secret is
+stored. A **repo-bound static token** (minted by `POST /api/team/repos`) is the fallback. Either
+way the central **authoritatively stamps** `git_remote` + `ci: true` + `user = github-actions` (via
+`stampCiSessions`) — a runner cannot mis-report its repo. CI sessions are keyed by `ciMemberId`
+(`repo:<remote>`). `ci === true` sessions power the **Repositories → Actions** view. Enable OIDC by
+setting `AGENTISTICS_OIDC_AUDIENCE` on the central (the workflow requests that same audience).
 
 Cloud runners need the central reachable without exposing the dashboard. `AGENTISTICS_INGEST_ONLY=1`
 (config.ts) makes a central serve **only** `POST /api/team/ingest` (404 for everything else, checked

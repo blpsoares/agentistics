@@ -16,6 +16,7 @@ import type { Collection } from 'mongodb'
 import { normalizeGitRemote, repoShortName } from '@agentistics/core'
 import { getMongoDb } from './mongo'
 import { mintToken, revokeToken } from './team-tokens'
+import { ciMemberId } from './team-oidc'
 
 export interface RepoDoc {
   _id: string        // the normalized remote (host/org/repo) — also the dedup key
@@ -58,7 +59,9 @@ export async function registerRepo(
     await revokeToken(existing.tokenId).catch(() => {})
     try {
       const db = await getMongoDb()
-      await db.collection('sessions').deleteMany({ memberId: existing.tokenId }).catch(() => {})
+      // Clear this repo's CI sessions under both possible identities: the old token hash
+      // (static-token pushes) and the repo-scoped id (OIDC/keyless pushes).
+      await db.collection('sessions').deleteMany({ memberId: { $in: [existing.tokenId, ciMemberId(remote)] } }).catch(() => {})
     } catch { /* best-effort cleanup */ }
   }
 
@@ -73,6 +76,16 @@ export async function registerRepo(
     { upsert: true },
   )
   return { ok: true, token, remote }
+}
+
+/** Is this normalized remote in the registry (i.e. allowed to push CI metrics)? Used by the
+ *  OIDC ingest path as the repo allowlist — a valid GitHub OIDC token still only counts if the
+ *  admin has registered that repo. */
+export async function isRepoRegistered(remote: string): Promise<boolean> {
+  if (!remote) return false
+  const col = await getReposCollection()
+  const doc = await col.findOne({ _id: remote }, { projection: { _id: 1 } })
+  return !!doc
 }
 
 /** List all registered repositories (no token material). */
@@ -94,9 +107,10 @@ export async function unregisterRepo(rawRemote: string): Promise<boolean> {
   await revokeToken(doc.tokenId).catch(() => {})
   try {
     const db = await getMongoDb()
-    await db.collection('sessions').deleteMany({ memberId: doc.tokenId }).catch(() => {})
+    const ids = [doc.tokenId, ciMemberId(remote)]
+    await db.collection('sessions').deleteMany({ memberId: { $in: ids } }).catch(() => {})
     const { deleteMemberStats } = await import('./team-stats')
-    await deleteMemberStats(doc.tokenId).catch(() => {})
+    for (const id of ids) await deleteMemberStats(id).catch(() => {})
   } catch { /* best-effort */ }
   await col.deleteOne({ _id: remote })
   return true

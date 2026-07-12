@@ -3,11 +3,12 @@
 # Copy this into your repo as `.github/workflows/claude.yml` (or merge the "Push agentistics
 # metrics" step into your existing Claude Code workflow). See docs/github-actions.md for setup.
 #
-# Prerequisites:
-#   - The repo is registered on your central: POST /api/team/repos → a CI token.
-#   - Repo secret  AGENTISTICS_CI_TOKEN   = that token.
+# Prerequisites (keyless / GitHub OIDC — recommended, no secret to store):
+#   - The repo is registered (allowlisted) on your central: POST /api/team/repos.
+#   - The central has AGENTISTICS_OIDC_AUDIENCE set (e.g. its own URL).
 #   - Repo variable AGENTISTICS_CENTRAL_URL = your central base URL (e.g. https://host:48080).
-#   - Repo secret  ANTHROPIC_API_KEY       = your Anthropic key (for the Claude Code Action).
+#   - Repo secret  ANTHROPIC_API_KEY        = your Anthropic key (for the Claude Code Action).
+#   (Fallback without OIDC: also set repo secret AGENTISTICS_CI_TOKEN and add it to the step env.)
 
 name: Claude Code
 
@@ -23,6 +24,7 @@ jobs:
     if: contains(github.event.comment.body, '@claude')
     runs-on: ubuntu-latest
     permissions:
+      id-token: write        # ← lets the runner request a GitHub OIDC token (keyless push)
       contents: write
       pull-requests: write
       issues: write
@@ -38,13 +40,13 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 
       # --- Push this run's metrics to the agentistics central -------------------
+      # Keyless: ci-push requests a GitHub OIDC token itself (audience = AGENTISTICS_CENTRAL_URL).
       # `if: always()` so usage is reported even when the Claude step fails.
       # `ci-push` never fails the job on a push error — it logs and exits 0.
       - name: Push agentistics metrics
         if: always()
         env:
           AGENTISTICS_CENTRAL_URL: ${{ vars.AGENTISTICS_CENTRAL_URL }}
-          AGENTISTICS_CI_TOKEN: ${{ secrets.AGENTISTICS_CI_TOKEN }}
         run: |
           curl -fsSL "https://github.com/blpsoares/agentistics/releases/latest/download/agentop" -o agentop
           chmod +x agentop
