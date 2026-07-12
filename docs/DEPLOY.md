@@ -144,6 +144,42 @@ agentop central logs
 > the host harness dirs — for a self-contributing central (one machine = central + member), use
 > the repo `central.sh` with `AGENTISTICS_CENTRAL_USER` set.
 
+### External database (Atlas / remote Mongo) — no Docker required
+
+By default the standalone `agentop central` runs a **bundled MongoDB in Docker**. If you'd rather
+use a managed database (MongoDB Atlas) or an existing Mongo server, `agentop central init` (or the
+first `agentop central up`) now asks:
+
+```
+Database:
+  › Bundled Mongo (Docker starts it for you)
+    External URI — Atlas/remote (runs natively, no Docker)
+```
+
+Pick **External URI** and paste a connection string (`mongodb+srv://…` for Atlas, or
+`mongodb://host:27017/db`). When an external DB is configured, the central runs **natively — the
+`agentop` binary is the server itself, no Docker and no local Mongo container**. This is the path
+for a user who installed **only the CLI** and points it at a cloud database.
+
+```bash
+agentop central init      # choose "External URI", paste your Atlas connection string
+agentop central up        # runs the central natively in the FOREGROUND (Ctrl-C to stop)
+```
+
+- The connection string is written to `~/.agentistics/central/central.env` as `MONGO_URL`
+  (`chmod 600`) — treat that file as a secret.
+- `up` runs in the **foreground**. For a background service, use
+  `agentop autostart central` instead.
+- Docker-only actions (`down`, `logs`, `status`, `pull`) don't apply to a native central — they
+  print guidance instead. Stop it with Ctrl-C (or the autostart service).
+- Atlas is a replica set, so MongoDB change streams (used for live team refresh) work out of the
+  box. Whitelist this host's outbound IP in Atlas and use a database user scoped to the
+  `agentistics` DB.
+
+> **Bundled vs external is detected from `MONGO_URL`.** A URL pointing at the Docker service
+> (`mongo:27017`) → Docker path; anything else (Atlas, a remote host) → native path. To switch,
+> re-run `agentop central init` and change the database choice.
+
 ---
 
 ## Environment Variables
@@ -152,7 +188,7 @@ agentop central logs
 |---|---|---|
 | `APP_PORT` | `48080` | Host port the central is served on (distinct from a member/dev's `47291`) |
 | `BIND_IP` | `0.0.0.0` | Interface the app binds to. Default `0.0.0.0` = all interfaces. Set to a specific IP (e.g. your Tailscale address) to restrict exposure |
-| `MONGO_URL` | `mongodb://mongo:27017/?replicaSet=rs0` | MongoDB connection string |
+| `MONGO_URL` | `mongodb://mongo:27017/?replicaSet=rs0` | MongoDB connection string. Point it at Atlas (`mongodb+srv://…`) or a remote Mongo to skip the bundled container — the standalone `agentop central` then runs natively without Docker (see [External database](#external-database-atlas--remote-mongo--no-docker-required)) |
 | `MONGO_DB` | `agentistics` | MongoDB database name |
 | `AGENTISTICS_TEAM_CENTRAL` | `1` | Enable central aggregator mode (always `1` in Docker) |
 | `AGENTISTICS_TEAM_ORG` | `default` | Organisation namespace for team sessions |
