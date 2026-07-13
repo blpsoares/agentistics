@@ -45,6 +45,30 @@ export interface RepoStat {
   _paths: Record<string, number>
 }
 
+export type RepoSortKey = 'cost' | 'sessions' | 'tokens' | 'commits' | 'lastActive' | 'name'
+
+/** Sort a repo list by a metric. Numeric/date keys compare numerically; `name`
+ *  compares by locale. Non-mutating (returns a new array). `desc` reverses the
+ *  ascending order. */
+export function sortRepos(repos: RepoStat[], key: RepoSortKey, dir: 'asc' | 'desc'): RepoStat[] {
+  const val = (r: RepoStat): number | string => {
+    switch (key) {
+      case 'cost': return r.costUSD
+      case 'sessions': return r.sessions
+      case 'tokens': return r.inputTokens + r.outputTokens
+      case 'commits': return r.gitCommits
+      case 'lastActive': return r.lastActive ? new Date(r.lastActive).getTime() : 0
+      case 'name': return r.name.toLowerCase()
+    }
+  }
+  const sorted = [...repos].sort((a, b) => {
+    const va = val(a), vb = val(b)
+    if (typeof va === 'string' && typeof vb === 'string') return va.localeCompare(vb)
+    return (va as number) - (vb as number)
+  })
+  return dir === 'desc' ? sorted.reverse() : sorted
+}
+
 export type LoadProgress = Record<string, StageProgress>
 
 // Persisted snapshot of the last successful /api/data so reopening the app
