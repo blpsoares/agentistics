@@ -5,9 +5,10 @@ import {
   Clock, GitCommit, ChevronDown, DollarSign, Cpu, Wrench, Bot, FileCode, MessageSquare, Database, AlertTriangle,
 } from 'lucide-react'
 import type { AppContext, } from '../lib/app-context'
-import type { SessionMeta, MemberPresence, HarnessId, WorkflowRun } from '@agentistics/core'
+import type { SessionMeta, MemberPresence, HarnessId, WorkflowRun, WorkflowAgent } from '@agentistics/core'
 import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost } from '@agentistics/core'
 import { capable, HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
+import { buildWorkflowSteps } from '../lib/workflowSteps'
 import { useDerivedStats } from '../hooks/useData'
 import { Section } from '../components/Section'
 import { ModelBreakdown } from '../components/ModelBreakdown'
@@ -196,7 +197,7 @@ export default function RepoDetailPage() {
 
       {tab === 'workflows' && (
         <Section title={<><WorkflowIcon size={14} /> Dynamic Workflows</>}>
-          <WorkflowsMini workflows={workflows} lang={lang} currency={currency} brlRate={brlRate} />
+          <WorkflowsMini workflows={workflows} lang={lang} currency={currency} brlRate={brlRate} sessionById={sessionByIdWf} />
         </Section>
       )}
     </>
@@ -398,21 +399,131 @@ function MetricCard({ icon, label, value, hint, accent }: { icon: React.ReactNod
   )
 }
 
-function WorkflowsMini({ workflows, lang, currency, brlRate }: {
-  workflows: import('@agentistics/core').WorkflowRun[]
+function statusColor(status: WorkflowRun['status']): string {
+  return status === 'completed' ? '#22c55e' : status === 'partial' ? '#eab308' : '#ef4444'
+}
+
+/** Seconds-aware run duration (fmtDuration floors to whole minutes, so a 12s run
+ *  would read "0m" — workflow runs are often sub-minute). */
+function fmtRunDuration(ms: number): string {
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.round(s / 60)
+  if (m < 60) return `${m}m`
+  return `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}`
+}
+
+function agentGlyph(status: WorkflowAgent['status']): { ch: string; color: string } {
+  if (status === 'completed') return { ch: '✓', color: '#22c55e' }
+  if (status === 'failed') return { ch: '✗', color: '#ef4444' }
+  return { ch: '⤼', color: 'var(--text-tertiary)' }
+}
+
+function WorkflowsMini({ workflows, lang, currency, brlRate, sessionById }: {
+  workflows: WorkflowRun[]
   lang: 'pt' | 'en'; currency: 'USD' | 'BRL'; brlRate: number
+  sessionById: Map<string, SessionMeta>
 }) {
   const pt = lang === 'pt'
+  if (workflows.length === 0) {
+    return <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>{pt ? 'Nenhum workflow.' : 'No workflows.'}</div>
+  }
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {workflows.map(w => (
-        <div key={w.runId} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: 'var(--bg-elevated)', borderRadius: 8, border: '1px solid var(--border-subtle)' }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</span>
-          <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>{w.totals.agentCount} {pt ? 'agentes' : 'agents'}</span>
-          <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>{fmt(w.totals.tokensIn + w.totals.tokensOut)} tok</span>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--anthropic-orange)' }}>{fmtCost(w.totals.costUSD, currency, brlRate)}</span>
-        </div>
+        <WorkflowRunCard key={w.runId} run={w} pt={pt} currency={currency} brlRate={brlRate} sessionById={sessionById} />
       ))}
+    </div>
+  )
+}
+
+function WorkflowRunCard({ run, pt, currency, brlRate, sessionById }: {
+  run: WorkflowRun; pt: boolean; currency: 'USD' | 'BRL'; brlRate: number; sessionById: Map<string, SessionMeta>
+}) {
+  const [open, setOpen] = useState(true)
+  const harness = sessionById.get(run.sessionId)?.harness ?? 'claude'
+  const steps = buildWorkflowSteps(run, pt ? '(sem fase)' : '(no phase)')
+  const tok = run.totals.tokensIn + run.totals.tokensOut
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: 'var(--bg-card)' }}>
+      {/* Header */}
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 12px', cursor: 'pointer' }}
+      >
+        <ChevronDown size={14} style={{ transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform 0.2s', color: 'var(--text-tertiary)' }} />
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: statusColor(run.status), flexShrink: 0 }} />
+        <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{run.name}</span>
+        <span style={{
+          fontSize: 10.5, fontWeight: 600, color: HARNESS_COLORS[harness],
+          background: 'var(--bg-elevated)', border: `1px solid ${HARNESS_COLORS[harness]}55`,
+          borderRadius: 5, padding: '2px 7px',
+        }}>{HARNESS_LABELS[harness]}</span>
+        <span style={{ marginLeft: 'auto', display: 'flex', gap: 12, fontSize: 11.5, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
+          <span>{run.totals.agentCount} {pt ? 'agentes' : 'agents'}</span>
+          <span>{fmt(tok)} tok</span>
+          <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{fmtCost(run.totals.costUSD, currency, brlRate)}</span>
+          {run.durationMs > 0 && <span>{fmtRunDuration(run.durationMs)}</span>}
+        </span>
+      </div>
+
+      {/* Timeline */}
+      {open && (
+        <div style={{ padding: '4px 12px 12px', display: 'flex', flexDirection: 'column' }}>
+          {steps.map((step, i) => (
+            <div key={`${step.title}-${i}`} style={{ display: 'flex', gap: 10 }}>
+              {/* Rail */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 22, flexShrink: 0 }}>
+                <span style={{
+                  width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)',
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                }}>{step.index}</span>
+                {i < steps.length - 1 && <span style={{ flex: 1, width: 2, background: 'var(--border)', minHeight: 8 }} />}
+              </div>
+              {/* Step body */}
+              <div style={{ flex: 1, minWidth: 0, paddingBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>{step.title}</span>
+                  <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>{step.subtotal.count} {pt ? 'agentes' : 'agents'}</span>
+                  {step.subtotal.count > 0 && (
+                    <span style={{ marginLeft: 'auto', fontSize: 10.5, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                      {fmt(step.subtotal.tokensIn)} in · {fmt(step.subtotal.tokensOut)} out · <strong style={{ color: 'var(--anthropic-orange)' }}>{fmtCost(step.subtotal.costUSD, currency, brlRate)}</strong>
+                    </span>
+                  )}
+                </div>
+                {step.agents.length === 0
+                  ? <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic', marginTop: 4 }}>{pt ? 'nada rodou' : 'nothing ran'}</div>
+                  : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                      {step.agents.map((a, j) => {
+                        const g = agentGlyph(a.status)
+                        return (
+                          <div key={j} style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', fontSize: 11.5 }}>
+                            <span style={{ color: g.color, fontWeight: 700, width: 12, flexShrink: 0 }}>{g.ch}</span>
+                            <span style={{ color: 'var(--text-primary)', fontWeight: 600, wordBreak: 'break-word' }}>{a.label}</span>
+                            {a.model && <span style={{ color: 'var(--text-tertiary)', fontSize: 10.5 }}>{formatModel(a.model)}</span>}
+                            <span style={{ marginLeft: 'auto', display: 'flex', gap: 10, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                              <span>{fmt(a.tokensIn)}/{fmt(a.tokensOut)}</span>
+                              <span style={{ color: 'var(--anthropic-orange)' }}>{fmtCost(a.costUSD, currency, brlRate)}</span>
+                            </span>
+                            {a.toolStats && (
+                              <span style={{ flexBasis: '100%', paddingLeft: 20, color: 'var(--text-tertiary)', fontSize: 10.5 }}>
+                                {a.toolStats.readCount}r · {a.toolStats.editFileCount}e · +{a.toolStats.linesAdded}/−{a.toolStats.linesRemoved}
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
