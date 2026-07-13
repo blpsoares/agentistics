@@ -9,6 +9,11 @@
 #   - Repo variable AGENTISTICS_CENTRAL_URL = your central base URL (e.g. https://host:48080).
 #   - Repo secret  ANTHROPIC_API_KEY        = your Anthropic key (for the Claude Code Action).
 #   (Fallback without OIDC: also set repo secret AGENTISTICS_CI_TOKEN and add it to the step env.)
+#
+# Claude auth is independent of the metrics push: you can run this on a Claude Pro/Max
+# subscription instead of an API key. Generate a token with `claude setup-token`, store it as
+# the secret CLAUDE_CODE_OAUTH_TOKEN, and swap the `Run Claude Code` step's `with:` to use
+# `claude_code_oauth_token` (see the commented alternative below). Metrics push is unchanged.
 
 name: Claude Code
 
@@ -38,6 +43,8 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # --- or run on your Claude Pro/Max subscription instead of an API key: ---
+          # claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}   # from `claude setup-token`
 
       # --- Push this run's metrics to the agentistics central -------------------
       # Keyless: ci-push requests a GitHub OIDC token itself (audience = AGENTISTICS_CENTRAL_URL).

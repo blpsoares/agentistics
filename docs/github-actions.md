@@ -93,6 +93,40 @@ gh variable set AGENTISTICS_CENTRAL_URL --repo org/repo --body 'https://central.
 
 The central must be reachable from the runner (see Networking below).
 
+### Authenticating the Claude step — API key *or* your Pro/Max subscription
+
+Two **independent** credentials are in play, and it helps to keep them separate:
+
+| Purpose | Who handles it | Credential |
+|---|---|---|
+| **Running Claude** in the workflow | `anthropics/claude-code-action` | `anthropic_api_key` **or** `claude_code_oauth_token` |
+| **Pushing metrics** to your central | `agentop ci-push` (this project) | keyless GitHub OIDC (or the fallback `AGENTISTICS_CI_TOKEN`) |
+
+agentistics never touches your Anthropic credentials — it only reads the `~/.claude` the Claude
+step already wrote. So **yes, you can run the workflow on your Claude subscription** instead of a
+metered API key. The official action supports a **Pro/Max OAuth token**: generate it once locally
+with
+
+```bash
+claude setup-token          # requires a Claude Pro or Max subscription
+```
+
+store the printed value as the repo secret `CLAUDE_CODE_OAUTH_TOKEN`, and point the action at it:
+
+```yaml
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # (instead of: anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }})
+```
+
+Either way the metrics push step below is **unchanged** — it works the same on API-key or
+subscription auth. Trade-offs to know: an OAuth token is tied to **one personal account** and its
+subscription rate limits (fine for a small repo, less so for a busy shared one), and inline-comment
+classification currently still needs `anthropic_api_key`. For heavy or org-wide automation a
+dedicated API key (or Bedrock/Vertex) is usually steadier.
+
 ## 3. See it in the dashboard
 
 Open **Repositories** → click the repo → **Actions** tab, or **Repositories → Actions** for the
