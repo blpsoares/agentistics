@@ -60,6 +60,35 @@ function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
+/** Provider brand mark (inline SVG — lucide-react no longer ships brand icons).
+ *  Falls back to GitBranch for unknown hosts and Link2Off for unlinked repos. */
+function ProviderLogo({ host, linked, size = 15, color }: { host: string; linked: boolean; size?: number; color?: string }) {
+  const style: React.CSSProperties = { flexShrink: 0, color }
+  if (!linked) return <Link2Off size={size} color={color} style={{ flexShrink: 0 }} />
+  if (host.includes('github')) {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" style={style} aria-label="GitHub">
+        <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0 1 12 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222 0 1.606-.014 2.898-.014 3.293 0 .322.216.694.825.576C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
+      </svg>
+    )
+  }
+  if (host.includes('gitlab')) {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" style={style} aria-label="GitLab">
+        <path d="m23.6004 9.5927-.0337-.0862L20.3.9814a.851.851 0 0 0-.3362-.405.8748.8748 0 0 0-.9997.0539.8748.8748 0 0 0-.29.4399l-2.2055 6.748H7.5375l-2.2057-6.748a.8573.8573 0 0 0-.29-.4412.8748.8748 0 0 0-.9997-.0537.8585.8585 0 0 0-.3362.4049L.4332 9.5015l-.0325.0862a6.0657 6.0657 0 0 0 2.0119 7.0105l.0113.0087.03.0213 4.976 3.7264 2.462 1.8633 1.4995 1.1321a1.0085 1.0085 0 0 0 1.2197 0l1.4995-1.1321 2.462-1.8633 5.006-3.7489.0125-.01a6.0682 6.0682 0 0 0 2.0094-7.003z" />
+      </svg>
+    )
+  }
+  if (host.includes('bitbucket')) {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" style={style} aria-label="Bitbucket">
+        <path d="M.778 1.213a.768.768 0 0 0-.768.892l3.263 19.81c.084.5.515.868 1.022.873H19.95a.772.772 0 0 0 .77-.646l3.27-20.03a.768.768 0 0 0-.768-.891zM14.52 15.53H9.522L8.17 8.466h7.561z" />
+      </svg>
+    )
+  }
+  return <GitBranch size={size} color={color} style={{ flexShrink: 0 }} />
+}
+
 export function RepositoriesList({ repos, isCentral, currency = 'USD', brlRate = 1, lang, onOpen }: Props) {
   const pt = lang === 'pt'
   if (repos.length === 0) {
@@ -98,18 +127,16 @@ export function RepositoriesList({ repos, isCentral, currency = 'USD', brlRate =
             {/* Header: icon + title + host chip, with a full-path subtitle for every card */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                {r.linked
-                  ? <GitBranch size={15} color={accent} style={{ flexShrink: 0 }} />
-                  : <Link2Off size={15} color={accent} style={{ flexShrink: 0 }} />}
+                <ProviderLogo host={host} linked={r.linked} size={16} color={accent} />
                 <span title={r.linked ? r.remote : r.path} style={{
                   fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)',
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
                 }}>{title}</span>
                 {host && (
                   <span style={{
-                    marginLeft: 'auto', flexShrink: 0, fontSize: 9.5, fontWeight: 600,
+                    marginLeft: 'auto', flexShrink: 0, fontSize: 9.5, fontWeight: 500,
                     color: hostColor(host), background: 'var(--bg-elevated)',
-                    padding: '2px 6px', borderRadius: 5, whiteSpace: 'nowrap',
+                    padding: '2px 6px', borderRadius: 5, whiteSpace: 'nowrap', opacity: 0.9,
                   }}>{host}</span>
                 )}
               </div>
