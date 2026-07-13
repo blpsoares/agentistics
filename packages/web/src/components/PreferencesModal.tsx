@@ -3,7 +3,7 @@ import {
   X, GripVertical, RotateCcw, Save, Volume2, VolumeX, Zap, Bot,
   Globe, Monitor, Download, SlidersHorizontal, Activity,
   Archive, Check, HardDrive, FolderClock, ExternalLink, DatabaseZap,
-  Cpu, Copy, CheckCheck, AlertCircle, CircleDot, Users, Database,
+  Cpu, Copy, CheckCheck, AlertCircle, CircleDot, Users, Database, GitBranch,
 } from 'lucide-react'
 import type { Lang, Theme, HarnessId, MemberPresence } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
@@ -15,6 +15,7 @@ import { CHAT_SOUNDS, DEFAULT_CHAT_SOUND_ID, findChatSound } from '../lib/chatSo
 import { useChatHarnesses, type HarnessChatStatus } from '../hooks/useChatHarnesses'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { TeamSettings, type TeamConfig } from './TeamSettings'
+import { TeamRepos } from './TeamRepos'
 import { DeployCentral } from './DeployCentral'
 
 type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
@@ -56,7 +57,7 @@ const BADGE_COLORS: Record<string, string> = {
   Powerful: 'var(--accent-purple)',
 }
 
-export type SettingsTab = 'preferences' | 'sessions' | 'live' | 'install' | 'harnesses' | 'datasources' | 'team'
+export type SettingsTab = 'preferences' | 'sessions' | 'live' | 'install' | 'harnesses' | 'datasources' | 'team' | 'repositories'
 
 interface Props {
   initial: PrefsDraft
@@ -1123,6 +1124,7 @@ function TeamTab({ pt, central, presence }: { pt: boolean; central: boolean | nu
 const TABS: { id: SettingsTab; icon: React.ReactNode; labelEn: string; labelPt: string }[] = [
   { id: 'preferences', icon: <SlidersHorizontal size={13} />, labelEn: 'Preferences', labelPt: 'Preferências' },
   { id: 'team',        icon: <Users size={13} />,             labelEn: 'Team',         labelPt: 'Time' },
+  { id: 'repositories', icon: <GitBranch size={13} />,        labelEn: 'GitHub Repositories', labelPt: 'Repositórios GitHub' },
   { id: 'live',        icon: <Activity size={13} />,          labelEn: 'Live',         labelPt: 'Live' },
   { id: 'datasources', icon: <Database size={13} />,          labelEn: 'Data & sources', labelPt: 'Dados & fontes' },
   { id: 'harnesses',   icon: <Cpu size={13} />,               labelEn: 'Harnesses',    labelPt: 'Backends' },
@@ -1178,9 +1180,12 @@ export function PreferencesModal({
   // A central has nothing "live" to toggle — member pushes already refresh its dashboards in
   // real time via SSE-on-ingest — so the Live tab is hidden there. If it was the active tab when
   // the central flag resolves, fall back to Preferences so the body doesn't render blank.
-  const visibleTabs = central ? TABS.filter(t => t.id !== 'live') : TABS
+  // Live is hidden on a central (it refreshes via SSE-on-ingest); the GitHub Repositories
+  // registry is a central-only admin panel, so it's hidden everywhere else.
+  const visibleTabs = central ? TABS.filter(t => t.id !== 'live') : TABS.filter(t => t.id !== 'repositories')
   useEffect(() => {
     if (central && activeTab === 'live') setActiveTab('preferences')
+    if (!central && activeTab === 'repositories') setActiveTab('preferences')
   }, [central, activeTab])
 
   function set<K extends keyof PrefsDraft>(key: K, value: PrefsDraft[K]) {
@@ -1291,6 +1296,7 @@ export function PreferencesModal({
           {activeTab === 'harnesses' && <HarnessesTab pt={pt} />}
           {activeTab === 'datasources' && <DataSourcesTab pt={pt} harnesses={harnesses} />}
           {activeTab === 'team' && <TeamTab pt={pt} central={central} presence={presence} />}
+          {activeTab === 'repositories' && <TeamRepos lang={pt ? 'pt' : 'en'} />}
         </div>
 
         {/* Footer — only for Preferences tab */}

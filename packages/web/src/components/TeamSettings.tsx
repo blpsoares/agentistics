@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Loader2, CheckCircle, XCircle, Users, User, Server, LogOut } from 'lucide-react'
 import { TeamMembers } from './TeamMembers'
-import { TeamRepos } from './TeamRepos'
 import { PUSH_INTERVAL, type TeamConfig, type MemberPresence } from '@agentistics/core'
 import { pushNotification } from '../lib/notifications'
 import { MemberConnectionStatus } from './MemberConnectionStatus'
@@ -535,10 +534,6 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
         <Divider />
 
         <TeamMembers lang={lang} presence={presence} />
-
-        <Divider />
-
-        <TeamRepos lang={lang} />
 
         {/* Inline keyframe for spinner */}
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
