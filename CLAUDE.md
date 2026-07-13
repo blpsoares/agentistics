@@ -95,7 +95,7 @@ packages/web/src/ (React + Vite, port 47292 in dev)
   │   ├── CostsPage.tsx         → cost deep-dive page
   │   ├── ProjectsPage.tsx      → projects overview page
   │   ├── RepositoriesPage.tsx  → repositories overview (/repositories): cards grouped by normalized git remote (RepositoriesList); unlinked sessions show as a flagged "no repo" card; links to /repo/:id
-  │   ├── RepoDetailPage.tsx    → per-repo detail (/repo/:id): scopes a repo via an overridden `repos` filter (no global filter mutation) + tabs Overview/Members/Actions/Sessions/Workflows
+  │   ├── RepoDetailPage.tsx    → per-repo detail (/repo/:id): scopes a repo via an overridden `repos` filter (no global filter mutation) + tabs Overview/Members/Actions/Sessions/Dynamic Workflows. The "Actions" tab shows only when the repo has CI sessions; the "Dynamic Workflows" tab shows only when the repo has workflow runs from a `dynamicWorkflows`-capable harness, and renders each run as a step-by-step timeline (phases → agents) with a harness badge (see `lib/workflowSteps.ts` `buildWorkflowSteps`)
   │   ├── ActionsPage.tsx       → /repositories/actions: all CI-runner sessions (SessionMeta.ci) grouped by repo — the GitHub Actions submenu of Repositories
   │   ├── ToolsPage.tsx         → tools breakdown page
   │   ├── HarnessPage.tsx       → generic per-harness dashboard at /h/:harness (validates param; sets harness filter; tab bar: "Overview" = dashboard, "Data & sources" = HarnessInfoPanel); replaced the old hardcoded CodexPage
@@ -136,7 +136,7 @@ Agentistics tracks sessions from multiple AI coding assistants (harnesses), not 
 
 ### N/A vs real 0 — `HARNESS_CAPABILITIES`
 
-`HARNESS_CAPABILITIES` in `@agentistics/core` (`packages/core/src/types.ts`) is the single source of truth for which metrics each harness can produce. When a capability flag is `false`, the frontend renders "N/A" via the `NAtag` component + `capable(harness, metric)` helper (re-exported from `lib/harness.ts`), rather than showing a misleading 0. Current limitations: Codex, Gemini, and Copilot do not produce agent metrics or git line counts (those capabilities are `false` for non-Claude harnesses).
+`HARNESS_CAPABILITIES` in `@agentistics/core` (`packages/core/src/types.ts`) is the single source of truth for which metrics each harness can produce. When a capability flag is `false`, the frontend renders "N/A" via the `NAtag` component + `capable(harness, metric)` helper (re-exported from `lib/harness.ts`), rather than showing a misleading 0. Current limitations: Codex, Gemini, and Copilot do not produce agent metrics or git line counts (those capabilities are `false` for non-Claude harnesses). `dynamicWorkflows` (runs of the multi-agent orchestration Workflow tool) is `true` only for `claude` — it gates the repo-detail "Dynamic Workflows" tab.
 
 ### Aggregation — stats-cache.json is Claude-only
 
