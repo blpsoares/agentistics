@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test'
 import type { WorkflowRun, WorkflowAgent } from '@agentistics/core'
-import { buildWorkflowSteps } from './workflowSteps'
+import { buildWorkflowSteps, groupRunsBySession } from './workflowSteps'
 
 function agent(p: Partial<WorkflowAgent>): WorkflowAgent {
   return {
@@ -38,4 +38,28 @@ test('orders steps by declared phases, then appends undeclared/no-phase', () => 
   expect(steps[2]!.agents.length).toBe(0)        // declared phase with no agents renders empty
   expect(steps[2]!.subtotal.count).toBe(0)
   expect(steps[3]!.title).toBe('(no phase)')
+})
+
+function totals(p: Partial<WorkflowRun['totals']>): WorkflowRun['totals'] {
+  return { agentCount: 0, tokensIn: 0, tokensOut: 0, costUSD: 0, durationMs: 0, toolUses: 0, ...p }
+}
+
+test('groupRunsBySession groups by sessionId, sums, and orders by cost desc', () => {
+  const runs = [
+    run({ runId: 'a', sessionId: 's1', totals: totals({ agentCount: 2, costUSD: 0.5, tokensIn: 10, tokensOut: 2 }) }),
+    run({ runId: 'b', sessionId: 's2', totals: totals({ agentCount: 1, costUSD: 2.0 }) }),
+    run({ runId: 'c', sessionId: 's1', totals: totals({ agentCount: 3, costUSD: 0.5, tokensIn: 4, tokensOut: 1 }) }),
+  ]
+  const groups = groupRunsBySession(runs)
+  expect(groups.map(g => g.sessionId)).toEqual(['s2', 's1']) // s2 cost 2.0 > s1 cost 1.0
+  const s1 = groups.find(g => g.sessionId === 's1')!
+  expect(s1.totals.runs).toBe(2)
+  expect(s1.totals.agents).toBe(5)
+  expect(s1.totals.tokensIn).toBe(14)
+  expect(s1.totals.costUSD).toBeCloseTo(1.0, 10)
+  expect(s1.runs.map(r => r.runId)).toEqual(['a', 'c']) // first-seen order within a session
+})
+
+test('groupRunsBySession returns empty for no runs', () => {
+  expect(groupRunsBySession([])).toEqual([])
 })

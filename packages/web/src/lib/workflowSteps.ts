@@ -1,5 +1,36 @@
 import type { WorkflowRun, WorkflowAgent } from '@agentistics/core'
 
+export interface SessionGroup {
+  sessionId: string
+  runs: WorkflowRun[]
+  totals: { runs: number; agents: number; tokensIn: number; tokensOut: number; costUSD: number }
+}
+
+/** Group workflow runs by their owning session, summing per-session totals. Sessions are
+ *  ordered by total cost descending (ties keep first-seen order). Used by the repo-detail
+ *  "Dynamic Workflows" tab's per-session view. */
+export function groupRunsBySession(workflows: WorkflowRun[]): SessionGroup[] {
+  const order: string[] = []
+  const map = new Map<string, SessionGroup>()
+  for (const run of workflows) {
+    let g = map.get(run.sessionId)
+    if (!g) {
+      g = { sessionId: run.sessionId, runs: [], totals: { runs: 0, agents: 0, tokensIn: 0, tokensOut: 0, costUSD: 0 } }
+      map.set(run.sessionId, g)
+      order.push(run.sessionId)
+    }
+    g.runs.push(run)
+    g.totals.runs += 1
+    g.totals.agents += run.totals.agentCount
+    g.totals.tokensIn += run.totals.tokensIn
+    g.totals.tokensOut += run.totals.tokensOut
+    g.totals.costUSD += run.totals.costUSD
+  }
+  return order
+    .map((id) => map.get(id)!)
+    .sort((a, b) => b.totals.costUSD - a.totals.costUSD)
+}
+
 export interface StepSubtotal {
   count: number
   tokensIn: number

@@ -6,9 +6,9 @@ import {
 } from 'lucide-react'
 import type { AppContext, } from '../lib/app-context'
 import type { SessionMeta, MemberPresence, HarnessId, WorkflowRun, WorkflowAgent } from '@agentistics/core'
-import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost } from '@agentistics/core'
+import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost, sessionLabel } from '@agentistics/core'
 import { capable, HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
-import { buildWorkflowSteps } from '../lib/workflowSteps'
+import { buildWorkflowSteps, groupRunsBySession } from '../lib/workflowSteps'
 import { useDerivedStats } from '../hooks/useData'
 import { Section } from '../components/Section'
 import { ModelBreakdown } from '../components/ModelBreakdown'
@@ -425,16 +425,65 @@ function WorkflowsMini({ workflows, lang, currency, brlRate, sessionById }: {
   sessionById: Map<string, SessionMeta>
 }) {
   const pt = lang === 'pt'
+  const [view, setView] = useState<'all' | 'session'>('all')
+  const sessionCount = useMemo(() => new Set(workflows.map(w => w.sessionId)).size, [workflows])
+  const groups = useMemo(() => groupRunsBySession(workflows), [workflows])
+
   if (workflows.length === 0) {
     return <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>{pt ? 'Nenhum workflow.' : 'No workflows.'}</div>
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {workflows.map(w => (
-        <WorkflowRunCard key={w.runId} run={w} pt={pt} currency={currency} brlRate={brlRate} sessionById={sessionById} />
-      ))}
+      {/* View toggle: flat list of runs vs grouped by session */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginRight: 2 }}>{pt ? 'Ver:' : 'View:'}</span>
+        {([['all', pt ? 'Todos' : 'All'], ['session', pt ? 'Por sessão' : 'By session']] as const).map(([v, label]) => (
+          <button key={v} onClick={() => setView(v)} style={wfPill(view === v)}>{label}</button>
+        ))}
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
+          {workflows.length} {pt ? 'workflows' : 'workflows'} · {sessionCount} {pt ? (sessionCount === 1 ? 'sessão' : 'sessões') : (sessionCount === 1 ? 'session' : 'sessions')}
+        </span>
+      </div>
+
+      {view === 'all'
+        ? workflows.map(w => (
+          <WorkflowRunCard key={w.runId} run={w} pt={pt} currency={currency} brlRate={brlRate} sessionById={sessionById} />
+        ))
+        : groups.map(g => {
+          const s = sessionById.get(g.sessionId)
+          const label = s ? sessionLabel(s) : g.sessionId.slice(0, 8)
+          return (
+            <div key={g.sessionId} style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 12px', background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border)' }}>
+                <MessageSquare size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, maxWidth: '60%' }}>{label}</span>
+                <span style={{ marginLeft: 'auto', display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                  <span><strong style={{ color: 'var(--text-primary)' }}>{g.totals.runs}</strong> {pt ? 'workflows' : 'workflows'}</span>
+                  <span>{g.totals.agents} {pt ? 'agentes' : 'agents'}</span>
+                  <span>{fmt(g.totals.tokensIn + g.totals.tokensOut)} tok</span>
+                  <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{fmtCost(g.totals.costUSD, currency, brlRate)}</span>
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10 }}>
+                {g.runs.map(w => (
+                  <WorkflowRunCard key={w.runId} run={w} pt={pt} currency={currency} brlRate={brlRate} sessionById={sessionById} />
+                ))}
+              </div>
+            </div>
+          )
+        })}
     </div>
   )
+}
+
+function wfPill(active: boolean): React.CSSProperties {
+  return {
+    padding: '4px 10px', borderRadius: 7, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit',
+    border: '1px solid var(--border)',
+    background: active ? 'var(--anthropic-orange-dim, rgba(205,93,56,0.12))' : 'var(--bg-elevated)',
+    color: active ? 'var(--anthropic-orange, #cd5d38)' : 'var(--text-secondary)',
+    fontWeight: active ? 600 : 500,
+  }
 }
 
 function WorkflowRunCard({ run, pt, currency, brlRate, sessionById }: {
