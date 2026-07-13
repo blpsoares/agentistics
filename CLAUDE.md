@@ -30,7 +30,7 @@ packages/server/bin/cli.ts  (binary entry point — agentop)
   ├── agentop central …    → server/cli-central.ts (wraps central.sh: up/init/down/logs/status/restart/pull)
   ├── agentop member …     → server/cli-member.ts (connect/leave/status; whoami-verified, no browser)
   ├── agentop ci-push      → server/ci-push.ts (one-shot GitHub Actions runner → central push; env AGENTISTICS_CENTRAL_URL/AGENTISTICS_CI_TOKEN)
-  ├── agentop autostart …  → server/autostart.ts (systemd user service + linger + ~/.bashrc update-check hook)
+  ├── agentop autostart …  → server/autostart.ts (systemd user service + linger + ~/.bashrc + ~/.zshrc update-check hook)
   ├── agentop upgrade      → server/upgrade.ts
   └── agentop check-update → server/version.ts (prints a banner only when outdated; silent otherwise)
 
@@ -52,7 +52,7 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── otel-watcher.ts      → chokidar file watcher + OTLP metrics export daemon
   ├── preferences.ts       → ~/.agentistics prefs incl. team config (mode/endpoint/token/user)
   ├── version.ts           → getVersionInfo (current vs latest); drives update banners/notifications
-  ├── autostart.ts         → systemd user service + loginctl linger + ~/.bashrc update-check hook
+  ├── autostart.ts         → systemd user service + loginctl linger + ~/.bashrc + ~/.zshrc update-check hook
   ├── cli-setup.ts / cli-central.ts / cli-member.ts → the agentop setup/central/member command handlers
   ├── cli-start.ts         → the `agentop start` interactive launcher (config vs running status, start agentistics / agentistics central, connect/disconnect, stop, language)
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)

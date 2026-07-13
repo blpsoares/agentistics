@@ -25,9 +25,46 @@ export interface AutostartResult {
 
 const MODES: AutostartMode[] = ['server', 'central', 'watch']
 
-// --- .bashrc update-check hook markers (kept stable so uninstall is exact) ---
+// --- shell-rc update-check hook markers (kept stable so uninstall is exact) ---
 const HOOK_BEGIN = '# >>> agentop update check >>>'
 const HOOK_END = '# <<< agentop update check <<<'
+// POSIX one-liner — valid in both bash and zsh (the two shells we manage).
+const HOOK_LINE = 'command -v agentop >/dev/null 2>&1 && agentop check-update 2>/dev/null'
+
+/** Shell rc files we manage the update-check hook in. Different login shells source
+ *  different files (bash → ~/.bashrc, zsh → ~/.zshrc), so a bash-only hook was invisible
+ *  to zsh users. We install into whichever of these already exist. */
+function hookRcCandidates(): string[] {
+  return [join(homedir(), '.bashrc'), join(homedir(), '.zshrc')]
+}
+
+/** Pure: append the guarded hook block to rc `content` when absent. Returns null when the
+ *  block is already present (idempotent no-op). */
+export function addHookBlock(content: string): string | null {
+  if (content.includes(HOOK_BEGIN)) return null
+  return content + `\n${HOOK_BEGIN}\n${HOOK_LINE}\n${HOOK_END}\n`
+}
+
+/** Pure: remove the guarded hook block from rc `content`. Returns null when absent, or
+ *  throws when the block is corrupt (a BEGIN with no matching END). */
+export function removeHookBlock(content: string): string | null {
+  const beginIdx = content.indexOf(HOOK_BEGIN)
+  if (beginIdx === -1) return null
+  const endIdx = content.indexOf(HOOK_END, beginIdx)
+  if (endIdx === -1) throw new Error('corrupt hook block')
+  // Consume the newline addHookBlock prepended before BEGIN and the one after END, so this is
+  // an exact inverse of addHookBlock (no stray blank line left behind).
+  let start = beginIdx
+  if (start > 0 && content[start - 1] === '\n') start -= 1
+  let end = endIdx + HOOK_END.length
+  if (content[end] === '\n') end += 1
+  return content.slice(0, start) + content.slice(end)
+}
+
+/** ~/.bashrc → "~/.bashrc" for user-facing messages. */
+function tildeRc(rc: string): string {
+  return rc.replace(homedir(), '~')
+}
 
 /**
  * Best-effort repo root, used only by the `central` mode command.
@@ -128,60 +165,60 @@ function notSupported(action: string): AutostartResult {
 }
 
 /**
- * Appends a single guarded line to ~/.bashrc that runs `agentop check-update`
- * on every terminal open (and thus at boot for login shells). Idempotent.
+ * Appends a single guarded line to each present shell rc (~/.bashrc and ~/.zshrc) that runs
+ * `agentop check-update` on every terminal open (and thus at boot for login shells). Installs
+ * into whichever candidates already exist; if NEITHER exists, creates ~/.bashrc as the default.
+ * Idempotent per file.
  */
 export async function installUpdateHook(): Promise<AutostartResult> {
-  const rc = join(homedir(), '.bashrc')
-  let existing = ''
-  try {
-    existing = await readFile(rc, 'utf8')
-  } catch {
-    existing = ''
+  const candidates = hookRcCandidates()
+  const present: string[] = []
+  for (const rc of candidates) {
+    try { await readFile(rc, 'utf8'); present.push(rc) } catch { /* missing */ }
   }
-  if (existing.includes(HOOK_BEGIN)) {
-    return { ok: true, message: 'Update-check hook already present in ~/.bashrc.' }
+  // If the user has neither rc yet, seed ~/.bashrc (the historical default).
+  const targets = present.length ? present : [join(homedir(), '.bashrc')]
+
+  const touched: string[] = []
+  for (const rc of targets) {
+    let existing = ''
+    try { existing = await readFile(rc, 'utf8') } catch { existing = '' }
+    const next = addHookBlock(existing)
+    if (next === null) { touched.push(`${tildeRc(rc)} (already present)`); continue }
+    try {
+      await writeFile(rc, next, 'utf8')
+      touched.push(tildeRc(rc))
+    } catch (err: any) {
+      return { ok: false, message: `Could not write ${tildeRc(rc)}: ${err?.message ?? err}` }
+    }
   }
-  const block =
-    `\n${HOOK_BEGIN}\n` +
-    `command -v agentop >/dev/null 2>&1 && agentop check-update 2>/dev/null\n` +
-    `${HOOK_END}\n`
-  try {
-    await writeFile(rc, existing + block, 'utf8')
-    return { ok: true, message: 'Added update-check hook to ~/.bashrc.' }
-  } catch (err: any) {
-    return { ok: false, message: `Could not write ~/.bashrc: ${err?.message ?? err}` }
-  }
+  return { ok: true, message: `Update-check hook ensured in: ${touched.join(', ')}.` }
 }
 
-/** Removes the guarded update-check block from ~/.bashrc (exact marker match). */
+/** Removes the guarded update-check block from every present shell rc (exact marker match). */
 export async function uninstallUpdateHook(): Promise<AutostartResult> {
-  const rc = join(homedir(), '.bashrc')
-  let existing = ''
-  try {
-    existing = await readFile(rc, 'utf8')
-  } catch {
-    return { ok: true, message: 'No ~/.bashrc found — nothing to remove.' }
+  const candidates = hookRcCandidates()
+  const removedFrom: string[] = []
+  for (const rc of candidates) {
+    let existing = ''
+    try { existing = await readFile(rc, 'utf8') } catch { continue /* no such rc */ }
+    let next: string | null
+    try {
+      next = removeHookBlock(existing)
+    } catch {
+      return { ok: false, message: `${tildeRc(rc)} has a corrupt hook block — remove it manually.` }
+    }
+    if (next === null) continue // not present in this file
+    try {
+      await writeFile(rc, next, 'utf8')
+      removedFrom.push(tildeRc(rc))
+    } catch (err: any) {
+      return { ok: false, message: `Could not write ${tildeRc(rc)}: ${err?.message ?? err}` }
+    }
   }
-  const beginIdx = existing.indexOf(HOOK_BEGIN)
-  if (beginIdx === -1) {
-    return { ok: true, message: 'Update-check hook not present in ~/.bashrc.' }
-  }
-  const endIdx = existing.indexOf(HOOK_END, beginIdx)
-  if (endIdx === -1) {
-    return { ok: false, message: '~/.bashrc has a corrupt hook block — remove it manually.' }
-  }
-  // Trim the leading newline we inserted before HOOK_BEGIN, if present.
-  let start = beginIdx
-  if (start > 0 && existing[start - 1] === '\n') start -= 1
-  const after = existing.slice(endIdx + HOOK_END.length).replace(/^\n/, '')
-  const next = existing.slice(0, start) + (after ? '\n' + after : '\n')
-  try {
-    await writeFile(rc, next, 'utf8')
-    return { ok: true, message: 'Removed update-check hook from ~/.bashrc.' }
-  } catch (err: any) {
-    return { ok: false, message: `Could not write ~/.bashrc: ${err?.message ?? err}` }
-  }
+  return removedFrom.length
+    ? { ok: true, message: `Removed update-check hook from: ${removedFrom.join(', ')}.` }
+    : { ok: true, message: 'Update-check hook not present in any shell rc — nothing to remove.' }
 }
 
 /** Enables an agentop autostart service for the given mode (Linux/systemd). */
