@@ -307,6 +307,18 @@ async function restartRunning(s: CliStrings, svc: Services): Promise<boolean> {
   return true
 }
 
+/** Non-interactive `agentop restart --all`: bounce every running service. Returns an exit code. */
+export async function restartAllServices(): Promise<number> {
+  const s = cliStrings(await resolveLang())
+  const svc = await detectServices()
+  if (!(svc.local || svc.central || svc.machine)) {
+    process.stdout.write(`  ${D}○ ${s.nothingRunning}${R}\n`)
+    return 0
+  }
+  await restartRunning(s, svc)
+  return 0
+}
+
 // ── main loop ─────────────────────────────────────────────────────────────────
 export async function runStart(): Promise<StartResult> {
   if (!process.stdin.isTTY) return 'foreground'

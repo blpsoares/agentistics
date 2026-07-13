@@ -37,9 +37,10 @@ Start:
     A central is started via its Docker flow. Non-interactive stdin runs like 'agentop server'.
 
 Restart:
-  agentop restart [server|watch|central]
+  agentop restart [server|watch|central|--all]
     Restart a running mode so it picks up new code (after an upgrade/pull) or config.
     server/watch bounce the systemd user service; central rebuilds/restarts its container.
+    --all bounces every service currently up (local + central + machine), non-interactively.
 
 Setup:
   agentop setup
@@ -309,6 +310,11 @@ if (command === 'status') {
 
 if (command === 'restart') {
   const modeArg = args[0] ?? 'server'
+  // `agentop restart --all` — bounce every service currently up (local + central + machine).
+  if (modeArg === '--all' || modeArg === 'all') {
+    const { restartAllServices } = await import('../server/cli-start.ts')
+    process.exit(await restartAllServices())
+  }
   // The central runs in Docker — delegate to its own restart (systemctl can't bounce a container).
   if (modeArg === 'central') {
     const { runCentral } = await import('../server/cli-central.ts')
