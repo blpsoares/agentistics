@@ -49,15 +49,18 @@ export interface HarnessCapabilities {
   tools: boolean
   agents: boolean
   gitLines: boolean
+  /** Runs of the harness's multi-agent orchestration tool (Claude Code's Workflow tool).
+   *  Gates the repo-detail "Dynamic Workflows" tab. */
+  dynamicWorkflows: boolean
 }
 
 /** Single source of truth for which metrics each harness can produce.
  *  Drives "N/A vs real 0" rendering and what the unified view aggregates. */
 export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
-  claude:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: true,  gitLines: true },
-  codex:   { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false },
-  gemini:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false },
-  copilot: { tokens: true,  cost: true,  model: true,  tools: false, agents: false, gitLines: true },
+  claude:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: true,  gitLines: true,  dynamicWorkflows: true  },
+  codex:   { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false },
+  gemini:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false },
+  copilot: { tokens: true,  cost: true,  model: true,  tools: false, agents: false, gitLines: true,  dynamicWorkflows: false },
 }
 
 export interface SessionMeta {

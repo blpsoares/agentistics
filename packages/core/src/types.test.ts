@@ -284,6 +284,13 @@ test('claude is fully capable; gemini and copilot have tokens/cost/model', () =>
   expect(HARNESS_CAPABILITIES.copilot.gitLines).toBe(true)
 })
 
+test('dynamicWorkflows capability is Claude-only', () => {
+  expect(HARNESS_CAPABILITIES.claude.dynamicWorkflows).toBe(true)
+  expect(HARNESS_CAPABILITIES.codex.dynamicWorkflows).toBe(false)
+  expect(HARNESS_CAPABILITIES.gemini.dynamicWorkflows).toBe(false)
+  expect(HARNESS_CAPABILITIES.copilot.dynamicWorkflows).toBe(false)
+})
+
 describe('normalizeGitRemote', () => {
   test('collapses https, ssh, scp, and git protocols to host/org/repo', () => {
     const cases: [string, string][] = [
