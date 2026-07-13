@@ -449,29 +449,46 @@ function WorkflowsMini({ workflows, lang, currency, brlRate, sessionById }: {
         ? workflows.map(w => (
           <WorkflowRunCard key={w.runId} run={w} pt={pt} currency={currency} brlRate={brlRate} sessionById={sessionById} />
         ))
-        : groups.map(g => {
-          const s = sessionById.get(g.sessionId)
-          const label = s ? sessionLabel(s) : g.sessionId.slice(0, 8)
-          return (
-            <div key={g.sessionId} style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 12px', background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border)' }}>
-                <MessageSquare size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
-                <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, maxWidth: '60%' }}>{label}</span>
-                <span style={{ marginLeft: 'auto', display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
-                  <span><strong style={{ color: 'var(--text-primary)' }}>{g.totals.runs}</strong> {pt ? 'workflows' : 'workflows'}</span>
-                  <span>{g.totals.agents} {pt ? 'agentes' : 'agents'}</span>
-                  <span>{fmt(g.totals.tokensIn + g.totals.tokensOut)} tok</span>
-                  <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{fmtCost(g.totals.costUSD, currency, brlRate)}</span>
-                </span>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10 }}>
-                {g.runs.map(w => (
-                  <WorkflowRunCard key={w.runId} run={w} pt={pt} currency={currency} brlRate={brlRate} sessionById={sessionById} />
-                ))}
-              </div>
-            </div>
-          )
-        })}
+        : groups.map(g => (
+          <SessionGroupCard key={g.sessionId} group={g} pt={pt} currency={currency} brlRate={brlRate} sessionById={sessionById} />
+        ))}
+    </div>
+  )
+}
+
+function SessionGroupCard({ group: g, pt, currency, brlRate, sessionById }: {
+  group: ReturnType<typeof groupRunsBySession>[number]
+  pt: boolean; currency: 'USD' | 'BRL'; brlRate: number; sessionById: Map<string, SessionMeta>
+}) {
+  const [open, setOpen] = useState(true)
+  const s = sessionById.get(g.sessionId)
+  const label = s ? sessionLabel(s) : g.sessionId.slice(0, 8)
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 12px', background: 'var(--bg-elevated)', borderBottom: open ? '1px solid var(--border)' : 'none', cursor: 'pointer' }}
+      >
+        <ChevronDown size={13} style={{ transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform 0.2s', color: 'var(--text-tertiary)', flexShrink: 0 }} />
+        <MessageSquare size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, maxWidth: '55%' }}>{label}</span>
+        <span style={{ marginLeft: 'auto', display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+          <span><strong style={{ color: 'var(--text-primary)' }}>{g.totals.runs}</strong> {pt ? 'workflows' : 'workflows'}</span>
+          <span>{g.totals.agents} {pt ? 'agentes' : 'agents'}</span>
+          <span>{fmt(g.totals.tokensIn + g.totals.tokensOut)} tok</span>
+          <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{fmtCost(g.totals.costUSD, currency, brlRate)}</span>
+        </span>
+      </div>
+      {/* Animated collapse — glides open/closed instead of snapping. */}
+      <div style={{ display: 'grid', gridTemplateRows: open ? '1fr' : '0fr', transition: 'grid-template-rows 0.28s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+        <div style={{ overflow: 'hidden', minHeight: 0 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10 }}>
+            {g.runs.map(w => (
+              <WorkflowRunCard key={w.runId} run={w} pt={pt} currency={currency} brlRate={brlRate} sessionById={sessionById} />
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
