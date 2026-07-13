@@ -108,10 +108,23 @@ async function detectServices(): Promise<Services> {
 }
 
 // ── stopping ────────────────────────────────────────────────────────────────
+
+/** Parse `lsof -ti` output into a pid list, dropping blanks and the caller's OWN
+ *  pid. The health check (`isServerRunning` → fetch to PORT) leaves a keep-alive
+ *  client socket open, so `lsof -ti tcp:PORT` returns the CLI's own pid alongside
+ *  the server's — killing the raw list SIGTERM'd the CLI itself before it could
+ *  restart the server. */
+export function pidsToKill(lsofOut: string, selfPid: number): string[] {
+  const self = String(selfPid)
+  return lsofOut.split(/\s+/).filter(Boolean).filter((pid) => pid !== self)
+}
+
 async function stopLocal(s: CliStrings): Promise<void> {
   process.stdout.write(`  ${D}${s.stoppingLocal}${R}\n`)
-  const lsof = await sh(['lsof', '-ti', `tcp:${PORT}`])
-  const pids = lsof.out.split(/\s+/).filter(Boolean)
+  // `-sTCP:LISTEN` targets only the listening server, never a client connection
+  // (e.g. our own health-check socket); pidsToKill drops our pid as a safety net.
+  const lsof = await sh(['lsof', '-ti', `tcp:${PORT}`, '-sTCP:LISTEN'])
+  const pids = pidsToKill(lsof.out, process.pid)
   if (pids.length) { for (const pid of pids) await sh(['kill', pid]) }
   else await sh(['pkill', '-f', 'agentop server'])
   for (let i = 0; i < 20; i++) { if (!(await isServerRunning())) return; await sleep(150) }
