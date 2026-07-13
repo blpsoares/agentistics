@@ -43,6 +43,10 @@ services:
       PORT: "47291"
       SERVE_STATIC: "1"
     volumes:
+      # The app's writable data dir (preferences, consolidate store, sync state). A named
+      # volume so it survives container recreation (down/up, image upgrade) — otherwise the
+      # archive-mode consent gate + install prompt reappear on every recreate.
+      - agentistics_data:/root/.agentistics
       # Host harness dirs mounted read-only — only read when AGENTISTICS_CENTRAL_USER is
       # set (self-contribution). Harmless (and unused) on a dedicated central; remove these
       # lines if you prefer not to expose the host directories to the container at all.
@@ -58,3 +62,4 @@ services:
 
 volumes:
   mongo_data:
+  agentistics_data:

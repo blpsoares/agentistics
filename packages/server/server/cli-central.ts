@@ -134,10 +134,16 @@ services:
       SERVE_STATIC: "1"
     ports:
       - "\${BIND_IP:-0.0.0.0}:\${APP_PORT:-48080}:47291"
+    # Writable data dir (preferences, consolidate store). A named volume so it survives the
+    # \`--force-recreate\` that every \`agentop central up\` does — otherwise the archive-mode
+    # consent gate + install prompt reappear on every up.
+    volumes:
+      - agentistics_data:/root/.agentistics
     restart: unless-stopped
 
 volumes:
   mongo_data:
+  agentistics_data:
 `
 
 const hex = (bytes: number) => randomBytes(bytes).toString('hex')

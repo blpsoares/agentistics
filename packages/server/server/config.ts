@@ -26,6 +26,11 @@ export const WEB_PORT = parseInt(process.env.WEB_PORT ?? String(PORT + 1), 10)
 // Reads union live + archive (live always wins); set AGENTISTICS_ARCHIVE=0 to disable.
 // ---------------------------------------------------------------------------
 export const ARCHIVE_ENABLED = process.env.AGENTISTICS_ARCHIVE !== '0'
+// The app's own writable data dir. In Docker (machine + self-contributing central) this is
+// the read-WRITE ~/.agentistics mount, whereas CLAUDE_DIR is the host ~/.claude mounted
+// read-only — so anything the app must persist (preferences, consolidate store, sync state)
+// belongs here, never under CLAUDE_DIR.
+export const AGENTISTICS_DATA_DIR = process.env.AGENTISTICS_DIR ?? join(HOME_DIR, '.agentistics')
 export const ARCHIVE_DIR = process.env.AGENTISTICS_ARCHIVE_DIR ?? join(HOME_DIR, '.agentistics', 'archive')
 export const ARCHIVE_PROJECTS_DIR = join(ARCHIVE_DIR, 'projects')
 export const ARCHIVE_SESSION_META_DIR = join(ARCHIVE_DIR, 'usage-data', 'session-meta')

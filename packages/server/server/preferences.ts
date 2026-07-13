@@ -1,9 +1,14 @@
 import { join } from 'path'
-import { CLAUDE_DIR } from './config'
+import { AGENTISTICS_DATA_DIR, CLAUDE_DIR } from './config'
 import type { TeamConfig } from '@agentistics/core'
 import { DEFAULT_TEAM } from '@agentistics/core'
 
-export const PREFERENCES_FILE = join(CLAUDE_DIR, 'agentistics-preferences.json')
+// Preferences live in the writable ~/.agentistics dir. The legacy location under CLAUDE_DIR
+// is read-only in Docker (host ~/.claude mounted :ro), which silently broke persistence and
+// re-asked the consent gate every launch. We still READ the legacy file (and migrate it) so
+// native installs that predate this change keep their saved choices.
+export const PREFERENCES_FILE = join(AGENTISTICS_DATA_DIR, 'preferences.json')
+export const LEGACY_PREFERENCES_FILE = join(CLAUDE_DIR, 'agentistics-preferences.json')
 
 export interface CustomGridItem {
   i: string
@@ -61,22 +66,47 @@ const DEFAULT_PREFS: Preferences = {
   team: DEFAULT_TEAM,
 }
 
-export async function readPreferences(): Promise<Preferences> {
+/** Read + parse a preferences JSON file, or null if it's absent/empty/corrupt. */
+async function readJsonPrefs(path: string): Promise<Preferences | null> {
   try {
-    const file = Bun.file(PREFERENCES_FILE)
-    if (!(await file.exists())) return DEFAULT_PREFS
+    const file = Bun.file(path)
+    if (!(await file.exists())) return null
     const text = await file.text()
-    if (!text.trim()) return DEFAULT_PREFS
-    const parsed = JSON.parse(text) as Preferences
-    return { ...DEFAULT_PREFS, ...parsed }
+    if (!text.trim()) return null
+    return JSON.parse(text) as Preferences
   } catch (err) {
-    console.error('[preferences] failed to read', err)
-    return DEFAULT_PREFS
+    console.error('[preferences] failed to read', path, err)
+    return null
   }
 }
 
-export async function writePreferences(prefs: Preferences): Promise<void> {
-  const current = await readPreferences()
+/** Read preferences from `primary`, falling back to `legacy` (and migrating it to `primary`
+ *  best-effort) when the primary file is absent. Exported for tests; `readPreferences` binds
+ *  the real paths. */
+export async function readPreferencesFrom(primary: string, legacy: string): Promise<Preferences> {
+  const p = await readJsonPrefs(primary)
+  if (p) return { ...DEFAULT_PREFS, ...p }
+  const l = await readJsonPrefs(legacy)
+  if (l) {
+    // One-time migration so future reads hit the writable primary. The legacy dir may be
+    // read-only (Docker), so a failed migration write is expected and ignored.
+    try { await Bun.write(primary, JSON.stringify({ ...DEFAULT_PREFS, ...l }, null, 2)) } catch { /* read-only legacy dir */ }
+    return { ...DEFAULT_PREFS, ...l }
+  }
+  return DEFAULT_PREFS
+}
+
+export async function readPreferences(): Promise<Preferences> {
+  return readPreferencesFrom(PREFERENCES_FILE, LEGACY_PREFERENCES_FILE)
+}
+
+/** Merge `prefs` over the current preferences and persist to `primary`. Exported for tests. */
+export async function writePreferencesTo(primary: string, legacy: string, prefs: Preferences): Promise<void> {
+  const current = await readPreferencesFrom(primary, legacy)
   const merged = { ...current, ...prefs }
-  await Bun.write(PREFERENCES_FILE, JSON.stringify(merged, null, 2))
+  await Bun.write(primary, JSON.stringify(merged, null, 2))
+}
+
+export async function writePreferences(prefs: Preferences): Promise<void> {
+  return writePreferencesTo(PREFERENCES_FILE, LEGACY_PREFERENCES_FILE, prefs)
 }
