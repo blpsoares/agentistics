@@ -204,3 +204,9 @@ html, body {
     -webkit-tap-highlight-color: transparent;
   }
 }
+
+/* Horizontal-only scroll for the repo-detail tab bar: keep left/right scroll on
+   mobile but hide the scrollbar chrome. overflow-x:auto otherwise promotes
+   overflow-y to auto and the tabs' -1px marginBottom shows a vertical scrollbar. */
+.tabscroll { scrollbar-width: none; }
+.tabscroll::-webkit-scrollbar { display: none; }

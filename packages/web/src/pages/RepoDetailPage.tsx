@@ -5,8 +5,9 @@ import {
   Clock, GitCommit, ChevronDown, DollarSign, Cpu, Wrench, Bot, FileCode, MessageSquare, Database, AlertTriangle,
 } from 'lucide-react'
 import type { AppContext, } from '../lib/app-context'
-import type { SessionMeta, MemberPresence } from '@agentistics/core'
+import type { SessionMeta, MemberPresence, HarnessId, WorkflowRun } from '@agentistics/core'
 import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost } from '@agentistics/core'
+import { capable, HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { useDerivedStats } from '../hooks/useData'
 import { Section } from '../components/Section'
 import { ModelBreakdown } from '../components/ModelBreakdown'
@@ -44,12 +45,17 @@ export default function RepoDetailPage() {
     () => new Set((scoped?.filteredSessions ?? []).map(s => s.session_id)),
     [scoped],
   )
+  const sessionByIdWf = useMemo(
+    () => new Map((data.sessions ?? []).map(s => [s.session_id, s] as [string, SessionMeta])),
+    [data.sessions],
+  )
 
   if (!scoped) return null
 
   const sessions = scoped.filteredSessions
   const ciSessions = sessions.filter(s => s.ci)
   const workflows = (data.workflows ?? []).filter(w => sessionIds.has(w.sessionId))
+  const harnessOf = (w: WorkflowRun): HarnessId => sessionByIdWf.get(w.sessionId)?.harness ?? 'claude'
 
   const title = linked ? repoShortName(remote) : (folderPath.split('/').filter(Boolean).pop() || (pt ? 'Sem repositório' : 'No repository'))
   const host = linked ? remote.split('/')[0]! : ''
@@ -57,9 +63,9 @@ export default function RepoDetailPage() {
   const tabs: { id: Tab; label: string; icon: React.ReactNode; show: boolean; badge?: number }[] = [
     { id: 'overview', label: pt ? 'Visão geral' : 'Overview', icon: <GitBranch size={13} />, show: true },
     { id: 'members', label: pt ? 'Membros' : 'Members', icon: <Users size={13} />, show: isCentral, badge: scoped.repoStats[0]?.members.length },
-    { id: 'actions', label: 'Actions', icon: <Zap size={13} />, show: true, badge: ciSessions.length || undefined },
+    { id: 'actions', label: 'Actions', icon: <Zap size={13} />, show: ciSessions.length > 0, badge: ciSessions.length || undefined },
     { id: 'sessions', label: pt ? 'Sessões' : 'Sessions', icon: <Clock size={13} />, show: true },
-    { id: 'workflows', label: 'Workflows', icon: <WorkflowIcon size={13} />, show: workflows.length > 0, badge: workflows.length },
+    { id: 'workflows', label: 'Dynamic Workflows', icon: <WorkflowIcon size={13} />, show: workflows.length > 0 && workflows.some(w => capable(harnessOf(w), 'dynamicWorkflows')), badge: workflows.length },
   ]
 
   return (
@@ -112,7 +118,7 @@ export default function RepoDetailPage() {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', overflowX: 'auto' }}>
+      <div className="tabscroll" style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', overflowX: 'auto' }}>
         {tabs.filter(t => t.show).map(t => {
           const active = tab === t.id
           return (
@@ -189,7 +195,7 @@ export default function RepoDetailPage() {
       )}
 
       {tab === 'workflows' && (
-        <Section title={<><WorkflowIcon size={14} /> Workflows</>}>
+        <Section title={<><WorkflowIcon size={14} /> Dynamic Workflows</>}>
           <WorkflowsMini workflows={workflows} lang={lang} currency={currency} brlRate={brlRate} />
         </Section>
       )}
