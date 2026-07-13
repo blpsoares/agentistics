@@ -274,13 +274,13 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
           )}
         </div>
 
-        {/* Desktop: force a row break here so period controls stay on row 1 and the dimension
-            filters (members/harnesses/presence/repos/projects/models) flow onto row 2 as a
-            deliberate second line — the bar never wraps mid-group. Mobile keeps the single
-            wrapping flow with a vertical divider. */}
-        {isMobile
-          ? (!compact && <div style={{ width: 1, height: 20, background: 'var(--border)', flexShrink: 0 }} />)
-          : <div style={{ flexBasis: '100%', height: 0 }} aria-hidden />}
+        {/* Dimension filters (members/harnesses/presence/repos/projects/models). On desktop this
+            wrapper is a deliberate SECOND row (flexBasis:100% forces its own line, so the bar never
+            wraps mid-group); on mobile `display:contents` dissolves the wrapper so the controls flow
+            inline exactly as before. */}
+        <div style={isMobile
+          ? { display: 'contents' }
+          : { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', flexBasis: '100%' }}>
 
         {users.length > 0 && (
           <UsersFilter
@@ -568,6 +568,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
             </div>
           )}
         </div>
+        </div>{/* end dimension-filters row */}
 
         {/* Reset button removed — clear individual chips via their × instead. */}
       </div>
