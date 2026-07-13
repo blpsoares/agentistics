@@ -286,6 +286,27 @@ async function runAgentistics(s: CliStrings, localRunning: boolean): Promise<Sta
   return 'handled'
 }
 
+/** Restart every service currently up (local server + central + machine containers), in place. */
+async function restartRunning(s: CliStrings, svc: Services): Promise<boolean> {
+  if (!(svc.local || svc.central || svc.machine)) return false
+  if (svc.local) {
+    process.stdout.write(`  ${D}${s.restartingLocal}${R}\n`)
+    await stopLocal(s)
+    startBackground(s)
+  }
+  if (svc.central) {
+    process.stdout.write(`  ${D}${s.restartingCentral}${R}\n`)
+    await runCentral('restart', [])
+  }
+  if (svc.machine) {
+    process.stdout.write(`  ${D}${s.restartingMachine}${R}\n`)
+    const ids = await dockerIds(`ancestor=${MACHINE_IMAGE}`)
+    if (ids.length) await sh(['docker', 'restart', ...ids])
+  }
+  process.stdout.write(`\n  ${GR}${s.restartedAll}${R}\n`)
+  return true
+}
+
 // ── main loop ─────────────────────────────────────────────────────────────────
 export async function runStart(): Promise<StartResult> {
   if (!process.stdin.isTTY) return 'foreground'
@@ -308,6 +329,7 @@ export async function runStart(): Promise<StartResult> {
     ]
     if (mode === 'member') choices.push({ name: s.itemDisconnect, value: 'disconnect', hint: s.itemDisconnectHint })
     else choices.push({ name: s.itemConnect, value: 'connect', hint: s.itemConnectHint })
+    if (anyRunning) choices.push({ name: s.itemRestart, value: 'restart', hint: s.itemRestartHint })
     if (anyRunning) choices.push({ name: s.itemStop, value: 'stop' })
     choices.push({ name: s.itemLanguage, value: 'language' })
     choices.push({ name: s.quit, value: 'quit' })
@@ -335,6 +357,9 @@ export async function runStart(): Promise<StartResult> {
       case 'disconnect':
         await disconnectFlow(s)
         acted = true
+        break
+      case 'restart':
+        acted = await restartRunning(s, svc)
         break
       case 'stop':
         acted = await stopMenu(s, svc)

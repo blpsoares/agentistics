@@ -54,7 +54,7 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── version.ts           → getVersionInfo (current vs latest); drives update banners/notifications
   ├── autostart.ts         → systemd user service + loginctl linger + ~/.bashrc + ~/.zshrc update-check hook
   ├── cli-setup.ts / cli-central.ts / cli-member.ts → the agentop setup/central/member command handlers
-  ├── cli-start.ts         → the `agentop start` interactive launcher (config vs running status, start agentistics / agentistics central, connect/disconnect, stop, language)
+  ├── cli-start.ts         → the `agentop start` interactive launcher (config vs running status, start agentistics / agentistics central, connect/disconnect, restart-all, stop, language)
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
   ├── cli-i18n.ts          → EN/PT strings for the launcher (CLI is English by default; language follows --lang / preferences.lang / the in-launcher toggle)
   ├── team-tokens.ts       → mint / rotate / revoke / validate tokens (stored as sha256 hashes only)
