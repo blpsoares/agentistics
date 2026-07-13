@@ -898,7 +898,11 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
 
       <nav style={{ display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
         {items.map(item => {
-          const active = item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to)
+          const active = item.to === '/'
+            ? location.pathname === '/'
+            : item.to === '/repositories'
+              ? inReposSection
+              : location.pathname.startsWith(item.to)
           const label = pt ? item.labelPt : item.labelEn
           // The Repositories item owns a collapsible "Actions" (GitHub Actions) submenu.
           const hasSubmenu = item.to === '/repositories'
