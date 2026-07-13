@@ -29,6 +29,7 @@ packages/server/bin/cli.ts  (binary entry point — agentop)
   ├── agentop watch        → server/otel-watcher.ts (daemon only)
   ├── agentop central …    → server/cli-central.ts (wraps central.sh: up/init/down/logs/status/restart/pull)
   ├── agentop member …     → server/cli-member.ts (connect/leave/status; whoami-verified, no browser)
+  ├── agentop ci-push      → server/ci-push.ts (one-shot GitHub Actions runner → central push; env AGENTISTICS_CENTRAL_URL/AGENTISTICS_CI_TOKEN)
   ├── agentop autostart …  → server/autostart.ts (systemd user service + linger + ~/.bashrc update-check hook)
   ├── agentop upgrade      → server/upgrade.ts
   └── agentop check-update → server/version.ts (prints a banner only when outdated; silent otherwise)
@@ -62,6 +63,9 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── team-source.ts / team-admin.ts → central-side team read for buildApiResponse + members-panel admin routes
   ├── team-uploader.ts     → member→central push: sent-state, sync-signature auto-reconcile, push-on-change (notifyDataChanged), auto-reset on revoke, /api/team/status pill
   ├── team-watch.ts        → central watches the team collection → SSE refresh (fallback)
+  ├── team-repos.ts        → central repo registry (`repos` collection): registerRepo (mints a repo-bound CI token + records name/remote; re-register rotates), listRepos, unregisterRepo
+  ├── ci-push.ts           → `agentop ci-push`: one-shot push of an ephemeral GitHub Actions runner's ~/.claude metrics to a central; prefers keyless OIDC (fetches the runner's id-token), falls back to a static token; never fails the CI job on a push error
+  ├── team-oidc.ts         → verifies GitHub Actions OIDC JWTs (jose createRemoteJWKSet + jwtVerify; issuer/audience/expiry) for keyless CI ingest; pure helpers pickCiClaims/looksLikeJwt/ciMemberId
   ├── team-agent.ts / team-agent-client.ts → reverse-channel WebSocket: WS-authoritative presence signals, ping/pong latency, on-demand chat fetch
   ├── team-presence.ts     → computePresence (WS-authoritative online/offline + latency; heartbeat only for pure-HTTP members)
   ├── central-config.ts    → Mongo central config: instanceId + pushIntervalSec + includeOfflineData
@@ -90,6 +94,9 @@ packages/web/src/ (React + Vite, port 47292 in dev)
   │   ├── CustomPage.tsx        → custom layout builder (/custom route)
   │   ├── CostsPage.tsx         → cost deep-dive page
   │   ├── ProjectsPage.tsx      → projects overview page
+  │   ├── RepositoriesPage.tsx  → repositories overview (/repositories): cards grouped by normalized git remote (RepositoriesList); unlinked sessions show as a flagged "no repo" card; links to /repo/:id
+  │   ├── RepoDetailPage.tsx    → per-repo detail (/repo/:id): scopes a repo via an overridden `repos` filter (no global filter mutation) + tabs Overview/Members/Actions/Sessions/Workflows
+  │   ├── ActionsPage.tsx       → /repositories/actions: all CI-runner sessions (SessionMeta.ci) grouped by repo — the GitHub Actions submenu of Repositories
   │   ├── ToolsPage.tsx         → tools breakdown page
   │   ├── HarnessPage.tsx       → generic per-harness dashboard at /h/:harness (validates param; sets harness filter; tab bar: "Overview" = dashboard, "Data & sources" = HarnessInfoPanel); replaced the old hardcoded CodexPage
   │   └── ComparePage.tsx       → unified side-by-side comparison at /compare (per-harness colors; N/A for incapable metrics; sessions/messages/tokens/cost + comparatives: usage-by-hour with peak hour, busiest day-of-week, activity-over-time sparkline, peak token day / peak session cost)
@@ -99,6 +106,7 @@ packages/web/src/ (React + Vite, port 47292 in dev)
       ├── HarnessInfoPanel.tsx  → inline panel explaining each harness's data sources / what's captured / what's missing (and why) / caveats; driven by HARNESS_INFO in lib/harness.ts
       ├── PreferencesModal.tsx  → unified Settings modal with tabs: Preferences / Live / Install (Environment tab removed)
       ├── TeamLogin.tsx / TeamMembers.tsx / TeamSettings.tsx → central: password login, members panel (mint/rotate/revoke/rename + presence), team settings (interval/express, offline-data policy)
+  ├── TeamRepos.tsx         → central admin panel (in TeamSettings): register/unregister repos (POST/DELETE /api/team/repos) + generates a ready-to-paste GitHub Actions workflow snippet + `gh` setup commands with the minted CI token
       ├── DeployCentral.tsx / PresenceFilter.tsx / MemberConnectionStatus.tsx → central deploy help, online/offline member filter, member-side connection pill
       └── NotificationToasts.tsx / NotificationBell.tsx / UpdateModal.tsx → auto-dismiss toasts, header bell (history + unread badge), mode-aware upgrade modal
 
@@ -155,6 +163,60 @@ The consolidate store is namespaced by harness: `~/.agentistics/sessions/<harnes
 - **Phase 3** (planned): Gemini OTel integration for real token/cost data.
 
 See `docs/superpowers/specs/2026-06-19-multi-harness-tracking-design.md` for the full design.
+
+---
+
+## Repository dimension (group by git remote)
+
+Metrics can be grouped **by repository** (git remote) independent of the local path or which
+machine produced them — so a repo's usage aggregates across all devs and CI agents. See
+`docs/github-actions.md` for the GitHub Actions half.
+
+### The key — `normalizeGitRemote` (single source of truth)
+
+`normalizeGitRemote(url)` in `@agentistics/core` (`packages/core/src/types.ts`) collapses any
+remote form (https / ssh / scp / git, with or without credentials/port/`.git`) into a stable,
+**protocol-less** key `host/org/repo` (e.g. `github.com/org/repo`). Host is lowercased, path case
+preserved. Returns `''` for local paths / `file://` / junk. **Never key repos by anything else.**
+`repoShortName(remote)` drops the host for display (`org/repo`).
+
+### How it's captured and threaded
+
+- `git.ts getGitRemote(projectPath)` reads `remote.origin.url` (same Windows/WSL + no-prompt guards
+  as the stats helpers) and normalizes it.
+- `data.ts scanProjectDir` resolves the remote once per project and **stamps `SessionMeta.git_remote`
+  onto every session** (+ `ServerProject.gitRemote`). Because it lives on the session, the remote
+  travels into the consolidate store → team uploader → Mongo — the central has no filesystem access
+  to members' repos, so per-session is the only place it can live.
+- Frontend: `useDerivedStats` builds `repoStats` (per-remote aggregate; `remote === ''` = the
+  "no linked repository" bucket, never hidden) and honors a `Filters.repos` filter (scopes cost/
+  tokens session-side like a project filter). `RepoStat` is exported from `hooks/useData.ts`.
+
+### GitHub Actions — `SessionMeta.ci` + repo-bound tokens
+
+An ephemeral Claude Code Actions runner pushes its metrics via `agentop ci-push` →
+`POST /api/team/ingest`. Auth is **keyless GitHub OIDC** (preferred): the runner presents a
+short-lived GitHub-signed JWT, the central verifies it against GitHub's JWKS (`team-oidc.ts`, uses
+`jose`) and checks the `repository` claim against the **registered repos allowlist** — no secret is
+stored. A **repo-bound static token** (minted by `POST /api/team/repos`) is the fallback. Either
+way the central **authoritatively stamps** `git_remote` + `ci: true` + `user = github-actions` (via
+`stampCiSessions`) — a runner cannot mis-report its repo. CI sessions are keyed by `ciMemberId`
+(`repo:<remote>`). `ci === true` sessions power the **Repositories → Actions** view. Enable OIDC by
+setting `AGENTISTICS_OIDC_AUDIENCE` on the central (the workflow requests that same audience).
+
+Cloud runners need the central reachable without exposing the dashboard. `AGENTISTICS_INGEST_ONLY=1`
+(config.ts) makes a central serve **only** `POST /api/team/ingest` (404 for everything else, checked
+right after the OPTIONS handler in `index.ts`) — run it as a public ingest instance sharing Mongo
+with a separate private dashboard instance. See `docs/github-actions.md`.
+
+### Repository rules
+
+- **`normalizeGitRemote` is the only way to key a repo** — never parse `project_path` strings.
+- **`git_remote` lives on the session** (not only the project) so it reaches the central.
+- **CI attribution is server-authoritative** — stamped from the repo token, never trusted from the
+  runner's payload.
+- **`stats-cache.json` stays Claude-only** — repo/CI aggregates come from per-session sums, same as
+  every non-Claude dimension.
 
 ---
 

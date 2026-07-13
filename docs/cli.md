@@ -34,6 +34,7 @@ agentop --version    # print version (and a notice if an update exists)
 | [`watch`](#watch) | OpenTelemetry metrics daemon only (headless) |
 | [`central`](#central) | Manage the Team Mode central (wraps `central.sh`) |
 | [`member`](#member) | Join / leave / inspect a Team Mode central from this machine |
+| [`ci-push`](#ci-push) | One-shot push of a GitHub Actions run's metrics to a central (per repo) |
 | [`autostart`](#autostart) | Start a mode with the system (systemd user service) |
 | [`upgrade`](#upgrade) | Upgrade `agentop` to the latest release |
 | [`check-update`](#check-update) | Print an "update available" banner, else stay silent |
@@ -281,6 +282,39 @@ user:      alice-laptop
 last sync: 2026-07-01T12:34:56.000Z
 state:     ok
 ```
+
+---
+
+## `ci-push`
+
+One-shot push of a **GitHub Actions** run's computed metrics to a central, attributed to
+the repository it ran in. Meant to be the **last step** of a workflow that already runs Claude
+Code (it does **not** run Claude) — the ephemeral runner populates `~/.claude`, then `ci-push`
+sends that run's session/token/cost aggregates before the runner is torn down. It reads
+everything from the environment and takes no flags.
+
+| Env var | Required | Description |
+|---------|----------|-------------|
+| `AGENTISTICS_CENTRAL_URL` | yes | Central base URL, e.g. `https://central.example.com` |
+| `AGENTISTICS_CI_TOKEN` | no | Repo-bound static token (fallback when OIDC is unavailable) |
+
+Auth is **keyless GitHub OIDC** by default: with `permissions: id-token: write` on the job,
+`ci-push` fetches a short-lived GitHub-signed token itself (audience = `AGENTISTICS_CENTRAL_URL`)
+and the central verifies it against GitHub's JWKS. No secret needed. If no OIDC token can be
+fetched it falls back to `AGENTISTICS_CI_TOKEN`. The repo must first be **registered** on the
+central (Settings → Team → Repositories, which allowlists the remote and, for the fallback,
+mints the token).
+
+```bash
+# inside a GitHub Actions job, after the Claude Code Action step:
+curl -fsSL "https://github.com/blpsoares/agentistics/releases/latest/download/agentop" -o agentop
+chmod +x agentop
+./agentop ci-push
+```
+
+`ci-push` **never fails your job** — a push error (central down, unverifiable token) logs and
+exits 0. It pushes **computed metrics only**, never chat. See
+[`docs/github-actions.md`](./github-actions.md) for the full workflow + registration walkthrough.
 
 ---
 

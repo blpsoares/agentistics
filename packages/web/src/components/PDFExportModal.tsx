@@ -4,7 +4,7 @@ import {
 } from 'lucide-react'
 import { format, parseISO, subDays } from 'date-fns'
 import type { AppData, Filters, Lang, ModelUsage, SessionMeta, HarnessId } from '@agentistics/core'
-import { formatModel, formatProjectName, calcCost, sessionLabel, fmt, fmtCost, fmtFull } from '@agentistics/core'
+import { formatModel, formatProjectName, repoShortName, calcCost, sessionLabel, fmt, fmtCost, fmtFull } from '@agentistics/core'
 import { useDerivedStats, blendedCostPerToken, type HarnessSummary } from '../hooks/useData'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
 
@@ -1184,6 +1184,16 @@ export function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, 
     ? pdfFilters.models.length === 1 ? formatModel(pdfFilters.models[0]!) : `${pdfFilters.models.length} models`
     : null
 
+  // Scope labels for the report header — so a repo/project-filtered PDF says what it covers.
+  const repoLabel = pdfFilters.repos && pdfFilters.repos.length > 0
+    ? pdfFilters.repos.length === 1
+      ? (pdfFilters.repos[0] === '' ? (pt ? 'Sem repositório' : 'No repository') : repoShortName(pdfFilters.repos[0]!))
+      : `${pdfFilters.repos.length} ${pt ? 'repositórios' : 'repos'}`
+    : null
+  const projectLabel = pdfFilters.projects && pdfFilters.projects.length > 0
+    ? pdfFilters.projects.length === 1 ? formatProjectName(pdfFilters.projects[0]!) : `${pdfFilters.projects.length} ${pt ? 'projetos' : 'projects'}`
+    : null
+
   // Harness-aware title: use the harness label when filtered to a specific harness,
   // otherwise fall back to the neutral 'agentistics' brand name.
   const harnessTitle = pdfFilters.harness
@@ -1208,6 +1218,8 @@ export function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, 
             <div style={{ fontSize: 20, fontWeight: 700, color: c.text, lineHeight: 1 }}>{harnessTitle}</div>
             <div style={{ fontSize: 11, color: c.textSec, marginTop: 3 }}>
               {pt ? 'Relatório de uso' : 'Usage Report'} · {periodLabel}
+              {repoLabel && ` · ${repoLabel}`}
+              {projectLabel && ` · ${projectLabel}`}
               {modelLabel && ` · ${modelLabel}`}
             </div>
           </div>

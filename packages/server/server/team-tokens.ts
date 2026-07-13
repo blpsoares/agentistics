@@ -31,6 +31,11 @@ export interface TokenDoc {
   label: string
   createdAt: string
   lastSeenAt: string | null
+  /** Normalized git remote (`host/org/repo`) this token is bound to, for repo/CI tokens.
+   *  When set, ingest stamps every pushed session's `git_remote` with this value authoritatively. */
+  repo?: string
+  /** True for GitHub Actions / CI tokens — ingest stamps `ci: true` on every pushed session. */
+  ci?: boolean
 }
 
 export type MemberInfo = {
@@ -73,9 +78,10 @@ async function getTokensCollection(): Promise<Collection<TokenDoc>> {
  * Mint a new random ingest token. Stores only the SHA-256 hash in Mongo.
  * Returns the plaintext token (shown once; never stored or logged here).
  */
-export async function mintToken(user: string, label: string): Promise<string> {
-  // 32 random bytes → 64-char hex string (256 bits of entropy)
-  const token = randomBytes(32).toString('hex')
+export async function mintToken(user: string, label: string, opts?: { repo?: string; ci?: boolean }): Promise<string> {
+  // 32 random bytes → 64-char hex string (256 bits of entropy). Repo/CI tokens use 48 bytes
+  // (96-char) — longer since they live as a GitHub Actions secret with broader blast radius.
+  const token = randomBytes(opts?.ci ? 48 : 32).toString('hex')
   const id = hashToken(token)
   const doc: TokenDoc = {
     _id: id,
@@ -83,6 +89,8 @@ export async function mintToken(user: string, label: string): Promise<string> {
     label,
     createdAt: new Date().toISOString(),
     lastSeenAt: null,
+    ...(opts?.repo ? { repo: opts.repo } : {}),
+    ...(opts?.ci ? { ci: true } : {}),
   }
   const col = await getTokensCollection()
   await col.insertOne(doc)
@@ -190,7 +198,7 @@ export async function hasAnyTokens(): Promise<boolean> {
  */
 export async function validateIngestToken(
   bearer: string | null,
-): Promise<{ ok: true; user: string; memberId: string } | { ok: false }> {
+): Promise<{ ok: true; user: string; memberId: string; repo?: string; ci?: boolean } | { ok: false }> {
   if (!bearer) return { ok: false }
   const id = hashToken(bearer)
   const col = await getTokensCollection()
@@ -198,7 +206,7 @@ export async function validateIngestToken(
   if (!doc) return { ok: false }
   // Update last-seen — fire and forget (non-critical, must not block the caller).
   void col.updateOne({ _id: id }, { $set: { lastSeenAt: new Date().toISOString() } }).catch(() => {})
-  return { ok: true, user: doc.user, memberId: id }
+  return { ok: true, user: doc.user, memberId: id, repo: doc.repo, ci: doc.ci }
 }
 
 /**

@@ -50,6 +50,22 @@ export const TEAM_DIR = process.env.AGENTISTICS_TEAM_DIR ?? join(HOME_DIR, '.age
 // TEAM_ORG namespaces docs; TEAM_INGEST_TOKEN (optional) gates ingestion.
 // ---------------------------------------------------------------------------
 export const TEAM_CENTRAL = process.env.AGENTISTICS_TEAM_CENTRAL === '1'
+// Ingest-only hardening: when set on a central, the instance serves ONLY
+// `POST /api/team/ingest` (+ its OPTIONS preflight) and returns 404 for everything else —
+// the dashboard, login, /api/data, static assets, all of it. Intended for a public-facing
+// central (for cloud GitHub Actions runners to push to) that shares its MongoDB with a
+// SEPARATE, private admin/dashboard instance. Exposing an ingest-only instance is low-risk:
+// there is nothing to read, only a token-gated write endpoint.
+export const INGEST_ONLY = process.env.AGENTISTICS_INGEST_ONLY === '1'
+// ---------------------------------------------------------------------------
+// GitHub Actions OIDC (keyless CI auth). A runner presents a short-lived,
+// GitHub-signed JWT instead of a static secret; the central verifies it against
+// GitHub's public JWKS and checks the `repository` claim against the registered
+// repos. Enabled only when an AUDIENCE is configured (forces a deliberate, secure
+// config — the workflow must request that same audience). Issuer defaults to GitHub.
+// ---------------------------------------------------------------------------
+export const OIDC_ISSUER = process.env.AGENTISTICS_OIDC_ISSUER ?? 'https://token.actions.githubusercontent.com'
+export const OIDC_AUDIENCE = process.env.AGENTISTICS_OIDC_AUDIENCE || undefined
 export const MONGO_URL = process.env.MONGO_URL ?? 'mongodb://localhost:27017'
 export const MONGO_DB = process.env.MONGO_DB ?? 'agentistics'
 export const TEAM_ORG = process.env.AGENTISTICS_TEAM_ORG ?? 'default'

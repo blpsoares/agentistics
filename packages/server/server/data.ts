@@ -6,7 +6,7 @@ import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
 import { writeWorkflowRuns, loadWorkflowRuns } from './workflow-store'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
-import { UUID_RE, decodeProjectDir, getProjectGitStats } from './git'
+import { UUID_RE, decodeProjectDir, getProjectGitStats, getGitRemote } from './git'
 import { parseSessionJsonl } from './jsonl'
 import { runHealthChecks, analyzeToolHealthIssues, analyzeCacheStaleness } from './health'
 import { extractAgentMetricsFromFile } from './agent-metrics'
@@ -37,6 +37,8 @@ export interface ServerProject {
   name: string
   sessions: { sessionId: string; created: string }[]
   git_stats?: ProjectGitStats
+  /** Normalized git remote (`host/org/repo`, no protocol) of this project's repo, when known. */
+  gitRemote?: string
   /** Team/central only: display names of members who own sessions in this project. */
   users?: string[]
 }
@@ -127,6 +129,7 @@ export async function loadSessionMetas(roots: string[] = [SESSION_META_DIR]): Pr
             })(),
             user_message_timestamps: (data.user_message_timestamps as string[]) ?? [],
             harness: 'claude',
+            git_remote: (data.git_remote as string) || undefined,
             _source: 'meta',
           }
 
@@ -309,6 +312,20 @@ async function scanProjectDir(
     ? sessionDates.reduce((a, b) => a < b ? a : b)
     : undefined
   const git_stats = await getProjectGitStats(projectPath, earliestSession)
+  // Resolve the repo's origin remote once per project. This is the local-machine source of
+  // the group-by-repository key; it's stamped onto every session below so it survives being
+  // pushed to a central (which has no filesystem access to the member's repos) and persisted
+  // to the consolidate store.
+  const gitRemote = await getGitRemote(projectPath)
+
+  // Stamp the remote onto this project's sessions so the dimension travels with each session.
+  if (gitRemote) {
+    for (const s of extraSessions) s.git_remote = gitRemote
+    for (const ps of projectSessions) {
+      const meta = metaMap.get(ps.sessionId)
+      if (meta && !meta.git_remote) meta.git_remote = gitRemote
+    }
+  }
 
   return {
     project: {
@@ -316,6 +333,7 @@ async function scanProjectDir(
       name: projectPath.split('/').filter(Boolean).pop() ?? projDir,
       sessions: projectSessions.sort((a, b) => b.created.localeCompare(a.created)),
       git_stats,
+      gitRemote,
     },
     extraSessions,
     workflowRuns,
@@ -659,6 +677,7 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
             path: s.project_path,
             name: s.project_path.split('/').filter(Boolean).pop() ?? s.project_path,
             sessions: [{ sessionId: id, created: s.start_time }],
+            gitRemote: s.git_remote || undefined,
           }
           projects.push(np)
           projByPath.set(s.project_path, np)
@@ -694,11 +713,14 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
         const existing = projects.find(p => p.path === s.project_path && p.path)
         if (existing) {
           existing.sessions.push({ sessionId: s.session_id, created: s.start_time })
+          // Backfill the repo remote if the project was created from a session that lacked it.
+          if (!existing.gitRemote && s.git_remote) existing.gitRemote = s.git_remote
         } else if (s.project_path) {
           projects.push({
             path: s.project_path,
             name: s.project_path.split('/').filter(Boolean).pop() ?? s.project_path,
             sessions: [{ sessionId: s.session_id, created: s.start_time }],
+            gitRemote: s.git_remote || undefined,
           })
         }
       }
@@ -729,11 +751,14 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
         const existing = projects.find(p => p.path === s.project_path && p.path)
         if (existing) {
           existing.sessions.push({ sessionId: s.session_id, created: s.start_time })
+          // Backfill the repo remote if the project was created from a session that lacked it.
+          if (!existing.gitRemote && s.git_remote) existing.gitRemote = s.git_remote
         } else if (s.project_path) {
           projects.push({
             path: s.project_path,
             name: s.project_path.split('/').filter(Boolean).pop() ?? s.project_path,
             sessions: [{ sessionId: s.session_id, created: s.start_time }],
+            gitRemote: s.git_remote || undefined,
           })
         }
       }

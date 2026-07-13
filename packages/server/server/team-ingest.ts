@@ -1,6 +1,6 @@
 import type { SessionMeta } from '@agentistics/core'
 import { getTeamCollection } from './mongo'
-import { parseIngestBody, toTeamDoc } from './team-store'
+import { parseIngestBody, toTeamDoc, stampCiSessions } from './team-store'
 import { TEAM_INGEST_TOKEN, TEAM_PASSWORD } from './config'
 import { validateIngestToken, hasAnyTokens } from './team-tokens'
 import { constantTimeEqual } from './auth'
@@ -42,6 +42,28 @@ export async function handleTeamIngest(req: Request): Promise<Response> {
   const authHeader = req.headers.get('authorization') ?? ''
   const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
 
+  // 0. GitHub Actions OIDC (keyless) — preferred for CI. The bearer is a short-lived,
+  //    GitHub-signed JWT (three dotted segments; our static tokens are hex, so no collision).
+  //    We verify it against GitHub's JWKS, require the `repository` to be a registered repo
+  //    (admin allowlist), and stamp git_remote + ci + user authoritatively from the VERIFIED
+  //    claim — no secret is ever stored. A JWT that fails OIDC falls through to the token paths.
+  const { oidcEnabled, looksLikeJwt } = await import('./team-oidc')
+  if (oidcEnabled() && looksLikeJwt(bearer)) {
+    const { verifyCiOidc, ciMemberId } = await import('./team-oidc')
+    const oidc = await verifyCiOidc(bearer!)
+    if (oidc.ok) {
+      const { normalizeGitRemote } = await import('@agentistics/core')
+      const remote = normalizeGitRemote(`github.com/${oidc.claims.repository}`)
+      const { isRepoRegistered } = await import('./team-repos')
+      if (remote && await isRepoRegistered(remote)) {
+        return handleIngestBody(req, ciMemberId(remote), 'github-actions', remote, true)
+      }
+      return new Response(JSON.stringify({ error: 'repository not registered on this central' }), { status: 403, headers: JSON_HEADERS })
+    }
+    // else: fall through — a dotted bearer that isn't a valid OIDC token won't match a hex token
+    // either, so the tiers below will return 401.
+  }
+
   // 1. Try minted token lookup (hashes bearer, looks up in Mongo, updates lastSeenAt).
   //    The token's memberId (hash) + user are AUTHORITATIVE — sessions are keyed by the
   //    stable memberId, and the authoritative user name prevents one member impersonating
@@ -49,7 +71,7 @@ export async function handleTeamIngest(req: Request): Promise<Response> {
   //    docs are resolved at read time by getMemberNameMap(), so no re-ingest is needed.
   const mintedResult = await validateIngestToken(bearer)
   if (mintedResult.ok) {
-    return handleIngestBody(req, mintedResult.memberId, mintedResult.user)
+    return handleIngestBody(req, mintedResult.memberId, mintedResult.user, mintedResult.repo, mintedResult.ci)
   }
 
   // 2. Legacy shared-secret fallback (constant-time compare).
@@ -132,7 +154,7 @@ export async function handleTeamLeave(req: Request): Promise<Response> {
  * @param overrideUser - Authoritative display name from the minted token. When absent, the
  *   self-declared `body.user` is used (legacy/open paths only).
  */
-async function handleIngestBody(req: Request, overrideMemberId?: string, overrideUser?: string): Promise<Response> {
+async function handleIngestBody(req: Request, overrideMemberId?: string, overrideUser?: string, overrideRepo?: string, overrideCi?: boolean): Promise<Response> {
   let raw: unknown
   try {
     raw = await req.json()
@@ -149,7 +171,12 @@ async function handleIngestBody(req: Request, overrideMemberId?: string, overrid
     // document is still structured consistently. These sessions cannot benefit from
     // rename-safety: a different self-declared user creates a new memberId → new docs.
     const memberId = overrideMemberId ?? `legacy:${user}`
-    const count = await ingestSessions(parsed.body.org, memberId, user, parsed.body.sessions)
+    // Repo-bound (CI) token → stamp git_remote + ci authoritatively on every pushed session,
+    // so a repo's GitHub Actions usage is attributed correctly no matter what the runner sent.
+    const sessions = (overrideRepo || overrideCi)
+      ? stampCiSessions(parsed.body.sessions, overrideRepo, overrideCi ?? false)
+      : parsed.body.sessions
+    const count = await ingestSessions(parsed.body.org, memberId, user, sessions)
     // Store the member's own statsCache (aggregated Claude history) so the central can
     // reproduce its exact totals — the deep history is never present as individual sessions.
     if (parsed.body.statsCache) {

@@ -101,6 +101,14 @@ export interface SessionMeta {
   harness: HarnessId
   /** Owning user in team mode. Undefined for local/Solo sessions. */
   user?: string
+  /** Normalized git remote of the session's repo (`host/org/repo`, no protocol) — the
+   *  "group by repository" key. Set server-side from the local repo's `remote.origin.url`
+   *  (or authoritatively from a repo-bound token on CI ingest). Empty/undefined when the
+   *  project is not a git repo or has no origin remote. See `normalizeGitRemote`. */
+  git_remote?: string
+  /** True when this session was produced by a CI runner (Claude Code GitHub Actions), stamped
+   *  authoritatively by the central on ingest via a repo-bound token. Powers the Actions view. */
+  ci?: boolean
   _source?: 'meta' | 'jsonl' | 'subdir'
   agentMetrics?: SessionAgentMetrics
   /** Number of MCP tool calls recorded in this session (Copilot adapter). */
@@ -217,6 +225,9 @@ export interface Project {
   name: string
   sessions: SessionIndex[]
   git_stats?: ProjectGitStats
+  /** Normalized git remote (`host/org/repo`, no protocol) of this project's repo, when known.
+   *  Drives the group-by-repository dimension (Repositories page). See `normalizeGitRemote`. */
+  gitRemote?: string
   /** Team/central only: display names of the members who own sessions in this project.
    *  Lets the frontend scope the project filter to the selected members deterministically,
    *  instead of re-matching paths against user-filtered sessions. Absent/empty on solo. */
@@ -339,6 +350,7 @@ export interface Filters {
   customStart: string
   customEnd: string
   projects: string[]   // empty = all projects
+  repos?: string[]     // empty/undefined = all repos; [''] targets the "no linked repo" bucket
   users?: string[]     // empty/undefined = all users
   models: string[]     // empty = all models
   harness?: HarnessId
@@ -444,4 +456,52 @@ export function getModelColor(modelId: string): string {
   if (modelId.startsWith('gpt-')) return '#10a37f' // OpenAI green
   if (modelId.startsWith('gemini')) return '#4285f4' // Google blue
   return '#8b5cf6'
+}
+
+/**
+ * Normalize a git remote URL into a stable, protocol-less grouping key of the form
+ * `host/org/repo` (e.g. `github.com/org/repo`). Pure — the single source of truth for
+ * how the "group by repository" dimension is keyed across the whole app.
+ *
+ * Collapses the many shapes a single repo's remote can take into one canonical value:
+ *   - `https://github.com/org/repo.git`            → `github.com/org/repo`
+ *   - `git@github.com:org/repo.git`                → `github.com/org/repo`   (scp-style)
+ *   - `ssh://git@github.com:22/org/repo`           → `github.com/org/repo`
+ *   - `https://x-access-token:ghs_…@github.com/o/r`→ `github.com/o/r`        (CI creds stripped)
+ *
+ * Rules: strip the scheme, embedded credentials, and any `:port`; lowercase the host (hosts
+ * are case-insensitive) while preserving the path case; drop a trailing `.git` and slashes.
+ * Returns `''` for anything without a host + path (local paths, `file://`, junk) so callers
+ * can treat "no usable remote" uniformly.
+ */
+export function normalizeGitRemote(raw: string | undefined | null): string {
+  if (!raw) return ''
+  let s = String(raw).trim()
+  if (!s) return ''
+
+  // scp-style `user@host:org/repo` (no scheme) — the colon separates host from path.
+  const scp = s.match(/^[^/@]+@([^/:]+):(.+)$/)
+  if (scp && !s.includes('://')) {
+    s = `${scp[1]}/${scp[2]}`
+  } else {
+    s = s.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '') // scheme://
+    s = s.replace(/^[^/@]*@/, '')                       // user[:pass]@
+  }
+
+  // Drop a numeric :port immediately after the host.
+  s = s.replace(/^([^/]+):(\d+)\//, '$1/')
+
+  const slash = s.indexOf('/')
+  if (slash <= 0) return '' // no host or no path → not a groupable remote
+  const host = s.slice(0, slash).toLowerCase()
+  const path = s.slice(slash + 1).replace(/\/+$/, '').replace(/\.git$/i, '')
+  if (!host || !path) return ''
+  return `${host}/${path}`
+}
+
+/** Short display label for a normalized remote: `org/repo` (drops the host). Pure. */
+export function repoShortName(remote: string): string {
+  if (!remote) return ''
+  const parts = remote.split('/').filter(Boolean)
+  return parts.length <= 1 ? remote : parts.slice(1).join('/')
 }

@@ -5,6 +5,9 @@ import AppLayout from './App'
 const HomePage = lazy(() => import('./pages/HomePage'))
 const CostsPage = lazy(() => import('./pages/CostsPage'))
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage'))
+const RepositoriesPage = lazy(() => import('./pages/RepositoriesPage'))
+const RepoDetailPage = lazy(() => import('./pages/RepoDetailPage'))
+const ActionsPage = lazy(() => import('./pages/ActionsPage'))
 const ToolsPage = lazy(() => import('./pages/ToolsPage'))
 const CustomPage = lazy(() => import('./pages/CustomPage'))
 const ComparePage = lazy(() => import('./pages/ComparePage'))
@@ -33,6 +36,9 @@ export default function AppRouter() {
           <Route path="sessions" element={<Suspense fallback={<PageFallback />}><SessionsPage /></Suspense>} />
           <Route path="workflows" element={<Suspense fallback={<PageFallback />}><WorkflowsPage /></Suspense>} />
           <Route path="projects" element={<Suspense fallback={<PageFallback />}><ProjectsPage /></Suspense>} />
+          <Route path="repositories" element={<Suspense fallback={<PageFallback />}><RepositoriesPage /></Suspense>} />
+          <Route path="repositories/actions" element={<Suspense fallback={<PageFallback />}><ActionsPage /></Suspense>} />
+          <Route path="repo/:id" element={<Suspense fallback={<PageFallback />}><RepoDetailPage /></Suspense>} />
           <Route path="tools" element={<Suspense fallback={<PageFallback />}><ToolsPage /></Suspense>} />
           <Route path="custom" element={<Suspense fallback={<PageFallback />}><CustomPage /></Suspense>} />
           <Route path="compare" element={<Suspense fallback={<PageFallback />}><ComparePage /></Suspense>} />

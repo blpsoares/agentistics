@@ -66,6 +66,21 @@ export function fromTeamDoc(doc: TeamSessionDoc): SessionMeta {
   return rest
 }
 
+/**
+ * Stamp CI/repo attribution onto sessions pushed by a repo-bound token. Pure — returns new
+ * objects, does not mutate the input. Sets `git_remote` to the token's registered remote and
+ * `ci: true` on every session, so a repo's GitHub Actions usage is attributed authoritatively
+ * regardless of what the ephemeral runner reported. A falsy `repo` leaves `git_remote` as-is.
+ */
+export function stampCiSessions(sessions: SessionMeta[], repo: string | undefined, ci: boolean): SessionMeta[] {
+  if (!ci && !repo) return sessions
+  return sessions.map(s => ({
+    ...s,
+    ...(repo ? { git_remote: repo } : {}),
+    ...(ci ? { ci: true } : {}),
+  }))
+}
+
 /** Validate an untrusted ingest request body. Pure. */
 export function parseIngestBody(raw: unknown):
   | { ok: true; body: IngestBody }

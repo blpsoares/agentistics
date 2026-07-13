@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test'
 import type { SessionMeta } from '@agentistics/core'
-import { teamDocId, toTeamDoc, fromTeamDoc, parseIngestBody } from './team-store'
+import { teamDocId, toTeamDoc, fromTeamDoc, parseIngestBody, stampCiSessions } from './team-store'
 
 function session(id: string, harness: SessionMeta['harness'] = 'claude'): SessionMeta {
   return {
@@ -86,4 +86,26 @@ test('parseIngestBody rejects a non-array sessions field', () => {
 test('parseIngestBody rejects a session without a session_id', () => {
   const r = parseIngestBody({ org: 'acme', user: 'devA', sessions: [{ harness: 'claude' }] })
   expect(r.ok).toBe(false)
+})
+
+test('stampCiSessions sets git_remote + ci without mutating input', () => {
+  const s = session('s1')
+  const [out] = stampCiSessions([s], 'github.com/org/repo', true)
+  expect(out!.git_remote).toBe('github.com/org/repo')
+  expect(out!.ci).toBe(true)
+  // original untouched
+  expect(s.git_remote).toBeUndefined()
+  expect(s.ci).toBeUndefined()
+})
+
+test('stampCiSessions overrides whatever the runner reported', () => {
+  const s = { ...session('s1'), git_remote: 'github.com/attacker/evil', ci: false }
+  const [out] = stampCiSessions([s], 'github.com/org/repo', true)
+  expect(out!.git_remote).toBe('github.com/org/repo')
+  expect(out!.ci).toBe(true)
+})
+
+test('stampCiSessions with no repo and no ci is a passthrough (same ref)', () => {
+  const arr = [session('s1')]
+  expect(stampCiSessions(arr, undefined, false)).toBe(arr)
 })

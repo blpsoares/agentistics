@@ -1,12 +1,48 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMeta } from '@agentistics/core'
-import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, distinctHarnesses, mergeStatsCaches } from '@agentistics/core'
+import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, distinctHarnesses, mergeStatsCaches, repoShortName } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 
 export interface StageProgress {
   progress: number
   detail?: string
   status: 'pending' | 'active' | 'done'
+}
+
+/** Per-repository aggregate (group by normalized git remote), reactive to active filters.
+ *  `remote === ''` is the "no linked repository" bucket. `_users`/`_harnesses` are internal
+ *  accumulators; consumers read the finalized `members`/`harnesses` arrays. */
+export interface RepoStat {
+  /** Routing/identity key: the normalized remote for linked repos, or `folder:<project_path>`
+   *  for unlinked folders (each unlinked folder is its own card). */
+  id: string
+  remote: string
+  linked: boolean
+  /** Display name: `org/repo` for linked, the folder basename for unlinked. */
+  name: string
+  /** Representative local folder path (most common project_path) — the card subtitle for all. */
+  path: string
+  sessions: number
+  messages: number
+  tools: number
+  costUSD: number
+  inputTokens: number
+  outputTokens: number
+  gitCommits: number
+  linesAdded: number
+  linesRemoved: number
+  filesModified: number
+  /** Sessions produced by CI runners (GitHub Actions), i.e. SessionMeta.ci === true. */
+  ciSessions: number
+  /** Distinct member display names that contributed to this repo (team/central). */
+  members: string[]
+  harnesses: HarnessId[]
+  firstActive: string
+  lastActive: string
+  activityByDay: Record<string, number>
+  _users: Set<string>
+  _harnesses: Set<HarnessId>
+  _paths: Record<string, number>
 }
 
 export type LoadProgress = Record<string, StageProgress>
@@ -614,6 +650,12 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const projects = filters.projects ?? []
     const projectFiltered = projects.length > 0
     const projectSet = new Set(projects)
+    // Repository (git-remote) filter. An empty-string entry targets the "no linked repo" bucket,
+    // so a session's key is `git_remote || ''`. Treated like a project filter for aggregation
+    // (session-scoped cost/token breakdown) below.
+    const repos = filters.repos ?? []
+    const repoFiltered = repos.length > 0
+    const repoSet = new Set(repos)
     const users = filters.users ?? []
     const userFiltered = users.length > 0
     const modelSet = filters.models && filters.models.length > 0 ? new Set(filters.models) : null
@@ -683,6 +725,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const filteredSessions = harnessSessions.filter(s => {
       if (!inDateRange(s)) return false
       if (projectFiltered && !projectSet.has(s.project_path)) return false
+      if (repoFiltered && !repoSet.has(s.git_remote || '')) return false
       if (modelSet && (!s.model || !modelSet.has(s.model))) return false
       return true
     })
@@ -743,7 +786,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // Use filteredSessions when project/model/non-claude-harness filter is active
     // (statsCache has no per-project/model/harness granularity)
     const harnessesFiltered = (filters.harnesses?.length ?? 0) > 0
-    const sessionFiltered = projectFiltered || modelSet !== null || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)
+    const sessionFiltered = projectFiltered || repoFiltered || modelSet !== null || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)
 
     const totalMessages = sessionFiltered
       ? filteredSessions.reduce((s, sess) => s + (sess.user_message_count ?? 0) + (sess.assistant_message_count ?? 0), 0)
@@ -888,7 +931,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
 
     let filteredModelUsage: Record<string, import('@agentistics/core').ModelUsage>
 
-    if (projectFiltered || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)) {
+    if (projectFiltered || repoFiltered || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)) {
       // Build per-model breakdown from sessions that have a model field.
       // Sessions without a model field are excluded from the per-model breakdown.
       // Also used when a non-Claude harness is selected (statsCache has no harness granularity).
@@ -993,7 +1036,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
 
     // ── Cost calculation ──
     let totalCostUSD = 0
-    if (projectFiltered || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)) {
+    if (projectFiltered || repoFiltered || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)) {
       // Use per-session calcCost with the session's model field (includes cache tokens).
       // Also used when a non-Claude harness is selected (statsCache lacks harness granularity).
       // Sessions without a model fall back to blended rate on input+output only.
@@ -1135,6 +1178,79 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       projectStats[p].tools += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
     }
 
+    // ── Repository stats (group by normalized git remote) ──
+    // The key is `git_remote || ''`; the empty-string bucket collects sessions with no linked
+    // repo (shown as a flagged "no repository" card, never hidden). Cost is per-session (same
+    // blended/calcCost path as the KPI total) so repo cards reconcile with the rest of the app.
+    // Reactive to every active filter because it derives purely from filteredSessions.
+    const blendedRepo = blendedCostPerToken(globalModelUsage)
+    const repoModelFallback = modelSet?.size === 1 ? [...modelSet][0]! : undefined
+    const sessionCostUSD = (sess: SessionMeta): number => {
+      const m = sess.model ?? repoModelFallback
+      if (m) {
+        return calcCost({
+          inputTokens: sess.input_tokens ?? 0,
+          outputTokens: sess.output_tokens ?? 0,
+          cacheReadInputTokens: sess.cache_read_input_tokens ?? 0,
+          cacheCreationInputTokens: sess.cache_creation_input_tokens ?? 0,
+          webSearchRequests: 0, costUSD: 0,
+        }, m)
+      }
+      return ((sess.input_tokens ?? 0) / 1_000_000) * blendedRepo.input
+           + ((sess.output_tokens ?? 0) / 1_000_000) * blendedRepo.output
+    }
+
+    const repoStatsMap: Record<string, RepoStat> = {}
+    for (const s of filteredSessions) {
+      const linked = !!s.git_remote
+      // Linked sessions group by remote; unlinked sessions group per project folder so each
+      // shows up as its own card (folder name + path), never lumped into one bucket.
+      const key = linked ? s.git_remote! : `folder:${s.project_path || 'Unknown'}`
+      let r = repoStatsMap[key]
+      if (!r) {
+        r = repoStatsMap[key] = {
+          id: key, remote: linked ? s.git_remote! : '', linked, name: '', path: '',
+          sessions: 0, messages: 0, tools: 0, costUSD: 0,
+          inputTokens: 0, outputTokens: 0,
+          gitCommits: 0, linesAdded: 0, linesRemoved: 0, filesModified: 0,
+          ciSessions: 0, members: [], harnesses: [],
+          firstActive: '', lastActive: '', activityByDay: {},
+          _users: new Set<string>(), _harnesses: new Set<HarnessId>(), _paths: {},
+        }
+      }
+      if (s.project_path) r._paths[s.project_path] = (r._paths[s.project_path] ?? 0) + 1
+      r.sessions++
+      r.messages += (s.user_message_count ?? 0)
+      r.tools += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
+      r.costUSD += sessionCostUSD(s)
+      r.inputTokens += s.input_tokens ?? 0
+      r.outputTokens += s.output_tokens ?? 0
+      r.gitCommits += s.git_commits ?? 0
+      r.linesAdded += s.lines_added ?? 0
+      r.linesRemoved += s.lines_removed ?? 0
+      r.filesModified += s.files_modified ?? 0
+      if (s.ci) r.ciSessions++
+      if (s.user) r._users.add(s.user)
+      r._harnesses.add(s.harness ?? 'claude')
+      if (s.start_time) {
+        if (!r.firstActive || s.start_time < r.firstActive) r.firstActive = s.start_time
+        if (!r.lastActive || s.start_time > r.lastActive) r.lastActive = s.start_time
+        const day = s.start_time.slice(0, 10)
+        r.activityByDay[day] = (r.activityByDay[day] ?? 0) + 1
+      }
+    }
+    // Finalize Set-backed fields into plain arrays + resolve the representative folder path/name.
+    for (const r of Object.values(repoStatsMap)) {
+      r.members = Array.from(r._users).sort()
+      r.harnesses = Array.from(r._harnesses)
+      const topPath = Object.entries(r._paths).sort((a, b) => b[1] - a[1])[0]?.[0] ?? ''
+      r.path = topPath
+      r.name = r.linked
+        ? repoShortName(r.remote)
+        : (topPath.split('/').filter(Boolean).pop() || topPath)
+    }
+    const repoStats = Object.values(repoStatsMap).sort((a, b) => b.costUSD - a.costUSD || b.sessions - a.sessions)
+
     // ── Agent metrics ──
     const agentInvocations: AgentInvocation[] = []
     const agentTypeBreakdown: Record<string, { count: number; tokens: number; costUSD: number; durationMs: number }> = {}
@@ -1254,6 +1370,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       hourCounts,
       hourMeta,
       projectStats,
+      repoStats,
       filteredSessions,
       filteredDailyActivity,
       longestSession,
