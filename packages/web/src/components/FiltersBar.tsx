@@ -274,8 +274,13 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
           )}
         </div>
 
-        {/* Divider */}
-        {!compact && <div style={{ width: 1, height: 20, background: 'var(--border)', flexShrink: 0 }} />}
+        {/* Desktop: force a row break here so period controls stay on row 1 and the dimension
+            filters (members/harnesses/presence/repos/projects/models) flow onto row 2 as a
+            deliberate second line — the bar never wraps mid-group. Mobile keeps the single
+            wrapping flow with a vertical divider. */}
+        {isMobile
+          ? (!compact && <div style={{ width: 1, height: 20, background: 'var(--border)', flexShrink: 0 }} />)
+          : <div style={{ flexBasis: '100%', height: 0 }} aria-hidden />}
 
         {users.length > 0 && (
           <UsersFilter
