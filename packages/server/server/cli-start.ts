@@ -286,24 +286,48 @@ async function runAgentistics(s: CliStrings, localRunning: boolean): Promise<Sta
   return 'handled'
 }
 
+// ── restart (per-service helpers) ───────────────────────────────────────────────
+async function restartLocalSvc(s: CliStrings): Promise<void> {
+  process.stdout.write(`  ${D}${s.restartingLocal}${R}\n`)
+  await stopLocal(s)
+  startBackground(s)
+}
+async function restartCentralSvc(s: CliStrings): Promise<void> {
+  process.stdout.write(`  ${D}${s.restartingCentral}${R}\n`)
+  await runCentral('restart', [])
+}
+async function restartMachineSvc(s: CliStrings): Promise<void> {
+  process.stdout.write(`  ${D}${s.restartingMachine}${R}\n`)
+  const ids = await dockerIds(`ancestor=${MACHINE_IMAGE}`)
+  if (ids.length) await sh(['docker', 'restart', ...ids])
+}
+
 /** Restart every service currently up (local server + central + machine containers), in place. */
 async function restartRunning(s: CliStrings, svc: Services): Promise<boolean> {
   if (!(svc.local || svc.central || svc.machine)) return false
-  if (svc.local) {
-    process.stdout.write(`  ${D}${s.restartingLocal}${R}\n`)
-    await stopLocal(s)
-    startBackground(s)
-  }
-  if (svc.central) {
-    process.stdout.write(`  ${D}${s.restartingCentral}${R}\n`)
-    await runCentral('restart', [])
-  }
-  if (svc.machine) {
-    process.stdout.write(`  ${D}${s.restartingMachine}${R}\n`)
-    const ids = await dockerIds(`ancestor=${MACHINE_IMAGE}`)
-    if (ids.length) await sh(['docker', 'restart', ...ids])
-  }
+  if (svc.local) await restartLocalSvc(s)
+  if (svc.central) await restartCentralSvc(s)
+  if (svc.machine) await restartMachineSvc(s)
   process.stdout.write(`\n  ${GR}${s.restartedAll}${R}\n`)
+  return true
+}
+
+// ── restart submenu (pick one running service, or all) ───────────────────────────
+async function restartMenu(s: CliStrings, svc: Services): Promise<boolean> {
+  const choices: { name: string; value: string }[] = []
+  if (svc.local) choices.push({ name: s.stopLocal, value: 'local' })
+  if (svc.central) choices.push({ name: s.stopCentral, value: 'central' })
+  if (svc.machine) choices.push({ name: s.stopMachine, value: 'machine' })
+  if (choices.length > 1) choices.push({ name: s.stopEverything, value: 'all' })
+  choices.push({ name: s.cancel, value: 'cancel' })
+
+  const pick = await select({ message: s.restartWhich, choices })
+  if (pick === 'cancel') return false
+  if (pick === 'all') return restartRunning(s, svc)
+  if (pick === 'local') await restartLocalSvc(s)
+  if (pick === 'central') await restartCentralSvc(s)
+  if (pick === 'machine') await restartMachineSvc(s)
+  process.stdout.write(`\n  ${GR}${s.restartedDone}${R}\n`)
   return true
 }
 
@@ -371,7 +395,7 @@ export async function runStart(): Promise<StartResult> {
         acted = true
         break
       case 'restart':
-        acted = await restartRunning(s, svc)
+        acted = await restartMenu(s, svc)
         break
       case 'stop':
         acted = await stopMenu(s, svc)

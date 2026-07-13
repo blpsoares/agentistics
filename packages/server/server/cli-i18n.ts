@@ -71,10 +71,12 @@ export interface CliStrings {
   stoppingLocal: string
   stoppingCentral: string
   stoppingMachine: string
+  restartWhich: string
   restartingLocal: string
   restartingCentral: string
   restartingMachine: string
   restartedAll: string
+  restartedDone: string
   disconnected: string
   noComposeFrom: (dir: string) => string
   runFromRepo: string
@@ -103,8 +105,8 @@ const EN: CliStrings = {
   itemDisconnect: 'Disconnect from the central',
   itemDisconnectHint: 'back to solo',
   itemStop: 'Stop a running service…',
-  itemRestart: 'Restart running services',
-  itemRestartHint: 'bounce everything that is up',
+  itemRestart: 'Restart a running service…',
+  itemRestartHint: 'one, or all',
   itemLanguage: 'Switch to Português',
   quit: 'Quit',
   back: 'Back',
@@ -143,10 +145,12 @@ const EN: CliStrings = {
   stoppingLocal: 'stopping the local server…',
   stoppingCentral: 'stopping the central container…',
   stoppingMachine: 'stopping the machine container…',
+  restartWhich: 'Restart which?',
   restartingLocal: 'restarting the local server…',
   restartingCentral: 'restarting the central container…',
   restartingMachine: 'restarting the machine container…',
   restartedAll: 'restarted all running services.',
+  restartedDone: 'service restarted.',
   disconnected: 'disconnected — this machine is back to solo.',
   noComposeFrom: (dir) => `couldn't find docker-compose.machine.yml in ${dir}.`,
   runFromRepo: 'Run agentop start from the agentistics repo to use Docker.',
@@ -175,8 +179,8 @@ const PT: CliStrings = {
   itemDisconnect: 'Desconectar da central',
   itemDisconnectHint: 'voltar para solo',
   itemStop: 'Parar um serviço…',
-  itemRestart: 'Reiniciar serviços no ar',
-  itemRestartHint: 'reinicia tudo que está rodando',
+  itemRestart: 'Reiniciar um serviço…',
+  itemRestartHint: 'um, ou todos',
   itemLanguage: 'Trocar para English',
   quit: 'Sair',
   back: 'Voltar',
@@ -215,10 +219,12 @@ const PT: CliStrings = {
   stoppingLocal: 'parando o server local…',
   stoppingCentral: 'parando o container da central…',
   stoppingMachine: 'parando o container da máquina…',
+  restartWhich: 'Reiniciar o quê?',
   restartingLocal: 'reiniciando o server local…',
   restartingCentral: 'reiniciando o container da central…',
   restartingMachine: 'reiniciando o container da máquina…',
   restartedAll: 'todos os serviços no ar foram reiniciados.',
+  restartedDone: 'serviço reiniciado.',
   disconnected: 'desconectado — esta máquina voltou para solo.',
   noComposeFrom: (dir) => `não achei docker-compose.machine.yml em ${dir}.`,
   runFromRepo: 'Rode agentop start de dentro do repo agentistics para usar Docker.',
