@@ -661,7 +661,9 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     for (const r of liveWorkflows) workflowsById.set(r.runId, r)
     // `workflows` stays mutable — team/central workflow runs (from Mongo) are unioned in
     // below, after the team-sessions block, then a final sort is applied.
-    let workflows: WorkflowRun[] = [...workflowsById.values()]
+    // Hide empty runs (0 agents) — including any persisted before extraction started dropping
+    // them — so the Dynamic Workflows view never shows "0 agents · nothing ran" skeletons.
+    let workflows: WorkflowRun[] = [...workflowsById.values()].filter(r => r.agents.length > 0)
     if (mode === 'consolidate') {
       const stored = await loadConsolidated()
       const liveIds = new Set(sessions.map(s => s.session_id))
