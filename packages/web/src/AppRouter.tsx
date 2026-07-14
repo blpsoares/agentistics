@@ -17,11 +17,13 @@ const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'))
 
 function PageFallback() {
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      minHeight: 240, color: 'var(--text-tertiary)', fontSize: 13,
-    }}>
-      Loading…
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 340, padding: 40 }}>
+      <div className="ag-loader" role="status" aria-label="Loading">
+        <div className="ag-loader-bars" aria-hidden="true">
+          <span /><span /><span /><span /><span />
+        </div>
+        <div className="ag-loader-label">agentistics</div>
+      </div>
     </div>
   )
 }
