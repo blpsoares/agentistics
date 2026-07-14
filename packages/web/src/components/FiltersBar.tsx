@@ -628,15 +628,25 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         </AnimatedRow>
         <AnimatedRow show={filters.presence !== undefined}>
           <ChipRow label={lang === 'pt' ? 'Presença' : 'Presence'}>
-            {filters.presence !== undefined && (
-              <FilterChip title={filters.presence === 'online' ? 'Online' : 'Offline'} onRemove={() => onChange({ ...filters, presence: undefined })} removeTitle={lang === 'pt' ? 'Remover filtro de presença' : 'Remove presence filter'}>
+            {filters.presence !== undefined && (() => {
+              const online = filters.presence === 'online'
+              const color = online ? '#22c55e' : '#ef4444'
+              return (
                 <span style={{
-                  width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
-                  background: filters.presence === 'online' ? '#22c55e' : '#ef4444',
-                }} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{filters.presence === 'online' ? 'Online' : 'Offline'}</span>
-              </FilterChip>
-            )}
+                  display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+                  color, background: `${color}1f`, border: `1px solid ${color}55`, borderRadius: 5,
+                  padding: '2px 6px 2px 8px', whiteSpace: 'nowrap',
+                }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                  {online ? 'Online' : 'Offline'}
+                  <button onClick={() => onChange({ ...filters, presence: undefined })}
+                    title={lang === 'pt' ? 'Remover filtro de presença' : 'Remove presence filter'}
+                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color, opacity: 0.7, flexShrink: 0 }}>
+                    <X size={10} strokeWidth={2.5} />
+                  </button>
+                </span>
+              )
+            })()}
           </ChipRow>
         </AnimatedRow>
       </div>
