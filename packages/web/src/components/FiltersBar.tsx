@@ -75,6 +75,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
   type Dimension = 'members' | 'harnesses' | 'presence' | 'repos' | 'models'
   const [showAddMenu, setShowAddMenu] = useState(false)
   const [openPicker, setOpenPicker] = useState<Dimension | null>(null)
+  // Desktop: collapse the active-filter chip rows (mobile has its own whole-bar minimize).
+  const [chipsCollapsed, setChipsCollapsed] = useState(false)
   const addFilterRef = useRef<HTMLDivElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const today = format(new Date(), 'yyyy-MM-dd')
@@ -579,9 +581,31 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         {/* Reset button removed — clear individual chips via their × instead. */}
       </div>
 
+      {/* Desktop-only handle to collapse the active-filter chip rows (mobile minimizes the whole
+          bar via the header). Shown only when at least one filter is active. */}
+      {!compact && activeFilterCount > 0 && (
+        <button
+          onClick={() => setChipsCollapsed(c => !c)}
+          style={{
+            alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 5,
+            background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)',
+            fontSize: 11, fontWeight: 600, padding: '4px 0', fontFamily: 'inherit',
+          }}
+          title={chipsCollapsed ? (lang === 'pt' ? 'Mostrar filtros ativos' : 'Show active filters') : (lang === 'pt' ? 'Minimizar filtros ativos' : 'Minimize active filters')}
+        >
+          <ChevronDown size={13} style={{ transform: chipsCollapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.2s' }} />
+          {chipsCollapsed
+            ? (lang === 'pt' ? `${activeFilterCount} filtro${activeFilterCount > 1 ? 's' : ''} ativo${activeFilterCount > 1 ? 's' : ''}` : `${activeFilterCount} active filter${activeFilterCount > 1 ? 's' : ''}`)
+            : (lang === 'pt' ? 'Filtros ativos' : 'Active filters')}
+        </button>
+      )}
+
       {/* Active-filter chips — each category (members/projects/harnesses/models) is its own
           row that slides in/out INDEPENDENTLY, so adding a second filter type animates the new
-          line too (not just the first). Rows are always mounted; their grid-rows toggle. */}
+          line too (not just the first). Rows are always mounted; their grid-rows toggle.
+          Wrapped in a grid-rows collapse driven by chipsCollapsed (desktop only). */}
+      <div style={{ display: 'grid', gridTemplateRows: (!compact && chipsCollapsed) ? '0fr' : '1fr', transition: 'grid-template-rows 0.25s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+      <div style={{ overflow: 'hidden', minHeight: 0 }}>
       <div style={{ display: 'flex', flexDirection: 'column', padding: compact ? '0 12px' : 0 }}>
         <AnimatedRow show={(filters.users?.length ?? 0) > 0}>
           <ChipRow label={lang === 'pt' ? 'Membros' : 'Members'}>
@@ -667,6 +691,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
             })()}
           </ChipRow>
         </AnimatedRow>
+      </div>
+      </div>
       </div>
 
       {showProjectsModal && (
