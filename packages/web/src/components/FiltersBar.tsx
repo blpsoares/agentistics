@@ -1,12 +1,9 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
 import type { Filters, DateRange, Project, Lang, HarnessId } from '@agentistics/core'
 import { formatModel, formatProjectName, repoShortName } from '@agentistics/core'
-import { Layers, Cpu, ChevronDown, X, CalendarDays, Check, Users, GitBranch, Search } from 'lucide-react'
+import { Layers, Cpu, ChevronDown, X, CalendarDays, Check, Users, GitBranch, Search, Plus, Blocks, Radio } from 'lucide-react'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { ProjectsModal } from './ProjectsModal'
-import { UsersFilter } from './UsersFilter'
-import { HarnessFilter } from './HarnessFilter'
-import { PresenceFilter } from './PresenceFilter'
 import type { MemberPresence } from '@agentistics/core'
 import { DatePicker } from './DatePicker'
 import { format } from 'date-fns'
@@ -53,6 +50,13 @@ const CTL: React.CSSProperties = {
   alignItems: 'center',
 }
 
+/** Search input used inside the value pickers (members / repositories). */
+const SEARCH_INPUT: React.CSSProperties = {
+  width: '100%', boxSizing: 'border-box', fontSize: 12, fontFamily: 'inherit',
+  color: 'var(--text-primary)', background: 'var(--bg-card)', border: '1px solid var(--border)',
+  borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
+}
+
 export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
@@ -62,11 +66,13 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
   const showGroupHeaders = groups.length > 1
   const isMobile = useIsMobile()
   const [showProjectsModal, setShowProjectsModal] = useState(false)
-  const [showModelDropdown, setShowModelDropdown] = useState(false)
-  const [showRepoDropdown, setShowRepoDropdown] = useState(false)
   const [repoQuery, setRepoQuery] = useState('')
-  const repoDropdownRef = useRef<HTMLDivElement>(null)
-  const modelDropdownRef = useRef<HTMLDivElement>(null)
+  const [memberQuery, setMemberQuery] = useState('')
+  // ── "+ Filter" menu: pick a dimension → open its value picker. One open at a time. ──
+  type Dimension = 'members' | 'harnesses' | 'presence' | 'repos' | 'models'
+  const [showAddMenu, setShowAddMenu] = useState(false)
+  const [openPicker, setOpenPicker] = useState<Dimension | null>(null)
+  const addFilterRef = useRef<HTMLDivElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const today = format(new Date(), 'yyyy-MM-dd')
   const hasCustomDates = !!(filters.customStart || filters.customEnd)
@@ -75,15 +81,6 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
   const hasModelFilter = selectedModels.length > 0
 
   const hasProjects = filters.projects.length > 0
-  const projectLabel = lang === 'pt'
-    ? hasProjects ? `${filters.projects.length} projeto${filters.projects.length > 1 ? 's' : ''}` : 'Projetos'
-    : hasProjects ? `${filters.projects.length} project${filters.projects.length > 1 ? 's' : ''}` : 'Projects'
-
-  const modelLabel = hasModelFilter
-    ? selectedModels.length === 1
-      ? formatModel(selectedModels[0]!)
-      : `${selectedModels.length} ${lang === 'pt' ? 'modelos' : 'models'}`
-    : lang === 'pt' ? 'Modelos' : 'Models'
 
   const toggleModel = (m: string) => {
     const next = selectedModels.includes(m)
@@ -116,45 +113,41 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
     if (!q) return repoOptions
     return repoOptions.filter(o => `${o.label} ${o.value}`.toLowerCase().includes(q))
   }, [repoOptions, repoQuery])
-  const repoLabel = hasRepoFilter
-    ? selectedRepos.length === 1
-      ? (repoOptions.find(o => o.value === selectedRepos[0])?.label ?? (selectedRepos[0] === '' ? (lang === 'pt' ? 'Sem repositório' : 'No repository') : repoShortName(selectedRepos[0]!)))
-      : `${selectedRepos.length} ${lang === 'pt' ? 'repositórios' : 'repos'}`
-    : lang === 'pt' ? 'Repositórios' : 'Repos'
   const toggleRepo = (v: string) => {
     const next = selectedRepos.includes(v) ? selectedRepos.filter(x => x !== v) : [...selectedRepos, v]
     onChange({ ...filters, repos: next })
   }
 
-  useEffect(() => {
-    if (!showModelDropdown) return
-    function handleClickOutside(e: MouseEvent) {
-      if (modelDropdownRef.current && !modelDropdownRef.current.contains(e.target as Node)) {
-        setShowModelDropdown(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [showModelDropdown])
+  // Number of dimensions currently active — shown as the badge on the "+ Filter" button.
+  const activeFilterCount = [
+    (filters.users?.length ?? 0) > 0,
+    (filters.harnesses?.length ?? 0) > 0,
+    filters.presence !== undefined,
+    hasRepoFilter,
+    hasProjects,
+    hasModelFilter,
+  ].filter(Boolean).length
 
+  // Outside click closes the "+ Filter" menu and any open dimension picker together.
   useEffect(() => {
-    if (!showRepoDropdown) return
+    if (!showAddMenu && !openPicker) return
     function handleClickOutside(e: MouseEvent) {
-      if (repoDropdownRef.current && !repoDropdownRef.current.contains(e.target as Node)) {
-        setShowRepoDropdown(false)
+      if (addFilterRef.current && !addFilterRef.current.contains(e.target as Node)) {
+        setShowAddMenu(false)
+        setOpenPicker(null)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [showRepoDropdown])
+  }, [showAddMenu, openPicker])
 
   // Clamp the popover so it never overflows the viewport (which would give the whole page a
   // horizontal scrollbar). First cap its width to the viewport, then shift it left if its
   // right edge still spills over — keeping the left edge at least 8px from the viewport edge.
   useLayoutEffect(() => {
-    if (!showModelDropdown || !popoverRef.current || !modelDropdownRef.current) return
+    if (!openPicker || !popoverRef.current || !addFilterRef.current) return
     const MARGIN = 8
-    const container = modelDropdownRef.current.getBoundingClientRect()
+    const container = addFilterRef.current.getBoundingClientRect()
     const popover = popoverRef.current
     // Reset any previous adjustment before measuring.
     popover.style.left = '0'
@@ -169,7 +162,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
       const maxShift = Math.max(0, container.left - MARGIN)
       popover.style.left = `-${Math.min(overflow, maxShift)}px`
     }
-  }, [showModelDropdown])
+  }, [openPicker])
 
   return (
     <>
@@ -274,175 +267,97 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
           )}
         </div>
 
-        {/* Dimension filters (members/harnesses/presence/repos/projects/models). On desktop this
-            wrapper is a deliberate SECOND row (flexBasis:100% forces its own line, so the bar never
-            wraps mid-group); on mobile `display:contents` dissolves the wrapper so the controls flow
-            inline exactly as before. */}
-        <div style={isMobile
-          ? { display: 'contents' }
-          : { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', flexBasis: '100%' }}>
-
-        {users.length > 0 && (
-          <UsersFilter
-            users={users}
-            selected={filters.users ?? []}
-            onChange={u => onChange({ ...filters, users: u })}
-            lang={lang}
-            presence={presence}
-            presenceFilter={filters.presence}
-          />
-        )}
-
-        {harnesses && harnesses.length > 1 && (
-          <HarnessFilter
-            harnesses={harnesses}
-            selected={filters.harnesses ?? []}
-            onChange={h => onChange({ ...filters, harnesses: h })}
-            lang={lang}
-          />
-        )}
-
-        {presence && Object.keys(presence).length > 0 && (
-          <PresenceFilter
-            value={filters.presence}
-            onChange={p => onChange({ ...filters, presence: p })}
-            onlineCount={Object.values(presence).filter(p => p.online).length}
-            offlineCount={Object.values(presence).filter(p => !p.online).length}
-            lang={lang}
-          />
-        )}
-
-        {/* Repositories (group-by-remote) — only when a repo dimension exists */}
-        {showRepoFilter && (
-          <div ref={repoDropdownRef} style={{ position: 'relative', flex: isMobile ? '1 1 0' : undefined }}>
-            <button
-              onClick={() => { setShowRepoDropdown(v => !v); setRepoQuery('') }}
-              title={lang === 'pt' ? 'Filtrar por repositório' : 'Filter by repository'}
-              style={{
-                ...CTL,
-                gap: 5,
-                width: isMobile ? '100%' : undefined,
-                border: hasRepoFilter ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
-                background: hasRepoFilter ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
-                color: hasRepoFilter ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                minWidth: isMobile ? 0 : 120,
-                justifyContent: 'space-between',
-              }}
-            >
-              <GitBranch size={11} style={{ flexShrink: 0 }} />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
-                {repoLabel}
-              </span>
-              <ChevronDown size={11} style={{ flexShrink: 0, opacity: 0.5, transform: showRepoDropdown ? 'rotate(180deg)' : undefined, transition: 'transform 0.15s' }} />
-            </button>
-            {showRepoDropdown && (
-              <div style={{
-                position: 'absolute', top: 'calc(100% + 4px)', left: 0,
-                background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8,
-                boxShadow: '0 4px 16px rgba(0,0,0,0.25)', zIndex: 1000,
-                width: isMobile ? 'min(92vw, 320px)' : 280, maxHeight: '60vh',
-                display: 'flex', flexDirection: 'column', boxSizing: 'border-box', padding: 6,
-              }}>
-                {/* Search box — filters the repo list, mirroring the Projects filter */}
-                <div style={{ position: 'relative', display: 'flex', alignItems: 'center', marginBottom: 4, flexShrink: 0 }}>
-                  <Search size={13} color="var(--text-tertiary)" style={{ position: 'absolute', left: 8, pointerEvents: 'none' }} />
-                  <input
-                    value={repoQuery}
-                    onChange={e => setRepoQuery(e.target.value)}
-                    autoFocus
-                    placeholder={lang === 'pt' ? 'Buscar repositório…' : 'Search repository…'}
-                    style={{
-                      width: '100%', boxSizing: 'border-box', fontSize: 12, fontFamily: 'inherit',
-                      color: 'var(--text-primary)', background: 'var(--bg-card)', border: '1px solid var(--border)',
-                      borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
-                    }}
-                  />
-                </div>
-                <div style={{ overflowY: 'auto', minHeight: 0 }}>
-                {repoFilteredOptions.length === 0 && (
-                  <div style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '8px 10px', textAlign: 'center' }}>
-                    {lang === 'pt' ? 'Nenhum repositório' : 'No repositories'}
-                  </div>
-                )}
-                {repoFilteredOptions.map(opt => {
-                  const selected = selectedRepos.includes(opt.value)
-                  return (
-                    <button
-                      key={opt.value || '__none__'}
-                      onClick={() => toggleRepo(opt.value)}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-                        padding: '7px 10px', borderRadius: 6, border: 'none', cursor: 'pointer',
-                        background: selected ? 'var(--anthropic-orange-dim)' : 'transparent',
-                        color: selected ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                        fontSize: 12, fontFamily: 'inherit', textAlign: 'left',
-                      }}
-                      onMouseEnter={e => { if (!selected) (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-card-hover)' }}
-                      onMouseLeave={e => { if (!selected) (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
-                    >
-                      <span style={{ width: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        {selected && <Check size={12} strokeWidth={3} />}
-                      </span>
-                      {opt.linked
-                        ? <GitBranch size={11} style={{ flexShrink: 0, opacity: 0.6 }} />
-                        : <X size={11} style={{ flexShrink: 0, opacity: 0.6 }} />}
-                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: opt.linked ? undefined : 'var(--text-tertiary)' }}>{opt.label}</span>
-                      <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>{opt.count}</span>
-                    </button>
-                  )
-                })}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Projects */}
-        <button
-          onClick={() => setShowProjectsModal(true)}
-          title={lang === 'pt' ? 'Filtrar por projeto' : 'Filter by project'}
-          style={{
-            ...CTL,
-            gap: 5,
-            flex: isMobile ? '1 1 0' : undefined,
-            border: hasProjects ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
-            background: hasProjects ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
-            color: hasProjects ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-            minWidth: isMobile ? 0 : 110,
-            justifyContent: 'space-between',
-          }}
-        >
-          <Layers size={11} style={{ flexShrink: 0 }} />
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
-            {projectLabel}
-          </span>
-          <ChevronDown size={11} style={{ flexShrink: 0, opacity: 0.5 }} />
-        </button>
-
-        {/* Model multi-select */}
-        <div ref={modelDropdownRef} style={{ position: 'relative', flex: isMobile ? '1 1 0' : undefined }}>
+        {/* + Filter — single entry point for all dimension filters (members/harnesses/
+            presence/repos/projects/models). Clicking it opens a menu of the AVAILABLE
+            dimensions; picking one opens that dimension's value picker. The selected
+            values themselves render in the animated chip rows below, not here. */}
+        <div ref={addFilterRef} style={{ position: 'relative', flex: isMobile ? '1 1 0' : undefined }}>
           <button
-            onClick={() => setShowModelDropdown(v => !v)}
-            title={lang === 'pt' ? 'Filtrar por modelo' : 'Filter by model'}
+            onClick={() => { setShowAddMenu(v => !v); setOpenPicker(null) }}
+            title={lang === 'pt' ? 'Adicionar filtro' : 'Add filter'}
             style={{
               ...CTL,
               gap: 5,
               width: isMobile ? '100%' : undefined,
-              border: hasModelFilter ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
-              background: hasModelFilter ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
-              color: hasModelFilter ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-              minWidth: isMobile ? 0 : 130,
-              justifyContent: 'space-between',
+              justifyContent: isMobile ? 'center' : undefined,
+              border: '1px dashed var(--border)',
+              background: 'transparent',
+              color: 'var(--text-secondary)',
             }}
           >
-            <Cpu size={11} style={{ flexShrink: 0 }} />
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
-              {modelLabel}
-            </span>
-            <ChevronDown size={11} style={{ flexShrink: 0, opacity: 0.5, transform: showModelDropdown ? 'rotate(180deg)' : undefined, transition: 'transform 0.15s' }} />
+            <Plus size={12} style={{ flexShrink: 0 }} />
+            <span>{lang === 'pt' ? 'Filtro' : 'Filter'}</span>
+            {activeFilterCount > 0 && (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                minWidth: 15, height: 15, borderRadius: 8, padding: '0 4px',
+                background: 'var(--anthropic-orange)', color: 'white',
+                fontSize: 10, fontWeight: 700, lineHeight: 1, flexShrink: 0,
+              }}>{activeFilterCount}</span>
+            )}
           </button>
 
-          {showModelDropdown && (
+          {/* Dimension menu — lists only the dimensions that actually apply to this data. */}
+          {showAddMenu && !openPicker && (
+            <div style={{
+              position: 'absolute', top: 'calc(100% + 4px)', left: 0,
+              background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.25)', zIndex: 1000,
+              minWidth: 190, boxSizing: 'border-box', padding: 6,
+            }}>
+              {users.length > 0 && (
+                <MenuItem
+                  icon={<Users size={13} />}
+                  label={lang === 'pt' ? 'Membros' : 'Members'}
+                  active={(filters.users?.length ?? 0) > 0}
+                  onClick={() => setOpenPicker('members')}
+                />
+              )}
+              {harnesses && harnesses.length > 1 && (
+                <MenuItem
+                  icon={<Blocks size={13} />}
+                  label={lang === 'pt' ? 'Harnesses' : 'Harnesses'}
+                  active={(filters.harnesses?.length ?? 0) > 0}
+                  onClick={() => setOpenPicker('harnesses')}
+                />
+              )}
+              {presence && Object.keys(presence).length > 0 && (
+                <MenuItem
+                  icon={<Radio size={13} />}
+                  label={lang === 'pt' ? 'Presença' : 'Presence'}
+                  active={filters.presence !== undefined}
+                  onClick={() => setOpenPicker('presence')}
+                />
+              )}
+              {showRepoFilter && (
+                <MenuItem
+                  icon={<GitBranch size={13} />}
+                  label={lang === 'pt' ? 'Repositórios' : 'Repositories'}
+                  active={hasRepoFilter}
+                  onClick={() => { setRepoQuery(''); setOpenPicker('repos') }}
+                />
+              )}
+              {projects.length > 0 && (
+                <MenuItem
+                  icon={<Layers size={13} />}
+                  label={lang === 'pt' ? 'Projetos' : 'Projects'}
+                  active={hasProjects}
+                  onClick={() => { setShowAddMenu(false); setShowProjectsModal(true) }}
+                />
+              )}
+              {models.length > 0 && (
+                <MenuItem
+                  icon={<Cpu size={13} />}
+                  label={lang === 'pt' ? 'Modelos' : 'Models'}
+                  active={hasModelFilter}
+                  onClick={() => setOpenPicker('models')}
+                />
+              )}
+            </div>
+          )}
+
+          {/* Value picker — one dimension at a time. */}
+          {openPicker && (
             <div ref={popoverRef} style={{
               position: 'absolute',
               top: 'calc(100% + 4px)',
@@ -452,123 +367,196 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               borderRadius: 8,
               boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
               zIndex: 1000,
-              // On mobile, cap to 92vw so it never exceeds the viewport;
-              // on desktop, 80vw keeps the existing generous maximum.
-              width: isMobile ? 'min(92vw, 360px)' : undefined,
-              maxWidth: isMobile ? undefined : 'min(80vw, 720px)',
+              width: isMobile ? 'min(92vw, 340px)' : 280,
               maxHeight: '70vh',
               overflowY: 'auto',
-              overflowX: 'auto',
+              overflowX: 'hidden',
               boxSizing: 'border-box',
               padding: 6,
             }}>
-              {/* Harness groups laid out as side-by-side columns (a grid), so the
-                  list doesn't become one giant vertical column.
-                  On mobile collapse to 1 column; desktop allows up to 4. */}
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: isMobile
-                  ? `repeat(${Math.min(groups.length, 2)}, minmax(130px, 1fr))`
-                  : `repeat(${Math.min(groups.length, 4)}, minmax(150px, 1fr))`,
-                gap: 2,
-                alignItems: 'start',
-              }}>
-              {groups.map((group, gi) => (
-                <div key={group.harness ?? '__all__'} style={{
-                  borderLeft: gi > 0 ? '1px solid var(--border)' : 'none',
-                  paddingLeft: gi > 0 ? 6 : 0,
-                }}>
-                  {showGroupHeaders && group.harness && (
-                    <div style={{
-                      display: 'flex', alignItems: 'center', gap: 6,
-                      padding: '7px 12px 3px',
-                      fontSize: 10, fontWeight: 700,
-                      textTransform: 'uppercase', letterSpacing: '0.06em',
-                      color: HARNESS_COLORS[group.harness],
-                    }}>
-                      <span style={{
-                        width: 7, height: 7, borderRadius: '50%',
-                        background: HARNESS_COLORS[group.harness], flexShrink: 0,
-                      }} />
-                      {HARNESS_LABELS[group.harness]}
-                    </div>
-                  )}
-                  {group.models.map(m => {
-                    const disabled = modelsInProject ? !modelsInProject.has(m) : false
-                    const selected = selectedModels.includes(m)
-                    return (
-                      <button
-                        key={`${group.harness ?? ''}:${m}`}
-                        disabled={disabled}
-                        onClick={() => toggleModel(m)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 8,
-                          width: '100%',
-                          padding: '7px 12px',
-                          background: selected ? 'var(--anthropic-orange-dim)' : 'transparent',
-                          border: 'none',
-                          cursor: disabled ? 'not-allowed' : 'pointer',
-                          color: disabled ? 'var(--text-tertiary)' : selected ? 'var(--anthropic-orange)' : 'var(--text-primary)',
-                          fontSize: 12,
-                          fontFamily: 'inherit',
-                          textAlign: 'left',
-                          opacity: disabled ? 0.45 : 1,
-                          transition: 'background 0.1s',
-                        }}
-                      >
-                        <div style={{
-                          width: 14,
-                          height: 14,
-                          borderRadius: 3,
-                          border: selected
-                            ? '1.5px solid var(--anthropic-orange)'
-                            : disabled
-                              ? '1.5px solid var(--border)'
-                              : '1.5px solid var(--text-tertiary)',
-                          background: selected ? 'var(--anthropic-orange)' : 'transparent',
-                          flexShrink: 0,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}>
-                          {selected && <Check size={9} color="white" strokeWidth={3} />}
-                        </div>
-                        <span style={{ flex: 1 }}>{formatModel(m)}</span>
-                        {disabled && (
-                          <span style={{ fontSize: 10, opacity: 0.7 }}>
-                            {lang === 'pt' ? 'sem uso' : 'unused'}
-                          </span>
-                        )}
-                      </button>
-                    )
-                  })}
-                </div>
-              ))}
-              </div>
-              {hasModelFilter && (
+              <button
+                onClick={() => setOpenPicker(null)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  background: 'transparent', border: 'none', cursor: 'pointer',
+                  color: 'var(--text-tertiary)', fontSize: 11, fontFamily: 'inherit',
+                  padding: '2px 6px 6px',
+                }}
+              >
+                <ChevronDown size={11} style={{ transform: 'rotate(90deg)' }} />
+                {lang === 'pt' ? 'Voltar' : 'Back'}
+              </button>
+              <div style={{ height: 1, background: 'var(--border)', margin: '0 0 4px' }} />
+
+              {/* Members (multi) */}
+              {openPicker === 'members' && (
                 <>
-                  <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
-                  <button
-                    onClick={() => { onChange({ ...filters, models: [] }); setShowModelDropdown(false) }}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      width: '100%', padding: '7px 12px',
-                      background: 'transparent', border: 'none',
-                      cursor: 'pointer', color: 'var(--text-secondary)',
-                      fontSize: 12, fontFamily: 'inherit', textAlign: 'left',
-                    }}
-                  >
-                    <X size={11} />
-                    {lang === 'pt' ? 'Limpar modelos' : 'Clear models'}
-                  </button>
+                  <div style={{ position: 'relative', display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+                    <Search size={13} color="var(--text-tertiary)" style={{ position: 'absolute', left: 8, pointerEvents: 'none' }} />
+                    <input
+                      value={memberQuery}
+                      onChange={e => setMemberQuery(e.target.value)}
+                      autoFocus
+                      placeholder={lang === 'pt' ? 'Buscar membro…' : 'Search member…'}
+                      style={SEARCH_INPUT}
+                    />
+                  </div>
+                  <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                    {users
+                      .filter(u => u.toLowerCase().includes(memberQuery.trim().toLowerCase()))
+                      .map(u => {
+                        const selected = (filters.users ?? []).includes(u)
+                        return (
+                          <PickerRow
+                            key={u}
+                            selected={selected}
+                            label={u}
+                            onClick={() => {
+                              const cur = filters.users ?? []
+                              const next = cur.includes(u) ? cur.filter(x => x !== u) : [...cur, u]
+                              onChange({ ...filters, users: next })
+                            }}
+                          />
+                        )
+                      })}
+                  </div>
+                  {(filters.users?.length ?? 0) > 0 && (
+                    <ClearFooter onClick={() => onChange({ ...filters, users: [] })} label={lang === 'pt' ? 'Limpar membros' : 'Clear members'} />
+                  )}
+                </>
+              )}
+
+              {/* Harnesses (multi) */}
+              {openPicker === 'harnesses' && harnesses && (
+                <>
+                  <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                    {harnesses.map(h => {
+                      const selected = (filters.harnesses ?? []).includes(h)
+                      return (
+                        <PickerRow
+                          key={h}
+                          selected={selected}
+                          dotColor={HARNESS_COLORS[h]}
+                          label={HARNESS_LABELS[h]}
+                          onClick={() => {
+                            const cur = filters.harnesses ?? []
+                            const next = cur.includes(h) ? cur.filter(x => x !== h) : [...cur, h]
+                            onChange({ ...filters, harnesses: next })
+                          }}
+                        />
+                      )
+                    })}
+                  </div>
+                  {(filters.harnesses?.length ?? 0) > 0 && (
+                    <ClearFooter onClick={() => onChange({ ...filters, harnesses: [] })} label={lang === 'pt' ? 'Limpar harnesses' : 'Clear harnesses'} />
+                  )}
+                </>
+              )}
+
+              {/* Presence (single) */}
+              {openPicker === 'presence' && presence && (
+                <div>
+                  {([
+                    { key: undefined, label: lang === 'pt' ? 'Todos' : 'All', count: null },
+                    { key: 'online' as const, label: 'Online', count: Object.values(presence).filter(p => p.online).length, dot: '#22c55e' },
+                    { key: 'offline' as const, label: 'Offline', count: Object.values(presence).filter(p => !p.online).length, dot: '#ef4444' },
+                  ]).map(opt => (
+                    <PickerRow
+                      key={opt.label}
+                      selected={filters.presence === opt.key}
+                      label={opt.label}
+                      count={opt.count ?? undefined}
+                      dotColor={opt.dot}
+                      onClick={() => { onChange({ ...filters, presence: opt.key }); setOpenPicker(null) }}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {/* Repositories (multi) */}
+              {openPicker === 'repos' && (
+                <>
+                  <div style={{ position: 'relative', display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+                    <Search size={13} color="var(--text-tertiary)" style={{ position: 'absolute', left: 8, pointerEvents: 'none' }} />
+                    <input
+                      value={repoQuery}
+                      onChange={e => setRepoQuery(e.target.value)}
+                      autoFocus
+                      placeholder={lang === 'pt' ? 'Buscar repositório…' : 'Search repository…'}
+                      style={SEARCH_INPUT}
+                    />
+                  </div>
+                  <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                    {repoFilteredOptions.length === 0 && (
+                      <div style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '8px 10px', textAlign: 'center' }}>
+                        {lang === 'pt' ? 'Nenhum repositório' : 'No repositories'}
+                      </div>
+                    )}
+                    {repoFilteredOptions.map(opt => (
+                      <PickerRow
+                        key={opt.value || '__none__'}
+                        selected={selectedRepos.includes(opt.value)}
+                        icon={opt.linked
+                          ? <GitBranch size={11} style={{ flexShrink: 0, opacity: 0.6 }} />
+                          : <X size={11} style={{ flexShrink: 0, opacity: 0.6 }} />}
+                        label={opt.label}
+                        count={opt.count}
+                        onClick={() => toggleRepo(opt.value)}
+                      />
+                    ))}
+                  </div>
+                  {hasRepoFilter && (
+                    <ClearFooter onClick={() => onChange({ ...filters, repos: [] })} label={lang === 'pt' ? 'Limpar repositórios' : 'Clear repositories'} />
+                  )}
+                </>
+              )}
+
+              {/* Models (multi, grouped by harness) */}
+              {openPicker === 'models' && (
+                <>
+                  <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+                    {groups.map(group => (
+                      <div key={group.harness ?? '__all__'}>
+                        {showGroupHeaders && group.harness && (
+                          <div style={{
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            padding: '7px 10px 3px',
+                            fontSize: 10, fontWeight: 700,
+                            textTransform: 'uppercase', letterSpacing: '0.06em',
+                            color: HARNESS_COLORS[group.harness],
+                          }}>
+                            <span style={{
+                              width: 7, height: 7, borderRadius: '50%',
+                              background: HARNESS_COLORS[group.harness], flexShrink: 0,
+                            }} />
+                            {HARNESS_LABELS[group.harness]}
+                          </div>
+                        )}
+                        {group.models.map(m => {
+                          const disabled = modelsInProject ? !modelsInProject.has(m) : false
+                          const selected = selectedModels.includes(m)
+                          return (
+                            <PickerRow
+                              key={`${group.harness ?? ''}:${m}`}
+                              selected={selected}
+                              disabled={disabled}
+                              label={formatModel(m)}
+                              tag={disabled ? (lang === 'pt' ? 'sem uso' : 'unused') : undefined}
+                              onClick={() => toggleModel(m)}
+                            />
+                          )
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                  {hasModelFilter && (
+                    <ClearFooter onClick={() => onChange({ ...filters, models: [] })} label={lang === 'pt' ? 'Limpar modelos' : 'Clear models'} />
+                  )}
                 </>
               )}
             </div>
           )}
         </div>
-        </div>{/* end dimension-filters row */}
 
         {/* Reset button removed — clear individual chips via their × instead. */}
       </div>
@@ -638,6 +626,19 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
             ))}
           </ChipRow>
         </AnimatedRow>
+        <AnimatedRow show={filters.presence !== undefined}>
+          <ChipRow label={lang === 'pt' ? 'Presença' : 'Presence'}>
+            {filters.presence !== undefined && (
+              <FilterChip title={filters.presence === 'online' ? 'Online' : 'Offline'} onRemove={() => onChange({ ...filters, presence: undefined })} removeTitle={lang === 'pt' ? 'Remover filtro de presença' : 'Remove presence filter'}>
+                <span style={{
+                  width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+                  background: filters.presence === 'online' ? '#22c55e' : '#ef4444',
+                }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{filters.presence === 'online' ? 'Online' : 'Offline'}</span>
+              </FilterChip>
+            )}
+          </ChipRow>
+        </AnimatedRow>
       </div>
 
       {showProjectsModal && (
@@ -694,5 +695,85 @@ function FilterChip({ title, onRemove, removeTitle, children }: { title?: string
         <X size={10} strokeWidth={2.5} />
       </button>
     </span>
+  )
+}
+
+/** A row in the "+ Filter" dimension menu — icon + label + a subtle dot marker when active. */
+function MenuItem({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+        padding: '8px 10px', borderRadius: 6, border: 'none',
+        background: 'transparent', cursor: 'pointer', color: 'var(--text-primary)',
+        fontSize: 12, fontFamily: 'inherit', textAlign: 'left',
+      }}
+      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-card-hover)' }}
+      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
+    >
+      <span style={{ display: 'flex', alignItems: 'center', color: 'var(--text-tertiary)', flexShrink: 0 }}>{icon}</span>
+      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      {active && <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--anthropic-orange)', flexShrink: 0 }} />}
+    </button>
+  )
+}
+
+/** One selectable row inside a dimension value picker (checkbox-style; also used for the
+ *  single-select presence picker, where "selected" just highlights the current choice). */
+function PickerRow({ selected, onClick, icon, label, count, disabled, tag, dotColor }: {
+  selected: boolean
+  onClick: () => void
+  icon?: React.ReactNode
+  label: string
+  count?: number
+  disabled?: boolean
+  tag?: string
+  dotColor?: string
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+        padding: '7px 10px', borderRadius: 6, border: 'none',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        background: selected ? 'var(--anthropic-orange-dim)' : 'transparent',
+        color: disabled ? 'var(--text-tertiary)' : selected ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+        fontSize: 12, fontFamily: 'inherit', textAlign: 'left', opacity: disabled ? 0.45 : 1,
+      }}
+      onMouseEnter={e => { if (!selected && !disabled) (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-card-hover)' }}
+      onMouseLeave={e => { if (!selected) (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
+    >
+      <span style={{ width: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {selected && <Check size={12} strokeWidth={3} />}
+      </span>
+      {dotColor && <span style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />}
+      {icon}
+      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      {tag && <span style={{ fontSize: 10, opacity: 0.7, flexShrink: 0 }}>{tag}</span>}
+      {count !== undefined && <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>{count}</span>}
+    </button>
+  )
+}
+
+/** Footer "Clear" action shown at the bottom of a multi-select picker when it has a selection. */
+function ClearFooter({ onClick, label }: { onClick: () => void; label: string }) {
+  return (
+    <>
+      <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+      <button
+        onClick={onClick}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 10px',
+          background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)',
+          fontSize: 12, fontFamily: 'inherit', textAlign: 'left',
+        }}
+      >
+        <X size={11} />
+        {label}
+      </button>
+    </>
   )
 }
