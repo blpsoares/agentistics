@@ -915,6 +915,8 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
                 to={item.to}
                 end={item.to === '/'}
                 aria-label={collapsed ? label : undefined}
+                // Clicking the Repositories item itself opens its submenu (no need to hit the chevron).
+                onClick={hasSubmenu ? () => setReposExpanded(true) : undefined}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 11, flex: 1, minWidth: 0,
                   padding: collapsed ? '10px 0' : '10px 12px', justifyContent: collapsed ? 'center' : 'flex-start',
