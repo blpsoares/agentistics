@@ -433,7 +433,9 @@ function WorkflowsMini({ workflows, lang, currency, brlRate, sessionById }: {
     return <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>{pt ? 'Nenhum workflow.' : 'No workflows.'}</div>
   }
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    // Cap the width so run metrics sit next to their labels instead of being flung to the far
+    // edge of a full-width (~1400px) page — that scatter is what read as "jogado".
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 940 }}>
       {/* View toggle: flat list of runs vs grouped by session */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginRight: 2 }}>{pt ? 'Ver:' : 'View:'}</span>
@@ -535,60 +537,78 @@ function WorkflowRunCard({ run, pt, currency, brlRate, sessionById }: {
       </div>
 
       {/* Timeline */}
-      {open && (
-        <div style={{ padding: '4px 12px 12px', display: 'flex', flexDirection: 'column' }}>
-          {steps.map((step, i) => (
-            <div key={`${step.title}-${i}`} style={{ display: 'flex', gap: 10 }}>
-              {/* Rail */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 22, flexShrink: 0 }}>
-                <span style={{
-                  width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)',
-                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                }}>{step.index}</span>
-                {i < steps.length - 1 && <span style={{ flex: 1, width: 2, background: 'var(--border)', minHeight: 8 }} />}
-              </div>
-              {/* Step body */}
-              <div style={{ flex: 1, minWidth: 0, paddingBottom: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>{step.title}</span>
-                  <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>{step.subtotal.count} {pt ? 'agentes' : 'agents'}</span>
-                  {step.subtotal.count > 0 && (
-                    <span style={{ marginLeft: 'auto', fontSize: 10.5, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
-                      {fmt(step.subtotal.tokensIn)} in · {fmt(step.subtotal.tokensOut)} out · <strong style={{ color: 'var(--anthropic-orange)' }}>{fmtCost(step.subtotal.costUSD, currency, brlRate)}</strong>
-                    </span>
-                  )}
-                </div>
-                {step.agents.length === 0
-                  ? <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic', marginTop: 4 }}>{pt ? 'nada rodou' : 'nothing ran'}</div>
-                  : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
-                      {step.agents.map((a, j) => {
-                        const g = agentGlyph(a.status)
-                        return (
-                          <div key={j} style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', fontSize: 11.5 }}>
-                            <span style={{ color: g.color, fontWeight: 700, width: 12, flexShrink: 0 }}>{g.ch}</span>
-                            <span style={{ color: 'var(--text-primary)', fontWeight: 600, wordBreak: 'break-word' }}>{a.label}</span>
-                            {a.model && <span style={{ color: 'var(--text-tertiary)', fontSize: 10.5 }}>{formatModel(a.model)}</span>}
-                            <span style={{ marginLeft: 'auto', display: 'flex', gap: 10, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
-                              <span>{fmt(a.tokensIn)}/{fmt(a.tokensOut)}</span>
-                              <span style={{ color: 'var(--anthropic-orange)' }}>{fmtCost(a.costUSD, currency, brlRate)}</span>
-                            </span>
-                            {a.toolStats && (
-                              <span style={{ flexBasis: '100%', paddingLeft: 20, color: 'var(--text-tertiary)', fontSize: 10.5 }}>
-                                {a.toolStats.readCount}r · {a.toolStats.editFileCount}e · +{a.toolStats.linesAdded}/−{a.toolStats.linesRemoved}
-                              </span>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-              </div>
+      {open && (() => {
+        const noPhaseLabel = pt ? '(sem fase)' : '(no phase)'
+        // Agents are only meaningfully phased when at least one DECLARED phase actually ran an
+        // agent. When they're not (everything fell into the no-phase bucket), the numbered rail +
+        // empty "nada rodou" phases are just noise — show a clean flat agent list instead.
+        const phased = steps.some(s => s.title !== noPhaseLabel && s.agents.length > 0)
+        if (!phased) {
+          const allAgents = steps.flatMap(s => s.agents)
+          return (
+            <div style={{ padding: '2px 12px 12px', display: 'flex', flexDirection: 'column', gap: 7 }}>
+              {allAgents.map((a, j) => <WfAgentRow key={j} a={a} pt={pt} currency={currency} brlRate={brlRate} />)}
             </div>
-          ))}
-        </div>
+          )
+        }
+        const shown = steps.filter(s => s.title !== noPhaseLabel || s.agents.length > 0)
+        return (
+          <div style={{ padding: '4px 12px 12px', display: 'flex', flexDirection: 'column' }}>
+            {shown.map((step, i) => (
+              <div key={`${step.title}-${i}`} style={{ display: 'flex', gap: 10 }}>
+                {/* Rail */}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 22, flexShrink: 0 }}>
+                  <span style={{
+                    width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)',
+                    background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                  }}>{i + 1}</span>
+                  {i < shown.length - 1 && <span style={{ flex: 1, width: 2, background: 'var(--border)', minHeight: 8 }} />}
+                </div>
+                {/* Step body */}
+                <div style={{ flex: 1, minWidth: 0, paddingBottom: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>{step.title}</span>
+                    <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>{step.subtotal.count} {pt ? 'agentes' : 'agents'}</span>
+                    {step.subtotal.count > 0 && (
+                      <span style={{ marginLeft: 'auto', fontSize: 10.5, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                        {fmt(step.subtotal.tokensIn)} in · {fmt(step.subtotal.tokensOut)} out · <strong style={{ color: 'var(--anthropic-orange)' }}>{fmtCost(step.subtotal.costUSD, currency, brlRate)}</strong>
+                      </span>
+                    )}
+                  </div>
+                  {step.agents.length === 0
+                    ? <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic', marginTop: 4 }}>{pt ? 'nada rodou' : 'nothing ran'}</div>
+                    : <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                        {step.agents.map((a, j) => <WfAgentRow key={j} a={a} pt={pt} currency={currency} brlRate={brlRate} />)}
+                      </div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      })()}
+    </div>
+  )
+}
+
+/** One agent line inside a Dynamic Workflow run: status glyph + label + model on the left,
+ *  tokens + cost right-aligned, an optional tool-stats line wrapping underneath. */
+function WfAgentRow({ a, pt, currency, brlRate }: { a: WorkflowAgent; pt: boolean; currency: 'USD' | 'BRL'; brlRate: number }) {
+  const g = agentGlyph(a.status)
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', fontSize: 11.5 }}>
+      <span style={{ color: g.color, fontWeight: 700, width: 12, flexShrink: 0 }}>{g.ch}</span>
+      <span style={{ color: 'var(--text-primary)', fontWeight: 600, wordBreak: 'break-word' }}>{a.label}</span>
+      {a.model && <span style={{ color: 'var(--text-tertiary)', fontSize: 10.5 }}>{formatModel(a.model)}</span>}
+      <span style={{ marginLeft: 'auto', display: 'flex', gap: 10, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+        <span>{fmt(a.tokensIn)}/{fmt(a.tokensOut)}</span>
+        <span style={{ color: 'var(--anthropic-orange)' }}>{fmtCost(a.costUSD, currency, brlRate)}</span>
+      </span>
+      {a.toolStats && (
+        <span style={{ flexBasis: '100%', paddingLeft: 20, color: 'var(--text-tertiary)', fontSize: 10.5 }}>
+          {a.toolStats.readCount}r · {a.toolStats.editFileCount}e · +{a.toolStats.linesAdded}/−{a.toolStats.linesRemoved}
+        </span>
       )}
     </div>
   )
