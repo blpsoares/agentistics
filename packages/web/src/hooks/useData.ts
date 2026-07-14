@@ -45,7 +45,7 @@ export interface RepoStat {
   _paths: Record<string, number>
 }
 
-export type RepoSortKey = 'cost' | 'sessions' | 'tokens' | 'commits' | 'lastActive' | 'name'
+export type RepoSortKey = 'cost' | 'sessions' | 'tokens' | 'commits' | 'lastActive' | 'name' | 'linked'
 
 /** Sort a repo list by a metric. Numeric/date keys compare numerically; `name`
  *  compares by locale. Non-mutating (returns a new array). `desc` reverses the
@@ -59,6 +59,7 @@ export function sortRepos(repos: RepoStat[], key: RepoSortKey, dir: 'asc' | 'des
       case 'commits': return r.gitCommits
       case 'lastActive': return r.lastActive ? new Date(r.lastActive).getTime() : 0
       case 'name': return r.name.toLowerCase()
+      case 'linked': return r.linked ? 1 : 0   // desc = linked (with repo) first
     }
   }
   const sorted = [...repos].sort((a, b) => {

@@ -1,9 +1,12 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useState } from 'react'
 import { useOutletContext, useNavigate } from 'react-router-dom'
 import { Zap, ArrowLeft, GitCommit, ExternalLink } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import { repoShortName, fmt, fmtCost, calcCost, type SessionMeta } from '@agentistics/core'
 import { Section } from '../components/Section'
+import { SortControl } from '../components/SortControl'
+
+type ActSortKey = 'cost' | 'runs' | 'tokens' | 'commits' | 'members' | 'name'
 
 /** Global GitHub Actions view: every CI runner session (SessionMeta.ci) grouped by repo. */
 export default function ActionsPage() {
@@ -26,8 +29,38 @@ export default function ActionsPage() {
       g.costUSD += sessionCost(s)
       if (s.user) g.users.add(s.user)
     }
-    return Object.values(byRepo).sort((a, b) => b.costUSD - a.costUSD || b.runs - a.runs)
+    return Object.values(byRepo)
   }, [derived.filteredSessions])
+
+  const [sortKey, setSortKey] = useState<ActSortKey>('cost')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const sorted = useMemo(() => {
+    const val = (g: typeof groups[number]): number | string => {
+      switch (sortKey) {
+        case 'cost': return g.costUSD
+        case 'runs': return g.runs
+        case 'tokens': return g.tokensIn + g.tokensOut
+        case 'commits': return g.commits
+        case 'members': return g.users.size
+        case 'name': return (g.remote ? repoShortName(g.remote) : '').toLowerCase()
+      }
+    }
+    const s = [...groups].sort((a, b) => {
+      const va = val(a), vb = val(b)
+      if (typeof va === 'string' && typeof vb === 'string') return va.localeCompare(vb)
+      return (va as number) - (vb as number)
+    })
+    return sortDir === 'desc' ? s.reverse() : s
+  }, [groups, sortKey, sortDir])
+
+  const sortOptions: { key: ActSortKey; label: string }[] = [
+    { key: 'cost', label: pt ? 'Custo' : 'Cost' },
+    { key: 'runs', label: 'Runs' },
+    { key: 'tokens', label: 'Tokens' },
+    { key: 'commits', label: 'Commits' },
+    { key: 'members', label: pt ? 'Membros' : 'Members' },
+    { key: 'name', label: pt ? 'Nome' : 'Name' },
+  ]
 
   const totalRuns = groups.reduce((a, g) => a + g.runs, 0)
   const totalCost = groups.reduce((a, g) => a + g.costUSD, 0)
@@ -53,7 +86,15 @@ export default function ActionsPage() {
       </div>
 
       <Section title={<><Zap size={14} /> {pt ? `${groups.length} repositório${groups.length === 1 ? '' : 's'} · ${totalRuns} runs` : `${groups.length} repositor${groups.length === 1 ? 'y' : 'ies'} · ${totalRuns} runs`}</>}
-        action={<span style={{ fontSize: 12, fontWeight: 700, color: 'var(--anthropic-orange)' }}>{fmtCost(totalCost, currency, brlRate)}</span>}
+        action={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            {groups.length > 1 && (
+              <SortControl lang={lang} options={sortOptions} sortKey={sortKey} dir={sortDir}
+                onKey={setSortKey} onDir={() => setSortDir(d => (d === 'desc' ? 'asc' : 'desc'))} />
+            )}
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--anthropic-orange)' }}>{fmtCost(totalCost, currency, brlRate)}</span>
+          </div>
+        }
       >
         {groups.length === 0 ? (
           <div style={{ color: 'var(--text-tertiary)', fontSize: 13, padding: 24, textAlign: 'center', lineHeight: 1.6 }}>
@@ -63,7 +104,7 @@ export default function ActionsPage() {
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {groups.map(g => {
+            {sorted.map(g => {
               const linked = g.remote !== ''
               return (
                 <div

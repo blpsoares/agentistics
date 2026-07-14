@@ -191,6 +191,7 @@ export default function RepoDetailPage() {
 
       {tab === 'sessions' && (
         <Section title={<><Clock size={14} /> {pt ? 'Sessões recentes' : 'Recent sessions'}</>}>
+          {/* RecentSessions has its own built-in sort (date/tokens/messages/tools/files). */}
           <RecentSessions sessions={sessions} lang={lang} onSelect={setSelectedSession} />
         </Section>
       )}
