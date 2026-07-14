@@ -581,23 +581,41 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
         {/* Reset button removed — clear individual chips via their × instead. */}
       </div>
 
-      {/* Desktop-only handle to collapse the active-filter chip rows (mobile minimizes the whole
-          bar via the header). Shown only when at least one filter is active. */}
-      {!compact && activeFilterCount > 0 && (
-        <button
-          onClick={() => setChipsCollapsed(c => !c)}
-          style={{
-            alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 5,
-            background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)',
-            fontSize: 11, fontWeight: 600, padding: '4px 0', fontFamily: 'inherit',
-          }}
-          title={chipsCollapsed ? (lang === 'pt' ? 'Mostrar filtros ativos' : 'Show active filters') : (lang === 'pt' ? 'Minimizar filtros ativos' : 'Minimize active filters')}
-        >
-          <ChevronDown size={13} style={{ transform: chipsCollapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.2s' }} />
-          {chipsCollapsed
-            ? (lang === 'pt' ? `${activeFilterCount} filtro${activeFilterCount > 1 ? 's' : ''} ativo${activeFilterCount > 1 ? 's' : ''}` : `${activeFilterCount} active filter${activeFilterCount > 1 ? 's' : ''}`)
-            : (lang === 'pt' ? 'Filtros ativos' : 'Active filters')}
-        </button>
+      {/* Handle row (shown only when ≥1 filter is active): a desktop-only collapse toggle for the
+          chip rows + a "Clear all" button that removes every applied dimension filter. */}
+      {activeFilterCount > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: compact ? '2px 12px 0' : '0' }}>
+          {!compact && (
+            <button
+              onClick={() => setChipsCollapsed(c => !c)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)',
+                fontSize: 11, fontWeight: 600, padding: '4px 0', fontFamily: 'inherit',
+              }}
+              title={chipsCollapsed ? (lang === 'pt' ? 'Mostrar filtros ativos' : 'Show active filters') : (lang === 'pt' ? 'Minimizar filtros ativos' : 'Minimize active filters')}
+            >
+              <ChevronDown size={13} style={{ transform: chipsCollapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.2s' }} />
+              {chipsCollapsed
+                ? (lang === 'pt' ? `${activeFilterCount} filtro${activeFilterCount > 1 ? 's' : ''} ativo${activeFilterCount > 1 ? 's' : ''}` : `${activeFilterCount} active filter${activeFilterCount > 1 ? 's' : ''}`)
+                : (lang === 'pt' ? 'Filtros ativos' : 'Active filters')}
+            </button>
+          )}
+          <button
+            onClick={() => onChange({ ...filters, users: [], harnesses: [], presence: undefined, repos: [], projects: [], models: [] })}
+            style={{
+              marginLeft: compact ? 'auto' : 0,
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)',
+              fontSize: 11, fontWeight: 600, padding: '4px 0', fontFamily: 'inherit',
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--anthropic-orange)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)' }}
+            title={lang === 'pt' ? 'Limpar todos os filtros' : 'Clear all filters'}
+          >
+            <X size={12} /> {lang === 'pt' ? 'Limpar filtros' : 'Clear filters'}
+          </button>
+        </div>
       )}
 
       {/* Active-filter chips — each category (members/projects/harnesses/models) is its own
