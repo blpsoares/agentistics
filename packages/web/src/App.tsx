@@ -1931,6 +1931,11 @@ export default function AppLayout() {
                 harnesses={availableHarnesses}
                 presence={data?.presence}
                 lang={lang}
+                summary={{
+                  sessions: derived.totalSessions.toLocaleString(),
+                  cost: fmtCost(derived.totalCostUSD, currency, brlRate),
+                  tokens: fmt(derived.inputTokens + derived.outputTokens),
+                }}
               />
             </div>
 

@@ -26,6 +26,9 @@ interface Props {
   presence?: Record<string, MemberPresence>
   lang: Lang
   compact?: boolean
+  /** Live readout of the currently-filtered data, rendered right-aligned in the top bar
+   *  (desktop only). Pre-formatted so FiltersBar needs no currency/rate. */
+  summary?: { sessions: string; cost: string; tokens: string }
 }
 
 const DATE_RANGES: { key: DateRange; labelPt: string; labelEn: string }[] = [
@@ -57,7 +60,7 @@ const SEARCH_INPUT: React.CSSProperties = {
   borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
 }
 
-export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact }: Props) {
+export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
@@ -557,6 +560,21 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
             </div>
           )}
         </div>
+
+        {/* Live summary of the currently-filtered data — fills the right side of the bar
+            (desktop only; hidden in the compact/mobile header). */}
+        {summary && !compact && (
+          <div style={{
+            marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 9,
+            fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+          }}>
+            <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{summary.sessions}</strong> {lang === 'pt' ? 'sessões' : 'sessions'}</span>
+            <span style={{ opacity: 0.35 }}>·</span>
+            <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{summary.cost}</span>
+            <span style={{ opacity: 0.35 }}>·</span>
+            <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{summary.tokens}</strong> tok</span>
+          </div>
+        )}
 
         {/* Reset button removed — clear individual chips via their × instead. */}
       </div>
