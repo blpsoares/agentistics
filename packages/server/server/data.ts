@@ -687,6 +687,21 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       }
     }
 
+    // Backfill git_remote onto sessions that lack it (e.g. legacy consolidated sessions saved
+    // before the per-session remote existed) using the remote we DID resolve for their project
+    // path. Without this, an old remote-less session at a now-linked repo folds into a duplicate
+    // "no linked repository" card next to the real repo card. Keyed by exact project_path.
+    const pathToRemote = new Map<string, string>()
+    for (const p of projects) if (p.gitRemote) pathToRemote.set(p.path, p.gitRemote)
+    if (pathToRemote.size > 0) {
+      for (const s of sessions) {
+        if (!s.git_remote) {
+          const r = pathToRemote.get(s.project_path)
+          if (r) s.git_remote = r
+        }
+      }
+    }
+
     // Sort sessions by start_time descending (most recent first)
     sessions.sort((a, b) => b.start_time.localeCompare(a.start_time))
 
