@@ -393,29 +393,49 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               </button>
               <div style={{ height: 1, background: 'var(--border)', margin: '0 0 4px' }} />
 
-              {/* Members (multi) */}
-              {openPicker === 'members' && (
-                <>
-                  <div style={{ position: 'relative', display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-                    <Search size={13} color="var(--text-tertiary)" style={{ position: 'absolute', left: 8, pointerEvents: 'none' }} />
-                    <input
-                      value={memberQuery}
-                      onChange={e => setMemberQuery(e.target.value)}
-                      autoFocus
-                      placeholder={lang === 'pt' ? 'Buscar membro…' : 'Search member…'}
-                      style={SEARCH_INPUT}
-                    />
-                  </div>
-                  <div style={{ maxHeight: 240, overflowY: 'auto' }}>
-                    {users
-                      .filter(u => u.toLowerCase().includes(memberQuery.trim().toLowerCase()))
-                      .map(u => {
+              {/* Members (multi). When a presence filter is active, only list members with that
+                  status; with no presence filter, show a green/red online dot per member. */}
+              {openPicker === 'members' && (() => {
+                const pres = presence ?? {}
+                const hasPresence = Object.keys(pres).length > 0
+                const matchesPresence = (u: string) => {
+                  if (!filters.presence) return true
+                  const on = pres[u]?.online
+                  return filters.presence === 'online' ? on === true : on === false
+                }
+                const q = memberQuery.trim().toLowerCase()
+                const list = users.filter(u => matchesPresence(u) && u.toLowerCase().includes(q))
+                return (
+                  <>
+                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+                      <Search size={13} color="var(--text-tertiary)" style={{ position: 'absolute', left: 8, pointerEvents: 'none' }} />
+                      <input
+                        value={memberQuery}
+                        onChange={e => setMemberQuery(e.target.value)}
+                        autoFocus
+                        placeholder={lang === 'pt' ? 'Buscar membro…' : 'Search member…'}
+                        style={SEARCH_INPUT}
+                      />
+                    </div>
+                    <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                      {list.length === 0 && (
+                        <div style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '8px 10px', textAlign: 'center' }}>
+                          {lang === 'pt' ? 'Nenhum membro' : 'No members'}
+                        </div>
+                      )}
+                      {list.map(u => {
                         const selected = (filters.users ?? []).includes(u)
+                        // Online indicator only when there's no presence filter (the list is already
+                        // scoped to one status when a presence filter is active).
+                        const dot = !filters.presence && hasPresence && pres[u]
+                          ? (pres[u]!.online ? '#22c55e' : '#ef4444')
+                          : undefined
                         return (
                           <PickerRow
                             key={u}
                             selected={selected}
                             label={u}
+                            dotColor={dot}
                             onClick={() => {
                               const cur = filters.users ?? []
                               const next = cur.includes(u) ? cur.filter(x => x !== u) : [...cur, u]
@@ -424,12 +444,13 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                           />
                         )
                       })}
-                  </div>
-                  {(filters.users?.length ?? 0) > 0 && (
-                    <ClearFooter onClick={() => onChange({ ...filters, users: [] })} label={lang === 'pt' ? 'Limpar membros' : 'Clear members'} />
-                  )}
-                </>
-              )}
+                    </div>
+                    {(filters.users?.length ?? 0) > 0 && (
+                      <ClearFooter onClick={() => onChange({ ...filters, users: [] })} label={lang === 'pt' ? 'Limpar membros' : 'Clear members'} />
+                    )}
+                  </>
+                )
+              })()}
 
               {/* Harnesses (multi) */}
               {openPicker === 'harnesses' && harnesses && (
