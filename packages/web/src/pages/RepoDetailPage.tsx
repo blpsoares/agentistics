@@ -520,19 +520,26 @@ function WorkflowRunCard({ run, pt, currency, brlRate, sessionById }: {
         onClick={() => setOpen(o => !o)}
         style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 12px', cursor: 'pointer' }}
       >
-        <ChevronDown size={14} style={{ transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform 0.2s', color: 'var(--text-tertiary)' }} />
+        <ChevronDown size={14} style={{ transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform 0.2s', color: 'var(--text-tertiary)', flexShrink: 0 }} />
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: statusColor(run.status), flexShrink: 0 }} />
-        <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{run.name}</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{run.name}</span>
         <span style={{
-          fontSize: 10.5, fontWeight: 600, color: HARNESS_COLORS[harness],
+          fontSize: 10.5, fontWeight: 600, color: HARNESS_COLORS[harness], flexShrink: 0,
           background: 'var(--bg-elevated)', border: `1px solid ${HARNESS_COLORS[harness]}55`,
           borderRadius: 5, padding: '2px 7px',
         }}>{HARNESS_LABELS[harness]}</span>
-        <span style={{ marginLeft: 'auto', display: 'flex', gap: 12, fontSize: 11.5, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
-          <span>{run.totals.agentCount} {pt ? 'agentes' : 'agents'}</span>
-          <span>{fmt(tok)} tok</span>
-          <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{fmtCost(run.totals.costUSD, currency, brlRate)}</span>
-          {run.durationMs > 0 && <span>{fmtRunDuration(run.durationMs)}</span>}
+        {steps.length > 0 && (
+          <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>
+            {steps.length} {pt ? (steps.length === 1 ? 'fase' : 'fases') : (steps.length === 1 ? 'phase' : 'phases')}
+          </span>
+        )}
+        {/* Metrics as aligned right-hand columns (value + micro-label) — reads as a table and
+            uses the full row width instead of leaving a ragged gap. */}
+        <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'stretch', flexShrink: 0 }}>
+          <WfMetric label={pt ? 'agentes' : 'agents'} value={String(run.totals.agentCount)} w={78} />
+          <WfMetric label="tokens" value={fmt(tok)} w={82} />
+          <WfMetric label={pt ? 'custo' : 'cost'} value={fmtCost(run.totals.costUSD, currency, brlRate)} w={92} accent />
+          {run.durationMs > 0 && <WfMetric label={pt ? 'duração' : 'duration'} value={fmtRunDuration(run.durationMs)} w={64} />}
         </span>
       </div>
 
@@ -599,17 +606,27 @@ function WfAgentRow({ a, pt, currency, brlRate }: { a: WorkflowAgent; pt: boolea
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', fontSize: 11.5 }}>
       <span style={{ color: g.color, fontWeight: 700, width: 12, flexShrink: 0 }}>{g.ch}</span>
-      <span style={{ color: 'var(--text-primary)', fontWeight: 600, wordBreak: 'break-word' }}>{a.label}</span>
-      {a.model && <span style={{ color: 'var(--text-tertiary)', fontSize: 10.5 }}>{formatModel(a.model)}</span>}
-      <span style={{ marginLeft: 'auto', display: 'flex', gap: 10, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
-        <span>{fmt(a.tokensIn)}/{fmt(a.tokensOut)}</span>
-        <span style={{ color: 'var(--anthropic-orange)' }}>{fmtCost(a.costUSD, currency, brlRate)}</span>
-      </span>
+      {/* label grows to fill the row; tokens/cost sit in fixed right columns aligned with the header */}
+      <span style={{ color: 'var(--text-primary)', fontWeight: 600, wordBreak: 'break-word', flex: 1, minWidth: 120 }}>{a.label}</span>
+      {a.model && <span style={{ color: 'var(--text-tertiary)', fontSize: 10.5, flexShrink: 0 }}>{formatModel(a.model)}</span>}
+      <span style={{ width: 96, textAlign: 'right', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{fmt(a.tokensIn)}/{fmt(a.tokensOut)}</span>
+      <span style={{ width: 92, textAlign: 'right', color: 'var(--anthropic-orange)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{fmtCost(a.costUSD, currency, brlRate)}</span>
       {a.toolStats && (
         <span style={{ flexBasis: '100%', paddingLeft: 20, color: 'var(--text-tertiary)', fontSize: 10.5 }}>
           {a.toolStats.readCount}r · {a.toolStats.editFileCount}e · +{a.toolStats.linesAdded}/−{a.toolStats.linesRemoved}
         </span>
       )}
     </div>
+  )
+}
+
+/** A right-aligned metric column (value on top, micro-label below) for the workflow run header —
+ *  fixed width so the columns line up across rows and fill the row instead of a ragged gap. */
+function WfMetric({ label, value, w, accent }: { label: string; value: string; w: number; accent?: boolean }) {
+  return (
+    <span style={{ width: w, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1, flexShrink: 0 }}>
+      <span style={{ fontSize: 12, fontWeight: accent ? 700 : 600, fontVariantNumeric: 'tabular-nums', color: accent ? 'var(--anthropic-orange)' : 'var(--text-primary)' }}>{value}</span>
+      <span style={{ fontSize: 8.5, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-tertiary)' }}>{label}</span>
+    </span>
   )
 }
