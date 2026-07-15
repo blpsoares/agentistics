@@ -430,6 +430,33 @@ export function invalidateCache(): void {
   // 'computing': no-op — let the in-flight computation finish
 }
 
+/** Backfill `git_remote` onto remote-less sessions (and their projects) from any session/project
+ *  at the same `project_path` that already carries a remote. Members stamp git_remote at push time
+ *  from their local repo, but legacy pushes / older consolidated sessions lack it — without this an
+ *  old remote-less session at a now-linked repo shows as a duplicate "no linked repository" card.
+ *  The central has NO filesystem access to members' repos (so a git scan can't resolve it there),
+ *  which is why the remote is sourced from the sessions themselves. Mutates in place; returns the
+ *  number of sessions stamped. */
+function backfillGitRemote(sessions: SessionMeta[], projects: ServerProject[]): number {
+  const pathToRemote = new Map<string, string>()
+  for (const p of projects) if (p.gitRemote) pathToRemote.set(p.path, p.gitRemote)
+  for (const s of sessions) {
+    if (s.git_remote && s.project_path && !pathToRemote.has(s.project_path)) pathToRemote.set(s.project_path, s.git_remote)
+  }
+  if (pathToRemote.size === 0) return 0
+  let n = 0
+  for (const s of sessions) {
+    if (!s.git_remote && s.project_path) {
+      const r = pathToRemote.get(s.project_path)
+      if (r) { s.git_remote = r; n++ }
+    }
+  }
+  for (const p of projects) {
+    if (!p.gitRemote) { const r = pathToRemote.get(p.path); if (r) p.gitRemote = r }
+  }
+  return n
+}
+
 export async function buildApiResponse(): Promise<ApiResponse> {
   if (_status === 'computing') return _promise!
   if (_status === 'done' && Date.now() - _resolvedAt < CACHE_TTL_MS) return _promise!
@@ -687,41 +714,13 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       }
     }
 
-    // Backfill git_remote onto remote-less sessions using the remote that ANY session (or project)
-    // at the same path already carries. Members stamp git_remote at push time from their local
-    // repo, but legacy pushes / older consolidated sessions lack it — without this an old
-    // remote-less session at a now-linked repo shows as a duplicate "no linked repository" card.
-    // The central has NO filesystem access to members' repos (so `project.gitRemote` is empty
-    // there), which is why the remote is sourced from the sessions themselves, not a git scan.
-    const pathToRemote = new Map<string, string>()
-    for (const p of projects) if (p.gitRemote) pathToRemote.set(p.path, p.gitRemote)
-    for (const s of sessions) {
-      if (s.git_remote && s.project_path && !pathToRemote.has(s.project_path)) {
-        pathToRemote.set(s.project_path, s.git_remote)
-      }
-    }
-    let backfilled = 0
-    if (pathToRemote.size > 0) {
-      for (const s of sessions) {
-        if (!s.git_remote && s.project_path) {
-          const r = pathToRemote.get(s.project_path)
-          if (r) { s.git_remote = r; backfilled++ }
-        }
-      }
-      // Keep ServerProject in sync so any project-keyed consumer links too.
-      for (const p of projects) {
-        if (!p.gitRemote) {
-          const r = pathToRemote.get(p.path)
-          if (r) p.gitRemote = r
-        }
-      }
-    }
-    // On a MEMBER, persist the backfilled remotes to the consolidate store so the uploader pushes
-    // them — the central can only group by git_remote, and cross-machine linking needs each member
-    // to actually SEND it (a member's legacy store entries otherwise stay remote-less forever, and
-    // the central has no filesystem to recover them). Skip on a central: its `sessions` include
-    // team data from Mongo that must never be written into the local store.
-    if (backfilled > 0 && !TEAM_CENTRAL && mode !== 'off') {
+    // Backfill git_remote onto remote-less sessions from any session/project at the same path
+    // (see backfillGitRemote). This first pass covers LOCAL sessions; on a MEMBER, persist the
+    // result to the store so the uploader pushes git_remote (the central can only group by remote
+    // and has no filesystem to recover it). It runs AGAIN after the team merge below so a central
+    // also backfills the members' sessions it just read from Mongo.
+    const localBackfilled = backfillGitRemote(sessions, projects)
+    if (localBackfilled > 0 && !TEAM_CENTRAL && mode !== 'off') {
       await writeConsolidated(sessions).catch(err => console.warn('[repo] store git_remote heal failed:', String(err)))
     }
 
@@ -810,6 +809,12 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       // Each member's deep history is exposed separately via `userStatsCaches` (below) and
       // aggregated per-selected-member on the frontend, so the numbers match each machine
       // exactly. `statsCache` stays the central machine's own (used for CENTRAL_USER).
+
+      // Second backfill pass: now that the members' sessions (from Mongo) are merged in, link any
+      // remote-less session to a repo that ANOTHER session at the same path resolved. Without this
+      // the central's own first pass (local sessions only) never touched the team data, so the
+      // same repo showed up both linked and unlinked. In-memory only (never persisted centrally).
+      backfillGitRemote(sessions, projects)
     }
 
     // Central self-contribution: the central machine's OWN local sessions have no `user`
