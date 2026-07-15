@@ -1712,9 +1712,10 @@ export default function AppLayout() {
   if (archiveChoice === undefined || teamSession === undefined) {
     return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
   }
-  // A pure central (aggregator, no local harness data) has no local sessions to archive —
-  // never show the consent gate there.
-  if (archiveChoice === null && !teamSession.aggregatorOnly) {
+  // A central never shows the archive consent gate: it aggregates members' computed metrics
+  // (stored in Mongo) and any self-contributed host data defaults server-side — there's nothing
+  // for the operator to consent to here, so the blocking prompt would only annoy.
+  if (archiveChoice === null && !teamSession.aggregatorOnly && !isCentral) {
     return (
       <ArchiveConsentModal
         lang={lang}
