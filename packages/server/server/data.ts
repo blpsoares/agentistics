@@ -687,17 +687,31 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       }
     }
 
-    // Backfill git_remote onto sessions that lack it (e.g. legacy consolidated sessions saved
-    // before the per-session remote existed) using the remote we DID resolve for their project
-    // path. Without this, an old remote-less session at a now-linked repo folds into a duplicate
-    // "no linked repository" card next to the real repo card. Keyed by exact project_path.
+    // Backfill git_remote onto remote-less sessions using the remote that ANY session (or project)
+    // at the same path already carries. Members stamp git_remote at push time from their local
+    // repo, but legacy pushes / older consolidated sessions lack it — without this an old
+    // remote-less session at a now-linked repo shows as a duplicate "no linked repository" card.
+    // The central has NO filesystem access to members' repos (so `project.gitRemote` is empty
+    // there), which is why the remote is sourced from the sessions themselves, not a git scan.
     const pathToRemote = new Map<string, string>()
     for (const p of projects) if (p.gitRemote) pathToRemote.set(p.path, p.gitRemote)
+    for (const s of sessions) {
+      if (s.git_remote && s.project_path && !pathToRemote.has(s.project_path)) {
+        pathToRemote.set(s.project_path, s.git_remote)
+      }
+    }
     if (pathToRemote.size > 0) {
       for (const s of sessions) {
-        if (!s.git_remote) {
+        if (!s.git_remote && s.project_path) {
           const r = pathToRemote.get(s.project_path)
           if (r) s.git_remote = r
+        }
+      }
+      // Keep ServerProject in sync so any project-keyed consumer links too.
+      for (const p of projects) {
+        if (!p.gitRemote) {
+          const r = pathToRemote.get(p.path)
+          if (r) p.gitRemote = r
         }
       }
     }
