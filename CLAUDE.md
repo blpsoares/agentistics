@@ -94,7 +94,7 @@ packages/web/src/ (React + Vite, port 47292 in dev)
   │   ├── CustomPage.tsx        → custom layout builder (/custom route)
   │   ├── CostsPage.tsx         → cost deep-dive page
   │   ├── ProjectsPage.tsx      → projects overview page
-  │   ├── RepositoriesPage.tsx  → repositories overview (/repositories): cards grouped by normalized git remote (RepositoriesList); unlinked sessions show as a flagged "no repo" card; links to /repo/:id
+  │   ├── RepositoriesPage.tsx  → repositories overview (/repositories): cards grouped by normalized git remote (RepositoriesList) so the same repo unifies across devs/paths/machines. **Only repos WITH a remote are shown by default** — remote-less sessions can't be attributed to a repo (and would split the same repo's metrics across machines), so they're hidden behind an "Unlinked · N" toggle. Links to /repo/:id
   │   ├── RepoDetailPage.tsx    → per-repo detail (/repo/:id): scopes a repo via an overridden `repos` filter (no global filter mutation) + tabs Overview/Members/Actions/Sessions/Dynamic Workflows. The "Actions" tab shows only when the repo has CI sessions; the "Dynamic Workflows" tab shows only when the repo has workflow runs from a `dynamicWorkflows`-capable harness, and renders each run as a step-by-step timeline (phases → agents) with a harness badge, and offers an "All / By session" view toggle that groups runs per session (see `lib/workflowSteps.ts` `buildWorkflowSteps` + `groupRunsBySession`)
   │   ├── ActionsPage.tsx       → /repositories/actions: all CI-runner sessions (SessionMeta.ci) grouped by repo — the GitHub Actions submenu of Repositories
   │   ├── ToolsPage.tsx         → tools breakdown page

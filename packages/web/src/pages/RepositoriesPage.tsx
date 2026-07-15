@@ -16,15 +16,20 @@ export default function RepositoriesPage() {
   const [query, setQuery] = useState('')
   const [sortKey, setSortKey] = useState<RepoSortKey>('cost')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  // Repositories are git remotes. Sessions without a remote can't be attributed to a repo (and
+  // split the same repo's metrics across machines with different local paths), so hide them by
+  // default; a toggle brings the "no repository" folder cards back.
+  const [showUnlinked, setShowUnlinked] = useState(false)
 
   const repos = derived.repoStats
+  const scoped = useMemo(() => (showUnlinked ? repos : repos.filter(r => r.linked)), [repos, showUnlinked])
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return repos
-    return repos.filter(r =>
+    if (!q) return scoped
+    return scoped.filter(r =>
       `${r.name} ${r.remote} ${r.path}`.toLowerCase().includes(q),
     )
-  }, [repos, query])
+  }, [scoped, query])
   const sorted = useMemo(() => sortRepos(filtered, sortKey, sortDir), [filtered, sortKey, sortDir])
 
   const sortOptions: { key: RepoSortKey; label: string }[] = [
@@ -38,6 +43,7 @@ export default function RepositoriesPage() {
   ]
 
   const linkedCount = repos.filter(r => r.linked).length
+  const unlinkedCount = repos.length - linkedCount
   const ciTotal = repos.reduce((a, r) => a + r.ciSessions, 0)
 
   const openRepo = (r: RepoStat) => {
@@ -53,16 +59,31 @@ export default function RepositoriesPage() {
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
           {pt
-            ? 'Métricas agrupadas por remote do git — independente do caminho local ou da máquina. Clique num repositório para ver o detalhamento completo.'
-            : 'Metrics grouped by git remote — regardless of local path or machine. Click a repository for the full breakdown.'}
+            ? 'Métricas agrupadas por remote do git — independente do caminho local ou da máquina, unificando o mesmo repo entre devs. Só repositórios com remote; habilite "sem repo" para ver sessões sem remote.'
+            : 'Metrics grouped by git remote — regardless of local path or machine, unifying the same repo across devs. Only repos with a remote; enable "unlinked" to see remote-less sessions.'}
         </div>
       </div>
 
       <Section
         flashId="repositories"
-        title={<><GitBranch size={14} /> {pt ? `${linkedCount} repositório${linkedCount === 1 ? '' : 's'}` : `${linkedCount} repositor${linkedCount === 1 ? 'y' : 'ies'}`}</>}
+        title={<><GitBranch size={14} /> {(() => { const n = sorted.length; return pt ? `${n} repositório${n === 1 ? '' : 's'}` : `${n} repositor${n === 1 ? 'y' : 'ies'}` })()}</>}
         action={
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            {unlinkedCount > 0 && (
+              <button
+                onClick={() => setShowUnlinked(v => !v)}
+                title={pt ? 'Mostrar/ocultar sessões sem repositório (sem remote)' : 'Show/hide sessions without a repository (no remote)'}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600,
+                  borderRadius: 7, padding: '5px 9px', cursor: 'pointer', fontFamily: 'inherit',
+                  border: showUnlinked ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
+                  background: showUnlinked ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+                  color: showUnlinked ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+                }}
+              >
+                <GitBranch size={12} /> {pt ? 'Sem repo' : 'Unlinked'} · {unlinkedCount}
+              </button>
+            )}
             {ciTotal > 0 && (
               <button
                 onClick={() => navigate('/repositories/actions')}
