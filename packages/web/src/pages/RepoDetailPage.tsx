@@ -340,7 +340,7 @@ interface MemberAgg {
   cost: number; inTok: number; outTok: number; cacheRead: number; cacheWrite: number
   commits: number; linesAdded: number; linesRemoved: number; files: number
   agents: number; durationMin: number; interruptions: number; errors: number
-  models: Set<string>; firstActive: string; lastActive: string
+  models: Set<string>; harnesses: Set<HarnessId>; firstActive: string; lastActive: string
   byDay: Record<string, number>; byHour: Record<number, number>
 }
 
@@ -371,9 +371,10 @@ function MembersTable({ sessions, presence, lang, currency, brlRate }: {
           user: u, sessions: 0, messages: 0, toolCalls: 0, cost: 0, inTok: 0, outTok: 0,
           cacheRead: 0, cacheWrite: 0, commits: 0, linesAdded: 0, linesRemoved: 0, files: 0,
           agents: 0, durationMin: 0, interruptions: 0, errors: 0,
-          models: new Set(), firstActive: '', lastActive: '', byDay: {}, byHour: {},
+          models: new Set(), harnesses: new Set(), firstActive: '', lastActive: '', byDay: {}, byHour: {},
         }
       }
+      m.harnesses.add(s.harness ?? 'claude')
       m.sessions++
       m.messages += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
       m.toolCalls += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
@@ -468,6 +469,23 @@ function MembersTable({ sessions, presence, lang, currency, brlRate }: {
                     <MetricCard icon={<GitCommit size={12} />} label="Commits" value={String(m.commits)} hint={pt ? `+${fmt(m.linesAdded)} / −${fmt(m.linesRemoved)} linhas · ${m.files} arquivos.` : `+${fmt(m.linesAdded)} / −${fmt(m.linesRemoved)} lines · ${m.files} files.`} />
                     <MetricCard icon={<Bot size={12} />} label="Agents" value={String(m.agents)} hint={pt ? 'Subagentes disparados via Task/Agent.' : 'Subagents launched via Task/Agent.'} />
                     <MetricCard icon={<AlertTriangle size={12} />} label={pt ? 'Erros de tool' : 'Tool errors'} value={String(m.errors)} hint={pt ? `${m.interruptions} interrupções do usuário.` : `${m.interruptions} user interruptions.`} />
+                  </div>
+
+                  {/* Harnesses used by this member in this repo */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 14 }}>
+                    <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Harnesses:</span>
+                    {m.harnesses.size === 0
+                      ? <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>—</span>
+                      : [...m.harnesses].map(h => (
+                        <span key={h} style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+                          color: HARNESS_COLORS[h], background: `${HARNESS_COLORS[h]}1f`,
+                          border: `1px solid ${HARNESS_COLORS[h]}55`, borderRadius: 5, padding: '2px 7px 2px 8px',
+                        }}>
+                          <span style={{ width: 7, height: 7, borderRadius: '50%', background: HARNESS_COLORS[h], flexShrink: 0 }} />
+                          {HARNESS_LABELS[h]}
+                        </span>
+                      ))}
                   </div>
 
                   {/* Models used + active range */}
