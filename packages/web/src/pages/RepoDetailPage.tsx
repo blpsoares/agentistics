@@ -434,9 +434,8 @@ function WorkflowsMini({ workflows, lang, currency, brlRate, sessionById }: {
     return <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>{pt ? 'Nenhum workflow.' : 'No workflows.'}</div>
   }
   return (
-    // Cap the width so run metrics sit next to their labels instead of being flung to the far
-    // edge of a full-width (~1400px) page — that scatter is what read as "jogado".
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 940 }}>
+    // Fill the full available width so the run cards and step/agent rows reach the component edge.
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%' }}>
       {/* View toggle: flat list of runs vs grouped by session */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginRight: 2 }}>{pt ? 'Ver:' : 'View:'}</span>
