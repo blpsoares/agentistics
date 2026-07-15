@@ -700,11 +700,12 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
         pathToRemote.set(s.project_path, s.git_remote)
       }
     }
+    let backfilled = 0
     if (pathToRemote.size > 0) {
       for (const s of sessions) {
         if (!s.git_remote && s.project_path) {
           const r = pathToRemote.get(s.project_path)
-          if (r) s.git_remote = r
+          if (r) { s.git_remote = r; backfilled++ }
         }
       }
       // Keep ServerProject in sync so any project-keyed consumer links too.
@@ -714,6 +715,14 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
           if (r) p.gitRemote = r
         }
       }
+    }
+    // On a MEMBER, persist the backfilled remotes to the consolidate store so the uploader pushes
+    // them — the central can only group by git_remote, and cross-machine linking needs each member
+    // to actually SEND it (a member's legacy store entries otherwise stay remote-less forever, and
+    // the central has no filesystem to recover them). Skip on a central: its `sessions` include
+    // team data from Mongo that must never be written into the local store.
+    if (backfilled > 0 && !TEAM_CENTRAL && mode !== 'off') {
+      await writeConsolidated(sessions).catch(err => console.warn('[repo] store git_remote heal failed:', String(err)))
     }
 
     // Sort sessions by start_time descending (most recent first)
