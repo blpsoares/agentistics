@@ -861,7 +861,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
     { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={17} /> },
     { to: '/repositories', labelPt: 'Repositórios', labelEn: 'Repositories', icon: <GitBranch size={17} /> },
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={17} /> },
-    ...(hasWorkflows ? [{ to: '/workflows', labelPt: 'Workflows', labelEn: 'Workflows', icon: <WorkflowIcon size={17} /> }] : []),
+    ...(hasWorkflows ? [{ to: '/workflows', labelPt: 'Dynamic Workflows', labelEn: 'Dynamic Workflows', icon: <WorkflowIcon size={17} /> }] : []),
     { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={17} /> },
     ...(harnesses && harnesses.length > 1 ? [{ to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={17} /> }] : []),
   ]

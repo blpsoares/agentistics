@@ -3,6 +3,8 @@ import { useOutletContext } from 'react-router-dom'
 import { Workflow as WorkflowIcon, ChevronDown, ChevronRight, Search } from 'lucide-react'
 import type { WorkflowRun, WorkflowAgent, SessionMeta } from '@agentistics/core'
 import { getModelPrice, fmtCost, fmt, sessionLabel } from '@agentistics/core'
+import { DYNAMIC_WORKFLOWS_DOC } from '../lib/harness'
+import { DocLink } from '../components/DocLink'
 import type { AppContext } from '../lib/app-context'
 import { Section } from '../components/Section'
 import { getDateRangeFilter } from '../hooks/useData'
@@ -77,8 +79,9 @@ export default function WorkflowsPage() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 4 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>
           <span style={{ color: 'var(--anthropic-orange)' }}><WorkflowIcon size={16} /></span>
-          Workflows
+          Dynamic Workflows
           <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--text-tertiary)' }}>({filtered.length})</span>
+          <DocLink href={DYNAMIC_WORKFLOWS_DOC} title={pt ? 'O que é Dynamic Workflows? (doc da Anthropic)' : 'What is Dynamic Workflows? (Anthropic docs)'} size={14} />
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
           {pt

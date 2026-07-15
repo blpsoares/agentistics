@@ -325,8 +325,20 @@ function peakIndex(arr: number[]): number | null {
  * granularity, so the filtered view must come from per-session sums. Pure.
  */
 export function summarizeHarnessSessions(sessions: SessionMeta[], harness: HarnessId): HarnessSummary {
-  const harnessSessions = sessions.filter(s => (s.harness ?? 'claude') === harness)
-  const sessionCount = harnessSessions.length
+  return summarizeSessions(
+    sessions.filter(s => (s.harness ?? 'claude') === harness),
+    HARNESS_CAPABILITIES[harness].cost,
+    HARNESS_CAPABILITIES[harness].tokens,
+  )
+}
+
+/**
+ * Core summarizer over an ALREADY-scoped session list (no harness filter). `hasCost`/`hasTokens`
+ * gate cost/token-derived fields. Used by summarizeHarnessSessions (per harness) and by
+ * computeMemberSummaries (per member, across all harnesses → both capabilities on). Pure.
+ */
+export function summarizeSessions(list: SessionMeta[], hasCost: boolean, hasTokens: boolean): HarnessSummary {
+  const sessionCount = list.length
   let messages = 0
   let inputTokens = 0
   let outputTokens = 0
@@ -340,10 +352,7 @@ export function summarizeHarnessSessions(sessions: SessionMeta[], harness: Harne
   // Per-model token accumulation; cost computed via calcCost after the loop.
   const modelMap: Record<string, import('@agentistics/core').ModelUsage> = {}
 
-  const hasCost = HARNESS_CAPABILITIES[harness].cost
-  const hasTokens = HARNESS_CAPABILITIES[harness].tokens
-
-  for (const s of harnessSessions) {
+  for (const s of list) {
     messages += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
     inputTokens += s.input_tokens ?? 0
     outputTokens += s.output_tokens ?? 0
@@ -443,6 +452,26 @@ export function summarizeHarnessSessions(sessions: SessionMeta[], harness: Harne
     models,
     costPerMTokens,
   }
+}
+
+export interface MemberSummary { user: string; summary: HarnessSummary }
+
+/**
+ * Group a session list by `user` and summarize each member (across all harnesses), sorted by
+ * cost desc. Drives the repo-detail "Compare" tab (member-vs-member), mirroring how
+ * computeHarnessSummaries drives the /compare page (harness-vs-harness). Pure.
+ */
+export function computeMemberSummaries(sessions: SessionMeta[]): MemberSummary[] {
+  const byUser = new Map<string, SessionMeta[]>()
+  for (const s of sessions) {
+    if (!s.user) continue
+    const arr = byUser.get(s.user) ?? []
+    arr.push(s)
+    byUser.set(s.user, arr)
+  }
+  return [...byUser.entries()]
+    .map(([user, list]) => ({ user, summary: summarizeSessions(list, true, true) }))
+    .sort((a, b) => b.summary.costUSD - a.summary.costUSD)
 }
 
 /**

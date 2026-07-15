@@ -1,21 +1,22 @@
 import React, { useMemo, useState } from 'react'
 import { useOutletContext, useParams, useNavigate } from 'react-router-dom'
 import {
-  GitBranch, ArrowLeft, ExternalLink, Link2Off, Users, Zap, Workflow as WorkflowIcon,
+  GitBranch, ArrowLeft, ExternalLink, Link2Off, Users, Zap, Workflow as WorkflowIcon, GitCompare,
   Clock, GitCommit, ChevronDown, DollarSign, Cpu, Wrench, Bot, FileCode, MessageSquare, Database, AlertTriangle,
 } from 'lucide-react'
 import type { AppContext, } from '../lib/app-context'
 import type { SessionMeta, MemberPresence, HarnessId, WorkflowRun, WorkflowAgent } from '@agentistics/core'
 import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost, sessionLabel } from '@agentistics/core'
-import { capable, HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
+import { capable, HARNESS_LABELS, HARNESS_COLORS, DYNAMIC_WORKFLOWS_DOC } from '../lib/harness'
+import { DocLink } from '../components/DocLink'
 import { buildWorkflowSteps, groupRunsBySession } from '../lib/workflowSteps'
-import { useDerivedStats } from '../hooks/useData'
+import { useDerivedStats, computeMemberSummaries, type MemberSummary } from '../hooks/useData'
 import { Section } from '../components/Section'
 import { ModelBreakdown } from '../components/ModelBreakdown'
 import { ActivityChart } from '../components/ActivityChart'
 import { RecentSessions } from '../components/RecentSessions'
 
-type Tab = 'overview' | 'members' | 'actions' | 'sessions' | 'workflows'
+type Tab = 'overview' | 'members' | 'compare' | 'actions' | 'sessions' | 'workflows'
 
 export default function RepoDetailPage() {
   const ctx = useOutletContext<AppContext>()
@@ -64,6 +65,7 @@ export default function RepoDetailPage() {
   const tabs: { id: Tab; label: string; icon: React.ReactNode; show: boolean; badge?: number }[] = [
     { id: 'overview', label: pt ? 'Visão geral' : 'Overview', icon: <GitBranch size={13} />, show: true },
     { id: 'members', label: pt ? 'Membros' : 'Members', icon: <Users size={13} />, show: isCentral, badge: scoped.repoStats[0]?.members.length },
+    { id: 'compare', label: pt ? 'Comparar' : 'Compare', icon: <GitCompare size={13} />, show: isCentral && (scoped.repoStats[0]?.members.length ?? 0) > 1 },
     { id: 'actions', label: 'Actions', icon: <Zap size={13} />, show: ciSessions.length > 0, badge: ciSessions.length || undefined },
     { id: 'sessions', label: pt ? 'Sessões' : 'Sessions', icon: <Clock size={13} />, show: true },
     { id: 'workflows', label: 'Dynamic Workflows', icon: <WorkflowIcon size={13} />, show: workflows.length > 0 && workflows.some(w => capable(harnessOf(w), 'dynamicWorkflows')), badge: workflows.length },
@@ -168,6 +170,12 @@ export default function RepoDetailPage() {
         </Section>
       )}
 
+      {tab === 'compare' && (
+        <Section title={<><GitCompare size={14} /> {pt ? 'Comparar membros' : 'Compare members'}</>}>
+          <MemberComparePanel sessions={sessions} lang={lang} currency={currency} brlRate={brlRate} />
+        </Section>
+      )}
+
       {tab === 'actions' && (
         <Section title={<><Zap size={14} /> {pt ? 'GitHub Actions (runners de CI)' : 'GitHub Actions (CI runners)'}</>}>
           {ciSessions.length === 0 ? (
@@ -197,11 +205,120 @@ export default function RepoDetailPage() {
       )}
 
       {tab === 'workflows' && (
-        <Section title={<><WorkflowIcon size={14} /> Dynamic Workflows</>}>
+        <Section title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><WorkflowIcon size={14} /> Dynamic Workflows <DocLink href={DYNAMIC_WORKFLOWS_DOC} title={pt ? 'O que é Dynamic Workflows? (doc da Anthropic)' : 'What is Dynamic Workflows? (Anthropic docs)'} /></span>}>
           <WorkflowsMini workflows={workflows} lang={lang} currency={currency} brlRate={brlRate} sessionById={sessionByIdWf} />
         </Section>
       )}
     </>
+  )
+}
+
+// ── Compare members (repo-scoped, mirrors the /compare page but keyed by member) ──────────────
+const MEMBER_COLORS = ['#D97706', '#6366f1', '#10b981', '#ef4444', '#06b6d4', '#8b5cf6', '#f59e0b', '#ec4899']
+const mcolor = (i: number): string => MEMBER_COLORS[i % MEMBER_COLORS.length]!
+const DOW_NAMES: Record<'pt' | 'en', string[]> = {
+  pt: ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'],
+  en: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+}
+
+function CmpBar({ value, max, color }: { value: number; max: number; color: string }) {
+  const pct = max > 0 ? Math.round((value / max) * 100) : 0
+  return (
+    <div style={{ height: 4, background: 'var(--bg-elevated)', borderRadius: 2, overflow: 'hidden', marginTop: 5 }}>
+      <div style={{ height: '100%', width: `${pct}%`, background: color, borderRadius: 2, transition: 'width 0.4s ease-out' }} />
+    </div>
+  )
+}
+
+function CmpSparkline({ series, color }: { series: { date: string; sessions: number }[]; color: string }) {
+  if (series.length < 2) return <div style={{ height: 24 }} />
+  const vals = series.map(d => d.sessions)
+  const max = Math.max(...vals, 1)
+  const W = 120, H = 24, step = W / (vals.length - 1)
+  const pts = vals.map((v, i) => `${(i * step).toFixed(1)},${(H - (v / max) * (H - 2) - 1).toFixed(1)}`).join(' ')
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: '100%', height: 24, display: 'block' }}>
+      <polyline points={pts} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" opacity={0.9} />
+    </svg>
+  )
+}
+
+function MemberComparePanel({ sessions, lang, currency, brlRate }: {
+  sessions: SessionMeta[]; lang: 'pt' | 'en'; currency: 'USD' | 'BRL'; brlRate: number
+}) {
+  const pt = lang === 'pt'
+  const members = useMemo(() => computeMemberSummaries(sessions), [sessions])
+  if (members.length < 2) {
+    return <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>{pt ? 'Só há um membro neste repositório.' : 'Only one member on this repository.'}</div>
+  }
+
+  const tok = (m: MemberSummary) => m.summary.inputTokens + m.summary.outputTokens
+  const rows: { label: string; val: (m: MemberSummary) => number; display: (m: MemberSummary) => string }[] = [
+    { label: pt ? 'Sessões' : 'Sessions', val: m => m.summary.sessions, display: m => String(m.summary.sessions) },
+    { label: pt ? 'Mensagens' : 'Messages', val: m => m.summary.messages, display: m => fmt(m.summary.messages) },
+    { label: 'Tokens', val: m => tok(m), display: m => fmt(tok(m)) },
+    { label: pt ? 'Custo' : 'Cost', val: m => m.summary.costUSD, display: m => fmtCost(m.summary.costUSD, currency, brlRate) },
+    { label: pt ? 'Custo/M tok' : 'Cost/M tok', val: m => m.summary.costPerMTokens ?? 0, display: m => m.summary.costPerMTokens != null ? fmtCost(m.summary.costPerMTokens, currency, brlRate) : '—' },
+  ]
+
+  const gridCols = `minmax(120px, 1.1fr) ${members.map(() => 'minmax(150px, 1fr)').join(' ')}`
+
+  const compRow = (label: string, cell: (m: MemberSummary) => string) => (
+    <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: 12, alignItems: 'center', padding: '8px 0', borderTop: '1px solid var(--border)' }}>
+      <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600 }}>{label}</span>
+      {members.map((m, i) => (
+        <span key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>{cell(m)}</span>
+      ))}
+    </div>
+  )
+
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <div style={{ minWidth: 120 + members.length * 160 }}>
+        {/* Header — member names */}
+        <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: 12, alignItems: 'end', paddingBottom: 8 }}>
+          <span />
+          {members.map((m, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+              <span style={{ width: 9, height: 9, borderRadius: '50%', background: mcolor(i), flexShrink: 0 }} />
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.user}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Numeric rows with comparative bars */}
+        {rows.map(row => {
+          const max = Math.max(...members.map(row.val), 0)
+          return (
+            <div key={row.label} style={{ display: 'grid', gridTemplateColumns: gridCols, gap: 12, alignItems: 'start', padding: '9px 0', borderTop: '1px solid var(--border)' }}>
+              <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', fontWeight: 600, paddingTop: 2 }}>{row.label}</span>
+              {members.map((m, i) => (
+                <div key={i} style={{ minWidth: 0 }}>
+                  <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{row.display(m)}</span>
+                  <CmpBar value={row.val(m)} max={max} color={mcolor(i)} />
+                </div>
+              ))}
+            </div>
+          )
+        })}
+
+        {/* Comparatives */}
+        <div style={{ marginTop: 6 }}>
+          {compRow(pt ? 'Hora de pico' : 'Peak hour', m => m.summary.peakHour == null ? '—' : `${String(m.summary.peakHour).padStart(2, '0')}:00`)}
+          {compRow(pt ? 'Dia mais ativo' : 'Busiest day', m => m.summary.peakDow == null ? '—' : DOW_NAMES[lang][m.summary.peakDow] ?? '—')}
+          {compRow(pt ? 'Pico de tokens/dia' : 'Peak token day', m => m.summary.peakTokenDay ? `${fmt(m.summary.peakTokenDay.tokens)} · ${m.summary.peakTokenDay.date.slice(5)}` : '—')}
+          {compRow(pt ? 'Sessão mais cara' : 'Peak session cost', m => m.summary.peakSessionCost != null ? fmtCost(m.summary.peakSessionCost, currency, brlRate) : '—')}
+        </div>
+
+        {/* Activity sparklines */}
+        <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: 12, alignItems: 'center', padding: '10px 0 2px', borderTop: '1px solid var(--border)' }}>
+          <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600 }}>{pt ? 'Atividade' : 'Activity'}</span>
+          {members.map((m, i) => (
+            <CmpSparkline key={i} series={m.summary.dailyActivity} color={mcolor(i)} />
+          ))}
+        </div>
+      </div>
+    </div>
   )
 }
 
