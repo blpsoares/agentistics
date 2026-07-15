@@ -75,6 +75,8 @@ export interface CliStrings {
   restartingLocal: string
   restartingCentral: string
   restartingMachine: string
+  rebuildingCentral: string
+  rebuildingMachine: string
   restartedAll: string
   restartedDone: string
   disconnected: string
@@ -149,6 +151,8 @@ const EN: CliStrings = {
   restartingLocal: 'restarting the local server…',
   restartingCentral: 'restarting the central container…',
   restartingMachine: 'restarting the machine container…',
+  rebuildingCentral: 'rebuilding the central image and recreating…',
+  rebuildingMachine: 'rebuilding the machine image and recreating…',
   restartedAll: 'restarted all running services.',
   restartedDone: 'service restarted.',
   disconnected: 'disconnected — this machine is back to solo.',
@@ -223,6 +227,8 @@ const PT: CliStrings = {
   restartingLocal: 'reiniciando o server local…',
   restartingCentral: 'reiniciando o container da central…',
   restartingMachine: 'reiniciando o container da máquina…',
+  rebuildingCentral: 'reconstruindo a imagem da central e recriando…',
+  rebuildingMachine: 'reconstruindo a imagem da máquina e recriando…',
   restartedAll: 'todos os serviços no ar foram reiniciados.',
   restartedDone: 'serviço reiniciado.',
   disconnected: 'desconectado — esta máquina voltou para solo.',

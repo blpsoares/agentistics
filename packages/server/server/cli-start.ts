@@ -287,27 +287,41 @@ async function runAgentistics(s: CliStrings, localRunning: boolean): Promise<Sta
 }
 
 // ── restart (per-service helpers) ───────────────────────────────────────────────
+// `rebuild` (from `--rebuild`) recreates Docker images/containers instead of just bouncing them.
 async function restartLocalSvc(s: CliStrings): Promise<void> {
+  // The local server is a native binary — "rebuild" belongs to `bun bin` / `agentop upgrade`,
+  // not here; a restart just relaunches the already-installed binary.
   process.stdout.write(`  ${D}${s.restartingLocal}${R}\n`)
   await stopLocal(s)
   startBackground(s)
 }
-async function restartCentralSvc(s: CliStrings): Promise<void> {
-  process.stdout.write(`  ${D}${s.restartingCentral}${R}\n`)
-  await runCentral('restart', [])
+async function restartCentralSvc(s: CliStrings, rebuild = false): Promise<void> {
+  process.stdout.write(`  ${D}${rebuild ? s.rebuildingCentral : s.restartingCentral}${R}\n`)
+  // `up` rebuilds/pulls the image and recreates; `restart` just bounces the running container.
+  await runCentral(rebuild ? 'up' : 'restart', [])
 }
-async function restartMachineSvc(s: CliStrings): Promise<void> {
-  process.stdout.write(`  ${D}${s.restartingMachine}${R}\n`)
+async function restartMachineSvc(s: CliStrings, rebuild = false): Promise<void> {
+  process.stdout.write(`  ${D}${rebuild ? s.rebuildingMachine : s.restartingMachine}${R}\n`)
+  if (rebuild) {
+    const compose = join(process.cwd(), 'docker-compose.machine.yml')
+    if (await Bun.file(compose).exists()) {
+      const child = spawn('docker', ['compose', '-f', compose, 'up', '-d', '--build'], { stdio: 'inherit' })
+      await new Promise<void>((resolve) => child.on('exit', () => resolve()))
+      return
+    }
+    process.stderr.write(`  ${YE}${s.noComposeFrom(process.cwd())}${R}\n`)
+    // fall through to a plain restart so the machine still comes back up
+  }
   const ids = await dockerIds(`ancestor=${MACHINE_IMAGE}`)
   if (ids.length) await sh(['docker', 'restart', ...ids])
 }
 
-/** Restart every service currently up (local server + central + machine containers), in place. */
-async function restartRunning(s: CliStrings, svc: Services): Promise<boolean> {
+/** Restart every service currently up. `rebuild` recreates Docker images (central + machine). */
+async function restartRunning(s: CliStrings, svc: Services, rebuild = false): Promise<boolean> {
   if (!(svc.local || svc.central || svc.machine)) return false
   if (svc.local) await restartLocalSvc(s)
-  if (svc.central) await restartCentralSvc(s)
-  if (svc.machine) await restartMachineSvc(s)
+  if (svc.central) await restartCentralSvc(s, rebuild)
+  if (svc.machine) await restartMachineSvc(s, rebuild)
   process.stdout.write(`\n  ${GR}${s.restartedAll}${R}\n`)
   return true
 }
@@ -331,15 +345,16 @@ async function restartMenu(s: CliStrings, svc: Services): Promise<boolean> {
   return true
 }
 
-/** Non-interactive `agentop restart --all`: bounce every running service. Returns an exit code. */
-export async function restartAllServices(): Promise<number> {
+/** Non-interactive `agentop restart --all [--rebuild]`: bounce (or rebuild) every running
+ *  service. Returns an exit code. */
+export async function restartAllServices(rebuild = false): Promise<number> {
   const s = cliStrings(await resolveLang())
   const svc = await detectServices()
   if (!(svc.local || svc.central || svc.machine)) {
     process.stdout.write(`  ${D}○ ${s.nothingRunning}${R}\n`)
     return 0
   }
-  await restartRunning(s, svc)
+  await restartRunning(s, svc, rebuild)
   return 0
 }
 

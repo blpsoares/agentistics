@@ -37,10 +37,12 @@ Start:
     A central is started via its Docker flow. Non-interactive stdin runs like 'agentop server'.
 
 Restart:
-  agentop restart [server|watch|central|--all]
+  agentop restart [server|watch|central|--all] [--rebuild]
     Restart a running mode so it picks up new code (after an upgrade/pull) or config.
-    server/watch bounce the systemd user service; central rebuilds/restarts its container.
+    server/watch bounce the systemd user service; central restarts its container.
     --all bounces every service currently up (local + central + machine), non-interactively.
+    --rebuild recreates the Docker image/container (central + machine) instead of just bouncing
+    it — use it to pick up new code in Docker deployments (native server: use bun bin / upgrade).
 
 Setup:
   agentop setup
@@ -309,17 +311,25 @@ if (command === 'status') {
 }
 
 if (command === 'restart') {
-  const modeArg = args[0] ?? 'server'
-  // `agentop restart --all` — bounce every service currently up (local + central + machine).
-  if (modeArg === '--all' || modeArg === 'all') {
+  // `--rebuild` recreates Docker images/containers (central + machine) instead of just bouncing.
+  const rebuild = args.includes('--rebuild')
+  const positional = args.filter(a => !a.startsWith('-'))
+  const modeArg = positional[0] ?? (args.includes('--all') ? 'all' : 'server')
+  // `agentop restart --all [--rebuild]` — bounce (or rebuild) every service currently up.
+  if (modeArg === 'all') {
     const { restartAllServices } = await import('../server/cli-start.ts')
-    process.exit(await restartAllServices())
+    process.exit(await restartAllServices(rebuild))
   }
-  // The central runs in Docker — delegate to its own restart (systemctl can't bounce a container).
+  // The central runs in Docker — delegate to its own compose. `up` rebuilds/pulls + recreates;
+  // `restart` just bounces the running container.
   if (modeArg === 'central') {
     const { runCentral } = await import('../server/cli-central.ts')
-    const code = await runCentral('restart', [])
+    const code = await runCentral(rebuild ? 'up' : 'restart', [])
     process.exit(code)
+  }
+  if (rebuild) {
+    console.error(`--rebuild only applies to Docker services (central/machine). For the native ${modeArg}, use \`bun bin\` (from the repo) or \`agentop upgrade\`.\n`)
+    process.exit(1)
   }
   const { restartAutostart, isAutostartMode } = await import('../server/autostart.ts')
   if (!isAutostartMode(modeArg)) {
