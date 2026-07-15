@@ -3,7 +3,7 @@ import { HARNESS_CAPABILITIES } from '@agentistics/core'
 
 /** Anthropic doc explaining Dynamic Workflows (Claude Code's multi-agent orchestration / subagents).
  *  Surfaced as a "what is this?" doc link next to the Dynamic Workflows headings. */
-export const DYNAMIC_WORKFLOWS_DOC = 'https://docs.claude.com/en/docs/claude-code/sub-agents'
+export const DYNAMIC_WORKFLOWS_DOC = 'https://code.claude.com/docs/en/workflows'
 
 export const HARNESS_LABELS: Record<HarnessId, string> = {
   claude: 'Claude Code',
