@@ -10,7 +10,7 @@ import {
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Workflow as WorkflowIcon,
-  GitBranch,
+  GitBranch, Users,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -844,9 +844,10 @@ function CollapsedTip({ label, show, children }: { label: string; show: boolean;
   )
 }
 
-function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle, updatedText, sinceText, theme, onToggleTheme, onToggleLang, onSettings, onExport }: {
+function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle, updatedText, sinceText, memberSummary, theme, onToggleTheme, onToggleLang, onSettings, onExport }: {
   lang: Lang; harnesses?: HarnessId[]; isCentral?: boolean; hasWorkflows?: boolean
   collapsed: boolean; onToggle: () => void; updatedText: string; sinceText?: string
+  memberSummary?: { total: number; online: number; offline: number }
   theme: Theme; onToggleTheme: () => void; onToggleLang: () => void; onSettings: () => void; onExport: () => void
 }) {
   const location = useLocation()
@@ -886,10 +887,24 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
             {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
           </button>
         </div>
-        {!collapsed && (updatedText || sinceText) && (
+        {!collapsed && (updatedText || sinceText || memberSummary) && (
           <div style={{ marginTop: 6, fontSize: 10.5, lineHeight: 1.55 }}>
             {updatedText && <div style={{ color: 'var(--text-tertiary)' }}>{updatedText}</div>}
             {sinceText && <div style={{ color: 'var(--text-secondary)' }}>{sinceText}</div>}
+            {memberSummary && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <Users size={11} style={{ color: 'var(--text-tertiary)' }} />
+                  {memberSummary.total} {pt ? (memberSummary.total === 1 ? 'membro' : 'membros') : (memberSummary.total === 1 ? 'member' : 'members')}
+                </span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title={pt ? 'Online' : 'Online'}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e' }} />{memberSummary.online}
+                </span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title={pt ? 'Offline' : 'Offline'}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444' }} />{memberSummary.offline}
+                </span>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1749,6 +1764,13 @@ export default function AppLayout() {
         }`}
         sinceText={(singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate)
           ? `${lang === 'pt' ? 'Desde' : 'Since'} ${format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')} · ${derived.allTimeTotalSessions.toLocaleString()} ${lang === 'pt' ? 'sessões' : 'sessions'}${singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}`
+          : undefined}
+        memberSummary={isCentral && data?.presence && Object.keys(data.presence).length > 0
+          ? {
+            total: Object.keys(data.presence).length,
+            online: Object.values(data.presence).filter(p => p.online).length,
+            offline: Object.values(data.presence).filter(p => !p.online).length,
+          }
           : undefined}
         theme={theme}
         onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
