@@ -239,6 +239,15 @@ export async function getMemberNameMap(): Promise<Record<string, string>> {
   return map
 }
 
+/** memberId (token hash) → teamId, for read-time team tagging. Defaults to DEFAULT_TEAM_ID. */
+export async function getMemberTeamMap(): Promise<Record<string, string>> {
+  const col = await getTokensCollection()
+  const docs = await col.find({}, { projection: { _id: 1, teamId: 1 } }).toArray()
+  const map: Record<string, string> = {}
+  for (const d of docs) map[d._id] = d.teamId ?? DEFAULT_TEAM_ID
+  return map
+}
+
 /** Assign the Default team to any token minted before teams existed. Idempotent. */
 export async function backfillTokenTeamIds(): Promise<void> {
   const col = await getTokensCollection()

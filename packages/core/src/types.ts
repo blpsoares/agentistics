@@ -109,6 +109,8 @@ export interface SessionMeta {
    *  (or authoritatively from a repo-bound token on CI ingest). Empty/undefined when the
    *  project is not a git repo or has no origin remote. See `normalizeGitRemote`. */
   git_remote?: string
+  /** Team the owning member belongs to (central read-time tag; used for per-team scoping). */
+  teamId?: string
   /** True when this session was produced by a CI runner (Claude Code GitHub Actions), stamped
    *  authoritatively by the central on ingest via a repo-bound token. Powers the Actions view. */
   ci?: boolean

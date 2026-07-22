@@ -6,7 +6,8 @@ import { TEAM_DIR } from './config'
 import { getTeamCollection } from './mongo'
 import { fromTeamDoc } from './team-store'
 import { loadAllTeamWorkflows } from './team-workflows'
-import { getMemberNameMap } from './team-tokens'
+import { getMemberNameMap, getMemberTeamMap } from './team-tokens'
+import { DEFAULT_TEAM_ID } from './teams'
 
 /**
  * Phase-1 "folder union" transport. Reads consolidated SessionMeta JSONs from
@@ -42,14 +43,17 @@ export async function loadTeamSessions(root: string = TEAM_DIR): Promise<Session
  */
 export async function loadTeamSessionsFromMongo(): Promise<SessionMeta[]> {
   const col = await getTeamCollection()
-  const [docs, nameMap] = await Promise.all([
+  const [docs, nameMap, teamMap] = await Promise.all([
     col.find({}).toArray(),
     getMemberNameMap().catch(() => ({} as Record<string, string>)),
+    getMemberTeamMap().catch(() => ({} as Record<string, string>)),
   ])
   return docs.map(doc => {
     // Resolve current name from the live tokens table; fall back to the cached value in the doc.
     const resolved = { ...doc, user: nameMap[doc.memberId] ?? doc.user }
-    return fromTeamDoc(resolved)
+    const meta = fromTeamDoc(resolved)
+    meta.teamId = teamMap[doc.memberId] ?? DEFAULT_TEAM_ID
+    return meta
   })
 }
 
