@@ -1,5 +1,5 @@
 import React, { lazy, Suspense } from 'react'
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import AppLayout from './App'
 
 const HomePage = lazy(() => import('./pages/HomePage'))
@@ -14,6 +14,16 @@ const ComparePage = lazy(() => import('./pages/ComparePage'))
 const ExportPage = lazy(() => import('./pages/ExportPage'))
 const SessionsPage = lazy(() => import('./pages/SessionsPage'))
 const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'))
+const SettingsPage = lazy(() => import('./pages/settings/SettingsPage'))
+const PreferencesSettings = lazy(() => import('./pages/settings/PreferencesSettings'))
+const SessionsSettings = lazy(() => import('./pages/settings/SessionsSettings'))
+const DataSourcesSettings = lazy(() => import('./pages/settings/DataSourcesSettings'))
+const HarnessesSettings = lazy(() => import('./pages/settings/HarnessesSettings'))
+const InstallSettings = lazy(() => import('./pages/settings/InstallSettings'))
+const LiveSettings = lazy(() => import('./pages/settings/LiveSettings'))
+const IamSettings = lazy(() => import('./pages/settings/IamSettings'))
+const TeamSettingsPage = lazy(() => import('./pages/settings/TeamSettingsPage'))
+const ReposSettingsPage = lazy(() => import('./pages/settings/ReposSettingsPage'))
 
 function PageFallback() {
   return (
@@ -45,6 +55,18 @@ export default function AppRouter() {
           <Route path="custom" element={<Suspense fallback={<PageFallback />}><CustomPage /></Suspense>} />
           <Route path="compare" element={<Suspense fallback={<PageFallback />}><ComparePage /></Suspense>} />
           <Route path="export" element={<Suspense fallback={<PageFallback />}><ExportPage /></Suspense>} />
+          <Route path="settings" element={<Suspense fallback={<PageFallback />}><SettingsPage /></Suspense>}>
+            <Route index element={<Navigate to="preferences" replace />} />
+            <Route path="preferences" element={<Suspense fallback={<PageFallback />}><PreferencesSettings /></Suspense>} />
+            <Route path="sessions" element={<Suspense fallback={<PageFallback />}><SessionsSettings /></Suspense>} />
+            <Route path="data-sources" element={<Suspense fallback={<PageFallback />}><DataSourcesSettings /></Suspense>} />
+            <Route path="harnesses" element={<Suspense fallback={<PageFallback />}><HarnessesSettings /></Suspense>} />
+            <Route path="install" element={<Suspense fallback={<PageFallback />}><InstallSettings /></Suspense>} />
+            <Route path="live" element={<Suspense fallback={<PageFallback />}><LiveSettings /></Suspense>} />
+            <Route path="iam" element={<Suspense fallback={<PageFallback />}><IamSettings /></Suspense>} />
+            <Route path="team" element={<Suspense fallback={<PageFallback />}><TeamSettingsPage /></Suspense>} />
+            <Route path="repositories" element={<Suspense fallback={<PageFallback />}><ReposSettingsPage /></Suspense>} />
+          </Route>
         </Route>
       </Routes>
     </BrowserRouter>
