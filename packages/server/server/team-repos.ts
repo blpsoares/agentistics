@@ -17,12 +17,14 @@ import { normalizeGitRemote } from '@agentistics/core'
 import { getMongoDb } from './mongo'
 import { mintToken, revokeToken } from './team-tokens'
 import { ciMemberId } from './team-oidc'
+import { DEFAULT_TEAM_ID } from './teams'
 
 export interface RepoDoc {
   _id: string        // the normalized remote (host/org/repo) — also the dedup key
   remote: string     // same as _id, explicit for reads
   tokenId: string    // sha256 hash of the CI token (memberId of pushed sessions)
   createdAt: string
+  teamId?: string
 }
 
 /** Safe repo record for listing (no token material). The display name is always derived from
@@ -69,7 +71,7 @@ export async function registerRepo(
 
   await col.replaceOne(
     { _id: remote },
-    { remote, tokenId, createdAt: new Date().toISOString() },
+    { remote, tokenId, teamId: DEFAULT_TEAM_ID, createdAt: new Date().toISOString() },
     { upsert: true },
   )
   return { ok: true, token, remote }
@@ -111,4 +113,10 @@ export async function unregisterRepo(rawRemote: string): Promise<boolean> {
   } catch { /* best-effort */ }
   await col.deleteOne({ _id: remote })
   return true
+}
+
+/** Assign the Default team to any repo registered before teams existed. Idempotent. */
+export async function backfillRepoTeamIds(): Promise<void> {
+  const col = await getReposCollection()
+  await col.updateMany({ teamId: { $exists: false } }, { $set: { teamId: DEFAULT_TEAM_ID } })
 }

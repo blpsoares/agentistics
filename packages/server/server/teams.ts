@@ -45,3 +45,13 @@ export async function deleteTeam(id: string): Promise<void> {
   const col = await getTeamsCollection()
   await col.deleteOne({ _id: id })
 }
+
+/** Idempotently ensure the seeded Default team exists (every pre-existing member/repo maps here). */
+export async function seedDefaultTeam(): Promise<void> {
+  const col = await getTeamsCollection()
+  await col.updateOne(
+    { _id: DEFAULT_TEAM_ID },
+    { $setOnInsert: { name: 'Default team', createdAt: new Date().toISOString() } },
+    { upsert: true },
+  )
+}

@@ -20,6 +20,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import type { Collection } from 'mongodb'
 import { getMongoDb } from './mongo'
 import { teamDocId, type TeamSessionDoc } from './team-store'
+import { DEFAULT_TEAM_ID } from './teams'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -36,6 +37,7 @@ export interface TokenDoc {
   repo?: string
   /** True for GitHub Actions / CI tokens — ingest stamps `ci: true` on every pushed session. */
   ci?: boolean
+  teamId?: string
 }
 
 export type MemberInfo = {
@@ -89,6 +91,7 @@ export async function mintToken(user: string, label: string, opts?: { repo?: str
     label,
     createdAt: new Date().toISOString(),
     lastSeenAt: null,
+    teamId: DEFAULT_TEAM_ID,
     ...(opts?.repo ? { repo: opts.repo } : {}),
     ...(opts?.ci ? { ci: true } : {}),
   }
@@ -234,4 +237,10 @@ export async function getMemberNameMap(): Promise<Record<string, string>> {
     map[doc._id] = doc.user
   }
   return map
+}
+
+/** Assign the Default team to any token minted before teams existed. Idempotent. */
+export async function backfillTokenTeamIds(): Promise<void> {
+  const col = await getTokensCollection()
+  await col.updateMany({ teamId: { $exists: false } }, { $set: { teamId: DEFAULT_TEAM_ID } })
 }
