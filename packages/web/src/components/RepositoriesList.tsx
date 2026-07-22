@@ -140,7 +140,9 @@ export function RepositoriesList({ repos, isCentral, currency = 'USD', brlRate =
                   }}>{host}</span>
                 )}
               </div>
-              {subtitle && (
+              {/* The path is a machine-local detail — meaningless on the central, where a repo is
+                  keyed by its remote and the title already shows org/repo. Hide it there. */}
+              {subtitle && !isCentral && (
                 <span title={r.path} style={{
                   fontSize: 10.5, color: 'var(--text-tertiary)', paddingLeft: 23,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,

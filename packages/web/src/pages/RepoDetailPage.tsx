@@ -11,6 +11,7 @@ import { capable, HARNESS_LABELS, HARNESS_COLORS, DYNAMIC_WORKFLOWS_DOC } from '
 import { DocLink } from '../components/DocLink'
 import { buildWorkflowSteps, groupRunsBySession } from '../lib/workflowSteps'
 import { useDerivedStats, computeMemberSummaries, type MemberSummary } from '../hooks/useData'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { Section } from '../components/Section'
 import { ModelBreakdown } from '../components/ModelBreakdown'
 import { ActivityChart } from '../components/ActivityChart'
@@ -100,8 +101,10 @@ export default function RepoDetailPage() {
             </a>
           )}
         </div>
-        {/* Full folder path subtitle — shown for every repo/folder */}
-        {(folderPath || scoped.repoStats[0]?.path) && (
+        {/* Full folder path subtitle — a machine-local detail, hidden on the central where a repo
+            is keyed by its remote (the title/host chip already identify it). Shown on machines,
+            where the same repo can live at several local paths. */}
+        {!isCentral && (folderPath || scoped.repoStats[0]?.path) && (
           <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
             {formatProjectName(folderPath || scoped.repoStats[0]!.path)}
           </span>
@@ -359,6 +362,7 @@ function MembersTable({ sessions, presence, lang, currency, brlRate }: {
   lang: 'pt' | 'en'; currency: 'USD' | 'BRL'; brlRate: number
 }) {
   const pt = lang === 'pt'
+  const isMobile = useIsMobile()
   const [openUser, setOpenUser] = useState<string | null>(null)
 
   const rows = useMemo(() => {
@@ -446,10 +450,11 @@ function MembersTable({ sessions, presence, lang, currency, brlRate }: {
                   <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>{share.toFixed(0)}% {pt ? 'do custo' : 'of cost'}</span>
                 </div>
               </div>
-              {/* Compact headline metrics */}
-              <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexShrink: 0 }}>
-                <Head label={pt ? 'sessões' : 'sessions'} value={String(m.sessions)} />
-                <Head label="tokens" value={fmt(m.inTok + m.outTok)} />
+              {/* Compact headline metrics — on mobile keep only cost + chevron (the rest is one tap
+                  away in the expanded card) so the row never overflows. */}
+              <div style={{ display: 'flex', gap: isMobile ? 10 : 16, alignItems: 'center', flexShrink: 0 }}>
+                {!isMobile && <Head label={pt ? 'sessões' : 'sessions'} value={String(m.sessions)} />}
+                {!isMobile && <Head label="tokens" value={fmt(m.inTok + m.outTok)} />}
                 <Head label={pt ? 'custo' : 'cost'} value={fc(m.cost)} accent />
                 <ChevronDown size={16} color="var(--text-tertiary)" style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', flexShrink: 0 }} />
               </div>
@@ -600,6 +605,7 @@ function SessionGroupCard({ group: g, pt, currency, brlRate, sessionById }: {
   const [open, setOpen] = useState(true)
   const s = sessionById.get(g.sessionId)
   const label = s ? sessionLabel(s) : g.sessionId.slice(0, 8)
+  const project = s?.project_path ? formatProjectName(s.project_path) : ''
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
       <div
@@ -608,7 +614,12 @@ function SessionGroupCard({ group: g, pt, currency, brlRate, sessionById }: {
       >
         <ChevronDown size={13} style={{ transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform 0.2s', color: 'var(--text-tertiary)', flexShrink: 0 }} />
         <MessageSquare size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, maxWidth: '55%' }}>{label}</span>
+        <span title={label} style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, maxWidth: '55%' }}>{label}</span>
+        {project && (
+          <span title={project} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, maxWidth: '30%' }}>
+            <FileCode size={11} style={{ flexShrink: 0 }} /> {project}
+          </span>
+        )}
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
           <span><strong style={{ color: 'var(--text-primary)' }}>{g.totals.runs}</strong> {pt ? 'workflows' : 'workflows'}</span>
           <span>{g.totals.agents} {pt ? 'agentes' : 'agents'}</span>
@@ -644,7 +655,11 @@ function WorkflowRunCard({ run, pt, currency, brlRate, sessionById }: {
   run: WorkflowRun; pt: boolean; currency: 'USD' | 'BRL'; brlRate: number; sessionById: Map<string, SessionMeta>
 }) {
   const [open, setOpen] = useState(true)
-  const harness = sessionById.get(run.sessionId)?.harness ?? 'claude'
+  const s = sessionById.get(run.sessionId)
+  const harness = s?.harness ?? 'claude'
+  // Session context: title + project. Repo is omitted here — this page is already repo-scoped.
+  const sessTitle = s ? sessionLabel(s) : ''
+  const project = s?.project_path ? formatProjectName(s.project_path) : ''
   const steps = buildWorkflowSteps(run, pt ? '(sem fase)' : '(no phase)')
   const tok = run.totals.tokensIn + run.totals.tokensOut
 
@@ -676,6 +691,21 @@ function WorkflowRunCard({ run, pt, currency, brlRate, sessionById }: {
           <WfMetric label={pt ? 'custo' : 'cost'} value={fmtCost(run.totals.costUSD, currency, brlRate)} w={92} accent />
           {run.durationMs > 0 && <WfMetric label={pt ? 'duração' : 'duration'} value={fmtRunDuration(run.durationMs)} w={64} />}
         </span>
+        {/* Session context line (own row via flex-basis:100%): session title + project. */}
+        {(sessTitle || project) && (
+          <span style={{ flexBasis: '100%', paddingLeft: 32, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', fontSize: 11, color: 'var(--text-tertiary)', minWidth: 0 }}>
+            {sessTitle && (
+              <span title={sessTitle} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>
+                <MessageSquare size={11} style={{ flexShrink: 0 }} /> {sessTitle}
+              </span>
+            )}
+            {project && (
+              <span title={project} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <FileCode size={11} style={{ flexShrink: 0 }} /> {project}
+              </span>
+            )}
+          </span>
+        )}
       </div>
 
       {/* Timeline */}
