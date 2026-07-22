@@ -27,6 +27,7 @@
     "dev": "bun run --bun concurrently \"bun run dev:api\" \"bun run dev:ui\"",
     "build": "bun run --cwd packages/web build",
     "bin": "bun build:binary && mkdir -p ~/.local/bin && cp -f ./release/agentop ~/.local/bin/.agentop.new && mv -f ~/.local/bin/.agentop.new ~/.local/bin/agentop",
+    "restart:all": "bun run bin && agentop restart all --rebuild",
     "build:assets": "bun run packages/server/scripts/embed-dist.ts",
     "build:binary": "bun run build && bun run build:assets && bun build --compile packages/server/bin/cli.ts --outfile ./release/agentop",
     "build:binary:windows": "bun run build && bun run build:assets && bun build --compile --target=bun-windows-x64 packages/server/bin/cli.ts --outfile ./release/agentop.exe",
