@@ -4,14 +4,15 @@
  * index.ts spreads CORS_HEADERS. Bootstrap is public only while no owner exists —
  * handleBootstrap re-checks hasAnyOwner() and refuses once set up.
  */
-import { hasAnyOwner, createAccount, findAccountByEmail, updateAccount, getAccount } from './accounts'
+import { hasAnyOwner, createAccount, findAccountByEmail, updateAccount, getAccount, listAccounts, deleteAccount } from './accounts'
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
-import { seedDefaultTeam } from './teams'
+import { seedDefaultTeam, listTeams, createTeam, getTeam, deleteTeam, DEFAULT_TEAM_ID } from './teams'
 import { backfillTokenTeamIds } from './team-tokens'
 import { backfillRepoTeamIds } from './team-repos'
 import { makePrincipalSessionCookieHeader, getPrincipal } from './auth'
-import { publicAccount } from './iam-view'
+import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo } from './iam-view'
+import type { Membership } from './iam-types'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
 
@@ -105,4 +106,99 @@ export async function handleIamMe(req: Request): Promise<Response> {
   const account = await getAccount(principal.accountId)
   if (!account) return json({ authed: false })
   return json({ authed: true, account: publicAccount(account) })
+}
+
+/** Parse an unknown value into a Membership[] (drops malformed entries). */
+function parseMemberships(v: unknown): Membership[] {
+  if (!Array.isArray(v)) return []
+  const out: Membership[] = []
+  for (const m of v) {
+    const r = (m as Record<string, unknown>)?.role
+    const t = (m as Record<string, unknown>)?.teamId
+    if (typeof t === 'string' && (r === 'manager' || r === 'user')) out.push({ teamId: t, role: r })
+  }
+  return out
+}
+
+/**
+ * /api/iam/accounts — GET list (scoped), POST create, DELETE remove. Self-guarding.
+ */
+export async function handleAccounts(req: Request): Promise<Response> {
+  const principal = await getPrincipal(req)
+  if (!principal) return json({ error: 'unauthorized' }, 401)
+
+  if (req.method === 'GET') {
+    const all = await listAccounts()
+    return json({ accounts: all.filter(a => accountVisibleTo(principal, a)).map(publicAccount) })
+  }
+
+  if (req.method === 'POST') {
+    let body: unknown
+    try { body = await req.json() } catch { return json({ error: 'invalid JSON' }, 400) }
+    const b = body as Record<string, unknown>
+    const name = typeof b.name === 'string' ? b.name.trim() : ''
+    const email = typeof b.email === 'string' ? b.email.trim() : ''
+    const password = typeof b.password === 'string' ? b.password : ''
+    const memberships = parseMemberships(b.memberships)
+    if (!name) return json({ error: 'name is required' }, 400)
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: 'valid email is required' }, 400)
+    if (password.length < 8) return json({ error: 'password must be at least 8 characters' }, 400)
+    if (!canCreateAccount(principal, memberships)) return json({ error: 'forbidden' }, 403)
+    if (await findAccountByEmail(email)) return json({ error: 'email already exists' }, 409)
+    const passwordHash = await hashPassword(password)
+    const account = await createAccount({ name, email, passwordHash, role: 'member', memberships, createdBy: principal.accountId })
+    return json({ account: publicAccount(account) }, 201)
+  }
+
+  if (req.method === 'DELETE') {
+    let body: unknown
+    try { body = await req.json() } catch { return json({ error: 'invalid JSON' }, 400) }
+    const id = typeof (body as Record<string, unknown>)?.id === 'string' ? (body as Record<string, unknown>).id as string : ''
+    if (!id) return json({ error: 'id is required' }, 400)
+    if (id === principal.accountId) return json({ error: 'cannot delete yourself' }, 400)
+    const target = await getAccount(id)
+    if (!target) return json({ error: 'not found' }, 404)
+    if (!canDeleteAccount(principal, target)) return json({ error: 'forbidden' }, 403)
+    await deleteAccount(id)
+    return json({ ok: true })
+  }
+
+  return json({ error: 'method not allowed' }, 405)
+}
+
+/**
+ * /api/iam/teams — GET list (scoped), POST create (owner), DELETE remove (owner, not default).
+ */
+export async function handleTeams(req: Request): Promise<Response> {
+  const principal = await getPrincipal(req)
+  if (!principal) return json({ error: 'unauthorized' }, 401)
+
+  if (req.method === 'GET') {
+    const all = await listTeams()
+    return json({ teams: all.filter(t => teamVisibleTo(principal, t._id)) })
+  }
+
+  if (req.method === 'POST') {
+    if (principal.role !== 'owner') return json({ error: 'forbidden' }, 403)
+    let body: unknown
+    try { body = await req.json() } catch { return json({ error: 'invalid JSON' }, 400) }
+    const name = typeof (body as Record<string, unknown>)?.name === 'string' ? ((body as Record<string, unknown>).name as string).trim() : ''
+    if (!name) return json({ error: 'name is required' }, 400)
+    const team = await createTeam(name, principal.accountId)
+    return json({ team }, 201)
+  }
+
+  if (req.method === 'DELETE') {
+    if (principal.role !== 'owner') return json({ error: 'forbidden' }, 403)
+    let body: unknown
+    try { body = await req.json() } catch { return json({ error: 'invalid JSON' }, 400) }
+    const id = typeof (body as Record<string, unknown>)?.id === 'string' ? (body as Record<string, unknown>).id as string : ''
+    if (!id) return json({ error: 'id is required' }, 400)
+    if (id === DEFAULT_TEAM_ID) return json({ error: 'cannot delete the default team' }, 400)
+    if (!(await getTeam(id))) return json({ error: 'not found' }, 404)
+    await deleteTeam(id)
+    return json({ ok: true })
+  }
+
+  return json({ error: 'method not allowed' }, 405)
 }
