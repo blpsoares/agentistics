@@ -1223,6 +1223,33 @@ export default function AppLayout() {
       return next
     })
   }, [])
+
+  // Persist a full preferences draft — applies to global state + PUTs /api/preferences.
+  // Threaded to the Preferences settings page (and reused by the legacy Settings modal onSave).
+  const savePreferences = useCallback((draft: PrefsDraft) => {
+    setLangState(draft.lang)
+    setThemeState(draft.theme)
+    setCurrencyState(draft.currency)
+    setCardOrder(draft.cardOrder as CardId[])
+    setCardPrecisionState(draft.cardPrecision)
+    if (draft.chatModel) setChatModel(draft.chatModel)
+    setChatSoundEnabled(draft.chatSoundEnabled)
+    setChatSoundId(draft.chatSoundId)
+    fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        lang: draft.lang,
+        theme: draft.theme,
+        currency: draft.currency,
+        cardOrder: draft.cardOrder,
+        cardPrecision: draft.cardPrecision,
+        chatModel: draft.chatModel,
+        chatSoundEnabled: draft.chatSoundEnabled,
+        chatSoundId: draft.chatSoundId,
+      }),
+    }).catch(() => {})
+  }, [setCardOrder])
   const [scrolled, setScrolled] = useState(false)
   const [highlightUpdates, setHighlightUpdates] = useState(true)
   const highlightUpdatesRef = useRef(true)
@@ -2017,6 +2044,12 @@ export default function AppLayout() {
           statsCache,
           filters, setFilters,
           lang, theme, currency, setCurrency, brlRate,
+          chatModel, chatSoundEnabled, chatSoundId,
+          savePreferences,
+          pwaPrompt,
+          onPwaInstalled: () => { setPwaInstalled(true); setPwaPrompt(null) },
+          liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval,
+          riskyMode, setRiskyMode, highlightUpdates, setHighlightUpdates,
           monthlyBudgetUSD, updateBudget,
           totalInputTokens, totalOutputTokens,
           setExpandedChart, setSelectedSession, setInfoModalIndex,
@@ -2033,31 +2066,7 @@ export default function AppLayout() {
       {showPrefsModal && (
         <PreferencesModal
           initial={{ lang, theme, currency, cardOrder, cardPrecision, chatModel, chatSoundEnabled, chatSoundId }}
-          onSave={(draft: PrefsDraft) => {
-            setLangState(draft.lang)
-            setThemeState(draft.theme)
-            setCurrencyState(draft.currency)
-            setCardOrder(draft.cardOrder as CardId[])
-            setCardPrecisionState(draft.cardPrecision)
-            if (draft.chatModel) setChatModel(draft.chatModel)
-            setChatSoundEnabled(draft.chatSoundEnabled)
-            setChatSoundId(draft.chatSoundId)
-            fetch('/api/preferences', {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                lang: draft.lang,
-                theme: draft.theme,
-                currency: draft.currency,
-                cardOrder: draft.cardOrder,
-                cardPrecision: draft.cardPrecision,
-                chatModel: draft.chatModel,
-                chatSoundEnabled: draft.chatSoundEnabled,
-                chatSoundId: draft.chatSoundId,
-              }),
-            }).catch(() => {})
-            setShowPrefsModal(false)
-          }}
+          onSave={(draft: PrefsDraft) => { savePreferences(draft); setShowPrefsModal(false) }}
           onClose={() => setShowPrefsModal(false)}
           pwaPrompt={pwaPrompt}
           onPwaInstalled={() => { setPwaInstalled(true); setPwaPrompt(null) }}

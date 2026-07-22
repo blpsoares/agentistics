@@ -1,5 +1,6 @@
 import type { Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId } from '@agentistics/core'
 import type { useDerivedStats } from '../hooks/useData'
+import type { ChatModelId } from './chatModels'
 
 type DerivedStats = NonNullable<ReturnType<typeof useDerivedStats>>
 
@@ -8,6 +9,21 @@ export interface InfoItem {
   source: string
   formula: string
   note?: string
+}
+
+/** The `beforeinstallprompt` event, captured in App and threaded to the Install settings page. */
+export type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
+
+/** Draft shape for the Preferences settings page / modal (single source of truth). */
+export interface PrefsDraft {
+  lang: Lang
+  theme: Theme
+  currency: 'USD' | 'BRL'
+  cardOrder: string[]
+  cardPrecision: Record<string, boolean>
+  chatModel: ChatModelId | null
+  chatSoundEnabled: boolean
+  chatSoundId: string
 }
 
 export interface AppContext {
@@ -26,6 +42,29 @@ export interface AppContext {
   currency: 'USD' | 'BRL'
   setCurrency: (c: 'USD' | 'BRL') => void
   brlRate: number
+
+  // chat preferences (seed the Preferences settings page draft)
+  chatModel: ChatModelId | null
+  chatSoundEnabled: boolean
+  chatSoundId: string
+
+  /** Persists a full preferences draft: applies it to global state + PUTs /api/preferences.
+   *  Reuses the same logic the old Settings modal ran on Save. */
+  savePreferences: (draft: PrefsDraft) => void
+
+  // PWA install (captured in App from the beforeinstallprompt event)
+  pwaPrompt: PwaPrompt | null
+  onPwaInstalled: () => void
+
+  // live-update settings (applied immediately — threaded to the Live settings page)
+  liveUpdates: boolean
+  setLiveUpdates: (v: boolean) => void
+  updateInterval: number
+  setUpdateInterval: (v: number) => void
+  riskyMode: boolean
+  setRiskyMode: (v: boolean) => void
+  highlightUpdates: boolean
+  setHighlightUpdates: (v: boolean) => void
 
   // budget
   monthlyBudgetUSD: number | null

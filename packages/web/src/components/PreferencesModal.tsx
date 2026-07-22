@@ -19,18 +19,10 @@ import { TeamRepos } from './TeamRepos'
 import { DeployCentral } from './DeployCentral'
 import { IamTab } from './IamTab'
 
-type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
+import type { PrefsDraft } from '../lib/app-context'
+export type { PrefsDraft }
 
-export interface PrefsDraft {
-  lang: Lang
-  theme: Theme
-  currency: 'USD' | 'BRL'
-  cardOrder: string[]
-  cardPrecision: Record<string, boolean>
-  chatModel: ChatModelId | null
-  chatSoundEnabled: boolean
-  chatSoundId: string
-}
+type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
 
 const CARD_LABELS: Record<string, { en: string; pt: string }> = {
   messages:         { en: 'Messages',        pt: 'Mensagens' },
