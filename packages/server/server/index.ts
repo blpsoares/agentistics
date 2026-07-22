@@ -19,7 +19,7 @@ import { PROJECTS_DIR } from './config'
 import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
-import { handleLogin, handleLogout, handleSession, isAuthed, hasValidSession } from './auth'
+import { handleLogin, handleLogout, handleSession, isAuthed, hasValidSession, getPrincipal } from './auth'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -855,7 +855,7 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
 
     if (url.pathname === '/api/data' && req.method === 'GET') {
       try {
-        const data = await buildApiResponse()
+        let data = await buildApiResponse()
         // Presence is live (in-memory sockets + heartbeat) — merge it in AFTER the cached
         // build so online/offline + latency stay fresh without recomputing the whole response.
         let extra: { presence?: unknown; includeOfflineData?: boolean } = {}
@@ -869,6 +869,12 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
             getCentralConfig().catch(() => null),
           ])
           extra = { presence, includeOfflineData: cfg?.includeOfflineData ?? true }
+          // Apply per-team scoping for non-owner principals
+          const principal = await getPrincipal(req)
+          if (principal && principal.role !== 'owner') {
+            const { scopeAppDataToTeams, visibleTeamIdsOf } = await import('./team-scope')
+            data = scopeAppDataToTeams(data as any, visibleTeamIdsOf(principal)) as any
+          }
         }
         // Live open-session detection — computed per request (not part of the cached build)
         // so it reflects `claude` processes in real time.
