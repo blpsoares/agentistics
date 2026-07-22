@@ -19,7 +19,7 @@ import { PROJECTS_DIR } from './config'
 import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
-import { handleLogin, handleLogout, handleSession, isAuthed, hasValidSession, getPrincipal } from './auth'
+import { handleLogin, handleLogout, handleSession, getPrincipal } from './auth'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -151,6 +151,7 @@ const CORS_HEADERS = {
 
 // Routes that are always public (no auth gate applied)
 const AUTH_PUBLIC = new Set([
+  '/api/health',
   '/api/team/login',
   '/api/team/logout',
   '/api/team/session',
@@ -217,27 +218,21 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     }
 
     // ---------------------------------------------------------------------------
-    // Auth gate (Phase 3): when central + password set, all /api/* routes require
-    // a valid session cookie except the public allowlist below.
+    // Auth gate (Phase 5): account-principal auth on the central.
+    // All /api/* routes require a valid account session except the public allowlist.
     // Static assets are always served (the SPA + login UI must load without auth).
     // ---------------------------------------------------------------------------
-    if (
-      TEAM_CENTRAL &&
-      TEAM_PASSWORD &&
-      url.pathname.startsWith('/api/') &&
-      !AUTH_PUBLIC.has(url.pathname) &&
-      !isAuthed(req)
-    ) {
-      return new Response(JSON.stringify({ error: 'auth required' }), {
-        status: 401,
-        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-      })
+    if (TEAM_CENTRAL && url.pathname.startsWith('/api/') && !AUTH_PUBLIC.has(url.pathname)) {
+      const principal = await getPrincipal(req)
+      if (!principal) {
+        return new Response(JSON.stringify({ error: 'auth required' }), { status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+      }
+      // Admin routes require the owner.
+      if (ADMIN_PATHS.has(url.pathname) && principal.role !== 'owner') {
+        return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+      }
     }
 
-    // Admin gate: admin routes require a real session even on a passwordless central.
-    if (TEAM_CENTRAL && ADMIN_PATHS.has(url.pathname) && !hasValidSession(req)) {
-      return new Response(JSON.stringify({ error: 'auth required' }), { status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
-    }
 
     if (url.pathname === '/api/events' && req.method === 'GET') {
       const stream = new ReadableStream<Uint8Array>({
@@ -899,10 +894,7 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     // ---------------------------------------------------------------------------
 
     if (url.pathname === '/api/team/login' && req.method === 'POST') {
-      const res = await handleLogin(req)
-      const headers = new Headers(res.headers)
-      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
-      return new Response(res.body, { status: res.status, headers })
+      return new Response(JSON.stringify({ ok: false, error: 'shared-password login retired; use account login' }), { status: 410, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
     }
 
     if (url.pathname === '/api/team/logout' && req.method === 'POST') {
