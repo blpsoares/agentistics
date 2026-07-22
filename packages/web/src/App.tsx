@@ -10,7 +10,7 @@ import {
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Workflow as WorkflowIcon,
-  GitBranch, Users,
+  GitBranch, Users, LogOut,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -954,6 +954,19 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
         display: 'flex', flexWrap: 'wrap', gap: 6, paddingTop: 10, marginTop: 6,
         borderTop: '1px solid var(--border)', justifyContent: collapsed ? 'center' : 'flex-start',
       }}>
+        {principal && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 4px', minWidth: 0 }}>
+            <div style={{ width: 26, height: 26, borderRadius: '50%', background: 'var(--bg-elevated)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', flexShrink: 0 }}>{principal.name.slice(0, 2)}</div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{principal.name}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{principal.role === 'owner' ? 'Owner' : (principal.memberships.some(m => m.role === 'manager') ? 'Manager' : 'User')}</div>
+            </div>
+            <button title="Log out" onClick={() => { void fetch('/api/iam/logout', { method: 'POST' }).then(() => window.location.reload()) }}
+              style={{ display: 'inline-flex', padding: 6, borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', flexShrink: 0 }}>
+              <LogOut size={14} />
+            </button>
+          </div>
+        )}
         <CollapsedTip label={pt ? 'Configurações' : 'Settings'} show={collapsed}>
           <button onClick={onSettings} aria-label={pt ? 'Configurações' : 'Settings'} title={collapsed ? undefined : (pt ? 'Configurações' : 'Settings')} style={footBtn}
             onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
