@@ -163,6 +163,11 @@ const AUTH_PUBLIC = new Set([
   '/api/team/agent',
   '/api/iam/status',
   '/api/iam/bootstrap',
+  '/api/iam/login',
+  '/api/iam/logout',
+  '/api/iam/me',
+  '/api/iam/accounts',
+  '/api/iam/teams',
 ])
 
 // Admin routes that require a real session cookie even on a passwordless central
@@ -921,6 +926,51 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleBootstrap } = await import('./iam-handlers')
       const res = await handleBootstrap(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/login' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleIamLogin } = await import('./iam-handlers')
+      const res = await handleIamLogin(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/logout' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleLogout } = await import('./auth')
+      const res = handleLogout(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/me' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleIamMe } = await import('./iam-handlers')
+      const res = await handleIamMe(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/accounts' && (req.method === 'GET' || req.method === 'POST' || req.method === 'DELETE')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleAccounts } = await import('./iam-handlers')
+      const res = await handleAccounts(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/teams' && (req.method === 'GET' || req.method === 'POST' || req.method === 'DELETE')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleTeams } = await import('./iam-handlers')
+      const res = await handleTeams(req)
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })
