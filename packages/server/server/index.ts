@@ -873,7 +873,7 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           const principal = await getPrincipal(req)
           if (principal && principal.role !== 'owner') {
             const { scopeAppDataToTeams, visibleTeamIdsOf } = await import('./team-scope')
-            data = scopeAppDataToTeams(data as any, visibleTeamIdsOf(principal)) as any
+            data = scopeAppDataToTeams(data, visibleTeamIdsOf(principal))
           }
         }
         // Live open-session detection — computed per request (not part of the cached build)

@@ -4,7 +4,9 @@
  * Sessions are kept by their read-time `teamId` tag; workflows follow their session;
  * projects + user-keyed maps (userStatsCaches, presence) are pruned to visible users.
  */
-import type { AppData } from '@agentistics/core'
+import type { SessionMeta } from '@agentistics/core'
+import type { ServerProject } from './data'
+import type { WorkflowRun } from '@agentistics/core'
 import type { Principal } from './iam-types'
 
 export function visibleTeamIdsOf(principal: Principal): Set<string> {
@@ -18,7 +20,13 @@ function pickKeys<T>(obj: Record<string, T> | undefined, keep: Set<string>): Rec
   return out
 }
 
-export function scopeAppDataToTeams(data: AppData, visible: Set<string>): AppData {
+export function scopeAppDataToTeams<T extends {
+  sessions?: SessionMeta[]
+  workflows?: WorkflowRun[]
+  projects?: ServerProject[]
+  userStatsCaches?: Record<string, unknown>
+  presence?: Record<string, unknown>
+}>(data: T, visible: Set<string>): T {
   const sessions = (data.sessions ?? []).filter(s => s.teamId != null && visible.has(s.teamId))
   const visibleSessionIds = new Set(sessions.map(s => s.session_id))
   const visibleUsers = new Set(sessions.map(s => s.user).filter((u): u is string => Boolean(u)))
@@ -31,5 +39,5 @@ export function scopeAppDataToTeams(data: AppData, visible: Set<string>): AppDat
     projects,
     userStatsCaches: pickKeys(data.userStatsCaches, visibleUsers),
     presence: pickKeys(data.presence, visibleUsers),
-  }
+  } as T
 }
