@@ -52,6 +52,14 @@ English by project convention; conversation with the user is Portuguese.
   RepoDetailPage omit repo entirely (redundant — page is repo-scoped).
 - **Spec:** [2026-07-22-group-a-ui-fixes-design.md](specs/2026-07-22-group-a-ui-fixes-design.md)
 
+### Group C — UI/UX follow-ups (post-B4)
+
+#### UI-1 — Settings as pages + IAM redesign + sidebar footer 🟨
+- **Problem:** the Settings modal grew too large (9 tabs); IAM tab confusing; sidebar footer cramped; PWA doesn't auto-update (stale-bundle pain).
+- **Decisions:** aside "Settings" with inline expandable submenu → dedicated `/settings/:section` pages (decision A), showing only sections the account can access; IAM as one page with Accounts + Teams sections + drawer forms + role explanations (decision A); sidebar footer redesign; PWA `registerType: 'autoUpdate'` (skipWaiting/clientsClaim). Frontend only.
+- **Spec:** [2026-07-22-settings-pages-and-iam-redesign-design.md](specs/2026-07-22-settings-pages-and-iam-redesign-design.md)
+- **Plan:** _(link when written)_
+
 ### Group B — Large subsystems (each is its own project)
 
 #### B4 — Governance / IAM (the foundation) 🟨
