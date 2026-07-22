@@ -280,3 +280,13 @@ export async function getPrincipal(req: Request): Promise<Principal | null> {
   if (account.sessionVersion !== parsed.sessionVersion) return null
   return { accountId: account._id, role: account.role, memberships: account.memberships }
 }
+
+/**
+ * Build a Set-Cookie header string for a freshly-issued principal session (7-day expiry).
+ * Reuses the module's cookie internals so login/bootstrap flows never re-implement them.
+ */
+export function makePrincipalSessionCookieHeader(accountId: string, sessionVersion: number): string {
+  const expiryMs = Date.now() + SESSION_DURATION_MS
+  const value = signPrincipalSession(expiryMs, accountId, sessionVersion, TEAM_SESSION_SECRET)
+  return makeCookieHeader(value, MAX_AGE_SECONDS)
+}
