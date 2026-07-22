@@ -4,13 +4,14 @@
  * index.ts spreads CORS_HEADERS. Bootstrap is public only while no owner exists —
  * handleBootstrap re-checks hasAnyOwner() and refuses once set up.
  */
-import { hasAnyOwner, createAccount } from './accounts'
-import { hashPassword } from './passwords'
+import { hasAnyOwner, createAccount, findAccountByEmail, updateAccount, getAccount } from './accounts'
+import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
 import { seedDefaultTeam } from './teams'
 import { backfillTokenTeamIds } from './team-tokens'
 import { backfillRepoTeamIds } from './team-repos'
-import { makePrincipalSessionCookieHeader } from './auth'
+import { makePrincipalSessionCookieHeader, getPrincipal } from './auth'
+import { publicAccount } from './iam-view'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
 
@@ -71,4 +72,37 @@ export async function handleBootstrap(req: Request): Promise<Response> {
     status: 200,
     headers: { ...JSON_CT, 'Set-Cookie': cookie },
   })
+}
+
+/**
+ * POST /api/iam/login  Body: { email, password }
+ * Generic 401 on unknown email OR wrong password (no user enumeration).
+ */
+export async function handleIamLogin(req: Request): Promise<Response> {
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return json({ ok: false, error: 'invalid JSON' }, 400)
+  }
+  const b = body as Record<string, unknown>
+  const email = typeof b.email === 'string' ? b.email : ''
+  const password = typeof b.password === 'string' ? b.password : ''
+  const account = await findAccountByEmail(email)
+  const ok = account ? await verifyPassword(password, account.passwordHash) : false
+  if (!account || !ok) return json({ ok: false, error: 'invalid credentials' }, 401)
+  await updateAccount(account._id, { lastLoginAt: new Date().toISOString() })
+  const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion)
+  return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...JSON_CT, 'Set-Cookie': cookie } })
+}
+
+/**
+ * GET /api/iam/me → { authed, account? }. Drives the logged-in-user display + the SPA gate.
+ */
+export async function handleIamMe(req: Request): Promise<Response> {
+  const principal = await getPrincipal(req)
+  if (!principal) return json({ authed: false })
+  const account = await getAccount(principal.accountId)
+  if (!account) return json({ authed: false })
+  return json({ authed: true, account: publicAccount(account) })
 }
