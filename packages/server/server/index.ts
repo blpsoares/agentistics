@@ -19,7 +19,7 @@ import { PROJECTS_DIR } from './config'
 import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
-import { handleLogin, handleLogout, handleSession, getPrincipal } from './auth'
+import { handleLogout, handleSession, getPrincipal } from './auth'
 import {
   readEnvConfig,
   writeEnvConfig,
