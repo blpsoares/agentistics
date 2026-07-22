@@ -68,6 +68,57 @@ export function verifySession(
   return constantTimeEqual(mac, expected)
 }
 
+// ---------------------------------------------------------------------------
+// Principal-carrying session (IAM) — additive; coexists with the legacy
+// password session above until Phase 2 switches login over to accounts.
+// Cookie value: `${expiryMs}.${accountId}.${sessionVersion}.${HMAC(payload)}`.
+// ---------------------------------------------------------------------------
+
+export interface PrincipalCookie {
+  accountId: string
+  sessionVersion: number
+}
+
+/** Sign a principal session. The signed payload is `expiryMs.accountId.sessionVersion`. */
+export function signPrincipalSession(
+  expiryMs: number,
+  accountId: string,
+  sessionVersion: number,
+  secret: string,
+): string {
+  const payload = `${expiryMs}.${accountId}.${sessionVersion}`
+  const mac = createHmac('sha256', secret).update(payload).digest('hex')
+  return `${payload}.${mac}`
+}
+
+/**
+ * Verify a principal session cookie:
+ *   - splits off the trailing `.mac`, verifies HMAC over the payload (constant-time),
+ *   - parses `expiryMs.accountId.sessionVersion`, checks expiry > nowMs.
+ * Returns { accountId, sessionVersion } or null for any malformed/expired/tampered cookie.
+ */
+export function verifyPrincipalSession(
+  cookieValue: string | undefined,
+  secret: string,
+  nowMs: number,
+): PrincipalCookie | null {
+  if (!cookieValue) return null
+  const lastDot = cookieValue.lastIndexOf('.')
+  if (lastDot === -1) return null
+  const payload = cookieValue.slice(0, lastDot)
+  const mac = cookieValue.slice(lastDot + 1)
+  const expected = createHmac('sha256', secret).update(payload).digest('hex')
+  if (!constantTimeEqual(mac, expected)) return null
+  const parts = payload.split('.')
+  if (parts.length !== 3) return null
+  const expiry = parseInt(parts[0]!, 10)
+  const accountId = parts[1]!
+  const sessionVersion = parseInt(parts[2]!, 10)
+  if (isNaN(expiry) || expiry <= nowMs) return null
+  if (!accountId || isNaN(sessionVersion)) return null
+  return { accountId, sessionVersion }
+}
+
 /**
  * Minimal cookie header parser. Splits on `;` and on the first `=`.
  * Handles cookie values containing `=` (e.g. base64).
