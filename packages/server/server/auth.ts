@@ -18,6 +18,8 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { TEAM_CENTRAL, TEAM_PASSWORD, TEAM_SESSION_SECRET, TEAM_TLS, CENTRAL_USER } from './config'
+import { getAccount } from './accounts'
+import type { Principal } from './iam-types'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -261,4 +263,20 @@ export function hasValidSession(req: Request): boolean {
   const cookieHeader = req.headers.get('cookie')
   const cookies = parseCookies(cookieHeader)
   return verifySession(cookies[COOKIE_NAME], TEAM_SESSION_SECRET, Date.now())
+}
+
+/**
+ * Resolve the authenticated principal for a request, or null.
+ * Verifies the principal cookie, loads the account, and rejects if the account's
+ * sessionVersion no longer matches the cookie (revocation / password change / logout-all).
+ * Role + memberships are read FRESH from the DB so permission changes take effect immediately.
+ */
+export async function getPrincipal(req: Request): Promise<Principal | null> {
+  const cookies = parseCookies(req.headers.get('cookie'))
+  const parsed = verifyPrincipalSession(cookies[COOKIE_NAME], TEAM_SESSION_SECRET, Date.now())
+  if (!parsed) return null
+  const account = await getAccount(parsed.accountId)
+  if (!account) return null
+  if (account.sessionVersion !== parsed.sessionVersion) return null
+  return { accountId: account._id, role: account.role, memberships: account.memberships }
 }
