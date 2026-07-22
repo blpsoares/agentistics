@@ -30,6 +30,8 @@ export default defineConfig({
         // Cache only static assets; API calls always go to network
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         navigateFallback: null,
+        skipWaiting: true,
+        clientsClaim: true,
         runtimeCaching: [
           {
             urlPattern: /^\/api\//,
