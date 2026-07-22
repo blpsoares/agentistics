@@ -48,6 +48,8 @@ import { InstallModal } from './components/InstallModal'
 import { ArchiveConsentModal, type ArchiveMode } from './components/ArchiveConsentModal'
 import { resolveArchiveChoice } from './lib/archive'
 import { TeamLogin } from './components/TeamLogin'
+import { Login } from './components/Login'
+import { OwnerSetup } from './components/OwnerSetup'
 import { type ChatModelId } from './lib/chatModels'
 import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
@@ -62,6 +64,9 @@ interface TeamSessionState {
    *  (archive consent gate, Nay chat) that only makes sense with a local harness installed. */
   aggregatorOnly?: boolean
 }
+
+export interface IamAccount { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: { teamId: string; role: 'manager' | 'user' }[] }
+interface IamState { needsBootstrap: boolean; authed: boolean; account?: IamAccount }
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
 const LOAD_STAGES: { key: string; labelPt: string; labelEn: string; icon: React.ReactNode; phase: 1 | 2 | 3 }[] = [
@@ -844,11 +849,12 @@ function CollapsedTip({ label, show, children }: { label: string; show: boolean;
   )
 }
 
-function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle, updatedText, sinceText, memberSummary, theme, onToggleTheme, onToggleLang, onSettings, onExport }: {
+function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle, updatedText, sinceText, memberSummary, theme, onToggleTheme, onToggleLang, onSettings, onExport, principal }: {
   lang: Lang; harnesses?: HarnessId[]; isCentral?: boolean; hasWorkflows?: boolean
   collapsed: boolean; onToggle: () => void; updatedText: string; sinceText?: string
   memberSummary?: { total: number; online: number; offline: number }
   theme: Theme; onToggleTheme: () => void; onToggleLang: () => void; onSettings: () => void; onExport: () => void
+  principal?: IamAccount
 }) {
   const location = useLocation()
   const pt = lang === 'pt'
@@ -997,6 +1003,17 @@ export default function AppLayout() {
   // Used only to tailor the upgrade command shown in the UpdateModal.
   const [isMember, setIsMember] = useState(false)
 
+  // ── IAM gate (central only) ────────────────────────────────────────────────────
+  const [iam, setIam] = useState<IamState | undefined>(undefined)
+  const reloadIam = useCallback(() => {
+    Promise.all([
+      fetch('/api/iam/status').then(r => r.ok ? r.json() : { needsBootstrap: false }),
+      fetch('/api/iam/me').then(r => r.ok ? r.json() : { authed: false }),
+    ]).then(([st, me]) => setIam({ needsBootstrap: !!st.needsBootstrap, authed: !!me.authed, account: me.account }))
+      .catch(() => setIam({ needsBootstrap: false, authed: false }))
+  }, [])
+  useEffect(() => { if (teamSession?.central) reloadIam() }, [teamSession?.central, reloadIam])
+
   useEffect(() => {
     fetch('/api/team/session')
       .then(r => r.ok ? (r.json() as Promise<TeamSessionState>) : null)
@@ -1016,7 +1033,8 @@ export default function AppLayout() {
     if (error && error.includes('401') && teamSession?.required) {
       setTeamSession({ required: true, authed: false })
     }
-  }, [error, teamSession?.required])
+    if (teamSession?.central && String(error).includes('401')) reloadIam()
+  }, [error, teamSession?.required, teamSession?.central, reloadIam])
   const [theme, setThemeState] = useState<Theme>('dark')
   const [currency, setCurrencyState] = useState<'USD' | 'BRL'>('USD')
 
@@ -1648,12 +1666,14 @@ export default function AppLayout() {
   if (teamSession === undefined) {
     return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
   }
-  if (teamSession.required && !teamSession.authed) {
-    return (
-      <TeamLogin
-        onAuthed={() => { setTeamSession(s => ({ ...(s ?? { required: true }), required: true, authed: true })); refetch() }}
-      />
-    )
+  // Central: account-based IAM gate (bootstrap → login → app).
+  if (teamSession.central) {
+    if (iam === undefined) return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
+    if (iam.needsBootstrap) return <OwnerSetup onDone={() => { reloadIam(); refetch() }} />
+    if (!iam.authed) return <Login onAuthed={() => { reloadIam(); refetch() }} />
+  } else if (teamSession.required && !teamSession.authed) {
+    // Non-central (member/solo) keeps the legacy password gate.
+    return <TeamLogin onAuthed={() => { setTeamSession(s => ({ ...(s ?? { required: true }), required: true, authed: true })); refetch() }} />
   }
 
   if (loading) {
@@ -1777,6 +1797,7 @@ export default function AppLayout() {
         onToggleLang={() => { const next = lang === 'pt' ? 'en' : 'pt'; setLang(next); if (next === 'pt') setCurrency('BRL'); else if (currency === 'BRL') setCurrency('USD') }}
         onSettings={() => setShowPrefsModal(true)}
         onExport={() => navigate('/export')}
+        principal={iam?.account}
       />}
       {/* Header */}
       <header style={{
