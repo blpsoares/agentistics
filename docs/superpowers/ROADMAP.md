@@ -54,7 +54,7 @@ English by project convention; conversation with the user is Portuguese.
 
 ### Group B — Large subsystems (each is its own project)
 
-#### B4 — Governance / IAM (the foundation) ⬜
+#### B4 — Governance / IAM (the foundation) 🟨
 - **Roles:** `owner`, `gestor` (manager), `users`.
   - **owner:** all permissions + create/update/delete **teams** (team creation can aggregate repos
     from machines, and machines/users), delete/add machines, update tokens.
@@ -68,8 +68,20 @@ English by project convention; conversation with the user is Portuguese.
   shown somewhere on screen. Every action/view gated by the logged-in account's permissions.
 - **Note:** This replaces/extends the current central password-only login. It's the foundation —
   B5 (tags) and B7 (member metrics) should respect roles/teams.
-- **Open question from user:** they're open to better governance suggestions.
-- **Spec:** _(link when written)_
+- **Decisions:** Teams = unit of division/visibility (members/repos gain `teamId`, seeded
+  "Default team"). Roles: owner (global) / manager / user (team-scoped `memberships`). Security:
+  argon2id, session cookie carries `accountId+sessionVersion`, permissions resolved from DB
+  (instant revocation), rate-limited login. Shared password **removed** once an owner exists.
+  Bootstrap: **one-time setup token printed to central logs** (primary) + `agentop central owner`
+  CLI (shortcut); same flow covers fresh + already-running centrals; ingest never blocked. Manager
+  can create `user` accounts within their team.
+- **Spec:** [2026-07-22-governance-iam-design.md](specs/2026-07-22-governance-iam-design.md)
+- **Implementation is split into 5 per-phase plans** (each testable on its own):
+  1. **Core (data + security)** — ✅ **implemented** (commits `2628d44`..`bec226e` on `dev`; tsc clean, 328 tests pass; whole-branch review READY TO MERGE, 0 Critical/Important): [plans/2026-07-22-b4-phase1-iam-core.md](plans/2026-07-22-b4-phase1-iam-core.md) — passwords (Bun.password argon2id), IAM types, capability matrix, principal session, accounts/teams collections, `getPrincipal`. Additive/non-breaking.
+  2. Bootstrap (setup token + owner creation + Default-team seed/backfill) — ⬜ plan TBD. **Carry-over from Ph1 review:** wire `ensureAccountIndexes()` (unique `emailLower`) + `DEFAULT_TEAM_ID` seeding at boot.
+  3. IAM API (accounts/teams CRUD with role enforcement) — ⬜ plan TBD. **Carry-over from Ph1 review:** strip `passwordHash` from `AccountDoc` before serializing in `/api/iam/accounts` + `/api/iam/me`.
+  4. Data scoping (`visibleTeamIds` in buildApiResponse/team-source) — ⬜ plan TBD
+  5. Frontend (OwnerSetup + Login + IAM/Teams panels + logged-in user) — ⬜ plan TBD
 
 #### B5 — Tags (aggregate project metrics) ⬜
 - **Problem:** Create tags that aggregate metrics across "projects". A "project" can be:
@@ -124,4 +136,5 @@ approved spec is parallelized aggressively (subagents / dynamic workflows per in
 |------|---------------|---------|
 | 2026-07-22 | Kickoff: decomposed the initiative into 7 items, created this roadmap. Starting Group A brainstorming. | Roadmap created. |
 | 2026-07-22 | Group A brainstormed + spec written (A1 omit path on central; A2 both member views responsive; A3 title+project+repo in both workflow views). | Spec `specs/2026-07-22-group-a-ui-fixes-design.md`. A1/A2/A3 → 🟦 Planned. Implementing next. |
-| 2026-07-22 | Group A implemented. A1: gated path subtitle on `!isCentral` in `RepositoriesList.tsx` + `RepoDetailPage.tsx`. A2: `TeamMembers.tsx` + `RepoDetailPage.MembersTable` responsive (useIsMobile stacked cards, GRID_COLS with minmax(0,…), flex action buttons). A3: joined `sessionById` to render title/project/repo in `WorkflowsPage.RunBlock` + title/project in `RepoDetailPage` workflow cards. `bun tsc --noEmit` clean, 310 tests pass. | A1/A2/A3 → ✅. **Next: B4 Governance/IAM design.** |
+| 2026-07-22 | Group A implemented. A1: gated path subtitle on `!isCentral` in `RepositoriesList.tsx` + `RepoDetailPage.tsx`. A2: `TeamMembers.tsx` + `RepoDetailPage.MembersTable` responsive (useIsMobile stacked cards, GRID_COLS with minmax(0,…), flex action buttons). A3: joined `sessionById` to render title/project/repo in `WorkflowsPage.RunBlock` + title/project in `RepoDetailPage` workflow cards. `bun tsc --noEmit` clean, 310 tests pass. | A1/A2/A3 → ✅. Committed `d6a9bff`. Also added `restart:all` npm script (`37e5940`). **Next: B4 Governance/IAM design.** |
+| 2026-07-22 | Group A committed + validated on the real central (PWA service-worker cache had masked the rebuild — see memory). B4 Governance/IAM fully brainstormed; mapped current central auth (single shared password, no accounts/roles, token=member identity). | Spec `specs/2026-07-22-governance-iam-design.md` written. B4 → 🟨 (design). **Next: user reviews spec → writing-plans.** |
