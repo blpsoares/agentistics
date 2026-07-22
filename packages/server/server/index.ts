@@ -87,6 +87,48 @@ if (TEAM_CENTRAL) {
   // per request (not cached), so this needs no cache invalidation and no debounce.
   setPresenceChangeHook(() => notifySseClients())
 }
+
+// IAM bootstrap init (central only): ensure indexes + Default team, backfill teamId, and —
+// when no owner exists yet — mint a one-time setup token and print it to the logs.
+if (TEAM_CENTRAL) {
+  void (async () => {
+    try {
+      const { ensureAccountIndexes, hasAnyOwner } = await import('./accounts')
+      const { seedDefaultTeam } = await import('./teams')
+      const { backfillTokenTeamIds } = await import('./team-tokens')
+      const { backfillRepoTeamIds } = await import('./team-repos')
+      await ensureAccountIndexes()
+      await seedDefaultTeam()
+      await backfillTokenTeamIds()
+      await backfillRepoTeamIds()
+      if (!(await hasAnyOwner())) {
+        const { getBootstrapDoc, generateBootstrapToken } = await import('./bootstrap')
+        const existing = await getBootstrapDoc()
+        if (!existing || existing.consumedAt || !existing.tokenHash) {
+          const token = await generateBootstrapToken(new Date().toISOString())
+          console.log(
+            '\n' +
+            '========================================================\n' +
+            '  agentistics — OWNER SETUP REQUIRED\n' +
+            '  No owner account exists yet. Create it with this\n' +
+            '  one-time setup token (POST /api/iam/bootstrap):\n\n' +
+            `      ${token}\n\n` +
+            '  Keep it secret. It is shown only once.\n' +
+            '========================================================\n',
+          )
+        } else {
+          console.log(
+            '\n[agentistics] Owner setup pending — a setup token was already issued ' +
+            '(see earlier logs). Restart with the DB reset, or reissue later via the CLI.\n',
+          )
+        }
+      }
+    } catch (err) {
+      console.error('[agentistics] IAM bootstrap init skipped:', err instanceof Error ? err.message : err)
+    }
+  })()
+}
+
 import('./team-uploader').then(m => m.startUploader()).catch(err => console.error('[team-uploader] failed to start:', err))
 startAgentClient()
 maybeSpawnWatcher()
@@ -119,6 +161,8 @@ const AUTH_PUBLIC = new Set([
   // validateIngestToken (Bearer token in the Upgrade request headers).
   '/api/team/whoami',
   '/api/team/agent',
+  '/api/iam/status',
+  '/api/iam/bootstrap',
 ])
 
 // Admin routes that require a real session cookie even on a passwordless central
@@ -859,6 +903,24 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
 
     if (url.pathname === '/api/team/session' && req.method === 'GET') {
       const res = handleSession(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/status' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleIamStatus } = await import('./iam-handlers')
+      const res = await handleIamStatus()
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/bootstrap' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleBootstrap } = await import('./iam-handlers')
+      const res = await handleBootstrap(req)
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })
