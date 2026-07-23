@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Loader2, CheckCircle, XCircle, Users, User, Server, LogOut } from 'lucide-react'
 import { TeamMembers } from './TeamMembers'
-import { PUSH_INTERVAL, type TeamConfig, type MemberPresence } from '@agentistics/core'
+import { PUSH_INTERVAL, type TeamConfig, type MemberPresence, unpackConnectToken } from '@agentistics/core'
 import { pushNotification } from '../lib/notifications'
 import { MemberConnectionStatus } from './MemberConnectionStatus'
 
@@ -289,6 +289,9 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
     team?: string
   } | null>(null)
 
+  // Track whether the endpoint was auto-filled from the token
+  const [endpointAutoFilled, setEndpointAutoFilled] = useState(false)
+
   // ── Edit/lock state for the member connect form ──────────────────────────
   // Starts locked when already configured; starts open for fresh setup.
   const [editing, setEditing] = useState<boolean>(
@@ -382,11 +385,31 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
 
   function set<K extends keyof TeamConfig>(key: K, value: TeamConfig[K]) {
     userTouched.current = true // user is editing — don't let the async-load lock fire
+
+    // Special handling for token: unpack and auto-fill endpoint if embedded
+    if (key === 'token' && typeof value === 'string') {
+      const { endpoint, secret } = unpackConnectToken(value)
+      if (endpoint) {
+        // Auto-fill the endpoint from the token
+        onChange({ ...team, token: secret, endpoint })
+        setEndpointAutoFilled(true)
+      } else {
+        onChange({ ...team, token: secret })
+        setEndpointAutoFilled(false)
+      }
+      setTestResult(null)
+      setSaveResult(null)
+      return
+    }
+
     onChange({ ...team, [key]: value })
     // Clear test/save results when connection details change
     if (key === 'endpoint' || key === 'org' || key === 'user' || key === 'token') {
       setTestResult(null)
       setSaveResult(null)
+      if (key === 'endpoint') {
+        setEndpointAutoFilled(false) // user manually changed endpoint
+      }
     }
   }
 
@@ -680,9 +703,18 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
             disabled={!editing}
           />
 
+          {/* Show note when endpoint was auto-filled from token */}
+          {editing && endpointAutoFilled && (
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '-4px 0 14px', lineHeight: 1.5, fontStyle: 'italic' }}>
+              {pt
+                ? 'URL preenchida a partir do token.'
+                : 'URL filled from the token.'}
+            </div>
+          )}
+
           {/* NO name input — the central owns the machine's name (set on the minted token).
               It's resolved via whoami on Save and shown read-only below. */}
-          {editing && (
+          {editing && !endpointAutoFilled && (
             <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', margin: '-4px 0 14px', lineHeight: 1.5 }}>
               {pt
                 ? 'O nome desta máquina é definido pela central (no token). Nada a preencher aqui.'

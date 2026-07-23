@@ -148,6 +148,11 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
 
+  // Central URL state
+  const [publicUrl, setPublicUrl] = useState('')
+  const [publicUrlSaving, setPublicUrlSaving] = useState(false)
+  const [publicUrlSaved, setPublicUrlSaved] = useState(false)
+
   const load = useCallback(async () => {
     try {
       const [m, a, t] = await Promise.all([
@@ -166,6 +171,37 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   }, [])
 
   useEffect(() => { void load() }, [load])
+
+  // Load central config (public URL)
+  useEffect(() => {
+    fetch('/api/team/config')
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then((cfg: { publicUrl?: string }) => {
+        if (typeof cfg.publicUrl === 'string') {
+          setPublicUrl(cfg.publicUrl)
+        }
+      })
+      .catch(() => { /* ignore — server may not have the field yet */ })
+  }, [])
+
+  async function savePublicUrl() {
+    setPublicUrlSaving(true)
+    setPublicUrlSaved(false)
+    try {
+      const res = await fetch('/api/team/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ publicUrl }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setPublicUrlSaved(true)
+      setTimeout(() => setPublicUrlSaved(false), 2000)
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setPublicUrlSaving(false)
+    }
+  }
 
   // Build team lookup
   const teamNameById = new Map<string, string>()
@@ -286,6 +322,20 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     }
   }
 
+  async function assignOwner(machineId: string, accountId: string) {
+    try {
+      const res = await fetch('/api/iam/machines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ownerId: machineId, accountId }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      void load()
+    } catch (e) {
+      setErr(String(e))
+    }
+  }
+
   function startRename(id: string, currentName: string) {
     setRenamingId(id)
     setRenameValue(currentName)
@@ -385,6 +435,46 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
       </p>
 
       {err && <div style={{ fontSize: 12, color: '#ef4444', marginBottom: 12 }}>{err}</div>}
+
+      {/* Central URL setting — only for owner/manager */}
+      {canManageFleet && (
+        <div style={{ marginBottom: 20, padding: '12px 14px', borderRadius: 8, background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: 6 }}>
+            {pt ? 'URL Central' : 'Central URL'}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 8, lineHeight: 1.5 }}>
+            {pt
+              ? 'Quando definida, o token gerado já embute esta URL — a máquina preenche o endpoint sozinha ao colar o token.'
+              : 'When set, generated tokens embed this URL — the machine auto-fills the endpoint when the token is pasted.'}
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="text"
+              value={publicUrl}
+              onChange={e => setPublicUrl(e.target.value)}
+              placeholder="http://100.109.247.39:48080"
+              style={{
+                ...input,
+                flex: 1,
+                fontSize: 12.5,
+              }}
+            />
+            <button
+              onClick={() => void savePublicUrl()}
+              disabled={publicUrlSaving}
+              style={{
+                ...primaryBtn,
+                padding: '8px 16px',
+                fontSize: 12,
+                opacity: publicUrlSaving ? 0.6 : 1,
+                cursor: publicUrlSaving ? 'default' : 'pointer',
+              }}
+            >
+              {publicUrlSaving ? (pt ? 'Salvando…' : 'Saving…') : publicUrlSaved ? '✓' : (pt ? 'Salvar' : 'Save')}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{pt ? 'Máquinas' : 'Machines'}</div>
@@ -496,16 +586,28 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                       )}
                     </td>
                     <td style={td}>
-                      {m.accountName ? (
-                        <div style={{ display: 'flex', flexDirection: 'column' }}>
-                          <span style={{ fontWeight: 600 }}>{m.accountName}</span>
-                          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{m.accountEmail}</span>
-                        </div>
+                      {canManageFleet ? (
+                        <Select
+                          value={m.accountId ?? ''}
+                          onChange={v => void assignOwner(m.id, v)}
+                          options={[
+                            { value: '', label: pt ? '— sem conta —' : '— no account —' },
+                            ...accounts.map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
+                          ]}
+                          placeholder={pt ? 'Selecionar conta…' : 'Select account…'}
+                        />
                       ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column' }}>
-                          <span>—</span>
-                          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{pt ? 'sem conta' : 'no account'}</span>
-                        </div>
+                        m.accountName ? (
+                          <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <span style={{ fontWeight: 600 }}>{m.accountName}</span>
+                            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{m.accountEmail}</span>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <span>—</span>
+                            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{pt ? 'sem conta' : 'no account'}</span>
+                          </div>
+                        )
                       )}
                     </td>
                     <td style={td}>{m.user}</td>
