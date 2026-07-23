@@ -97,8 +97,9 @@ export default function UsersSettings() {
   const [mustChange, setMustChange] = useState(true)
   const [pwVisible, setPwVisible] = useState(false)
   // one-time result after a successful create (credentials + machine token shown once)
-  const [created, setCreated] = useState<null | { name: string; email: string; password: string; mustChange: boolean; machineName?: string; machineToken?: string }>(null)
+  const [created, setCreated] = useState<null | { email: string; password: string; machineName?: string; machineToken?: string }>(null)
   const [copied, setCopied] = useState<string | null>(null)
+  const [copyFailed, setCopyFailed] = useState<string | null>(null)
 
   // ── edit drawer ──
   const [editOpen, setEditOpen] = useState(false)
@@ -111,11 +112,39 @@ export default function UsersSettings() {
 
   function openAccountDrawer() {
     setAn(''); setAe(''); setAp(''); setAccountType('member'); setRows([{ teamId: '', role: 'user' }]); setAccountErr(null)
-    setProvisionMachine(false); setMachineName(''); setMustChange(true); setPwVisible(false); setCreated(null); setCopied(null)
+    setProvisionMachine(false); setMachineName(''); setMustChange(true); setPwVisible(false); setCreated(null); setCopied(null); setCopyFailed(null)
     setAccountOpen(true)
   }
   async function copy(label: string, text: string) {
-    try { await navigator.clipboard.writeText(text); setCopied(label); setTimeout(() => setCopied(c => c === label ? null : c), 1500) } catch { /* ignore */ }
+    setCopyFailed(null)
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text)
+        setCopied(label)
+        setTimeout(() => setCopied(c => c === label ? null : c), 1500)
+        return
+      } catch { /* fallback below */ }
+    }
+    // fallback: execCommand via temp textarea
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.left = '-9999px'
+    document.body.appendChild(ta)
+    ta.select()
+    try {
+      const ok = document.execCommand('copy')
+      if (ok) {
+        setCopied(label)
+        setTimeout(() => setCopied(c => c === label ? null : c), 1500)
+      } else {
+        setCopyFailed(label)
+      }
+    } catch {
+      setCopyFailed(label)
+    } finally {
+      document.body.removeChild(ta)
+    }
   }
   function updateRow(i: number, patch: Partial<Membership>) {
     setRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r))
@@ -152,7 +181,7 @@ export default function UsersSettings() {
     if (!res.ok) { const d = await res.json() as { error?: string }; setAccountErr(d.error || `HTTP ${res.status}`); return }
     const d = await res.json() as { machineToken?: string }
     setCreated({
-      name: an.trim(), email: ae.trim(), password: ap, mustChange,
+      email: ae.trim(), password: ap,
       machineName: provisionMachine ? machineName.trim() : undefined,
       machineToken: d.machineToken,
     })
@@ -406,6 +435,11 @@ export default function UsersSettings() {
                     {copied === label ? <Check size={13} /> : <Copy size={13} />}
                   </button>
                 </div>
+                {copyFailed === label && (
+                  <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
+                    {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                  </span>
+                )}
               </div>
             ))}
             {created.machineToken && (
@@ -476,6 +510,11 @@ export default function UsersSettings() {
                   {copied === 'temp' ? <Check size={13} /> : <Copy size={13} />}
                 </button>
               </div>
+              {copyFailed === 'temp' && (
+                <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
+                  {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                </span>
+              )}
               <span style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{pt ? 'O usuário deverá trocá-la no próximo login.' : 'The user must change it on next login.'}</span>
             </div>
           ) : (
