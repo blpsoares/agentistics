@@ -263,8 +263,14 @@ export async function handleAccounts(req: Request): Promise<Response> {
     if (b.memberships !== undefined) {
       const memberships = parseMemberships(b.memberships)
       // A manager may only assign user-role memberships in teams they manage — never escalate a
-      // target to manager/owner (owner memberships stay [] and are set only at creation).
-      if (!isOwner && !canCreateAccount(principal, memberships)) return json({ error: 'forbidden' }, 403)
+      // target to manager/owner. Unlike creation, EDIT may reduce to an empty set (removing a member
+      // from the manager's only team is allowed — the entry gate already proved every current
+      // membership was a user-role in a managed team, so the result stays within scope).
+      if (!isOwner) {
+        const managed = new Set(principal.memberships.filter(m => m.role === 'manager').map(m => m.teamId))
+        const ok = memberships.every(m => m.role === 'user' && managed.has(m.teamId))
+        if (!ok) return json({ error: 'forbidden' }, 403)
+      }
       patch.memberships = memberships
     }
 
@@ -398,9 +404,14 @@ export async function handleMachines(req: Request): Promise<Response> {
     if (reassignId) {
       const newTeamId = typeof b.teamId === 'string' ? b.teamId : ''
       if (!newTeamId) return json({ error: 'teamId is required' }, 400)
+      if (!(await getTeam(newTeamId))) return json({ error: 'team not found' }, 404)
       const machine = (await listMachines()).find(m => m.id === reassignId)
       if (!machine) return json({ error: 'machine not found' }, 404)
-      if (!canManageMachineTeam(principal, machine.teamId) || !canManageMachineTeam(principal, newTeamId)) {
+      // Must manage the machine's current team. The target must also be managed UNLESS it's the
+      // Default team — detaching a machine (moving it to Default) is allowed for any manager of the
+      // source team, since Default is the catch-all and detaching only removes it from their scope.
+      const canTarget = canManageMachineTeam(principal, newTeamId) || newTeamId === DEFAULT_TEAM_ID
+      if (!canManageMachineTeam(principal, machine.teamId) || !canTarget) {
         return json({ error: 'forbidden' }, 403)
       }
       await setMachineTeam(reassignId, newTeamId)

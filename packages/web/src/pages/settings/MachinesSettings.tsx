@@ -298,9 +298,12 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
       }
-      void load()
     } catch (e) {
       setErr(String(e))
+    } finally {
+      // Always resync — a partial failure otherwise leaves already-deleted rows on screen.
+      setBulkDeleteConfirm(false)
+      void load()
     }
   }
 
