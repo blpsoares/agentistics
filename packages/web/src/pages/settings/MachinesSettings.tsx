@@ -151,10 +151,14 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
 
+  // Owner edit state
+  const [editingOwnerId, setEditingOwnerId] = useState<string | null>(null)
+
   // Central URL state
   const [publicUrl, setPublicUrl] = useState('')
   const [publicUrlSaving, setPublicUrlSaving] = useState(false)
   const [publicUrlSaved, setPublicUrlSaved] = useState(false)
+  const [publicUrlEditing, setPublicUrlEditing] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -198,6 +202,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setPublicUrlSaved(true)
+      setPublicUrlEditing(false)
       setTimeout(() => setPublicUrlSaved(false), 2000)
     } catch (e) {
       setErr(String(e))
@@ -433,12 +438,17 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     ? selectedAccount!.memberships.map(m => ({ id: m.teamId, name: teamNameById.get(m.teamId) ?? m.teamId }))
     : []
 
-  const connectCmdFor = (token: string) =>
-    `agentop member connect --endpoint ${window.location.origin} --token ${token}`
+  // Build connect commands based on token type (composite vs raw)
+  const connectCmdFor = (token: string) => {
+    const isComposite = token.startsWith('act1_')
+    if (isComposite) {
+      return `agentop member connect --token ${token}`
+    }
+    const endpoint = publicUrl || window.location.origin
+    return `agentop member connect --endpoint ${endpoint} --token ${token}`
+  }
 
-  const rotateConnectCmd = rotatedToken
-    ? `agentop member connect --endpoint ${window.location.origin} --token ${rotatedToken}`
-    : ''
+  const rotateConnectCmd = rotatedToken ? connectCmdFor(rotatedToken) : ''
 
   const drawerErrPanel = (m: string | null) => m && (
     <div style={{ fontSize: 12, color: '#ef4444', background: 'color-mix(in srgb, #ef4444 12%, transparent)', border: '1px solid color-mix(in srgb, #ef4444 35%, transparent)', borderRadius: 7, padding: '8px 10px' }}>
@@ -470,30 +480,80 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
               : 'When set, generated tokens embed this URL — the machine auto-fills the endpoint when the token is pasted.'}
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input
-              type="text"
-              value={publicUrl}
-              onChange={e => setPublicUrl(e.target.value)}
-              placeholder="http://100.109.247.39:48080"
-              style={{
-                ...input,
-                flex: 1,
-                fontSize: 12.5,
-              }}
-            />
-            <button
-              onClick={() => void savePublicUrl()}
-              disabled={publicUrlSaving}
-              style={{
-                ...primaryBtn,
-                padding: '8px 16px',
-                fontSize: 12,
-                opacity: publicUrlSaving ? 0.6 : 1,
-                cursor: publicUrlSaving ? 'default' : 'pointer',
-              }}
-            >
-              {publicUrlSaving ? (pt ? 'Salvando…' : 'Saving…') : publicUrlSaved ? '✓' : (pt ? 'Salvar' : 'Save')}
-            </button>
+            {!publicUrlEditing && publicUrl ? (
+              <>
+                <code style={{
+                  flex: 1,
+                  fontSize: 12.5,
+                  fontFamily: 'var(--font-mono, monospace)',
+                  color: 'var(--text-tertiary)',
+                  padding: '9px 11px',
+                }}>
+                  {publicUrl}
+                </code>
+                <button
+                  onClick={() => setPublicUrlEditing(true)}
+                  style={{
+                    ...ghostBtn,
+                    padding: '8px 12px',
+                    fontSize: 12,
+                  }}
+                  title={pt ? 'Editar' : 'Edit'}
+                >
+                  <Pencil size={14} />
+                </button>
+              </>
+            ) : (
+              <>
+                <input
+                  type="text"
+                  value={publicUrl}
+                  onChange={e => setPublicUrl(e.target.value)}
+                  placeholder="http://100.109.247.39:48080"
+                  style={{
+                    ...input,
+                    flex: 1,
+                    fontSize: 12.5,
+                  }}
+                />
+                {publicUrlEditing && (
+                  <button
+                    onClick={() => {
+                      setPublicUrlEditing(false)
+                      // Reload the original value (reset changes)
+                      fetch('/api/team/config')
+                        .then(r => r.ok ? r.json() : Promise.reject())
+                        .then((cfg: { publicUrl?: string }) => {
+                          if (typeof cfg.publicUrl === 'string') {
+                            setPublicUrl(cfg.publicUrl)
+                          }
+                        })
+                        .catch(() => { /* ignore */ })
+                    }}
+                    style={{
+                      ...ghostBtn,
+                      padding: '8px 16px',
+                      fontSize: 12,
+                    }}
+                  >
+                    {pt ? 'Cancelar' : 'Cancel'}
+                  </button>
+                )}
+                <button
+                  onClick={() => void savePublicUrl()}
+                  disabled={publicUrlSaving}
+                  style={{
+                    ...primaryBtn,
+                    padding: '8px 16px',
+                    fontSize: 12,
+                    opacity: publicUrlSaving ? 0.6 : 1,
+                    cursor: publicUrlSaving ? 'default' : 'pointer',
+                  }}
+                >
+                  {publicUrlSaving ? (pt ? 'Salvando…' : 'Saving…') : publicUrlSaved ? '✓' : (pt ? 'Salvar' : 'Save')}
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -608,28 +668,51 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                       )}
                     </td>
                     <td style={td}>
-                      {canManageFleet ? (
-                        <Select
-                          value={m.accountId ?? ''}
-                          onChange={v => void assignOwner(m.id, v)}
-                          options={[
-                            { value: '', label: pt ? '— sem conta —' : '— no account —' },
-                            ...accounts.map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
-                          ]}
-                          placeholder={pt ? 'Selecionar conta…' : 'Select account…'}
-                        />
+                      {editingOwnerId === m.id && canManageFleet ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Select
+                            value={m.accountId ?? ''}
+                            onChange={v => {
+                              void assignOwner(m.id, v)
+                              setEditingOwnerId(null)
+                            }}
+                            options={[
+                              { value: '', label: pt ? '— sem conta —' : '— no account —' },
+                              ...accounts.map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
+                            ]}
+                            placeholder={pt ? 'Selecionar conta…' : 'Select account…'}
+                          />
+                          <button
+                            onClick={() => setEditingOwnerId(null)}
+                            style={{ ...ghostBtn, padding: '4px 8px', border: 'none', color: '#6b7280' }}
+                            title={pt ? 'Cancelar' : 'Cancel'}
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
                       ) : (
-                        m.accountName ? (
-                          <div style={{ display: 'flex', flexDirection: 'column' }}>
-                            <span style={{ fontWeight: 600 }}>{m.accountName}</span>
-                            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{m.accountEmail}</span>
-                          </div>
-                        ) : (
-                          <div style={{ display: 'flex', flexDirection: 'column' }}>
-                            <span>—</span>
-                            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{pt ? 'sem conta' : 'no account'}</span>
-                          </div>
-                        )
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {m.accountName ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                              <span style={{ fontWeight: 600 }}>{m.accountName}</span>
+                              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{m.accountEmail}</span>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                              <span>—</span>
+                              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{pt ? 'sem conta' : 'no account'}</span>
+                            </div>
+                          )}
+                          {canManageFleet && (
+                            <button
+                              onClick={() => setEditingOwnerId(m.id)}
+                              style={{ ...ghostBtn, padding: '4px 8px', border: 'none', color: 'var(--text-tertiary)' }}
+                              title={pt ? 'Editar' : 'Edit'}
+                            >
+                              <Pencil size={12} />
+                            </button>
+                          )}
+                        </div>
                       )}
                     </td>
                     <td style={td}>{m.user}</td>

@@ -75,15 +75,17 @@ export default function UsersSettings() {
 
   const [teams, setTeams] = useState<Team[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
+  const [machines, setMachines] = useState<LinkedMachine[]>([])
   const [err, setErr] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
-      const [t, a] = await Promise.all([
+      const [t, a, m] = await Promise.all([
         fetch('/api/iam/teams').then(r => r.json() as Promise<{ teams: Team[] }>),
         fetch('/api/iam/accounts').then(r => r.json() as Promise<{ accounts: Account[] }>),
+        fetch('/api/iam/machines').then(r => r.json() as Promise<{ machines: LinkedMachine[] }>),
       ])
-      setTeams(t.teams ?? []); setAccounts(a.accounts ?? [])
+      setTeams(t.teams ?? []); setAccounts(a.accounts ?? []); setMachines(m.machines ?? [])
     } catch (e) { setErr(String(e)) }
   }, [])
   useEffect(() => { void load() }, [load])
@@ -342,7 +344,6 @@ export default function UsersSettings() {
     <div style={{ fontSize: 12, color: '#ef4444', background: 'color-mix(in srgb, #ef4444 12%, transparent)', border: '1px solid color-mix(in srgb, #ef4444 35%, transparent)', borderRadius: 7, padding: '8px 10px' }}>{m}</div>
   )
 
-  const ownerCount = accounts.filter(a => a.role === 'owner').length
   function canDeleteClient(a: Account): boolean {
     if (!me) return false
     if (a.id === me.id) return false                    // never yourself
@@ -360,8 +361,24 @@ export default function UsersSettings() {
     return canDeleteClient(a)                  // manager → managed user-members
   }
 
-  const connectCmdFor = (token: string) =>
-    `agentop member connect --endpoint ${window.location.origin} --token ${token}`
+  // Build connect commands based on token type (composite vs raw)
+  const connectCmdFor = (token: string) => {
+    const isComposite = token.startsWith('act1_')
+    if (isComposite) {
+      return `agentop member connect --token ${token}`
+    }
+    // For raw tokens, fallback to window.location.origin (no central URL available in UsersSettings)
+    return `agentop member connect --endpoint ${window.location.origin} --token ${token}`
+  }
+
+  // Compute totals
+  const totalAccounts = accounts.length
+  const ownerCount = accounts.filter(a => a.role === 'owner').length
+  const managerCount = accounts.filter(a => a.role === 'member' && a.memberships.some(m => m.role === 'manager')).length
+  const userCount = accounts.filter(a => a.role === 'member' && !a.memberships.some(m => m.role === 'manager')).length
+
+  // Helper to count machines per account
+  const machineCountFor = (accountId: string) => machines.filter(m => m.accountId === accountId).length
 
   return (
     <div>
@@ -394,6 +411,40 @@ export default function UsersSettings() {
         <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{pt ? 'Contas' : 'Accounts'}</div>
         <button style={primaryBtn} onClick={openAccountDrawer}><Plus size={14} /> {pt ? 'Nova conta' : 'New account'}</button>
       </div>
+
+      {/* Totals summary */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <span style={{
+          display: 'inline-block', padding: '4px 10px', borderRadius: 6, fontSize: 11.5, fontWeight: 600,
+          background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text-secondary)',
+        }}>
+          {pt ? 'Total' : 'Total'}: {totalAccounts}
+        </span>
+        {ownerCount > 0 && (
+          <span style={{
+            display: 'inline-block', padding: '4px 10px', borderRadius: 6, fontSize: 11.5, fontWeight: 600,
+            background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text-secondary)',
+          }}>
+            Owners: {ownerCount}
+          </span>
+        )}
+        {managerCount > 0 && (
+          <span style={{
+            display: 'inline-block', padding: '4px 10px', borderRadius: 6, fontSize: 11.5, fontWeight: 600,
+            background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text-secondary)',
+          }}>
+            Managers: {managerCount}
+          </span>
+        )}
+        {userCount > 0 && (
+          <span style={{
+            display: 'inline-block', padding: '4px 10px', borderRadius: 6, fontSize: 11.5, fontWeight: 600,
+            background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text-secondary)',
+          }}>
+            Users: {userCount}
+          </span>
+        )}
+      </div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
@@ -402,12 +453,13 @@ export default function UsersSettings() {
               <th style={th}>Email</th>
               <th style={th}>{pt ? 'Papel' : 'Role'}</th>
               <th style={th}>{pt ? 'Times' : 'Teams'}</th>
+              <th style={th}>{pt ? 'Máquinas' : 'Machines'}</th>
               <th style={{ ...th, width: 40 }} />
             </tr>
           </thead>
           <tbody>
             {accounts.length === 0 && (
-              <tr><td style={{ ...td, color: 'var(--text-tertiary)' }} colSpan={5}>{pt ? 'Nenhuma conta.' : 'No accounts.'}</td></tr>
+              <tr><td style={{ ...td, color: 'var(--text-tertiary)' }} colSpan={6}>{pt ? 'Nenhuma conta.' : 'No accounts.'}</td></tr>
             )}
             {accounts.map(a => (
               <tr key={a.id}>
@@ -426,6 +478,7 @@ export default function UsersSettings() {
                       ))}
                   </span>
                 </td>
+                <td style={td}>{machineCountFor(a.id)}</td>
                 <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                   {canEditClient(a) && (
                     <button onClick={() => void openEditDrawer(a)} style={{ ...trashBtn, color: 'var(--text-tertiary)' }} aria-label="Edit account"><Pencil size={14} /></button>
