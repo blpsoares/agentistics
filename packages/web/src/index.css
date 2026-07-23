@@ -159,6 +159,10 @@ html, body {
 .prefs-tabbar { scrollbar-width: none; }
 .prefs-tabbar::-webkit-scrollbar { display: none; }
 
+/* Scrollable but no visible scrollbar (generic utility) */
+.ag-noscroll { scrollbar-width: none; -ms-overflow-style: none; }
+.ag-noscroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
 /* FiltersBar sticky shimmer scan */
 @keyframes filters-shimmer-scan {
   0%   { background-position: -100% 0; }

@@ -914,7 +914,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
         )}
       </div>
 
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
+      <nav className="ag-noscroll" style={{ display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
         {items.map(item => {
           const active = item.to === '/'
             ? location.pathname === '/'
