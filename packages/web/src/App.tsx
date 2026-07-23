@@ -49,6 +49,7 @@ import { ArchiveConsentModal, type ArchiveMode } from './components/ArchiveConse
 import { resolveArchiveChoice } from './lib/archive'
 import { TeamLogin } from './components/TeamLogin'
 import { Login } from './components/Login'
+import { MemberConnectionStatus } from './components/MemberConnectionStatus'
 import { OwnerSetup } from './components/OwnerSetup'
 import { ChangePassword } from './components/ChangePassword'
 import { type ChatModelId } from './lib/chatModels'
@@ -911,6 +912,9 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
                 </span>
               </div>
             )}
+            {/* Member machine: live connection status + latency to the central (mirrors the
+                central's presence line). Renders null unless this instance is a connected member. */}
+            {!isCentral && <MemberConnectionStatus lang={lang} compact />}
           </div>
         )}
       </div>

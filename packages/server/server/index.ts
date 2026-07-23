@@ -1009,12 +1009,24 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       ])
       const team = (await readPreferences()).team
       const st = getUploaderStatus()
+      // Best-effort round-trip latency to the central (member mode only) — a quick timed ping of
+      // the public policy endpoint. null when solo, offline, or the request fails.
+      let latencyMs: number | null = null
+      if (team?.mode === 'member' && team.endpoint) {
+        try {
+          const base = team.endpoint.replace(/\/+$/, '')
+          const t0 = Date.now()
+          const r = await fetch(`${base}/api/team/policy`, { signal: AbortSignal.timeout(4000) })
+          if (r.ok) latencyMs = Date.now() - t0
+        } catch { /* offline — leave null */ }
+      }
       return new Response(JSON.stringify({
         mode: team?.mode ?? 'solo',
         user: team?.user ?? '',
         endpoint: team?.endpoint ?? '',
         lastSuccessAt: st.lastSuccessAt,
         errKind: st.errKind,
+        latencyMs,
       }), { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
     }
 
