@@ -1,6 +1,6 @@
 // packages/server/server/iam-view.test.ts
 import { test, expect } from 'bun:test'
-import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo } from './iam-view'
+import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam } from './iam-view'
 import type { AccountDoc, Principal } from './iam-types'
 
 const owner: Principal = { accountId: 'o1', role: 'owner', memberships: [] }
@@ -45,4 +45,15 @@ test('teamVisibleTo: owner all; member only their teams', () => {
   expect(teamVisibleTo(owner, 'Z')).toBe(true)
   expect(teamVisibleTo(mgrA, 'A')).toBe(true)
   expect(teamVisibleTo(mgrA, 'B')).toBe(false)
+})
+
+test('canManageMachineTeam: owner any team; manager own team only; user never', () => {
+  const ownerPrincipal = { accountId: 'o', role: 'owner' as const, memberships: [] }
+  const mgrA = { accountId: 'm', role: 'member' as const, memberships: [{ teamId: 'A', role: 'manager' as const }] }
+  const userA = { accountId: 'u', role: 'member' as const, memberships: [{ teamId: 'A', role: 'user' as const }] }
+  expect(canManageMachineTeam(ownerPrincipal, 'Z')).toBe(true)
+  expect(canManageMachineTeam(mgrA, 'A')).toBe(true)
+  expect(canManageMachineTeam(mgrA, 'B')).toBe(false)
+  expect(canManageMachineTeam(userA, 'A')).toBe(false)
+  expect(canManageMachineTeam(mgrA, undefined)).toBe(false)
 })

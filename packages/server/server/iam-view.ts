@@ -62,3 +62,11 @@ export function teamVisibleTo(p: Principal, teamId: string): boolean {
   if (p.role === 'owner') return true
   return p.memberships.some(m => m.teamId === teamId)
 }
+
+/** Owner may manage machines in any team; a manager may manage only in teams
+ *  they manage; users cannot manage machines. Undefined teamId always returns false. */
+export function canManageMachineTeam(p: Principal, teamId: string | undefined): boolean {
+  if (p.role === 'owner') return true
+  if (!teamId) return false
+  return p.memberships.some(m => m.teamId === teamId && m.role === 'manager')
+}

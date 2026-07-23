@@ -38,6 +38,8 @@ export interface TokenDoc {
   /** True for GitHub Actions / CI tokens — ingest stamps `ci: true` on every pushed session. */
   ci?: boolean
   teamId?: string
+  /** Account ID for machine tokens — identifies which account owns a registered machine. */
+  accountId?: string
 }
 
 export type MemberInfo = {
@@ -49,6 +51,16 @@ export type MemberInfo = {
   /** Live status — populated by the members endpoint from the presence snapshot. */
   online?: boolean
   latencyMs?: number | null
+}
+
+export type MachineInfo = {
+  id: string
+  accountId: string
+  machineName: string
+  user: string
+  teamId?: string
+  createdAt: string
+  lastSeenAt: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +92,7 @@ async function getTokensCollection(): Promise<Collection<TokenDoc>> {
  * Mint a new random ingest token. Stores only the SHA-256 hash in Mongo.
  * Returns the plaintext token (shown once; never stored or logged here).
  */
-export async function mintToken(user: string, label: string, opts?: { repo?: string; ci?: boolean }): Promise<string> {
+export async function mintToken(user: string, label: string, opts?: { repo?: string; ci?: boolean; accountId?: string; teamId?: string }): Promise<string> {
   // 32 random bytes → 64-char hex string (256 bits of entropy). Repo/CI tokens use 48 bytes
   // (96-char) — longer since they live as a GitHub Actions secret with broader blast radius.
   const token = randomBytes(opts?.ci ? 48 : 32).toString('hex')
@@ -91,9 +103,10 @@ export async function mintToken(user: string, label: string, opts?: { repo?: str
     label,
     createdAt: new Date().toISOString(),
     lastSeenAt: null,
-    teamId: DEFAULT_TEAM_ID,
+    teamId: opts?.teamId ?? DEFAULT_TEAM_ID,
     ...(opts?.repo ? { repo: opts.repo } : {}),
     ...(opts?.ci ? { ci: true } : {}),
+    ...(opts?.accountId ? { accountId: opts.accountId } : {}),
   }
   const col = await getTokensCollection()
   await col.insertOne(doc)
@@ -246,6 +259,34 @@ export async function getMemberTeamMap(): Promise<Record<string, string>> {
   const map: Record<string, string> = {}
   for (const d of docs) map[d._id] = d.teamId ?? DEFAULT_TEAM_ID
   return map
+}
+
+/**
+ * Mint a machine token bound to an accountId and team.
+ * Returns the token hash (id) and plaintext token.
+ */
+export async function mintMachineToken(input: { accountId: string; user: string; machineName: string; teamId: string }): Promise<{ id: string; token: string }> {
+  const token = await mintToken(input.user, input.machineName, { accountId: input.accountId, teamId: input.teamId })
+  const id = hashToken(token)
+  return { id, token }
+}
+
+/**
+ * List all machine tokens (those with accountId set).
+ * Returns machine records with the token hash as id (no plaintext).
+ */
+export async function listMachines(): Promise<MachineInfo[]> {
+  const col = await getTokensCollection()
+  const docs = await col.find({ accountId: { $exists: true } }).toArray()
+  return docs.map(d => ({
+    id: d._id,
+    accountId: d.accountId!,
+    machineName: d.label,
+    user: d.user,
+    teamId: d.teamId,
+    createdAt: d.createdAt,
+    lastSeenAt: d.lastSeenAt,
+  }))
 }
 
 /** Assign the Default team to any token minted before teams existed. Idempotent. */
