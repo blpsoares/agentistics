@@ -1890,53 +1890,6 @@ export default function AppLayout() {
           </div>
         )}
 
-        {/* Desktop-only summary strip: one tidy flex line — updated date + members/machines/projects/repos. */}
-        {!isMobile && (() => {
-          const sep = <span style={{ color: 'var(--border)' }}>·</span>
-          const dot = (c: string) => <span style={{ width: 6, height: 6, borderRadius: '50%', background: c, display: 'inline-block', flexShrink: 0 }} />
-          const stat = (icon: React.ReactNode, label: string) => (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
-              {icon}<span style={{ color: 'var(--text-secondary)' }}>{label}</span>
-            </span>
-          )
-          const updated = singleHarness && singleHarness !== 'claude'
-            ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
-            : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
-          const firstDate = singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate
-          const iconSt: React.CSSProperties = { color: 'var(--text-tertiary)', flexShrink: 0 }
-          return (
-            <div style={{
-              maxWidth: 1400, margin: '0 auto', padding: '6px 16px 0', width: '100%', boxSizing: 'border-box',
-              display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '3px 12px',
-              fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums',
-            }}>
-              <span style={{ whiteSpace: 'nowrap' }}>{lang === 'pt' ? 'Atualizado em' : 'Updated'} <span style={{ color: 'var(--text-secondary)' }}>{updated}</span></span>
-              {firstDate && (<>
-                {sep}
-                <span style={{ whiteSpace: 'nowrap' }}>
-                  {lang === 'pt' ? 'Desde' : 'Since'} {format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')}
-                  {' · '}{derived.allTimeTotalSessions.toLocaleString()} {lang === 'pt' ? (derived.allTimeTotalSessions === 1 ? 'sessão' : 'sessões') : (derived.allTimeTotalSessions === 1 ? 'session' : 'sessions')}
-                  {singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}
-                </span>
-              </>)}
-              {isCentral && (<>
-                {sep}
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
-                  <Users size={11} style={iconSt} />
-                  <span style={{ color: 'var(--text-secondary)' }}>{memberCount} {lang === 'pt' ? (memberCount === 1 ? 'membro' : 'membros') : (memberCount === 1 ? 'member' : 'members')}</span>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>{dot('#22c55e')}{onlineCount}</span>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>{dot('#ef4444')}{offlineCount}</span>
-                </span>
-                {sep}
-                {stat(<Server size={11} style={iconSt} />, `${machineCount} ${lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}`)}
-              </>)}
-              {sep}
-              {stat(<FolderOpen size={11} style={iconSt} />, `${projectCount} ${lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}`)}
-              {sep}
-              {stat(<GitBranch size={11} style={iconSt} />, `${repoCount} ${lang === 'pt' ? (repoCount === 1 ? 'repositório' : 'repositórios') : (repoCount === 1 ? 'repository' : 'repositories')}`)}
-            </div>
-          )
-        })()}
 
         {/* Filters — full bar, fixed in the sticky header so it's reachable at any
             scroll position. Hidden on /custom. On mobile the bar is collapsible
@@ -2033,11 +1986,34 @@ export default function AppLayout() {
                 harnesses={availableHarnesses}
                 presence={data?.presence}
                 lang={lang}
-                summary={{
-                  sessions: derived.totalSessions.toLocaleString(),
-                  cost: fmtCost(derived.totalCostUSD, currency, brlRate),
-                  tokens: fmt(derived.inputTokens + derived.outputTokens),
-                }}
+                summary={(() => {
+                  // Updated date: use harness-specific last date when filtering a single non-Claude
+                  // harness, otherwise fall back to statsCache (Claude-canonical).
+                  const updated = singleHarness && singleHarness !== 'claude'
+                    ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+                    : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+                  // Since/sessions line (only when firstDate is available)
+                  const firstDate = singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate
+                  const since = firstDate
+                    ? `${lang === 'pt' ? 'Desde' : 'Since'} ${format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')} · ${derived.allTimeTotalSessions.toLocaleString()} ${lang === 'pt' ? (derived.allTimeTotalSessions === 1 ? 'sessão' : 'sessões') : (derived.allTimeTotalSessions === 1 ? 'session' : 'sessions')}${singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}`
+                    : undefined
+                  return {
+                    sessions: derived.totalSessions.toLocaleString(),
+                    cost: fmtCost(derived.totalCostUSD, currency, brlRate),
+                    tokens: fmt(derived.inputTokens + derived.outputTokens),
+                    fleet: {
+                      updated,
+                      since,
+                      members: isCentral ? memberCount : undefined,
+                      online: isCentral ? onlineCount : undefined,
+                      offline: isCentral ? offlineCount : undefined,
+                      machines: isCentral ? machineCount : undefined,
+                      projects: projectCount,
+                      repos: repoCount,
+                      isCentral,
+                    },
+                  }
+                })()}
                 teams={teamsList}
                 machines={machinesList}
               />

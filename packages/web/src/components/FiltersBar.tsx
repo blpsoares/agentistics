@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
 import type { Filters, DateRange, Project, Lang, HarnessId } from '@agentistics/core'
 import { formatModel, formatProjectName, repoShortName } from '@agentistics/core'
-import { Layers, Cpu, ChevronDown, X, CalendarDays, Check, Users, GitBranch, Search, Plus, Blocks, Radio } from 'lucide-react'
+import { Layers, Cpu, ChevronDown, X, CalendarDays, Check, Users, GitBranch, Search, Plus, Blocks, Radio, Server, FolderOpen } from 'lucide-react'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { ProjectsModal } from './ProjectsModal'
 import type { MemberPresence } from '@agentistics/core'
@@ -28,7 +28,22 @@ interface Props {
   compact?: boolean
   /** Live readout of the currently-filtered data, rendered right-aligned in the top bar
    *  (desktop only). Pre-formatted so FiltersBar needs no currency/rate. */
-  summary?: { sessions: string; cost: string; tokens: string }
+  summary?: {
+    sessions: string
+    cost: string
+    tokens: string
+    fleet?: {
+      updated: string
+      since?: string
+      members?: number
+      online?: number
+      offline?: number
+      machines?: number
+      projects: number
+      repos: number
+      isCentral: boolean
+    }
+  }
   /** Central-only: available teams for filter. Empty when not a central or no teams. */
   teams?: { id: string; name: string }[]
   /** Central-only: available machines for filter. Empty when not a central or no machines. */
@@ -718,14 +733,63 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
             (desktop only; hidden in the compact/mobile header). */}
         {summary && !compact && (
           <div style={{
-            marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 9,
-            fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+            marginLeft: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3,
           }}>
-            <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{summary.sessions}</strong> {lang === 'pt' ? 'sessões' : 'sessions'}</span>
-            <span style={{ opacity: 0.35 }}>·</span>
-            <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{summary.cost}</span>
-            <span style={{ opacity: 0.35 }}>·</span>
-            <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{summary.tokens}</strong> tok</span>
+            {/* Main stats row: sessions · cost · tokens */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 9,
+              fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+            }}>
+              <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{summary.sessions}</strong> {lang === 'pt' ? 'sessões' : 'sessions'}</span>
+              <span style={{ opacity: 0.35 }}>·</span>
+              <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{summary.cost}</span>
+              <span style={{ opacity: 0.35 }}>·</span>
+              <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{summary.tokens}</strong> tok</span>
+            </div>
+
+            {/* Fleet stats row: updated · since/sessions · members · machines · projects · repos */}
+            {summary.fleet && (() => {
+              const f = summary.fleet
+              const sep = <span style={{ color: 'var(--border)' }}>·</span>
+              const dot = (c: string) => <span style={{ width: 6, height: 6, borderRadius: '50%', background: c, display: 'inline-block', flexShrink: 0 }} />
+              const iconSt: React.CSSProperties = { color: 'var(--text-tertiary)', flexShrink: 0 }
+              return (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 9,
+                  fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+                }}>
+                  <span>{lang === 'pt' ? 'Atualizado em' : 'Updated'} <span style={{ color: 'var(--text-secondary)' }}>{f.updated}</span></span>
+                  {f.since && (<>
+                    {sep}
+                    <span style={{ color: 'var(--text-secondary)' }}>{f.since}</span>
+                  </>)}
+                  {f.isCentral && f.members !== undefined && (<>
+                    {sep}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <Users size={11} style={iconSt} />
+                      <span style={{ color: 'var(--text-secondary)' }}>{f.members} {lang === 'pt' ? (f.members === 1 ? 'membro' : 'membros') : (f.members === 1 ? 'member' : 'members')}</span>
+                      {f.online !== undefined && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>{dot('#22c55e')}{f.online}</span>}
+                      {f.offline !== undefined && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>{dot('#ef4444')}{f.offline}</span>}
+                    </span>
+                    {sep}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <Server size={11} style={iconSt} />
+                      <span style={{ color: 'var(--text-secondary)' }}>{f.machines} {lang === 'pt' ? (f.machines === 1 ? 'máquina' : 'máquinas') : (f.machines === 1 ? 'machine' : 'machines')}</span>
+                    </span>
+                  </>)}
+                  {sep}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                    <FolderOpen size={11} style={iconSt} />
+                    <span style={{ color: 'var(--text-secondary)' }}>{f.projects} {lang === 'pt' ? (f.projects === 1 ? 'projeto' : 'projetos') : (f.projects === 1 ? 'project' : 'projects')}</span>
+                  </span>
+                  {sep}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                    <GitBranch size={11} style={iconSt} />
+                    <span style={{ color: 'var(--text-secondary)' }}>{f.repos} {lang === 'pt' ? (f.repos === 1 ? 'repositório' : 'repositórios') : (f.repos === 1 ? 'repository' : 'repositories')}</span>
+                  </span>
+                </div>
+              )
+            })()}
           </div>
         )}
 
