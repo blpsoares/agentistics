@@ -54,11 +54,11 @@ English by project convention; conversation with the user is Portuguese.
 
 ### Group C — UI/UX follow-ups (post-B4)
 
-#### UI-1 — Settings as pages + IAM redesign + sidebar footer 🟨
+#### UI-1 — Settings as pages + IAM redesign + sidebar footer ✅
 - **Problem:** the Settings modal grew too large (9 tabs); IAM tab confusing; sidebar footer cramped; PWA doesn't auto-update (stale-bundle pain).
 - **Decisions:** aside "Settings" with inline expandable submenu → dedicated `/settings/:section` pages (decision A), showing only sections the account can access; IAM as one page with Accounts + Teams sections + drawer forms + role explanations (decision A); sidebar footer redesign; PWA `registerType: 'autoUpdate'` (skipWaiting/clientsClaim). Frontend only.
 - **Spec:** [2026-07-22-settings-pages-and-iam-redesign-design.md](specs/2026-07-22-settings-pages-and-iam-redesign-design.md)
-- **Plan:** _(link when written)_
+- **Plan:** [plans/2026-07-22-ui1-settings-pages.md](plans/2026-07-22-ui1-settings-pages.md) — ✅ **implemented** (commits `4cb50f8`..`f127f2c` on `dev`; tsc clean, 344 tests; all reviews clean): PWA autoUpdate (skipWaiting+clientsClaim), `visibleSettingsSections` helper, 8 settings pages extracted from the modal, `/settings/*` routes + shell, gated aside submenu, redesigned sidebar footer, `PreferencesModal` retired, redesigned IAM page (Accounts+Teams tables + drawers). **Deferred:** client-side guard on directly-typed inaccessible `/settings/*` URLs (server 401/403 covers it); account role badge shows first membership; account/team edit (PATCH).
 
 ### Group B — Large subsystems (each is its own project)
 
