@@ -10,7 +10,7 @@ import {
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Workflow as WorkflowIcon,
-  GitBranch, Users, LogOut,
+  GitBranch, Users, LogOut, Server,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -999,6 +999,9 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
 export default function AppLayout() {
   const location = useLocation()
   const navigate = useNavigate()
+  // Reset scroll to the top on every route change — otherwise navigating away while scrolled to the
+  // bottom of a page lands the next page still scrolled down.
+  useEffect(() => { window.scrollTo(0, 0) }, [location.pathname])
   const isCustomPage = location.pathname === '/custom'
   const isMobile = useIsMobile()
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
@@ -1887,57 +1890,53 @@ export default function AppLayout() {
           </div>
         )}
 
-        {/* Desktop-only summary strip: Updated date + members/machines/projects/repos counts */}
-        {!isMobile && (
-          <div style={{
-            maxWidth: 1400, margin: '0 auto', padding: '8px 16px 0', width: '100%', boxSizing: 'border-box',
-            fontSize: 10.5, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums',
-          }}>
-            <span>
-              {lang === 'pt' ? 'Atualizado em' : 'Updated'}{' '}
-              {singleHarness && singleHarness !== 'claude'
-                ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
-                : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))}
+        {/* Desktop-only summary strip: one tidy flex line — updated date + members/machines/projects/repos. */}
+        {!isMobile && (() => {
+          const sep = <span style={{ color: 'var(--border)' }}>·</span>
+          const dot = (c: string) => <span style={{ width: 6, height: 6, borderRadius: '50%', background: c, display: 'inline-block', flexShrink: 0 }} />
+          const stat = (icon: React.ReactNode, label: string) => (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
+              {icon}<span style={{ color: 'var(--text-secondary)' }}>{label}</span>
             </span>
-            {((singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate) && (
-              <span style={{ color: 'var(--text-secondary)', marginLeft: 8 }}>
-                {lang === 'pt' ? 'Desde' : 'Since'}{' '}
-                {format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')}
-                {' · '}
-                {derived.allTimeTotalSessions.toLocaleString()} {lang === 'pt' ? (derived.allTimeTotalSessions === 1 ? 'sessão' : 'sessões') : (derived.allTimeTotalSessions === 1 ? 'session' : 'sessions')}
-                {singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}
-              </span>
-            ))}
-            {isCentral && (
-              <span style={{ marginLeft: 16 }}>
-                {memberCount} {lang === 'pt' ? (memberCount === 1 ? 'membro' : 'membros') : (memberCount === 1 ? 'member' : 'members')}
-                {' '}
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />
-                  {onlineCount}
+          )
+          const updated = singleHarness && singleHarness !== 'claude'
+            ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+            : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+          const firstDate = singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate
+          const iconSt: React.CSSProperties = { color: 'var(--text-tertiary)', flexShrink: 0 }
+          return (
+            <div style={{
+              maxWidth: 1400, margin: '0 auto', padding: '6px 16px 0', width: '100%', boxSizing: 'border-box',
+              display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '3px 12px',
+              fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums',
+            }}>
+              <span style={{ whiteSpace: 'nowrap' }}>{lang === 'pt' ? 'Atualizado em' : 'Updated'} <span style={{ color: 'var(--text-secondary)' }}>{updated}</span></span>
+              {firstDate && (<>
+                {sep}
+                <span style={{ whiteSpace: 'nowrap' }}>
+                  {lang === 'pt' ? 'Desde' : 'Since'} {format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')}
+                  {' · '}{derived.allTimeTotalSessions.toLocaleString()} {lang === 'pt' ? (derived.allTimeTotalSessions === 1 ? 'sessão' : 'sessões') : (derived.allTimeTotalSessions === 1 ? 'session' : 'sessions')}
+                  {singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}
                 </span>
-                {' '}
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />
-                  {offlineCount}
+              </>)}
+              {isCentral && (<>
+                {sep}
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                  <Users size={11} style={iconSt} />
+                  <span style={{ color: 'var(--text-secondary)' }}>{memberCount} {lang === 'pt' ? (memberCount === 1 ? 'membro' : 'membros') : (memberCount === 1 ? 'member' : 'members')}</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>{dot('#22c55e')}{onlineCount}</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>{dot('#ef4444')}{offlineCount}</span>
                 </span>
-                {' · '}
-                {machineCount} {lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}
-                {' · '}
-                {projectCount} {lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}
-                {' · '}
-                {repoCount} {lang === 'pt' ? (repoCount === 1 ? 'repositório' : 'repositórios') : (repoCount === 1 ? 'repository' : 'repositories')}
-              </span>
-            )}
-            {!isCentral && (
-              <span style={{ marginLeft: 16 }}>
-                {projectCount} {lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}
-                {' · '}
-                {repoCount} {lang === 'pt' ? (repoCount === 1 ? 'repositório' : 'repositórios') : (repoCount === 1 ? 'repository' : 'repositories')}
-              </span>
-            )}
-          </div>
-        )}
+                {sep}
+                {stat(<Server size={11} style={iconSt} />, `${machineCount} ${lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}`)}
+              </>)}
+              {sep}
+              {stat(<FolderOpen size={11} style={iconSt} />, `${projectCount} ${lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}`)}
+              {sep}
+              {stat(<GitBranch size={11} style={iconSt} />, `${repoCount} ${lang === 'pt' ? (repoCount === 1 ? 'repositório' : 'repositórios') : (repoCount === 1 ? 'repository' : 'repositories')}`)}
+            </div>
+          )
+        })()}
 
         {/* Filters — full bar, fixed in the sticky header so it's reachable at any
             scroll position. Hidden on /custom. On mobile the bar is collapsible
@@ -2102,6 +2101,9 @@ export default function AppLayout() {
         width: '100%',
         boxSizing: 'border-box',
         flex: 1,
+        // Fill at least the viewport so the footer always sits below the fold (a scroll away),
+        // even on short pages — it never floats up into a half-empty screen.
+        minHeight: '100vh',
         padding: isMobile ? '16px 16px 80px' : '24px 32px',
         display: 'flex',
         flexDirection: 'column',
@@ -2289,7 +2291,6 @@ export default function AppLayout() {
 
       {/* Footer */}
       <footer style={{
-        marginTop: 64,
         borderTop: '1px solid var(--border)',
         background: 'var(--bg-surface)',
       }}>

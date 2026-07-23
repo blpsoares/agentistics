@@ -21,7 +21,7 @@ export function Drawer({ open, title, onClose, children }: {
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          width: isMobile ? '100%' : 400,
+          width: isMobile ? '100%' : 'min(560px, 92vw)',
           height: '100%',
           background: 'var(--bg-card)',
           borderLeft: isMobile ? 'none' : '1px solid var(--border)',
