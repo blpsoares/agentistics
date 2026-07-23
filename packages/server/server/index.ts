@@ -1347,15 +1347,18 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           user: tokenResult.user,
           org: TEAM_ORG,
         }
-        if (tokenResult.accountId) {
-          body.machineName = tokenResult.label
+        // machineName (token label) + teamId are available for EVERY machine token, not just
+        // account-bound ones — so a machine always shows its own name + owner user, even legacy
+        // (no-account) tokens. email requires the linked account.
+        if (tokenResult.label) body.machineName = tokenResult.label
+        if (tokenResult.teamId) {
           body.teamId = tokenResult.teamId
+          const t = await getTeam(tokenResult.teamId)
+          if (t) body.team = t.name
+        }
+        if (tokenResult.accountId) {
           const account = await getAccount(tokenResult.accountId)
           if (account?.email) body.email = account.email
-          if (tokenResult.teamId) {
-            const t = await getTeam(tokenResult.teamId)
-            if (t) body.team = t.name
-          }
         }
         return new Response(JSON.stringify(body), {
           status: 200,

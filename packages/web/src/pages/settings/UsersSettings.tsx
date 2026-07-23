@@ -907,36 +907,6 @@ export default function UsersSettings() {
           </div>
         </div>
 
-        {/* SECURITY (PASSWORD RESET) SECTION */}
-        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 18, marginTop: 6 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 14 }}>
-            {pt ? 'Segurança' : 'Security'}
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {tempPassword ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 14px', background: 'var(--bg-elevated)', border: '1px solid var(--anthropic-orange)', borderRadius: 7 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{pt ? 'Senha temporária (mostrada uma vez)' : 'Temporary password (shown once)'}</span>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 10px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>{tempPassword}</code>
-                  <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('temp', tempPassword) }} aria-label="Copy temp password">
-                    {copied === 'temp' ? <Check size={13} /> : <Copy size={13} />}
-                  </button>
-                </div>
-                {copyFailed === 'temp' && (
-                  <span style={{ fontSize: 10.5, color: '#ef4444', lineHeight: 1.4 }}>
-                    {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
-                  </span>
-                )}
-                <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{pt ? 'O usuário deverá trocá-la no próximo login.' : 'The user must change it on next login.'}</span>
-              </div>
-            ) : (
-              <button type="button" style={ghostBtn} onClick={() => void resetPassword()}>
-                <KeyRound size={13} /> {pt ? 'Resetar senha (gera temporária)' : 'Reset password (generates temp)'}
-              </button>
-            )}
-          </div>
-        </div>
-
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
           <button style={ghostBtn} onClick={() => setEditOpen(false)}>{pt ? 'Fechar' : 'Close'}</button>
           <button style={primaryBtn} onClick={() => void saveEdit()}><Check size={14} /> {pt ? 'Salvar' : 'Save'}</button>
