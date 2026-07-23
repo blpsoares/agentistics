@@ -289,6 +289,14 @@ export async function listMachines(): Promise<MachineInfo[]> {
   }))
 }
 
+/** Set of every live token id (hash). Central reads filter team data by this so a revoked
+ *  member's orphaned sessions/stats/workflows never keep showing after the token is gone. */
+export async function getLiveTokenIds(): Promise<Set<string>> {
+  const col = await getTokensCollection()
+  const docs = await col.find({}, { projection: { _id: 1 } }).toArray()
+  return new Set(docs.map(d => d._id))
+}
+
 /** Reassign a machine token to a different team. Returns true if a doc was matched. */
 export async function setMachineTeam(id: string, teamId: string): Promise<boolean> {
   const col = await getTokensCollection()

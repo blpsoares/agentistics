@@ -67,13 +67,17 @@ export async function ingestWorkflows(org: string, memberId: string, user: strin
  * tokens table takes precedence over the cached doc value, so a member rename is reflected
  * immediately without re-ingest.
  */
-export async function loadAllTeamWorkflows(nameMap: Record<string, string> = {}): Promise<WorkflowRun[]> {
+export async function loadAllTeamWorkflows(nameMap: Record<string, string> = {}, liveIds?: Set<string> | null): Promise<WorkflowRun[]> {
   const col = await getWorkflowsCollection()
   const docs = await col.find({}).toArray()
-  return docs.map(doc => {
-    const resolved = { ...doc, user: nameMap[doc.memberId] ?? doc.user }
-    return fromTeamWorkflowDoc(resolved)
-  })
+  return docs
+    // Drop runs from revoked members (when a live-token set is supplied) so a removed machine's
+    // workflows don't linger. Omitting liveIds keeps the old passthrough behavior.
+    .filter(doc => liveIds === undefined || liveIds === null || liveIds.has(doc.memberId))
+    .map(doc => {
+      const resolved = { ...doc, user: nameMap[doc.memberId] ?? doc.user }
+      return fromTeamWorkflowDoc(resolved)
+    })
 }
 
 /** Remove a member's stored workflow runs (used by revoke cascade / leave). Best-effort. */

@@ -859,13 +859,16 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     let userStatsCaches: Record<string, StatsCache> | undefined
     if (TEAM_CENTRAL) {
       const { loadAllMemberStats } = await import('./team-stats')
-      const { getMemberNameMap } = await import('./team-tokens')
-      const [memberStats, nameMap] = await Promise.all([
+      const { getMemberNameMap, getLiveTokenIds } = await import('./team-tokens')
+      const [memberStats, nameMap, liveIds] = await Promise.all([
         loadAllMemberStats().catch(() => [] as { memberId: string; user: string; statsCache: StatsCache }[]),
         getMemberNameMap().catch(() => ({} as Record<string, string>)),
+        getLiveTokenIds().catch(() => null),
       ])
       userStatsCaches = {}
       for (const m of memberStats) {
+        // Skip revoked members — their orphaned statsCache must not keep inflating team KPIs.
+        if (liveIds && !liveIds.has(m.memberId)) continue
         userStatsCaches[nameMap[m.memberId] ?? m.user] = m.statsCache
       }
       if (CENTRAL_USER) userStatsCaches[CENTRAL_USER] = statsCache
