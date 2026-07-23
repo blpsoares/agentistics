@@ -139,14 +139,23 @@ export async function handleAccounts(req: Request): Promise<Response> {
     const name = typeof b.name === 'string' ? b.name.trim() : ''
     const email = typeof b.email === 'string' ? b.email.trim() : ''
     const password = typeof b.password === 'string' ? b.password : ''
+    const role = b.role === 'owner' ? 'owner' : 'member'
     const memberships = parseMemberships(b.memberships)
     if (!name) return json({ error: 'name is required' }, 400)
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: 'valid email is required' }, 400)
     if (password.length < 8) return json({ error: 'password must be at least 8 characters' }, 400)
-    if (!canCreateAccount(principal, memberships)) return json({ error: 'forbidden' }, 403)
+    // Owner accounts (full access) may only be created by an owner; memberships are ignored.
+    // Member accounts follow the scoped canCreateAccount rule (owner→any; manager→user-role in managed teams).
+    if (role === 'owner') {
+      if (principal.role !== 'owner') return json({ error: 'forbidden' }, 403)
+    } else if (!canCreateAccount(principal, memberships)) {
+      return json({ error: 'forbidden' }, 403)
+    }
     if (await findAccountByEmail(email)) return json({ error: 'email already exists' }, 409)
     const passwordHash = await hashPassword(password)
-    const account = await createAccount({ name, email, passwordHash, role: 'member', memberships, createdBy: principal.accountId })
+    const account = role === 'owner'
+      ? await createAccount({ name, email, passwordHash, role: 'owner', memberships: [], createdBy: principal.accountId })
+      : await createAccount({ name, email, passwordHash, role: 'member', memberships, createdBy: principal.accountId })
     return json({ account: publicAccount(account) }, 201)
   }
 

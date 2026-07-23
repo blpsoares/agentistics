@@ -946,28 +946,6 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
             </CollapsedTip>
           )
         })}
-
-        {/* Settings — single gear entry that opens the hub page (/settings). */}
-        <CollapsedTip label={pt ? 'Configurações' : 'Settings'} show={collapsed}>
-          <NavLink
-            to="/settings"
-            aria-label={collapsed ? (pt ? 'Configurações' : 'Settings') : undefined}
-            style={({ isActive }) => ({
-              display: 'flex', alignItems: 'center', gap: 11, minWidth: 0,
-              padding: collapsed ? '10px 0' : '10px 12px', justifyContent: collapsed ? 'center' : 'flex-start',
-              borderRadius: 9, textDecoration: 'none',
-              fontSize: 13.5, fontWeight: isActive ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap',
-              color: isActive ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-              background: isActive ? 'var(--anthropic-orange-dim)' : 'transparent',
-              transition: 'background 0.15s, color 0.15s',
-            })}
-            onMouseEnter={e => { const t = e.currentTarget; if (!t.style.background.includes('orange')) { t.style.color = 'var(--text-primary)'; t.style.background = 'var(--bg-elevated)' } }}
-            onMouseLeave={e => { const t = e.currentTarget; if (!t.style.color.includes('orange')) { t.style.color = 'var(--text-secondary)'; t.style.background = 'transparent' } }}
-          >
-            <span style={{ flexShrink: 0, display: 'flex' }}><Settings size={17} /></span>
-            {!collapsed && (pt ? 'Configurações' : 'Settings')}
-          </NavLink>
-        </CollapsedTip>
       </nav>
 
       {/* Footer — Row A account · thin divider · Row B config actions */}

@@ -66,8 +66,9 @@ function RoleBadge({ role }: { role: string }) {
 
 // ── page ──────────────────────────────────────────────────────────────────
 export default function UsersSettings() {
-  const { lang } = useOutletContext<AppContext>()
+  const { lang, me } = useOutletContext<AppContext>()
   const pt = lang === 'pt'
+  const viewerIsOwner = me?.role === 'owner'
 
   const [teams, setTeams] = useState<Team[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
@@ -87,21 +88,36 @@ export default function UsersSettings() {
   // ── account drawer ──
   const [accountOpen, setAccountOpen] = useState(false)
   const [an, setAn] = useState(''); const [ae, setAe] = useState(''); const [ap, setAp] = useState('')
-  const [atTeam, setAtTeam] = useState(''); const [atRole, setAtRole] = useState<'manager' | 'user'>('user')
+  const [accountType, setAccountType] = useState<'owner' | 'member'>('member')
+  const [rows, setRows] = useState<Membership[]>([{ teamId: '', role: 'user' }])
   const [accountErr, setAccountErr] = useState<string | null>(null)
 
   function openAccountDrawer() {
-    setAn(''); setAe(''); setAp(''); setAtTeam(''); setAtRole('user'); setAccountErr(null)
+    setAn(''); setAe(''); setAp(''); setAccountType('member'); setRows([{ teamId: '', role: 'user' }]); setAccountErr(null)
     setAccountOpen(true)
   }
+  function updateRow(i: number, patch: Partial<Membership>) {
+    setRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r))
+  }
+  function addRow() { setRows(rs => [...rs, { teamId: '', role: 'user' }]) }
+  function removeRow(i: number) { setRows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs) }
+
   async function createAccount() {
-    if (!an.trim() || !ae.trim() || ap.length < 8 || !atTeam) {
-      setAccountErr(pt ? 'Preencha nome, email, senha (8+) e time.' : 'Fill name, email, password (8+) and team.')
+    if (!an.trim() || !ae.trim() || ap.length < 8) {
+      setAccountErr(pt ? 'Preencha nome, email e senha (8+).' : 'Fill name, email and password (8+).')
       return
+    }
+    let memberships: Membership[] = []
+    if (accountType === 'member') {
+      memberships = rows.filter(r => r.teamId)
+      if (memberships.length === 0) {
+        setAccountErr(pt ? 'Selecione ao menos um time.' : 'Select at least one team.')
+        return
+      }
     }
     const res = await fetch('/api/iam/accounts', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: an.trim(), email: ae.trim(), password: ap, memberships: [{ teamId: atTeam, role: atRole }] }),
+      body: JSON.stringify({ name: an.trim(), email: ae.trim(), password: ap, role: accountType, memberships }),
     })
     if (!res.ok) { const d = await res.json() as { error?: string }; setAccountErr(d.error || `HTTP ${res.status}`); return }
     setAccountOpen(false); void load()
@@ -198,6 +214,32 @@ export default function UsersSettings() {
       {/* Account drawer */}
       <Drawer open={accountOpen} onClose={() => setAccountOpen(false)} title={pt ? 'Nova conta' : 'New account'}>
         {drawerErr(accountErr)}
+
+        {/* Account type — Owner is offered only to an owner viewer. */}
+        {viewerIsOwner && (
+          <Field label={pt ? 'Tipo de conta' : 'Account type'}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              {([
+                ['member', pt ? 'Membro com escopo' : 'Scoped member', pt ? 'Acesso restrito a times' : 'Access scoped to teams'],
+                ['owner', pt ? 'Owner (acesso total)' : 'Owner (full access)', pt ? 'Controle total do painel' : 'Full dashboard control'],
+              ] as const).map(([val, title, desc]) => {
+                const selected = accountType === val
+                return (
+                  <button key={val} type="button" onClick={() => setAccountType(val)} style={{
+                    display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start', textAlign: 'left',
+                    padding: '10px 12px', borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit',
+                    border: `1px solid ${selected ? 'var(--anthropic-orange)' : 'var(--border)'}`,
+                    background: selected ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+                  }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: selected ? 'var(--anthropic-orange)' : 'var(--text-primary)' }}>{title}</span>
+                    <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)', lineHeight: 1.4 }}>{desc}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </Field>
+        )}
+
         <Field label={pt ? 'Nome' : 'Name'}>
           <input style={input} value={an} onChange={e => setAn(e.target.value)} placeholder={pt ? 'Nome completo' : 'Full name'} />
         </Field>
@@ -207,18 +249,44 @@ export default function UsersSettings() {
         <Field label={pt ? 'Senha (8+)' : 'Password (8+)'}>
           <input style={input} type="password" value={ap} onChange={e => setAp(e.target.value)} placeholder="••••••••" />
         </Field>
-        <Field label={pt ? 'Time' : 'Team'}>
-          <select style={input} value={atTeam} onChange={e => setAtTeam(e.target.value)}>
-            <option value="">{pt ? 'Selecione…' : 'Select…'}</option>
-            {teams.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
-          </select>
-        </Field>
-        <Field label={pt ? 'Papel' : 'Role'}>
-          <select style={input} value={atRole} onChange={e => setAtRole(e.target.value as 'manager' | 'user')}>
-            <option value="user">user</option>
-            <option value="manager">manager</option>
-          </select>
-        </Field>
+
+        {accountType === 'owner' ? (
+          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '9px 11px' }}>
+            {pt
+              ? 'Owners têm acesso total a todos os times e máquinas — sem escopo de times.'
+              : 'Owners have full access to all teams and machines — no team scope.'}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{pt ? 'Escopo (times)' : 'Scope (teams)'}</span>
+              <button type="button" style={ghostBtn} onClick={addRow}><Plus size={13} /> {pt ? 'Adicionar time' : 'Add team'}</button>
+            </div>
+            <p style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5, margin: 0 }}>
+              {pt
+                ? 'Um manager gerencia os times selecionados (e suas máquinas). Um user tem leitura restrita.'
+                : "A manager manages the selected teams (and their machines). A user has scoped read access."}
+            </p>
+            {rows.map((r, i) => (
+              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <select style={{ ...input, flex: 2 }} value={r.teamId} onChange={e => updateRow(i, { teamId: e.target.value })}>
+                  <option value="">{pt ? 'Selecione o time…' : 'Select team…'}</option>
+                  {teams.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
+                </select>
+                <select style={{ ...input, flex: 1 }} value={r.role} onChange={e => updateRow(i, { role: e.target.value as 'manager' | 'user' })}>
+                  <option value="user">user</option>
+                  <option value="manager">manager</option>
+                </select>
+                <button type="button" onClick={() => removeRow(i)} disabled={rows.length === 1}
+                  style={{ ...trashBtn, opacity: rows.length === 1 ? 0.35 : 1, cursor: rows.length === 1 ? 'not-allowed' : 'pointer' }}
+                  aria-label={pt ? 'Remover time' : 'Remove team'}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
           <button style={ghostBtn} onClick={() => setAccountOpen(false)}>{pt ? 'Cancelar' : 'Cancel'}</button>
           <button style={primaryBtn} onClick={() => void createAccount()}><Plus size={14} /> {pt ? 'Criar conta' : 'Create account'}</button>
