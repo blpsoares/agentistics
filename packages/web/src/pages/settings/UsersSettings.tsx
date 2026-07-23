@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Plus, Trash2, Copy, Check, Dice5 } from 'lucide-react'
+import { Plus, Trash2, Copy, Check, Dice5, KeyRound, Pencil } from 'lucide-react'
 import { generatePassword } from '../../lib/password'
 import type { AppContext } from '../../lib/app-context'
 import { SectionHeader } from './primitives'
@@ -100,6 +100,15 @@ export default function UsersSettings() {
   const [created, setCreated] = useState<null | { name: string; email: string; password: string; mustChange: boolean; machineName?: string; machineToken?: string }>(null)
   const [copied, setCopied] = useState<string | null>(null)
 
+  // ── edit drawer ──
+  const [editOpen, setEditOpen] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
+  const [editIsOwner, setEditIsOwner] = useState(false)
+  const [en, setEn] = useState('')
+  const [eRows, setERows] = useState<Membership[]>([{ teamId: '', role: 'user' }])
+  const [editErr, setEditErr] = useState<string | null>(null)
+  const [tempPassword, setTempPassword] = useState<string | null>(null)
+
   function openAccountDrawer() {
     setAn(''); setAe(''); setAp(''); setAccountType('member'); setRows([{ teamId: '', role: 'user' }]); setAccountErr(null)
     setProvisionMachine(false); setMachineName(''); setMustChange(true); setPwVisible(false); setCreated(null); setCopied(null)
@@ -151,6 +160,40 @@ export default function UsersSettings() {
   }
   async function deleteAccount(id: string) {
     await fetch('/api/iam/accounts', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
+    void load()
+  }
+
+  function openEditDrawer(a: Account) {
+    setEditId(a.id); setEditIsOwner(a.role === 'owner'); setEn(a.name)
+    setERows(a.memberships.length ? a.memberships.map(m => ({ ...m })) : [{ teamId: '', role: 'user' }])
+    setEditErr(null); setTempPassword(null); setEditOpen(true)
+  }
+  function updateERow(i: number, patch: Partial<Membership>) { setERows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r)) }
+  function addERow() { setERows(rs => [...rs, { teamId: '', role: 'user' }]) }
+  function removeERow(i: number) { setERows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs) }
+
+  async function saveEdit() {
+    if (!editId) return
+    if (!en.trim()) { setEditErr(pt ? 'O nome não pode ficar vazio.' : 'Name cannot be empty.'); return }
+    const body: Record<string, unknown> = { id: editId, name: en.trim() }
+    if (!editIsOwner) body.memberships = eRows.filter(r => r.teamId)
+    const res = await fetch('/api/iam/accounts', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) { const d = await res.json() as { error?: string }; setEditErr(d.error || `HTTP ${res.status}`); return }
+    setEditOpen(false); void load()
+  }
+
+  async function resetPassword() {
+    if (!editId) return
+    const res = await fetch('/api/iam/accounts', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: editId, resetPassword: true }),
+    })
+    if (!res.ok) { const d = await res.json() as { error?: string }; setEditErr(d.error || `HTTP ${res.status}`); return }
+    const d = await res.json() as { tempPassword?: string }
+    setTempPassword(d.tempPassword ?? null)
     void load()
   }
 
@@ -227,7 +270,8 @@ export default function UsersSettings() {
                       ))}
                   </span>
                 </td>
-                <td style={{ ...td, textAlign: 'right' }}>
+                <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <button onClick={() => openEditDrawer(a)} style={{ ...trashBtn, color: 'var(--text-tertiary)' }} aria-label="Edit account"><Pencil size={14} /></button>
                   {a.role !== 'owner' && (
                     <button onClick={() => void deleteAccount(a.id)} style={trashBtn} aria-label="Delete account"><Trash2 size={14} /></button>
                   )}
@@ -382,6 +426,69 @@ export default function UsersSettings() {
             <button style={primaryBtn} onClick={() => void createAccount()}><Plus size={14} /> {pt ? 'Criar conta' : 'Create account'}</button>
           </div>
         )}
+      </Drawer>
+
+      {/* Edit account drawer */}
+      <Drawer open={editOpen} onClose={() => setEditOpen(false)} title={pt ? 'Editar conta' : 'Edit account'}>
+        {drawerErr(editErr)}
+        <Field label={pt ? 'Nome' : 'Name'}>
+          <input style={input} value={en} onChange={e => setEn(e.target.value)} placeholder={pt ? 'Nome completo' : 'Full name'} />
+        </Field>
+
+        {editIsOwner ? (
+          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '9px 11px' }}>
+            {pt ? 'Owners não têm escopo de times.' : 'Owners have no team scope.'}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{pt ? 'Escopo (times)' : 'Scope (teams)'}</span>
+              <button type="button" style={ghostBtn} onClick={addERow}><Plus size={13} /> {pt ? 'Adicionar time' : 'Add team'}</button>
+            </div>
+            {eRows.map((r, i) => (
+              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <select style={{ ...input, flex: 2 }} value={r.teamId} onChange={e => updateERow(i, { teamId: e.target.value })}>
+                  <option value="">{pt ? 'Selecione o time…' : 'Select team…'}</option>
+                  {teams.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
+                </select>
+                <select style={{ ...input, flex: 1 }} value={r.role} onChange={e => updateERow(i, { role: e.target.value as 'manager' | 'user' })}>
+                  <option value="user">user</option>
+                  <option value="manager">manager</option>
+                </select>
+                <button type="button" onClick={() => removeERow(i)} disabled={eRows.length === 1}
+                  style={{ ...trashBtn, opacity: eRows.length === 1 ? 0.35 : 1, cursor: eRows.length === 1 ? 'not-allowed' : 'pointer' }}
+                  aria-label={pt ? 'Remover time' : 'Remove team'}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Reset password */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 12 }}>
+          {tempPassword ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{pt ? 'Senha temporária (mostrada uma vez)' : 'Temporary password (shown once)'}</span>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>{tempPassword}</code>
+                <button type="button" style={ghostBtn} onClick={() => void copy('temp', tempPassword)} aria-label="Copy temp password">
+                  {copied === 'temp' ? <Check size={13} /> : <Copy size={13} />}
+                </button>
+              </div>
+              <span style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{pt ? 'O usuário deverá trocá-la no próximo login.' : 'The user must change it on next login.'}</span>
+            </div>
+          ) : (
+            <button type="button" style={ghostBtn} onClick={() => void resetPassword()}>
+              <KeyRound size={13} /> {pt ? 'Resetar senha (gera temporária)' : 'Reset password (generates temp)'}
+            </button>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+          <button style={ghostBtn} onClick={() => setEditOpen(false)}>{pt ? 'Fechar' : 'Close'}</button>
+          <button style={primaryBtn} onClick={() => void saveEdit()}><Check size={14} /> {pt ? 'Salvar' : 'Save'}</button>
+        </div>
       </Drawer>
     </div>
   )
