@@ -96,6 +96,22 @@ export function filterByHarnesses<T extends { harness?: HarnessId }>(sessions: T
   return sessions.filter(s => set.has(s.harness ?? 'claude'))
 }
 
+/** Multi-select team predicate (central). Empty/undefined = all pass. Matches `session.teamId`;
+ *  sessions with no teamId are excluded when a selection is active. Pure. */
+export function filterByTeams<T extends { teamId?: string }>(sessions: T[], teams: string[]): T[] {
+  if (!teams || teams.length === 0) return sessions
+  const set = new Set(teams)
+  return sessions.filter(s => !!s.teamId && set.has(s.teamId))
+}
+
+/** Multi-select machine predicate (central). Empty/undefined = all pass. Matches `session.memberId`
+ *  (the machine's token hash); sessions with no memberId are excluded when active. Pure. */
+export function filterByMachines<T extends { memberId?: string }>(sessions: T[], machines: string[]): T[] {
+  if (!machines || machines.length === 0) return sessions
+  const set = new Set(machines)
+  return sessions.filter(s => !!s.memberId && set.has(s.memberId))
+}
+
 
 // ── Machine connect token (optionally carries the central endpoint) ──────────────
 // The bearer sent to the central is ALWAYS the raw secret. When the central has a public URL

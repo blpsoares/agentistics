@@ -111,6 +111,9 @@ export interface SessionMeta {
   git_remote?: string
   /** Team the owning member belongs to (central read-time tag; used for per-team scoping). */
   teamId?: string
+  /** Stable machine identity (the member token's sha256 hash) — central read-time tag, used to
+   *  filter by an individual machine. Matches `machine.id` from /api/iam/machines. */
+  memberId?: string
   /** True when this session was produced by a CI runner (Claude Code GitHub Actions), stamped
    *  authoritatively by the central on ingest via a repo-bound token. Powers the Actions view. */
   ci?: boolean
@@ -356,7 +359,9 @@ export interface Filters {
   customEnd: string
   projects: string[]   // empty = all projects
   repos?: string[]     // empty/undefined = all repos; [''] targets the "no linked repo" bucket
-  users?: string[]     // empty/undefined = all users
+  users?: string[]     // empty/undefined = all users (member = user; scoped to users with machines)
+  teams?: string[]     // central: empty/undefined = all teams; matches session.teamId
+  machines?: string[]  // central: empty/undefined = all machines; matches session.memberId (token hash)
   models: string[]     // empty = all models
   harness?: HarnessId
   harnesses?: HarnessId[]  // multi-select harness filter; empty/undefined = all harnesses

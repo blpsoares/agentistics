@@ -158,3 +158,18 @@ test('clampPushInterval rounds fractional seconds', () => {
   expect(clampPushInterval(29.4)).toBe(29)
   expect(clampPushInterval(29.6)).toBe(30)
 })
+
+import { filterByTeams, filterByMachines } from './team'
+
+test('filterByTeams: empty = all; matches teamId; drops missing', () => {
+  const s = [{ teamId: 'A' }, { teamId: 'B' }, {}]
+  expect(filterByTeams(s, [])).toHaveLength(3)
+  expect(filterByTeams(s, ['A'])).toEqual([{ teamId: 'A' }])
+  expect(filterByTeams(s, ['A', 'B']).length).toBe(2)
+})
+
+test('filterByMachines: empty = all; matches memberId; drops missing', () => {
+  const s = [{ memberId: 'm1' }, { memberId: 'm2' }, {}]
+  expect(filterByMachines(s, [])).toHaveLength(3)
+  expect(filterByMachines(s, ['m2'])).toEqual([{ memberId: 'm2' }])
+})

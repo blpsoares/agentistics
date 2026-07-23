@@ -60,6 +60,7 @@ export async function loadTeamSessionsFromMongo(): Promise<SessionMeta[]> {
     const resolved = { ...doc, user: nameMap[doc.memberId] ?? doc.user }
     const meta = fromTeamDoc(resolved)
     meta.teamId = teamMap[doc.memberId] ?? DEFAULT_TEAM_ID
+    meta.memberId = doc.memberId // re-attach the machine id (fromTeamDoc strips it) for machine filtering
     return meta
   })
 }
