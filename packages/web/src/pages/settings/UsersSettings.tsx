@@ -273,7 +273,7 @@ export default function UsersSettings() {
   }
 
   async function revokeMachine(id: string) {
-    const res = await fetch('/api/team/tokens', {
+    const res = await fetch('/api/iam/machines', {
       method: 'DELETE', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id }),
     })

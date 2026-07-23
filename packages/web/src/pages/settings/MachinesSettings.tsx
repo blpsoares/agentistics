@@ -230,7 +230,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
 
   async function revokeMachine(id: string) {
     try {
-      const res = await fetch('/api/team/tokens', {
+      const res = await fetch('/api/iam/machines', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),
@@ -245,10 +245,10 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
 
   async function rotateMachine(id: string) {
     try {
-      const res = await fetch('/api/team/tokens/rotate', {
+      const res = await fetch('/api/iam/machines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
+        body: JSON.stringify({ rotateId: id }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const d = await res.json() as { token: string }

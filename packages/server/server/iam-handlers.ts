@@ -9,7 +9,7 @@ import { hasAnyOwner, countOwners, createAccount, findAccountByEmail, updateAcco
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
 import { seedDefaultTeam, listTeams, createTeam, getTeam, deleteTeam, DEFAULT_TEAM_ID } from './teams'
-import { backfillTokenTeamIds, listMachines, mintMachineToken } from './team-tokens'
+import { backfillTokenTeamIds, listMachines, mintMachineToken, revokeToken, rotateToken } from './team-tokens'
 import { backfillRepoTeamIds } from './team-repos'
 import { makePrincipalSessionCookieHeader, getPrincipal } from './auth'
 import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam } from './iam-view'
@@ -356,23 +356,25 @@ export async function handleMachines(req: Request): Promise<Response> {
     const all = await listMachines()
     const visible = principal.role === 'owner' ? all : all.filter(m => canManageMachineTeam(principal, m.teamId))
 
-    // Enrich with owner account info
+    // Enrich with owner account info — ONLY for accounts the caller may actually see, so a manager
+    // never learns an owner account's name/email via a default-team machine.
     const accounts = await listAccounts()
-    const accountMap = new Map<string, { name: string; email: string }>()
-    for (const a of accounts) accountMap.set(a._id, { name: a.name, email: a.email })
+    const accountMap = new Map<string, AccountDoc>()
+    for (const a of accounts) accountMap.set(a._id, a)
 
-    // Enrich with presence
+    // Enrich with presence (keyed by user, mirroring the members panel).
     const presence = await import('./team-presence').then(m => m.computePresence()).catch(() => ({} as Record<string, { online: boolean; latencyMs: number | null }>))
 
-    const enriched = visible.map(m => ({
-      ...m,
-      ...(m.accountId && accountMap.has(m.accountId) ? {
-        accountName: accountMap.get(m.accountId)!.name,
-        accountEmail: accountMap.get(m.accountId)!.email,
-      } : {}),
-      online: presence[m.user]?.online ?? false,
-      latencyMs: presence[m.user]?.latencyMs ?? null,
-    }))
+    const enriched = visible.map(m => {
+      const acc = m.accountId ? accountMap.get(m.accountId) : undefined
+      const showAcc = acc && accountVisibleTo(principal, acc)
+      return {
+        ...m,
+        ...(showAcc ? { accountName: acc.name, accountEmail: acc.email } : {}),
+        online: presence[m.user]?.online ?? false,
+        latencyMs: presence[m.user]?.latencyMs ?? null,
+      }
+    })
 
     return json({ machines: enriched })
   }
@@ -380,6 +382,16 @@ export async function handleMachines(req: Request): Promise<Response> {
     let body: unknown
     try { body = await req.json() } catch { return json({ error: 'invalid JSON' }, 400) }
     const b = body as Record<string, unknown>
+    // Rotate a machine's token (scoped): { rotateId } → new plaintext token once.
+    const rotateId = typeof b.rotateId === 'string' ? b.rotateId : ''
+    if (rotateId) {
+      const machine = (await listMachines()).find(m => m.id === rotateId)
+      if (!machine) return json({ error: 'machine not found' }, 404)
+      if (!canManageMachineTeam(principal, machine.teamId)) return json({ error: 'forbidden' }, 403)
+      const token = await rotateToken(rotateId)
+      if (token === null) return json({ error: 'machine not found' }, 404)
+      return json({ token }, 200)
+    }
     const accountId = typeof b.accountId === 'string' ? b.accountId : ''
     const name = typeof b.name === 'string' ? b.name.trim() : ''
     if (!accountId || !name) return json({ error: 'accountId and name are required' }, 400)
@@ -397,6 +409,28 @@ export async function handleMachines(req: Request): Promise<Response> {
     if (!canManageMachineTeam(principal, teamId)) return json({ error: 'forbidden' }, 403)
     const { token } = await mintMachineToken({ accountId, user: account.name, machineName: name, teamId })
     return json({ token }, 201) // plaintext once
+  }
+  if (req.method === 'DELETE') {
+    // Revoke a machine (scoped): { id }. Cascades to the member's sessions/stats/workflows.
+    let body: unknown
+    try { body = await req.json() } catch { return json({ error: 'invalid JSON' }, 400) }
+    const id = typeof (body as Record<string, unknown>)?.id === 'string' ? (body as Record<string, unknown>).id as string : ''
+    if (!id) return json({ error: 'id is required' }, 400)
+    const machine = (await listMachines()).find(m => m.id === id)
+    if (!machine) return json({ error: 'machine not found' }, 404)
+    if (!canManageMachineTeam(principal, machine.teamId)) return json({ error: 'forbidden' }, 403)
+    const deleted = await revokeToken(id)
+    // Cascade cleanup (best-effort) — mirrors handleRevokeToken so the member disappears too.
+    try {
+      const { getTeamCollection } = await import('./mongo')
+      const col = await getTeamCollection()
+      await col.deleteMany({ memberId: id })
+      const { deleteMemberStats } = await import('./team-stats')
+      await deleteMemberStats(id)
+      const { deleteMemberWorkflows } = await import('./team-workflows')
+      await deleteMemberWorkflows(id)
+    } catch { /* best-effort; token already revoked */ }
+    return json({ ok: deleted })
   }
   return json({ error: 'method not allowed' }, 405)
 }

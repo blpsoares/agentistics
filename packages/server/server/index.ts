@@ -987,10 +987,14 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       return new Response(res.body, { status: res.status, headers })
     }
 
-    if (url.pathname === '/api/iam/machines' && (req.method === 'GET' || req.method === 'POST')) {
+    if (url.pathname === '/api/iam/machines' && (req.method === 'GET' || req.method === 'POST' || req.method === 'DELETE')) {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleMachines } = await import('./iam-handlers')
       const res = await handleMachines(req)
+      // Revoke/rotate change the member set — refresh dashboards.
+      if ((req.method === 'DELETE' || req.method === 'POST') && res.status >= 200 && res.status < 300) {
+        const { triggerSseNotification } = await import('./sse'); triggerSseNotification()
+      }
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })
