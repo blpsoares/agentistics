@@ -42,6 +42,7 @@ import { getArchiveMode } from './preferences'
 import { registerAgent, unregisterAgent, onAgentMessage, onAgentPong, setPresenceChangeHook } from './team-agent'
 import { startAgentClient, reconcileNow } from './team-agent-client'
 import { validateIngestToken } from './team-tokens'
+import { getAccount } from './accounts'
 
 // ---------------------------------------------------------------------------
 // Reads the first `cwd` field found in a JSONL session file.
@@ -1333,7 +1334,21 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
       const tokenResult = await validateIngestToken(bearer)
       if (tokenResult.ok) {
-        return new Response(JSON.stringify({ ok: true, user: tokenResult.user, org: TEAM_ORG }), {
+        // For machine tokens (bound to an account), also surface the machine's
+        // bound identity: machineName (token label), teamId, and the owner's email.
+        // Only non-secret account fields are exposed — never passwordHash.
+        const body: { ok: true; user: string; org: string; machineName?: string; teamId?: string; email?: string } = {
+          ok: true,
+          user: tokenResult.user,
+          org: TEAM_ORG,
+        }
+        if (tokenResult.accountId) {
+          body.machineName = tokenResult.label
+          body.teamId = tokenResult.teamId
+          const account = await getAccount(tokenResult.accountId)
+          if (account?.email) body.email = account.email
+        }
+        return new Response(JSON.stringify(body), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })

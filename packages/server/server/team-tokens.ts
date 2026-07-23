@@ -214,7 +214,7 @@ export async function hasAnyTokens(): Promise<boolean> {
  */
 export async function validateIngestToken(
   bearer: string | null,
-): Promise<{ ok: true; user: string; memberId: string; repo?: string; ci?: boolean } | { ok: false }> {
+): Promise<{ ok: true; user: string; memberId: string; repo?: string; ci?: boolean; label?: string; teamId?: string; accountId?: string } | { ok: false }> {
   if (!bearer) return { ok: false }
   const id = hashToken(bearer)
   const col = await getTokensCollection()
@@ -222,7 +222,7 @@ export async function validateIngestToken(
   if (!doc) return { ok: false }
   // Update last-seen — fire and forget (non-critical, must not block the caller).
   void col.updateOne({ _id: id }, { $set: { lastSeenAt: new Date().toISOString() } }).catch(() => {})
-  return { ok: true, user: doc.user, memberId: id, repo: doc.repo, ci: doc.ci }
+  return { ok: true, user: doc.user, memberId: id, repo: doc.repo, ci: doc.ci, label: doc.label, teamId: doc.teamId, accountId: doc.accountId }
 }
 
 /**
