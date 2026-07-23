@@ -13,8 +13,10 @@ interface MachineInfo {
   user: string
   teamId?: string
   accountId?: string
+  accountIds?: string[]
   accountName?: string
   accountEmail?: string
+  owners?: { id: string; name: string; email: string }[]
   createdAt: string
   lastSeenAt: string | null
   online?: boolean
@@ -147,12 +149,13 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
 
-  // Rename state
-  const [renamingId, setRenamingId] = useState<string | null>(null)
-  const [renameValue, setRenameValue] = useState('')
-
-  // Owner edit state
-  const [editingOwnerId, setEditingOwnerId] = useState<string | null>(null)
+  // Edit machine drawer state
+  const [editMachineOpen, setEditMachineOpen] = useState(false)
+  const [editingMachine, setEditingMachine] = useState<MachineInfo | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editTeamId, setEditTeamId] = useState('')
+  const [editOwnerRows, setEditOwnerRows] = useState<string[]>([])
+  const [editErr, setEditErr] = useState<string | null>(null)
 
   // Central URL state
   const [publicUrl, setPublicUrl] = useState('')
@@ -335,58 +338,75 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     }
   }
 
-  async function renameMachine(id: string, name: string) {
+
+  function openEditMachine(m: MachineInfo) {
+    setEditingMachine(m)
+    setEditName(m.machineName)
+    setEditTeamId(m.teamId ?? '')
+    // Prefill owners from accountIds, or use accountId as fallback, or start with one empty row
+    const ids = m.accountIds ?? (m.accountId ? [m.accountId] : [])
+    setEditOwnerRows(ids.length > 0 ? ids : [''])
+    setEditErr(null)
+    setEditMachineOpen(true)
+  }
+
+  function addEditOwnerRow() {
+    setEditOwnerRows(rs => [...rs, ''])
+  }
+
+  function removeEditOwnerRow(i: number) {
+    setEditOwnerRows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs)
+  }
+
+  function updateEditOwnerRow(i: number, accountId: string) {
+    setEditOwnerRows(rs => rs.map((r, idx) => idx === i ? accountId : r))
+  }
+
+  async function saveEditMachine() {
+    if (!editingMachine) return
+    if (!editName.trim()) {
+      setEditErr(pt ? 'O nome não pode ficar vazio.' : 'Name cannot be empty.')
+      return
+    }
+
+    const nameChanged = editName.trim() !== editingMachine.machineName
+    const teamChanged = editTeamId !== (editingMachine.teamId ?? '')
+    const originalOwners = editingMachine.accountIds ?? (editingMachine.accountId ? [editingMachine.accountId] : [])
+    const newOwners = [...new Set(editOwnerRows.filter(id => id.trim()))]
+    const ownersChanged = JSON.stringify([...originalOwners].sort()) !== JSON.stringify([...newOwners].sort())
+
     try {
-      const res = await fetch('/api/iam/machines', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ renameId: id, name }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      setRenamingId(null)
+      if (nameChanged) {
+        const res = await fetch('/api/iam/machines', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ renameId: editingMachine.id, name: editName.trim() }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      }
+
+      if (teamChanged) {
+        const res = await fetch('/api/iam/machines', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reassignId: editingMachine.id, teamId: editTeamId || 'default' }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      }
+
+      if (ownersChanged) {
+        const res = await fetch('/api/iam/machines', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ownerId: editingMachine.id, accountIds: newOwners }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      }
+
+      setEditMachineOpen(false)
       void load()
     } catch (e) {
-      setErr(String(e))
-    }
-  }
-
-  async function assignOwner(machineId: string, accountId: string) {
-    try {
-      const res = await fetch('/api/iam/machines', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ownerId: machineId, accountId }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      void load()
-    } catch (e) {
-      setErr(String(e))
-    }
-  }
-
-  function startRename(id: string, currentName: string) {
-    setRenamingId(id)
-    setRenameValue(currentName)
-  }
-
-  function cancelRename() {
-    setRenamingId(null)
-    setRenameValue('')
-  }
-
-  function confirmRename() {
-    if (renamingId && renameValue.trim()) {
-      void renameMachine(renamingId, renameValue.trim())
-    }
-  }
-
-  function handleRenameKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      confirmRename()
-    } else if (e.key === 'Escape') {
-      e.preventDefault()
-      cancelRename()
+      setEditErr(String(e))
     }
   }
 
@@ -621,7 +641,13 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
               {machines.map(m => {
                 const statusColor = m.online ? '#10b981' : '#6b7280'
                 const statusLabel = m.online ? (pt ? 'online' : 'online') : (pt ? 'offline' : 'offline')
-                const isRenaming = renamingId === m.id
+                // Determine if the viewer can manage this machine
+                const ownerIds = m.accountIds ?? (m.accountId ? [m.accountId] : [])
+                const canManage = canManageFleet || ownerIds.includes(me?.id ?? '')
+                // Display owners
+                const owners = m.owners ?? []
+                const ownerDisplay = owners.length === 0 ? '—' : (owners[0]?.name ?? '') + (owners.length > 1 ? ` +${owners.length - 1}` : '')
+                const ownerEmailDisplay = owners.length > 0 ? (owners[0]?.email ?? '') : (pt ? 'sem conta' : 'no account')
                 return (
                   <tr key={m.id}>
                     <td style={td}>
@@ -632,88 +658,13 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                       />
                     </td>
                     <td style={{ ...td, fontWeight: 600, color: 'var(--text-primary)' }}>
-                      {isRenaming ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <input
-                            type="text"
-                            value={renameValue}
-                            onChange={e => setRenameValue(e.target.value)}
-                            onKeyDown={handleRenameKeyDown}
-                            autoFocus
-                            style={{
-                              ...input,
-                              padding: '4px 8px',
-                              fontSize: 12.5,
-                              minWidth: 120,
-                              flex: 1,
-                            }}
-                          />
-                          <button
-                            onClick={confirmRename}
-                            style={{ ...ghostBtn, padding: '4px 8px', border: 'none', color: '#10b981' }}
-                            title={pt ? 'Confirmar' : 'Confirm'}
-                          >
-                            <Check size={14} />
-                          </button>
-                          <button
-                            onClick={cancelRename}
-                            style={{ ...ghostBtn, padding: '4px 8px', border: 'none', color: '#6b7280' }}
-                            title={pt ? 'Cancelar' : 'Cancel'}
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      ) : (
-                        m.machineName
-                      )}
+                      {m.machineName}
                     </td>
                     <td style={td}>
-                      {editingOwnerId === m.id && canManageFleet ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <Select
-                            value={m.accountId ?? ''}
-                            onChange={v => {
-                              void assignOwner(m.id, v)
-                              setEditingOwnerId(null)
-                            }}
-                            options={[
-                              { value: '', label: pt ? '— sem conta —' : '— no account —' },
-                              ...accounts.map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
-                            ]}
-                            placeholder={pt ? 'Selecionar conta…' : 'Select account…'}
-                          />
-                          <button
-                            onClick={() => setEditingOwnerId(null)}
-                            style={{ ...ghostBtn, padding: '4px 8px', border: 'none', color: '#6b7280' }}
-                            title={pt ? 'Cancelar' : 'Cancel'}
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      ) : (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          {m.accountName ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-                              <span style={{ fontWeight: 600 }}>{m.accountName}</span>
-                              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{m.accountEmail}</span>
-                            </div>
-                          ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-                              <span>—</span>
-                              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{pt ? 'sem conta' : 'no account'}</span>
-                            </div>
-                          )}
-                          {canManageFleet && (
-                            <button
-                              onClick={() => setEditingOwnerId(m.id)}
-                              style={{ ...ghostBtn, padding: '4px 8px', border: 'none', color: 'var(--text-tertiary)' }}
-                              title={pt ? 'Editar' : 'Edit'}
-                            >
-                              <Pencil size={12} />
-                            </button>
-                          )}
-                        </div>
-                      )}
+                      <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+                        <span style={{ fontWeight: 600 }}>{ownerDisplay}</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{ownerEmailDisplay}</span>
+                      </div>
                     </td>
                     <td style={td}>{m.user}</td>
                     <td style={td}>{m.teamId ? (teamNameById.get(m.teamId) ?? m.teamId) : '—'}</td>
@@ -729,13 +680,15 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                     </td>
                     <td style={td}>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <button
-                          style={{ ...ghostBtn, padding: '4px 8px' }}
-                          onClick={() => startRename(m.id, m.machineName)}
-                          title={pt ? 'Renomear' : 'Rename'}
-                        >
-                          <Pencil size={12} />
-                        </button>
+                        {canManage && (
+                          <button
+                            style={{ ...ghostBtn, padding: '4px 8px' }}
+                            onClick={() => openEditMachine(m)}
+                            title={pt ? 'Editar' : 'Edit'}
+                          >
+                            <Pencil size={12} />
+                          </button>
+                        )}
                         <button
                           style={{ ...ghostBtn, padding: '4px 8px' }}
                           onClick={() => void rotateMachine(m.id)}
@@ -972,6 +925,79 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
           </div>
         </Drawer>
       )}
+
+      {/* Edit machine drawer */}
+      <Drawer open={editMachineOpen} onClose={() => setEditMachineOpen(false)} title={pt ? 'Editar máquina' : 'Edit machine'}>
+        {drawerErrPanel(editErr)}
+
+        <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
+          <input
+            style={input}
+            value={editName}
+            onChange={e => setEditName(e.target.value)}
+            placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'}
+          />
+        </Field>
+
+        <Field label={pt ? 'Time' : 'Team'}>
+          <Select
+            value={editTeamId}
+            onChange={v => setEditTeamId(v)}
+            options={[
+              { value: '', label: pt ? 'Padrão' : 'Default' },
+              ...teams.map(t => ({ value: t._id, label: t.name })),
+            ]}
+            placeholder={pt ? 'Selecione o time…' : 'Select team…'}
+          />
+        </Field>
+
+        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 18, marginTop: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+            <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+              {pt ? 'Contas (owners)' : 'Owners'}
+            </span>
+            <button type="button" style={ghostBtn} onClick={addEditOwnerRow}>
+              <Plus size={13} /> {pt ? 'Adicionar conta' : 'Add owner'}
+            </button>
+          </div>
+
+          {editOwnerRows.map((accountId, i) => (
+            <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
+              <div style={{ flex: 1 }}>
+                <Select
+                  value={accountId}
+                  onChange={v => updateEditOwnerRow(i, v)}
+                  options={[
+                    { value: '', label: pt ? 'Selecione a conta…' : 'Select account…' },
+                    ...accounts.map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
+                  ]}
+                  placeholder={pt ? 'Selecione a conta…' : 'Select account…'}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => removeEditOwnerRow(i)}
+                disabled={editOwnerRows.length === 1}
+                style={{
+                  ...trashBtn,
+                  opacity: editOwnerRows.length === 1 ? 0.35 : 1,
+                  cursor: editOwnerRows.length === 1 ? 'not-allowed' : 'pointer',
+                }}
+                aria-label={pt ? 'Remover conta' : 'Remove owner'}
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+          <button style={ghostBtn} onClick={() => setEditMachineOpen(false)}>{pt ? 'Cancelar' : 'Cancel'}</button>
+          <button style={primaryBtn} onClick={() => void saveEditMachine()}>
+            <Check size={14} /> {pt ? 'Salvar' : 'Save'}
+          </button>
+        </div>
+      </Drawer>
     </>
   )
 }

@@ -10,7 +10,7 @@ interface Team { _id: string; name: string }
 interface Membership { teamId: string; role: 'manager' | 'user' }
 interface Account { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: Membership[] }
 interface MachineRow { name: string; teamId: string }
-interface LinkedMachine { id: string; machineName: string; teamId?: string; accountId?: string; lastSeenAt: string | null }
+interface LinkedMachine { id: string; machineName: string; teamId?: string; accountId?: string; accountIds?: string[]; lastSeenAt: string | null }
 
 // ── shared inline styles ──────────────────────────────────────────────────
 const input: React.CSSProperties = {
@@ -224,7 +224,7 @@ export default function UsersSettings() {
     try {
       const res = await fetch('/api/iam/machines')
       const d = await res.json() as { machines: LinkedMachine[] }
-      setLinkedMachines((d.machines ?? []).filter(m => m.accountId === a.id))
+      setLinkedMachines((d.machines ?? []).filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).includes(a.id)))
     } catch (e) {
       setEditErr(String(e))
     } finally {
@@ -276,7 +276,7 @@ export default function UsersSettings() {
     // Refetch machines
     const mRes = await fetch('/api/iam/machines')
     const mData = await mRes.json() as { machines: LinkedMachine[] }
-    setLinkedMachines((mData.machines ?? []).filter(m => m.accountId === editId))
+    setLinkedMachines((mData.machines ?? []).filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).includes(editId)))
   }
 
   async function revokeMachine(id: string) {
@@ -289,7 +289,7 @@ export default function UsersSettings() {
     if (editId) {
       const mRes = await fetch('/api/iam/machines')
       const mData = await mRes.json() as { machines: LinkedMachine[] }
-      setLinkedMachines((mData.machines ?? []).filter(m => m.accountId === editId))
+      setLinkedMachines((mData.machines ?? []).filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).includes(editId)))
     }
   }
 
@@ -304,7 +304,7 @@ export default function UsersSettings() {
     if (editId) {
       const mRes = await fetch('/api/iam/machines')
       const mData = await mRes.json() as { machines: LinkedMachine[] }
-      setLinkedMachines((mData.machines ?? []).filter(m => m.accountId === editId))
+      setLinkedMachines((mData.machines ?? []).filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).includes(editId)))
     }
   }
 
@@ -378,7 +378,7 @@ export default function UsersSettings() {
   const userCount = accounts.filter(a => a.role === 'member' && !a.memberships.some(m => m.role === 'manager')).length
 
   // Helper to count machines per account
-  const machineCountFor = (accountId: string) => machines.filter(m => m.accountId === accountId).length
+  const machineCountFor = (accountId: string) => machines.filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).includes(accountId)).length
 
   return (
     <div>
