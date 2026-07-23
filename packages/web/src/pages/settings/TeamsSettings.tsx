@@ -239,8 +239,14 @@ export default function TeamsSettings() {
             {teams.length === 0 && (
               <tr><td style={{ ...td, color: 'var(--text-tertiary)' }} colSpan={3}>{pt ? 'Nenhum time.' : 'No teams.'}</td></tr>
             )}
-            {teams.map(t => (
-              <tr key={t._id}>
+            {teams.map(t => {
+              const clickable = canManageTeam(t._id)
+              return (
+              <tr key={t._id}
+                onClick={clickable ? () => openManageDrawer(t._id) : undefined}
+                style={{ cursor: clickable ? 'pointer' : 'default' }}
+                onMouseEnter={clickable ? e => { e.currentTarget.style.background = 'var(--bg-elevated)' } : undefined}
+                onMouseLeave={clickable ? e => { e.currentTarget.style.background = '' } : undefined}>
                 <td style={{ ...td, color: 'var(--text-primary)', fontWeight: 500 }}>
                   {t.name}
                   {t._id === 'default' && <em style={{ color: 'var(--text-tertiary)', fontWeight: 400, marginLeft: 6 }}>({pt ? 'padrão' : 'default'})</em>}
@@ -248,16 +254,17 @@ export default function TeamsSettings() {
                 <td style={td}>{memberCountOf(t._id)}</td>
                 <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                   {canManageTeam(t._id) && (
-                    <button onClick={() => openManageDrawer(t._id)} style={{ ...trashBtn, color: 'var(--text-tertiary)' }} aria-label="Manage team" title={pt ? 'Gerenciar' : 'Manage'}>
+                    <button onClick={e => { e.stopPropagation(); openManageDrawer(t._id) }} style={{ ...trashBtn, color: 'var(--text-tertiary)' }} aria-label="Manage team" title={pt ? 'Gerenciar' : 'Manage'}>
                       <Settings size={14} />
                     </button>
                   )}
                   {t._id !== 'default' && (
-                    <button onClick={() => void deleteTeam(t._id)} style={trashBtn} aria-label="Delete team"><Trash2 size={14} /></button>
+                    <button onClick={e => { e.stopPropagation(); void deleteTeam(t._id) }} style={trashBtn} aria-label="Delete team"><Trash2 size={14} /></button>
                   )}
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>

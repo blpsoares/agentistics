@@ -670,8 +670,12 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                 const ownerDisplay = owners.length === 0 ? '—' : (owners[0]?.name ?? '') + (owners.length > 1 ? ` +${owners.length - 1}` : '')
                 const ownerEmailDisplay = owners.length > 0 ? (owners[0]?.email ?? '') : (pt ? 'sem conta' : 'no account')
                 return (
-                  <tr key={m.id}>
-                    <td style={td}>
+                  <tr key={m.id}
+                    onClick={canManage ? () => openEditMachine(m) : undefined}
+                    style={{ cursor: canManage ? 'pointer' : 'default' }}
+                    onMouseEnter={canManage ? e => { e.currentTarget.style.background = 'var(--bg-elevated)' } : undefined}
+                    onMouseLeave={canManage ? e => { e.currentTarget.style.background = '' } : undefined}>
+                    <td style={td} onClick={e => e.stopPropagation()}>
                       <Checkbox
                         checked={selectedIds.has(m.id)}
                         onChange={() => toggleSelect(m.id)}
@@ -699,12 +703,12 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                     <td style={td}>
                       {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
                     </td>
-                    <td style={td}>
+                    <td style={td} onClick={e => e.stopPropagation()}>
                       <div style={{ display: 'flex', gap: 6 }}>
                         {canManage && (
                           <button
                             style={{ ...ghostBtn, padding: '4px 8px' }}
-                            onClick={() => openEditMachine(m)}
+                            onClick={e => { e.stopPropagation(); openEditMachine(m) }}
                             title={pt ? 'Editar' : 'Edit'}
                           >
                             <Pencil size={12} />
@@ -712,7 +716,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                         )}
                         <button
                           style={{ ...ghostBtn, padding: '4px 8px' }}
-                          onClick={() => void rotateMachine(m.id)}
+                          onClick={e => { e.stopPropagation(); void rotateMachine(m.id) }}
                           title={pt ? 'Rotacionar token' : 'Rotate token'}
                         >
                           <RotateCw size={12} />
@@ -720,7 +724,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                         {revokeConfirmId === m.id ? (
                           <button
                             style={{ ...ghostBtn, padding: '4px 8px', color: '#ef4444', borderColor: '#ef4444' }}
-                            onClick={() => void revokeMachine(m.id)}
+                            onClick={e => { e.stopPropagation(); void revokeMachine(m.id) }}
                             title={pt ? 'Confirmar' : 'Confirm'}
                           >
                             {pt ? 'Confirmar?' : 'Confirm?'}
@@ -728,7 +732,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                         ) : (
                           <button
                             style={{ ...ghostBtn, padding: '4px 8px', color: '#ef4444' }}
-                            onClick={() => setRevokeConfirmId(m.id)}
+                            onClick={e => { e.stopPropagation(); setRevokeConfirmId(m.id) }}
                             title={pt ? 'Revogar' : 'Revoke'}
                           >
                             <Trash2 size={12} />

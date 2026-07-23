@@ -461,8 +461,14 @@ export default function UsersSettings() {
             {accounts.length === 0 && (
               <tr><td style={{ ...td, color: 'var(--text-tertiary)' }} colSpan={6}>{pt ? 'Nenhuma conta.' : 'No accounts.'}</td></tr>
             )}
-            {accounts.map(a => (
-              <tr key={a.id}>
+            {accounts.map(a => {
+              const clickable = canEditClient(a)
+              return (
+              <tr key={a.id}
+                onClick={clickable ? () => void openEditDrawer(a) : undefined}
+                style={{ cursor: clickable ? 'pointer' : 'default' }}
+                onMouseEnter={clickable ? e => { e.currentTarget.style.background = 'var(--bg-elevated)' } : undefined}
+                onMouseLeave={clickable ? e => { e.currentTarget.style.background = '' } : undefined}>
                 <td style={{ ...td, color: 'var(--text-primary)', fontWeight: 500 }}>{a.name}</td>
                 <td style={td}>{a.email}</td>
                 <td style={td}><RoleBadge role={a.role === 'owner' ? 'owner' : (a.memberships[0]?.role ?? 'user')} /></td>
@@ -481,14 +487,15 @@ export default function UsersSettings() {
                 <td style={td}>{machineCountFor(a.id)}</td>
                 <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                   {canEditClient(a) && (
-                    <button onClick={() => void openEditDrawer(a)} style={{ ...trashBtn, color: 'var(--text-tertiary)' }} aria-label="Edit account"><Pencil size={14} /></button>
+                    <button onClick={e => { e.stopPropagation(); void openEditDrawer(a) }} style={{ ...trashBtn, color: 'var(--text-tertiary)' }} aria-label="Edit account"><Pencil size={14} /></button>
                   )}
                   {canDeleteClient(a) && (
-                    <button onClick={() => void deleteAccount(a.id)} style={trashBtn} aria-label="Delete account"><Trash2 size={14} /></button>
+                    <button onClick={e => { e.stopPropagation(); void deleteAccount(a.id) }} style={trashBtn} aria-label="Delete account"><Trash2 size={14} /></button>
                   )}
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -748,6 +755,23 @@ export default function UsersSettings() {
           so it can't be lost to a stray click (Close/Save are explicit). */}
       <Drawer open={editOpen} onClose={() => { if (!tempPassword && !addedMachineToken) setEditOpen(false) }} title={pt ? 'Editar conta' : 'Edit account'}>
         {drawerErr(editErr)}
+
+        {/* ROLE / PERMISSION SUMMARY */}
+        {(() => {
+          const managerTeamNames = eRows.filter(r => r.role === 'manager' && r.teamId).map(r => teamNameOf(r.teamId))
+          const roleKind = editIsOwner ? 'owner' : managerTeamNames.length > 0 ? 'manager' : 'user'
+          const line = editIsOwner
+            ? (pt ? 'Acesso total ao painel central.' : 'Full access to the central dashboard.')
+            : roleKind === 'manager'
+              ? (pt ? `Gerente de ${managerTeamNames.join(', ')}.` : `Manager of ${managerTeamNames.join(', ')}.`)
+              : (pt ? 'Leitura restrita aos times atribuídos.' : 'Scoped read of assigned teams.')
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+              <RoleBadge role={roleKind} />
+              <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{line}</span>
+            </div>
+          )
+        })()}
 
         {/* IDENTITY SECTION */}
         <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginTop: 4 }}>
