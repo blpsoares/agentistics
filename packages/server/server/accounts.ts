@@ -73,7 +73,7 @@ export async function listAccounts(): Promise<AccountDoc[]> {
 
 export async function updateAccount(
   id: string,
-  patch: Partial<Pick<AccountDoc, 'name' | 'passwordHash' | 'role' | 'memberships' | 'lastLoginAt'>>,
+  patch: Partial<Pick<AccountDoc, 'name' | 'passwordHash' | 'role' | 'memberships' | 'lastLoginAt' | 'mustChangePassword'>>,
 ): Promise<void> {
   const col = await getAccountsCollection()
   await col.updateOne({ _id: id }, { $set: { ...patch, updatedAt: new Date().toISOString() } })

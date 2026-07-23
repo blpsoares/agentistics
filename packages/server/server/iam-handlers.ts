@@ -4,7 +4,8 @@
  * index.ts spreads CORS_HEADERS. Bootstrap is public only while no owner exists —
  * handleBootstrap re-checks hasAnyOwner() and refuses once set up.
  */
-import { hasAnyOwner, createAccount, findAccountByEmail, updateAccount, getAccount, listAccounts, deleteAccount } from './accounts'
+import { randomBytes } from 'node:crypto'
+import { hasAnyOwner, createAccount, findAccountByEmail, updateAccount, getAccount, listAccounts, deleteAccount, bumpSessionVersion } from './accounts'
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
 import { seedDefaultTeam, listTeams, createTeam, getTeam, deleteTeam, DEFAULT_TEAM_ID } from './teams'
@@ -12,7 +13,7 @@ import { backfillTokenTeamIds, listMachines, mintMachineToken } from './team-tok
 import { backfillRepoTeamIds } from './team-repos'
 import { makePrincipalSessionCookieHeader, getPrincipal } from './auth'
 import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam } from './iam-view'
-import type { Membership } from './iam-types'
+import type { AccountDoc, Membership } from './iam-types'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
 
@@ -108,6 +109,37 @@ export async function handleIamMe(req: Request): Promise<Response> {
   return json({ authed: true, account: publicAccount(account) })
 }
 
+/**
+ * POST /api/iam/change-password  Body: { currentPassword?, newPassword }
+ * Self-service password change. currentPassword is required UNLESS the account is flagged
+ * mustChangePassword (forced first-login change). Bumps sessionVersion to invalidate old
+ * sessions, then re-issues the caller's principal cookie with the bumped version so they
+ * stay logged in.
+ */
+export async function handleChangePassword(req: Request): Promise<Response> {
+  const principal = await getPrincipal(req)
+  if (!principal) return json({ error: 'unauthorized' }, 401)
+  let body: unknown
+  try { body = await req.json() } catch { return json({ error: 'invalid JSON' }, 400) }
+  const b = body as Record<string, unknown>
+  const current = typeof b.currentPassword === 'string' ? b.currentPassword : ''
+  const next = typeof b.newPassword === 'string' ? b.newPassword : ''
+  if (next.length < 8) return json({ error: 'password must be at least 8 characters' }, 400)
+  const account = await getAccount(principal.accountId)
+  if (!account) return json({ error: 'account not found' }, 404)
+  // require currentPassword unless this is a forced first-login change
+  if (!account.mustChangePassword) {
+    if (!(await verifyPassword(current, account.passwordHash))) return json({ error: 'current password is incorrect' }, 401)
+  }
+  const passwordHash = await hashPassword(next)
+  await updateAccount(account._id, { passwordHash, mustChangePassword: false })
+  await bumpSessionVersion(account._id) // invalidate old sessions
+  // Re-issue with the bumped version (stored version is now account.sessionVersion + 1)
+  // so the caller stays logged in.
+  const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion + 1)
+  return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...JSON_CT, 'Set-Cookie': cookie } })
+}
+
 /** Parse an unknown value into a Membership[] (drops malformed entries). */
 function parseMemberships(v: unknown): Membership[] {
   if (!Array.isArray(v)) return []
@@ -167,6 +199,67 @@ export async function handleAccounts(req: Request): Promise<Response> {
       machineToken = token
     }
     return json({ account: publicAccount(account), ...(machineToken ? { machineToken } : {}) }, 201)
+  }
+
+  if (req.method === 'PATCH') {
+    let body: unknown
+    try { body = await req.json() } catch { return json({ error: 'invalid JSON' }, 400) }
+    const b = body as Record<string, unknown>
+    const id = typeof b.id === 'string' ? b.id : ''
+    if (!id) return json({ error: 'id is required' }, 400)
+    const target = await getAccount(id)
+    if (!target) return json({ error: 'not found' }, 404)
+
+    const isOwner = principal.role === 'owner'
+    const isSelf = target._id === principal.accountId
+
+    // Authz: owner may edit any non-owner target (and its own name); a manager may edit only
+    // targets it could delete (every membership a user-role in a team it manages — canDeleteAccount
+    // already rejects owner targets, so a manager can never touch an owner).
+    if (isOwner) {
+      if (target.role === 'owner') {
+        if (!isSelf) return json({ error: 'forbidden' }, 403)
+        // Editing your own owner account is limited to renaming — no self membership/reset here.
+        if (b.memberships !== undefined || b.resetPassword === true) return json({ error: 'forbidden' }, 403)
+      }
+    } else if (!canDeleteAccount(principal, target)) {
+      return json({ error: 'forbidden' }, 403)
+    }
+
+    const patch: Partial<Pick<AccountDoc, 'name' | 'memberships' | 'passwordHash' | 'mustChangePassword'>> = {}
+
+    if (b.name !== undefined) {
+      const name = typeof b.name === 'string' ? b.name.trim() : ''
+      if (!name) return json({ error: 'name cannot be empty' }, 400)
+      patch.name = name
+    }
+
+    if (b.memberships !== undefined) {
+      const memberships = parseMemberships(b.memberships)
+      // A manager may only assign user-role memberships in teams they manage — never escalate a
+      // target to manager/owner (owner memberships stay [] and are set only at creation).
+      if (!isOwner && !canCreateAccount(principal, memberships)) return json({ error: 'forbidden' }, 403)
+      patch.memberships = memberships
+    }
+
+    let tempPassword: string | undefined
+    if (b.resetPassword === true) {
+      tempPassword = randomBytes(12).toString('hex') // 24 hex chars
+      patch.passwordHash = await hashPassword(tempPassword)
+      patch.mustChangePassword = true
+    }
+
+    if (Object.keys(patch).length === 0) return json({ error: 'nothing to update' }, 400)
+    await updateAccount(target._id, patch)
+    // A password reset invalidates the target's existing sessions (forces re-login → first change).
+    if (b.resetPassword === true) await bumpSessionVersion(target._id)
+
+    const updated = await getAccount(target._id)
+    return json({
+      ok: true,
+      account: publicAccount(updated ?? target),
+      ...(tempPassword ? { tempPassword } : {}),
+    })
   }
 
   if (req.method === 'DELETE') {

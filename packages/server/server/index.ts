@@ -167,6 +167,7 @@ const AUTH_PUBLIC = new Set([
   '/api/iam/login',
   '/api/iam/logout',
   '/api/iam/me',
+  '/api/iam/change-password',
   '/api/iam/accounts',
   '/api/iam/teams',
   '/api/iam/machines',
@@ -957,7 +958,16 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       return new Response(res.body, { status: res.status, headers })
     }
 
-    if (url.pathname === '/api/iam/accounts' && (req.method === 'GET' || req.method === 'POST' || req.method === 'DELETE')) {
+    if (url.pathname === '/api/iam/change-password' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleChangePassword } = await import('./iam-handlers')
+      const res = await handleChangePassword(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/accounts' && (req.method === 'GET' || req.method === 'POST' || req.method === 'PATCH' || req.method === 'DELETE')) {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleAccounts } = await import('./iam-handlers')
       const res = await handleAccounts(req)
