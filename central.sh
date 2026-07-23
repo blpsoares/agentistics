@@ -31,7 +31,31 @@ cd "$(dirname "$0")"
 PROJECT="${PROJECT:-team-mode}"
 ENV_FILE="${ENV_FILE:-central.env}"
 
-compose() { docker compose -p "$PROJECT" --env-file "$ENV_FILE" "$@"; }
+# Decide whether to start the bundled local Mongo. Local when MONGO_URL is unset/blank or points
+# at the internal `mongo` service host; external (Atlas etc.) otherwise. The value is whitespace-
+# trimmed so a stray space in `MONGO_URL= mongodb+srv://…` doesn't misclassify it as external junk.
+uses_local_db() {
+  [ -f "$ENV_FILE" ] || return 0
+  local url
+  url="$(grep -E '^MONGO_URL=' "$ENV_FILE" | tail -1 | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  [ -z "$url" ] && return 0
+  case "$url" in
+    *mongo:27017*) return 0 ;;  # internal service host → bundled Mongo
+    *) return 1 ;;              # external cluster → do NOT start local Mongo
+  esac
+}
+
+# Compose file set: always the base; add the local-Mongo overlay only when using the bundled DB.
+compose_files() {
+  if uses_local_db; then
+    printf '%s' "-f docker-compose.yml -f docker-compose.localdb.yml"
+  else
+    printf '%s' "-f docker-compose.yml"
+  fi
+}
+
+# shellcheck disable=SC2046  # intentional word-splitting of the -f flags
+compose() { docker compose -p "$PROJECT" --env-file "$ENV_FILE" $(compose_files) "$@"; }
 
 # Print the dashboard access URL(s) after the central is up. Reads APP_PORT / BIND_IP from
 # the env file; when bound to all interfaces (0.0.0.0) also suggests the LAN / Tailscale IP so
@@ -147,6 +171,10 @@ init_env() {
 APP_PORT=$port
 BIND_IP=${extra_bind:-0.0.0.0}
 
+# Database. Leave as-is to use the bundled local Mongo (started automatically). To use an
+# external cluster (e.g. Atlas), set the full connection string here — central.sh then does NOT
+# start the local Mongo. No leading space after '='.
+#   MONGO_URL=mongodb+srv://user:pass@cluster.mongodb.net/
 MONGO_URL=mongodb://mongo:27017/?replicaSet=rs0
 MONGO_DB=agentistics
 
@@ -185,8 +213,15 @@ case "$cmd" in
     fi
     # --build rebuilds the image; --force-recreate is ESSENTIAL — plain `up -d`
     # does NOT recreate the container after a rebuild, so new code wouldn't run.
-    compose up -d --build --force-recreate
+    # --remove-orphans cleans up a previously-bundled local Mongo container when you switch
+    # to an external MONGO_URL (its data volume is preserved).
+    compose up -d --build --force-recreate --remove-orphans
     echo
+    if uses_local_db; then
+      echo "Database: bundled local Mongo (docker-compose.localdb.yml)."
+    else
+      echo "Database: external MONGO_URL — local Mongo NOT started."
+    fi
     compose ps
     print_access_url
     ;;
@@ -207,7 +242,7 @@ case "$cmd" in
     ;;
   pull)
     compose build --pull
-    compose up -d --force-recreate
+    compose up -d --force-recreate --remove-orphans
     ;;
   help|-h|--help)
     # Print the contiguous header comment block (lines 2.. until the first non-# line).

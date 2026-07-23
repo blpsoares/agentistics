@@ -71,8 +71,10 @@ export const INGEST_ONLY = process.env.AGENTISTICS_INGEST_ONLY === '1'
 // ---------------------------------------------------------------------------
 export const OIDC_ISSUER = process.env.AGENTISTICS_OIDC_ISSUER ?? 'https://token.actions.githubusercontent.com'
 export const OIDC_AUDIENCE = process.env.AGENTISTICS_OIDC_AUDIENCE || undefined
-export const MONGO_URL = process.env.MONGO_URL ?? 'mongodb://localhost:27017'
-export const MONGO_DB = process.env.MONGO_DB ?? 'agentistics'
+// Trim surrounding whitespace: a stray space in `MONGO_URL= mongodb+srv://…` (easy to leave
+// in an env file) otherwise reaches the driver as an invalid connection string.
+export const MONGO_URL = (process.env.MONGO_URL ?? 'mongodb://localhost:27017').trim()
+export const MONGO_DB = (process.env.MONGO_DB ?? 'agentistics').trim()
 export const TEAM_ORG = process.env.AGENTISTICS_TEAM_ORG ?? 'default'
 export const TEAM_INGEST_TOKEN = process.env.AGENTISTICS_TEAM_INGEST_TOKEN || undefined
 // Self-contribution: when set on a central, the central machine's own local sessions
