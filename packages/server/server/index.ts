@@ -43,6 +43,7 @@ import { registerAgent, unregisterAgent, onAgentMessage, onAgentPong, setPresenc
 import { startAgentClient, reconcileNow } from './team-agent-client'
 import { validateIngestToken } from './team-tokens'
 import { getAccount } from './accounts'
+import { getTeam } from './teams'
 
 // ---------------------------------------------------------------------------
 // Reads the first `cwd` field found in a JSONL session file.
@@ -1335,9 +1336,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       const tokenResult = await validateIngestToken(bearer)
       if (tokenResult.ok) {
         // For machine tokens (bound to an account), also surface the machine's
-        // bound identity: machineName (token label), teamId, and the owner's email.
+        // bound identity: machineName (token label), teamId, team name, and the owner's email.
         // Only non-secret account fields are exposed — never passwordHash.
-        const body: { ok: true; user: string; org: string; machineName?: string; teamId?: string; email?: string } = {
+        const body: { ok: true; user: string; org: string; machineName?: string; teamId?: string; email?: string; team?: string } = {
           ok: true,
           user: tokenResult.user,
           org: TEAM_ORG,
@@ -1347,6 +1348,10 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           body.teamId = tokenResult.teamId
           const account = await getAccount(tokenResult.accountId)
           if (account?.email) body.email = account.email
+          if (tokenResult.teamId) {
+            const t = await getTeam(tokenResult.teamId)
+            if (t) body.team = t.name
+          }
         }
         return new Response(JSON.stringify(body), {
           status: 200,

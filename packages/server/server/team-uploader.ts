@@ -572,6 +572,10 @@ interface TestConnectionResult {
   error?: string
   user?: string
   org?: string
+  machineName?: string
+  email?: string
+  teamId?: string
+  team?: string
 }
 
 /**
@@ -654,9 +658,25 @@ export async function handleTeamTestConnection(req: Request): Promise<Response> 
         signal: AbortSignal.timeout(5_000),
       })
       if (whoamiRes.ok) {
-        const whoamiJson = await whoamiRes.json() as { ok?: boolean; user?: string; org?: string }
+        const whoamiJson = await whoamiRes.json() as {
+          ok?: boolean
+          user?: string
+          org?: string
+          machineName?: string
+          email?: string
+          teamId?: string
+          team?: string
+        }
         if (whoamiJson.ok && typeof whoamiJson.user === 'string') {
-          result = { ...result, user: whoamiJson.user, org: whoamiJson.org }
+          result = {
+            ...result,
+            user: whoamiJson.user,
+            org: whoamiJson.org,
+            ...(typeof whoamiJson.machineName === 'string' && { machineName: whoamiJson.machineName }),
+            ...(typeof whoamiJson.email === 'string' && { email: whoamiJson.email }),
+            ...(typeof whoamiJson.teamId === 'string' && { teamId: whoamiJson.teamId }),
+            ...(typeof whoamiJson.team === 'string' && { team: whoamiJson.team }),
+          }
         }
       }
     } catch { /* whoami is best-effort; a failed lookup does not fail the connection test */ }
