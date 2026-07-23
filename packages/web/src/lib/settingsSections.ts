@@ -6,7 +6,7 @@ export type SettingsSectionId =
 export type SettingsGroup = 'personal' | 'governance'
 
 export interface SettingsSection { id: SettingsSectionId; labelEn: string; labelPt: string; group: SettingsGroup }
-export interface SettingsViewer { central: boolean; role?: 'owner' | 'admin' | 'member'; isManager?: boolean }
+export interface SettingsViewer { central: boolean; role?: 'owner' | 'member'; isManager?: boolean }
 
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   { id: 'preferences', labelEn: 'Preferences', labelPt: 'Preferências', group: 'personal' },
@@ -29,7 +29,7 @@ export function visibleSettingsSections(v: SettingsViewer): SettingsSection[] {
       case 'live': return !v.central
       case 'users':
       case 'teams':
-      case 'machines': return v.central && (v.role === 'owner' || v.role === 'admin' || !!v.isManager)
+      case 'machines': return v.central && (v.role === 'owner' || !!v.isManager)
       case 'repositories': return v.central && v.role === 'owner'
       default: return true
     }

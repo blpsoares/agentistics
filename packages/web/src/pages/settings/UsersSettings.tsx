@@ -3,12 +3,14 @@ import { useOutletContext } from 'react-router-dom'
 import { Plus, Trash2, Copy, Check, Dice5, KeyRound, Pencil } from 'lucide-react'
 import { generatePassword } from '../../lib/password'
 import type { AppContext } from '../../lib/app-context'
-import { SectionHeader } from './primitives'
+import { SectionHeader, Checkbox } from './primitives'
 import { Drawer } from './Drawer'
 
 interface Team { _id: string; name: string }
 interface Membership { teamId: string; role: 'manager' | 'user' }
-interface Account { id: string; name: string; email: string; role: 'owner' | 'admin' | 'member'; memberships: Membership[] }
+interface Account { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: Membership[] }
+interface MachineRow { name: string; teamId: string }
+interface LinkedMachine { id: string; machineName: string; teamId?: string; accountId?: string; lastSeenAt: string | null }
 
 // ── shared inline styles ──────────────────────────────────────────────────
 const input: React.CSSProperties = {
@@ -50,7 +52,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 const ROLE_BADGE_COLORS: Record<string, string> = {
-  owner: '#a855f7', admin: '#14b8a6', manager: 'var(--anthropic-orange)', user: '#3b82f6',
+  owner: '#a855f7', manager: 'var(--anthropic-orange)', user: '#3b82f6',
 }
 function RoleBadge({ role }: { role: string }) {
   const color = ROLE_BADGE_COLORS[role] ?? 'var(--text-tertiary)'
@@ -86,18 +88,21 @@ export default function UsersSettings() {
   }, [])
   useEffect(() => { void load() }, [load])
 
+  // Scoping helpers
+  const managedTeamIds = new Set((me?.memberships ?? []).filter(m => m.role === 'manager').map(m => m.teamId))
+  const assignableTeams = viewerIsOwner ? teams : teams.filter(t => managedTeamIds.has(t._id))
+
   // ── account drawer ──
   const [accountOpen, setAccountOpen] = useState(false)
   const [an, setAn] = useState(''); const [ae, setAe] = useState(''); const [ap, setAp] = useState('')
-  const [accountType, setAccountType] = useState<'owner' | 'admin' | 'member'>('member')
+  const [accountType, setAccountType] = useState<'owner' | 'member'>('member')
   const [rows, setRows] = useState<Membership[]>([{ teamId: '', role: 'user' }])
+  const [machineRows, setMachineRows] = useState<MachineRow[]>([])
   const [accountErr, setAccountErr] = useState<string | null>(null)
-  const [provisionMachine, setProvisionMachine] = useState(false)
-  const [machineName, setMachineName] = useState('')
   const [mustChange, setMustChange] = useState(true)
   const [pwVisible, setPwVisible] = useState(false)
-  // one-time result after a successful create (credentials + machine token shown once)
-  const [created, setCreated] = useState<null | { email: string; password: string; machineName?: string; machineToken?: string }>(null)
+  // one-time result after a successful create (credentials + machine tokens shown once)
+  const [created, setCreated] = useState<null | { email: string; password: string; machineTokens?: { name: string; token: string }[] }>(null)
   const [copied, setCopied] = useState<string | null>(null)
   const [copyFailed, setCopyFailed] = useState<string | null>(null)
 
@@ -107,12 +112,20 @@ export default function UsersSettings() {
   const [editIsOwner, setEditIsOwner] = useState(false)
   const [en, setEn] = useState('')
   const [eRows, setERows] = useState<Membership[]>([{ teamId: '', role: 'user' }])
+  const [linkedMachines, setLinkedMachines] = useState<LinkedMachine[]>([])
+  const [loadingMachines, setLoadingMachines] = useState(false)
   const [editErr, setEditErr] = useState<string | null>(null)
   const [tempPassword, setTempPassword] = useState<string | null>(null)
+  // Add machine inline form in edit drawer
+  const [addMachineName, setAddMachineName] = useState('')
+  const [addMachineTeam, setAddMachineTeam] = useState('')
+  const [addedMachineToken, setAddedMachineToken] = useState<string | null>(null)
+  const [addedMachineName, setAddedMachineName] = useState<string | null>(null)
 
   function openAccountDrawer() {
-    setAn(''); setAe(''); setAp(''); setAccountType('member'); setRows([{ teamId: '', role: 'user' }]); setAccountErr(null)
-    setProvisionMachine(false); setMachineName(''); setMustChange(true); setPwVisible(false); setCreated(null); setCopied(null); setCopyFailed(null)
+    setAn(''); setAe(''); setAp(''); setAccountType('member'); setRows([{ teamId: '', role: 'user' }])
+    setMachineRows([]); setAccountErr(null)
+    setMustChange(true); setPwVisible(false); setCreated(null); setCopied(null); setCopyFailed(null)
     setAccountOpen(true)
   }
   async function copy(label: string, text: string) {
@@ -152,6 +165,12 @@ export default function UsersSettings() {
   function addRow() { setRows(rs => [...rs, { teamId: '', role: 'user' }]) }
   function removeRow(i: number) { setRows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs) }
 
+  function addMachineRow() { setMachineRows(rs => [...rs, { name: '', teamId: '' }]) }
+  function removeMachineRow(i: number) { setMachineRows(rs => rs.filter((_, idx) => idx !== i)) }
+  function updateMachineRow(i: number, patch: Partial<MachineRow>) {
+    setMachineRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r))
+  }
+
   async function createAccount() {
     if (!an.trim() || !ae.trim() || ap.length < 8) {
       setAccountErr(pt ? 'Preencha nome, email e senha (8+).' : 'Fill name, email and password (8+).')
@@ -165,25 +184,21 @@ export default function UsersSettings() {
         return
       }
     }
-    if (provisionMachine && !machineName.trim()) {
-      setAccountErr(pt ? 'Informe o nome da máquina.' : 'Enter the machine name.')
-      return
-    }
+    const machines = machineRows.filter(m => m.name.trim()).map(m => ({ name: m.name.trim(), teamId: m.teamId || undefined }))
     const body: Record<string, unknown> = {
       name: an.trim(), email: ae.trim(), password: ap, role: accountType, memberships,
       mustChangePassword: mustChange,
     }
-    if (provisionMachine) body.machine = { name: machineName.trim() }
+    if (machines.length > 0) body.machines = machines
     const res = await fetch('/api/iam/accounts', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
     if (!res.ok) { const d = await res.json() as { error?: string }; setAccountErr(d.error || `HTTP ${res.status}`); return }
-    const d = await res.json() as { machineToken?: string }
+    const d = await res.json() as { machineTokens?: { name: string; token: string }[] }
     setCreated({
       email: ae.trim(), password: ap,
-      machineName: provisionMachine ? machineName.trim() : undefined,
-      machineToken: d.machineToken,
+      machineTokens: d.machineTokens,
     })
     void load()
   }
@@ -192,10 +207,22 @@ export default function UsersSettings() {
     void load()
   }
 
-  function openEditDrawer(a: Account) {
-    setEditId(a.id); setEditIsOwner(a.role === 'owner' || a.role === 'admin'); setEn(a.name)
+  async function openEditDrawer(a: Account) {
+    setEditId(a.id); setEditIsOwner(a.role === 'owner'); setEn(a.name)
     setERows(a.memberships.length ? a.memberships.map(m => ({ ...m })) : [{ teamId: '', role: 'user' }])
-    setEditErr(null); setTempPassword(null); setEditOpen(true)
+    setEditErr(null); setTempPassword(null); setAddMachineName(''); setAddMachineTeam(''); setAddedMachineToken(null); setAddedMachineName(null)
+    setEditOpen(true)
+    // Fetch linked machines
+    setLoadingMachines(true)
+    try {
+      const res = await fetch('/api/iam/machines')
+      const d = await res.json() as { machines: LinkedMachine[] }
+      setLinkedMachines((d.machines ?? []).filter(m => m.accountId === a.id))
+    } catch (e) {
+      setEditErr(String(e))
+    } finally {
+      setLoadingMachines(false)
+    }
   }
   function updateERow(i: number, patch: Partial<Membership>) { setERows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r)) }
   function addERow() { setERows(rs => [...rs, { teamId: '', role: 'user' }]) }
@@ -226,16 +253,44 @@ export default function UsersSettings() {
     void load()
   }
 
+  async function addMachine() {
+    if (!editId || !addMachineName.trim()) return
+    const body: Record<string, unknown> = { accountId: editId, name: addMachineName.trim() }
+    if (addMachineTeam) body.teamId = addMachineTeam
+    const res = await fetch('/api/iam/machines', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) { const d = await res.json() as { error?: string }; setEditErr(d.error || `HTTP ${res.status}`); return }
+    const d = await res.json() as { token: string }
+    setAddedMachineToken(d.token)
+    setAddedMachineName(addMachineName.trim())
+    setAddMachineName(''); setAddMachineTeam('')
+    // Refetch machines
+    const mRes = await fetch('/api/iam/machines')
+    const mData = await mRes.json() as { machines: LinkedMachine[] }
+    setLinkedMachines((mData.machines ?? []).filter(m => m.accountId === editId))
+  }
+
+  async function revokeMachine(id: string) {
+    const res = await fetch('/api/team/tokens', {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+    if (!res.ok) { setEditErr(`HTTP ${res.status}`); return }
+    // Refetch machines
+    if (editId) {
+      const mRes = await fetch('/api/iam/machines')
+      const mData = await mRes.json() as { machines: LinkedMachine[] }
+      setLinkedMachines((mData.machines ?? []).filter(m => m.accountId === editId))
+    }
+  }
+
   const teamNameOf = (id: string) => teams.find(t => t._id === id)?.name ?? id
 
-  // Ready-to-paste connect command using the endpoint the admin is actually viewing.
-  const connectCmd = created?.machineToken
-    ? `agentop member connect --endpoint ${window.location.origin} --token ${created.machineToken}`
-    : ''
-
   const roleLegend = pt
-    ? [['Owner', 'controle total'], ['Admin', 'gerencia tudo, menos owners/admins'], ['Manager', 'gerencia usuários e tokens do seu time'], ['User', 'leitura restrita']]
-    : [['Owner', 'full control'], ['Admin', 'manages everything except owners/admins'], ['Manager', "manages their team's users & tokens"], ['User', 'scoped read']]
+    ? [['Owner', 'controle total'], ['Manager', 'gerencia usuários e tokens do seu time'], ['User', 'leitura restrita']]
+    : [['Owner', 'full control'], ['Manager', "manages their team's users & tokens"], ['User', 'scoped read']]
 
   const drawerErr = (m: string | null) => m && (
     <div style={{ fontSize: 12, color: '#ef4444', background: 'color-mix(in srgb, #ef4444 12%, transparent)', border: '1px solid color-mix(in srgb, #ef4444 35%, transparent)', borderRadius: 7, padding: '8px 10px' }}>{m}</div>
@@ -246,9 +301,8 @@ export default function UsersSettings() {
     if (!me) return false
     if (a.id === me.id) return false                    // never yourself
     if (a.role === 'owner') return me.role === 'owner' && ownerCount > 1   // last-owner protected
-    if (a.role === 'admin') return me.role === 'owner'
     // target is a member:
-    if (me.role === 'owner' || me.role === 'admin') return true
+    if (me.role === 'owner') return true
     const managed = new Set(me.memberships.filter(m => m.role === 'manager').map(m => m.teamId))
     return a.memberships.length > 0 && a.memberships.every(m => m.role === 'user' && managed.has(m.teamId))
   }
@@ -257,8 +311,11 @@ export default function UsersSettings() {
     if (!me) return false
     if (a.id === me.id) return true            // self rename
     if (me.role === 'owner') return true
-    return canDeleteClient(a)                  // admin → members; manager → managed user-members
+    return canDeleteClient(a)                  // manager → managed user-members
   }
+
+  const connectCmdFor = (token: string) =>
+    `agentop member connect --endpoint ${window.location.origin} --token ${token}`
 
   return (
     <div>
@@ -310,10 +367,10 @@ export default function UsersSettings() {
               <tr key={a.id}>
                 <td style={{ ...td, color: 'var(--text-primary)', fontWeight: 500 }}>{a.name}</td>
                 <td style={td}>{a.email}</td>
-                <td style={td}><RoleBadge role={a.role === 'owner' ? 'owner' : a.role === 'admin' ? 'admin' : (a.memberships[0]?.role ?? 'user')} /></td>
+                <td style={td}><RoleBadge role={a.role === 'owner' ? 'owner' : (a.memberships[0]?.role ?? 'user')} /></td>
                 <td style={td}>
                   <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>
-                    {(a.role === 'owner' || a.role === 'admin')
+                    {a.role === 'owner'
                       ? <span style={{ color: 'var(--text-tertiary)' }}>—</span>
                       : a.memberships.map(m => (
                         <span key={m.teamId} style={{
@@ -325,7 +382,7 @@ export default function UsersSettings() {
                 </td>
                 <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                   {canEditClient(a) && (
-                    <button onClick={() => openEditDrawer(a)} style={{ ...trashBtn, color: 'var(--text-tertiary)' }} aria-label="Edit account"><Pencil size={14} /></button>
+                    <button onClick={() => void openEditDrawer(a)} style={{ ...trashBtn, color: 'var(--text-tertiary)' }} aria-label="Edit account"><Pencil size={14} /></button>
                   )}
                   {canDeleteClient(a) && (
                     <button onClick={() => void deleteAccount(a.id)} style={trashBtn} aria-label="Delete account"><Trash2 size={14} /></button>
@@ -346,10 +403,9 @@ export default function UsersSettings() {
         {/* Account type — Owner is offered only to an owner viewer. */}
         {viewerIsOwner && (
           <Field label={pt ? 'Tipo de conta' : 'Account type'}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               {([
                 ['member', pt ? 'Membro com escopo' : 'Scoped member', pt ? 'Acesso restrito a times' : 'Access scoped to teams'],
-                ['admin', pt ? 'Admin' : 'Admin', pt ? 'Gerencia tudo, menos owners/admins' : 'Manages everything except owners/admins'],
                 ['owner', pt ? 'Owner (acesso total)' : 'Owner (full access)', pt ? 'Controle total do painel' : 'Full dashboard control'],
               ] as const).map(([val, title, desc]) => {
                 const selected = accountType === val
@@ -386,34 +442,13 @@ export default function UsersSettings() {
           </div>
         </Field>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer' }}>
-          <input type="checkbox" checked={mustChange} onChange={e => setMustChange(e.target.checked)} />
-          {pt ? 'Exigir troca de senha no primeiro login' : 'Require password change on first login'}
-        </label>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 12 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)', cursor: 'pointer' }}>
-            <input type="checkbox" checked={provisionMachine} onChange={e => setProvisionMachine(e.target.checked)} />
-            {pt ? 'Provisionar uma máquina para esta conta' : 'Provision a machine for this account'}
-          </label>
-          {provisionMachine && (
-            <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
-              <input style={input} value={machineName} onChange={e => setMachineName(e.target.value)} placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'} />
-            </Field>
-          )}
-        </div>
+        <Checkbox checked={mustChange} onChange={setMustChange} label={pt ? 'Exigir troca de senha no primeiro login' : 'Require password change on first login'} />
 
         {accountType === 'owner' ? (
           <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '9px 11px' }}>
             {pt
               ? 'Owners têm acesso total a todos os times e máquinas — sem escopo de times.'
               : 'Owners have full access to all teams and machines — no team scope.'}
-          </div>
-        ) : accountType === 'admin' ? (
-          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '9px 11px' }}>
-            {pt
-              ? 'Admins têm acesso quase total — sem escopo de times (não gerenciam owners nem outros admins).'
-              : 'Admins have near-full access — no team scope (they cannot manage owners or other admins).'}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -430,11 +465,11 @@ export default function UsersSettings() {
               <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <select style={{ ...input, flex: 2 }} value={r.teamId} onChange={e => updateRow(i, { teamId: e.target.value })}>
                   <option value="">{pt ? 'Selecione o time…' : 'Select team…'}</option>
-                  {teams.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
+                  {assignableTeams.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
                 </select>
                 <select style={{ ...input, flex: 1 }} value={r.role} onChange={e => updateRow(i, { role: e.target.value as 'manager' | 'user' })}>
                   <option value="user">user</option>
-                  <option value="manager">manager</option>
+                  {viewerIsOwner && <option value="manager">manager</option>}
                 </select>
                 <button type="button" onClick={() => removeRow(i)} disabled={rows.length === 1}
                   style={{ ...trashBtn, opacity: rows.length === 1 ? 0.35 : 1, cursor: rows.length === 1 ? 'not-allowed' : 'pointer' }}
@@ -445,6 +480,39 @@ export default function UsersSettings() {
             ))}
           </div>
         )}
+
+        {/* Link machines */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{pt ? 'Vincular máquinas' : 'Link machines'}</span>
+            <button type="button" style={ghostBtn} onClick={addMachineRow}><Plus size={13} /> {pt ? 'Adicionar máquina' : 'Add machine'}</button>
+          </div>
+          <p style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5, margin: 0 }}>
+            {pt
+              ? 'Vincular máquinas gera um token por máquina (mostrado uma vez).'
+              : 'Linking machines mints one token per machine (shown once).'}
+          </p>
+          {machineRows.map((m, i) => (
+            <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+              <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
+                <input style={input} value={m.name} onChange={e => updateMachineRow(i, { name: e.target.value })} placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'} />
+              </Field>
+              {accountType === 'member' && (
+                <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
+                  <select style={input} value={m.teamId} onChange={e => updateMachineRow(i, { teamId: e.target.value })}>
+                    <option value="">{pt ? 'Deixar vazio' : 'Leave empty'}</option>
+                    {assignableTeams.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
+                  </select>
+                </Field>
+              )}
+              <button type="button" onClick={() => removeMachineRow(i)}
+                style={trashBtn}
+                aria-label={pt ? 'Remover máquina' : 'Remove machine'}>
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
         </>)}
 
         {created ? (
@@ -458,8 +526,6 @@ export default function UsersSettings() {
             {([
               ['Email', created.email],
               [pt ? 'Senha' : 'Password', created.password],
-              ...(created.machineName ? [[pt ? 'Máquina' : 'Machine', created.machineName] as [string, string]] : []),
-              ...(created.machineToken ? [[pt ? 'Token da máquina' : 'Machine token', created.machineToken] as [string, string]] : []),
             ] as [string, string][]).map(([label, value]) => (
               <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                 <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
@@ -476,24 +542,47 @@ export default function UsersSettings() {
                 )}
               </div>
             ))}
-            {created.machineToken && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{pt ? 'Comando de conexão' : 'Connect command'}</span>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-secondary)' }}>
-                    {connectCmd}
-                  </code>
-                  <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('connect', connectCmd) }} aria-label="Copy connect command">
-                    {copied === 'connect' ? <Check size={13} /> : <Copy size={13} />}
-                  </button>
+            {created.machineTokens && created.machineTokens.length > 0 && created.machineTokens.map(mt => (
+              <React.Fragment key={mt.name}>
+                <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 8 }}>
+                  {pt ? 'Máquina:' : 'Machine:'} {mt.name}
                 </div>
-                {copyFailed === 'connect' && (
-                  <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
-                    {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {pt ? 'Token' : 'Token'}
                   </span>
-                )}
-              </div>
-            )}
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>{mt.token}</code>
+                    <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy(`token-${mt.name}`, mt.token) }} aria-label="Copy token">
+                      {copied === `token-${mt.name}` ? <Check size={13} /> : <Copy size={13} />}
+                    </button>
+                  </div>
+                  {copyFailed === `token-${mt.name}` && (
+                    <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
+                      {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {pt ? 'Comando de conexão' : 'Connect command'}
+                  </span>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-secondary)' }}>
+                      {connectCmdFor(mt.token)}
+                    </code>
+                    <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy(`cmd-${mt.name}`, connectCmdFor(mt.token)) }} aria-label="Copy connect command">
+                      {copied === `cmd-${mt.name}` ? <Check size={13} /> : <Copy size={13} />}
+                    </button>
+                  </div>
+                  {copyFailed === `cmd-${mt.name}` && (
+                    <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
+                      {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                    </span>
+                  )}
+                </div>
+              </React.Fragment>
+            ))}
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
               <button style={primaryBtn} onClick={() => setAccountOpen(false)}><Check size={14} /> {pt ? 'Concluir' : 'Done'}</button>
             </div>
@@ -506,9 +595,9 @@ export default function UsersSettings() {
         )}
       </Drawer>
 
-      {/* Edit account drawer — while a shown-once temp password is on screen, backdrop/X are no-ops
+      {/* Edit account drawer — while a shown-once temp password or machine token is on screen, backdrop/X are no-ops
           so it can't be lost to a stray click (Close/Save are explicit). */}
-      <Drawer open={editOpen} onClose={() => { if (!tempPassword) setEditOpen(false) }} title={pt ? 'Editar conta' : 'Edit account'}>
+      <Drawer open={editOpen} onClose={() => { if (!tempPassword && !addedMachineToken) setEditOpen(false) }} title={pt ? 'Editar conta' : 'Edit account'}>
         {drawerErr(editErr)}
         <Field label={pt ? 'Nome' : 'Name'}>
           <input style={input} value={en} onChange={e => setEn(e.target.value)} placeholder={pt ? 'Nome completo' : 'Full name'} />
@@ -516,7 +605,7 @@ export default function UsersSettings() {
 
         {editIsOwner ? (
           <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '9px 11px' }}>
-            {pt ? 'Owners e admins não têm escopo de times.' : 'Owners and admins have no team scope.'}
+            {pt ? 'Owners não têm escopo de times.' : 'Owners have no team scope.'}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -528,11 +617,11 @@ export default function UsersSettings() {
               <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <select style={{ ...input, flex: 2 }} value={r.teamId} onChange={e => updateERow(i, { teamId: e.target.value })}>
                   <option value="">{pt ? 'Selecione o time…' : 'Select team…'}</option>
-                  {teams.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
+                  {assignableTeams.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
                 </select>
                 <select style={{ ...input, flex: 1 }} value={r.role} onChange={e => updateERow(i, { role: e.target.value as 'manager' | 'user' })}>
                   <option value="user">user</option>
-                  <option value="manager">manager</option>
+                  {viewerIsOwner && <option value="manager">manager</option>}
                 </select>
                 <button type="button" onClick={() => removeERow(i)} disabled={eRows.length === 1}
                   style={{ ...trashBtn, opacity: eRows.length === 1 ? 0.35 : 1, cursor: eRows.length === 1 ? 'not-allowed' : 'pointer' }}
@@ -543,6 +632,95 @@ export default function UsersSettings() {
             ))}
           </div>
         )}
+
+        {/* Linked machines */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 12 }}>
+          <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{pt ? 'Máquinas vinculadas' : 'Linked machines'}</span>
+          {loadingMachines ? (
+            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>{pt ? 'Carregando…' : 'Loading…'}</div>
+          ) : linkedMachines.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>{pt ? 'Nenhuma máquina vinculada.' : 'No machines linked.'}</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {linkedMachines.map(m => (
+                <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 8px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</span>
+                    <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+                      {m.teamId ? teamNameOf(m.teamId) : (pt ? 'sem time' : 'no team')} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
+                    </span>
+                  </div>
+                  <button type="button" style={{ ...ghostBtn, padding: '4px 8px', color: '#ef4444' }} onClick={() => window.confirm(pt ? 'Revogar esta máquina?' : 'Revoke this machine?') && void revokeMachine(m.id)}>
+                    {pt ? 'Revogar' : 'Revoke'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Add machine inline form */}
+          {addedMachineToken ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8, padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>
+                {pt ? 'Máquina adicionada — copie agora' : 'Machine added — copy now'}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.4 }}>
+                {addedMachineName}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {pt ? 'Token' : 'Token'}
+                </span>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>{addedMachineToken}</code>
+                  <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('added-token', addedMachineToken) }} aria-label="Copy token">
+                    {copied === 'added-token' ? <Check size={13} /> : <Copy size={13} />}
+                  </button>
+                </div>
+                {copyFailed === 'added-token' && (
+                  <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
+                    {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {pt ? 'Comando de conexão' : 'Connect command'}
+                </span>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-secondary)' }}>
+                    {connectCmdFor(addedMachineToken)}
+                  </code>
+                  <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('added-cmd', connectCmdFor(addedMachineToken)) }} aria-label="Copy connect command">
+                    {copied === 'added-cmd' ? <Check size={13} /> : <Copy size={13} />}
+                  </button>
+                </div>
+                {copyFailed === 'added-cmd' && (
+                  <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
+                    {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                  </span>
+                )}
+              </div>
+              <button type="button" style={ghostBtn} onClick={() => setAddedMachineToken(null)}>{pt ? 'Fechar' : 'Close'}</button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', marginTop: 8 }}>
+              <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
+                <input style={input} value={addMachineName} onChange={e => setAddMachineName(e.target.value)} placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'} />
+              </Field>
+              {!editIsOwner && (
+                <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
+                  <select style={input} value={addMachineTeam} onChange={e => setAddMachineTeam(e.target.value)}>
+                    <option value="">{pt ? 'Deixar vazio' : 'Leave empty'}</option>
+                    {assignableTeams.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
+                  </select>
+                </Field>
+              )}
+              <button type="button" style={primaryBtn} onClick={() => void addMachine()}>
+                <Plus size={13} /> {pt ? 'Adicionar' : 'Add'}
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* Reset password */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 12 }}>

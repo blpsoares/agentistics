@@ -25,7 +25,7 @@ interface PublicAccount {
   id: string
   name: string
   email: string
-  role: 'owner' | 'admin' | 'member'
+  role: 'owner' | 'member'
   memberships: { teamId: string; role: 'manager' | 'user' }[]
 }
 

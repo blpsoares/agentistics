@@ -86,3 +86,34 @@ export function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) 
     </button>
   )
 }
+
+export function Checkbox({ checked, onChange, label }: { checked: boolean; onChange: (checked: boolean) => void; label: string }) {
+  return (
+    <label style={{
+      display: 'flex', alignItems: 'center', gap: 8,
+      fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer',
+    }}>
+      <div
+        role="checkbox"
+        aria-checked={checked}
+        tabIndex={0}
+        onClick={() => onChange(!checked)}
+        onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); onChange(!checked) } }}
+        style={{
+          width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+          border: `1px solid ${checked ? 'var(--anthropic-orange)' : 'var(--border)'}`,
+          background: checked ? 'var(--anthropic-orange)' : 'transparent',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          cursor: 'pointer', transition: 'all 0.15s',
+        }}
+      >
+        {checked && (
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M2 6L5 9L10 3" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
+      </div>
+      <span>{label}</span>
+    </label>
+  )
+}
