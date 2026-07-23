@@ -69,7 +69,11 @@ English by project convention; conversation with the user is Portuguese.
 - **What:** machines owned by accounts (token gains `accountId`+machineName); create account with/without a machine; random password + **forced first-login change** (`mustChangePassword` + `POST /api/iam/change-password`); **1 account : N machines**; owner registers machines for any account & grants managers visibility via team memberships (**account PATCH/edit**); Machines page becomes a **scoped view**; `whoami` extended so the machine shows its identity; **Central connection** settings section restored on solo/member (regression fix `87f6671`).
 - **Handshake:** bearer machine token (sha256-hashed server-side) → `GET /api/team/whoami` verifies + returns `{user,machineName,email,teamId}`; server-authoritative attribution.
 - **Spec:** [2026-07-23-accounts-machines-governance-design.md](specs/2026-07-23-accounts-machines-governance-design.md)
-- **Phases:** 1 backend core · 2 frontend accounts (create/edit/first-login) · 3 frontend machines (view + add-to-account) · 4 machine client (whoami identity display). **Plans:** _(link as written)_
+- **Phases:**
+  1. **Backend core** — ✅ **implemented** (commits `f13619a`..`ab4a81b` on `dev`; tsc clean, 346 tests; whole-branch review READY TO MERGE, 1 Important authz gap fixed): [plans/2026-07-23-b4ext-phase1-backend.md](plans/2026-07-23-b4ext-phase1-backend.md) — token `accountId` + `mintMachineToken`/`listMachines` + `canManageMachineTeam`; `/api/iam/machines` (scoped list + gated add-to-account); `mustChangePassword` + `/api/iam/change-password` (cookie re-issue); `PATCH /api/iam/accounts` (edit memberships/reset, no manager escalation); account create-with-machine; `whoami` returns machineName/email/teamId. Routes smoke-verified (401 self-guarded). *(Authed end-to-end still needs an owner session — test via the Phase 2/3 UI.)*
+  2. Frontend accounts (create with/without machine + random pw, edit memberships, first-login blocking change) — ⬜
+  3. Frontend machines (grouped view + add-to-account) — ⬜
+  4. Machine client (whoami identity display in Central connection) — ⬜
 
 ### Group B — Large subsystems (each is its own project)
 
