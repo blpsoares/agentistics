@@ -38,8 +38,16 @@ export interface TokenDoc {
   /** True for GitHub Actions / CI tokens — ingest stamps `ci: true` on every pushed session. */
   ci?: boolean
   teamId?: string
-  /** Account ID for machine tokens — identifies which account owns a registered machine. */
+  /** Primary owning account (accountIds[0]) — kept for whoami/back-compat. */
   accountId?: string
+  /** All owning accounts for machine tokens — a machine can be owned/managed by several accounts. */
+  accountIds?: string[]
+}
+
+/** Canonical owner-account id list for a token (handles legacy single-accountId docs). */
+export function ownerIdsOf(doc: Pick<TokenDoc, 'accountId' | 'accountIds'>): string[] {
+  if (doc.accountIds && doc.accountIds.length) return doc.accountIds
+  return doc.accountId ? [doc.accountId] : []
 }
 
 export type MemberInfo = {
@@ -55,7 +63,8 @@ export type MemberInfo = {
 
 export type MachineInfo = {
   id: string
-  accountId?: string
+  accountId?: string        // primary owner (accountIds[0]) — kept for compatibility
+  accountIds: string[]      // all owner accounts
   machineName: string
   user: string
   teamId?: string
@@ -106,7 +115,7 @@ export async function mintToken(user: string, label: string, opts?: { repo?: str
     teamId: opts?.teamId ?? DEFAULT_TEAM_ID,
     ...(opts?.repo ? { repo: opts.repo } : {}),
     ...(opts?.ci ? { ci: true } : {}),
-    ...(opts?.accountId ? { accountId: opts.accountId } : {}),
+    ...(opts?.accountId ? { accountId: opts.accountId, accountIds: [opts.accountId] } : {}),
   }
   const col = await getTokensCollection()
   await col.insertOne(doc)
@@ -278,15 +287,19 @@ export async function mintMachineToken(input: { accountId: string; user: string;
 export async function listMachines(): Promise<MachineInfo[]> {
   const col = await getTokensCollection()
   const docs = await col.find({ ci: { $ne: true }, repo: { $exists: false } }).toArray()
-  return docs.map(d => ({
-    id: d._id,
-    accountId: d.accountId,
-    machineName: d.label || d.user,
-    user: d.user,
-    teamId: d.teamId,
-    createdAt: d.createdAt,
-    lastSeenAt: d.lastSeenAt,
-  }))
+  return docs.map(d => {
+    const accountIds = ownerIdsOf(d)
+    return {
+      id: d._id,
+      accountId: accountIds[0],
+      accountIds,
+      machineName: d.label || d.user,
+      user: d.user,
+      teamId: d.teamId,
+      createdAt: d.createdAt,
+      lastSeenAt: d.lastSeenAt,
+    }
+  })
 }
 
 /** Set of every live token id (hash). Central reads filter team data by this so a revoked
@@ -312,10 +325,13 @@ export async function setMachineLabel(id: string, label: string): Promise<boolea
   return res.matchedCount > 0
 }
 
-/** Assign/replace a machine's owner account (sets accountId + user = the account's display name). */
-export async function setMachineOwner(id: string, accountId: string, user: string): Promise<boolean> {
+/** Replace a machine's set of owner accounts. accountIds[0] becomes the primary (accountId), kept
+ *  for whoami/back-compat. Passing an empty list clears ownership. The `user` (push identity) is
+ *  left untouched — ownership is about visibility/management, not the machine's display name. */
+export async function setMachineOwners(id: string, accountIds: string[]): Promise<boolean> {
   const col = await getTokensCollection()
-  const res = await col.updateOne({ _id: id }, { $set: { accountId, user } })
+  const unique = [...new Set(accountIds.filter(Boolean))]
+  const res = await col.updateOne({ _id: id }, { $set: { accountIds: unique, accountId: unique[0] } })
   return res.matchedCount > 0
 }
 

@@ -9,7 +9,7 @@ import { hasAnyOwner, countOwners, createAccount, findAccountByEmail, updateAcco
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
 import { seedDefaultTeam, listTeams, createTeam, getTeam, deleteTeam, DEFAULT_TEAM_ID } from './teams'
-import { backfillTokenTeamIds, listMachines, mintMachineToken, revokeToken, rotateToken, setMachineTeam, setMachineLabel, setMachineOwner } from './team-tokens'
+import { backfillTokenTeamIds, listMachines, mintMachineToken, revokeToken, rotateToken, setMachineTeam, setMachineLabel, setMachineOwners } from './team-tokens'
 import { getCentralConfig } from './central-config'
 import { packConnectToken } from '@agentistics/core'
 import { backfillRepoTeamIds } from './team-repos'
@@ -377,11 +377,16 @@ export async function handleMachines(req: Request): Promise<Response> {
     const presence = await import('./team-presence').then(m => m.computePresence()).catch(() => ({} as Record<string, { online: boolean; latencyMs: number | null }>))
 
     const enriched = visible.map(m => {
-      const acc = m.accountId ? accountMap.get(m.accountId) : undefined
-      const showAcc = acc && accountVisibleTo(principal, acc)
+      // Resolve every owner account the caller may actually see (no cross-scope name/email leak).
+      const owners = m.accountIds
+        .map(id => accountMap.get(id))
+        .filter((a): a is AccountDoc => !!a && accountVisibleTo(principal, a))
+        .map(a => ({ id: a._id, name: a.name, email: a.email }))
       return {
         ...m,
-        ...(showAcc ? { accountName: acc.name, accountEmail: acc.email } : {}),
+        owners,
+        // Back-compat: primary owner's name/email for any caller still reading the flat fields.
+        ...(owners[0] ? { accountName: owners[0].name, accountEmail: owners[0].email } : {}),
         online: presence[m.user]?.online ?? false,
         latencyMs: presence[m.user]?.latencyMs ?? null,
       }
@@ -393,19 +398,26 @@ export async function handleMachines(req: Request): Promise<Response> {
     let body: unknown
     try { body = await req.json() } catch { return json({ error: 'invalid JSON' }, 400) }
     const b = body as Record<string, unknown>
-    // Reassign a machine's owner ACCOUNT (scoped): { ownerId, accountId }. Sets the token's
-    // accountId + user = account name, so the machine shows under that account.
+    // Set a machine's owner ACCOUNTS (scoped): { ownerId, accountIds: string[] } (a single
+    // { accountId } is also accepted). A machine may be owned/managed by several accounts. Every
+    // account in the new set must be visible to the caller, and the caller must manage the machine.
     const ownerId = typeof b.ownerId === 'string' ? b.ownerId : ''
     if (ownerId) {
-      const acctId = typeof b.accountId === 'string' ? b.accountId : ''
-      if (!acctId) return json({ error: 'accountId is required' }, 400)
+      const accountIds = Array.isArray(b.accountIds)
+        ? b.accountIds.filter((x): x is string => typeof x === 'string')
+        : (typeof b.accountId === 'string' ? [b.accountId] : [])
       const machine = (await listMachines()).find(m => m.id === ownerId)
       if (!machine) return json({ error: 'machine not found' }, 404)
       if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
-      const account = await getAccount(acctId)
-      if (!account) return json({ error: 'account not found' }, 404)
-      if (!accountVisibleTo(principal, account)) return json({ error: 'forbidden' }, 403)
-      await setMachineOwner(ownerId, acctId, account.name)
+      // Validate every target account exists + is visible to the caller (no assigning to
+      // out-of-scope accounts). An empty list is allowed (clears ownership) only for an owner.
+      if (accountIds.length === 0 && principal.role !== 'owner') return json({ error: 'accountIds is required' }, 400)
+      for (const id of accountIds) {
+        const acct = await getAccount(id)
+        if (!acct) return json({ error: 'account not found' }, 404)
+        if (!accountVisibleTo(principal, acct)) return json({ error: 'forbidden' }, 403)
+      }
+      await setMachineOwners(ownerId, accountIds)
       return json({ ok: true })
     }
     // Rename a machine (scoped): { renameId, name }. Updates the token label; the new name

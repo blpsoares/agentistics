@@ -75,8 +75,10 @@ export function canManageMachineTeam(p: Principal, teamId: string | undefined): 
 }
 
 /** Whether a principal may view/manage a specific machine: owner, a manager of the machine's team,
- *  OR the machine's own account (a user managing their own machine — view/rename/rotate/revoke). */
-export function canManageMachine(p: Principal, machine: { teamId?: string; accountId?: string }): boolean {
-  if (machine.accountId && machine.accountId === p.accountId) return true
+ *  OR one of the machine's owner accounts (a user managing a machine they own). A machine may have
+ *  several owner accounts. */
+export function canManageMachine(p: Principal, machine: { teamId?: string; accountId?: string; accountIds?: string[] }): boolean {
+  const owners = machine.accountIds && machine.accountIds.length ? machine.accountIds : (machine.accountId ? [machine.accountId] : [])
+  if (owners.includes(p.accountId)) return true
   return canManageMachineTeam(p, machine.teamId)
 }
