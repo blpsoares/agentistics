@@ -847,10 +847,9 @@ function CollapsedTip({ label, show, children }: { label: string; show: boolean;
   )
 }
 
-function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle, updatedText, sinceText, memberSummary, theme, onToggleTheme, onToggleLang, onExport, principal }: {
+function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle, theme, onToggleTheme, onToggleLang, onExport, principal }: {
   lang: Lang; harnesses?: HarnessId[]; isCentral?: boolean; hasWorkflows?: boolean
-  collapsed: boolean; onToggle: () => void; updatedText: string; sinceText?: string
-  memberSummary?: { total: number; online: number; offline: number }
+  collapsed: boolean; onToggle: () => void
   theme: Theme; onToggleTheme: () => void; onToggleLang: () => void; onExport: () => void
   principal?: IamAccount
 }) {
@@ -881,7 +880,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
       display: 'flex', flexDirection: 'column', padding: '14px 12px', boxSizing: 'border-box',
       transition: 'width 0.22s cubic-bezier(0.22, 1, 0.36, 1)', overflow: 'hidden',
     }}>
-      {/* Logo + collapse toggle, then the "updated / since / sessions" summary */}
+      {/* Logo + collapse toggle */}
       <div style={{ padding: '0 4px 12px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 44 }}>
           {!collapsed && <img src='/minimalistLogo.png' alt="agentistics" style={{ height: 40, width: 'auto', flexShrink: 0 }} />}
@@ -890,29 +889,9 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
             {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
           </button>
         </div>
-        {!collapsed && (updatedText || sinceText || memberSummary) && (
-          <div style={{ marginTop: 6, fontSize: 10.5, lineHeight: 1.55 }}>
-            {updatedText && <div style={{ color: 'var(--text-tertiary)' }}>{updatedText}</div>}
-            {sinceText && <div style={{ color: 'var(--text-secondary)' }}>{sinceText}</div>}
-            {memberSummary && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                  <Users size={11} style={{ color: 'var(--text-tertiary)' }} />
-                  {memberSummary.total} {pt ? (memberSummary.total === 1 ? 'membro' : 'membros') : (memberSummary.total === 1 ? 'member' : 'members')}
-                </span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title={pt ? 'Online' : 'Online'}>
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e' }} />{memberSummary.online}
-                </span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title={pt ? 'Offline' : 'Offline'}>
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444' }} />{memberSummary.offline}
-                </span>
-              </div>
-            )}
-            {/* Member machine: live connection status + latency to the central (mirrors the
-                central's presence line). Renders null unless this instance is a connected member. */}
-            {!isCentral && <MemberConnectionStatus lang={lang} compact />}
-          </div>
-        )}
+        {/* Member machine: live connection status + latency to the central (mirrors the
+            central's presence line). Renders null unless this instance is a connected member. */}
+        {!collapsed && !isCentral && <div style={{ marginTop: 6 }}><MemberConnectionStatus lang={lang} compact /></div>}
       </div>
 
       <nav className="ag-noscroll" style={{ display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
@@ -1539,6 +1518,14 @@ export default function AppLayout() {
     })
   }, [teamSession?.central])
 
+  // Header summary counts (desktop only)
+  const memberCount = users.length
+  const onlineCount = data?.presence ? Object.values(data.presence).filter(p => p.online).length : 0
+  const offlineCount = data?.presence ? Object.values(data.presence).filter(p => !p.online).length : 0
+  const machineCount = machinesList.length
+  const projectCount = data?.projects?.length ?? 0
+  const repoCount = useMemo(() => new Set((data?.sessions ?? []).map(s => s.git_remote).filter(Boolean)).size, [data])
+
   // Members list = users WITH machines only
   const machineUsers = useMemo(() => new Set(machinesList.map(m => m.user)), [machinesList])
   const usersWithMachines = useMemo(() => users.filter(u => machineUsers.has(u)), [users, machineUsers])
@@ -1859,21 +1846,6 @@ export default function AppLayout() {
         hasWorkflows={(data.workflows?.length ?? 0) > 0}
         collapsed={sidebarCollapsed}
         onToggle={toggleSidebar}
-        updatedText={`${lang === 'pt' ? 'Atualizado em' : 'Updated'} ${
-          singleHarness && singleHarness !== 'claude'
-            ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
-            : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
-        }`}
-        sinceText={(singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate)
-          ? `${lang === 'pt' ? 'Desde' : 'Since'} ${format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')} · ${derived.allTimeTotalSessions.toLocaleString()} ${lang === 'pt' ? 'sessões' : 'sessions'}${singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}`
-          : undefined}
-        memberSummary={isCentral && data?.presence && Object.keys(data.presence).length > 0
-          ? {
-            total: Object.keys(data.presence).length,
-            online: Object.values(data.presence).filter(p => p.online).length,
-            offline: Object.values(data.presence).filter(p => !p.online).length,
-          }
-          : undefined}
         theme={theme}
         onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
         onToggleLang={() => { const next = lang === 'pt' ? 'en' : 'pt'; setLang(next); if (next === 'pt') setCurrency('BRL'); else if (currency === 'BRL') setCurrency('USD') }}
@@ -1912,6 +1884,58 @@ export default function AppLayout() {
                 color: 'var(--text-tertiary)', cursor: 'pointer', position: 'relative',
               }} />
             </div>
+          </div>
+        )}
+
+        {/* Desktop-only summary strip: Updated date + members/machines/projects/repos counts */}
+        {!isMobile && (
+          <div style={{
+            maxWidth: 1400, margin: '0 auto', padding: '8px 16px 0', width: '100%', boxSizing: 'border-box',
+            fontSize: 10.5, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums',
+          }}>
+            <span>
+              {lang === 'pt' ? 'Atualizado em' : 'Updated'}{' '}
+              {singleHarness && singleHarness !== 'claude'
+                ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+                : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))}
+            </span>
+            {((singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate) && (
+              <span style={{ color: 'var(--text-secondary)', marginLeft: 8 }}>
+                {lang === 'pt' ? 'Desde' : 'Since'}{' '}
+                {format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')}
+                {' · '}
+                {derived.allTimeTotalSessions.toLocaleString()} {lang === 'pt' ? (derived.allTimeTotalSessions === 1 ? 'sessão' : 'sessões') : (derived.allTimeTotalSessions === 1 ? 'session' : 'sessions')}
+                {singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}
+              </span>
+            ))}
+            {isCentral && (
+              <span style={{ marginLeft: 16 }}>
+                {memberCount} {lang === 'pt' ? (memberCount === 1 ? 'membro' : 'membros') : (memberCount === 1 ? 'member' : 'members')}
+                {' '}
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />
+                  {onlineCount}
+                </span>
+                {' '}
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />
+                  {offlineCount}
+                </span>
+                {' · '}
+                {machineCount} {lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}
+                {' · '}
+                {projectCount} {lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}
+                {' · '}
+                {repoCount} {lang === 'pt' ? (repoCount === 1 ? 'repositório' : 'repositórios') : (repoCount === 1 ? 'repository' : 'repositories')}
+              </span>
+            )}
+            {!isCentral && (
+              <span style={{ marginLeft: 16 }}>
+                {projectCount} {lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}
+                {' · '}
+                {repoCount} {lang === 'pt' ? (repoCount === 1 ? 'repositório' : 'repositórios') : (repoCount === 1 ? 'repository' : 'repositories')}
+              </span>
+            )}
           </div>
         )}
 
