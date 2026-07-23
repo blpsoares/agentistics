@@ -7,7 +7,7 @@
  * config plus the live uploader status. The bearer token is never logged.
  */
 
-import { DEFAULT_TEAM } from '@agentistics/core'
+import { DEFAULT_TEAM, unpackConnectToken } from '@agentistics/core'
 import { PORT } from './config'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
 import { getUploaderStatus } from './team-uploader'
@@ -46,15 +46,18 @@ interface WhoamiResponse {
  * Returns 0 on success, non-zero (with an actionable message) on failure.
  */
 export async function memberConnect(opts: MemberConnectOptions): Promise<number> {
-  const endpoint = (opts.endpoint ?? '').trim().replace(/\/+$/, '')
-  const token = (opts.token ?? '').trim()
+  // The token may embed the central URL (act1_ composite). Unpack it: --endpoint wins, else the
+  // endpoint carried inside the token; the bearer sent to the central is always the raw secret.
+  const { endpoint: embeddedEndpoint, secret } = unpackConnectToken((opts.token ?? '').trim())
+  const token = secret
+  const endpoint = ((opts.endpoint ?? '').trim() || embeddedEndpoint || '').replace(/\/+$/, '')
 
-  if (!endpoint) {
-    process.stderr.write('member connect needs --endpoint <url>.\n')
-    return 1
-  }
   if (!token) {
     process.stderr.write('member connect needs --token <token>.\n')
+    return 1
+  }
+  if (!endpoint) {
+    process.stderr.write('member connect needs --endpoint <url> (or a token with the URL embedded).\n')
     return 1
   }
 

@@ -1254,11 +1254,17 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
 
     if (url.pathname === '/api/team/config' && req.method === 'PUT') {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
-      let body: { pushIntervalSec?: unknown; includeOfflineData?: unknown }
+      let body: { pushIntervalSec?: unknown; includeOfflineData?: unknown; publicUrl?: unknown }
       try {
-        body = await req.json() as { pushIntervalSec?: unknown; includeOfflineData?: unknown }
+        body = await req.json() as { pushIntervalSec?: unknown; includeOfflineData?: unknown; publicUrl?: unknown }
       } catch {
         return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      if (body.publicUrl !== undefined && typeof body.publicUrl !== 'string') {
+        return new Response(JSON.stringify({ error: 'publicUrl must be a string' }), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -1275,9 +1281,10 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
-      const { setPushInterval, setIncludeOfflineData, getCentralConfig } = await import('./central-config')
+      const { setPushInterval, setIncludeOfflineData, setPublicUrl, getCentralConfig } = await import('./central-config')
       if (typeof body.pushIntervalSec === 'number') await setPushInterval(body.pushIntervalSec)
       if (typeof body.includeOfflineData === 'boolean') await setIncludeOfflineData(body.includeOfflineData)
+      if (typeof body.publicUrl === 'string') await setPublicUrl(body.publicUrl)
       const config = await getCentralConfig()
       // A policy change (offline-data default) affects every viewer → nudge them to refetch.
       if (typeof body.includeOfflineData === 'boolean') triggerSseNotification()

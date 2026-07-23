@@ -9,7 +9,9 @@ import { hasAnyOwner, countOwners, createAccount, findAccountByEmail, updateAcco
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
 import { seedDefaultTeam, listTeams, createTeam, getTeam, deleteTeam, DEFAULT_TEAM_ID } from './teams'
-import { backfillTokenTeamIds, listMachines, mintMachineToken, revokeToken, rotateToken, setMachineTeam, setMachineLabel } from './team-tokens'
+import { backfillTokenTeamIds, listMachines, mintMachineToken, revokeToken, rotateToken, setMachineTeam, setMachineLabel, setMachineOwner } from './team-tokens'
+import { getCentralConfig } from './central-config'
+import { packConnectToken } from '@agentistics/core'
 import { backfillRepoTeamIds } from './team-repos'
 import { makePrincipalSessionCookieHeader, getPrincipal } from './auth'
 import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine } from './iam-view'
@@ -211,12 +213,13 @@ export async function handleAccounts(req: Request): Promise<Response> {
       : await createAccount({ name, email, passwordHash, role: 'member', memberships, createdBy: principal.accountId, mustChangePassword })
     // Link the requested machines — one token per machine, each gated by team scope.
     const fallbackTeam = account.memberships[0]?.teamId || 'default'
+    const centralUrl = (await getCentralConfig()).publicUrl
     const machineTokens: { name: string; token: string }[] = []
     for (const m of machineReqs) {
       const teamId = (m.teamId && account.memberships.some(x => x.teamId === m.teamId)) ? m.teamId : fallbackTeam
       if (!canManageMachineTeam(principal, teamId)) continue // out-of-scope machine link is skipped
       const { token } = await mintMachineToken({ accountId: account._id, user: account.name, machineName: m.name, teamId })
-      machineTokens.push({ name: m.name, token })
+      machineTokens.push({ name: m.name, token: packConnectToken(token, centralUrl) })
     }
     const firstToken = machineTokens[0]?.token
     return json({
@@ -390,6 +393,21 @@ export async function handleMachines(req: Request): Promise<Response> {
     let body: unknown
     try { body = await req.json() } catch { return json({ error: 'invalid JSON' }, 400) }
     const b = body as Record<string, unknown>
+    // Reassign a machine's owner ACCOUNT (scoped): { ownerId, accountId }. Sets the token's
+    // accountId + user = account name, so the machine shows under that account.
+    const ownerId = typeof b.ownerId === 'string' ? b.ownerId : ''
+    if (ownerId) {
+      const acctId = typeof b.accountId === 'string' ? b.accountId : ''
+      if (!acctId) return json({ error: 'accountId is required' }, 400)
+      const machine = (await listMachines()).find(m => m.id === ownerId)
+      if (!machine) return json({ error: 'machine not found' }, 404)
+      if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
+      const account = await getAccount(acctId)
+      if (!account) return json({ error: 'account not found' }, 404)
+      if (!accountVisibleTo(principal, account)) return json({ error: 'forbidden' }, 403)
+      await setMachineOwner(ownerId, acctId, account.name)
+      return json({ ok: true })
+    }
     // Rename a machine (scoped): { renameId, name }. Updates the token label; the new name
     // reflects on the machine at its next whoami handshake. Owner / team-manager / the machine's
     // own account may rename.
@@ -412,7 +430,7 @@ export async function handleMachines(req: Request): Promise<Response> {
       if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
       const token = await rotateToken(rotateId)
       if (token === null) return json({ error: 'machine not found' }, 404)
-      return json({ token }, 200)
+      return json({ token: packConnectToken(token, (await getCentralConfig()).publicUrl) }, 200)
     }
     // Reassign a machine to another team (scoped): { reassignId, teamId }. Must manage BOTH the
     // machine's current team and the target team. Used by the Teams page to attach a machine.
@@ -449,7 +467,7 @@ export async function handleMachines(req: Request): Promise<Response> {
       : (accountTeams[0] ?? 'default')
     if (!canManageMachineTeam(principal, teamId)) return json({ error: 'forbidden' }, 403)
     const { token } = await mintMachineToken({ accountId, user: account.name, machineName: name, teamId })
-    return json({ token }, 201) // plaintext once
+    return json({ token: packConnectToken(token, (await getCentralConfig()).publicUrl) }, 201) // shown once
   }
   if (req.method === 'DELETE') {
     // Revoke a machine (scoped): { id }. Cascades to the member's sessions/stats/workflows.

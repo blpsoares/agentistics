@@ -312,6 +312,13 @@ export async function setMachineLabel(id: string, label: string): Promise<boolea
   return res.matchedCount > 0
 }
 
+/** Assign/replace a machine's owner account (sets accountId + user = the account's display name). */
+export async function setMachineOwner(id: string, accountId: string, user: string): Promise<boolean> {
+  const col = await getTokensCollection()
+  const res = await col.updateOne({ _id: id }, { $set: { accountId, user } })
+  return res.matchedCount > 0
+}
+
 /** Assign the Default team to any token minted before teams existed. Idempotent. */
 export async function backfillTokenTeamIds(): Promise<void> {
   const col = await getTokensCollection()
