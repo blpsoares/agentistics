@@ -252,6 +252,13 @@ export default function UsersSettings() {
     const managed = new Set(me.memberships.filter(m => m.role === 'manager').map(m => m.teamId))
     return a.memberships.length > 0 && a.memberships.every(m => m.role === 'user' && managed.has(m.teamId))
   }
+  // Mirror the server PATCH authz: self (rename) always; owner edits anyone; else same rule as delete.
+  function canEditClient(a: Account): boolean {
+    if (!me) return false
+    if (a.id === me.id) return true            // self rename
+    if (me.role === 'owner') return true
+    return canDeleteClient(a)                  // admin → members; manager → managed user-members
+  }
 
   return (
     <div>
@@ -317,7 +324,9 @@ export default function UsersSettings() {
                   </span>
                 </td>
                 <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  <button onClick={() => openEditDrawer(a)} style={{ ...trashBtn, color: 'var(--text-tertiary)' }} aria-label="Edit account"><Pencil size={14} /></button>
+                  {canEditClient(a) && (
+                    <button onClick={() => openEditDrawer(a)} style={{ ...trashBtn, color: 'var(--text-tertiary)' }} aria-label="Edit account"><Pencil size={14} /></button>
+                  )}
                   {canDeleteClient(a) && (
                     <button onClick={() => void deleteAccount(a.id)} style={trashBtn} aria-label="Delete account"><Trash2 size={14} /></button>
                   )}

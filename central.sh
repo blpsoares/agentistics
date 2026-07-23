@@ -39,9 +39,11 @@ uses_local_db() {
   local url
   url="$(grep -E '^MONGO_URL=' "$ENV_FILE" | tail -1 | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
   [ -z "$url" ] && return 0
+  # Match the internal service host at a URL boundary (//mongo:27017 or user@mongo:27017) so an
+  # external host that merely ends in "mongo:27017" (e.g. //mymongo:27017) isn't misclassified.
   case "$url" in
-    *mongo:27017*) return 0 ;;  # internal service host → bundled Mongo
-    *) return 1 ;;              # external cluster → do NOT start local Mongo
+    *//mongo:27017*|*@mongo:27017*) return 0 ;;  # internal service host → bundled Mongo
+    *) return 1 ;;                               # external cluster → do NOT start local Mongo
   esac
 }
 
