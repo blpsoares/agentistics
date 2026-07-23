@@ -65,7 +65,7 @@ interface TeamSessionState {
   aggregatorOnly?: boolean
 }
 
-export interface IamAccount { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: { teamId: string; role: 'manager' | 'user' }[] }
+export interface IamAccount { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: { teamId: string; role: 'manager' | 'user' }[]; mustChangePassword: boolean }
 interface IamState { needsBootstrap: boolean; authed: boolean; account?: IamAccount }
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.

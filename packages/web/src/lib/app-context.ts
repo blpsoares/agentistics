@@ -22,6 +22,8 @@ export interface Principal {
   email: string
   role: 'owner' | 'member'
   memberships: { teamId: string; role: 'manager' | 'user' }[]
+  /** Forces a blocking first-login password change when true (B4-EXT). */
+  mustChangePassword: boolean
 }
 
 /** Draft shape for the Preferences settings page / modal (single source of truth). */
