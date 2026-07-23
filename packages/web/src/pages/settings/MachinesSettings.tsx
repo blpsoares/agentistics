@@ -734,7 +734,8 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
               onChange={v => { setSelectedAccountId(v) }}
               options={[
                 { value: '', label: pt ? 'Selecione a conta…' : 'Select account…' },
-                ...accounts.map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
+                // Owners already own every machine — no point offering them as a machine owner.
+                ...accounts.filter(a => a.role !== 'owner').map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
               ]}
               placeholder={pt ? 'Selecione a conta…' : 'Select account…'}
             />
