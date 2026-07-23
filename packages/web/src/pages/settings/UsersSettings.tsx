@@ -228,6 +228,11 @@ export default function UsersSettings() {
 
   const teamNameOf = (id: string) => teams.find(t => t._id === id)?.name ?? id
 
+  // Ready-to-paste connect command using the endpoint the admin is actually viewing.
+  const connectCmd = created?.machineToken
+    ? `agentop member connect --endpoint ${window.location.origin} --token ${created.machineToken}`
+    : ''
+
   const roleLegend = pt
     ? [['Owner', 'controle total'], ['Manager', 'gerencia usuários e tokens do seu time'], ['User', 'leitura restrita']]
     : [['Owner', 'full control'], ['Manager', "manages their team's users & tokens"], ['User', 'scoped read']]
@@ -311,8 +316,9 @@ export default function UsersSettings() {
         </table>
       </div>
 
-      {/* Account drawer */}
-      <Drawer open={accountOpen} onClose={() => setAccountOpen(false)} title={pt ? 'Nova conta' : 'New account'}>
+      {/* Account drawer — while showing shown-once secrets, only the explicit "Done" button closes it
+          (backdrop/X are no-ops) so the machine token/command can't be lost to a stray click. */}
+      <Drawer open={accountOpen} onClose={() => { if (!created) setAccountOpen(false) }} title={pt ? 'Nova conta' : 'New account'}>
         {drawerErr(accountErr)}
 
         {!created && (<>
@@ -431,7 +437,7 @@ export default function UsersSettings() {
                 <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>{value}</code>
-                  <button type="button" style={ghostBtn} onClick={() => void copy(label, value)} aria-label={`Copy ${label}`}>
+                  <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy(label, value) }} aria-label={`Copy ${label}`}>
                     {copied === label ? <Check size={13} /> : <Copy size={13} />}
                   </button>
                 </div>
@@ -445,9 +451,19 @@ export default function UsersSettings() {
             {created.machineToken && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                 <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{pt ? 'Comando de conexão' : 'Connect command'}</span>
-                <code style={{ fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-secondary)' }}>
-                  agentop member connect --endpoint &lt;central-url&gt; --token {created.machineToken}
-                </code>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-secondary)' }}>
+                    {connectCmd}
+                  </code>
+                  <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('connect', connectCmd) }} aria-label="Copy connect command">
+                    {copied === 'connect' ? <Check size={13} /> : <Copy size={13} />}
+                  </button>
+                </div>
+                {copyFailed === 'connect' && (
+                  <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
+                    {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                  </span>
+                )}
               </div>
             )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
@@ -462,8 +478,9 @@ export default function UsersSettings() {
         )}
       </Drawer>
 
-      {/* Edit account drawer */}
-      <Drawer open={editOpen} onClose={() => setEditOpen(false)} title={pt ? 'Editar conta' : 'Edit account'}>
+      {/* Edit account drawer — while a shown-once temp password is on screen, backdrop/X are no-ops
+          so it can't be lost to a stray click (Close/Save are explicit). */}
+      <Drawer open={editOpen} onClose={() => { if (!tempPassword) setEditOpen(false) }} title={pt ? 'Editar conta' : 'Edit account'}>
         {drawerErr(editErr)}
         <Field label={pt ? 'Nome' : 'Name'}>
           <input style={input} value={en} onChange={e => setEn(e.target.value)} placeholder={pt ? 'Nome completo' : 'Full name'} />
@@ -506,7 +523,7 @@ export default function UsersSettings() {
               <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{pt ? 'Senha temporária (mostrada uma vez)' : 'Temporary password (shown once)'}</span>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>{tempPassword}</code>
-                <button type="button" style={ghostBtn} onClick={() => void copy('temp', tempPassword)} aria-label="Copy temp password">
+                <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('temp', tempPassword) }} aria-label="Copy temp password">
                   {copied === 'temp' ? <Check size={13} /> : <Copy size={13} />}
                 </button>
               </div>
