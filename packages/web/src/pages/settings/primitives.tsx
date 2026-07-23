@@ -126,7 +126,9 @@ export function Select({ value, onChange, options, placeholder, disabled }: {
   disabled?: boolean
 }) {
   const [open, setOpen] = React.useState(false)
+  const [activeIndex, setActiveIndex] = React.useState(-1)
   const wrapperRef = React.useRef<HTMLDivElement>(null)
+  const listRef = React.useRef<HTMLDivElement>(null)
 
   const selectedLabel = options.find(o => o.value === value)?.label ?? placeholder ?? ''
   const isEmpty = !value
@@ -138,20 +140,26 @@ export function Select({ value, onChange, options, placeholder, disabled }: {
         setOpen(false)
       }
     }
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
     document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('keydown', handleEscape)
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('keydown', handleEscape)
-    }
+    return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [open])
 
+  // Keep the keyboard-highlighted option scrolled into view.
+  React.useEffect(() => {
+    if (!open || activeIndex < 0) return
+    const el = listRef.current?.children[activeIndex] as HTMLElement | undefined
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [open, activeIndex])
+
+  const openMenu = () => {
+    const i = options.findIndex(o => o.value === value)
+    setActiveIndex(i >= 0 ? i : 0)
+    setOpen(true)
+  }
   const handleToggle = () => {
     if (disabled) return
-    setOpen(prev => !prev)
+    if (open) setOpen(false)
+    else openMenu()
   }
 
   const handleSelect = (optValue: string) => {
@@ -159,12 +167,40 @@ export function Select({ value, onChange, options, placeholder, disabled }: {
     setOpen(false)
   }
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (disabled) return
+    if (!open) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault(); openMenu()
+      }
+      return
+    }
+    switch (e.key) {
+      case 'ArrowDown': e.preventDefault(); setActiveIndex(i => Math.min(options.length - 1, i + 1)); break
+      case 'ArrowUp': e.preventDefault(); setActiveIndex(i => Math.max(0, i - 1)); break
+      case 'Home': e.preventDefault(); setActiveIndex(0); break
+      case 'End': e.preventDefault(); setActiveIndex(options.length - 1); break
+      case 'Enter':
+      case ' ': {
+        e.preventDefault()
+        const opt = options[activeIndex]
+        if (opt) handleSelect(opt.value)
+        break
+      }
+      case 'Escape': e.preventDefault(); setOpen(false); break
+      case 'Tab': setOpen(false); break
+    }
+  }
+
   return (
     <div ref={wrapperRef} style={{ position: 'relative', width: '100%' }}>
       <button
         type="button"
         onClick={handleToggle}
+        onKeyDown={handleKeyDown}
         disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
         style={{
           width: '100%',
           padding: '8px 11px',
@@ -220,6 +256,8 @@ export function Select({ value, onChange, options, placeholder, disabled }: {
 
       {open && (
         <div
+          ref={listRef}
+          role="listbox"
           style={{
             position: 'absolute',
             top: 'calc(100% + 4px)',
@@ -235,22 +273,16 @@ export function Select({ value, onChange, options, placeholder, disabled }: {
             padding: 4,
           }}
         >
-          {options.map(opt => {
+          {options.map((opt, idx) => {
             const isSelected = opt.value === value
+            const isActive = idx === activeIndex
             return (
               <div
                 key={opt.value}
+                role="option"
+                aria-selected={isSelected}
                 onClick={() => handleSelect(opt.value)}
-                onMouseEnter={e => {
-                  (e.currentTarget as HTMLDivElement).style.background = 'var(--anthropic-orange-dim)'
-                  ;(e.currentTarget as HTMLDivElement).style.color = 'var(--anthropic-orange)'
-                }}
-                onMouseLeave={e => {
-                  if (!isSelected) {
-                    (e.currentTarget as HTMLDivElement).style.background = 'transparent'
-                    ;(e.currentTarget as HTMLDivElement).style.color = 'var(--text-primary)'
-                  }
-                }}
+                onMouseEnter={() => setActiveIndex(idx)}
                 style={{
                   padding: '8px 10px',
                   borderRadius: 6,
@@ -260,8 +292,8 @@ export function Select({ value, onChange, options, placeholder, disabled }: {
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   gap: 8,
-                  color: isSelected ? 'var(--anthropic-orange)' : 'var(--text-primary)',
-                  background: 'transparent',
+                  color: (isActive || isSelected) ? 'var(--anthropic-orange)' : 'var(--text-primary)',
+                  background: isActive ? 'var(--anthropic-orange-dim)' : 'transparent',
                   transition: 'background 0.1s, color 0.1s',
                 }}
               >
