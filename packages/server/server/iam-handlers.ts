@@ -8,10 +8,10 @@ import { hasAnyOwner, createAccount, findAccountByEmail, updateAccount, getAccou
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
 import { seedDefaultTeam, listTeams, createTeam, getTeam, deleteTeam, DEFAULT_TEAM_ID } from './teams'
-import { backfillTokenTeamIds } from './team-tokens'
+import { backfillTokenTeamIds, listMachines, mintMachineToken } from './team-tokens'
 import { backfillRepoTeamIds } from './team-repos'
 import { makePrincipalSessionCookieHeader, getPrincipal } from './auth'
-import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo } from './iam-view'
+import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam } from './iam-view'
 import type { Membership } from './iam-types'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
@@ -209,5 +209,35 @@ export async function handleTeams(req: Request): Promise<Response> {
     return json({ ok: true })
   }
 
+  return json({ error: 'method not allowed' }, 405)
+}
+
+/**
+ * /api/iam/machines — GET list (scoped), POST add-to-account (gated). Self-guarding.
+ * Owner sees/manages all; a manager only their team's machines.
+ */
+export async function handleMachines(req: Request): Promise<Response> {
+  const principal = await getPrincipal(req)
+  if (!principal) return json({ error: 'unauthorized' }, 401)
+  if (req.method === 'GET') {
+    const all = await listMachines()
+    const visible = principal.role === 'owner' ? all : all.filter(m => canManageMachineTeam(principal, m.teamId))
+    return json({ machines: visible })
+  }
+  if (req.method === 'POST') {
+    let body: unknown
+    try { body = await req.json() } catch { return json({ error: 'invalid JSON' }, 400) }
+    const b = body as Record<string, unknown>
+    const accountId = typeof b.accountId === 'string' ? b.accountId : ''
+    const name = typeof b.name === 'string' ? b.name.trim() : ''
+    if (!accountId || !name) return json({ error: 'accountId and name are required' }, 400)
+    const account = await getAccount(accountId)
+    if (!account) return json({ error: 'account not found' }, 404)
+    // team: explicit ctx or the account's first membership team (or 'default' for owner accounts)
+    const teamId = (typeof b.teamId === 'string' && b.teamId) || account.memberships[0]?.teamId || 'default'
+    if (!canManageMachineTeam(principal, teamId)) return json({ error: 'forbidden' }, 403)
+    const { token } = await mintMachineToken({ accountId, user: account.name, machineName: name, teamId })
+    return json({ token }, 201) // plaintext once
+  }
   return json({ error: 'method not allowed' }, 405)
 }

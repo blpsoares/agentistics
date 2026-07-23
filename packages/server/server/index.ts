@@ -169,6 +169,7 @@ const AUTH_PUBLIC = new Set([
   '/api/iam/me',
   '/api/iam/accounts',
   '/api/iam/teams',
+  '/api/iam/machines',
 ])
 
 // Admin routes that require a real session cookie even on a passwordless central
@@ -969,6 +970,15 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleTeams } = await import('./iam-handlers')
       const res = await handleTeams(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/machines' && (req.method === 'GET' || req.method === 'POST')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleMachines } = await import('./iam-handlers')
+      const res = await handleMachines(req)
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })
