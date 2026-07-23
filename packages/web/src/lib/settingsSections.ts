@@ -28,8 +28,10 @@ export function visibleSettingsSections(v: SettingsViewer): SettingsSection[] {
       case 'connection': return !v.central
       case 'live': return !v.central
       case 'users':
-      case 'teams':
-      case 'machines': return v.central && (v.role === 'owner' || !!v.isManager)
+      case 'teams': return v.central && (v.role === 'owner' || !!v.isManager)
+      // Machines is visible to ANY central account: owner/manager manage the fleet, a plain user
+      // sees (and manages) the machines linked to their own account. The server scopes the list.
+      case 'machines': return v.central
       case 'repositories': return v.central && v.role === 'owner'
       default: return true
     }

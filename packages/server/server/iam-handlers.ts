@@ -9,10 +9,10 @@ import { hasAnyOwner, countOwners, createAccount, findAccountByEmail, updateAcco
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
 import { seedDefaultTeam, listTeams, createTeam, getTeam, deleteTeam, DEFAULT_TEAM_ID } from './teams'
-import { backfillTokenTeamIds, listMachines, mintMachineToken, revokeToken, rotateToken, setMachineTeam } from './team-tokens'
+import { backfillTokenTeamIds, listMachines, mintMachineToken, revokeToken, rotateToken, setMachineTeam, setMachineLabel } from './team-tokens'
 import { backfillRepoTeamIds } from './team-repos'
 import { makePrincipalSessionCookieHeader, getPrincipal } from './auth'
-import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam } from './iam-view'
+import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine } from './iam-view'
 import type { AccountDoc, Membership, Role } from './iam-types'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
@@ -360,7 +360,9 @@ export async function handleMachines(req: Request): Promise<Response> {
   if (!principal) return json({ error: 'unauthorized' }, 401)
   if (req.method === 'GET') {
     const all = await listMachines()
-    const visible = principal.role === 'owner' ? all : all.filter(m => canManageMachineTeam(principal, m.teamId))
+    // Owner sees all; anyone else sees machines in teams they manage PLUS their own account's
+    // machines (so a user can view/manage the machines linked to them).
+    const visible = principal.role === 'owner' ? all : all.filter(m => canManageMachine(principal, m))
 
     // Enrich with owner account info — ONLY for accounts the caller may actually see, so a manager
     // never learns an owner account's name/email via a default-team machine.
@@ -388,12 +390,26 @@ export async function handleMachines(req: Request): Promise<Response> {
     let body: unknown
     try { body = await req.json() } catch { return json({ error: 'invalid JSON' }, 400) }
     const b = body as Record<string, unknown>
-    // Rotate a machine's token (scoped): { rotateId } → new plaintext token once.
+    // Rename a machine (scoped): { renameId, name }. Updates the token label; the new name
+    // reflects on the machine at its next whoami handshake. Owner / team-manager / the machine's
+    // own account may rename.
+    const renameId = typeof b.renameId === 'string' ? b.renameId : ''
+    if (renameId) {
+      const newName = typeof b.name === 'string' ? b.name.trim() : ''
+      if (!newName) return json({ error: 'name is required' }, 400)
+      const machine = (await listMachines()).find(m => m.id === renameId)
+      if (!machine) return json({ error: 'machine not found' }, 404)
+      if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
+      await setMachineLabel(renameId, newName)
+      return json({ ok: true })
+    }
+    // Rotate a machine's token (scoped): { rotateId } → new plaintext token once. Lets an admin OR
+    // the machine's owner recover a lost token (the shown-once token can't be re-displayed).
     const rotateId = typeof b.rotateId === 'string' ? b.rotateId : ''
     if (rotateId) {
       const machine = (await listMachines()).find(m => m.id === rotateId)
       if (!machine) return json({ error: 'machine not found' }, 404)
-      if (!canManageMachineTeam(principal, machine.teamId)) return json({ error: 'forbidden' }, 403)
+      if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
       const token = await rotateToken(rotateId)
       if (token === null) return json({ error: 'machine not found' }, 404)
       return json({ token }, 200)
@@ -443,7 +459,7 @@ export async function handleMachines(req: Request): Promise<Response> {
     if (!id) return json({ error: 'id is required' }, 400)
     const machine = (await listMachines()).find(m => m.id === id)
     if (!machine) return json({ error: 'machine not found' }, 404)
-    if (!canManageMachineTeam(principal, machine.teamId)) return json({ error: 'forbidden' }, 403)
+    if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
     const deleted = await revokeToken(id)
     // Cascade cleanup (best-effort) — mirrors handleRevokeToken so the member disappears too.
     try {

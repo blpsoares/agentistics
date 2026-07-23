@@ -196,6 +196,7 @@ export default function UsersSettings() {
     })
     if (!res.ok) { const d = await res.json() as { error?: string }; setAccountErr(d.error || `HTTP ${res.status}`); return }
     const d = await res.json() as { machineTokens?: { name: string; token: string }[] }
+    setAccountErr(null) // clear any prior error (e.g. "email already exists") on success
     setCreated({
       email: ae.trim(), password: ap,
       machineTokens: d.machineTokens,

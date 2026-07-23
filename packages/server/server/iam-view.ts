@@ -73,3 +73,10 @@ export function canManageMachineTeam(p: Principal, teamId: string | undefined): 
   if (!teamId) return false
   return p.memberships.some(m => m.teamId === teamId && m.role === 'manager')
 }
+
+/** Whether a principal may view/manage a specific machine: owner, a manager of the machine's team,
+ *  OR the machine's own account (a user managing their own machine — view/rename/rotate/revoke). */
+export function canManageMachine(p: Principal, machine: { teamId?: string; accountId?: string }): boolean {
+  if (machine.accountId && machine.accountId === p.accountId) return true
+  return canManageMachineTeam(p, machine.teamId)
+}

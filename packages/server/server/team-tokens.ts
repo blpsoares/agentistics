@@ -304,6 +304,14 @@ export async function setMachineTeam(id: string, teamId: string): Promise<boolea
   return res.matchedCount > 0
 }
 
+/** Rename a machine (updates the token doc's `label`). Returns true if a doc was matched. The new
+ *  name reflects on the machine on its next whoami handshake (machineName = label). */
+export async function setMachineLabel(id: string, label: string): Promise<boolean> {
+  const col = await getTokensCollection()
+  const res = await col.updateOne({ _id: id }, { $set: { label } })
+  return res.matchedCount > 0
+}
+
 /** Assign the Default team to any token minted before teams existed. Idempotent. */
 export async function backfillTokenTeamIds(): Promise<void> {
   const col = await getTokensCollection()

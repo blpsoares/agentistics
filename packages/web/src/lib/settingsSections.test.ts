@@ -15,8 +15,8 @@ test('central manager: personal + governance (users/teams/machines)', () => {
   expect(ids({ central: true, role: 'member', isManager: true })).toEqual(['preferences', 'sessions', 'data-sources', 'harnesses', 'install', 'users', 'teams', 'machines'])
 })
 
-test('central plain user: personal only, no governance', () => {
-  expect(ids({ central: true, role: 'member', isManager: false })).toEqual(['preferences', 'sessions', 'data-sources', 'harnesses', 'install'])
+test('central plain user: personal + machines (to view/manage their own), no users/teams', () => {
+  expect(ids({ central: true, role: 'member', isManager: false })).toEqual(['preferences', 'sessions', 'data-sources', 'harnesses', 'install', 'machines'])
 })
 
 test('every section has a group', () => {
