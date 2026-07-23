@@ -3,7 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import { Plus, Copy, Check, RotateCw, Trash2 } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
 import { TeamSettings, type TeamConfig } from '../../components/TeamSettings'
-import { SectionHeader, Select } from './primitives'
+import { SectionHeader, Select, Checkbox } from './primitives'
 import { Drawer } from './Drawer'
 
 // ── interfaces ────────────────────────────────────────────────────────────────
@@ -139,6 +139,10 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   // Revoke confirm state
   const [revokeConfirmId, setRevokeConfirmId] = useState<string | null>(null)
 
+  // Bulk delete state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
+
   const load = useCallback(async () => {
     try {
       const [m, a, t] = await Promise.all([
@@ -149,6 +153,8 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
       setMachines(m.machines ?? [])
       setAccounts(a.accounts ?? [])
       setTeams(t.teams ?? [])
+      setSelectedIds(new Set())
+      setBulkDeleteConfirm(false)
     } catch (e) {
       setErr(String(e))
     }
@@ -260,6 +266,44 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     }
   }
 
+  function toggleSelectAll() {
+    if (selectedIds.size === machines.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(machines.map(m => m.id)))
+    }
+  }
+
+  function toggleSelect(id: string) {
+    const newSet = new Set(selectedIds)
+    if (newSet.has(id)) {
+      newSet.delete(id)
+    } else {
+      newSet.add(id)
+    }
+    setSelectedIds(newSet)
+  }
+
+  async function bulkDelete() {
+    if (!bulkDeleteConfirm) {
+      setBulkDeleteConfirm(true)
+      return
+    }
+    try {
+      for (const id of selectedIds) {
+        const res = await fetch('/api/iam/machines', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      }
+      void load()
+    } catch (e) {
+      setErr(String(e))
+    }
+  }
+
   // Determine whether to show the team picker for the selected account
   const selectedAccount = accounts.find(a => a.id === selectedAccountId)
   const showTeamPicker = selectedAccount?.role === 'member' && (selectedAccount.memberships.length ?? 0) > 1
@@ -298,6 +342,25 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
         </button>
       </div>
 
+      {selectedIds.size > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <button
+            style={{
+              ...primaryBtn,
+              background: bulkDeleteConfirm ? '#ef4444' : 'color-mix(in srgb, #ef4444 12%, transparent)',
+              borderColor: '#ef4444',
+              color: bulkDeleteConfirm ? '#fff' : '#ef4444',
+            }}
+            onClick={() => void bulkDelete()}
+          >
+            <Trash2 size={14} />
+            {bulkDeleteConfirm
+              ? (pt ? `Confirmar exclusão de ${selectedIds.size}?` : `Confirm delete ${selectedIds.size}?`)
+              : (pt ? `Excluir selecionados (${selectedIds.size})` : `Delete selected (${selectedIds.size})`)}
+          </button>
+        </div>
+      )}
+
       {machines.length === 0 ? (
         <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', padding: '20px 0' }}>
           {pt ? 'Nenhuma máquina registrada.' : 'No machines registered.'}
@@ -307,6 +370,13 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
+                <th style={{ ...th, width: 40 }}>
+                  <Checkbox
+                    checked={selectedIds.size === machines.length}
+                    onChange={toggleSelectAll}
+                    label=""
+                  />
+                </th>
                 <th style={th}>{pt ? 'Máquina' : 'Machine'}</th>
                 <th style={th}>{pt ? 'Conta' : 'Owner'}</th>
                 <th style={th}>{pt ? 'Usuário' : 'User'}</th>
@@ -322,6 +392,13 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                 const statusLabel = m.online ? (pt ? 'online' : 'online') : (pt ? 'offline' : 'offline')
                 return (
                   <tr key={m.id}>
+                    <td style={td}>
+                      <Checkbox
+                        checked={selectedIds.has(m.id)}
+                        onChange={() => toggleSelect(m.id)}
+                        label=""
+                      />
+                    </td>
                     <td style={{ ...td, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</td>
                     <td style={td}>
                       {m.accountName ? (
