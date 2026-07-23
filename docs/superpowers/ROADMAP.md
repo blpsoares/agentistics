@@ -65,6 +65,12 @@ English by project convention; conversation with the user is Portuguese.
 - **Decisions:** aside keeps only a gear → `/settings` **hub page** with grouped internal nav (Personal / Governance); governance split into **Users** (accounts), **Teams**, **Machines** (registered member tokens/presence), **Repositories**; account creation gained an **owner** option (gated to owner callers) + **multi-team manager scope** editor.
 - **Plan:** [plans/2026-07-22-ui2-settings-hub.md](plans/2026-07-22-ui2-settings-hub.md) — ✅ **implemented** (commits `0e108ff`..`a14c9ec` on `dev`; tsc clean, 345 tests; reviews clean, no privilege-escalation). Also fixed the UI-1 blank-settings-page bug (`SettingsPage` must forward outlet context — commit `<hubfix>`). **Deferred:** hide `manager` role option from non-owner viewers (server already 403s); account/team PATCH.
 
+#### B4-EXT — Accounts ↔ Machines governance + first-login password 🟨
+- **What:** machines owned by accounts (token gains `accountId`+machineName); create account with/without a machine; random password + **forced first-login change** (`mustChangePassword` + `POST /api/iam/change-password`); **1 account : N machines**; owner registers machines for any account & grants managers visibility via team memberships (**account PATCH/edit**); Machines page becomes a **scoped view**; `whoami` extended so the machine shows its identity; **Central connection** settings section restored on solo/member (regression fix `87f6671`).
+- **Handshake:** bearer machine token (sha256-hashed server-side) → `GET /api/team/whoami` verifies + returns `{user,machineName,email,teamId}`; server-authoritative attribution.
+- **Spec:** [2026-07-23-accounts-machines-governance-design.md](specs/2026-07-23-accounts-machines-governance-design.md)
+- **Phases:** 1 backend core · 2 frontend accounts (create/edit/first-login) · 3 frontend machines (view + add-to-account) · 4 machine client (whoami identity display). **Plans:** _(link as written)_
+
 ### Group B — Large subsystems (each is its own project)
 
 #### B4 — Governance / IAM (the foundation) 🟨
