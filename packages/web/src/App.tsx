@@ -41,7 +41,7 @@ import { CacheHitRatePanel } from './components/CacheHitRatePanel'
 import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
 import { TranscriptModal } from './components/TranscriptModal'
-import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
+import type { PrefsDraft } from './lib/app-context'
 import { TtyChat } from './components/TtyChat'
 import { UpdateModal } from './components/UpdateModal'
 import { InstallModal } from './components/InstallModal'
@@ -614,11 +614,10 @@ function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): st
 }
 
 function MobileBottomNav({
-  lang, harnesses, onSettings, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues, isCentral, hasWorkflows,
+  lang, harnesses, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues, isCentral, hasWorkflows,
 }: {
   lang: Lang
   harnesses?: HarnessId[]
-  onSettings: () => void
   onRefresh: () => void
   liveUpdates: boolean
   onToggleLive: () => void
@@ -850,11 +849,11 @@ function CollapsedTip({ label, show, children }: { label: string; show: boolean;
   )
 }
 
-function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle, updatedText, sinceText, memberSummary, theme, onToggleTheme, onToggleLang, onSettings, onExport, principal }: {
+function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle, updatedText, sinceText, memberSummary, theme, onToggleTheme, onToggleLang, onExport, principal }: {
   lang: Lang; harnesses?: HarnessId[]; isCentral?: boolean; hasWorkflows?: boolean
   collapsed: boolean; onToggle: () => void; updatedText: string; sinceText?: string
   memberSummary?: { total: number; online: number; offline: number }
-  theme: Theme; onToggleTheme: () => void; onToggleLang: () => void; onSettings: () => void; onExport: () => void
+  theme: Theme; onToggleTheme: () => void; onToggleLang: () => void; onExport: () => void
   principal?: IamAccount
 }) {
   const location = useLocation()
@@ -1009,52 +1008,69 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
         )}
       </nav>
 
-      {/* Footer — config controls */}
-      <div style={{
-        display: 'flex', flexWrap: 'wrap', gap: 6, paddingTop: 10, marginTop: 6,
-        borderTop: '1px solid var(--border)', justifyContent: collapsed ? 'center' : 'flex-start',
-      }}>
-        {principal && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 4px', minWidth: 0 }}>
-            <div style={{ width: 26, height: 26, borderRadius: '50%', background: 'var(--bg-elevated)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', flexShrink: 0 }}>{principal.name.slice(0, 2)}</div>
+      {/* Footer — Row A account · thin divider · Row B config actions */}
+      <div style={{ paddingTop: 10, marginTop: 6, borderTop: '1px solid var(--border)' }}>
+        {/* Row A — account (avatar + name + role, logout right-aligned) */}
+        {principal && (collapsed ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingBottom: 10 }}>
+            <div title={principal.name} style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--bg-elevated)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', flexShrink: 0 }}>{principal.name.slice(0, 2)}</div>
+            <CollapsedTip label={pt ? 'Sair' : 'Log out'} show>
+              <button title={pt ? 'Sair' : 'Log out'} aria-label={pt ? 'Sair' : 'Log out'} onClick={() => { void fetch('/api/iam/logout', { method: 'POST' }).then(() => window.location.reload()) }} style={footBtn}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
+                <LogOut size={15} />
+              </button>
+            </CollapsedTip>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 2px 10px', minWidth: 0 }}>
+            <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--bg-elevated)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', flexShrink: 0 }}>{principal.name.slice(0, 2)}</div>
             <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{principal.name}</div>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{principal.name}</div>
               <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{principal.role === 'owner' ? 'Owner' : (principal.memberships.some(m => m.role === 'manager') ? 'Manager' : 'User')}</div>
             </div>
-            <button title="Log out" onClick={() => { void fetch('/api/iam/logout', { method: 'POST' }).then(() => window.location.reload()) }}
-              style={{ display: 'inline-flex', padding: 6, borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', flexShrink: 0 }}>
-              <LogOut size={14} />
+            <button title={pt ? 'Sair' : 'Log out'} aria-label={pt ? 'Sair' : 'Log out'} onClick={() => { void fetch('/api/iam/logout', { method: 'POST' }).then(() => window.location.reload()) }}
+              style={{ display: 'inline-flex', padding: 7, borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', flexShrink: 0, transition: 'color 0.15s' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)' }}>
+              <LogOut size={15} />
             </button>
           </div>
-        )}
-        <CollapsedTip label={pt ? 'Configurações' : 'Settings'} show={collapsed}>
-          <NavLink to="/settings/preferences" aria-label={pt ? 'Configurações' : 'Settings'} title={collapsed ? undefined : (pt ? 'Configurações' : 'Settings')} style={{ ...footBtn, textDecoration: 'none' }}
-            onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-primary)' }}
-            onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-secondary)' }}>
-            <SlidersHorizontal size={15} />
-          </NavLink>
-        </CollapsedTip>
-        <CollapsedTip label={pt ? 'Tema' : 'Theme'} show={collapsed}>
-          <button onClick={onToggleTheme} aria-label={pt ? 'Tema' : 'Theme'} title={collapsed ? undefined : (theme === 'dark' ? (pt ? 'Tema claro' : 'Light theme') : (pt ? 'Tema escuro' : 'Dark theme'))} style={footBtn}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
-            {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
-          </button>
-        </CollapsedTip>
-        <CollapsedTip label={pt ? 'Idioma' : 'Language'} show={collapsed}>
-          <button onClick={onToggleLang} aria-label={pt ? 'Idioma' : 'Language'} title={collapsed ? undefined : (pt ? 'Switch to English' : 'Mudar para Português')} style={{ ...footBtn, width: 'auto', padding: '0 10px', gap: 5, fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
-            <Globe size={14} />{!collapsed && (pt ? 'EN' : 'PT')}
-          </button>
-        </CollapsedTip>
-        {/* Export (PDF) — kept last so the orange download action sits at the right end. */}
-        <CollapsedTip label={pt ? 'Exportar' : 'Export'} show={collapsed}>
-          <button onClick={onExport} aria-label={pt ? 'Exportar relatório PDF' : 'Export PDF report'} title={collapsed ? undefined : (pt ? 'Exportar relatório PDF' : 'Export PDF report')}
-            style={{ ...footBtn, marginLeft: collapsed ? undefined : 'auto', borderColor: 'var(--anthropic-orange)50', color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)' }}>
-            <Download size={15} />
-          </button>
-        </CollapsedTip>
+        ))}
+
+        {/* Thin divider between account and actions */}
+        {principal && <div style={{ height: 1, background: 'var(--border)', marginBottom: 10 }} />}
+
+        {/* Row B — config actions (theme · language · export · settings), evenly spaced */}
+        <div style={{ display: 'flex', flexDirection: collapsed ? 'column' : 'row', alignItems: 'center', gap: 6 }}>
+          <CollapsedTip label={pt ? 'Tema' : 'Theme'} show={collapsed}>
+            <button onClick={onToggleTheme} aria-label={pt ? 'Tema' : 'Theme'} title={collapsed ? undefined : (theme === 'dark' ? (pt ? 'Tema claro' : 'Light theme') : (pt ? 'Tema escuro' : 'Dark theme'))} style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1 }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
+              {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+            </button>
+          </CollapsedTip>
+          <CollapsedTip label={pt ? 'Idioma' : 'Language'} show={collapsed}>
+            <button onClick={onToggleLang} aria-label={pt ? 'Idioma' : 'Language'} title={collapsed ? undefined : (pt ? 'Switch to English' : 'Mudar para Português')} style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1, gap: 5, fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
+              <Globe size={14} />{!collapsed && (pt ? 'EN' : 'PT')}
+            </button>
+          </CollapsedTip>
+          <CollapsedTip label={pt ? 'Exportar' : 'Export'} show={collapsed}>
+            <button onClick={onExport} aria-label={pt ? 'Exportar relatório PDF' : 'Export PDF report'} title={collapsed ? undefined : (pt ? 'Exportar relatório PDF' : 'Export PDF report')}
+              style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1, borderColor: 'var(--anthropic-orange)50', color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)' }}>
+              <Download size={15} />
+            </button>
+          </CollapsedTip>
+          <CollapsedTip label={pt ? 'Configurações' : 'Settings'} show={collapsed}>
+            <NavLink to="/settings/preferences" aria-label={pt ? 'Configurações' : 'Settings'} title={collapsed ? undefined : (pt ? 'Configurações' : 'Settings')} style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1, textDecoration: 'none' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-secondary)' }}>
+              <SlidersHorizontal size={15} />
+            </NavLink>
+          </CollapsedTip>
+        </div>
       </div>
     </aside>
   )
@@ -1188,7 +1204,6 @@ export default function AppLayout() {
     } catch {}
     return DEFAULT_CARD_ORDER
   })
-  const [showPrefsModal, setShowPrefsModal] = useState(false)
   // Mobile-only: lets the user minimize the sticky filter bar while scrolling so
   // it doesn't eat the viewport on small screens. Expanded by default.
   const [filtersCollapsed, setFiltersCollapsed] = useState(false)
@@ -1895,7 +1910,6 @@ export default function AppLayout() {
         theme={theme}
         onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
         onToggleLang={() => { const next = lang === 'pt' ? 'en' : 'pt'; setLang(next); if (next === 'pt') setCurrency('BRL'); else if (currency === 'BRL') setCurrency('USD') }}
-        onSettings={() => setShowPrefsModal(true)}
         onExport={() => navigate('/export')}
         principal={iam?.account}
       />}
@@ -2122,27 +2136,6 @@ export default function AppLayout() {
         }} />
       </main>
 
-      {/* Unified Settings modal (Preferences + Live + Environment) */}
-      {showPrefsModal && (
-        <PreferencesModal
-          initial={{ lang, theme, currency, cardOrder, cardPrecision, chatModel, chatSoundEnabled, chatSoundId }}
-          onSave={(draft: PrefsDraft) => { savePreferences(draft); setShowPrefsModal(false) }}
-          onClose={() => setShowPrefsModal(false)}
-          pwaPrompt={pwaPrompt}
-          onPwaInstalled={() => { setPwaInstalled(true); setPwaPrompt(null) }}
-          liveUpdates={liveUpdates}
-          setLiveUpdates={setLiveUpdates}
-          updateInterval={updateInterval}
-          setUpdateInterval={setUpdateInterval}
-          riskyMode={riskyMode}
-          setRiskyMode={setRiskyMode}
-          highlightUpdates={highlightUpdates}
-          setHighlightUpdates={setHighlightUpdates}
-          harnesses={data.harnesses}
-          presence={data?.presence}
-          />
-      )}
-
       {/* Install Modal — shown once after first data load */}
       {showInstallModal && (
         <InstallModal
@@ -2262,8 +2255,7 @@ export default function AppLayout() {
         <MobileBottomNav
           lang={lang}
           harnesses={data.harnesses}
-          onSettings={() => setShowPrefsModal(true)}
-          onRefresh={refetch}
+            onRefresh={refetch}
           liveUpdates={liveUpdates}
           onToggleLive={() => setLiveUpdates(v => !v)}
           updateInterval={updateInterval}
