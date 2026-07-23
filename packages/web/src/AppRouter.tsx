@@ -21,8 +21,9 @@ const DataSourcesSettings = lazy(() => import('./pages/settings/DataSourcesSetti
 const HarnessesSettings = lazy(() => import('./pages/settings/HarnessesSettings'))
 const InstallSettings = lazy(() => import('./pages/settings/InstallSettings'))
 const LiveSettings = lazy(() => import('./pages/settings/LiveSettings'))
-const IamSettings = lazy(() => import('./pages/settings/IamSettings'))
-const TeamSettingsPage = lazy(() => import('./pages/settings/TeamSettingsPage'))
+const UsersSettings = lazy(() => import('./pages/settings/UsersSettings'))
+const TeamsSettings = lazy(() => import('./pages/settings/TeamsSettings'))
+const MachinesSettings = lazy(() => import('./pages/settings/MachinesSettings'))
 const ReposSettingsPage = lazy(() => import('./pages/settings/ReposSettingsPage'))
 
 function PageFallback() {
@@ -63,8 +64,9 @@ export default function AppRouter() {
             <Route path="harnesses" element={<Suspense fallback={<PageFallback />}><HarnessesSettings /></Suspense>} />
             <Route path="install" element={<Suspense fallback={<PageFallback />}><InstallSettings /></Suspense>} />
             <Route path="live" element={<Suspense fallback={<PageFallback />}><LiveSettings /></Suspense>} />
-            <Route path="iam" element={<Suspense fallback={<PageFallback />}><IamSettings /></Suspense>} />
-            <Route path="team" element={<Suspense fallback={<PageFallback />}><TeamSettingsPage /></Suspense>} />
+            <Route path="users" element={<Suspense fallback={<PageFallback />}><UsersSettings /></Suspense>} />
+            <Route path="teams" element={<Suspense fallback={<PageFallback />}><TeamsSettings /></Suspense>} />
+            <Route path="machines" element={<Suspense fallback={<PageFallback />}><MachinesSettings /></Suspense>} />
             <Route path="repositories" element={<Suspense fallback={<PageFallback />}><ReposSettingsPage /></Suspense>} />
           </Route>
         </Route>

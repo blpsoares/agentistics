@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Plus, Trash2, X } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
-import { useIsMobile } from '../../hooks/useIsMobile'
 import { SectionHeader } from './primitives'
+import { Drawer } from './Drawer'
 
 interface Team { _id: string; name: string }
 interface Membership { teamId: string; role: 'manager' | 'user' }
@@ -39,50 +39,6 @@ const trashBtn: React.CSSProperties = {
   display: 'inline-flex', padding: 4,
 }
 
-// ── reusable Drawer ───────────────────────────────────────────────────────
-function Drawer({ open, title, onClose, children }: {
-  open: boolean; title: string; onClose: () => void; children: React.ReactNode
-}) {
-  const isMobile = useIsMobile()
-  if (!open) return null
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 1000, display: 'flex',
-        justifyContent: 'flex-end', background: 'rgba(0,0,0,0.5)',
-      }}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          width: isMobile ? '100%' : 400,
-          height: '100%',
-          background: 'var(--bg-card)',
-          borderLeft: isMobile ? 'none' : '1px solid var(--border)',
-          boxShadow: '-12px 0 40px rgba(0,0,0,0.35)',
-          display: 'flex', flexDirection: 'column',
-          overflowY: 'auto',
-        }}
-      >
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '16px 18px', borderBottom: '1px solid var(--border)',
-          position: 'sticky', top: 0, background: 'var(--bg-card)', zIndex: 1,
-        }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</div>
-          <button onClick={onClose} style={{ ...trashBtn, color: 'var(--text-tertiary)' }} aria-label="Close">
-            <X size={18} />
-          </button>
-        </div>
-        <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {children}
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -109,7 +65,7 @@ function RoleBadge({ role }: { role: string }) {
 }
 
 // ── page ──────────────────────────────────────────────────────────────────
-export default function IamSettings() {
+export default function UsersSettings() {
   const { lang } = useOutletContext<AppContext>()
   const pt = lang === 'pt'
 
@@ -155,26 +111,6 @@ export default function IamSettings() {
     void load()
   }
 
-  // ── team drawer ──
-  const [teamOpen, setTeamOpen] = useState(false)
-  const [teamName, setTeamName] = useState('')
-  const [teamErr, setTeamErr] = useState<string | null>(null)
-
-  function openTeamDrawer() { setTeamName(''); setTeamErr(null); setTeamOpen(true) }
-  async function createTeam() {
-    if (!teamName.trim()) { setTeamErr(pt ? 'Informe o nome do time.' : 'Enter a team name.'); return }
-    const res = await fetch('/api/iam/teams', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: teamName.trim() }),
-    })
-    if (!res.ok) { const d = await res.json().catch(() => ({})) as { error?: string }; setTeamErr(d.error || `HTTP ${res.status}`); return }
-    setTeamOpen(false); void load()
-  }
-  async function deleteTeam(id: string) {
-    await fetch('/api/iam/teams', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
-    void load()
-  }
-
   const teamNameOf = (id: string) => teams.find(t => t._id === id)?.name ?? id
 
   const roleLegend = pt
@@ -187,7 +123,13 @@ export default function IamSettings() {
 
   return (
     <div>
-      <SectionHeader label={pt ? 'Identidade & acesso' : 'Identity & access'} />
+      <SectionHeader label={pt ? 'Usuários' : 'Users'} />
+
+      <p style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6, margin: '0 0 14px' }}>
+        {pt
+          ? 'Contas que acessam o painel central. Cada usuário pertence a um ou mais times.'
+          : 'Accounts that sign in to the central dashboard. Each user belongs to one or more teams.'}
+      </p>
 
       {/* role legend */}
       <div style={{
@@ -210,7 +152,7 @@ export default function IamSettings() {
         <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{pt ? 'Contas' : 'Accounts'}</div>
         <button style={primaryBtn} onClick={openAccountDrawer}><Plus size={14} /> {pt ? 'Nova conta' : 'New account'}</button>
       </div>
-      <div style={{ overflowX: 'auto', marginBottom: 24 }}>
+      <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
@@ -253,40 +195,6 @@ export default function IamSettings() {
         </table>
       </div>
 
-      {/* Teams */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{pt ? 'Times' : 'Teams'}</div>
-        <button style={primaryBtn} onClick={openTeamDrawer}><Plus size={14} /> {pt ? 'Novo time' : 'New team'}</button>
-      </div>
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr>
-              <th style={th}>{pt ? 'Nome' : 'Name'}</th>
-              <th style={{ ...th, width: 40 }} />
-            </tr>
-          </thead>
-          <tbody>
-            {teams.length === 0 && (
-              <tr><td style={{ ...td, color: 'var(--text-tertiary)' }} colSpan={2}>{pt ? 'Nenhum time.' : 'No teams.'}</td></tr>
-            )}
-            {teams.map(t => (
-              <tr key={t._id}>
-                <td style={{ ...td, color: 'var(--text-primary)', fontWeight: 500 }}>
-                  {t.name}
-                  {t._id === 'default' && <em style={{ color: 'var(--text-tertiary)', fontWeight: 400, marginLeft: 6 }}>({pt ? 'padrão' : 'default'})</em>}
-                </td>
-                <td style={{ ...td, textAlign: 'right' }}>
-                  {t._id !== 'default' && (
-                    <button onClick={() => void deleteTeam(t._id)} style={trashBtn} aria-label="Delete team"><Trash2 size={14} /></button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
       {/* Account drawer */}
       <Drawer open={accountOpen} onClose={() => setAccountOpen(false)} title={pt ? 'Nova conta' : 'New account'}>
         {drawerErr(accountErr)}
@@ -314,18 +222,6 @@ export default function IamSettings() {
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
           <button style={ghostBtn} onClick={() => setAccountOpen(false)}>{pt ? 'Cancelar' : 'Cancel'}</button>
           <button style={primaryBtn} onClick={() => void createAccount()}><Plus size={14} /> {pt ? 'Criar conta' : 'Create account'}</button>
-        </div>
-      </Drawer>
-
-      {/* Team drawer */}
-      <Drawer open={teamOpen} onClose={() => setTeamOpen(false)} title={pt ? 'Novo time' : 'New team'}>
-        {drawerErr(teamErr)}
-        <Field label={pt ? 'Nome do time' : 'Team name'}>
-          <input style={input} value={teamName} onChange={e => setTeamName(e.target.value)} placeholder={pt ? 'Nome do time' : 'Team name'} />
-        </Field>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-          <button style={ghostBtn} onClick={() => setTeamOpen(false)}>{pt ? 'Cancelar' : 'Cancel'}</button>
-          <button style={primaryBtn} onClick={() => void createTeam()}><Plus size={14} /> {pt ? 'Criar time' : 'Create team'}</button>
         </div>
       </Drawer>
     </div>
