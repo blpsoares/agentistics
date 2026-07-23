@@ -9,7 +9,7 @@ import { hasAnyOwner, countOwners, createAccount, findAccountByEmail, updateAcco
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
 import { seedDefaultTeam, listTeams, createTeam, getTeam, deleteTeam, DEFAULT_TEAM_ID } from './teams'
-import { backfillTokenTeamIds, listMachines, mintMachineToken, revokeToken, rotateToken, setMachineTeam, setMachineLabel, setMachineOwners } from './team-tokens'
+import { backfillTokenTeamIds, listMachines, mintMachineToken, mintMachine, revokeToken, rotateToken, setMachineTeam, setMachineLabel, setMachineOwners } from './team-tokens'
 import { getCentralConfig } from './central-config'
 import { packConnectToken } from '@agentistics/core'
 import { backfillRepoTeamIds } from './team-repos'
@@ -469,23 +469,39 @@ export async function handleMachines(req: Request): Promise<Response> {
       await setMachineTeam(reassignId, newTeamId)
       return json({ ok: true })
     }
-    const accountId = typeof b.accountId === 'string' ? b.accountId : ''
+    // Mint a new machine: { name, accountIds?: string[], teamId?: string }.
+    // Flexible linkage: name required; accountIds (0+) optional; teamId optional.
+    // Owners may create any combination (incl. fully loose). Non-owners must provide a teamId they
+    // manage (else 403) — prevents managers creating machines outside their scope.
     const name = typeof b.name === 'string' ? b.name.trim() : ''
-    if (!accountId || !name) return json({ error: 'accountId and name are required' }, 400)
-    const account = await getAccount(accountId)
-    if (!account) return json({ error: 'account not found' }, 404)
-    // Principal must be able to see the target account (blocks minting for out-of-scope accounts).
-    if (!accountVisibleTo(principal, account)) return json({ error: 'forbidden' }, 403)
-    // team: an explicit ctx team the account actually belongs to, else the account's first
-    // membership team (or 'default' for owner accounts with no memberships). Constraining to the
-    // account's own teams prevents stamping the machine into a team the account isn't in.
-    const accountTeams = account.memberships.map(m => m.teamId)
-    const teamId = (typeof b.teamId === 'string' && b.teamId && accountTeams.includes(b.teamId))
-      ? b.teamId
-      : (accountTeams[0] ?? 'default')
-    if (!canManageMachineTeam(principal, teamId)) return json({ error: 'forbidden' }, 403)
-    const { token } = await mintMachineToken({ accountId, user: account.name, machineName: name, teamId })
-    return json({ token: packConnectToken(token, (await getCentralConfig()).publicUrl) }, 201) // shown once
+    if (!name) return json({ error: 'name is required' }, 400)
+    // accountIds: accept either an array OR a single accountId alias → array (may be empty).
+    const accountIds = Array.isArray(b.accountIds)
+      ? b.accountIds.filter((x): x is string => typeof x === 'string')
+      : (typeof b.accountId === 'string' ? [b.accountId] : [])
+    // teamId: only set when non-empty string; otherwise undefined (no DEFAULT_TEAM_ID fallback).
+    const teamId = typeof b.teamId === 'string' && b.teamId ? b.teamId : undefined
+    // Validate every account exists + is visible to the caller (no assigning to out-of-scope accounts).
+    for (const id of accountIds) {
+      const acct = await getAccount(id)
+      if (!acct) return json({ error: 'account not found' }, 404)
+      if (!accountVisibleTo(principal, acct)) return json({ error: 'forbidden' }, 403)
+    }
+    // Validate teamId exists (when set).
+    if (teamId && !(await getTeam(teamId))) return json({ error: 'team not found' }, 404)
+    // Scope rule: owner may create any combination. A non-owner (manager) MUST provide a teamId
+    // they manage — otherwise 403 so a manager can't create a machine outside their scope.
+    if (principal.role !== 'owner') {
+      if (!teamId || !canManageMachineTeam(principal, teamId)) {
+        return json({ error: 'select a team you manage' }, 403)
+      }
+    }
+    // user: first account's name, or the machine name itself if no accounts.
+    const user = accountIds.length > 0 && accountIds[0]
+      ? ((await getAccount(accountIds[0]))?.name ?? name)
+      : name
+    const { token } = await mintMachine({ machineName: name, user, accountIds, teamId })
+    return json({ token: packConnectToken(token, (await getCentralConfig()).publicUrl) }, 201)
   }
   if (req.method === 'DELETE') {
     // Revoke a machine (scoped): { id }. Cascades to the member's sessions/stats/workflows.

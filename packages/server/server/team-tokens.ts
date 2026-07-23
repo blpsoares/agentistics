@@ -281,6 +281,33 @@ export async function mintMachineToken(input: { accountId: string; user: string;
 }
 
 /**
+ * Mint a flexible machine token with optional owner(s) and team.
+ * A machine can be:
+ *   - loose (no owner + no team): accountIds empty/undefined, teamId undefined
+ *   - team-only: accountIds empty/undefined, teamId set
+ *   - owner(s)-only: accountIds set, teamId undefined
+ *   - both: accountIds set, teamId set
+ * Returns the token hash (id) and plaintext token.
+ */
+export async function mintMachine(input: { machineName: string; user: string; accountIds?: string[]; teamId?: string }): Promise<{ id: string; token: string }> {
+  const token = randomBytes(32).toString('hex')
+  const id = hashToken(token)
+  const unique = input.accountIds && input.accountIds.length ? [...new Set(input.accountIds.filter(Boolean))] : []
+  const doc: TokenDoc = {
+    _id: id,
+    user: input.user,
+    label: input.machineName,
+    createdAt: new Date().toISOString(),
+    lastSeenAt: null,
+    ...(unique.length > 0 ? { accountId: unique[0], accountIds: unique } : {}),
+    ...(input.teamId ? { teamId: input.teamId } : {}),
+  }
+  const col = await getTokensCollection()
+  await col.insertOne(doc)
+  return { id, token }
+}
+
+/**
  * List all machine tokens (excludes CI and repo tokens).
  * Returns machine records with the token hash as id (no plaintext).
  */

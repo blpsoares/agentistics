@@ -131,8 +131,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
 
   // Add machine drawer state
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [selectedAccountId, setSelectedAccountId] = useState('')
-  const [machineRows, setMachineRows] = useState<{ name: string; teamId: string }[]>([{ name: '', teamId: '' }])
+  const [machineRows, setMachineRows] = useState<{ name: string; teamId: string; accountIds: string[] }[]>([{ name: '', teamId: '', accountIds: [] }])
   const [drawerErr, setDrawerErr] = useState<string | null>(null)
   const [created, setCreated] = useState<null | { machines: { name: string; token: string }[] }>(null)
   const [copied, setCopied] = useState<string | null>(null)
@@ -251,8 +250,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   }
 
   function openDrawer() {
-    setSelectedAccountId('')
-    setMachineRows([{ name: '', teamId: '' }])
+    setMachineRows([{ name: '', teamId: '', accountIds: [] }])
     setDrawerErr(null)
     setCreated(null)
     setCopied(null)
@@ -261,33 +259,57 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   }
 
   function addMachineRow() {
-    setMachineRows(rs => [...rs, { name: '', teamId: '' }])
+    setMachineRows(rs => [...rs, { name: '', teamId: '', accountIds: [] }])
   }
 
   function removeMachineRow(i: number) {
     setMachineRows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs)
   }
 
-  function updateMachineRow(i: number, patch: { name?: string; teamId?: string }) {
+  function updateMachineRow(i: number, patch: { name?: string; teamId?: string; accountIds?: string[] }) {
     setMachineRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r))
   }
 
+  function addOwnerToMachineRow(machineIdx: number) {
+    setMachineRows(rs => rs.map((r, i) => i === machineIdx ? { ...r, accountIds: [...r.accountIds, ''] } : r))
+  }
+
+  function removeOwnerFromMachineRow(machineIdx: number, ownerIdx: number) {
+    setMachineRows(rs => rs.map((r, i) => {
+      if (i !== machineIdx) return r
+      const newAccountIds = r.accountIds.filter((_, idx) => idx !== ownerIdx)
+      return { ...r, accountIds: newAccountIds }
+    }))
+  }
+
+  function updateOwnerInMachineRow(machineIdx: number, ownerIdx: number, accountId: string) {
+    setMachineRows(rs => rs.map((r, i) => {
+      if (i !== machineIdx) return r
+      const newAccountIds = r.accountIds.map((id, idx) => idx === ownerIdx ? accountId : id)
+      return { ...r, accountIds: newAccountIds }
+    }))
+  }
+
   async function addMachine() {
-    if (!selectedAccountId.trim()) {
-      setDrawerErr(pt ? 'Informe a conta.' : 'Select an account.')
-      return
-    }
     const validRows = machineRows.filter(r => r.name.trim())
     if (validRows.length === 0) {
       setDrawerErr(pt ? 'Informe ao menos um nome de máquina.' : 'Provide at least one machine name.')
       return
     }
+    // Non-owner must provide a team for every machine (scope enforcement).
+    const isOwner = me?.role === 'owner'
+    if (!isOwner) {
+      const hasUnteamed = validRows.some(r => !r.teamId)
+      if (hasUnteamed) {
+        setDrawerErr(pt ? 'Selecione um time que você gerencia.' : 'Select a team you manage.')
+        return
+      }
+    }
     const results: { name: string; token: string }[] = []
     for (const row of validRows) {
-      const body: Record<string, unknown> = {
-        accountId: selectedAccountId,
-        name: row.name.trim(),
-      }
+      const uniqueAccountIds = [...new Set(row.accountIds.filter(id => id.trim()))]
+      const body: Record<string, unknown> = { name: row.name.trim() }
+      if (uniqueAccountIds.length > 0) body.accountIds = uniqueAccountIds
       if (row.teamId) body.teamId = row.teamId
       const res = await fetch('/api/iam/machines', {
         method: 'POST',
@@ -451,12 +473,11 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     }
   }
 
-  // Determine whether to show the team picker for the selected account
-  const selectedAccount = accounts.find(a => a.id === selectedAccountId)
-  const showTeamPicker = selectedAccount?.role === 'member' && (selectedAccount.memberships.length ?? 0) > 1
-  const membershipTeams = showTeamPicker
-    ? selectedAccount!.memberships.map(m => ({ id: m.teamId, name: teamNameById.get(m.teamId) ?? m.teamId }))
-    : []
+  // Team picker options: for owner viewers, all teams; for managers, only managed teams.
+  const isOwner = me?.role === 'owner'
+  const managerTeams = isOwner
+    ? teams
+    : teams.filter(t => me?.memberships.some(m => m.teamId === t._id && m.role === 'manager'))
 
   // Build connect commands based on token type (composite vs raw)
   const connectCmdFor = (token: string) => {
@@ -728,57 +749,54 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
         {drawerErrPanel(drawerErr)}
 
         {!created && (<>
-          <Field label={pt ? 'Conta' : 'Account'}>
-            <Select
-              value={selectedAccountId}
-              onChange={v => { setSelectedAccountId(v) }}
-              options={[
-                { value: '', label: pt ? 'Selecione a conta…' : 'Select account…' },
-                // Owners already own every machine — no point offering them as a machine owner.
-                ...accounts.filter(a => a.role !== 'owner').map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
-              ]}
-              placeholder={pt ? 'Selecione a conta…' : 'Select account…'}
-            />
-          </Field>
+          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, marginBottom: 14 }}>
+            {pt
+              ? 'Crie máquinas sem proprietário (loose), com time, com proprietário(s), ou ambos. Apenas o nome é obrigatório.'
+              : 'Create machines with no owner (loose), team-only, owner(s)-only, or both. Only the name is required.'}
+          </div>
 
-          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 18, marginTop: 6 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-              <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
-                {pt ? 'Máquinas' : 'Machines'}
-              </span>
-              <button type="button" style={ghostBtn} onClick={addMachineRow}>
-                <Plus size={13} /> {pt ? 'Adicionar outra máquina' : 'Add another machine'}
-              </button>
-            </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+            <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+              {pt ? 'Máquinas' : 'Machines'}
+            </span>
+            <button type="button" style={ghostBtn} onClick={addMachineRow}>
+              <Plus size={13} /> {pt ? 'Adicionar outra máquina' : 'Add another machine'}
+            </button>
+          </div>
 
-            {machineRows.map((row, i) => (
-              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'flex-end', marginBottom: 10 }}>
-                <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
+          {machineRows.map((row, machineIdx) => (
+            <div key={machineIdx} style={{
+              marginBottom: 20,
+              padding: 12,
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 8,
+              background: 'var(--bg-elevated)',
+            }}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', marginBottom: 12 }}>
+                <Field label={pt ? 'Nome da máquina *' : 'Machine name *'}>
                   <input
                     style={input}
                     value={row.name}
-                    onChange={e => updateMachineRow(i, { name: e.target.value })}
+                    onChange={e => updateMachineRow(machineIdx, { name: e.target.value })}
                     placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'}
                   />
                 </Field>
 
-                {showTeamPicker && (
-                  <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
-                    <Select
-                      value={row.teamId}
-                      onChange={v => updateMachineRow(i, { teamId: v })}
-                      options={[
-                        { value: '', label: pt ? 'Deixar vazio' : 'Leave empty' },
-                        ...membershipTeams.map(t => ({ value: t.id, label: t.name })),
-                      ]}
-                      placeholder={pt ? 'Deixar vazio' : 'Leave empty'}
-                    />
-                  </Field>
-                )}
+                <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
+                  <Select
+                    value={row.teamId}
+                    onChange={v => updateMachineRow(machineIdx, { teamId: v })}
+                    options={[
+                      { value: '', label: pt ? (isOwner ? 'Deixar vazio / loose' : 'Selecione um time…') : (isOwner ? 'Leave empty / loose' : 'Select a team…') },
+                      ...managerTeams.map(t => ({ value: t._id, label: t.name })),
+                    ]}
+                    placeholder={pt ? 'Deixar vazio' : 'Leave empty'}
+                  />
+                </Field>
 
                 <button
                   type="button"
-                  onClick={() => removeMachineRow(i)}
+                  onClick={() => removeMachineRow(machineIdx)}
                   disabled={machineRows.length === 1}
                   style={{
                     ...trashBtn,
@@ -790,8 +808,51 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                   <Trash2 size={14} />
                 </button>
               </div>
-            ))}
-          </div>
+
+              {/* Owners section */}
+              <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <span style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {pt ? 'Proprietários (opcional)' : 'Owners (optional)'}
+                  </span>
+                  <button type="button" style={{ ...ghostBtn, padding: '4px 8px', fontSize: 11 }} onClick={() => addOwnerToMachineRow(machineIdx)}>
+                    <Plus size={11} /> {pt ? 'Adicionar' : 'Add'}
+                  </button>
+                </div>
+
+                {row.accountIds.length === 0 ? (
+                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
+                    {pt ? 'Sem proprietários — clique "Adicionar" para vincular contas.' : 'No owners — click "Add" to link accounts.'}
+                  </div>
+                ) : (
+                  row.accountIds.map((accountId, ownerIdx) => (
+                    <div key={ownerIdx} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+                      <div style={{ flex: 1 }}>
+                        <Select
+                          value={accountId}
+                          onChange={v => updateOwnerInMachineRow(machineIdx, ownerIdx, v)}
+                          options={[
+                            { value: '', label: pt ? 'Selecione a conta…' : 'Select account…' },
+                            // Owner accounts are already hidden from visibility — no need to filter again.
+                            ...accounts.filter(a => a.role !== 'owner').map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
+                          ]}
+                          placeholder={pt ? 'Selecione a conta…' : 'Select account…'}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeOwnerFromMachineRow(machineIdx, ownerIdx)}
+                        style={trashBtn}
+                        aria-label={pt ? 'Remover proprietário' : 'Remove owner'}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          ))}
         </>)}
 
         {created ? (
