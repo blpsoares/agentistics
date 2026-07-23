@@ -289,6 +289,13 @@ export async function listMachines(): Promise<MachineInfo[]> {
   }))
 }
 
+/** Reassign a machine token to a different team. Returns true if a doc was matched. */
+export async function setMachineTeam(id: string, teamId: string): Promise<boolean> {
+  const col = await getTokensCollection()
+  const res = await col.updateOne({ _id: id }, { $set: { teamId } })
+  return res.matchedCount > 0
+}
+
 /** Assign the Default team to any token minted before teams existed. Idempotent. */
 export async function backfillTokenTeamIds(): Promise<void> {
   const col = await getTokensCollection()

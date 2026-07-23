@@ -9,7 +9,7 @@ import { hasAnyOwner, countOwners, createAccount, findAccountByEmail, updateAcco
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
 import { seedDefaultTeam, listTeams, createTeam, getTeam, deleteTeam, DEFAULT_TEAM_ID } from './teams'
-import { backfillTokenTeamIds, listMachines, mintMachineToken, revokeToken, rotateToken } from './team-tokens'
+import { backfillTokenTeamIds, listMachines, mintMachineToken, revokeToken, rotateToken, setMachineTeam } from './team-tokens'
 import { backfillRepoTeamIds } from './team-repos'
 import { makePrincipalSessionCookieHeader, getPrincipal } from './auth'
 import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam } from './iam-view'
@@ -391,6 +391,20 @@ export async function handleMachines(req: Request): Promise<Response> {
       const token = await rotateToken(rotateId)
       if (token === null) return json({ error: 'machine not found' }, 404)
       return json({ token }, 200)
+    }
+    // Reassign a machine to another team (scoped): { reassignId, teamId }. Must manage BOTH the
+    // machine's current team and the target team. Used by the Teams page to attach a machine.
+    const reassignId = typeof b.reassignId === 'string' ? b.reassignId : ''
+    if (reassignId) {
+      const newTeamId = typeof b.teamId === 'string' ? b.teamId : ''
+      if (!newTeamId) return json({ error: 'teamId is required' }, 400)
+      const machine = (await listMachines()).find(m => m.id === reassignId)
+      if (!machine) return json({ error: 'machine not found' }, 404)
+      if (!canManageMachineTeam(principal, machine.teamId) || !canManageMachineTeam(principal, newTeamId)) {
+        return json({ error: 'forbidden' }, 403)
+      }
+      await setMachineTeam(reassignId, newTeamId)
+      return json({ ok: true })
     }
     const accountId = typeof b.accountId === 'string' ? b.accountId : ''
     const name = typeof b.name === 'string' ? b.name.trim() : ''
