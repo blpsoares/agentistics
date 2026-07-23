@@ -79,16 +79,19 @@ export async function handleTeamIngest(req: Request): Promise<Response> {
     return handleIngestBody(req)
   }
 
-  // 3. Phase-2a open fallback: no auth mechanism configured at all.
-  //    Open only when: no password gate, no legacy token, AND no minted tokens in DB.
+  // 3. Phase-2a open fallback: only for a central that was NEVER set up (no IAM owner, no password,
+  //    no legacy token, no minted tokens). Once IAM is bootstrapped, a valid minted token is ALWAYS
+  //    required — so deleting a machine's token makes its next push 401, and the member auto-resets
+  //    to solo instead of continuing to push anonymously into the open central.
   if (!TEAM_PASSWORD && !TEAM_INGEST_TOKEN) {
     try {
-      const hasTokens = await hasAnyTokens()
-      if (!hasTokens) {
+      const { hasAnyOwner } = await import('./accounts')
+      const [hasTokens, bootstrapped] = await Promise.all([hasAnyTokens(), hasAnyOwner()])
+      if (!hasTokens && !bootstrapped) {
         return handleIngestBody(req)
       }
     } catch {
-      // If Mongo is unreachable for the count check, fall through to 401 (safe default).
+      // If Mongo is unreachable for the checks, fall through to 401 (safe default).
     }
   }
 
