@@ -50,6 +50,7 @@ import { resolveArchiveChoice } from './lib/archive'
 import { TeamLogin } from './components/TeamLogin'
 import { Login } from './components/Login'
 import { OwnerSetup } from './components/OwnerSetup'
+import { ChangePassword } from './components/ChangePassword'
 import { type ChatModelId } from './lib/chatModels'
 import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
@@ -1726,6 +1727,7 @@ export default function AppLayout() {
     if (iam === undefined) return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
     if (iam.needsBootstrap) return <OwnerSetup onDone={() => { reloadIam(); refetch() }} />
     if (!iam.authed) return <Login onAuthed={() => { reloadIam(); refetch() }} />
+    if (iam.account?.mustChangePassword) return <ChangePassword onDone={() => { reloadIam(); refetch() }} />
   } else if (teamSession.required && !teamSession.authed) {
     // Non-central (member/solo) keeps the legacy password gate.
     return <TeamLogin onAuthed={() => { setTeamSession(s => ({ ...(s ?? { required: true }), required: true, authed: true })); refetch() }} />
