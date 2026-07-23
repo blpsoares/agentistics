@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2, Copy, Check, Dice5 } from 'lucide-react'
+import { generatePassword } from '../../lib/password'
 import type { AppContext } from '../../lib/app-context'
 import { SectionHeader } from './primitives'
 import { Drawer } from './Drawer'
@@ -91,10 +92,21 @@ export default function UsersSettings() {
   const [accountType, setAccountType] = useState<'owner' | 'member'>('member')
   const [rows, setRows] = useState<Membership[]>([{ teamId: '', role: 'user' }])
   const [accountErr, setAccountErr] = useState<string | null>(null)
+  const [provisionMachine, setProvisionMachine] = useState(false)
+  const [machineName, setMachineName] = useState('')
+  const [mustChange, setMustChange] = useState(true)
+  const [pwVisible, setPwVisible] = useState(false)
+  // one-time result after a successful create (credentials + machine token shown once)
+  const [created, setCreated] = useState<null | { name: string; email: string; password: string; mustChange: boolean; machineName?: string; machineToken?: string }>(null)
+  const [copied, setCopied] = useState<string | null>(null)
 
   function openAccountDrawer() {
     setAn(''); setAe(''); setAp(''); setAccountType('member'); setRows([{ teamId: '', role: 'user' }]); setAccountErr(null)
+    setProvisionMachine(false); setMachineName(''); setMustChange(true); setPwVisible(false); setCreated(null); setCopied(null)
     setAccountOpen(true)
+  }
+  async function copy(label: string, text: string) {
+    try { await navigator.clipboard.writeText(text); setCopied(label); setTimeout(() => setCopied(c => c === label ? null : c), 1500) } catch { /* ignore */ }
   }
   function updateRow(i: number, patch: Partial<Membership>) {
     setRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r))
@@ -115,12 +127,27 @@ export default function UsersSettings() {
         return
       }
     }
+    if (provisionMachine && !machineName.trim()) {
+      setAccountErr(pt ? 'Informe o nome da máquina.' : 'Enter the machine name.')
+      return
+    }
+    const body: Record<string, unknown> = {
+      name: an.trim(), email: ae.trim(), password: ap, role: accountType, memberships,
+      mustChangePassword: mustChange,
+    }
+    if (provisionMachine) body.machine = { name: machineName.trim() }
     const res = await fetch('/api/iam/accounts', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: an.trim(), email: ae.trim(), password: ap, role: accountType, memberships }),
+      body: JSON.stringify(body),
     })
     if (!res.ok) { const d = await res.json() as { error?: string }; setAccountErr(d.error || `HTTP ${res.status}`); return }
-    setAccountOpen(false); void load()
+    const d = await res.json() as { machineToken?: string }
+    setCreated({
+      name: an.trim(), email: ae.trim(), password: ap, mustChange,
+      machineName: provisionMachine ? machineName.trim() : undefined,
+      machineToken: d.machineToken,
+    })
+    void load()
   }
   async function deleteAccount(id: string) {
     await fetch('/api/iam/accounts', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
@@ -215,6 +242,7 @@ export default function UsersSettings() {
       <Drawer open={accountOpen} onClose={() => setAccountOpen(false)} title={pt ? 'Nova conta' : 'New account'}>
         {drawerErr(accountErr)}
 
+        {!created && (<>
         {/* Account type — Owner is offered only to an owner viewer. */}
         {viewerIsOwner && (
           <Field label={pt ? 'Tipo de conta' : 'Account type'}>
@@ -247,8 +275,32 @@ export default function UsersSettings() {
           <input style={input} value={ae} onChange={e => setAe(e.target.value)} placeholder="name@example.com" />
         </Field>
         <Field label={pt ? 'Senha (8+)' : 'Password (8+)'}>
-          <input style={input} type="password" value={ap} onChange={e => setAp(e.target.value)} placeholder="••••••••" />
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input style={{ ...input, flex: 1 }} type={pwVisible ? 'text' : 'password'} value={ap}
+              onChange={e => setAp(e.target.value)} placeholder="••••••••" />
+            <button type="button" style={ghostBtn} title={pt ? 'Gerar senha aleatória' : 'Generate random password'}
+              onClick={() => { const p = generatePassword(16); setAp(p); setPwVisible(true) }}>
+              <Dice5 size={13} /> {pt ? 'Gerar' : 'Generate'}
+            </button>
+          </div>
         </Field>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+          <input type="checkbox" checked={mustChange} onChange={e => setMustChange(e.target.checked)} />
+          {pt ? 'Exigir troca de senha no primeiro login' : 'Require password change on first login'}
+        </label>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 12 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={provisionMachine} onChange={e => setProvisionMachine(e.target.checked)} />
+            {pt ? 'Provisionar uma máquina para esta conta' : 'Provision a machine for this account'}
+          </label>
+          {provisionMachine && (
+            <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
+              <input style={input} value={machineName} onChange={e => setMachineName(e.target.value)} placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'} />
+            </Field>
+          )}
+        </div>
 
         {accountType === 'owner' ? (
           <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '9px 11px' }}>
@@ -286,11 +338,50 @@ export default function UsersSettings() {
             ))}
           </div>
         )}
+        </>)}
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-          <button style={ghostBtn} onClick={() => setAccountOpen(false)}>{pt ? 'Cancelar' : 'Cancel'}</button>
-          <button style={primaryBtn} onClick={() => void createAccount()}><Plus size={14} /> {pt ? 'Criar conta' : 'Create account'}</button>
-        </div>
+        {created ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>
+              {pt ? 'Conta criada — copie os dados agora' : 'Account created — copy these now'}
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+              {pt ? 'Estes valores não serão exibidos novamente.' : 'These values will not be shown again.'}
+            </div>
+            {([
+              ['Email', created.email],
+              [pt ? 'Senha' : 'Password', created.password],
+              ...(created.machineName ? [[pt ? 'Máquina' : 'Machine', created.machineName] as [string, string]] : []),
+              ...(created.machineToken ? [[pt ? 'Token da máquina' : 'Machine token', created.machineToken] as [string, string]] : []),
+            ] as [string, string][]).map(([label, value]) => (
+              <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>{value}</code>
+                  <button type="button" style={ghostBtn} onClick={() => void copy(label, value)} aria-label={`Copy ${label}`}>
+                    {copied === label ? <Check size={13} /> : <Copy size={13} />}
+                  </button>
+                </div>
+              </div>
+            ))}
+            {created.machineToken && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{pt ? 'Comando de conexão' : 'Connect command'}</span>
+                <code style={{ fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-secondary)' }}>
+                  agentop member connect --endpoint &lt;central-url&gt; --token {created.machineToken}
+                </code>
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+              <button style={primaryBtn} onClick={() => setAccountOpen(false)}><Check size={14} /> {pt ? 'Concluir' : 'Done'}</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+            <button style={ghostBtn} onClick={() => setAccountOpen(false)}>{pt ? 'Cancelar' : 'Cancel'}</button>
+            <button style={primaryBtn} onClick={() => void createAccount()}><Plus size={14} /> {pt ? 'Criar conta' : 'Create account'}</button>
+          </div>
+        )}
       </Drawer>
     </div>
   )
