@@ -117,3 +117,171 @@ export function Checkbox({ checked, onChange, label }: { checked: boolean; onCha
     </label>
   )
 }
+
+export function Select({ value, onChange, options, placeholder, disabled }: {
+  value: string
+  onChange: (v: string) => void
+  options: { value: string; label: string }[]
+  placeholder?: string
+  disabled?: boolean
+}) {
+  const [open, setOpen] = React.useState(false)
+  const wrapperRef = React.useRef<HTMLDivElement>(null)
+
+  const selectedLabel = options.find(o => o.value === value)?.label ?? placeholder ?? ''
+  const isEmpty = !value
+
+  React.useEffect(() => {
+    if (!open) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [open])
+
+  const handleToggle = () => {
+    if (disabled) return
+    setOpen(prev => !prev)
+  }
+
+  const handleSelect = (optValue: string) => {
+    onChange(optValue)
+    setOpen(false)
+  }
+
+  return (
+    <div ref={wrapperRef} style={{ position: 'relative', width: '100%' }}>
+      <button
+        type="button"
+        onClick={handleToggle}
+        disabled={disabled}
+        style={{
+          width: '100%',
+          padding: '8px 11px',
+          background: 'var(--bg-elevated)',
+          border: `1px solid ${open ? 'var(--anthropic-orange)' : 'var(--border)'}`,
+          borderRadius: 8,
+          fontSize: 13,
+          color: isEmpty ? 'var(--text-tertiary)' : 'var(--text-primary)',
+          fontFamily: 'inherit',
+          textAlign: 'left',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          transition: 'border-color 0.15s',
+          opacity: disabled ? 0.5 : 1,
+        }}
+        onMouseEnter={e => {
+          if (!disabled && !open) {
+            (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--anthropic-orange)'
+          }
+        }}
+        onMouseLeave={e => {
+          if (!disabled && !open) {
+            (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
+          }
+        }}
+      >
+        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {selectedLabel}
+        </span>
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 12 12"
+          fill="none"
+          style={{
+            flexShrink: 0,
+            transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+            transition: 'transform 0.15s',
+          }}
+        >
+          <path
+            d="M3 4.5L6 7.5L9 4.5"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 4px)',
+            left: 0,
+            right: 0,
+            zIndex: 50,
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            boxShadow: '0 8px 28px rgba(0,0,0,0.35)',
+            maxHeight: 240,
+            overflowY: 'auto',
+            padding: 4,
+          }}
+        >
+          {options.map(opt => {
+            const isSelected = opt.value === value
+            return (
+              <div
+                key={opt.value}
+                onClick={() => handleSelect(opt.value)}
+                onMouseEnter={e => {
+                  (e.currentTarget as HTMLDivElement).style.background = 'var(--anthropic-orange-dim)'
+                  ;(e.currentTarget as HTMLDivElement).style.color = 'var(--anthropic-orange)'
+                }}
+                onMouseLeave={e => {
+                  if (!isSelected) {
+                    (e.currentTarget as HTMLDivElement).style.background = 'transparent'
+                    ;(e.currentTarget as HTMLDivElement).style.color = 'var(--text-primary)'
+                  }
+                }}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  fontSize: 13,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  color: isSelected ? 'var(--anthropic-orange)' : 'var(--text-primary)',
+                  background: 'transparent',
+                  transition: 'background 0.1s, color 0.1s',
+                }}
+              >
+                <span style={{ flex: 1 }}>{opt.label}</span>
+                {isSelected && (
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <path
+                      d="M3 7L6 10L11 4"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}

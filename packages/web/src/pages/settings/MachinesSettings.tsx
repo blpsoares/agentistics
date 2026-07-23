@@ -3,7 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import { Plus, Copy, Check, RotateCw, Trash2 } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
 import { TeamSettings, type TeamConfig } from '../../components/TeamSettings'
-import { SectionHeader } from './primitives'
+import { SectionHeader, Select } from './primitives'
 import { Drawer } from './Drawer'
 
 // ── interfaces ────────────────────────────────────────────────────────────────
@@ -390,12 +390,15 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
 
         {!created && (<>
           <Field label={pt ? 'Conta' : 'Account'}>
-            <select style={input} value={selectedAccountId} onChange={e => { setSelectedAccountId(e.target.value); setSelectedTeamId('') }}>
-              <option value="">{pt ? 'Selecione a conta…' : 'Select account…'}</option>
-              {accounts.map(a => (
-                <option key={a.id} value={a.id}>{a.name} — {a.email}</option>
-              ))}
-            </select>
+            <Select
+              value={selectedAccountId}
+              onChange={v => { setSelectedAccountId(v); setSelectedTeamId('') }}
+              options={[
+                { value: '', label: pt ? 'Selecione a conta…' : 'Select account…' },
+                ...accounts.map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
+              ]}
+              placeholder={pt ? 'Selecione a conta…' : 'Select account…'}
+            />
           </Field>
 
           <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
@@ -404,12 +407,15 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
 
           {showTeamPicker && (
             <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
-              <select style={input} value={selectedTeamId} onChange={e => setSelectedTeamId(e.target.value)}>
-                <option value="">{pt ? 'Deixar o servidor decidir' : 'Let server default'}</option>
-                {membershipTeams.map(t => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
+              <Select
+                value={selectedTeamId}
+                onChange={v => setSelectedTeamId(v)}
+                options={[
+                  { value: '', label: pt ? 'Deixar o servidor decidir' : 'Let server default' },
+                  ...membershipTeams.map(t => ({ value: t.id, label: t.name })),
+                ]}
+                placeholder={pt ? 'Deixar o servidor decidir' : 'Let server default'}
+              />
             </Field>
           )}
         </>)}

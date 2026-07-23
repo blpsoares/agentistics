@@ -3,7 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import { Plus, Trash2, Copy, Check, Dice5, KeyRound, Pencil } from 'lucide-react'
 import { generatePassword } from '../../lib/password'
 import type { AppContext } from '../../lib/app-context'
-import { SectionHeader, Checkbox } from './primitives'
+import { SectionHeader, Checkbox, Select } from './primitives'
 import { Drawer } from './Drawer'
 
 interface Team { _id: string; name: string }
@@ -400,6 +400,11 @@ export default function UsersSettings() {
         {drawerErr(accountErr)}
 
         {!created && (<>
+        {/* IDENTITY SECTION */}
+        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginTop: 4 }}>
+          {pt ? 'Identidade' : 'Identity'}
+        </div>
+
         {/* Account type — Owner is offered only to an owner viewer. */}
         {viewerIsOwner && (
           <Field label={pt ? 'Tipo de conta' : 'Account type'}>
@@ -442,76 +447,121 @@ export default function UsersSettings() {
           </div>
         </Field>
 
-        <Checkbox checked={mustChange} onChange={setMustChange} label={pt ? 'Exigir troca de senha no primeiro login' : 'Require password change on first login'} />
-
-        {accountType === 'owner' ? (
-          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '9px 11px' }}>
-            {pt
-              ? 'Owners têm acesso total a todos os times e máquinas — sem escopo de times.'
-              : 'Owners have full access to all teams and machines — no team scope.'}
+        {/* SECURITY SECTION */}
+        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 18, marginTop: 6 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 14 }}>
+            {pt ? 'Segurança' : 'Security'}
           </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{pt ? 'Escopo (times)' : 'Scope (teams)'}</span>
-              <button type="button" style={ghostBtn} onClick={addRow}><Plus size={13} /> {pt ? 'Adicionar time' : 'Add team'}</button>
-            </div>
-            <p style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5, margin: 0 }}>
+          <Checkbox checked={mustChange} onChange={setMustChange} label={pt ? 'Exigir troca de senha no primeiro login' : 'Require password change on first login'} />
+        </div>
+
+        {/* ACCESS (TEAMS) SECTION */}
+        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 18, marginTop: 6 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 14 }}>
+            {pt ? 'Acesso' : 'Access'}
+          </div>
+
+          {accountType === 'owner' ? (
+            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '9px 11px' }}>
               {pt
-                ? 'Um manager gerencia os times selecionados (e suas máquinas). Um user tem leitura restrita.'
-                : "A manager manages the selected teams (and their machines). A user has scoped read access."}
-            </p>
-            {rows.map((r, i) => (
-              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <select style={{ ...input, flex: 2 }} value={r.teamId} onChange={e => updateRow(i, { teamId: e.target.value })}>
-                  <option value="">{pt ? 'Selecione o time…' : 'Select team…'}</option>
-                  {assignableTeams.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
-                </select>
-                <select style={{ ...input, flex: 1 }} value={r.role} onChange={e => updateRow(i, { role: e.target.value as 'manager' | 'user' })}>
-                  <option value="user">user</option>
-                  {viewerIsOwner && <option value="manager">manager</option>}
-                </select>
-                <button type="button" onClick={() => removeRow(i)} disabled={rows.length === 1}
-                  style={{ ...trashBtn, opacity: rows.length === 1 ? 0.35 : 1, cursor: rows.length === 1 ? 'not-allowed' : 'pointer' }}
-                  aria-label={pt ? 'Remover time' : 'Remove team'}>
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Link machines */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{pt ? 'Vincular máquinas' : 'Link machines'}</span>
-            <button type="button" style={ghostBtn} onClick={addMachineRow}><Plus size={13} /> {pt ? 'Adicionar máquina' : 'Add machine'}</button>
-          </div>
-          <p style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5, margin: 0 }}>
-            {pt
-              ? 'Vincular máquinas gera um token por máquina (mostrado uma vez).'
-              : 'Linking machines mints one token per machine (shown once).'}
-          </p>
-          {machineRows.map((m, i) => (
-            <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-              <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
-                <input style={input} value={m.name} onChange={e => updateMachineRow(i, { name: e.target.value })} placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'} />
-              </Field>
-              {accountType === 'member' && (
-                <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
-                  <select style={input} value={m.teamId} onChange={e => updateMachineRow(i, { teamId: e.target.value })}>
-                    <option value="">{pt ? 'Deixar vazio' : 'Leave empty'}</option>
-                    {assignableTeams.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
-                  </select>
-                </Field>
-              )}
-              <button type="button" onClick={() => removeMachineRow(i)}
-                style={trashBtn}
-                aria-label={pt ? 'Remover máquina' : 'Remove machine'}>
-                <Trash2 size={14} />
-              </button>
+                ? 'Owners têm acesso total a todos os times e máquinas — sem escopo de times.'
+                : 'Owners have full access to all teams and machines — no team scope.'}
             </div>
-          ))}
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{pt ? 'Escopo (times)' : 'Scope (teams)'}</span>
+                <button type="button" style={ghostBtn} onClick={addRow}><Plus size={13} /> {pt ? 'Adicionar time' : 'Add team'}</button>
+              </div>
+              <p style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5, margin: 0 }}>
+                {pt
+                  ? 'Um manager gerencia os times selecionados (e suas máquinas). Um user tem leitura restrita.'
+                  : "A manager manages the selected teams (and their machines). A user has scoped read access."}
+              </p>
+              {rows.map((r, i) => (
+                <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <div style={{ flex: 2 }}>
+                    <Select
+                      value={r.teamId}
+                      onChange={v => updateRow(i, { teamId: v })}
+                      options={[
+                        { value: '', label: pt ? 'Selecione o time…' : 'Select team…' },
+                        ...assignableTeams.map(t => ({ value: t._id, label: t.name })),
+                      ]}
+                      placeholder={pt ? 'Selecione o time…' : 'Select team…'}
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <Select
+                      value={r.role}
+                      onChange={v => updateRow(i, { role: v as 'manager' | 'user' })}
+                      options={[
+                        { value: 'user', label: 'user' },
+                        ...(viewerIsOwner ? [{ value: 'manager', label: 'manager' }] : []),
+                      ]}
+                    />
+                  </div>
+                  <button type="button" onClick={() => removeRow(i)} disabled={rows.length === 1}
+                    style={{ ...trashBtn, opacity: rows.length === 1 ? 0.35 : 1, cursor: rows.length === 1 ? 'not-allowed' : 'pointer' }}
+                    aria-label={pt ? 'Remover time' : 'Remove team'}>
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* MACHINES SECTION */}
+        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 18, marginTop: 6 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 14 }}>
+            {pt ? 'Máquinas' : 'Machines'}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{pt ? 'Vincular máquinas' : 'Link machines'}</span>
+              <button type="button" style={ghostBtn} onClick={addMachineRow}><Plus size={13} /> {pt ? 'Adicionar' : 'Add'}</button>
+            </div>
+            {machineRows.length === 0 ? (
+              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '12px 0' }}>
+                {pt ? 'Nenhuma máquina a ser vinculada.' : 'No machines to link.'}
+              </div>
+            ) : (
+              <>
+                <p style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5, margin: 0 }}>
+                  {pt
+                    ? 'Tokens gerados aparecerão apenas uma vez após a criação.'
+                    : 'Tokens will be shown only once after creation.'}
+                </p>
+                {machineRows.map((m, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+                    <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
+                      <input style={input} value={m.name} onChange={e => updateMachineRow(i, { name: e.target.value })} placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'} />
+                    </Field>
+                    {accountType === 'member' && (
+                      <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
+                        <Select
+                          value={m.teamId}
+                          onChange={v => updateMachineRow(i, { teamId: v })}
+                          options={[
+                            { value: '', label: pt ? 'Deixar vazio' : 'Leave empty' },
+                            ...assignableTeams.map(t => ({ value: t._id, label: t.name })),
+                          ]}
+                          placeholder={pt ? 'Deixar vazio' : 'Leave empty'}
+                        />
+                      </Field>
+                    )}
+                    <button type="button" onClick={() => removeMachineRow(i)}
+                      style={trashBtn}
+                      aria-label={pt ? 'Remover máquina' : 'Remove machine'}>
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
         </div>
         </>)}
 
@@ -599,73 +649,104 @@ export default function UsersSettings() {
           so it can't be lost to a stray click (Close/Save are explicit). */}
       <Drawer open={editOpen} onClose={() => { if (!tempPassword && !addedMachineToken) setEditOpen(false) }} title={pt ? 'Editar conta' : 'Edit account'}>
         {drawerErr(editErr)}
+
+        {/* IDENTITY SECTION */}
+        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginTop: 4 }}>
+          {pt ? 'Identidade' : 'Identity'}
+        </div>
+
         <Field label={pt ? 'Nome' : 'Name'}>
           <input style={input} value={en} onChange={e => setEn(e.target.value)} placeholder={pt ? 'Nome completo' : 'Full name'} />
         </Field>
 
-        {editIsOwner ? (
-          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '9px 11px' }}>
-            {pt ? 'Owners não têm escopo de times.' : 'Owners have no team scope.'}
+        {/* ACCESS (TEAMS) SECTION */}
+        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 18, marginTop: 6 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 14 }}>
+            {pt ? 'Acesso' : 'Access'}
           </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{pt ? 'Escopo (times)' : 'Scope (teams)'}</span>
-              <button type="button" style={ghostBtn} onClick={addERow}><Plus size={13} /> {pt ? 'Adicionar time' : 'Add team'}</button>
-            </div>
-            {eRows.map((r, i) => (
-              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <select style={{ ...input, flex: 2 }} value={r.teamId} onChange={e => updateERow(i, { teamId: e.target.value })}>
-                  <option value="">{pt ? 'Selecione o time…' : 'Select team…'}</option>
-                  {assignableTeams.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
-                </select>
-                <select style={{ ...input, flex: 1 }} value={r.role} onChange={e => updateERow(i, { role: e.target.value as 'manager' | 'user' })}>
-                  <option value="user">user</option>
-                  {viewerIsOwner && <option value="manager">manager</option>}
-                </select>
-                <button type="button" onClick={() => removeERow(i)} disabled={eRows.length === 1}
-                  style={{ ...trashBtn, opacity: eRows.length === 1 ? 0.35 : 1, cursor: eRows.length === 1 ? 'not-allowed' : 'pointer' }}
-                  aria-label={pt ? 'Remover time' : 'Remove team'}>
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
 
-        {/* Linked machines */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 12 }}>
-          <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{pt ? 'Máquinas vinculadas' : 'Linked machines'}</span>
-          {loadingMachines ? (
-            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>{pt ? 'Carregando…' : 'Loading…'}</div>
-          ) : linkedMachines.length === 0 ? (
-            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>{pt ? 'Nenhuma máquina vinculada.' : 'No machines linked.'}</div>
+          {editIsOwner ? (
+            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '9px 11px' }}>
+              {pt ? 'Owners não têm escopo de times.' : 'Owners have no team scope.'}
+            </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {linkedMachines.map(m => (
-                <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 8px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6 }}>
-                  <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</span>
-                    <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>
-                      {m.teamId ? teamNameOf(m.teamId) : (pt ? 'sem time' : 'no team')} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
-                    </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{pt ? 'Escopo (times)' : 'Scope (teams)'}</span>
+                <button type="button" style={ghostBtn} onClick={addERow}><Plus size={13} /> {pt ? 'Adicionar time' : 'Add team'}</button>
+              </div>
+              {eRows.map((r, i) => (
+                <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <div style={{ flex: 2 }}>
+                    <Select
+                      value={r.teamId}
+                      onChange={v => updateERow(i, { teamId: v })}
+                      options={[
+                        { value: '', label: pt ? 'Selecione o time…' : 'Select team…' },
+                        ...assignableTeams.map(t => ({ value: t._id, label: t.name })),
+                      ]}
+                      placeholder={pt ? 'Selecione o time…' : 'Select team…'}
+                    />
                   </div>
-                  <button type="button" style={{ ...ghostBtn, padding: '4px 8px', color: '#ef4444' }} onClick={() => window.confirm(pt ? 'Revogar esta máquina?' : 'Revoke this machine?') && void revokeMachine(m.id)}>
-                    {pt ? 'Revogar' : 'Revoke'}
+                  <div style={{ flex: 1 }}>
+                    <Select
+                      value={r.role}
+                      onChange={v => updateERow(i, { role: v as 'manager' | 'user' })}
+                      options={[
+                        { value: 'user', label: 'user' },
+                        ...(viewerIsOwner ? [{ value: 'manager', label: 'manager' }] : []),
+                      ]}
+                    />
+                  </div>
+                  <button type="button" onClick={() => removeERow(i)} disabled={eRows.length === 1}
+                    style={{ ...trashBtn, opacity: eRows.length === 1 ? 0.35 : 1, cursor: eRows.length === 1 ? 'not-allowed' : 'pointer' }}
+                    aria-label={pt ? 'Remover time' : 'Remove team'}>
+                    <Trash2 size={14} />
                   </button>
                 </div>
               ))}
             </div>
           )}
-          {/* Add machine inline form */}
-          {addedMachineToken ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8, padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>
-                {pt ? 'Máquina adicionada — copie agora' : 'Machine added — copy now'}
+        </div>
+
+        {/* MACHINES SECTION */}
+        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 18, marginTop: 6 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 14 }}>
+            {pt ? 'Máquinas' : 'Machines'}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{pt ? 'Máquinas vinculadas' : 'Linked machines'}</span>
+            {loadingMachines ? (
+              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '12px 0' }}>{pt ? 'Carregando…' : 'Loading…'}</div>
+            ) : linkedMachines.length === 0 ? (
+              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '12px 0' }}>{pt ? 'Nenhuma máquina vinculada.' : 'No machines linked.'}</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {linkedMachines.map(m => (
+                  <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                        {m.teamId ? teamNameOf(m.teamId) : (pt ? 'sem time' : 'no team')} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
+                      </span>
+                    </div>
+                    <button type="button" style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }} onClick={() => window.confirm(pt ? 'Revogar esta máquina?' : 'Revoke this machine?') && void revokeMachine(m.id)}>
+                      {pt ? 'Revogar' : 'Revoke'}
+                    </button>
+                  </div>
+                ))}
               </div>
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.4 }}>
-                {addedMachineName}
-              </div>
+            )}
+            {/* Add machine inline form */}
+            {addedMachineToken ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 14px', background: 'var(--bg-elevated)', border: '1px solid var(--anthropic-orange)', borderRadius: 7 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>
+                  {pt ? 'Máquina adicionada — copie agora' : 'Machine added — copy now'}
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.4 }}>
+                  {addedMachineName}
+                </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                 <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                   {pt ? 'Token' : 'Token'}
@@ -702,49 +783,60 @@ export default function UsersSettings() {
               </div>
               <button type="button" style={ghostBtn} onClick={() => setAddedMachineToken(null)}>{pt ? 'Fechar' : 'Close'}</button>
             </div>
-          ) : (
-            <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', marginTop: 8 }}>
-              <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
-                <input style={input} value={addMachineName} onChange={e => setAddMachineName(e.target.value)} placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'} />
-              </Field>
-              {!editIsOwner && (
-                <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
-                  <select style={input} value={addMachineTeam} onChange={e => setAddMachineTeam(e.target.value)}>
-                    <option value="">{pt ? 'Deixar vazio' : 'Leave empty'}</option>
-                    {assignableTeams.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
-                  </select>
+            ) : (
+              <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+                <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
+                  <input style={input} value={addMachineName} onChange={e => setAddMachineName(e.target.value)} placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'} />
                 </Field>
-              )}
-              <button type="button" style={primaryBtn} onClick={() => void addMachine()}>
-                <Plus size={13} /> {pt ? 'Adicionar' : 'Add'}
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Reset password */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 12 }}>
-          {tempPassword ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{pt ? 'Senha temporária (mostrada uma vez)' : 'Temporary password (shown once)'}</span>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>{tempPassword}</code>
-                <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('temp', tempPassword) }} aria-label="Copy temp password">
-                  {copied === 'temp' ? <Check size={13} /> : <Copy size={13} />}
+                {!editIsOwner && (
+                  <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
+                    <Select
+                      value={addMachineTeam}
+                      onChange={v => setAddMachineTeam(v)}
+                      options={[
+                        { value: '', label: pt ? 'Deixar vazio' : 'Leave empty' },
+                        ...assignableTeams.map(t => ({ value: t._id, label: t.name })),
+                      ]}
+                      placeholder={pt ? 'Deixar vazio' : 'Leave empty'}
+                    />
+                  </Field>
+                )}
+                <button type="button" style={primaryBtn} onClick={() => void addMachine()}>
+                  <Plus size={13} /> {pt ? 'Adicionar' : 'Add'}
                 </button>
               </div>
-              {copyFailed === 'temp' && (
-                <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
-                  {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
-                </span>
-              )}
-              <span style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{pt ? 'O usuário deverá trocá-la no próximo login.' : 'The user must change it on next login.'}</span>
-            </div>
-          ) : (
-            <button type="button" style={ghostBtn} onClick={() => void resetPassword()}>
-              <KeyRound size={13} /> {pt ? 'Resetar senha (gera temporária)' : 'Reset password (generates temp)'}
-            </button>
-          )}
+            )}
+          </div>
+        </div>
+
+        {/* SECURITY (PASSWORD RESET) SECTION */}
+        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 18, marginTop: 6 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 14 }}>
+            {pt ? 'Segurança' : 'Security'}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {tempPassword ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 14px', background: 'var(--bg-elevated)', border: '1px solid var(--anthropic-orange)', borderRadius: 7 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{pt ? 'Senha temporária (mostrada uma vez)' : 'Temporary password (shown once)'}</span>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 10px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>{tempPassword}</code>
+                  <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('temp', tempPassword) }} aria-label="Copy temp password">
+                    {copied === 'temp' ? <Check size={13} /> : <Copy size={13} />}
+                  </button>
+                </div>
+                {copyFailed === 'temp' && (
+                  <span style={{ fontSize: 10.5, color: '#ef4444', lineHeight: 1.4 }}>
+                    {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                  </span>
+                )}
+                <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{pt ? 'O usuário deverá trocá-la no próximo login.' : 'The user must change it on next login.'}</span>
+              </div>
+            ) : (
+              <button type="button" style={ghostBtn} onClick={() => void resetPassword()}>
+                <KeyRound size={13} /> {pt ? 'Resetar senha (gera temporária)' : 'Reset password (generates temp)'}
+              </button>
+            )}
+          </div>
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
