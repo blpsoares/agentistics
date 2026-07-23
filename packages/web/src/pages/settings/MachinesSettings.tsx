@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Plus, Copy, Check, RotateCw, Trash2 } from 'lucide-react'
+import { Plus, Copy, Check, RotateCw, Trash2, Pencil, X } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
 import { TeamSettings, type TeamConfig } from '../../components/TeamSettings'
 import { SectionHeader, Select, Checkbox } from './primitives'
@@ -117,6 +117,7 @@ function SoloMemberMachinesView({ pt }: { pt: boolean }) {
 
 // ── central machines governance ───────────────────────────────────────────────
 function CentralMachinesView({ pt }: { pt: boolean }) {
+  const { me } = useOutletContext<AppContext>()
   const [machines, setMachines] = useState<MachineInfo[]>([])
   const [accounts, setAccounts] = useState<PublicAccount[]>([])
   const [teams, setTeams] = useState<Team[]>([])
@@ -142,6 +143,10 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   // Bulk delete state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
+
+  // Rename state
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
 
   const load = useCallback(async () => {
     try {
@@ -266,6 +271,47 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     }
   }
 
+  async function renameMachine(id: string, name: string) {
+    try {
+      const res = await fetch('/api/iam/machines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ renameId: id, name }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setRenamingId(null)
+      void load()
+    } catch (e) {
+      setErr(String(e))
+    }
+  }
+
+  function startRename(id: string, currentName: string) {
+    setRenamingId(id)
+    setRenameValue(currentName)
+  }
+
+  function cancelRename() {
+    setRenamingId(null)
+    setRenameValue('')
+  }
+
+  function confirmRename() {
+    if (renamingId && renameValue.trim()) {
+      void renameMachine(renamingId, renameValue.trim())
+    }
+  }
+
+  function handleRenameKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      confirmRename()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      cancelRename()
+    }
+  }
+
   function toggleSelectAll() {
     if (selectedIds.size === machines.length) {
       setSelectedIds(new Set())
@@ -328,6 +374,8 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     </div>
   )
 
+  const canManageFleet = me?.role === 'owner' || me?.memberships.some(m => m.role === 'manager')
+
   return (
     <>
       <p style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6, margin: '0 0 14px' }}>
@@ -340,10 +388,18 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{pt ? 'Máquinas' : 'Machines'}</div>
-        <button style={primaryBtn} onClick={openDrawer}>
-          <Plus size={14} /> {pt ? 'Adicionar máquina' : 'Add machine'}
-        </button>
+        {canManageFleet && (
+          <button style={primaryBtn} onClick={openDrawer}>
+            <Plus size={14} /> {pt ? 'Adicionar máquina' : 'Add machine'}
+          </button>
+        )}
       </div>
+
+      <p style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, margin: '0 0 14px' }}>
+        {pt
+          ? 'Perdeu o token de uma máquina? Use Rotacionar para gerar um novo (o token só é exibido uma vez).'
+          : 'Lost a machine\'s token? Use Rotate to generate a new one (tokens are shown only once).'}
+      </p>
 
       {selectedIds.size > 0 && (
         <div style={{ marginBottom: 12 }}>
@@ -393,6 +449,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
               {machines.map(m => {
                 const statusColor = m.online ? '#10b981' : '#6b7280'
                 const statusLabel = m.online ? (pt ? 'online' : 'online') : (pt ? 'offline' : 'offline')
+                const isRenaming = renamingId === m.id
                 return (
                   <tr key={m.id}>
                     <td style={td}>
@@ -402,7 +459,42 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                         label=""
                       />
                     </td>
-                    <td style={{ ...td, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</td>
+                    <td style={{ ...td, fontWeight: 600, color: 'var(--text-primary)' }}>
+                      {isRenaming ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <input
+                            type="text"
+                            value={renameValue}
+                            onChange={e => setRenameValue(e.target.value)}
+                            onKeyDown={handleRenameKeyDown}
+                            autoFocus
+                            style={{
+                              ...input,
+                              padding: '4px 8px',
+                              fontSize: 12.5,
+                              minWidth: 120,
+                              flex: 1,
+                            }}
+                          />
+                          <button
+                            onClick={confirmRename}
+                            style={{ ...ghostBtn, padding: '4px 8px', border: 'none', color: '#10b981' }}
+                            title={pt ? 'Confirmar' : 'Confirm'}
+                          >
+                            <Check size={14} />
+                          </button>
+                          <button
+                            onClick={cancelRename}
+                            style={{ ...ghostBtn, padding: '4px 8px', border: 'none', color: '#6b7280' }}
+                            title={pt ? 'Cancelar' : 'Cancel'}
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ) : (
+                        m.machineName
+                      )}
+                    </td>
                     <td style={td}>
                       {m.accountName ? (
                         <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -430,6 +522,13 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                     </td>
                     <td style={td}>
                       <div style={{ display: 'flex', gap: 6 }}>
+                        <button
+                          style={{ ...ghostBtn, padding: '4px 8px' }}
+                          onClick={() => startRename(m.id, m.machineName)}
+                          title={pt ? 'Renomear' : 'Rename'}
+                        >
+                          <Pencil size={12} />
+                        </button>
                         <button
                           style={{ ...ghostBtn, padding: '4px 8px' }}
                           onClick={() => void rotateMachine(m.id)}

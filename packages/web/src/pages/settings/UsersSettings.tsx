@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Plus, Trash2, Copy, Check, Dice5, KeyRound, Pencil } from 'lucide-react'
+import { Plus, Trash2, Copy, Check, Dice5, KeyRound, Pencil, X } from 'lucide-react'
 import { generatePassword } from '../../lib/password'
 import type { AppContext } from '../../lib/app-context'
 import { SectionHeader, Checkbox, Select } from './primitives'
@@ -121,6 +121,9 @@ export default function UsersSettings() {
   const [addMachineTeam, setAddMachineTeam] = useState('')
   const [addedMachineToken, setAddedMachineToken] = useState<string | null>(null)
   const [addedMachineName, setAddedMachineName] = useState<string | null>(null)
+  // Rename machine in edit drawer
+  const [renamingMachineId, setRenamingMachineId] = useState<string | null>(null)
+  const [renameMachineValue, setRenameMachineValue] = useState('')
 
   function openAccountDrawer() {
     setAn(''); setAe(''); setAp(''); setAccountType('member'); setRows([{ teamId: '', role: 'user' }])
@@ -212,6 +215,7 @@ export default function UsersSettings() {
     setEditId(a.id); setEditIsOwner(a.role === 'owner'); setEn(a.name)
     setERows(a.memberships.length ? a.memberships.map(m => ({ ...m })) : [{ teamId: '', role: 'user' }])
     setEditErr(null); setTempPassword(null); setAddMachineName(''); setAddMachineTeam(''); setAddedMachineToken(null); setAddedMachineName(null)
+    setRenamingMachineId(null); setRenameMachineValue('')
     setEditOpen(true)
     // Fetch linked machines
     setLoadingMachines(true)
@@ -284,6 +288,47 @@ export default function UsersSettings() {
       const mRes = await fetch('/api/iam/machines')
       const mData = await mRes.json() as { machines: LinkedMachine[] }
       setLinkedMachines((mData.machines ?? []).filter(m => m.accountId === editId))
+    }
+  }
+
+  async function renameMachine(id: string, name: string) {
+    const res = await fetch('/api/iam/machines', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ renameId: id, name }),
+    })
+    if (!res.ok) { setEditErr(`HTTP ${res.status}`); return }
+    setRenamingMachineId(null)
+    // Refetch machines
+    if (editId) {
+      const mRes = await fetch('/api/iam/machines')
+      const mData = await mRes.json() as { machines: LinkedMachine[] }
+      setLinkedMachines((mData.machines ?? []).filter(m => m.accountId === editId))
+    }
+  }
+
+  function startRenameMachine(id: string, currentName: string) {
+    setRenamingMachineId(id)
+    setRenameMachineValue(currentName)
+  }
+
+  function cancelRenameMachine() {
+    setRenamingMachineId(null)
+    setRenameMachineValue('')
+  }
+
+  function confirmRenameMachine() {
+    if (renamingMachineId && renameMachineValue.trim()) {
+      void renameMachine(renamingMachineId, renameMachineValue.trim())
+    }
+  }
+
+  function handleRenameMachineKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      confirmRenameMachine()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      cancelRenameMachine()
     }
   }
 
@@ -724,19 +769,71 @@ export default function UsersSettings() {
               <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '12px 0' }}>{pt ? 'Nenhuma máquina vinculada.' : 'No machines linked.'}</div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {linkedMachines.map(m => (
-                  <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                      <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</span>
-                      <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                        {m.teamId ? teamNameOf(m.teamId) : (pt ? 'sem time' : 'no team')} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
-                      </span>
+                {linkedMachines.map(m => {
+                  const isRenamingThisMachine = renamingMachineId === m.id
+                  return (
+                    <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+                        {isRenamingThisMachine ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <input
+                              type="text"
+                              value={renameMachineValue}
+                              onChange={e => setRenameMachineValue(e.target.value)}
+                              onKeyDown={handleRenameMachineKeyDown}
+                              autoFocus
+                              style={{
+                                ...input,
+                                padding: '4px 8px',
+                                fontSize: 12.5,
+                                minWidth: 120,
+                                flex: 1,
+                              }}
+                            />
+                            <button
+                              onClick={confirmRenameMachine}
+                              style={{ ...ghostBtn, padding: '4px 8px', border: 'none', color: '#10b981' }}
+                              title={pt ? 'Confirmar' : 'Confirm'}
+                            >
+                              <Check size={14} />
+                            </button>
+                            <button
+                              onClick={cancelRenameMachine}
+                              style={{ ...ghostBtn, padding: '4px 8px', border: 'none', color: '#6b7280' }}
+                              title={pt ? 'Cancelar' : 'Cancel'}
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</span>
+                        )}
+                        {!isRenamingThisMachine && (
+                          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                            {m.teamId ? teamNameOf(m.teamId) : (pt ? 'sem time' : 'no team')} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button
+                          type="button"
+                          style={{ ...ghostBtn, padding: '5px 10px', fontSize: 11.5 }}
+                          onClick={() => startRenameMachine(m.id, m.machineName)}
+                          title={pt ? 'Renomear' : 'Rename'}
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }}
+                          onClick={() => window.confirm(pt ? 'Revogar esta máquina?' : 'Revoke this machine?') && void revokeMachine(m.id)}
+                        >
+                          {pt ? 'Revogar' : 'Revoke'}
+                        </button>
+                      </div>
                     </div>
-                    <button type="button" style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }} onClick={() => window.confirm(pt ? 'Revogar esta máquina?' : 'Revoke this machine?') && void revokeMachine(m.id)}>
-                      {pt ? 'Revogar' : 'Revoke'}
-                    </button>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
             {/* Add machine inline form */}
