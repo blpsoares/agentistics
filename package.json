@@ -23,6 +23,7 @@
   ],
   "scripts": {
     "dev:api": "bun run --cwd packages/server server/index.ts",
+    "cli": "bun packages/server/bin/cli.ts",
     "dev:ui": "bun run --cwd packages/web dev",
     "dev": "bun run --bun concurrently \"bun run dev:api\" \"bun run dev:ui\"",
     "build": "bun run --cwd packages/web build",
