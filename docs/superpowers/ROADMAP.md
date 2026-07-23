@@ -107,6 +107,19 @@ English by project convention; conversation with the user is Portuguese.
   **Spec:** [2026-07-23-manager-direct-grants-design.md](specs/2026-07-23-manager-direct-grants-design.md).
   Adds a SECOND authz axis → must land after the pending whole-branch security review, with tests.
 
+#### C7 — Governance detail views + team add-user-suggests-machines ⬜
+- **Auto-suggest machines when adding a user to a team** (Teams → Manage → Add member): on picking a
+  user, offer (checkbox) to **also add that user's machines to the team**; on confirm, reassign those
+  machines' `teamId` to the team (POST `/api/iam/machines {reassignId, teamId}` per machine). The
+  team's **Add machine** picker must **exclude machines already in the team** (`m.teamId !== teamId`).
+- **Row → detail view** on Users / Teams / Machines: clicking a row opens a detail (modal or the
+  existing drawer, enriched) showing everything — a **user**: role/permission, teams, linked machines;
+  a **team**: members + machines; a **machine**: owners, team, presence, tokens. Much of this already
+  exists as the Teams "Manage" drawer + Users edit drawer + Machines edit drawer — mostly make rows
+  clickable + enrich, rather than build new modals.
+- **Recommendation:** build next session with the pending security review (touches the same
+  Teams/Users/Machines authz surface). Bounded part (#auto-suggest) could ship first.
+
 #### C4 — Dedicated mobile UI (ULTRA IMPORTANT) ⬜
 - **Problem:** after heavy desktop UI work (settings pages, governance/Users/Teams/Machines drawers,
   Select/Checkbox primitives, machine edit drawer, member sidebar status, filters), the **mobile
