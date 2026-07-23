@@ -336,8 +336,15 @@ export async function handleMachines(req: Request): Promise<Response> {
     if (!accountId || !name) return json({ error: 'accountId and name are required' }, 400)
     const account = await getAccount(accountId)
     if (!account) return json({ error: 'account not found' }, 404)
-    // team: explicit ctx or the account's first membership team (or 'default' for owner accounts)
-    const teamId = (typeof b.teamId === 'string' && b.teamId) || account.memberships[0]?.teamId || 'default'
+    // Principal must be able to see the target account (blocks minting for out-of-scope accounts).
+    if (!accountVisibleTo(principal, account)) return json({ error: 'forbidden' }, 403)
+    // team: an explicit ctx team the account actually belongs to, else the account's first
+    // membership team (or 'default' for owner accounts with no memberships). Constraining to the
+    // account's own teams prevents stamping the machine into a team the account isn't in.
+    const accountTeams = account.memberships.map(m => m.teamId)
+    const teamId = (typeof b.teamId === 'string' && b.teamId && accountTeams.includes(b.teamId))
+      ? b.teamId
+      : (accountTeams[0] ?? 'default')
     if (!canManageMachineTeam(principal, teamId)) return json({ error: 'forbidden' }, 403)
     const { token } = await mintMachineToken({ accountId, user: account.name, machineName: name, teamId })
     return json({ token }, 201) // plaintext once
