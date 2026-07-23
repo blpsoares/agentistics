@@ -60,6 +60,11 @@ English by project convention; conversation with the user is Portuguese.
 - **Spec:** [2026-07-22-settings-pages-and-iam-redesign-design.md](specs/2026-07-22-settings-pages-and-iam-redesign-design.md)
 - **Plan:** [plans/2026-07-22-ui1-settings-pages.md](plans/2026-07-22-ui1-settings-pages.md) — ✅ **implemented** (commits `4cb50f8`..`f127f2c` on `dev`; tsc clean, 344 tests; all reviews clean): PWA autoUpdate (skipWaiting+clientsClaim), `visibleSettingsSections` helper, 8 settings pages extracted from the modal, `/settings/*` routes + shell, gated aside submenu, redesigned sidebar footer, `PreferencesModal` retired, redesigned IAM page (Accounts+Teams tables + drawers). **Deferred:** client-side guard on directly-typed inaccessible `/settings/*` URLs (server 401/403 covers it); account role badge shows first membership; account/team edit (PATCH).
 
+#### UI-2 — Settings hub page (B) + governance reorg (Users/Teams/Machines) ✅
+- **Problem:** UI-1's aside submenu (model A) was bad; governance area confused Teams/Users/Machines.
+- **Decisions:** aside keeps only a gear → `/settings` **hub page** with grouped internal nav (Personal / Governance); governance split into **Users** (accounts), **Teams**, **Machines** (registered member tokens/presence), **Repositories**; account creation gained an **owner** option (gated to owner callers) + **multi-team manager scope** editor.
+- **Plan:** [plans/2026-07-22-ui2-settings-hub.md](plans/2026-07-22-ui2-settings-hub.md) — ✅ **implemented** (commits `0e108ff`..`a14c9ec` on `dev`; tsc clean, 345 tests; reviews clean, no privilege-escalation). Also fixed the UI-1 blank-settings-page bug (`SettingsPage` must forward outlet context — commit `<hubfix>`). **Deferred:** hide `manager` role option from non-owner viewers (server already 403s); account/team PATCH.
+
 ### Group B — Large subsystems (each is its own project)
 
 #### B4 — Governance / IAM (the foundation) 🟨
