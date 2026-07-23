@@ -77,6 +77,9 @@ export interface CliStrings {
   restartingMachine: string
   rebuildingCentral: string
   rebuildingMachine: string
+  rebuildingLocal: string
+  localRebuildHint: string
+  localRebuildFailed: string
   restartedAll: string
   restartedDone: string
   disconnected: string
@@ -153,6 +156,9 @@ const EN: CliStrings = {
   restartingMachine: 'restarting the machine container…',
   rebuildingCentral: 'rebuilding the central image and recreating…',
   rebuildingMachine: 'rebuilding the machine image and recreating…',
+  rebuildingLocal: 'rebuilding the native server (bun run bin)…',
+  localRebuildHint: '--rebuild needs the repo to rebuild the native server. Run this from the agentistics checkout, or `agentop upgrade`. Restarting the existing build.',
+  localRebuildFailed: 'native rebuild failed — restarting the existing build.',
   restartedAll: 'restarted all running services.',
   restartedDone: 'service restarted.',
   disconnected: 'disconnected — this machine is back to solo.',
@@ -229,6 +235,9 @@ const PT: CliStrings = {
   restartingMachine: 'reiniciando o container da máquina…',
   rebuildingCentral: 'reconstruindo a imagem da central e recriando…',
   rebuildingMachine: 'reconstruindo a imagem da máquina e recriando…',
+  rebuildingLocal: 'reconstruindo o server nativo (bun run bin)…',
+  localRebuildHint: '--rebuild precisa do repo para reconstruir o server nativo. Rode de dentro do checkout do agentistics, ou use `agentop upgrade`. Reiniciando o build atual.',
+  localRebuildFailed: 'falha ao reconstruir o server nativo — reiniciando o build atual.',
   restartedAll: 'todos os serviços no ar foram reiniciados.',
   restartedDone: 'serviço reiniciado.',
   disconnected: 'desconectado — esta máquina voltou para solo.',

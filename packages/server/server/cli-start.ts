@@ -288,9 +288,25 @@ async function runAgentistics(s: CliStrings, localRunning: boolean): Promise<Sta
 
 // ── restart (per-service helpers) ───────────────────────────────────────────────
 // `rebuild` (from `--rebuild`) recreates Docker images/containers instead of just bouncing them.
-async function restartLocalSvc(s: CliStrings): Promise<void> {
-  // The local server is a native binary — "rebuild" belongs to `bun bin` / `agentop upgrade`,
-  // not here; a restart just relaunches the already-installed binary.
+/** Rebuild + reinstall the native binary from the repo (`bun run bin`: web build → embed assets →
+ *  compile → install to ~/.local/bin/agentop). Returns 'not-repo' when not run from a checkout. */
+export async function rebuildNativeBinary(): Promise<'built' | 'not-repo' | 'failed'> {
+  const inRepo = await Bun.file(join(process.cwd(), 'packages/server/bin/cli.ts')).exists()
+  if (!inRepo) return 'not-repo'
+  const child = spawn('bun', ['run', 'bin'], { cwd: process.cwd(), stdio: 'inherit' })
+  const code = await new Promise<number>(resolve => child.on('exit', c => resolve(c ?? 1)))
+  return code === 0 ? 'built' : 'failed'
+}
+
+async function restartLocalSvc(s: CliStrings, rebuild = false): Promise<void> {
+  // With --rebuild, actually rebuild the native binary (web + embedded assets) so the restart
+  // serves the new frontend/code — not just bounce the old build. Needs the repo checkout.
+  if (rebuild) {
+    process.stdout.write(`  ${D}${s.rebuildingLocal}${R}\n`)
+    const r = await rebuildNativeBinary()
+    if (r === 'not-repo') process.stderr.write(`  ${YE}${s.localRebuildHint}${R}\n`)
+    else if (r === 'failed') process.stderr.write(`  ${YE}${s.localRebuildFailed}${R}\n`)
+  }
   process.stdout.write(`  ${D}${s.restartingLocal}${R}\n`)
   await stopLocal(s)
   startBackground(s)
@@ -319,7 +335,7 @@ async function restartMachineSvc(s: CliStrings, rebuild = false): Promise<void> 
 /** Restart every service currently up. `rebuild` recreates Docker images (central + machine). */
 async function restartRunning(s: CliStrings, svc: Services, rebuild = false): Promise<boolean> {
   if (!(svc.local || svc.central || svc.machine)) return false
-  if (svc.local) await restartLocalSvc(s)
+  if (svc.local) await restartLocalSvc(s, rebuild)
   if (svc.central) await restartCentralSvc(s, rebuild)
   if (svc.machine) await restartMachineSvc(s, rebuild)
   process.stdout.write(`\n  ${GR}${s.restartedAll}${R}\n`)

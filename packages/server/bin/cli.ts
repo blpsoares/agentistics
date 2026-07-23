@@ -327,14 +327,21 @@ if (command === 'restart') {
     const code = await runCentral(rebuild ? 'up' : 'restart', [])
     process.exit(code)
   }
-  if (rebuild) {
-    console.error(`--rebuild only applies to Docker services (central/machine). For the native ${modeArg}, use \`bun bin\` (from the repo) or \`agentop upgrade\`.\n`)
-    process.exit(1)
-  }
   const { restartAutostart, isAutostartMode } = await import('../server/autostart.ts')
   if (!isAutostartMode(modeArg)) {
     console.error(`Invalid mode: ${modeArg}. Expected one of: server, watch, central.\n`)
     process.exit(1)
+  }
+  // --rebuild on a native mode (server/watch) rebuilds + reinstalls the binary from the repo so
+  // the restart serves new frontend/code (a plain bounce would keep the old build).
+  if (rebuild) {
+    const { rebuildNativeBinary } = await import('../server/cli-start.ts')
+    const r = await rebuildNativeBinary()
+    if (r === 'not-repo') {
+      console.error('--rebuild for the native server needs the repo checkout. Run it from the agentistics repo (or `agentop upgrade`).\n')
+      process.exit(1)
+    }
+    if (r === 'failed') { console.error('native rebuild failed.\n'); process.exit(1) }
   }
   const res = await restartAutostart(modeArg)
   process.stdout.write(res.message + '\n')
