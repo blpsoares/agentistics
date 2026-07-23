@@ -332,7 +332,26 @@ export async function handleMachines(req: Request): Promise<Response> {
   if (req.method === 'GET') {
     const all = await listMachines()
     const visible = principal.role === 'owner' ? all : all.filter(m => canManageMachineTeam(principal, m.teamId))
-    return json({ machines: visible })
+
+    // Enrich with owner account info
+    const accounts = await listAccounts()
+    const accountMap = new Map<string, { name: string; email: string }>()
+    for (const a of accounts) accountMap.set(a._id, { name: a.name, email: a.email })
+
+    // Enrich with presence
+    const presence = await import('./team-presence').then(m => m.computePresence()).catch(() => ({} as Record<string, { online: boolean; latencyMs: number | null }>))
+
+    const enriched = visible.map(m => ({
+      ...m,
+      ...(m.accountId && accountMap.has(m.accountId) ? {
+        accountName: accountMap.get(m.accountId)!.name,
+        accountEmail: accountMap.get(m.accountId)!.email,
+      } : {}),
+      online: presence[m.user]?.online ?? false,
+      latencyMs: presence[m.user]?.latencyMs ?? null,
+    }))
+
+    return json({ machines: enriched })
   }
   if (req.method === 'POST') {
     let body: unknown

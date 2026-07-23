@@ -55,7 +55,7 @@ export type MemberInfo = {
 
 export type MachineInfo = {
   id: string
-  accountId: string
+  accountId?: string
   machineName: string
   user: string
   teamId?: string
@@ -272,16 +272,16 @@ export async function mintMachineToken(input: { accountId: string; user: string;
 }
 
 /**
- * List all machine tokens (those with accountId set).
+ * List all machine tokens (excludes CI and repo tokens).
  * Returns machine records with the token hash as id (no plaintext).
  */
 export async function listMachines(): Promise<MachineInfo[]> {
   const col = await getTokensCollection()
-  const docs = await col.find({ accountId: { $exists: true } }).toArray()
+  const docs = await col.find({ ci: { $ne: true }, repo: { $exists: false } }).toArray()
   return docs.map(d => ({
     id: d._id,
-    accountId: d.accountId!,
-    machineName: d.label,
+    accountId: d.accountId,
+    machineName: d.label || d.user,
     user: d.user,
     teamId: d.teamId,
     createdAt: d.createdAt,

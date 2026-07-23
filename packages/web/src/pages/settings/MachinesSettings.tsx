@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Plus, Copy, Check } from 'lucide-react'
+import { Plus, Copy, Check, RotateCw, Trash2 } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
 import { TeamSettings, type TeamConfig } from '../../components/TeamSettings'
 import { SectionHeader } from './primitives'
@@ -9,12 +9,16 @@ import { Drawer } from './Drawer'
 // ── interfaces ────────────────────────────────────────────────────────────────
 interface MachineInfo {
   id: string
-  accountId: string
   machineName: string
   user: string
   teamId?: string
+  accountId?: string
+  accountName?: string
+  accountEmail?: string
   createdAt: string
   lastSeenAt: string | null
+  online?: boolean
+  latencyMs?: number | null
 }
 
 interface PublicAccount {
@@ -128,6 +132,13 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   const [copied, setCopied] = useState<string | null>(null)
   const [copyFailed, setCopyFailed] = useState<string | null>(null)
 
+  // Rotate state
+  const [rotateId, setRotateId] = useState<string | null>(null)
+  const [rotatedToken, setRotatedToken] = useState<string | null>(null)
+
+  // Revoke confirm state
+  const [revokeConfirmId, setRevokeConfirmId] = useState<string | null>(null)
+
   const load = useCallback(async () => {
     try {
       const [m, a, t] = await Promise.all([
@@ -145,41 +156,9 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
 
   useEffect(() => { void load() }, [load])
 
-  // Build lookups
-  const accountById = new Map<string, { name: string; email: string }>()
-  accounts.forEach(a => accountById.set(a.id, { name: a.name, email: a.email }))
-
+  // Build team lookup
   const teamNameById = new Map<string, string>()
   teams.forEach(t => teamNameById.set(t._id, t.name))
-
-  // Group machines by accountId
-  const machinesByAccount = new Map<string, MachineInfo[]>()
-  machines.forEach(m => {
-    const key = m.accountId
-    if (!machinesByAccount.has(key)) machinesByAccount.set(key, [])
-    machinesByAccount.get(key)!.push(m)
-  })
-
-  // Sort groups: known accounts first (by name), then '—' (unknown)
-  const sortedGroups: Array<[string, MachineInfo[]]> = []
-  const knownGroups: Array<[string, MachineInfo[]]> = []
-  const unknownGroups: Array<[string, MachineInfo[]]> = []
-
-  machinesByAccount.forEach((ms, accountId) => {
-    if (accountById.has(accountId)) {
-      knownGroups.push([accountId, ms])
-    } else {
-      unknownGroups.push([accountId, ms])
-    }
-  })
-
-  knownGroups.sort((a, b) => {
-    const aName = accountById.get(a[0])!.name
-    const bName = accountById.get(b[0])!.name
-    return aName.localeCompare(bName)
-  })
-
-  sortedGroups.push(...knownGroups, ...unknownGroups)
 
   // copy helper (reused from UsersSettings)
   async function copy(label: string, text: string) {
@@ -249,6 +228,38 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     void load()
   }
 
+  async function revokeMachine(id: string) {
+    try {
+      const res = await fetch('/api/team/tokens', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setRevokeConfirmId(null)
+      void load()
+    } catch (e) {
+      setErr(String(e))
+    }
+  }
+
+  async function rotateMachine(id: string) {
+    try {
+      const res = await fetch('/api/team/tokens/rotate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const d = await res.json() as { token: string }
+      setRotateId(id)
+      setRotatedToken(d.token)
+      void load()
+    } catch (e) {
+      setErr(String(e))
+    }
+  }
+
   // Determine whether to show the team picker for the selected account
   const selectedAccount = accounts.find(a => a.id === selectedAccountId)
   const showTeamPicker = selectedAccount?.role === 'member' && (selectedAccount.memberships.length ?? 0) > 1
@@ -258,6 +269,10 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
 
   const connectCmd = created
     ? `agentop member connect --endpoint ${window.location.origin} --token ${created.token}`
+    : ''
+
+  const rotateConnectCmd = rotatedToken
+    ? `agentop member connect --endpoint ${window.location.origin} --token ${rotatedToken}`
     : ''
 
   const drawerErrPanel = (m: string | null) => m && (
@@ -283,50 +298,89 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
         </button>
       </div>
 
-      {sortedGroups.length === 0 ? (
+      {machines.length === 0 ? (
         <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', padding: '20px 0' }}>
           {pt ? 'Nenhuma máquina registrada.' : 'No machines registered.'}
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          {sortedGroups.map(([accountId, ms]) => {
-            const account = accountById.get(accountId)
-            const accountLabel = account ? `${account.name} — ${account.email}` : '—'
-            return (
-              <div key={accountId}>
-                <div style={{
-                  fontSize: 11.5, fontWeight: 700, color: 'var(--text-tertiary)',
-                  textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8,
-                }}>
-                  {accountLabel}
-                </div>
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                    <thead>
-                      <tr>
-                        <th style={th}>{pt ? 'Nome da máquina' : 'Machine name'}</th>
-                        <th style={th}>{pt ? 'Time' : 'Team'}</th>
-                        <th style={th}>{pt ? 'Última conexão' : 'Last seen'}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {ms.map(m => (
-                        <tr key={m.id}>
-                          <td style={{ ...td, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</td>
-                          <td style={td}>{m.teamId ? (teamNameById.get(m.teamId) ?? m.teamId) : '—'}</td>
-                          <td style={td}>
-                            {m.lastSeenAt
-                              ? new Date(m.lastSeenAt).toLocaleString()
-                              : (pt ? 'nunca' : 'never')}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )
-          })}
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th style={th}>{pt ? 'Máquina' : 'Machine'}</th>
+                <th style={th}>{pt ? 'Conta' : 'Owner'}</th>
+                <th style={th}>{pt ? 'Usuário' : 'User'}</th>
+                <th style={th}>{pt ? 'Time' : 'Team'}</th>
+                <th style={th}>Status</th>
+                <th style={th}>{pt ? 'Último acesso' : 'Last seen'}</th>
+                <th style={th}>{pt ? 'Ações' : 'Actions'}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {machines.map(m => {
+                const statusColor = m.online ? '#10b981' : '#6b7280'
+                const statusLabel = m.online ? (pt ? 'online' : 'online') : (pt ? 'offline' : 'offline')
+                return (
+                  <tr key={m.id}>
+                    <td style={{ ...td, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</td>
+                    <td style={td}>
+                      {m.accountName ? (
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontWeight: 600 }}>{m.accountName}</span>
+                          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{m.accountEmail}</span>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span>—</span>
+                          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{pt ? 'sem conta' : 'no account'}</span>
+                        </div>
+                      )}
+                    </td>
+                    <td style={td}>{m.user}</td>
+                    <td style={td}>{m.teamId ? (teamNameById.get(m.teamId) ?? m.teamId) : '—'}</td>
+                    <td style={td}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <div style={{ width: 6, height: 6, borderRadius: '50%', background: statusColor }} />
+                        <span>{statusLabel}</span>
+                        {m.latencyMs != null && <span style={{ color: 'var(--text-tertiary)' }}>· {m.latencyMs}ms</span>}
+                      </div>
+                    </td>
+                    <td style={td}>
+                      {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
+                    </td>
+                    <td style={td}>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button
+                          style={{ ...ghostBtn, padding: '4px 8px' }}
+                          onClick={() => void rotateMachine(m.id)}
+                          title={pt ? 'Rotacionar token' : 'Rotate token'}
+                        >
+                          <RotateCw size={12} />
+                        </button>
+                        {revokeConfirmId === m.id ? (
+                          <button
+                            style={{ ...ghostBtn, padding: '4px 8px', color: '#ef4444', borderColor: '#ef4444' }}
+                            onClick={() => void revokeMachine(m.id)}
+                            title={pt ? 'Confirmar' : 'Confirm'}
+                          >
+                            {pt ? 'Confirmar?' : 'Confirm?'}
+                          </button>
+                        ) : (
+                          <button
+                            style={{ ...ghostBtn, padding: '4px 8px', color: '#ef4444' }}
+                            onClick={() => setRevokeConfirmId(m.id)}
+                            title={pt ? 'Revogar' : 'Revoke'}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -424,6 +478,66 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
           </div>
         )}
       </Drawer>
+
+      {/* Rotate token drawer */}
+      {rotateId && rotatedToken && (
+        <Drawer open onClose={() => { setRotateId(null); setRotatedToken(null) }} title={pt ? 'Token rotacionado' : 'Token rotated'}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>
+              {pt ? 'Novo token — copie agora' : 'New token — copy now'}
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+              {pt ? 'Este valor não será exibido novamente.' : 'This value will not be shown again.'}
+            </div>
+
+            {/* Rotated token */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                {pt ? 'Novo token' : 'New token'}
+              </span>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>
+                  {rotatedToken}
+                </code>
+                <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('rotated-token', rotatedToken) }} aria-label="Copy token">
+                  {copied === 'rotated-token' ? <Check size={13} /> : <Copy size={13} />}
+                </button>
+              </div>
+              {copyFailed === 'rotated-token' && (
+                <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
+                  {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                </span>
+              )}
+            </div>
+
+            {/* Connect command */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                {pt ? 'Comando de conexão' : 'Connect command'}
+              </span>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-secondary)' }}>
+                  {rotateConnectCmd}
+                </code>
+                <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('rotated-connect', rotateConnectCmd) }} aria-label="Copy connect command">
+                  {copied === 'rotated-connect' ? <Check size={13} /> : <Copy size={13} />}
+                </button>
+              </div>
+              {copyFailed === 'rotated-connect' && (
+                <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
+                  {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                </span>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+              <button style={primaryBtn} onClick={() => { setRotateId(null); setRotatedToken(null) }}>
+                <Check size={14} /> {pt ? 'Concluir' : 'Done'}
+              </button>
+            </div>
+          </div>
+        </Drawer>
+      )}
     </>
   )
 }
