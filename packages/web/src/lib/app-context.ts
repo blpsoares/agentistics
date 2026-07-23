@@ -14,6 +14,16 @@ export interface InfoItem {
 /** The `beforeinstallprompt` event, captured in App and threaded to the Install settings page. */
 export type PwaPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
 
+/** The logged-in IAM account (role + team memberships), threaded from App.tsx `iam.account`.
+ *  Structurally matches `IamAccount` in App.tsx; kept inline here to avoid importing App into a lib. */
+export interface Principal {
+  id: string
+  name: string
+  email: string
+  role: 'owner' | 'member'
+  memberships: { teamId: string; role: 'manager' | 'user' }[]
+}
+
 /** Draft shape for the Preferences settings page / modal (single source of truth). */
 export interface PrefsDraft {
   lang: Lang
@@ -101,4 +111,6 @@ export interface AppContext {
   harnesses: HarnessId[]
   /** True when this instance is running as a team-mode central (aggregator). */
   isCentral: boolean
+  /** The logged-in IAM account (role + memberships). Undefined when IAM is not active. */
+  me?: Principal
 }

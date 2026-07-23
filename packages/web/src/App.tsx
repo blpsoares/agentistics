@@ -2133,6 +2133,7 @@ export default function AppLayout() {
           sessionCountByProject, models, modelGroups, modelsInProject, users,
           harnesses: data.harnesses,
           isCentral,
+          me: iam?.account,
         }} />
       </main>
 
