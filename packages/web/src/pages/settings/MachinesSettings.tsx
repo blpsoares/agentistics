@@ -59,6 +59,10 @@ const td: React.CSSProperties = {
   fontSize: 12.5, color: 'var(--text-secondary)', padding: '9px 10px',
   borderTop: '1px solid var(--border-subtle)', verticalAlign: 'middle',
 }
+const trashBtn: React.CSSProperties = {
+  border: 'none', background: 'transparent', color: '#ef4444', cursor: 'pointer',
+  display: 'inline-flex', padding: 4,
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -126,10 +130,9 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   // Add machine drawer state
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [selectedAccountId, setSelectedAccountId] = useState('')
-  const [machineName, setMachineName] = useState('')
-  const [selectedTeamId, setSelectedTeamId] = useState('')
+  const [machineRows, setMachineRows] = useState<{ name: string; teamId: string }[]>([{ name: '', teamId: '' }])
   const [drawerErr, setDrawerErr] = useState<string | null>(null)
-  const [created, setCreated] = useState<null | { token: string }>(null)
+  const [created, setCreated] = useState<null | { machines: { name: string; token: string }[] }>(null)
   const [copied, setCopied] = useState<string | null>(null)
   const [copyFailed, setCopyFailed] = useState<string | null>(null)
 
@@ -241,8 +244,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
 
   function openDrawer() {
     setSelectedAccountId('')
-    setMachineName('')
-    setSelectedTeamId('')
+    setMachineRows([{ name: '', teamId: '' }])
     setDrawerErr(null)
     setCreated(null)
     setCopied(null)
@@ -250,28 +252,49 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     setDrawerOpen(true)
   }
 
+  function addMachineRow() {
+    setMachineRows(rs => [...rs, { name: '', teamId: '' }])
+  }
+
+  function removeMachineRow(i: number) {
+    setMachineRows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs)
+  }
+
+  function updateMachineRow(i: number, patch: { name?: string; teamId?: string }) {
+    setMachineRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r))
+  }
+
   async function addMachine() {
-    if (!selectedAccountId.trim() || !machineName.trim()) {
-      setDrawerErr(pt ? 'Informe a conta e o nome da máquina.' : 'Fill account and machine name.')
+    if (!selectedAccountId.trim()) {
+      setDrawerErr(pt ? 'Informe a conta.' : 'Select an account.')
       return
     }
-    const body: Record<string, unknown> = {
-      accountId: selectedAccountId,
-      name: machineName.trim(),
-    }
-    if (selectedTeamId) body.teamId = selectedTeamId
-    const res = await fetch('/api/iam/machines', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (!res.ok) {
-      const d = await res.json() as { error?: string }
-      setDrawerErr(d.error || `HTTP ${res.status}`)
+    const validRows = machineRows.filter(r => r.name.trim())
+    if (validRows.length === 0) {
+      setDrawerErr(pt ? 'Informe ao menos um nome de máquina.' : 'Provide at least one machine name.')
       return
     }
-    const d = await res.json() as { token: string }
-    setCreated({ token: d.token })
+    const results: { name: string; token: string }[] = []
+    for (const row of validRows) {
+      const body: Record<string, unknown> = {
+        accountId: selectedAccountId,
+        name: row.name.trim(),
+      }
+      if (row.teamId) body.teamId = row.teamId
+      const res = await fetch('/api/iam/machines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const d = await res.json() as { error?: string }
+        setDrawerErr(d.error || `HTTP ${res.status}`)
+        return
+      }
+      const d = await res.json() as { token: string }
+      results.push({ name: row.name.trim(), token: d.token })
+    }
+    setCreated({ machines: results })
     void load()
   }
 
@@ -410,9 +433,8 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     ? selectedAccount!.memberships.map(m => ({ id: m.teamId, name: teamNameById.get(m.teamId) ?? m.teamId }))
     : []
 
-  const connectCmd = created
-    ? `agentop member connect --endpoint ${window.location.origin} --token ${created.token}`
-    : ''
+  const connectCmdFor = (token: string) =>
+    `agentop member connect --endpoint ${window.location.origin} --token ${token}`
 
   const rotateConnectCmd = rotatedToken
     ? `agentop member connect --endpoint ${window.location.origin} --token ${rotatedToken}`
@@ -666,14 +688,14 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
       )}
 
       {/* Add machine drawer */}
-      <Drawer open={drawerOpen} onClose={() => { if (!created) setDrawerOpen(false) }} title={pt ? 'Adicionar máquina' : 'Add machine'}>
+      <Drawer open={drawerOpen} onClose={() => { if (!created) setDrawerOpen(false) }} title={pt ? 'Adicionar máquinas' : 'Add machines'}>
         {drawerErrPanel(drawerErr)}
 
         {!created && (<>
           <Field label={pt ? 'Conta' : 'Account'}>
             <Select
               value={selectedAccountId}
-              onChange={v => { setSelectedAccountId(v); setSelectedTeamId('') }}
+              onChange={v => { setSelectedAccountId(v) }}
               options={[
                 { value: '', label: pt ? 'Selecione a conta…' : 'Select account…' },
                 ...accounts.map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
@@ -682,73 +704,115 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
             />
           </Field>
 
-          <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
-            <input style={input} value={machineName} onChange={e => setMachineName(e.target.value)} placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'} />
-          </Field>
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 18, marginTop: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                {pt ? 'Máquinas' : 'Machines'}
+              </span>
+              <button type="button" style={ghostBtn} onClick={addMachineRow}>
+                <Plus size={13} /> {pt ? 'Adicionar outra máquina' : 'Add another machine'}
+              </button>
+            </div>
 
-          {showTeamPicker && (
-            <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
-              <Select
-                value={selectedTeamId}
-                onChange={v => setSelectedTeamId(v)}
-                options={[
-                  { value: '', label: pt ? 'Deixar o servidor decidir' : 'Let server default' },
-                  ...membershipTeams.map(t => ({ value: t.id, label: t.name })),
-                ]}
-                placeholder={pt ? 'Deixar o servidor decidir' : 'Let server default'}
-              />
-            </Field>
-          )}
+            {machineRows.map((row, i) => (
+              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'flex-end', marginBottom: 10 }}>
+                <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
+                  <input
+                    style={input}
+                    value={row.name}
+                    onChange={e => updateMachineRow(i, { name: e.target.value })}
+                    placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'}
+                  />
+                </Field>
+
+                {showTeamPicker && (
+                  <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
+                    <Select
+                      value={row.teamId}
+                      onChange={v => updateMachineRow(i, { teamId: v })}
+                      options={[
+                        { value: '', label: pt ? 'Deixar vazio' : 'Leave empty' },
+                        ...membershipTeams.map(t => ({ value: t.id, label: t.name })),
+                      ]}
+                      placeholder={pt ? 'Deixar vazio' : 'Leave empty'}
+                    />
+                  </Field>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => removeMachineRow(i)}
+                  disabled={machineRows.length === 1}
+                  style={{
+                    ...trashBtn,
+                    opacity: machineRows.length === 1 ? 0.35 : 1,
+                    cursor: machineRows.length === 1 ? 'not-allowed' : 'pointer',
+                  }}
+                  aria-label={pt ? 'Remover máquina' : 'Remove machine'}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
         </>)}
 
         {created ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4 }}>
             <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>
-              {pt ? 'Máquina criada — copie os dados agora' : 'Machine created — copy these now'}
+              {pt ? 'Máquinas criadas — copie os dados agora' : 'Machines created — copy these now'}
             </div>
             <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
               {pt ? 'Estes valores não serão exibidos novamente.' : 'These values will not be shown again.'}
             </div>
 
-            {/* Machine token */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                {pt ? 'Token da máquina' : 'Machine token'}
-              </span>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>
-                  {created.token}
-                </code>
-                <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('token', created.token) }} aria-label="Copy token">
-                  {copied === 'token' ? <Check size={13} /> : <Copy size={13} />}
-                </button>
-              </div>
-              {copyFailed === 'token' && (
-                <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
-                  {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
-                </span>
-              )}
-            </div>
+            {created.machines.map((machine, idx) => (
+              <React.Fragment key={idx}>
+                <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)', marginTop: idx > 0 ? 12 : 0 }}>
+                  {pt ? 'Máquina:' : 'Machine:'} {machine.name}
+                </div>
 
-            {/* Connect command */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                {pt ? 'Comando de conexão' : 'Connect command'}
-              </span>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-secondary)' }}>
-                  {connectCmd}
-                </code>
-                <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('connect', connectCmd) }} aria-label="Copy connect command">
-                  {copied === 'connect' ? <Check size={13} /> : <Copy size={13} />}
-                </button>
-              </div>
-              {copyFailed === 'connect' && (
-                <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
-                  {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
-                </span>
-              )}
-            </div>
+                {/* Machine token */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {pt ? 'Token' : 'Token'}
+                  </span>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>
+                      {machine.token}
+                    </code>
+                    <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy(`token-${idx}`, machine.token) }} aria-label="Copy token">
+                      {copied === `token-${idx}` ? <Check size={13} /> : <Copy size={13} />}
+                    </button>
+                  </div>
+                  {copyFailed === `token-${idx}` && (
+                    <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
+                      {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                    </span>
+                  )}
+                </div>
+
+                {/* Connect command */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {pt ? 'Comando de conexão' : 'Connect command'}
+                  </span>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-secondary)' }}>
+                      {connectCmdFor(machine.token)}
+                    </code>
+                    <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy(`connect-${idx}`, connectCmdFor(machine.token)) }} aria-label="Copy connect command">
+                      {copied === `connect-${idx}` ? <Check size={13} /> : <Copy size={13} />}
+                    </button>
+                  </div>
+                  {copyFailed === `connect-${idx}` && (
+                    <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
+                      {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                    </span>
+                  )}
+                </div>
+              </React.Fragment>
+            ))}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
               <button style={primaryBtn} onClick={() => setDrawerOpen(false)}>
