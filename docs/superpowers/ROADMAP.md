@@ -65,7 +65,16 @@ English by project convention; conversation with the user is Portuguese.
 - **Decisions:** aside keeps only a gear → `/settings` **hub page** with grouped internal nav (Personal / Governance); governance split into **Users** (accounts), **Teams**, **Machines** (registered member tokens/presence), **Repositories**; account creation gained an **owner** option (gated to owner callers) + **multi-team manager scope** editor.
 - **Plan:** [plans/2026-07-22-ui2-settings-hub.md](plans/2026-07-22-ui2-settings-hub.md) — ✅ **implemented** (commits `0e108ff`..`a14c9ec` on `dev`; tsc clean, 345 tests; reviews clean, no privilege-escalation). Also fixed the UI-1 blank-settings-page bug (`SettingsPage` must forward outlet context — commit `<hubfix>`). **Deferred:** hide `manager` role option from non-owner viewers (server already 403s); account/team PATCH.
 
-#### C3 — Filters: Teams / Members / Machines (machine-aware) ⬜
+#### C3 — Filters: Teams / Members / Machines (machine-aware) ✅
+- **Implemented** (commits `25c5bbd` backend + `defbef3` frontend on `dev`; tsc clean, 357 tests, build ok):
+  `Filters` gained `teams?[]`/`machines?[]`; `SessionMeta` gained `memberId` (machine token hash,
+  re-attached at central read time); pure `filterByTeams`/`filterByMachines` in core (unit-tested);
+  App fetches `/api/iam/teams`+`/api/iam/machines` (central) → `FiltersBar` + `AppContext`; the
+  **Members filter lists only users with ≥1 machine** and shows each user's machine names; Machines
+  picker shows machine names + owner; `useDerivedStats` + `computeFilteredHarnessSummaries` apply both.
+- **(original spec kept below for reference)**
+
+<details><summary>original C3 spec</summary>
 - **What (central filter bar):** add filter dimensions:
   - **Teams** — filter by team.
   - **Members** — a member = a **user**; selecting a member filters by **that user's machines**, and the
@@ -76,6 +85,14 @@ English by project convention; conversation with the user is Portuguese.
 - **Depends on:** the machine↔account model (`accountIds[]`) + per-session `memberId`/user already in place.
   Likely touches `FiltersBar`, `useDerivedStats`/`Filters`, and the `/api/data` scoping.
 - **Spec:** _(write next session)_
+</details>
+
+#### C5 — Move Dynamic Workflows into the session drilldown ✅
+- **Implemented** (commit `b4e6ffb` on `dev`): removed the "Dynamic Workflows" item from the aside +
+  the mobile "More" tile; added a **Dynamic Workflows (N)** section inside `SessionDrilldownModal`
+  showing only that session's runs (phase→agents timeline). The `/workflows` route +
+  RepoDetailPage tab remain. *(Leftover: unused `hasWorkflows` prop / `WorkflowIcon` import in App.tsx
+  — harmless; clean up next pass.)*
 
 #### C4 — Dedicated mobile UI (ULTRA IMPORTANT) ⬜
 - **Problem:** after heavy desktop UI work (settings pages, governance/Users/Teams/Machines drawers,
