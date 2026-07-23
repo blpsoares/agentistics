@@ -52,7 +52,6 @@ import { Login } from './components/Login'
 import { OwnerSetup } from './components/OwnerSetup'
 import { type ChatModelId } from './lib/chatModels'
 import { HARNESS_LABELS } from './lib/harness'
-import { visibleSettingsSections } from './lib/settingsSections'
 import { format, parseISO, parse } from 'date-fns'
 
 // ── Team session state ────────────────────────────────────────────────────
@@ -674,7 +673,7 @@ function MobileBottomNav({
       badge: liveUpdates ? (updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`) : undefined,
     } as Tile]),
     { key: 'refresh', label: pt ? 'Atualizar' : 'Refresh', icon: RefreshCw, onClick: () => { onRefresh(); setMoreOpen(false) } },
-    { key: 'settings', label: pt ? 'Ajustes' : 'Settings', icon: SlidersHorizontal, onClick: () => { setMoreOpen(false); navigate('/settings/preferences') }, active: location.pathname.startsWith('/settings') },
+    { key: 'settings', label: pt ? 'Ajustes' : 'Settings', icon: SlidersHorizontal, onClick: () => { setMoreOpen(false); navigate('/settings') }, active: location.pathname.startsWith('/settings') },
     // Health warnings moved next to the notification bell in the mobile top bar (its own popover).
   ]
   const allTiles = [...navTiles, ...actionTiles]
@@ -857,17 +856,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
   principal?: IamAccount
 }) {
   const location = useLocation()
-  const navigate = useNavigate()
   const pt = lang === 'pt'
-  // Settings submenu — UX-only permission gate (server enforces real authz).
-  const settingsSections = visibleSettingsSections({
-    central: !!isCentral,
-    role: principal?.role,
-    isManager: principal?.memberships.some(m => m.role === 'manager'),
-  })
-  const inSettings = location.pathname.startsWith('/settings')
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const settingsExpanded = settingsOpen || inSettings
   // Repositories highlights across the whole section (list, detail, actions) — Actions lives as a
   // tab inside each repo, so there's no sidebar submenu.
   const inReposSection = location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo')
@@ -958,54 +947,27 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
           )
         })}
 
-        {/* Settings — collapsible, permission-gated group */}
-        {settingsSections.length > 0 && (
-          <>
-            <CollapsedTip label={pt ? 'Configurações' : 'Settings'} show={collapsed}>
-              <button
-                type="button"
-                aria-label={collapsed ? (pt ? 'Configurações' : 'Settings') : undefined}
-                aria-expanded={collapsed ? undefined : settingsExpanded}
-                onClick={() => { if (collapsed) navigate('/settings/preferences'); else setSettingsOpen(o => !o) }}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 11, minWidth: 0, width: '100%',
-                  padding: collapsed ? '10px 0' : '10px 12px', justifyContent: collapsed ? 'center' : 'flex-start',
-                  borderRadius: 9, border: 'none', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit',
-                  fontSize: 13.5, fontWeight: inSettings ? 700 : 500, whiteSpace: 'nowrap',
-                  color: inSettings ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                  background: inSettings ? 'var(--anthropic-orange-dim)' : 'transparent',
-                  transition: 'background 0.15s, color 0.15s',
-                }}
-                onMouseEnter={e => { if (!inSettings) { const t = e.currentTarget; t.style.color = 'var(--text-primary)'; t.style.background = 'var(--bg-elevated)' } }}
-                onMouseLeave={e => { if (!inSettings) { const t = e.currentTarget; t.style.color = 'var(--text-secondary)'; t.style.background = 'transparent' } }}
-              >
-                <span style={{ flexShrink: 0, display: 'flex' }}><Settings size={17} /></span>
-                {!collapsed && <>
-                  <span style={{ flex: 1 }}>{pt ? 'Configurações' : 'Settings'}</span>
-                  <ChevronDown size={15} style={{ flexShrink: 0, transition: 'transform 0.15s', transform: settingsExpanded ? 'rotate(0deg)' : 'rotate(-90deg)' }} />
-                </>}
-              </button>
-            </CollapsedTip>
-            {!collapsed && settingsExpanded && settingsSections.map(s => (
-              <NavLink
-                key={s.id}
-                to={`/settings/${s.id}`}
-                style={({ isActive }) => ({
-                  display: 'flex', alignItems: 'center', minWidth: 0,
-                  padding: '8px 12px 8px 40px', borderRadius: 9, textDecoration: 'none',
-                  fontSize: 12.5, fontWeight: isActive ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap',
-                  color: isActive ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                  background: isActive ? 'var(--anthropic-orange-dim)' : 'transparent',
-                  transition: 'background 0.15s, color 0.15s',
-                })}
-                onMouseEnter={e => { const t = e.currentTarget; if (!t.style.background.includes('orange')) { t.style.color = 'var(--text-primary)'; t.style.background = 'var(--bg-elevated)' } }}
-                onMouseLeave={e => { const t = e.currentTarget; if (!t.style.color.includes('orange')) { t.style.color = 'var(--text-secondary)'; t.style.background = 'transparent' } }}
-              >
-                {pt ? s.labelPt : s.labelEn}
-              </NavLink>
-            ))}
-          </>
-        )}
+        {/* Settings — single gear entry that opens the hub page (/settings). */}
+        <CollapsedTip label={pt ? 'Configurações' : 'Settings'} show={collapsed}>
+          <NavLink
+            to="/settings"
+            aria-label={collapsed ? (pt ? 'Configurações' : 'Settings') : undefined}
+            style={({ isActive }) => ({
+              display: 'flex', alignItems: 'center', gap: 11, minWidth: 0,
+              padding: collapsed ? '10px 0' : '10px 12px', justifyContent: collapsed ? 'center' : 'flex-start',
+              borderRadius: 9, textDecoration: 'none',
+              fontSize: 13.5, fontWeight: isActive ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap',
+              color: isActive ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+              background: isActive ? 'var(--anthropic-orange-dim)' : 'transparent',
+              transition: 'background 0.15s, color 0.15s',
+            })}
+            onMouseEnter={e => { const t = e.currentTarget; if (!t.style.background.includes('orange')) { t.style.color = 'var(--text-primary)'; t.style.background = 'var(--bg-elevated)' } }}
+            onMouseLeave={e => { const t = e.currentTarget; if (!t.style.color.includes('orange')) { t.style.color = 'var(--text-secondary)'; t.style.background = 'transparent' } }}
+          >
+            <span style={{ flexShrink: 0, display: 'flex' }}><Settings size={17} /></span>
+            {!collapsed && (pt ? 'Configurações' : 'Settings')}
+          </NavLink>
+        </CollapsedTip>
       </nav>
 
       {/* Footer — Row A account · thin divider · Row B config actions */}
@@ -1064,7 +1026,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
             </button>
           </CollapsedTip>
           <CollapsedTip label={pt ? 'Configurações' : 'Settings'} show={collapsed}>
-            <NavLink to="/settings/preferences" aria-label={pt ? 'Configurações' : 'Settings'} title={collapsed ? undefined : (pt ? 'Configurações' : 'Settings')} style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1, textDecoration: 'none' }}
+            <NavLink to="/settings" aria-label={pt ? 'Configurações' : 'Settings'} title={collapsed ? undefined : (pt ? 'Configurações' : 'Settings')} style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1, textDecoration: 'none' }}
               onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-primary)' }}
               onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-secondary)' }}>
               <SlidersHorizontal size={15} />
