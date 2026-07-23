@@ -419,6 +419,12 @@ export async function handleMachines(req: Request): Promise<Response> {
       if (!machine) return json({ error: 'machine not found' }, 404)
       if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
       await setMachineLabel(renameId, newName)
+      // Notify the machine over the reverse WebSocket (best-effort) with the new name + who did it.
+      try {
+        const actor = (await getAccount(principal.accountId))?.name ?? 'an admin'
+        const { notifyMember } = await import('./team-agent')
+        notifyMember(machine.user, { type: 'renamed', name: newName, actor })
+      } catch { /* best-effort — the name still reflects via whoami */ }
       return json({ ok: true })
     }
     // Rotate a machine's token (scoped): { rotateId } → new plaintext token once. Lets an admin OR
