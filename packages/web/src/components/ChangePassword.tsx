@@ -4,14 +4,23 @@ import { AlertCircle, KeyRound } from 'lucide-react'
 import { Field } from './Login'
 
 /** Blocking first-login password change (mustChangePassword). Forced flow — the server does not
- *  require the current password. Posts /api/iam/change-password; the server re-issues the cookie. */
+ *  require the current password. Posts /api/iam/change-password; the server re-issues the cookie.
+ *  `onDone` re-runs the IAM gate (used both after a successful change and after logout). */
 export function ChangePassword({ onDone }: { onDone: () => void }) {
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const ref = useRef<HTMLInputElement>(null)
   useEffect(() => { ref.current?.focus() }, [])
+
+  async function logout() {
+    if (loggingOut) return
+    setLoggingOut(true)
+    try { await fetch('/api/iam/logout', { method: 'POST' }) } catch { /* ignore */ }
+    onDone() // re-runs reloadIam → not authed → Login screen
+  }
 
   const tooShort = password.length < 8
   const mismatch = confirm.length > 0 && password !== confirm
@@ -52,6 +61,10 @@ export function ChangePassword({ onDone }: { onDone: () => void }) {
         <button type="submit" disabled={disabled}
           style={{ width: '100%', padding: '9px 14px', borderRadius: 8, border: '1px solid var(--anthropic-orange)', background: disabled ? 'var(--bg-elevated)' : 'var(--anthropic-orange-dim)', color: disabled ? 'var(--text-tertiary)' : 'var(--anthropic-orange)', fontSize: 13, fontWeight: 600, cursor: disabled ? 'default' : 'pointer', fontFamily: 'inherit' }}>
           {submitting ? 'Saving…' : 'Save & continue'}
+        </button>
+        <button type="button" onClick={() => void logout()} disabled={loggingOut}
+          style={{ width: '100%', marginTop: 10, padding: '8px 14px', borderRadius: 8, border: 'none', background: 'transparent', color: 'var(--text-tertiary)', fontSize: 12.5, fontWeight: 600, cursor: loggingOut ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+          {loggingOut ? 'Logging out…' : 'Log out'}
         </button>
       </form>
     </div>
