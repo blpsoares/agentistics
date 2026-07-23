@@ -12,7 +12,7 @@ import { seedDefaultTeam, listTeams, createTeam, getTeam, deleteTeam, DEFAULT_TE
 import { backfillTokenTeamIds, listMachines, mintMachineToken } from './team-tokens'
 import { backfillRepoTeamIds } from './team-repos'
 import { makePrincipalSessionCookieHeader, getPrincipal } from './auth'
-import { publicAccount, accountVisibleTo, canCreateAccount, canAssignRole, canDeleteAccount, teamVisibleTo, canManageMachineTeam } from './iam-view'
+import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam } from './iam-view'
 import type { AccountDoc, Membership, Role } from './iam-types'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
@@ -152,6 +152,23 @@ function parseMemberships(v: unknown): Membership[] {
   return out
 }
 
+/** Machine-link requests from create body: `machines: [{name, teamId?}]` (+ single `machine:{name}`
+ *  alias). Drops entries without a non-empty name. Each becomes its own minted machine token. */
+function parseMachineRequests(machines: unknown, single: unknown): { name: string; teamId?: string }[] {
+  const out: { name: string; teamId?: string }[] = []
+  if (Array.isArray(machines)) {
+    for (const m of machines) {
+      const name = typeof (m as Record<string, unknown>)?.name === 'string' ? ((m as Record<string, unknown>).name as string).trim() : ''
+      const teamId = typeof (m as Record<string, unknown>)?.teamId === 'string' ? ((m as Record<string, unknown>).teamId as string) : undefined
+      if (name) out.push({ name, ...(teamId ? { teamId } : {}) })
+    }
+  }
+  const singleName = typeof (single as Record<string, unknown> | undefined)?.name === 'string'
+    ? ((single as Record<string, unknown>).name as string).trim() : ''
+  if (singleName) out.push({ name: singleName })
+  return out
+}
+
 /**
  * /api/iam/accounts — GET list (scoped), POST create, DELETE remove. Self-guarding.
  */
@@ -171,35 +188,41 @@ export async function handleAccounts(req: Request): Promise<Response> {
     const name = typeof b.name === 'string' ? b.name.trim() : ''
     const email = typeof b.email === 'string' ? b.email.trim() : ''
     const password = typeof b.password === 'string' ? b.password : ''
-    const role: Role = b.role === 'owner' ? 'owner' : b.role === 'admin' ? 'admin' : 'member'
+    const role: Role = b.role === 'owner' ? 'owner' : 'member'
     const memberships = parseMemberships(b.memberships)
     const mustChangePassword = typeof b.mustChangePassword === 'boolean' ? b.mustChangePassword : true
-    const machineName = typeof (b.machine as Record<string, unknown> | undefined)?.name === 'string'
-      ? ((b.machine as Record<string, unknown>).name as string).trim()
-      : ''
+    // Machines to link at creation: accept `machines: [{name, teamId?}]` (multiple, each mints its
+    // own token) plus a single `machine: {name}` alias for back-compat.
+    const machineReqs = parseMachineRequests(b.machines, b.machine)
     if (!name) return json({ error: 'name is required' }, 400)
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: 'valid email is required' }, 400)
     if (password.length < 8) return json({ error: 'password must be at least 8 characters' }, 400)
-    // Role authorization: only an owner may mint owner/admin accounts (global roles, no team scope).
-    // A member account additionally follows the scoped canCreateAccount rule (owner/admin→any;
-    // manager→user-role in managed teams).
-    if (!canAssignRole(principal, role)) return json({ error: 'forbidden' }, 403)
-    if (role === 'member' && !canCreateAccount(principal, memberships)) {
+    // Only an owner may create another owner (global, no team scope). A member account follows the
+    // scoped canCreateAccount rule (owner→any; manager→user-role memberships in teams they manage).
+    if (role === 'owner') {
+      if (principal.role !== 'owner') return json({ error: 'forbidden' }, 403)
+    } else if (!canCreateAccount(principal, memberships)) {
       return json({ error: 'forbidden' }, 403)
     }
     if (await findAccountByEmail(email)) return json({ error: 'email already exists' }, 409)
     const passwordHash = await hashPassword(password)
-    // owner/admin accounts are global — no team memberships; member accounts carry their scope.
-    const account = role === 'member'
-      ? await createAccount({ name, email, passwordHash, role: 'member', memberships, createdBy: principal.accountId, mustChangePassword })
-      : await createAccount({ name, email, passwordHash, role, memberships: [], createdBy: principal.accountId, mustChangePassword })
-    let machineToken: string | undefined
-    if (machineName) {
-      const teamId = account.memberships[0]?.teamId || 'default'
-      const { token } = await mintMachineToken({ accountId: account._id, user: account.name, machineName, teamId })
-      machineToken = token
+    const account = role === 'owner'
+      ? await createAccount({ name, email, passwordHash, role: 'owner', memberships: [], createdBy: principal.accountId, mustChangePassword })
+      : await createAccount({ name, email, passwordHash, role: 'member', memberships, createdBy: principal.accountId, mustChangePassword })
+    // Link the requested machines — one token per machine, each gated by team scope.
+    const fallbackTeam = account.memberships[0]?.teamId || 'default'
+    const machineTokens: { name: string; token: string }[] = []
+    for (const m of machineReqs) {
+      const teamId = (m.teamId && account.memberships.some(x => x.teamId === m.teamId)) ? m.teamId : fallbackTeam
+      if (!canManageMachineTeam(principal, teamId)) continue // out-of-scope machine link is skipped
+      const { token } = await mintMachineToken({ accountId: account._id, user: account.name, machineName: m.name, teamId })
+      machineTokens.push({ name: m.name, token })
     }
-    return json({ account: publicAccount(account), ...(machineToken ? { machineToken } : {}) }, 201)
+    const firstToken = machineTokens[0]?.token
+    return json({
+      account: publicAccount(account),
+      ...(firstToken ? { machineTokens, machineToken: firstToken } : {}),
+    }, 201)
   }
 
   if (req.method === 'PATCH') {
@@ -214,15 +237,15 @@ export async function handleAccounts(req: Request): Promise<Response> {
     const isOwner = principal.role === 'owner'
     const isSelf = target._id === principal.accountId
 
-    // Authz (hierarchy owner > admin > member):
+    // Authz:
     //  - self: rename only (password via change-password; you can't alter your own memberships/role).
-    //  - owner: may edit anyone; memberships only apply to member accounts (reject on owner/admin).
-    //  - admin/manager: only targets they may delete (admin→members; manager→user-members in
-    //    managed teams) — canDeleteAccount already rejects owner/admin targets for them.
+    //  - owner: may edit anyone; memberships only apply to member accounts (reject on owner targets).
+    //  - manager: only targets they may delete (user-members in managed teams) — canDeleteAccount
+    //    already rejects owner targets for them.
     if (isSelf) {
       if (b.memberships !== undefined || b.resetPassword === true) return json({ error: 'forbidden' }, 403)
     } else if (isOwner) {
-      if ((target.role === 'owner' || target.role === 'admin') && b.memberships !== undefined) {
+      if (target.role === 'owner' && b.memberships !== undefined) {
         return json({ error: 'forbidden' }, 403)
       }
     } else if (!canDeleteAccount(principal, target)) {

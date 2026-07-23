@@ -1,12 +1,11 @@
 /**
  * iam-types.ts — shared governance/IAM types (server-only) + pure helpers.
- * Account roles form a global hierarchy: `owner` > `admin` > `member`. `owner` and `admin`
- * are instance-global (no team scope); a `member`'s effective rights come from `memberships`
- * (per-team manager/user). Deletion/edit follows the hierarchy: owner→anyone (last-owner
- * protected), admin→members, manager→their team's users.
+ * `role: 'owner'` is the instance-global owner (full access); everyone else is `'member'` whose
+ * effective rights come from `memberships` (per-team manager/user). Owner may delete anyone
+ * (last-owner protected); a team `manager` manages/creates `user` accounts within their teams.
  */
 
-export type Role = 'owner' | 'admin' | 'member'
+export type Role = 'owner' | 'member'
 export type TeamRole = 'manager' | 'user'
 
 export interface Membership {
