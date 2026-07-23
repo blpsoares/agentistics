@@ -94,7 +94,7 @@ export async function handleIamLogin(req: Request): Promise<Response> {
   if (!account || !ok) return json({ ok: false, error: 'invalid credentials' }, 401)
   await updateAccount(account._id, { lastLoginAt: new Date().toISOString() })
   const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion)
-  return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...JSON_CT, 'Set-Cookie': cookie } })
+  return new Response(JSON.stringify({ ok: true, mustChangePassword: account.mustChangePassword ?? false }), { status: 200, headers: { ...JSON_CT, 'Set-Cookie': cookie } })
 }
 
 /**
@@ -141,6 +141,10 @@ export async function handleAccounts(req: Request): Promise<Response> {
     const password = typeof b.password === 'string' ? b.password : ''
     const role = b.role === 'owner' ? 'owner' : 'member'
     const memberships = parseMemberships(b.memberships)
+    const mustChangePassword = typeof b.mustChangePassword === 'boolean' ? b.mustChangePassword : true
+    const machineName = typeof (b.machine as Record<string, unknown> | undefined)?.name === 'string'
+      ? ((b.machine as Record<string, unknown>).name as string).trim()
+      : ''
     if (!name) return json({ error: 'name is required' }, 400)
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: 'valid email is required' }, 400)
     if (password.length < 8) return json({ error: 'password must be at least 8 characters' }, 400)
@@ -154,9 +158,15 @@ export async function handleAccounts(req: Request): Promise<Response> {
     if (await findAccountByEmail(email)) return json({ error: 'email already exists' }, 409)
     const passwordHash = await hashPassword(password)
     const account = role === 'owner'
-      ? await createAccount({ name, email, passwordHash, role: 'owner', memberships: [], createdBy: principal.accountId })
-      : await createAccount({ name, email, passwordHash, role: 'member', memberships, createdBy: principal.accountId })
-    return json({ account: publicAccount(account) }, 201)
+      ? await createAccount({ name, email, passwordHash, role: 'owner', memberships: [], createdBy: principal.accountId, mustChangePassword })
+      : await createAccount({ name, email, passwordHash, role: 'member', memberships, createdBy: principal.accountId, mustChangePassword })
+    let machineToken: string | undefined
+    if (machineName) {
+      const teamId = account.memberships[0]?.teamId || 'default'
+      const { token } = await mintMachineToken({ accountId: account._id, user: account.name, machineName, teamId })
+      machineToken = token
+    }
+    return json({ account: publicAccount(account), ...(machineToken ? { machineToken } : {}) }, 201)
   }
 
   if (req.method === 'DELETE') {

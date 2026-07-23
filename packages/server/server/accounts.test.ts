@@ -20,5 +20,6 @@ test('makeAccountDoc is deterministic and normalizes the email', () => {
     updatedAt: '2026-07-22T00:00:00.000Z',
     createdBy: undefined,
     lastLoginAt: null,
+    mustChangePassword: false,
   })
 })

@@ -12,7 +12,7 @@ function acc(id: string, over: Partial<AccountDoc> = {}): AccountDoc {
 
 test('publicAccount strips passwordHash and maps _id → id', () => {
   const p = publicAccount(acc('u1', { memberships: [{ teamId: 'A', role: 'user' }] }))
-  expect(p).toEqual({ id: 'u1', name: 'N', email: 'u1@x.co', role: 'member', memberships: [{ teamId: 'A', role: 'user' }], createdAt: 't', lastLoginAt: null })
+  expect(p).toEqual({ id: 'u1', name: 'N', email: 'u1@x.co', role: 'member', memberships: [{ teamId: 'A', role: 'user' }], createdAt: 't', lastLoginAt: null, mustChangePassword: false })
   expect((p as unknown as Record<string, unknown>).passwordHash).toBeUndefined()
 })
 

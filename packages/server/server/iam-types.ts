@@ -33,6 +33,7 @@ export interface AccountDoc {
   updatedAt: string
   createdBy?: string
   lastLoginAt?: string | null
+  mustChangePassword?: boolean
 }
 
 /** Mongo doc in the `teams` collection. */

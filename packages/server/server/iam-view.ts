@@ -12,6 +12,7 @@ export interface PublicAccount {
   memberships: Membership[]
   createdAt: string
   lastLoginAt?: string | null
+  mustChangePassword: boolean
 }
 
 /** Client-safe view of an account — drops passwordHash/emailLower/sessionVersion. */
@@ -24,6 +25,7 @@ export function publicAccount(a: AccountDoc): PublicAccount {
     memberships: a.memberships,
     createdAt: a.createdAt,
     lastLoginAt: a.lastLoginAt ?? null,
+    mustChangePassword: a.mustChangePassword ?? false,
   }
 }
 

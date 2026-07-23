@@ -16,6 +16,7 @@ export interface NewAccount {
   role: Role
   memberships: Membership[]
   createdBy?: string
+  mustChangePassword?: boolean
 }
 
 /** Pure doc builder — deterministic given id + nowIso. */
@@ -33,6 +34,7 @@ export function makeAccountDoc(input: NewAccount, id: string, nowIso: string): A
     updatedAt: nowIso,
     createdBy: input.createdBy,
     lastLoginAt: null,
+    mustChangePassword: input.mustChangePassword ?? false,
   }
 }
 
