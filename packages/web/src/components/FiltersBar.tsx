@@ -755,8 +755,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               const iconSt: React.CSSProperties = { color: 'var(--text-tertiary)', flexShrink: 0 }
               return (
                 <div style={{
-                  display: 'flex', alignItems: 'center', gap: 9,
-                  fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+                  display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '3px 9px',
+                  fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums',
                 }}>
                   <span>{lang === 'pt' ? 'Atualizado em' : 'Updated'} <span style={{ color: 'var(--text-secondary)' }}>{f.updated}</span></span>
                   {f.since && (<>
