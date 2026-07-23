@@ -94,6 +94,19 @@ English by project convention; conversation with the user is Portuguese.
   RepoDetailPage tab remain. *(Leftover: unused `hasWorkflows` prop / `WorkflowIcon` import in App.tsx
   — harmless; clean up next pass.)*
 
+#### C6 — Flexible machine linkage + manager direct grants 🟨
+- **#1 flexible machine linkage — ✅ done** (commit `d5dbd3c` on `dev`): a machine can be added
+  **loose** (no owner, no team), **team-only**, **owner(s)-only**, or **team + owner(s)** — owner
+  and team are independent + optional (only the name is required). Backend `mintMachine` (no forced
+  team/owner) + scope rule (owner: any combo; manager: must pick a team they manage). Add-machine
+  drawer made owner/team optional.
+- **#2 manager direct grants — 🟨 spec'd, build next session (with security review).**
+  `managedMachineIds[]` + `managedAccountIds[]` on the account (Option A) so a manager can be granted
+  standalone machines/users beyond their teams. Touches `iam-view` (accountVisibleTo/canManageMachine),
+  `getPrincipal`, **data scoping** (`team-scope`), the account form, PATCH (owner-only edits).
+  **Spec:** [2026-07-23-manager-direct-grants-design.md](specs/2026-07-23-manager-direct-grants-design.md).
+  Adds a SECOND authz axis → must land after the pending whole-branch security review, with tests.
+
 #### C4 — Dedicated mobile UI (ULTRA IMPORTANT) ⬜
 - **Problem:** after heavy desktop UI work (settings pages, governance/Users/Teams/Machines drawers,
   Select/Checkbox primitives, machine edit drawer, member sidebar status, filters), the **mobile
