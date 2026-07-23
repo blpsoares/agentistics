@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMeta } from '@agentistics/core'
-import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, distinctHarnesses, mergeStatsCaches, repoShortName } from '@agentistics/core'
+import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, filterByTeams, filterByMachines, distinctHarnesses, mergeStatsCaches, repoShortName } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 
 export interface StageProgress {
@@ -633,9 +633,11 @@ export function computeFilteredHarnessSummaries(data: AppData, filters: Filters)
   // Team data present (a central) → always aggregate per-session: statsCache only
   // represents the central machine's own Claude, never the members'.
   const teamData = data.sessions.some(s => s.user)
+  const teamsSel = filters.teams ?? []
+  const machinesSel = filters.machines ?? []
   const anyFilter =
     teamData ||
-    usersSel.length > 0 || harnessSel.length > 0 || projects.length > 0 ||
+    usersSel.length > 0 || harnessSel.length > 0 || teamsSel.length > 0 || machinesSel.length > 0 || projects.length > 0 ||
     modelSet !== null || filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd
 
   // Columns: the explicitly selected harnesses, else the harnesses the selected users used
@@ -655,8 +657,14 @@ export function computeFilteredHarnessSummaries(data: AppData, filters: Filters)
   }
 
   // Filtered per-session view — every harness (incl. Claude) summarized from sessions,
-  // since statsCache has no per-user/-harness/-date granularity.
-  const filtered = filterByHarnesses(userScoped, harnessSel).filter(s => {
+  // since statsCache has no per-user/-harness/-date/-team/-machine granularity.
+  const filtered = filterByHarnesses(
+    filterByMachines(
+      filterByTeams(userScoped, teamsSel),
+      machinesSel
+    ),
+    harnessSel
+  ).filter(s => {
     if (!s.start_time) return false
     const d = parseISO(s.start_time)
     if (d < start || d > end) return false
@@ -675,7 +683,8 @@ export function computeFilteredHarnessSummaries(data: AppData, filters: Filters)
   const hasUserStats = !!usc && Object.keys(usc).length > 0
   const sliceActive =
     projects.length > 0 || modelSet !== null ||
-    filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd
+    filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd ||
+    teamsSel.length > 0 || machinesSel.length > 0
   const claudeStatsCache = hasUserStats
     ? mergeStatsCaches(
         (usersSel.length > 0 ? usersSel : Object.keys(usc!))
@@ -736,7 +745,13 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       ? data.sessions.filter(s => !!s.user && presenceAllowedUsers.has(s.user))
       : data.sessions
     const harnessSessions = filterByHarnesses(
-      filterByUsers(filterByHarness(presenceScoped, filters.harness), users),
+      filterByMachines(
+        filterByTeams(
+          filterByUsers(filterByHarness(presenceScoped, filters.harness), users),
+          filters.teams ?? []
+        ),
+        filters.machines ?? []
+      ),
       filters.harnesses ?? [],
     )
     // Harness selection comes solely from the multi-select filter (filters.harnesses).

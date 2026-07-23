@@ -115,4 +115,8 @@ export interface AppContext {
   isCentral: boolean
   /** The logged-in IAM account (role + memberships). Undefined when IAM is not active. */
   me?: Principal
+  /** Central-only: available teams for filter. Empty when not a central or no teams. */
+  teams: { id: string; name: string }[]
+  /** Central-only: available machines for filter. Empty when not a central or no machines. */
+  machines: { id: string; name: string; user: string; teamId?: string }[]
 }

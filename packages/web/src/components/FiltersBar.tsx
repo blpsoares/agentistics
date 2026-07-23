@@ -29,6 +29,10 @@ interface Props {
   /** Live readout of the currently-filtered data, rendered right-aligned in the top bar
    *  (desktop only). Pre-formatted so FiltersBar needs no currency/rate. */
   summary?: { sessions: string; cost: string; tokens: string }
+  /** Central-only: available teams for filter. Empty when not a central or no teams. */
+  teams?: { id: string; name: string }[]
+  /** Central-only: available machines for filter. Empty when not a central or no machines. */
+  machines?: { id: string; name: string; user: string; teamId?: string }[]
 }
 
 const DATE_RANGES: { key: DateRange; labelPt: string; labelEn: string }[] = [
@@ -60,7 +64,7 @@ const SEARCH_INPUT: React.CSSProperties = {
   borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
 }
 
-export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary }: Props) {
+export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
@@ -71,8 +75,10 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
   const [showProjectsModal, setShowProjectsModal] = useState(false)
   const [repoQuery, setRepoQuery] = useState('')
   const [memberQuery, setMemberQuery] = useState('')
+  const [teamQuery, setTeamQuery] = useState('')
+  const [machineQuery, setMachineQuery] = useState('')
   // ── "+ Filter" menu: pick a dimension → open its value picker. One open at a time. ──
-  type Dimension = 'members' | 'harnesses' | 'presence' | 'repos' | 'models'
+  type Dimension = 'members' | 'harnesses' | 'presence' | 'repos' | 'models' | 'teams' | 'machines'
   const [showAddMenu, setShowAddMenu] = useState(false)
   const [openPicker, setOpenPicker] = useState<Dimension | null>(null)
   // Desktop: collapse the active-filter chip rows (mobile has its own whole-bar minimize).
@@ -131,6 +137,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
     hasRepoFilter,
     hasProjects,
     hasModelFilter,
+    (filters.teams?.length ?? 0) > 0,
+    (filters.machines?.length ?? 0) > 0,
   ].filter(Boolean).length
 
   // Outside click closes the "+ Filter" menu and any open dimension picker together.
@@ -315,7 +323,23 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                   icon={<Users size={13} />}
                   label={lang === 'pt' ? 'Membros' : 'Members'}
                   active={(filters.users?.length ?? 0) > 0}
-                  onClick={() => setOpenPicker('members')}
+                  onClick={() => { setMemberQuery(''); setOpenPicker('members') }}
+                />
+              )}
+              {teams && teams.length > 0 && (
+                <MenuItem
+                  icon={<Users size={13} />}
+                  label={lang === 'pt' ? 'Times' : 'Teams'}
+                  active={(filters.teams?.length ?? 0) > 0}
+                  onClick={() => { setTeamQuery(''); setOpenPicker('teams') }}
+                />
+              )}
+              {machines && machines.length > 0 && (
+                <MenuItem
+                  icon={<Cpu size={13} />}
+                  label={lang === 'pt' ? 'Máquinas' : 'Machines'}
+                  active={(filters.machines?.length ?? 0) > 0}
+                  onClick={() => { setMachineQuery(''); setOpenPicker('machines') }}
                 />
               )}
               {harnesses && harnesses.length > 1 && (
@@ -394,7 +418,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               <div style={{ height: 1, background: 'var(--border)', margin: '0 0 4px' }} />
 
               {/* Members (multi). When a presence filter is active, only list members with that
-                  status; with no presence filter, show a green/red online dot per member. */}
+                  status; with no presence filter, show a green/red online dot per member.
+                  Shows machine names under each user. */}
               {openPicker === 'members' && (() => {
                 const pres = presence ?? {}
                 const hasPresence = Object.keys(pres).length > 0
@@ -405,6 +430,12 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                 }
                 const q = memberQuery.trim().toLowerCase()
                 const list = users.filter(u => matchesPresence(u) && u.toLowerCase().includes(q))
+                // Build map of user → machine names
+                const userMachines = new Map<string, string[]>()
+                for (const m of (machines ?? [])) {
+                  if (!userMachines.has(m.user)) userMachines.set(m.user, [])
+                  userMachines.get(m.user)!.push(m.name)
+                }
                 return (
                   <>
                     <div style={{ position: 'relative', display: 'flex', alignItems: 'center', marginBottom: 4 }}>
@@ -425,28 +456,127 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                       )}
                       {list.map(u => {
                         const selected = (filters.users ?? []).includes(u)
-                        // Online indicator only when there's no presence filter (the list is already
-                        // scoped to one status when a presence filter is active).
                         const dot = !filters.presence && hasPresence && pres[u]
                           ? (pres[u]!.online ? '#22c55e' : '#ef4444')
                           : undefined
+                        const machineNames = userMachines.get(u) ?? []
                         return (
-                          <PickerRow
-                            key={u}
-                            selected={selected}
-                            label={u}
-                            dotColor={dot}
-                            onClick={() => {
-                              const cur = filters.users ?? []
-                              const next = cur.includes(u) ? cur.filter(x => x !== u) : [...cur, u]
-                              onChange({ ...filters, users: next })
-                            }}
-                          />
+                          <div key={u}>
+                            <PickerRow
+                              selected={selected}
+                              label={u}
+                              dotColor={dot}
+                              onClick={() => {
+                                const cur = filters.users ?? []
+                                const next = cur.includes(u) ? cur.filter(x => x !== u) : [...cur, u]
+                                onChange({ ...filters, users: next })
+                              }}
+                            />
+                            {machineNames.length > 0 && (
+                              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', paddingLeft: 32, paddingBottom: 4, opacity: 0.7 }}>
+                                {machineNames.join(', ')}
+                              </div>
+                            )}
+                          </div>
                         )
                       })}
                     </div>
                     {(filters.users?.length ?? 0) > 0 && (
                       <ClearFooter onClick={() => onChange({ ...filters, users: [] })} label={lang === 'pt' ? 'Limpar membros' : 'Clear members'} />
+                    )}
+                  </>
+                )
+              })()}
+
+              {/* Teams (multi) */}
+              {openPicker === 'teams' && teams && (() => {
+                const q = teamQuery.trim().toLowerCase()
+                const list = teams.filter(t => t.name.toLowerCase().includes(q))
+                return (
+                  <>
+                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+                      <Search size={13} color="var(--text-tertiary)" style={{ position: 'absolute', left: 8, pointerEvents: 'none' }} />
+                      <input
+                        value={teamQuery}
+                        onChange={e => setTeamQuery(e.target.value)}
+                        autoFocus
+                        placeholder={lang === 'pt' ? 'Buscar time…' : 'Search team…'}
+                        style={SEARCH_INPUT}
+                      />
+                    </div>
+                    <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                      {list.length === 0 && (
+                        <div style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '8px 10px', textAlign: 'center' }}>
+                          {lang === 'pt' ? 'Nenhum time' : 'No teams'}
+                        </div>
+                      )}
+                      {list.map(t => {
+                        const selected = (filters.teams ?? []).includes(t.id)
+                        return (
+                          <PickerRow
+                            key={t.id}
+                            selected={selected}
+                            label={t.name}
+                            onClick={() => {
+                              const cur = filters.teams ?? []
+                              const next = cur.includes(t.id) ? cur.filter(x => x !== t.id) : [...cur, t.id]
+                              onChange({ ...filters, teams: next })
+                            }}
+                          />
+                        )
+                      })}
+                    </div>
+                    {(filters.teams?.length ?? 0) > 0 && (
+                      <ClearFooter onClick={() => onChange({ ...filters, teams: [] })} label={lang === 'pt' ? 'Limpar times' : 'Clear teams'} />
+                    )}
+                  </>
+                )
+              })()}
+
+              {/* Machines (multi) */}
+              {openPicker === 'machines' && machines && (() => {
+                const q = machineQuery.trim().toLowerCase()
+                const list = machines.filter(m => m.name.toLowerCase().includes(q) || m.user.toLowerCase().includes(q))
+                return (
+                  <>
+                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+                      <Search size={13} color="var(--text-tertiary)" style={{ position: 'absolute', left: 8, pointerEvents: 'none' }} />
+                      <input
+                        value={machineQuery}
+                        onChange={e => setMachineQuery(e.target.value)}
+                        autoFocus
+                        placeholder={lang === 'pt' ? 'Buscar máquina…' : 'Search machine…'}
+                        style={SEARCH_INPUT}
+                      />
+                    </div>
+                    <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                      {list.length === 0 && (
+                        <div style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '8px 10px', textAlign: 'center' }}>
+                          {lang === 'pt' ? 'Nenhuma máquina' : 'No machines'}
+                        </div>
+                      )}
+                      {list.map(m => {
+                        const selected = (filters.machines ?? []).includes(m.id)
+                        return (
+                          <div key={m.id}>
+                            <PickerRow
+                              selected={selected}
+                              label={m.name}
+                              onClick={() => {
+                                const cur = filters.machines ?? []
+                                const next = cur.includes(m.id) ? cur.filter(x => x !== m.id) : [...cur, m.id]
+                                onChange({ ...filters, machines: next })
+                              }}
+                            />
+                            <div style={{ fontSize: 10, color: 'var(--text-tertiary)', paddingLeft: 32, paddingBottom: 4, opacity: 0.7 }}>
+                              {m.user}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {(filters.machines?.length ?? 0) > 0 && (
+                      <ClearFooter onClick={() => onChange({ ...filters, machines: [] })} label={lang === 'pt' ? 'Limpar máquinas' : 'Clear machines'} />
                     )}
                   </>
                 )
@@ -623,7 +753,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
             </button>
           )}
           <button
-            onClick={() => onChange({ ...filters, users: [], harnesses: [], presence: undefined, repos: [], projects: [], models: [] })}
+            onClick={() => onChange({ ...filters, users: [], harnesses: [], presence: undefined, repos: [], projects: [], models: [], teams: [], machines: [] })}
             style={{
               marginLeft: compact ? 'auto' : 0,
               display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -654,6 +784,34 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{u}</span>
               </FilterChip>
             ))}
+          </ChipRow>
+        </AnimatedRow>
+        <AnimatedRow show={(filters.teams?.length ?? 0) > 0}>
+          <ChipRow label={lang === 'pt' ? 'Times' : 'Teams'}>
+            {(filters.teams ?? []).map(teamId => {
+              const team = teams?.find(t => t.id === teamId)
+              const label = team?.name ?? teamId
+              return (
+                <FilterChip key={`t:${teamId}`} title={label} onRemove={() => onChange({ ...filters, teams: filters.teams!.filter(x => x !== teamId) })} removeTitle={lang === 'pt' ? 'Remover time' : 'Remove team'}>
+                  <Users size={10} style={{ flexShrink: 0 }} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+                </FilterChip>
+              )
+            })}
+          </ChipRow>
+        </AnimatedRow>
+        <AnimatedRow show={(filters.machines?.length ?? 0) > 0}>
+          <ChipRow label={lang === 'pt' ? 'Máquinas' : 'Machines'}>
+            {(filters.machines ?? []).map(machineId => {
+              const machine = machines?.find(m => m.id === machineId)
+              const label = machine?.name ?? machineId
+              return (
+                <FilterChip key={`m:${machineId}`} title={label} onRemove={() => onChange({ ...filters, machines: filters.machines!.filter(x => x !== machineId) })} removeTitle={lang === 'pt' ? 'Remover máquina' : 'Remove machine'}>
+                  <Cpu size={10} style={{ flexShrink: 0 }} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+                </FilterChip>
+              )
+            })}
           </ChipRow>
         </AnimatedRow>
         <AnimatedRow show={hasProjects}>

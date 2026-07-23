@@ -1518,6 +1518,31 @@ export default function AppLayout() {
 
   const users = useMemo(() => (data ? distinctUsers(data.sessions) : []), [data])
 
+  // Central-only: fetch teams and machines for filter dimensions
+  const [teamsList, setTeamsList] = useState<{ id: string; name: string }[]>([])
+  const [machinesList, setMachinesList] = useState<{ id: string; name: string; user: string; teamId?: string }[]>([])
+  useEffect(() => {
+    if (!teamSession?.central) {
+      setTeamsList([])
+      setMachinesList([])
+      return
+    }
+    Promise.all([
+      fetch('/api/iam/teams').then(r => r.ok ? r.json() : { teams: [] }),
+      fetch('/api/iam/machines').then(r => r.ok ? r.json() : { machines: [] }),
+    ]).then(([teamsResp, machinesResp]) => {
+      setTeamsList((teamsResp.teams ?? []).map((t: { _id: string; name: string }) => ({ id: t._id, name: t.name })))
+      setMachinesList((machinesResp.machines ?? []).map((m: { id: string; machineName: string; user: string; teamId?: string }) => ({ id: m.id, name: m.machineName, user: m.user, teamId: m.teamId })))
+    }).catch(() => {
+      setTeamsList([])
+      setMachinesList([])
+    })
+  }, [teamSession?.central])
+
+  // Members list = users WITH machines only
+  const machineUsers = useMemo(() => new Set(machinesList.map(m => m.user)), [machinesList])
+  const usersWithMachines = useMemo(() => users.filter(u => machineUsers.has(u)), [users, machineUsers])
+
   // Harnesses available in the harness filter, scoped to the SELECTED users (empty = all
   // users). So picking one member narrows the harness options to the harnesses that member
   // actually used; "All members" shows the union. Falls back to all harnesses in the data
@@ -1942,11 +1967,13 @@ export default function AppLayout() {
                   models={models}
                   modelGroups={modelGroups}
                   modelsInProject={modelsInProject}
-                  users={users}
+                  users={usersWithMachines}
                   harnesses={availableHarnesses}
                   presence={data?.presence}
                   lang={lang}
                   compact
+                  teams={teamsList}
+                  machines={machinesList}
                 />
                 {/* Collapse handle */}
                 <button
@@ -1979,7 +2006,7 @@ export default function AppLayout() {
                 models={models}
                 modelGroups={modelGroups}
                 modelsInProject={modelsInProject}
-                users={users}
+                users={usersWithMachines}
                 harnesses={availableHarnesses}
                 presence={data?.presence}
                 lang={lang}
@@ -1988,6 +2015,8 @@ export default function AppLayout() {
                   cost: fmtCost(derived.totalCostUSD, currency, brlRate),
                   tokens: fmt(derived.inputTokens + derived.outputTokens),
                 }}
+                teams={teamsList}
+                machines={machinesList}
               />
             </div>
 
@@ -2072,10 +2101,12 @@ export default function AppLayout() {
           infoItems,
           cardOrder, setCardOrder: setCardOrder as (o: string[]) => void,
           cardPrecision, setCardPrecision,
-          sessionCountByProject, models, modelGroups, modelsInProject, users,
+          sessionCountByProject, models, modelGroups, modelsInProject, users: usersWithMachines,
           harnesses: data.harnesses,
           isCentral,
           me: iam?.account,
+          teams: teamsList,
+          machines: machinesList,
         }} />
       </main>
 
