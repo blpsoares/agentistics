@@ -657,9 +657,6 @@ function MobileBottomNav({
   const navTiles: Tile[] = [
     { key: 'sessions', label: pt ? 'Sessões' : 'Sessions', icon: Clock, onClick: () => { setMoreOpen(false); navigate('/sessions') }, active: location.pathname.startsWith('/sessions') },
     { key: 'repositories', label: pt ? 'Repositórios' : 'Repositories', icon: GitBranch, onClick: () => { setMoreOpen(false); navigate('/repositories') }, active: location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo') },
-    ...(hasWorkflows
-      ? [{ key: 'workflows', label: pt ? 'Workflows' : 'Workflows', icon: WorkflowIcon, onClick: () => { setMoreOpen(false); navigate('/workflows') }, active: location.pathname.startsWith('/workflows') } as Tile]
-      : []),
     { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { setMoreOpen(false); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
     { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { setMoreOpen(false); navigate('/export') }, active: location.pathname.startsWith('/export') },
     ...(harnesses && harnesses.length > 1
@@ -869,7 +866,6 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
     { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={17} /> },
     { to: '/repositories', labelPt: 'Repositórios', labelEn: 'Repositories', icon: <GitBranch size={17} /> },
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={17} /> },
-    ...(hasWorkflows ? [{ to: '/workflows', labelPt: 'Dynamic Workflows', labelEn: 'Dynamic Workflows', icon: <WorkflowIcon size={17} /> }] : []),
     { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={17} /> },
     ...(harnesses && harnesses.length > 1 ? [{ to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={17} /> }] : []),
   ]
@@ -2178,6 +2174,7 @@ export default function AppLayout() {
           brlRate={brlRate}
           lang={lang}
           central={teamSession?.central === true}
+          workflows={data.workflows}
           onClose={() => setSelectedSession(null)}
         />
       )}
