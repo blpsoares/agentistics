@@ -8,7 +8,7 @@ import { Drawer } from './Drawer'
 
 interface Team { _id: string; name: string }
 interface Membership { teamId: string; role: 'manager' | 'user' }
-interface Account { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: Membership[] }
+interface Account { id: string; name: string; email: string; role: 'owner' | 'admin' | 'member'; memberships: Membership[] }
 
 // ── shared inline styles ──────────────────────────────────────────────────
 const input: React.CSSProperties = {
@@ -50,7 +50,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 const ROLE_BADGE_COLORS: Record<string, string> = {
-  owner: '#a855f7', manager: 'var(--anthropic-orange)', user: '#3b82f6',
+  owner: '#a855f7', admin: '#14b8a6', manager: 'var(--anthropic-orange)', user: '#3b82f6',
 }
 function RoleBadge({ role }: { role: string }) {
   const color = ROLE_BADGE_COLORS[role] ?? 'var(--text-tertiary)'
@@ -89,7 +89,7 @@ export default function UsersSettings() {
   // ── account drawer ──
   const [accountOpen, setAccountOpen] = useState(false)
   const [an, setAn] = useState(''); const [ae, setAe] = useState(''); const [ap, setAp] = useState('')
-  const [accountType, setAccountType] = useState<'owner' | 'member'>('member')
+  const [accountType, setAccountType] = useState<'owner' | 'admin' | 'member'>('member')
   const [rows, setRows] = useState<Membership[]>([{ teamId: '', role: 'user' }])
   const [accountErr, setAccountErr] = useState<string | null>(null)
   const [provisionMachine, setProvisionMachine] = useState(false)
@@ -193,7 +193,7 @@ export default function UsersSettings() {
   }
 
   function openEditDrawer(a: Account) {
-    setEditId(a.id); setEditIsOwner(a.role === 'owner'); setEn(a.name)
+    setEditId(a.id); setEditIsOwner(a.role === 'owner' || a.role === 'admin'); setEn(a.name)
     setERows(a.memberships.length ? a.memberships.map(m => ({ ...m })) : [{ teamId: '', role: 'user' }])
     setEditErr(null); setTempPassword(null); setEditOpen(true)
   }
@@ -234,12 +234,24 @@ export default function UsersSettings() {
     : ''
 
   const roleLegend = pt
-    ? [['Owner', 'controle total'], ['Manager', 'gerencia usuários e tokens do seu time'], ['User', 'leitura restrita']]
-    : [['Owner', 'full control'], ['Manager', "manages their team's users & tokens"], ['User', 'scoped read']]
+    ? [['Owner', 'controle total'], ['Admin', 'gerencia tudo, menos owners/admins'], ['Manager', 'gerencia usuários e tokens do seu time'], ['User', 'leitura restrita']]
+    : [['Owner', 'full control'], ['Admin', 'manages everything except owners/admins'], ['Manager', "manages their team's users & tokens"], ['User', 'scoped read']]
 
   const drawerErr = (m: string | null) => m && (
     <div style={{ fontSize: 12, color: '#ef4444', background: 'color-mix(in srgb, #ef4444 12%, transparent)', border: '1px solid color-mix(in srgb, #ef4444 35%, transparent)', borderRadius: 7, padding: '8px 10px' }}>{m}</div>
   )
+
+  const ownerCount = accounts.filter(a => a.role === 'owner').length
+  function canDeleteClient(a: Account): boolean {
+    if (!me) return false
+    if (a.id === me.id) return false                    // never yourself
+    if (a.role === 'owner') return me.role === 'owner' && ownerCount > 1   // last-owner protected
+    if (a.role === 'admin') return me.role === 'owner'
+    // target is a member:
+    if (me.role === 'owner' || me.role === 'admin') return true
+    const managed = new Set(me.memberships.filter(m => m.role === 'manager').map(m => m.teamId))
+    return a.memberships.length > 0 && a.memberships.every(m => m.role === 'user' && managed.has(m.teamId))
+  }
 
   return (
     <div>
@@ -291,10 +303,10 @@ export default function UsersSettings() {
               <tr key={a.id}>
                 <td style={{ ...td, color: 'var(--text-primary)', fontWeight: 500 }}>{a.name}</td>
                 <td style={td}>{a.email}</td>
-                <td style={td}><RoleBadge role={a.role === 'owner' ? 'owner' : (a.memberships[0]?.role ?? 'user')} /></td>
+                <td style={td}><RoleBadge role={a.role === 'owner' ? 'owner' : a.role === 'admin' ? 'admin' : (a.memberships[0]?.role ?? 'user')} /></td>
                 <td style={td}>
                   <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>
-                    {a.role === 'owner'
+                    {(a.role === 'owner' || a.role === 'admin')
                       ? <span style={{ color: 'var(--text-tertiary)' }}>—</span>
                       : a.memberships.map(m => (
                         <span key={m.teamId} style={{
@@ -306,7 +318,7 @@ export default function UsersSettings() {
                 </td>
                 <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                   <button onClick={() => openEditDrawer(a)} style={{ ...trashBtn, color: 'var(--text-tertiary)' }} aria-label="Edit account"><Pencil size={14} /></button>
-                  {a.role !== 'owner' && (
+                  {canDeleteClient(a) && (
                     <button onClick={() => void deleteAccount(a.id)} style={trashBtn} aria-label="Delete account"><Trash2 size={14} /></button>
                   )}
                 </td>
@@ -325,9 +337,10 @@ export default function UsersSettings() {
         {/* Account type — Owner is offered only to an owner viewer. */}
         {viewerIsOwner && (
           <Field label={pt ? 'Tipo de conta' : 'Account type'}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
               {([
                 ['member', pt ? 'Membro com escopo' : 'Scoped member', pt ? 'Acesso restrito a times' : 'Access scoped to teams'],
+                ['admin', pt ? 'Admin' : 'Admin', pt ? 'Gerencia tudo, menos owners/admins' : 'Manages everything except owners/admins'],
                 ['owner', pt ? 'Owner (acesso total)' : 'Owner (full access)', pt ? 'Controle total do painel' : 'Full dashboard control'],
               ] as const).map(([val, title, desc]) => {
                 const selected = accountType === val
@@ -386,6 +399,12 @@ export default function UsersSettings() {
             {pt
               ? 'Owners têm acesso total a todos os times e máquinas — sem escopo de times.'
               : 'Owners have full access to all teams and machines — no team scope.'}
+          </div>
+        ) : accountType === 'admin' ? (
+          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '9px 11px' }}>
+            {pt
+              ? 'Admins têm acesso quase total — sem escopo de times (não gerenciam owners nem outros admins).'
+              : 'Admins have near-full access — no team scope (they cannot manage owners or other admins).'}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -488,7 +507,7 @@ export default function UsersSettings() {
 
         {editIsOwner ? (
           <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '9px 11px' }}>
-            {pt ? 'Owners não têm escopo de times.' : 'Owners have no team scope.'}
+            {pt ? 'Owners e admins não têm escopo de times.' : 'Owners and admins have no team scope.'}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

@@ -20,7 +20,7 @@ export interface Principal {
   id: string
   name: string
   email: string
-  role: 'owner' | 'member'
+  role: 'owner' | 'admin' | 'member'
   memberships: { teamId: string; role: 'manager' | 'user' }[]
   /** Forces a blocking first-login password change when true (B4-EXT). */
   mustChangePassword: boolean

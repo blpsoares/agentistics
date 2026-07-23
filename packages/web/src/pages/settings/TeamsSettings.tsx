@@ -7,7 +7,7 @@ import { Drawer } from './Drawer'
 
 interface Team { _id: string; name: string }
 interface Membership { teamId: string; role: 'manager' | 'user' }
-interface Account { id: string; role: 'owner' | 'member'; memberships: Membership[] }
+interface Account { id: string; role: 'owner' | 'admin' | 'member'; memberships: Membership[] }
 
 // ── shared inline styles ──────────────────────────────────────────────────
 const input: React.CSSProperties = {
@@ -89,7 +89,7 @@ export default function TeamsSettings() {
   }
 
   const memberCountOf = (teamId: string) =>
-    accounts.filter(a => a.role !== 'owner' && a.memberships.some(m => m.teamId === teamId)).length
+    accounts.filter(a => a.role !== 'owner' && a.role !== 'admin' && a.memberships.some(m => m.teamId === teamId)).length
 
   const drawerErr = (m: string | null) => m && (
     <div style={{ fontSize: 12, color: '#ef4444', background: 'color-mix(in srgb, #ef4444 12%, transparent)', border: '1px solid color-mix(in srgb, #ef4444 35%, transparent)', borderRadius: 7, padding: '8px 10px' }}>{m}</div>
