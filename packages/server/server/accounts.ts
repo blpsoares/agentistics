@@ -100,3 +100,9 @@ export async function hasAnyOwner(): Promise<boolean> {
   const col = await getAccountsCollection()
   return (await col.countDocuments({ role: 'owner' }, { limit: 1 })) > 0
 }
+
+/** Number of owner accounts — used to enforce last-owner protection on delete. */
+export async function countOwners(): Promise<number> {
+  const col = await getAccountsCollection()
+  return col.countDocuments({ role: 'owner' })
+}

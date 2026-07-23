@@ -5,15 +5,15 @@
  * handleBootstrap re-checks hasAnyOwner() and refuses once set up.
  */
 import { randomBytes } from 'node:crypto'
-import { hasAnyOwner, createAccount, findAccountByEmail, updateAccount, getAccount, listAccounts, deleteAccount, bumpSessionVersion } from './accounts'
+import { hasAnyOwner, countOwners, createAccount, findAccountByEmail, updateAccount, getAccount, listAccounts, deleteAccount, bumpSessionVersion } from './accounts'
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
 import { seedDefaultTeam, listTeams, createTeam, getTeam, deleteTeam, DEFAULT_TEAM_ID } from './teams'
 import { backfillTokenTeamIds, listMachines, mintMachineToken } from './team-tokens'
 import { backfillRepoTeamIds } from './team-repos'
 import { makePrincipalSessionCookieHeader, getPrincipal } from './auth'
-import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam } from './iam-view'
-import type { AccountDoc, Membership } from './iam-types'
+import { publicAccount, accountVisibleTo, canCreateAccount, canAssignRole, canDeleteAccount, teamVisibleTo, canManageMachineTeam } from './iam-view'
+import type { AccountDoc, Membership, Role } from './iam-types'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
 
@@ -171,7 +171,7 @@ export async function handleAccounts(req: Request): Promise<Response> {
     const name = typeof b.name === 'string' ? b.name.trim() : ''
     const email = typeof b.email === 'string' ? b.email.trim() : ''
     const password = typeof b.password === 'string' ? b.password : ''
-    const role = b.role === 'owner' ? 'owner' : 'member'
+    const role: Role = b.role === 'owner' ? 'owner' : b.role === 'admin' ? 'admin' : 'member'
     const memberships = parseMemberships(b.memberships)
     const mustChangePassword = typeof b.mustChangePassword === 'boolean' ? b.mustChangePassword : true
     const machineName = typeof (b.machine as Record<string, unknown> | undefined)?.name === 'string'
@@ -180,18 +180,19 @@ export async function handleAccounts(req: Request): Promise<Response> {
     if (!name) return json({ error: 'name is required' }, 400)
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: 'valid email is required' }, 400)
     if (password.length < 8) return json({ error: 'password must be at least 8 characters' }, 400)
-    // Owner accounts (full access) may only be created by an owner; memberships are ignored.
-    // Member accounts follow the scoped canCreateAccount rule (owner→any; manager→user-role in managed teams).
-    if (role === 'owner') {
-      if (principal.role !== 'owner') return json({ error: 'forbidden' }, 403)
-    } else if (!canCreateAccount(principal, memberships)) {
+    // Role authorization: only an owner may mint owner/admin accounts (global roles, no team scope).
+    // A member account additionally follows the scoped canCreateAccount rule (owner/admin→any;
+    // manager→user-role in managed teams).
+    if (!canAssignRole(principal, role)) return json({ error: 'forbidden' }, 403)
+    if (role === 'member' && !canCreateAccount(principal, memberships)) {
       return json({ error: 'forbidden' }, 403)
     }
     if (await findAccountByEmail(email)) return json({ error: 'email already exists' }, 409)
     const passwordHash = await hashPassword(password)
-    const account = role === 'owner'
-      ? await createAccount({ name, email, passwordHash, role: 'owner', memberships: [], createdBy: principal.accountId, mustChangePassword })
-      : await createAccount({ name, email, passwordHash, role: 'member', memberships, createdBy: principal.accountId, mustChangePassword })
+    // owner/admin accounts are global — no team memberships; member accounts carry their scope.
+    const account = role === 'member'
+      ? await createAccount({ name, email, passwordHash, role: 'member', memberships, createdBy: principal.accountId, mustChangePassword })
+      : await createAccount({ name, email, passwordHash, role, memberships: [], createdBy: principal.accountId, mustChangePassword })
     let machineToken: string | undefined
     if (machineName) {
       const teamId = account.memberships[0]?.teamId || 'default'
@@ -213,14 +214,16 @@ export async function handleAccounts(req: Request): Promise<Response> {
     const isOwner = principal.role === 'owner'
     const isSelf = target._id === principal.accountId
 
-    // Authz: owner may edit any non-owner target (and its own name); a manager may edit only
-    // targets it could delete (every membership a user-role in a team it manages — canDeleteAccount
-    // already rejects owner targets, so a manager can never touch an owner).
-    if (isOwner) {
-      if (target.role === 'owner') {
-        if (!isSelf) return json({ error: 'forbidden' }, 403)
-        // Editing your own owner account is limited to renaming — no self membership/reset here.
-        if (b.memberships !== undefined || b.resetPassword === true) return json({ error: 'forbidden' }, 403)
+    // Authz (hierarchy owner > admin > member):
+    //  - self: rename only (password via change-password; you can't alter your own memberships/role).
+    //  - owner: may edit anyone; memberships only apply to member accounts (reject on owner/admin).
+    //  - admin/manager: only targets they may delete (admin→members; manager→user-members in
+    //    managed teams) — canDeleteAccount already rejects owner/admin targets for them.
+    if (isSelf) {
+      if (b.memberships !== undefined || b.resetPassword === true) return json({ error: 'forbidden' }, 403)
+    } else if (isOwner) {
+      if ((target.role === 'owner' || target.role === 'admin') && b.memberships !== undefined) {
+        return json({ error: 'forbidden' }, 403)
       }
     } else if (!canDeleteAccount(principal, target)) {
       return json({ error: 'forbidden' }, 403)
@@ -271,6 +274,10 @@ export async function handleAccounts(req: Request): Promise<Response> {
     const target = await getAccount(id)
     if (!target) return json({ error: 'not found' }, 404)
     if (!canDeleteAccount(principal, target)) return json({ error: 'forbidden' }, 403)
+    // Last-owner protection: never leave the instance with zero owners.
+    if (target.role === 'owner' && (await countOwners()) <= 1) {
+      return json({ error: 'cannot delete the last owner' }, 400)
+    }
     await deleteAccount(id)
     return json({ ok: true })
   }
