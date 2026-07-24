@@ -1,6 +1,7 @@
 import { join } from 'path'
 import { readFile } from 'fs/promises'
 import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue, HarnessId, WorkflowRun } from '@agentistics/core'
+import { mergeStatsCaches } from '@agentistics/core'
 import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL, CENTRAL_USER } from './config'
 import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
@@ -869,7 +870,11 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       for (const m of memberStats) {
         // Skip revoked members — their orphaned statsCache must not keep inflating team KPIs.
         if (liveIds && !liveIds.has(m.memberId)) continue
-        userStatsCaches[nameMap[m.memberId] ?? m.user] = m.statsCache
+        // Multiple machines can share one display name (a dev with two machines). Key by name and
+        // SUM their caches instead of overwriting — otherwise only the last machine's totals survive.
+        const key = nameMap[m.memberId] ?? m.user
+        const prev = userStatsCaches[key]
+        userStatsCaches[key] = prev ? mergeStatsCaches([prev, m.statsCache]) : m.statsCache
       }
       if (CENTRAL_USER) userStatsCaches[CENTRAL_USER] = statsCache
     }
