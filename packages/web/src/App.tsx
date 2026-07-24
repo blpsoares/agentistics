@@ -2053,10 +2053,10 @@ export default function AppLayout() {
         )}
 
         {/* Nav moved to the left sidebar (SideNav) on desktop; mobile uses the bottom nav. */}
-      </header>
 
-      {/* Collapsible "fleet stats" tab — a little ear clipped under the header. Expands to show
-          updated/since + members/machines/teams/projects/repos; collapses to just the chevron. */}
+      {/* Collapsible "fleet stats" tab — hangs BELOW the header (position:absolute top:100%). It
+          lives inside the sticky header so it stays pinned and scrolls down with it; high z-index
+          overlays the page. Expands to show updated/since + members/machines/teams/projects/repos. */}
       {data && !isCustomPage && !isMobile && (() => {
         const fleetUpdated = singleHarness && singleHarness !== 'claude'
           ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
@@ -2068,9 +2068,9 @@ export default function AppLayout() {
         const sep = <span style={{ color: 'var(--border)' }}>·</span>
         const iconSt: React.CSSProperties = { color: 'var(--text-tertiary)', flexShrink: 0 }
         return (
-          <div style={{ position: 'sticky', top: 0, zIndex: 90, display: 'flex', justifyContent: 'center' }}>
-            <div style={{ position: 'absolute', top: 0, maxWidth: 1400, width: '100%', display: 'flex', justifyContent: 'flex-end', pointerEvents: 'none' }}>
-              <div style={{ pointerEvents: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', marginRight: 32 }}>
+          <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 300, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
+            <div style={{ maxWidth: 1400, width: '100%', display: 'flex', justifyContent: 'flex-end', paddingRight: 32, boxSizing: 'border-box', pointerEvents: 'none' }}>
+              <div style={{ pointerEvents: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
                 <button
                   onClick={toggleFleet}
                   title={fleetOpen ? (lang === 'pt' ? 'Minimizar' : 'Collapse') : (lang === 'pt' ? 'Mostrar estatísticas' : 'Show stats')}
@@ -2129,6 +2129,7 @@ export default function AppLayout() {
           </div>
         )
       })()}
+      </header>
 
       {/* Main content — routed pages render here via <Outlet /> */}
       <main style={{
