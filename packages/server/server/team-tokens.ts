@@ -20,7 +20,6 @@ import { createHash, randomBytes } from 'node:crypto'
 import type { Collection } from 'mongodb'
 import { getMongoDb } from './mongo'
 import { teamDocId, type TeamSessionDoc } from './team-store'
-import { DEFAULT_TEAM_ID } from './teams'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -122,7 +121,9 @@ export async function mintToken(user: string, label: string, opts?: { repo?: str
     label,
     createdAt: new Date().toISOString(),
     lastSeenAt: null,
-    teamId: opts?.teamId ?? DEFAULT_TEAM_ID,
+    // No forced Default team — a token with no team is "loose" (visible only to an owner until
+    // assigned). teamIds mirrors teamId when set.
+    ...(opts?.teamId ? { teamId: opts.teamId, teamIds: [opts.teamId] } : {}),
     ...(opts?.repo ? { repo: opts.repo } : {}),
     ...(opts?.ci ? { ci: true } : {}),
     ...(opts?.accountId ? { accountId: opts.accountId, accountIds: [opts.accountId] } : {}),
@@ -269,25 +270,23 @@ export async function getMemberNameMap(): Promise<Record<string, string>> {
   return map
 }
 
-/** memberId (token hash) → primary teamId, for read-time team tagging. Defaults to DEFAULT_TEAM_ID. */
+/** memberId (token hash) → primary teamId (or '' when the machine has no team — loose). */
 export async function getMemberTeamMap(): Promise<Record<string, string>> {
   const col = await getTokensCollection()
   const docs = await col.find({}, { projection: { _id: 1, teamId: 1, teamIds: 1 } }).toArray()
   const map: Record<string, string> = {}
-  for (const d of docs) map[d._id] = teamIdsOf(d)[0] ?? DEFAULT_TEAM_ID
+  for (const d of docs) map[d._id] = teamIdsOf(d)[0] ?? ''
   return map
 }
 
-/** memberId (token hash) → ALL teams the machine belongs to. Defaults to [DEFAULT_TEAM_ID].
- *  Used for read-time multi-team tagging + scoping (a session is visible to any of its teams). */
+/** memberId (token hash) → ALL teams the machine belongs to (empty when loose — no Default fallback).
+ *  Used for read-time multi-team tagging + scoping (a session is visible to any of its teams;
+ *  a loose session with no team is visible only to an owner). */
 export async function getMemberTeamsMap(): Promise<Record<string, string[]>> {
   const col = await getTokensCollection()
   const docs = await col.find({}, { projection: { _id: 1, teamId: 1, teamIds: 1 } }).toArray()
   const map: Record<string, string[]> = {}
-  for (const d of docs) {
-    const ids = teamIdsOf(d)
-    map[d._id] = ids.length ? ids : [DEFAULT_TEAM_ID]
-  }
+  for (const d of docs) map[d._id] = teamIdsOf(d)
   return map
 }
 
@@ -423,11 +422,10 @@ export async function setMachineOwners(id: string, accountIds: string[]): Promis
   return res.matchedCount > 0
 }
 
-/** Assign the Default team to any token minted before teams existed, and backfill the multi-team
- *  `teamIds[]` from the legacy single `teamId`. Idempotent. */
+/** Backfill the multi-team `teamIds[]` from the legacy single `teamId`. Tokens with no team stay
+ *  loose (no forced Default). Idempotent. */
 export async function backfillTokenTeamIds(): Promise<void> {
   const col = await getTokensCollection()
-  await col.updateMany({ teamId: { $exists: false }, teamIds: { $exists: false } }, { $set: { teamId: DEFAULT_TEAM_ID } })
   // Legacy docs have teamId but no teamIds → seed teamIds from teamId (aggregation pipeline update).
   await col.updateMany(
     { teamId: { $exists: true }, teamIds: { $exists: false } },

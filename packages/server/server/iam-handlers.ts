@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto'
 import { hasAnyOwner, countOwners, createAccount, findAccountByEmail, updateAccount, getAccount, listAccounts, deleteAccount, bumpSessionVersion } from './accounts'
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
-import { seedDefaultTeam, listTeams, createTeam, getTeam, deleteTeam, DEFAULT_TEAM_ID } from './teams'
+import { listTeams, createTeam, getTeam, deleteTeam } from './teams'
 import { backfillTokenTeamIds, listMachines, mintMachineToken, mintMachine, revokeToken, rotateToken, setMachineTeams, setMachineLabel, setMachineOwners, detachTeamFromAllMachines, detachAccountFromAllMachines } from './team-tokens'
 import { getCentralConfig } from './central-config'
 import { packConnectToken } from '@agentistics/core'
@@ -66,7 +66,8 @@ export async function handleBootstrap(req: Request): Promise<Response> {
     memberships: [],
   })
 
-  await seedDefaultTeam()
+  // No Default team is seeded — machines/accounts start with no team (loose) and are assigned to
+  // real teams explicitly. Backfills only normalize legacy shapes.
   await backfillTokenTeamIds()
   await backfillRepoTeamIds()
   await consumeBootstrapToken(new Date().toISOString())
@@ -348,7 +349,6 @@ export async function handleTeams(req: Request): Promise<Response> {
     try { body = await req.json() } catch { return json({ error: 'invalid JSON' }, 400) }
     const id = typeof (body as Record<string, unknown>)?.id === 'string' ? (body as Record<string, unknown>).id as string : ''
     if (!id) return json({ error: 'id is required' }, 400)
-    if (id === DEFAULT_TEAM_ID) return json({ error: 'cannot delete the default team' }, 400)
     if (!(await getTeam(id))) return json({ error: 'not found' }, 404)
     await deleteTeam(id)
     // Detach the deleted team from any machines in it (no orphaned teamId left showing as a raw _id)

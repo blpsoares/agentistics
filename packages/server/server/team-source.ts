@@ -7,7 +7,6 @@ import { getTeamCollection } from './mongo'
 import { fromTeamDoc } from './team-store'
 import { loadAllTeamWorkflows } from './team-workflows'
 import { getMemberNameMap, getMemberTeamsMap, getLiveTokenIds } from './team-tokens'
-import { DEFAULT_TEAM_ID } from './teams'
 
 /**
  * Phase-1 "folder union" transport. Reads consolidated SessionMeta JSONs from
@@ -59,9 +58,9 @@ export async function loadTeamSessionsFromMongo(): Promise<SessionMeta[]> {
     // Resolve current name from the live tokens table; fall back to the cached value in the doc.
     const resolved = { ...doc, user: nameMap[doc.memberId] ?? doc.user }
     const meta = fromTeamDoc(resolved)
-    const teamIds = teamMap[doc.memberId] ?? [DEFAULT_TEAM_ID]
+    const teamIds = teamMap[doc.memberId] ?? [] // loose (no team) → visible only to an owner
     meta.teamIds = teamIds
-    meta.teamId = teamIds[0] ?? DEFAULT_TEAM_ID // primary, for single-value consumers
+    meta.teamId = teamIds[0] // primary, for single-value consumers (undefined when loose)
     meta.memberId = doc.memberId // re-attach the machine id (fromTeamDoc strips it) for machine filtering
     return meta
   })

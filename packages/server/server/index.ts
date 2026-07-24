@@ -96,11 +96,10 @@ if (TEAM_CENTRAL) {
   void (async () => {
     try {
       const { ensureAccountIndexes, hasAnyOwner } = await import('./accounts')
-      const { seedDefaultTeam } = await import('./teams')
       const { backfillTokenTeamIds } = await import('./team-tokens')
       const { backfillRepoTeamIds } = await import('./team-repos')
       await ensureAccountIndexes()
-      await seedDefaultTeam()
+      // No Default team is seeded — machines/accounts are loose until assigned to real teams.
       await backfillTokenTeamIds()
       await backfillRepoTeamIds()
       if (!(await hasAnyOwner())) {
