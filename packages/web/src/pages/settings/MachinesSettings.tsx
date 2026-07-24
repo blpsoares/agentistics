@@ -3,8 +3,9 @@ import { useOutletContext } from 'react-router-dom'
 import { Plus, Copy, Check, RotateCw, Trash2, Pencil, X } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
 import { TeamSettings, type TeamConfig } from '../../components/TeamSettings'
-import { SectionHeader, Section, Select, Checkbox, ConfirmModal } from './primitives'
+import { SectionHeader, Section, Select, Checkbox, ConfirmModal, RecordCard, RecordCardAction } from './primitives'
 import { Drawer } from './Drawer'
+import { useIsMobile } from '../../hooks/useIsMobile'
 
 // interfaces
 interface MachineInfo {
@@ -135,6 +136,7 @@ function SoloMemberMachinesView({ pt }: { pt: boolean }) {
 // central machines governance
 function CentralMachinesView({ pt }: { pt: boolean }) {
   const { me } = useOutletContext<AppContext>()
+  const isMobile = useIsMobile()
   const [machines, setMachines] = useState<MachineInfo[]>([])
   const [accounts, setAccounts] = useState<PublicAccount[]>([])
   const [teams, setTeams] = useState<Team[]>([])
@@ -552,6 +554,21 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
 
   const canManageFleet = me?.role === 'owner' || me?.memberships.some(m => m.role === 'manager')
 
+  // Per-machine display values shared by the desktop row and the mobile card, so the two
+  // renderings cannot drift apart.
+  const machineView = (m: MachineInfo) => {
+    const ownerIds = m.accountIds ?? (m.accountId ? [m.accountId] : [])
+    const owners = m.owners ?? []
+    return {
+      canManage: canManageFleet || ownerIds.includes(me?.id ?? ''),
+      ownerDisplay: owners.length === 0 ? '—' : (owners[0]?.name ?? '') + (owners.length > 1 ? ` +${owners.length - 1}` : ''),
+      ownerEmailDisplay: owners.length > 0 ? (owners[0]?.email ?? '') : (pt ? 'sem conta' : 'no account'),
+      teamNames: machineTeamIds(m).map(id => teamNameById.get(id) ?? id),
+      statusColor: m.online ? '#10b981' : '#6b7280',
+      statusLabel: m.online ? 'online' : 'offline',
+    }
+  }
+
   // Edit-drawer derived data (read-first sections). Re-derive the machine from the
   // fresh list by id so the read view reflects the latest data after a section save.
   const editMachine = editingMachine ? (machines.find(m => m.id === editingMachine.id) ?? editingMachine) : null
@@ -687,6 +704,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
               background: 'color-mix(in srgb, #ef4444 12%, transparent)',
               borderColor: '#ef4444',
               color: '#ef4444',
+              ...(isMobile ? { width: '100%', minHeight: 44, justifyContent: 'center' } : {}),
             }}
             onClick={() => setBulkDeleteConfirm(true)}
           >
@@ -700,6 +718,61 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
         <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', padding: '20px 0' }}>
           {pt ? 'Nenhuma máquina registrada.' : 'No machines registered.'}
         </div>
+      ) : isMobile ? (
+        <>
+          {/* Select-all lives in a <th> on desktop; on mobile it becomes its own row above the cards. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 44, padding: '0 4px', marginBottom: 8 }}>
+            <Checkbox
+              checked={selectedIds.size === machines.length}
+              onChange={toggleSelectAll}
+              label={pt ? 'Selecionar tudo' : 'Select all'}
+            />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {machines.map(m => {
+              const v = machineView(m)
+              return (
+                <RecordCard
+                  key={m.id}
+                  title={m.machineName}
+                  subtitle={v.ownerEmailDisplay}
+                  onClick={v.canManage ? () => openEditMachine(m) : undefined}
+                  leading={<Checkbox checked={selectedIds.has(m.id)} onChange={() => toggleSelect(m.id)} label="" />}
+                  badge={
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--text-secondary)' }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: v.statusColor }} />
+                      {v.statusLabel}
+                      {m.latencyMs != null && <span style={{ color: 'var(--text-tertiary)' }}>· {m.latencyMs}ms</span>}
+                    </span>
+                  }
+                  fields={[
+                    { label: pt ? 'Conta' : 'Owner', value: v.ownerDisplay },
+                    { label: pt ? 'Usuário' : 'User', value: m.user },
+                    // The card has vertical room the table cell did not, so print every team
+                    // instead of the desktop's truncated chip + "+N" pill.
+                    { label: pt ? 'Time' : 'Team', value: v.teamNames.length === 0 ? '—' : v.teamNames.join(', ') },
+                    { label: pt ? 'Último acesso' : 'Last seen', value: m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never') },
+                  ]}
+                  actions={
+                    <>
+                      {v.canManage && (
+                        <RecordCardAction label="Edit machine" onClick={() => openEditMachine(m)}>
+                          <Pencil size={14} /> {pt ? 'Editar' : 'Edit'}
+                        </RecordCardAction>
+                      )}
+                      <RecordCardAction label="Rotate token" onClick={() => void rotateMachine(m.id)}>
+                        <RotateCw size={14} /> {pt ? 'Rotacionar' : 'Rotate'}
+                      </RecordCardAction>
+                      <RecordCardAction label="Revoke machine" danger onClick={() => setRevokeConfirmId(m.id)}>
+                        <Trash2 size={14} /> {pt ? 'Revogar' : 'Revoke'}
+                      </RecordCardAction>
+                    </>
+                  }
+                />
+              )
+            })}
+          </div>
+        </>
       ) : (
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -723,15 +796,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
             </thead>
             <tbody>
               {machines.map(m => {
-                const statusColor = m.online ? '#10b981' : '#6b7280'
-                const statusLabel = m.online ? (pt ? 'online' : 'online') : (pt ? 'offline' : 'offline')
-                // Determine if the viewer can manage this machine
-                const ownerIds = m.accountIds ?? (m.accountId ? [m.accountId] : [])
-                const canManage = canManageFleet || ownerIds.includes(me?.id ?? '')
-                // Display owners
-                const owners = m.owners ?? []
-                const ownerDisplay = owners.length === 0 ? '—' : (owners[0]?.name ?? '') + (owners.length > 1 ? ` +${owners.length - 1}` : '')
-                const ownerEmailDisplay = owners.length > 0 ? (owners[0]?.email ?? '') : (pt ? 'sem conta' : 'no account')
+                const { statusColor, statusLabel, canManage, ownerDisplay, ownerEmailDisplay } = machineView(m)
                 return (
                   <tr key={m.id}
                     onClick={canManage ? () => openEditMachine(m) : undefined}
