@@ -1,8 +1,60 @@
 import React from 'react'
+import { Pencil, Check } from 'lucide-react'
 
 // Shared presentational primitives for the settings pages. Extracted from the old
 // PreferencesModal so the settings pages (which replace the modal tabs) keep an
 // identical look without depending on the soon-to-be-removed modal.
+
+// ── Section ─────────────────────────────────────────────────────────────────
+// A titled block that is READ-ONLY by default with a right-aligned "Edit" button
+// (shown only when `canEdit` and not already editing). Renders `children` (read
+// view) by default; when `editing` it renders `editChildren` + Save/Cancel. The
+// caller owns the `editing` boolean (per-section state). Used in the detail drawers
+// so info shows read-first and each section is edited independently.
+export function Section({ title, editing, onEdit, onCancel, onSave, canEdit = true, children, editChildren, labels }: {
+  title: string
+  editing: boolean
+  onEdit: () => void
+  onCancel: () => void
+  onSave: () => void
+  canEdit?: boolean
+  children: React.ReactNode
+  editChildren: React.ReactNode
+  labels?: { edit: string; save: string; cancel: string }
+}) {
+  const l = labels ?? { edit: 'Edit', save: 'Save', cancel: 'Cancel' }
+  return (
+    <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase' }}>{title}</div>
+        {canEdit && !editing && (
+          <button type="button" onClick={onEdit} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 7,
+            border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)',
+            fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+          }}><Pencil size={12} /> {l.edit}</button>
+        )}
+      </div>
+      {editing ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {editChildren}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button type="button" onClick={onCancel} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 7,
+              border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)',
+              fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+            }}>{l.cancel}</button>
+            <button type="button" onClick={onSave} style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '8px 14px', borderRadius: 7,
+              border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+              fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+            }}><Check size={14} /> {l.save}</button>
+          </div>
+        </div>
+      ) : children}
+    </div>
+  )
+}
 
 export function SectionHeader({ label }: { label: string }) {
   return (

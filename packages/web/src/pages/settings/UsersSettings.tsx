@@ -3,7 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import { Plus, Trash2, Copy, Check, Dice5, KeyRound, Pencil, X } from 'lucide-react'
 import { generatePassword } from '../../lib/password'
 import type { AppContext } from '../../lib/app-context'
-import { SectionHeader, Checkbox, Select } from './primitives'
+import { SectionHeader, Section, Checkbox, Select } from './primitives'
 import { Drawer } from './Drawer'
 
 interface Team { _id: string; name: string }
@@ -48,6 +48,16 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{label}</span>
       {children}
     </label>
+  )
+}
+
+// Read-only labelled value used in the read-first drawer sections.
+function ReadField({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
+      <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{value}</span>
+    </div>
   )
 }
 
@@ -118,6 +128,8 @@ export default function UsersSettings() {
   const [loadingMachines, setLoadingMachines] = useState(false)
   const [editErr, setEditErr] = useState<string | null>(null)
   const [tempPassword, setTempPassword] = useState<string | null>(null)
+  // Per-section edit toggle inside the (read-first) edit drawer. Only one section edits at a time.
+  const [editingSection, setEditingSection] = useState<null | 'identity' | 'teams' | 'machines'>(null)
   // Add machine inline form in edit drawer
   const [addMachineName, setAddMachineName] = useState('')
   const [addMachineTeam, setAddMachineTeam] = useState('')
@@ -218,6 +230,7 @@ export default function UsersSettings() {
     setERows(a.memberships.length ? a.memberships.map(m => ({ ...m })) : [{ teamId: '', role: 'user' }])
     setEditErr(null); setTempPassword(null); setAddMachineName(''); setAddMachineTeam(''); setAddedMachineToken(null); setAddedMachineName(null)
     setRenamingMachineId(null); setRenameMachineValue('')
+    setEditingSection(null)
     setEditOpen(true)
     // Fetch linked machines
     setLoadingMachines(true)
@@ -246,6 +259,27 @@ export default function UsersSettings() {
     })
     if (!res.ok) { const d = await res.json() as { error?: string }; setEditErr(d.error || `HTTP ${res.status}`); return }
     setEditOpen(false); void load()
+  }
+
+  // Per-section saves (read-first drawer): each Section saves only its own fields.
+  async function saveIdentity() {
+    if (!editId) return
+    if (!en.trim()) { setEditErr(pt ? 'O nome não pode ficar vazio.' : 'Name cannot be empty.'); return }
+    const res = await fetch('/api/iam/accounts', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: editId, name: en.trim() }),
+    })
+    if (!res.ok) { const d = await res.json() as { error?: string }; setEditErr(d.error || `HTTP ${res.status}`); return }
+    setEditErr(null); setEditingSection(null); void load()
+  }
+  async function saveTeams() {
+    if (!editId) return
+    const res = await fetch('/api/iam/accounts', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: editId, memberships: eRows.filter(r => r.teamId) }),
+    })
+    if (!res.ok) { const d = await res.json() as { error?: string }; setEditErr(d.error || `HTTP ${res.status}`); return }
+    setEditErr(null); setEditingSection(null); void load()
   }
 
   async function resetPassword() {
@@ -379,6 +413,15 @@ export default function UsersSettings() {
 
   // Helper to count machines per account
   const machineCountFor = (accountId: string) => machines.filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).includes(accountId)).length
+
+  // Edit-drawer derived data (read-first sections)
+  const editAccount = accounts.find(a => a.id === editId) ?? null
+  const canEditEdit = editAccount ? canEditClient(editAccount) : false
+  const sectionLabels = {
+    edit: pt ? 'Editar' : 'Edit',
+    save: pt ? 'Salvar' : 'Save',
+    cancel: pt ? 'Cancelar' : 'Cancel',
+  }
 
   return (
     <div>
@@ -756,43 +799,62 @@ export default function UsersSettings() {
       <Drawer open={editOpen} onClose={() => { if (!tempPassword && !addedMachineToken) setEditOpen(false) }} title={pt ? 'Editar conta' : 'Edit account'}>
         {drawerErr(editErr)}
 
-        {/* ROLE / PERMISSION SUMMARY */}
-        {(() => {
-          const managerTeamNames = eRows.filter(r => r.role === 'manager' && r.teamId).map(r => teamNameOf(r.teamId))
-          const roleKind = editIsOwner ? 'owner' : managerTeamNames.length > 0 ? 'manager' : 'user'
-          const line = editIsOwner
-            ? (pt ? 'Acesso total ao painel central.' : 'Full access to the central dashboard.')
-            : roleKind === 'manager'
-              ? (pt ? `Gerente de ${managerTeamNames.join(', ')}.` : `Manager of ${managerTeamNames.join(', ')}.`)
-              : (pt ? 'Leitura restrita aos times atribuídos.' : 'Scoped read of assigned teams.')
-          return (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
-              <RoleBadge role={roleKind} />
-              <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{line}</span>
-            </div>
-          )
-        })()}
+        {/* IDENTITY SECTION (read-first) */}
+        <Section
+          title={pt ? 'Identidade' : 'Identity'}
+          editing={editingSection === 'identity'}
+          canEdit={canEditEdit}
+          onEdit={() => { setEditErr(null); setEn(editAccount?.name ?? ''); setEditingSection('identity') }}
+          onCancel={() => { setEn(editAccount?.name ?? ''); setEditingSection(null) }}
+          onSave={() => void saveIdentity()}
+          labels={sectionLabels}
+          editChildren={
+            <>
+              <Field label={pt ? 'Nome' : 'Name'}>
+                <input style={input} value={en} onChange={e => setEn(e.target.value)} placeholder={pt ? 'Nome completo' : 'Full name'} />
+              </Field>
+              <ReadField label="Email" value={editAccount?.email ?? '—'} />
+            </>
+          }
+        >
+          {(() => {
+            const managerTeamNames = editAccount ? editAccount.memberships.filter(m => m.role === 'manager').map(m => teamNameOf(m.teamId)) : []
+            const roleKind = editIsOwner ? 'owner' : managerTeamNames.length > 0 ? 'manager' : 'user'
+            const line = editIsOwner
+              ? (pt ? 'Acesso total ao painel central.' : 'Full access to the central dashboard.')
+              : roleKind === 'manager'
+                ? (pt ? `Gerente de ${managerTeamNames.join(', ')}.` : `Manager of ${managerTeamNames.join(', ')}.`)
+                : (pt ? 'Leitura restrita aos times atribuídos.' : 'Scoped read of assigned teams.')
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <RoleBadge role={roleKind} />
+                  <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{line}</span>
+                </div>
+                <ReadField label={pt ? 'Nome' : 'Name'} value={editAccount?.name ?? '—'} />
+                <ReadField label="Email" value={editAccount?.email ?? '—'} />
+              </div>
+            )
+          })()}
+        </Section>
 
-        {/* IDENTITY SECTION */}
-        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginTop: 4 }}>
-          {pt ? 'Identidade' : 'Identity'}
-        </div>
-
-        <Field label={pt ? 'Nome' : 'Name'}>
-          <input style={input} value={en} onChange={e => setEn(e.target.value)} placeholder={pt ? 'Nome completo' : 'Full name'} />
-        </Field>
-
-        {/* ACCESS (TEAMS) SECTION */}
-        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 18, marginTop: 6 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 14 }}>
-            {pt ? 'Acesso' : 'Access'}
-          </div>
-
-          {editIsOwner ? (
-            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '9px 11px' }}>
-              {pt ? 'Owners não têm escopo de times.' : 'Owners have no team scope.'}
-            </div>
-          ) : (
+        {/* ACCESS (TEAMS) SECTION (read-first; owners have no team scope) */}
+        <Section
+          title={pt ? 'Acesso (times)' : 'Access (teams)'}
+          editing={editingSection === 'teams'}
+          canEdit={canEditEdit && !editIsOwner}
+          onEdit={() => {
+            setEditErr(null)
+            setERows(editAccount && editAccount.memberships.length ? editAccount.memberships.map(m => ({ ...m })) : [{ teamId: '', role: 'user' }])
+            setEditingSection('teams')
+          }}
+          onCancel={() => {
+            setERows(editAccount && editAccount.memberships.length ? editAccount.memberships.map(m => ({ ...m })) : [{ teamId: '', role: 'user' }])
+            setEditingSection(null)
+          }}
+          onSave={() => void saveTeams()}
+          labels={sectionLabels}
+          editChildren={
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{pt ? 'Escopo (times)' : 'Scope (teams)'}</span>
@@ -829,164 +891,204 @@ export default function UsersSettings() {
                 </div>
               ))}
             </div>
-          )}
-        </div>
-
-        {/* MACHINES SECTION */}
-        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 18, marginTop: 6 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 14 }}>
-            {pt ? 'Máquinas' : 'Machines'}
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{pt ? 'Máquinas vinculadas' : 'Linked machines'}</span>
-            {loadingMachines ? (
-              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '12px 0' }}>{pt ? 'Carregando…' : 'Loading…'}</div>
-            ) : linkedMachines.length === 0 ? (
-              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '12px 0' }}>{pt ? 'Nenhuma máquina vinculada.' : 'No machines linked.'}</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {linkedMachines.map(m => {
-                  const isRenamingThisMachine = renamingMachineId === m.id
-                  return (
-                    <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
-                        {isRenamingThisMachine ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <input
-                              type="text"
-                              value={renameMachineValue}
-                              onChange={e => setRenameMachineValue(e.target.value)}
-                              onKeyDown={handleRenameMachineKeyDown}
-                              autoFocus
-                              style={{
-                                ...input,
-                                padding: '4px 8px',
-                                fontSize: 12.5,
-                                minWidth: 120,
-                                flex: 1,
-                              }}
-                            />
-                            <button
-                              onClick={confirmRenameMachine}
-                              style={{ ...ghostBtn, padding: '4px 8px', border: 'none', color: '#10b981' }}
-                              title={pt ? 'Confirmar' : 'Confirm'}
-                            >
-                              <Check size={14} />
-                            </button>
-                            <button
-                              onClick={cancelRenameMachine}
-                              style={{ ...ghostBtn, padding: '4px 8px', border: 'none', color: '#6b7280' }}
-                              title={pt ? 'Cancelar' : 'Cancel'}
-                            >
-                              <X size={14} />
-                            </button>
-                          </div>
-                        ) : (
-                          <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</span>
-                        )}
-                        {!isRenamingThisMachine && (
-                          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                            {m.teamId ? teamNameOf(m.teamId) : (pt ? 'sem time' : 'no team')} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button
-                          type="button"
-                          style={{ ...ghostBtn, padding: '5px 10px', fontSize: 11.5 }}
-                          onClick={() => startRenameMachine(m.id, m.machineName)}
-                          title={pt ? 'Renomear' : 'Rename'}
-                        >
-                          <Pencil size={13} />
-                        </button>
-                        <button
-                          type="button"
-                          style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }}
-                          onClick={() => window.confirm(pt ? 'Revogar esta máquina?' : 'Revoke this machine?') && void revokeMachine(m.id)}
-                        >
-                          {pt ? 'Revogar' : 'Revoke'}
-                        </button>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-            {/* Add machine inline form */}
-            {addedMachineToken ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 14px', background: 'var(--bg-elevated)', border: '1px solid var(--anthropic-orange)', borderRadius: 7 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>
-                  {pt ? 'Máquina adicionada — copie agora' : 'Machine added — copy now'}
-                </div>
-                <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.4 }}>
-                  {addedMachineName}
-                </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  {pt ? 'Token' : 'Token'}
-                </span>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>{addedMachineToken}</code>
-                  <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('added-token', addedMachineToken) }} aria-label="Copy token">
-                    {copied === 'added-token' ? <Check size={13} /> : <Copy size={13} />}
-                  </button>
-                </div>
-                {copyFailed === 'added-token' && (
-                  <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
-                    {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
-                  </span>
-                )}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  {pt ? 'Comando de conexão' : 'Connect command'}
-                </span>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-secondary)' }}>
-                    {connectCmdFor(addedMachineToken)}
-                  </code>
-                  <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('added-cmd', connectCmdFor(addedMachineToken)) }} aria-label="Copy connect command">
-                    {copied === 'added-cmd' ? <Check size={13} /> : <Copy size={13} />}
-                  </button>
-                </div>
-                {copyFailed === 'added-cmd' && (
-                  <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
-                    {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
-                  </span>
-                )}
-              </div>
-              <button type="button" style={ghostBtn} onClick={() => setAddedMachineToken(null)}>{pt ? 'Fechar' : 'Close'}</button>
+          }
+        >
+          {editIsOwner ? (
+            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '9px 11px' }}>
+              {pt ? 'Owners não têm escopo de times.' : 'Owners have no team scope.'}
             </div>
-            ) : (
-              <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-                <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
-                  <input style={input} value={addMachineName} onChange={e => setAddMachineName(e.target.value)} placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'} />
-                </Field>
-                {!editIsOwner && (
-                  <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
-                    <Select
-                      value={addMachineTeam}
-                      onChange={v => setAddMachineTeam(v)}
-                      options={[
-                        { value: '', label: pt ? 'Deixar vazio' : 'Leave empty' },
-                        ...assignableTeams.map(t => ({ value: t._id, label: t.name })),
-                      ]}
-                      placeholder={pt ? 'Deixar vazio' : 'Leave empty'}
-                    />
+          ) : (editAccount && editAccount.memberships.length > 0) ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {editAccount.memberships.map(m => (
+                <span key={m.teamId} style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 8px', borderRadius: 6, fontSize: 11.5,
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text-secondary)',
+                }}>
+                  {teamNameOf(m.teamId)} <RoleBadge role={m.role} />
+                </span>
+              ))}
+            </div>
+          ) : (
+            <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>—</span>
+          )}
+        </Section>
+
+        {/* MACHINES SECTION (read-first; add/rename/revoke behind the section's Edit toggle) */}
+        <Section
+          title={pt ? 'Máquinas' : 'Machines'}
+          editing={editingSection === 'machines'}
+          canEdit={canEditEdit}
+          onEdit={() => { setEditErr(null); setEditingSection('machines') }}
+          onCancel={() => { setAddMachineName(''); setAddMachineTeam(''); setRenamingMachineId(null); setRenameMachineValue(''); setEditingSection(null) }}
+          onSave={() => { setAddMachineName(''); setAddMachineTeam(''); setRenamingMachineId(null); setRenameMachineValue(''); setEditingSection(null) }}
+          labels={sectionLabels}
+          editChildren={
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{pt ? 'Máquinas vinculadas' : 'Linked machines'}</span>
+              {loadingMachines ? (
+                <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '12px 0' }}>{pt ? 'Carregando…' : 'Loading…'}</div>
+              ) : linkedMachines.length === 0 ? (
+                <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '12px 0' }}>{pt ? 'Nenhuma máquina vinculada.' : 'No machines linked.'}</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {linkedMachines.map(m => {
+                    const isRenamingThisMachine = renamingMachineId === m.id
+                    return (
+                      <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+                          {isRenamingThisMachine ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <input
+                                type="text"
+                                value={renameMachineValue}
+                                onChange={e => setRenameMachineValue(e.target.value)}
+                                onKeyDown={handleRenameMachineKeyDown}
+                                autoFocus
+                                style={{
+                                  ...input,
+                                  padding: '4px 8px',
+                                  fontSize: 12.5,
+                                  minWidth: 120,
+                                  flex: 1,
+                                }}
+                              />
+                              <button
+                                onClick={confirmRenameMachine}
+                                style={{ ...ghostBtn, padding: '4px 8px', border: 'none', color: '#10b981' }}
+                                title={pt ? 'Confirmar' : 'Confirm'}
+                              >
+                                <Check size={14} />
+                              </button>
+                              <button
+                                onClick={cancelRenameMachine}
+                                style={{ ...ghostBtn, padding: '4px 8px', border: 'none', color: '#6b7280' }}
+                                title={pt ? 'Cancelar' : 'Cancel'}
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+                          ) : (
+                            <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</span>
+                          )}
+                          {!isRenamingThisMachine && (
+                            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                              {m.teamId ? teamNameOf(m.teamId) : (pt ? 'sem time' : 'no team')} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button
+                            type="button"
+                            style={{ ...ghostBtn, padding: '5px 10px', fontSize: 11.5 }}
+                            onClick={() => startRenameMachine(m.id, m.machineName)}
+                            title={pt ? 'Renomear' : 'Rename'}
+                          >
+                            <Pencil size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }}
+                            onClick={() => window.confirm(pt ? 'Revogar esta máquina?' : 'Revoke this machine?') && void revokeMachine(m.id)}
+                          >
+                            {pt ? 'Revogar' : 'Revoke'}
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {/* Add machine inline form */}
+              {addedMachineToken ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 14px', background: 'var(--bg-elevated)', border: '1px solid var(--anthropic-orange)', borderRadius: 7 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {pt ? 'Máquina adicionada — copie agora' : 'Machine added — copy now'}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.4 }}>
+                    {addedMachineName}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      {pt ? 'Token' : 'Token'}
+                    </span>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>{addedMachineToken}</code>
+                      <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('added-token', addedMachineToken) }} aria-label="Copy token">
+                        {copied === 'added-token' ? <Check size={13} /> : <Copy size={13} />}
+                      </button>
+                    </div>
+                    {copyFailed === 'added-token' && (
+                      <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
+                        {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      {pt ? 'Comando de conexão' : 'Connect command'}
+                    </span>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-secondary)' }}>
+                        {connectCmdFor(addedMachineToken)}
+                      </code>
+                      <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('added-cmd', connectCmdFor(addedMachineToken)) }} aria-label="Copy connect command">
+                        {copied === 'added-cmd' ? <Check size={13} /> : <Copy size={13} />}
+                      </button>
+                    </div>
+                    {copyFailed === 'added-cmd' && (
+                      <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
+                        {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                      </span>
+                    )}
+                  </div>
+                  <button type="button" style={ghostBtn} onClick={() => setAddedMachineToken(null)}>{pt ? 'Fechar' : 'Close'}</button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+                  <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
+                    <input style={input} value={addMachineName} onChange={e => setAddMachineName(e.target.value)} placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'} />
                   </Field>
-                )}
-                <button type="button" style={primaryBtn} onClick={() => void addMachine()}>
-                  <Plus size={13} /> {pt ? 'Adicionar' : 'Add'}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
+                  {!editIsOwner && (
+                    <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
+                      <Select
+                        value={addMachineTeam}
+                        onChange={v => setAddMachineTeam(v)}
+                        options={[
+                          { value: '', label: pt ? 'Deixar vazio' : 'Leave empty' },
+                          ...assignableTeams.map(t => ({ value: t._id, label: t.name })),
+                        ]}
+                        placeholder={pt ? 'Deixar vazio' : 'Leave empty'}
+                      />
+                    </Field>
+                  )}
+                  <button type="button" style={primaryBtn} onClick={() => void addMachine()}>
+                    <Plus size={13} /> {pt ? 'Adicionar' : 'Add'}
+                  </button>
+                </div>
+              )}
+            </div>
+          }
+        >
+          {loadingMachines ? (
+            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '12px 0' }}>{pt ? 'Carregando…' : 'Loading…'}</div>
+          ) : linkedMachines.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '12px 0' }}>{pt ? 'Nenhuma máquina vinculada.' : 'No machines linked.'}</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {linkedMachines.map(m => (
+                <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                    {m.teamId ? teamNameOf(m.teamId) : (pt ? 'sem time' : 'no team')} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
           <button style={ghostBtn} onClick={() => setEditOpen(false)}>{pt ? 'Fechar' : 'Close'}</button>
-          <button style={primaryBtn} onClick={() => void saveEdit()}><Check size={14} /> {pt ? 'Salvar' : 'Save'}</button>
         </div>
       </Drawer>
     </div>
