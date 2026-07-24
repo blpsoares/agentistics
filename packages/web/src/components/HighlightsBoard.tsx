@@ -152,7 +152,7 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
         const lastStyle = lastSpan > 1 ? { gridColumn: `span ${lastSpan}` } : {}
 
       return (
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)', gap: isMobile ? 10 : 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(210px, 1fr))', gap: isMobile ? 10 : 14 }}>
 
         <HighlightCard
           label={pt ? 'Sessão mais longa' : 'Longest session'}

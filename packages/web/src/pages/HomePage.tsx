@@ -149,7 +149,7 @@ export default function HomePage() {
         }
         .live-flash { animation: liveFlash 1.2s ease-out forwards; border-radius: var(--radius-lg); }
       `}</style>
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(5, 1fr)', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
         {(cardOrder as CardId[]).map(id => renderCard(id))}
       </div>
 
