@@ -425,10 +425,25 @@ type CacheStatus = 'idle' | 'computing' | 'done'
 let _status: CacheStatus = 'idle'
 let _promise: Promise<ApiResponse> | null = null
 let _resolvedAt = 0
+let _revalidating = false
 
 export function invalidateCache(): void {
-  if (_status === 'done') _status = 'idle'
+  // Mark the cached result stale rather than dropping it, so the NEXT request serves the (stale)
+  // cache immediately and refreshes in the background instead of blocking on a full rebuild. A true
+  // blocking rebuild only ever happens for the very first build (when no result exists yet).
+  if (_status === 'done') _resolvedAt = 0
   // 'computing': no-op — let the in-flight computation finish
+}
+
+/** Kick a background rebuild that swaps in the fresh result when done. Non-blocking: callers keep
+ *  being served the previous (stale) result meanwhile. Guarded so only one runs at a time. */
+function revalidateInBackground(): void {
+  if (_revalidating || _status === 'computing') return
+  _revalidating = true
+  void _buildApiResponse()
+    .then(result => { _promise = Promise.resolve(result); _resolvedAt = Date.now(); _status = 'done' })
+    .catch(() => { /* keep serving the previous good result on failure */ })
+    .finally(() => { _revalidating = false })
 }
 
 /** Backfill `git_remote` onto remote-less sessions (and their projects) from any session/project
@@ -460,8 +475,14 @@ function backfillGitRemote(sessions: SessionMeta[], projects: ServerProject[]): 
 
 export async function buildApiResponse(): Promise<ApiResponse> {
   if (_status === 'computing') return _promise!
-  if (_status === 'done' && Date.now() - _resolvedAt < CACHE_TTL_MS) return _promise!
+  // Stale-while-revalidate: once a result exists, always serve it immediately. When it's older than
+  // the TTL, refresh in the background — but never make the caller wait for that rebuild.
+  if (_status === 'done' && _promise) {
+    if (Date.now() - _resolvedAt >= CACHE_TTL_MS) revalidateInBackground()
+    return _promise
+  }
 
+  // First build ever (idle) — the only path that blocks.
   _status = 'computing'
   _promise = _buildApiResponse()
     .then(result => {
@@ -942,10 +963,12 @@ function _broadcastProgress(stage: string, progress: number, detail?: string) {
 export async function buildApiResponseStream(onProgress: ProgressFn): Promise<ApiResponse> {
   const STAGES = ['statsCache', 'sessions', 'health', 'projects', 'finalizing'] as const
 
-  // Cache is fresh — all stages done instantly
-  if (_status === 'done' && Date.now() - _resolvedAt < CACHE_TTL_MS) {
+  // A result already exists (fresh OR stale) — mark every stage done and serve it instantly. If it's
+  // stale, refresh in the background; the caller still gets the cached result now (no 44s wait).
+  if (_status === 'done' && _promise) {
     for (const s of STAGES) onProgress(s, 1)
-    return _promise!
+    if (Date.now() - _resolvedAt >= CACHE_TTL_MS) revalidateInBackground()
+    return _promise
   }
 
   // Computation in flight — subscribe to real progress. Replay snapshot for already-done stages.
