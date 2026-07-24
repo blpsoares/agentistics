@@ -230,8 +230,11 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   const teamNameById = new Map<string, string>()
   teams.forEach(t => teamNameById.set(t._id, t.name))
 
-  // Resolve a machine's full team set (prefer teamIds, fall back to the single teamId).
-  const machineTeamIds = (m: MachineInfo): string[] => m.teamIds ?? (m.teamId ? [m.teamId] : [])
+  // Resolve a machine's full team set (prefer teamIds, fall back to the single teamId). Drop ids
+  // that no longer resolve to a live team (a deleted team) so a raw _id never shows — defensive on
+  // top of the server-side detach cascade, which also cleans any already-orphaned refs.
+  const machineTeamIds = (m: MachineInfo): string[] =>
+    (m.teamIds ?? (m.teamId ? [m.teamId] : [])).filter(id => teamNameById.has(id))
   const teamNamesLabel = (ids: string[]): string =>
     ids.length === 0 ? '—' : ids.map(id => teamNameById.get(id) ?? id).join(', ')
 

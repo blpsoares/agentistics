@@ -9,7 +9,7 @@ import { hasAnyOwner, countOwners, createAccount, findAccountByEmail, updateAcco
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
 import { seedDefaultTeam, listTeams, createTeam, getTeam, deleteTeam, DEFAULT_TEAM_ID } from './teams'
-import { backfillTokenTeamIds, listMachines, mintMachineToken, mintMachine, revokeToken, rotateToken, setMachineTeams, setMachineLabel, setMachineOwners } from './team-tokens'
+import { backfillTokenTeamIds, listMachines, mintMachineToken, mintMachine, revokeToken, rotateToken, setMachineTeams, setMachineLabel, setMachineOwners, detachTeamFromAllMachines, detachAccountFromAllMachines } from './team-tokens'
 import { getCentralConfig } from './central-config'
 import { packConnectToken } from '@agentistics/core'
 import { backfillRepoTeamIds } from './team-repos'
@@ -311,6 +311,9 @@ export async function handleAccounts(req: Request): Promise<Response> {
       return json({ error: 'cannot delete the last owner' }, 400)
     }
     await deleteAccount(id)
+    // Detach the deleted account from any machines it owned — the machines survive, they just lose
+    // the dead owner relation (no orphaned accountId left dangling).
+    await detachAccountFromAllMachines(id).catch(() => {})
     return json({ ok: true })
   }
 
@@ -348,6 +351,17 @@ export async function handleTeams(req: Request): Promise<Response> {
     if (id === DEFAULT_TEAM_ID) return json({ error: 'cannot delete the default team' }, 400)
     if (!(await getTeam(id))) return json({ error: 'not found' }, 404)
     await deleteTeam(id)
+    // Detach the deleted team from any machines in it (no orphaned teamId left showing as a raw _id)
+    // and from any account memberships that referenced it.
+    await detachTeamFromAllMachines(id).catch(() => {})
+    try {
+      const accounts = await listAccounts()
+      for (const a of accounts) {
+        if (a.memberships.some(m => m.teamId === id)) {
+          await updateAccount(a._id, { memberships: a.memberships.filter(m => m.teamId !== id) })
+        }
+      }
+    } catch { /* best-effort */ }
     return json({ ok: true })
   }
 

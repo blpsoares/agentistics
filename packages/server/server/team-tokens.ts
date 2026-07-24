@@ -354,6 +354,35 @@ export async function listMachines(): Promise<MachineInfo[]> {
   })
 }
 
+/** Remove a deleted team from every machine token (pull from teamIds + clear a stale primary
+ *  teamId). Machines are NOT deleted — they just lose the dead team relation. */
+export async function detachTeamFromAllMachines(teamId: string): Promise<void> {
+  const col = await getTokensCollection()
+  await col.updateMany({ teamIds: teamId }, { $pull: { teamIds: teamId } })
+  // Re-point the legacy primary teamId to the first remaining team (or unset it if none left).
+  const affected = await col.find({ teamId }).toArray()
+  for (const d of affected) {
+    const remaining = (d.teamIds ?? []).filter(t => t !== teamId)
+    await col.updateOne({ _id: d._id }, remaining.length
+      ? { $set: { teamId: remaining[0] } }
+      : { $unset: { teamId: '' } })
+  }
+}
+
+/** Remove a deleted account from every machine token (pull from accountIds + clear a stale primary
+ *  accountId). Machines are NOT deleted — they just lose the dead owner relation. */
+export async function detachAccountFromAllMachines(accountId: string): Promise<void> {
+  const col = await getTokensCollection()
+  await col.updateMany({ accountIds: accountId }, { $pull: { accountIds: accountId } })
+  const affected = await col.find({ accountId }).toArray()
+  for (const d of affected) {
+    const remaining = (d.accountIds ?? []).filter(a => a !== accountId)
+    await col.updateOne({ _id: d._id }, remaining.length
+      ? { $set: { accountId: remaining[0] } }
+      : { $unset: { accountId: '' } })
+  }
+}
+
 /** Set of every live token id (hash). Central reads filter team data by this so a revoked
  *  member's orphaned sessions/stats/workflows never keep showing after the token is gone. */
 export async function getLiveTokenIds(): Promise<Set<string>> {
