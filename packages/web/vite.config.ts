@@ -44,7 +44,9 @@ export default defineConfig({
   server: {
     allowedHosts: true,
     host: true,
-    port: 47292,
+    // Dev UI port. Defaults to 47292; the central dev flow sets WEB_PORT=48080 so you open the
+    // same URL as the Docker container (which publishes 48080). API stays proxied below.
+    port: Number(process.env.WEB_PORT ?? 47292),
     proxy: {
       '/api': {
         target: `http://localhost:${apiPort}`,
