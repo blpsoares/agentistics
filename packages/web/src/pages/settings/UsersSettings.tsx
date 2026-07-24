@@ -3,8 +3,9 @@ import { useOutletContext } from 'react-router-dom'
 import { Plus, Trash2, Copy, Check, Dice5, KeyRound, Pencil, X } from 'lucide-react'
 import { generatePassword } from '../../lib/password'
 import type { AppContext } from '../../lib/app-context'
-import { SectionHeader, Section, Checkbox, Select, ConfirmModal } from './primitives'
+import { SectionHeader, Section, Checkbox, Select, ConfirmModal, RecordCard, RecordCardAction } from './primitives'
 import { Drawer } from './Drawer'
+import { useIsMobile } from '../../hooks/useIsMobile'
 
 interface Team { _id: string; name: string }
 interface Membership { teamId: string; role: 'manager' | 'user' }
@@ -81,6 +82,7 @@ function RoleBadge({ role }: { role: string }) {
 export default function UsersSettings() {
   const { lang, me } = useOutletContext<AppContext>()
   const pt = lang === 'pt'
+  const isMobile = useIsMobile()
   const viewerIsOwner = me?.role === 'owner'
 
   const [teams, setTeams] = useState<Team[]>([])
@@ -374,6 +376,23 @@ export default function UsersSettings() {
 
   const teamNameOf = (id: string) => teams.find(t => t._id === id)?.name ?? id
 
+  // Only show memberships whose team still exists (drop refs to deleted teams so a raw _id never
+  // shows — defensive on top of the server purge cascade). Shared by the table and the card list.
+  const liveTeamChips = (a: Account) => {
+    const live = a.role === 'owner' ? [] : a.memberships.filter(m => teams.some(t => t._id === m.teamId))
+    if (live.length === 0) return <span style={{ color: 'var(--text-tertiary)' }}>—</span>
+    return (
+      <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4, justifyContent: 'flex-end' }}>
+        {live.map(m => (
+          <span key={m.teamId} style={{
+            display: 'inline-block', padding: '2px 7px', borderRadius: 6, fontSize: 10.5,
+            background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text-secondary)',
+          }}>{teamNameOf(m.teamId)}</span>
+        ))}
+      </span>
+    )
+  }
+
   const roleLegend = pt
     ? [['Owner', 'controle total'], ['Manager', 'gerencia usuários e tokens do seu time'], ['User', 'leitura restrita']]
     : [['Owner', 'full control'], ['Manager', "manages their team's users & tokens"], ['User', 'scoped read']]
@@ -498,6 +517,42 @@ export default function UsersSettings() {
           </span>
         )}
       </div>
+      {isMobile ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {accounts.length === 0 && (
+            <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', padding: '16px 2px' }}>
+              {pt ? 'Nenhuma conta.' : 'No accounts.'}
+            </div>
+          )}
+          {accounts.map(a => (
+            <RecordCard
+              key={a.id}
+              title={a.name}
+              subtitle={a.email}
+              badge={<RoleBadge role={a.role === 'owner' ? 'owner' : (a.memberships[0]?.role ?? 'user')} />}
+              onClick={canEditClient(a) ? () => void openEditDrawer(a) : undefined}
+              fields={[
+                { label: pt ? 'Times' : 'Teams', value: liveTeamChips(a) },
+                { label: pt ? 'Máquinas' : 'Machines', value: machineCountFor(a.id) },
+              ]}
+              actions={(canEditClient(a) || canDeleteClient(a)) ? (
+                <>
+                  {canEditClient(a) && (
+                    <RecordCardAction label="Edit account" onClick={() => void openEditDrawer(a)}>
+                      <Pencil size={14} /> {pt ? 'Editar' : 'Edit'}
+                    </RecordCardAction>
+                  )}
+                  {canDeleteClient(a) && (
+                    <RecordCardAction label="Delete account" danger onClick={() => setConfirmDelete({ id: a.id, name: a.name, email: a.email })}>
+                      <Trash2 size={14} /> {pt ? 'Excluir' : 'Delete'}
+                    </RecordCardAction>
+                  )}
+                </>
+              ) : undefined}
+            />
+          ))}
+        </div>
+      ) : (
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
@@ -525,22 +580,7 @@ export default function UsersSettings() {
                 <td style={{ ...td, color: 'var(--text-primary)', fontWeight: 500 }}>{a.name}</td>
                 <td style={td}>{a.email}</td>
                 <td style={td}><RoleBadge role={a.role === 'owner' ? 'owner' : (a.memberships[0]?.role ?? 'user')} /></td>
-                <td style={td}>
-                  <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>
-                    {(() => {
-                      // Only show memberships whose team still exists (drop refs to deleted teams so
-                      // a raw _id never shows — defensive on top of the server purge cascade).
-                      const live = a.role === 'owner' ? [] : a.memberships.filter(m => teams.some(t => t._id === m.teamId))
-                      if (a.role === 'owner' || live.length === 0) return <span style={{ color: 'var(--text-tertiary)' }}>—</span>
-                      return live.map(m => (
-                        <span key={m.teamId} style={{
-                          display: 'inline-block', padding: '2px 7px', borderRadius: 6, fontSize: 10.5,
-                          background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text-secondary)',
-                        }}>{teamNameOf(m.teamId)}</span>
-                      ))
-                    })()}
-                  </span>
-                </td>
+                <td style={td}>{liveTeamChips(a)}</td>
                 <td style={td}>{machineCountFor(a.id)}</td>
                 <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                   {canEditClient(a) && (
@@ -556,6 +596,7 @@ export default function UsersSettings() {
           </tbody>
         </table>
       </div>
+      )}
 
       {/* Account drawer — while showing shown-once secrets, only the explicit "Done" button closes it
           (backdrop/X are no-ops) so the machine token/command can't be lost to a stray click. */}
