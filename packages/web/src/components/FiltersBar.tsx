@@ -47,7 +47,7 @@ interface Props {
   /** Central-only: available teams for filter. Empty when not a central or no teams. */
   teams?: { id: string; name: string }[]
   /** Central-only: available machines for filter. Empty when not a central or no machines. */
-  machines?: { id: string; name: string; user: string; teamId?: string }[]
+  machines?: { id: string; name: string; user: string; teamId?: string; teamIds?: string[] }[]
 }
 
 const DATE_RANGES: { key: DateRange; labelPt: string; labelEn: string }[] = [

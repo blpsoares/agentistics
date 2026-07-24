@@ -8,7 +8,10 @@ import { Drawer } from './Drawer'
 interface Team { _id: string; name: string }
 interface Membership { teamId: string; role: 'manager' | 'user' }
 interface Account { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: Membership[] }
-interface Machine { id: string; machineName: string; user: string; teamId?: string; accountId?: string; accountName?: string; accountEmail?: string; lastSeenAt: string | null }
+interface Machine { id: string; machineName: string; user: string; teamId?: string; teamIds?: string[]; accountId?: string; accountName?: string; accountEmail?: string; lastSeenAt: string | null }
+
+// Resolve a machine's full team set (prefer teamIds, fall back to the single teamId).
+const machineTeams = (m: Machine): string[] => m.teamIds ?? (m.teamId ? [m.teamId] : [])
 
 // ── shared inline styles ──────────────────────────────────────────────────
 const input: React.CSSProperties = {
@@ -120,7 +123,7 @@ export default function TeamsSettings() {
       for (const machineId of newMachineIds) {
         const r = await fetch('/api/iam/machines', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reassignId: machineId, teamId: newId }),
+          body: JSON.stringify({ reassignId: machineId, addTeamId: newId }),
         })
         if (!r.ok) { const d = await r.json().catch(() => ({})) as { error?: string }; setTeamErr(d.error || `HTTP ${r.status}`); void load(); return }
       }
@@ -188,10 +191,11 @@ export default function TeamsSettings() {
   }
 
   async function removeMachineFromTeam(machineId: string) {
+    if (!manageTeamId) return
     const res = await fetch('/api/iam/machines', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reassignId: machineId, teamId: 'default' }),
+      body: JSON.stringify({ reassignId: machineId, removeTeamId: manageTeamId }),
     })
     if (!res.ok) { const d = await res.json() as { error?: string }; setManageErr(d.error || `HTTP ${res.status}`); return }
     void load()
@@ -202,7 +206,7 @@ export default function TeamsSettings() {
     const res = await fetch('/api/iam/machines', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reassignId: addMachineId, teamId: manageTeamId }),
+      body: JSON.stringify({ reassignId: addMachineId, addTeamId: manageTeamId }),
     })
     if (!res.ok) { const d = await res.json() as { error?: string }; setManageErr(d.error || `HTTP ${res.status}`); return }
     setAddMachineId('')
@@ -224,7 +228,7 @@ export default function TeamsSettings() {
     cancel: pt ? 'Fechar' : 'Close',
   }
   const teamMembers = manageTeamId ? accounts.filter(a => a.memberships.some(m => m.teamId === manageTeamId)) : []
-  const teamMachines = manageTeamId ? machines.filter(m => m.teamId === manageTeamId) : []
+  const teamMachines = manageTeamId ? machines.filter(m => machineTeams(m).includes(manageTeamId)) : []
   const eligibleAccounts = accounts.filter(a => {
     if (a.role === 'owner') return false
     if (manageTeamId && a.memberships.some(m => m.teamId === manageTeamId)) return false
@@ -236,8 +240,10 @@ export default function TeamsSettings() {
     return true
   })
   const eligibleMachines = manageTeamId ? machines.filter(m => {
-    if (m.teamId === manageTeamId) return false
-    if (!viewerIsOwner && m.teamId && !managedTeamIds.has(m.teamId)) return false
+    const mTeams = machineTeams(m)
+    if (mTeams.includes(manageTeamId)) return false
+    // Manager: cannot pull in a machine that belongs to a team they don't manage.
+    if (!viewerIsOwner && mTeams.length > 0 && !mTeams.some(id => managedTeamIds.has(id))) return false
     return true
   }) : []
 
@@ -257,7 +263,8 @@ export default function TeamsSettings() {
   })
   const draftMemberOptions = createEligibleAccounts.filter(a => !newMembers.some(r => r.accountId === a.id))
   const createEligibleMachines = machines.filter(m => {
-    if (!viewerIsOwner && m.teamId && !managedTeamIds.has(m.teamId)) return false
+    const mTeams = machineTeams(m)
+    if (!viewerIsOwner && mTeams.length > 0 && !mTeams.some(id => managedTeamIds.has(id))) return false
     return true
   })
   const draftMachineOptions = createEligibleMachines.filter(m => !newMachineIds.includes(m.id))

@@ -12,6 +12,7 @@ interface MachineInfo {
   machineName: string
   user: string
   teamId?: string
+  teamIds?: string[]
   accountId?: string
   accountIds?: string[]
   accountName?: string
@@ -141,7 +142,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
 
   // Add machine drawer state
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [machineRows, setMachineRows] = useState<{ name: string; teamId: string; accountIds: string[] }[]>([{ name: '', teamId: '', accountIds: [] }])
+  const [machineRows, setMachineRows] = useState<{ name: string; teamIds: string[]; accountIds: string[] }[]>([{ name: '', teamIds: [], accountIds: [] }])
   const [drawerErr, setDrawerErr] = useState<string | null>(null)
   const [created, setCreated] = useState<null | { machines: { name: string; token: string }[] }>(null)
   const [copied, setCopied] = useState<string | null>(null)
@@ -162,7 +163,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   const [editMachineOpen, setEditMachineOpen] = useState(false)
   const [editingMachine, setEditingMachine] = useState<MachineInfo | null>(null)
   const [editName, setEditName] = useState('')
-  const [editTeamId, setEditTeamId] = useState('')
+  const [editTeamIds, setEditTeamIds] = useState<string[]>([])
   const [editOwnerRows, setEditOwnerRows] = useState<string[]>([])
   const [editErr, setEditErr] = useState<string | null>(null)
   // Per-section edit toggle inside the (read-first) edit drawer. Only one section edits at a time.
@@ -229,6 +230,11 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   const teamNameById = new Map<string, string>()
   teams.forEach(t => teamNameById.set(t._id, t.name))
 
+  // Resolve a machine's full team set (prefer teamIds, fall back to the single teamId).
+  const machineTeamIds = (m: MachineInfo): string[] => m.teamIds ?? (m.teamId ? [m.teamId] : [])
+  const teamNamesLabel = (ids: string[]): string =>
+    ids.length === 0 ? '—' : ids.map(id => teamNameById.get(id) ?? id).join(', ')
+
   // copy helper (reused from UsersSettings)
   async function copy(label: string, text: string) {
     setCopyFailed(null)
@@ -262,7 +268,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   }
 
   function openDrawer() {
-    setMachineRows([{ name: '', teamId: '', accountIds: [] }])
+    setMachineRows([{ name: '', teamIds: [], accountIds: [] }])
     setDrawerErr(null)
     setCreated(null)
     setCopied(null)
@@ -271,15 +277,27 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   }
 
   function addMachineRow() {
-    setMachineRows(rs => [...rs, { name: '', teamId: '', accountIds: [] }])
+    setMachineRows(rs => [...rs, { name: '', teamIds: [], accountIds: [] }])
   }
 
   function removeMachineRow(i: number) {
     setMachineRows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs)
   }
 
-  function updateMachineRow(i: number, patch: { name?: string; teamId?: string; accountIds?: string[] }) {
+  function updateMachineRow(i: number, patch: { name?: string; teamIds?: string[]; accountIds?: string[] }) {
     setMachineRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r))
+  }
+
+  function addTeamToMachineRow(machineIdx: number) {
+    setMachineRows(rs => rs.map((r, i) => i === machineIdx ? { ...r, teamIds: [...r.teamIds, ''] } : r))
+  }
+
+  function removeTeamFromMachineRow(machineIdx: number, teamIdx: number) {
+    setMachineRows(rs => rs.map((r, i) => i === machineIdx ? { ...r, teamIds: r.teamIds.filter((_, idx) => idx !== teamIdx) } : r))
+  }
+
+  function updateTeamInMachineRow(machineIdx: number, teamIdx: number, teamId: string) {
+    setMachineRows(rs => rs.map((r, i) => i === machineIdx ? { ...r, teamIds: r.teamIds.map((id, idx) => idx === teamIdx ? teamId : id) } : r))
   }
 
   function addOwnerToMachineRow(machineIdx: number) {
@@ -311,18 +329,19 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     // Non-owner must provide a team for every machine (scope enforcement).
     const isOwner = me?.role === 'owner'
     if (!isOwner) {
-      const hasUnteamed = validRows.some(r => !r.teamId)
+      const hasUnteamed = validRows.some(r => r.teamIds.filter(id => id.trim()).length === 0)
       if (hasUnteamed) {
-        setDrawerErr(pt ? 'Selecione um time que você gerencia.' : 'Select a team you manage.')
+        setDrawerErr(pt ? 'Selecione ao menos um time que você gerencia.' : 'Select at least one team you manage.')
         return
       }
     }
     const results: { name: string; token: string }[] = []
     for (const row of validRows) {
       const uniqueAccountIds = [...new Set(row.accountIds.filter(id => id.trim()))]
+      const uniqueTeamIds = [...new Set(row.teamIds.filter(id => id.trim()))]
       const body: Record<string, unknown> = { name: row.name.trim() }
       if (uniqueAccountIds.length > 0) body.accountIds = uniqueAccountIds
-      if (row.teamId) body.teamId = row.teamId
+      if (uniqueTeamIds.length > 0) body.teamIds = uniqueTeamIds
       const res = await fetch('/api/iam/machines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -376,7 +395,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   function openEditMachine(m: MachineInfo) {
     setEditingMachine(m)
     setEditName(m.machineName)
-    setEditTeamId(m.teamId ?? '')
+    setEditTeamIds(machineTeamIds(m))
     // Prefill owners from accountIds, or use accountId as fallback, or start with one empty row
     const ids = m.accountIds ?? (m.accountId ? [m.accountId] : [])
     setEditOwnerRows(ids.length > 0 ? ids : [''])
@@ -397,6 +416,18 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     setEditOwnerRows(rs => rs.map((r, idx) => idx === i ? accountId : r))
   }
 
+  function addEditTeamRow() {
+    setEditTeamIds(rs => [...rs, ''])
+  }
+
+  function removeEditTeamRow(i: number) {
+    setEditTeamIds(rs => rs.filter((_, idx) => idx !== i))
+  }
+
+  function updateEditTeamRow(i: number, teamId: string) {
+    setEditTeamIds(rs => rs.map((r, idx) => idx === i ? teamId : r))
+  }
+
   // Per-section saves (read-first drawer): each Section saves only its own fields.
   async function saveDetails() {
     if (!editingMachine) return
@@ -405,7 +436,9 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
       return
     }
     const nameChanged = editName.trim() !== editingMachine.machineName
-    const teamChanged = editTeamId !== (editingMachine.teamId ?? '')
+    const newTeamIds = [...new Set(editTeamIds.filter(id => id.trim()))]
+    const originalTeamIds = machineTeamIds(editingMachine)
+    const teamsChanged = JSON.stringify([...originalTeamIds].sort()) !== JSON.stringify([...newTeamIds].sort())
     try {
       if (nameChanged) {
         const res = await fetch('/api/iam/machines', {
@@ -415,11 +448,11 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
       }
-      if (teamChanged) {
+      if (teamsChanged) {
         const res = await fetch('/api/iam/machines', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reassignId: editingMachine.id, teamId: editTeamId || 'default' }),
+          body: JSON.stringify({ reassignId: editingMachine.id, teamIds: newTeamIds }),
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
       }
@@ -725,7 +758,25 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                       </div>
                     </td>
                     <td style={td}>{m.user}</td>
-                    <td style={td}>{m.teamId ? (teamNameById.get(m.teamId) ?? m.teamId) : '—'}</td>
+                    <td style={td}>
+                      {(() => {
+                        const ids = machineTeamIds(m)
+                        if (ids.length === 0) return '—'
+                        return (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                            {ids.map(id => (
+                              <span key={id} style={{
+                                display: 'inline-block', padding: '2px 7px', borderRadius: 999, fontSize: 11,
+                                fontWeight: 600, color: 'var(--text-secondary)',
+                                background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                              }}>
+                                {teamNameById.get(id) ?? id}
+                              </span>
+                            ))}
+                          </div>
+                        )
+                      })()}
+                    </td>
                     <td style={td}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                         <div style={{ width: 6, height: 6, borderRadius: '50%', background: statusColor }} />
@@ -819,18 +870,6 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                   />
                 </Field>
 
-                <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
-                  <Select
-                    value={row.teamId}
-                    onChange={v => updateMachineRow(machineIdx, { teamId: v })}
-                    options={[
-                      { value: '', label: pt ? (isOwner ? 'Deixar vazio / loose' : 'Selecione um time…') : (isOwner ? 'Leave empty / loose' : 'Select a team…') },
-                      ...managerTeams.map(t => ({ value: t._id, label: t.name })),
-                    ]}
-                    placeholder={pt ? 'Deixar vazio' : 'Leave empty'}
-                  />
-                </Field>
-
                 <button
                   type="button"
                   onClick={() => removeMachineRow(machineIdx)}
@@ -844,6 +883,50 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                 >
                   <Trash2 size={14} />
                 </button>
+              </div>
+
+              {/* Teams section */}
+              <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 10, marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <span style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {pt ? (isOwner ? 'Times (opcional)' : 'Times') : (isOwner ? 'Teams (optional)' : 'Teams')}
+                  </span>
+                  <button type="button" style={{ ...ghostBtn, padding: '4px 8px', fontSize: 11 }} onClick={() => addTeamToMachineRow(machineIdx)}>
+                    <Plus size={11} /> {pt ? 'Adicionar' : 'Add'}
+                  </button>
+                </div>
+
+                {row.teamIds.length === 0 ? (
+                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
+                    {isOwner
+                      ? (pt ? 'Sem time (loose) — clique "Adicionar" para vincular times.' : 'No team (loose) — click "Add" to link teams.')
+                      : (pt ? 'Clique "Adicionar" para vincular ao menos um time.' : 'Click "Add" to link at least one team.')}
+                  </div>
+                ) : (
+                  row.teamIds.map((teamId, teamIdx) => (
+                    <div key={teamIdx} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+                      <div style={{ flex: 1 }}>
+                        <Select
+                          value={teamId}
+                          onChange={v => updateTeamInMachineRow(machineIdx, teamIdx, v)}
+                          options={[
+                            { value: '', label: pt ? 'Selecione o time…' : 'Select team…' },
+                            ...managerTeams.map(t => ({ value: t._id, label: t.name })),
+                          ]}
+                          placeholder={pt ? 'Selecione o time…' : 'Select team…'}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeTeamFromMachineRow(machineIdx, teamIdx)}
+                        style={trashBtn}
+                        aria-label={pt ? 'Remover time' : 'Remove team'}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
 
               {/* Owners section */}
@@ -1037,12 +1120,12 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
           onEdit={() => {
             setEditErr(null)
             setEditName(editMachine?.machineName ?? '')
-            setEditTeamId(editMachine?.teamId ?? '')
+            setEditTeamIds(editMachine ? machineTeamIds(editMachine) : [])
             setEditingSection('details')
           }}
           onCancel={() => {
             setEditName(editMachine?.machineName ?? '')
-            setEditTeamId(editMachine?.teamId ?? '')
+            setEditTeamIds(editMachine ? machineTeamIds(editMachine) : [])
             setEditingSection(null)
           }}
           onSave={() => void saveDetails()}
@@ -1057,23 +1140,51 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                   placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'}
                 />
               </Field>
-              <Field label={pt ? 'Time' : 'Team'}>
-                <Select
-                  value={editTeamId}
-                  onChange={v => setEditTeamId(v)}
-                  options={[
-                    { value: '', label: pt ? 'Padrão' : 'Default' },
-                    ...teams.map(t => ({ value: t._id, label: t.name })),
-                  ]}
-                  placeholder={pt ? 'Selecione o time…' : 'Select team…'}
-                />
-              </Field>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                    {pt ? 'Times' : 'Teams'}
+                  </span>
+                  <button type="button" style={{ ...ghostBtn, padding: '4px 8px', fontSize: 11 }} onClick={addEditTeamRow}>
+                    <Plus size={11} /> {pt ? 'Adicionar time' : 'Add team'}
+                  </button>
+                </div>
+                {editTeamIds.length === 0 ? (
+                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
+                    {pt ? 'Sem time — clique "Adicionar time" para vincular.' : 'No teams — click "Add team" to link one.'}
+                  </div>
+                ) : (
+                  editTeamIds.map((teamId, i) => (
+                    <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <div style={{ flex: 1 }}>
+                        <Select
+                          value={teamId}
+                          onChange={v => updateEditTeamRow(i, v)}
+                          options={[
+                            { value: '', label: pt ? 'Selecione o time…' : 'Select team…' },
+                            ...teams.map(t => ({ value: t._id, label: t.name })),
+                          ]}
+                          placeholder={pt ? 'Selecione o time…' : 'Select team…'}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeEditTeamRow(i)}
+                        style={trashBtn}
+                        aria-label={pt ? 'Remover time' : 'Remove team'}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
             </>
           }
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <ReadField label={pt ? 'Nome da máquina' : 'Machine name'} value={editMachine?.machineName ?? '—'} />
-            <ReadField label={pt ? 'Time' : 'Team'} value={editMachine?.teamId ? (teamNameById.get(editMachine.teamId) ?? editMachine.teamId) : '—'} />
+            <ReadField label={pt ? 'Times' : 'Teams'} value={editMachine ? teamNamesLabel(machineTeamIds(editMachine)) : '—'} />
           </div>
         </Section>
 

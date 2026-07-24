@@ -1502,7 +1502,7 @@ export default function AppLayout() {
 
   // Central-only: fetch teams and machines for filter dimensions
   const [teamsList, setTeamsList] = useState<{ id: string; name: string }[]>([])
-  const [machinesList, setMachinesList] = useState<{ id: string; name: string; user: string; teamId?: string }[]>([])
+  const [machinesList, setMachinesList] = useState<{ id: string; name: string; user: string; teamId?: string; teamIds?: string[] }[]>([])
   useEffect(() => {
     if (!teamSession?.central) {
       setTeamsList([])
@@ -1514,7 +1514,7 @@ export default function AppLayout() {
       fetch('/api/iam/machines').then(r => r.ok ? r.json() : { machines: [] }),
     ]).then(([teamsResp, machinesResp]) => {
       setTeamsList((teamsResp.teams ?? []).map((t: { _id: string; name: string }) => ({ id: t._id, name: t.name })))
-      setMachinesList((machinesResp.machines ?? []).map((m: { id: string; machineName: string; user: string; teamId?: string }) => ({ id: m.id, name: m.machineName, user: m.user, teamId: m.teamId })))
+      setMachinesList((machinesResp.machines ?? []).map((m: { id: string; machineName: string; user: string; teamId?: string; teamIds?: string[] }) => ({ id: m.id, name: m.machineName, user: m.user, teamId: m.teamId, teamIds: m.teamIds })))
     }).catch(() => {
       setTeamsList([])
       setMachinesList([])
