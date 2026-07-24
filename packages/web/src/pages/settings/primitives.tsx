@@ -32,6 +32,7 @@ export function ConfirmModal({ open, title, message, confirmLabel, cancelLabel, 
   onConfirm: () => void
   onCancel: () => void
 }) {
+  const isMobile = useIsMobile()
   React.useEffect(() => {
     if (!open) return
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel() }
@@ -56,13 +57,22 @@ export function ConfirmModal({ open, title, message, confirmLabel, cancelLabel, 
           <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</span>
         </div>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.55, margin: 0 }}>{message}</p>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 2 }}>
+        <div style={{
+          display: 'flex', gap: 8, marginTop: 2, justifyContent: 'flex-end',
+          flexDirection: isMobile ? 'column-reverse' : 'row',
+        }}>
           <button type="button" onClick={onCancel} style={{
-            padding: '8px 14px', borderRadius: 7, border: '1px solid var(--border)', background: 'transparent',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            padding: isMobile ? '0 14px' : '8px 14px', minHeight: isMobile ? 44 : undefined,
+            width: isMobile ? '100%' : undefined,
+            borderRadius: 7, border: '1px solid var(--border)', background: 'transparent',
             color: 'var(--text-secondary)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
           }}>{cancelLabel}</button>
           <button type="button" onClick={onConfirm} style={{
-            padding: '8px 14px', borderRadius: 7, border: '1px solid #ef4444', background: '#ef4444',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            padding: isMobile ? '0 14px' : '8px 14px', minHeight: isMobile ? 44 : undefined,
+            width: isMobile ? '100%' : undefined,
+            borderRadius: 7, border: '1px solid #ef4444', background: '#ef4444',
             color: '#fff', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
           }}>{confirmLabel}</button>
         </div>
