@@ -27,7 +27,12 @@ export function scopeAppDataToTeams<T extends {
   userStatsCaches?: Record<string, unknown>
   presence?: Record<string, unknown>
 }>(data: T, visible: Set<string>): T {
-  const sessions = (data.sessions ?? []).filter(s => s.teamId != null && visible.has(s.teamId))
+  // A session is visible if ANY of its machine's teams is visible to the principal (a machine can
+  // belong to several teams); falls back to the single teamId on legacy data.
+  const sessions = (data.sessions ?? []).filter(s => {
+    const ids = (s.teamIds && s.teamIds.length) ? s.teamIds : (s.teamId != null ? [s.teamId] : [])
+    return ids.some(t => visible.has(t))
+  })
   const visibleSessionIds = new Set(sessions.map(s => s.session_id))
   const visibleUsers = new Set(sessions.map(s => s.user).filter((u): u is string => Boolean(u)))
   const workflows = (data.workflows ?? []).filter(w => visibleSessionIds.has(w.sessionId))

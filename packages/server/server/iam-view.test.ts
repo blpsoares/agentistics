@@ -1,10 +1,19 @@
 // packages/server/server/iam-view.test.ts
 import { test, expect } from 'bun:test'
-import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam } from './iam-view'
+import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine } from './iam-view'
 import type { AccountDoc, Principal } from './iam-types'
 
 const owner: Principal = { accountId: 'o1', role: 'owner', memberships: [] }
 const mgrA: Principal = { accountId: 'm1', role: 'member', memberships: [{ teamId: 'A', role: 'manager' }] }
+
+test('canManageMachine: owner any; manager if managing ANY of the machine teams; owner-account always', () => {
+  expect(canManageMachine(owner, { teamIds: ['X', 'Y'] })).toBe(true)
+  expect(canManageMachine(mgrA, { teamIds: ['A', 'B'] })).toBe(true)   // manages A
+  expect(canManageMachine(mgrA, { teamIds: ['B', 'C'] })).toBe(false)  // manages none
+  expect(canManageMachine(mgrA, { teamId: 'A' })).toBe(true)           // legacy single
+  expect(canManageMachine(mgrA, { teamIds: ['B'], accountIds: ['m1'] })).toBe(true) // owns it
+  expect(canManageMachine(mgrA, {})).toBe(false)                        // loose, not owned
+})
 
 function acc(id: string, over: Partial<AccountDoc> = {}): AccountDoc {
   return { _id: id, name: 'N', email: `${id}@x.co`, emailLower: `${id}@x.co`, passwordHash: '$argon2id$secret', role: 'member', memberships: [], sessionVersion: 0, createdAt: 't', updatedAt: 't', lastLoginAt: null, ...over }

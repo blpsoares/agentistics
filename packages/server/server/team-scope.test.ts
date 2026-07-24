@@ -40,3 +40,15 @@ test('scopeAppDataToTeams drops sessions with no teamId (untagged) for a scoped 
   const data = { sessions: [{ session_id: 's3', user: 'c', project_path: '/c' }] } as unknown as AppData
   expect(scopeAppDataToTeams(data, new Set(['A'])).sessions).toEqual([])
 })
+
+test('scopeAppDataToTeams: a multi-team session is visible if ANY of its teamIds is visible', () => {
+  const data = {
+    sessions: [
+      { session_id: 'm1', user: 'alice', project_path: '/a', teamIds: ['A', 'B'] }, // A visible → kept
+      { session_id: 'm2', user: 'bob', project_path: '/b', teamIds: ['B', 'C'] },   // neither visible → dropped
+    ],
+    projects: [{ path: '/a', users: ['alice'] }, { path: '/b', users: ['bob'] }],
+  } as unknown as AppData
+  const scoped = scopeAppDataToTeams(data, new Set(['A']))
+  expect(scoped.sessions.map(s => s.session_id)).toEqual(['m1'])
+})

@@ -6,7 +6,7 @@ import { TEAM_DIR } from './config'
 import { getTeamCollection } from './mongo'
 import { fromTeamDoc } from './team-store'
 import { loadAllTeamWorkflows } from './team-workflows'
-import { getMemberNameMap, getMemberTeamMap, getLiveTokenIds } from './team-tokens'
+import { getMemberNameMap, getMemberTeamsMap, getLiveTokenIds } from './team-tokens'
 import { DEFAULT_TEAM_ID } from './teams'
 
 /**
@@ -46,7 +46,7 @@ export async function loadTeamSessionsFromMongo(): Promise<SessionMeta[]> {
   const [docs, nameMap, teamMap, liveIds] = await Promise.all([
     col.find({}).toArray(),
     getMemberNameMap().catch(() => ({} as Record<string, string>)),
-    getMemberTeamMap().catch(() => ({} as Record<string, string>)),
+    getMemberTeamsMap().catch(() => ({} as Record<string, string[]>)),
     getLiveTokenIds().catch(() => null),
   ])
   // Drop orphaned sessions whose member token was revoked/deleted — otherwise a removed
@@ -59,7 +59,9 @@ export async function loadTeamSessionsFromMongo(): Promise<SessionMeta[]> {
     // Resolve current name from the live tokens table; fall back to the cached value in the doc.
     const resolved = { ...doc, user: nameMap[doc.memberId] ?? doc.user }
     const meta = fromTeamDoc(resolved)
-    meta.teamId = teamMap[doc.memberId] ?? DEFAULT_TEAM_ID
+    const teamIds = teamMap[doc.memberId] ?? [DEFAULT_TEAM_ID]
+    meta.teamIds = teamIds
+    meta.teamId = teamIds[0] ?? DEFAULT_TEAM_ID // primary, for single-value consumers
     meta.memberId = doc.memberId // re-attach the machine id (fromTeamDoc strips it) for machine filtering
     return meta
   })

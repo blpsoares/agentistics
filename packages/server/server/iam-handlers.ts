@@ -9,7 +9,7 @@ import { hasAnyOwner, countOwners, createAccount, findAccountByEmail, updateAcco
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
 import { seedDefaultTeam, listTeams, createTeam, getTeam, deleteTeam, DEFAULT_TEAM_ID } from './teams'
-import { backfillTokenTeamIds, listMachines, mintMachineToken, mintMachine, revokeToken, rotateToken, setMachineTeam, setMachineLabel, setMachineOwners } from './team-tokens'
+import { backfillTokenTeamIds, listMachines, mintMachineToken, mintMachine, revokeToken, rotateToken, setMachineTeams, setMachineLabel, setMachineOwners } from './team-tokens'
 import { getCentralConfig } from './central-config'
 import { packConnectToken } from '@agentistics/core'
 import { backfillRepoTeamIds } from './team-repos'
@@ -452,21 +452,40 @@ export async function handleMachines(req: Request): Promise<Response> {
     }
     // Reassign a machine to another team (scoped): { reassignId, teamId }. Must manage BOTH the
     // machine's current team and the target team. Used by the Teams page to attach a machine.
+    // Change a machine's TEAMS (a machine can be in several). Forms:
+    //   { reassignId, addTeamId }        → attach one team
+    //   { reassignId, removeTeamId }     → detach one team (empty set → loose)
+    //   { reassignId, teamIds: [...] }   → replace the whole set (single `teamId` accepted as alias)
     const reassignId = typeof b.reassignId === 'string' ? b.reassignId : ''
     if (reassignId) {
-      const newTeamId = typeof b.teamId === 'string' ? b.teamId : ''
-      if (!newTeamId) return json({ error: 'teamId is required' }, 400)
-      if (!(await getTeam(newTeamId))) return json({ error: 'team not found' }, 404)
       const machine = (await listMachines()).find(m => m.id === reassignId)
       if (!machine) return json({ error: 'machine not found' }, 404)
-      // Must manage the machine's current team. The target must also be managed UNLESS it's the
-      // Default team — detaching a machine (moving it to Default) is allowed for any manager of the
-      // source team, since Default is the catch-all and detaching only removes it from their scope.
-      const canTarget = canManageMachineTeam(principal, newTeamId) || newTeamId === DEFAULT_TEAM_ID
-      if (!canManageMachineTeam(principal, machine.teamId) || !canTarget) {
-        return json({ error: 'forbidden' }, 403)
+      const current = machine.teamIds && machine.teamIds.length ? machine.teamIds : (machine.teamId ? [machine.teamId] : [])
+      const addTeamId = typeof b.addTeamId === 'string' && b.addTeamId ? b.addTeamId : ''
+      const removeTeamId = typeof b.removeTeamId === 'string' && b.removeTeamId ? b.removeTeamId : ''
+      let next: string[]
+      if (addTeamId) {
+        if (!(await getTeam(addTeamId))) return json({ error: 'team not found' }, 404)
+        if (!canManageMachineTeam(principal, addTeamId)) return json({ error: 'forbidden' }, 403)
+        next = [...new Set([...current, addTeamId])]
+      } else if (removeTeamId) {
+        // Detach: must manage the team being removed (owner always).
+        if (!canManageMachineTeam(principal, removeTeamId)) return json({ error: 'forbidden' }, 403)
+        next = current.filter(t => t !== removeTeamId)
+      } else {
+        // Replace the whole set. A non-owner must manage every team involved (old ∪ new, except the
+        // Default catch-all) so a replace can't drop or add teams outside their scope.
+        const raw = Array.isArray(b.teamIds) ? b.teamIds.filter((x): x is string => typeof x === 'string' && !!x)
+          : (typeof b.teamId === 'string' && b.teamId ? [b.teamId] : [])
+        next = [...new Set(raw)]
+        for (const t of next) if (!(await getTeam(t))) return json({ error: 'team not found' }, 404)
+        if (principal.role !== 'owner') {
+          const involved = [...new Set([...current, ...next])]
+          const ok = involved.every(t => t === DEFAULT_TEAM_ID || canManageMachineTeam(principal, t))
+          if (!ok) return json({ error: 'forbidden' }, 403)
+        }
       }
-      await setMachineTeam(reassignId, newTeamId)
+      await setMachineTeams(reassignId, next)
       return json({ ok: true })
     }
     // Mint a new machine: { name, accountIds?: string[], teamId?: string }.
@@ -479,28 +498,31 @@ export async function handleMachines(req: Request): Promise<Response> {
     const accountIds = Array.isArray(b.accountIds)
       ? b.accountIds.filter((x): x is string => typeof x === 'string')
       : (typeof b.accountId === 'string' ? [b.accountId] : [])
-    // teamId: only set when non-empty string; otherwise undefined (no DEFAULT_TEAM_ID fallback).
-    const teamId = typeof b.teamId === 'string' && b.teamId ? b.teamId : undefined
+    // teamIds: accept an array OR a single teamId alias; empty = loose (no team). No DEFAULT fallback.
+    const teamIds = [...new Set(
+      (Array.isArray(b.teamIds) ? b.teamIds.filter((x): x is string => typeof x === 'string' && !!x)
+        : (typeof b.teamId === 'string' && b.teamId ? [b.teamId] : [])),
+    )]
     // Validate every account exists + is visible to the caller (no assigning to out-of-scope accounts).
     for (const id of accountIds) {
       const acct = await getAccount(id)
       if (!acct) return json({ error: 'account not found' }, 404)
       if (!accountVisibleTo(principal, acct)) return json({ error: 'forbidden' }, 403)
     }
-    // Validate teamId exists (when set).
-    if (teamId && !(await getTeam(teamId))) return json({ error: 'team not found' }, 404)
-    // Scope rule: owner may create any combination. A non-owner (manager) MUST provide a teamId
-    // they manage — otherwise 403 so a manager can't create a machine outside their scope.
+    // Validate each team exists.
+    for (const t of teamIds) if (!(await getTeam(t))) return json({ error: 'team not found' }, 404)
+    // Scope rule: owner may create any combination. A non-owner (manager) MUST provide at least one
+    // team AND must manage EVERY team assigned — so they can't create a machine outside their scope.
     if (principal.role !== 'owner') {
-      if (!teamId || !canManageMachineTeam(principal, teamId)) {
-        return json({ error: 'select a team you manage' }, 403)
+      if (teamIds.length === 0 || !teamIds.every(t => canManageMachineTeam(principal, t))) {
+        return json({ error: 'select teams you manage' }, 403)
       }
     }
     // user: first account's name, or the machine name itself if no accounts.
     const user = accountIds.length > 0 && accountIds[0]
       ? ((await getAccount(accountIds[0]))?.name ?? name)
       : name
-    const { token } = await mintMachine({ machineName: name, user, accountIds, teamId })
+    const { token } = await mintMachine({ machineName: name, user, accountIds, teamIds })
     return json({ token: packConnectToken(token, (await getCentralConfig()).publicUrl) }, 201)
   }
   if (req.method === 'DELETE') {

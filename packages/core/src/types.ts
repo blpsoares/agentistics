@@ -109,8 +109,12 @@ export interface SessionMeta {
    *  (or authoritatively from a repo-bound token on CI ingest). Empty/undefined when the
    *  project is not a git repo or has no origin remote. See `normalizeGitRemote`. */
   git_remote?: string
-  /** Team the owning member belongs to (central read-time tag; used for per-team scoping). */
+  /** Primary team of the owning machine (teamIds[0]) — central read-time tag; kept for
+   *  single-value consumers. */
   teamId?: string
+  /** ALL teams the owning machine belongs to (central read-time tag). A session is visible/filtered
+   *  by ANY of these — a machine can be in several teams. Falls back to [teamId] on legacy data. */
+  teamIds?: string[]
   /** Stable machine identity (the member token's sha256 hash) — central read-time tag, used to
    *  filter by an individual machine. Matches `machine.id` from /api/iam/machines. */
   memberId?: string

@@ -96,12 +96,16 @@ export function filterByHarnesses<T extends { harness?: HarnessId }>(sessions: T
   return sessions.filter(s => set.has(s.harness ?? 'claude'))
 }
 
-/** Multi-select team predicate (central). Empty/undefined = all pass. Matches `session.teamId`;
- *  sessions with no teamId are excluded when a selection is active. Pure. */
-export function filterByTeams<T extends { teamId?: string }>(sessions: T[], teams: string[]): T[] {
+/** Multi-select team predicate (central). Empty/undefined = all pass. A session passes if ANY of its
+ *  teams is selected (a machine can be in several teams); falls back to the single `teamId` on legacy
+ *  data. Sessions with no team are excluded when a selection is active. Pure. */
+export function filterByTeams<T extends { teamId?: string; teamIds?: string[] }>(sessions: T[], teams: string[]): T[] {
   if (!teams || teams.length === 0) return sessions
   const set = new Set(teams)
-  return sessions.filter(s => !!s.teamId && set.has(s.teamId))
+  return sessions.filter(s => {
+    const ids = (s.teamIds && s.teamIds.length) ? s.teamIds : (s.teamId ? [s.teamId] : [])
+    return ids.some(t => set.has(t))
+  })
 }
 
 /** Multi-select machine predicate (central). Empty/undefined = all pass. Matches `session.memberId`
