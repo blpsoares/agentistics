@@ -1187,7 +1187,24 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <ReadField label={pt ? 'Nome da máquina' : 'Machine name'} value={editMachine?.machineName ?? '—'} />
-            <ReadField label={pt ? 'Times' : 'Teams'} value={editMachine ? teamNamesLabel(machineTeamIds(editMachine)) : '—'} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>{pt ? 'Times' : 'Teams'}</span>
+              {(() => {
+                const ids = editMachine ? machineTeamIds(editMachine) : []
+                if (ids.length === 0) return <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>{pt ? '— sem time' : '— no team'}</span>
+                return (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {ids.map(id => (
+                      <span key={id} style={{
+                        display: 'inline-flex', alignItems: 'center', padding: '5px 10px', borderRadius: 6,
+                        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                        fontSize: 12, fontWeight: 600, color: 'var(--text-primary)',
+                      }}>{teamNameById.get(id) ?? id}</span>
+                    ))}
+                  </div>
+                )
+              })()}
+            </div>
           </div>
         </Section>
 
