@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Plus, Trash2, Settings } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
-import { SectionHeader, Section, Select } from './primitives'
+import { SectionHeader, Section, Select, ConfirmModal } from './primitives'
 import { Drawer } from './Drawer'
 
 interface Team { _id: string; name: string }
@@ -63,6 +63,8 @@ export default function TeamsSettings() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [machines, setMachines] = useState<Machine[]>([])
   const [err, setErr] = useState<string | null>(null)
+  // Single pending-confirm target for destructive actions (delete team / remove member / remove machine).
+  const [confirm, setConfirm] = useState<{ kind: 'team' | 'member' | 'machine'; id: string; label: string } | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -263,9 +265,11 @@ export default function TeamsSettings() {
     return true
   }) : []
 
+  const userRoleLabel = pt ? 'Usuário (leitura)' : 'User (read)'
+  const managerRoleLabel = pt ? 'Manager (gerencia o time)' : 'Manager (manages the team)'
   const roleOptions: { value: 'manager' | 'user'; label: string }[] = viewerIsOwner
-    ? [{ value: 'user', label: 'user' }, { value: 'manager', label: 'manager' }]
-    : [{ value: 'user', label: 'user' }]
+    ? [{ value: 'user', label: userRoleLabel }, { value: 'manager', label: managerRoleLabel }]
+    : [{ value: 'user', label: userRoleLabel }]
 
   // ── create-drawer eligibility (no team yet, so independent of manageTeamId) ──
   const canCreateWithMembers = viewerIsOwner || managedTeamIds.size > 0
@@ -351,7 +355,7 @@ export default function TeamsSettings() {
                     </button>
                   )}
                   {t._id !== 'default' && (
-                    <button onClick={e => { e.stopPropagation(); void deleteTeam(t._id) }} style={trashBtn} aria-label="Delete team"><Trash2 size={14} /></button>
+                    <button onClick={e => { e.stopPropagation(); setConfirm({ kind: 'team', id: t._id, label: t.name }) }} style={trashBtn} aria-label="Delete team"><Trash2 size={14} /></button>
                   )}
                 </td>
               </tr>
@@ -518,7 +522,7 @@ export default function TeamsSettings() {
                             </div>
                           )
                           : membership && <RoleBadge role={membership.role} />}
-                        <button type="button" style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }} onClick={() => window.confirm(pt ? 'Remover este membro?' : 'Remove this member?') && void removeAccountFromTeam(a.id, manageTeamId!)}>
+                        <button type="button" style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }} onClick={() => setConfirm({ kind: 'member', id: a.id, label: a.name })}>
                           {pt ? 'Remover' : 'Remove'}
                         </button>
                       </div>
@@ -623,7 +627,7 @@ export default function TeamsSettings() {
                           {m.accountName ? `${m.accountName} — ${m.accountEmail}` : m.user} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
                         </span>
                       </div>
-                      <button type="button" style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }} onClick={() => window.confirm(pt ? 'Remover desta equipe?' : 'Remove from team?') && void removeMachineFromTeam(m.id)}>
+                      <button type="button" style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }} onClick={() => setConfirm({ kind: 'machine', id: m.id, label: m.machineName })}>
                         {pt ? 'Remover' : 'Remove'}
                       </button>
                     </div>
@@ -683,6 +687,39 @@ export default function TeamsSettings() {
           <button style={ghostBtn} onClick={() => setManageOpen(false)}>{pt ? 'Fechar' : 'Close'}</button>
         </div>
       </Drawer>
+
+      <ConfirmModal
+        open={confirm !== null}
+        title={
+          confirm?.kind === 'team' ? (pt ? 'Excluir time?' : 'Delete team?')
+            : confirm?.kind === 'member' ? (pt ? 'Remover membro do time?' : 'Remove member from team?')
+              : (pt ? 'Remover máquina do time?' : 'Remove machine from team?')
+        }
+        message={
+          confirm?.kind === 'team'
+            ? (pt
+              ? `O time "${confirm.label}" será excluído. As máquinas e membros vinculados serão desvinculados.`
+              : `The team "${confirm.label}" will be deleted. Its machines and members will be detached.`)
+            : confirm?.kind === 'member'
+              ? (pt
+                ? `Remover "${confirm.label}" deste time?`
+                : `Remove "${confirm.label}" from this team?`)
+              : (pt
+                ? `Remover a máquina "${confirm?.label}" deste time?`
+                : `Remove the machine "${confirm?.label}" from this team?`)
+        }
+        confirmLabel={confirm?.kind === 'team' ? (pt ? 'Excluir' : 'Delete') : (pt ? 'Remover' : 'Remove')}
+        cancelLabel={pt ? 'Cancelar' : 'Cancel'}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => {
+          const c = confirm
+          setConfirm(null)
+          if (!c) return
+          if (c.kind === 'team') void deleteTeam(c.id)
+          else if (c.kind === 'member') { if (manageTeamId) void removeAccountFromTeam(c.id, manageTeamId) }
+          else if (c.kind === 'machine') void removeMachineFromTeam(c.id)
+        }}
+      />
     </div>
   )
 }

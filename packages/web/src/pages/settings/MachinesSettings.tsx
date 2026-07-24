@@ -3,7 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import { Plus, Copy, Check, RotateCw, Trash2, Pencil, X } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
 import { TeamSettings, type TeamConfig } from '../../components/TeamSettings'
-import { SectionHeader, Section, Select, Checkbox } from './primitives'
+import { SectionHeader, Section, Select, Checkbox, ConfirmModal } from './primitives'
 import { Drawer } from './Drawer'
 
 // ── interfaces ────────────────────────────────────────────────────────────────
@@ -508,10 +508,6 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   }
 
   async function bulkDelete() {
-    if (!bulkDeleteConfirm) {
-      setBulkDeleteConfirm(true)
-      return
-    }
     try {
       for (const id of selectedIds) {
         const res = await fetch('/api/iam/machines', {
@@ -688,16 +684,14 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
           <button
             style={{
               ...primaryBtn,
-              background: bulkDeleteConfirm ? '#ef4444' : 'color-mix(in srgb, #ef4444 12%, transparent)',
+              background: 'color-mix(in srgb, #ef4444 12%, transparent)',
               borderColor: '#ef4444',
-              color: bulkDeleteConfirm ? '#fff' : '#ef4444',
+              color: '#ef4444',
             }}
-            onClick={() => void bulkDelete()}
+            onClick={() => setBulkDeleteConfirm(true)}
           >
             <Trash2 size={14} />
-            {bulkDeleteConfirm
-              ? (pt ? `Confirmar exclusão de ${selectedIds.size}?` : `Confirm delete ${selectedIds.size}?`)
-              : (pt ? `Excluir selecionados (${selectedIds.size})` : `Delete selected (${selectedIds.size})`)}
+            {pt ? `Excluir selecionados (${selectedIds.size})` : `Delete selected (${selectedIds.size})`}
           </button>
         </div>
       )}
@@ -811,23 +805,13 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                         >
                           <RotateCw size={12} />
                         </button>
-                        {revokeConfirmId === m.id ? (
-                          <button
-                            style={{ ...ghostBtn, padding: '4px 8px', color: '#ef4444', borderColor: '#ef4444' }}
-                            onClick={e => { e.stopPropagation(); void revokeMachine(m.id) }}
-                            title={pt ? 'Confirmar' : 'Confirm'}
-                          >
-                            {pt ? 'Confirmar?' : 'Confirm?'}
-                          </button>
-                        ) : (
-                          <button
-                            style={{ ...ghostBtn, padding: '4px 8px', color: '#ef4444' }}
-                            onClick={e => { e.stopPropagation(); setRevokeConfirmId(m.id) }}
-                            title={pt ? 'Revogar' : 'Revoke'}
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        )}
+                        <button
+                          style={{ ...ghostBtn, padding: '4px 8px', color: '#ef4444' }}
+                          onClick={e => { e.stopPropagation(); setRevokeConfirmId(m.id) }}
+                          title={pt ? 'Revogar' : 'Revoke'}
+                        >
+                          <Trash2 size={12} />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -1295,6 +1279,35 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
           <button style={ghostBtn} onClick={() => setEditMachineOpen(false)}>{pt ? 'Fechar' : 'Close'}</button>
         </div>
       </Drawer>
+
+      {/* Revoke machine confirm */}
+      <ConfirmModal
+        open={revokeConfirmId !== null}
+        title={pt ? 'Revogar máquina?' : 'Revoke machine?'}
+        message={(() => {
+          const name = machines.find(m => m.id === revokeConfirmId)?.machineName ?? ''
+          return pt
+            ? `A máquina "${name}" será revogada e suas sessões removidas. Esta ação não pode ser desfeita.`
+            : `Machine "${name}" will be revoked and its sessions removed. This action cannot be undone.`
+        })()}
+        confirmLabel={pt ? 'Revogar' : 'Revoke'}
+        cancelLabel={pt ? 'Cancelar' : 'Cancel'}
+        onConfirm={() => { if (revokeConfirmId) void revokeMachine(revokeConfirmId) }}
+        onCancel={() => setRevokeConfirmId(null)}
+      />
+
+      {/* Bulk delete confirm */}
+      <ConfirmModal
+        open={bulkDeleteConfirm}
+        title={pt ? `Excluir ${selectedIds.size} máquinas?` : `Delete ${selectedIds.size} machines?`}
+        message={pt
+          ? `${selectedIds.size} máquina(s) serão excluídas e suas sessões removidas. Esta ação não pode ser desfeita.`
+          : `${selectedIds.size} machine(s) will be deleted and their sessions removed. This action cannot be undone.`}
+        confirmLabel={pt ? 'Excluir' : 'Delete'}
+        cancelLabel={pt ? 'Cancelar' : 'Cancel'}
+        onConfirm={() => void bulkDelete()}
+        onCancel={() => setBulkDeleteConfirm(false)}
+      />
     </>
   )
 }

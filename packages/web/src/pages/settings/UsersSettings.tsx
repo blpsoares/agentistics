@@ -3,7 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import { Plus, Trash2, Copy, Check, Dice5, KeyRound, Pencil, X } from 'lucide-react'
 import { generatePassword } from '../../lib/password'
 import type { AppContext } from '../../lib/app-context'
-import { SectionHeader, Section, Checkbox, Select } from './primitives'
+import { SectionHeader, Section, Checkbox, Select, ConfirmModal } from './primitives'
 import { Drawer } from './Drawer'
 
 interface Team { _id: string; name: string }
@@ -138,6 +138,10 @@ export default function UsersSettings() {
   // Rename machine in edit drawer
   const [renamingMachineId, setRenamingMachineId] = useState<string | null>(null)
   const [renameMachineValue, setRenameMachineValue] = useState('')
+  // ── destructive-action confirmations (no silent delete/revoke/reset) ──
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string; email: string } | null>(null)
+  const [confirmRevoke, setConfirmRevoke] = useState<{ id: string; name: string } | null>(null)
+  const [confirmReset, setConfirmReset] = useState(false)
 
   function openAccountDrawer() {
     setAn(''); setAe(''); setAp(''); setAccountType('member'); setRows([{ teamId: '', role: 'user' }])
@@ -423,6 +427,12 @@ export default function UsersSettings() {
     cancel: pt ? 'Cancelar' : 'Cancel',
   }
 
+  // Team-role option labels (values stay 'user'/'manager'; only the display text clarifies the role).
+  const roleOptions = (owner: boolean) => [
+    { value: 'user', label: pt ? 'Usuário (leitura)' : 'User (read)' },
+    ...(owner ? [{ value: 'manager', label: pt ? 'Manager (gerencia o time)' : 'Manager (manages the team)' }] : []),
+  ]
+
   return (
     <div>
       <SectionHeader label={pt ? 'Usuários' : 'Users'} />
@@ -533,7 +543,7 @@ export default function UsersSettings() {
                     <button onClick={e => { e.stopPropagation(); void openEditDrawer(a) }} style={{ ...trashBtn, color: 'var(--text-tertiary)' }} aria-label="Edit account"><Pencil size={14} /></button>
                   )}
                   {canDeleteClient(a) && (
-                    <button onClick={e => { e.stopPropagation(); void deleteAccount(a.id) }} style={trashBtn} aria-label="Delete account"><Trash2 size={14} /></button>
+                    <button onClick={e => { e.stopPropagation(); setConfirmDelete({ id: a.id, name: a.name, email: a.email }) }} style={trashBtn} aria-label="Delete account"><Trash2 size={14} /></button>
                   )}
                 </td>
               </tr>
@@ -644,10 +654,7 @@ export default function UsersSettings() {
                     <Select
                       value={r.role}
                       onChange={v => updateRow(i, { role: v as 'manager' | 'user' })}
-                      options={[
-                        { value: 'user', label: 'user' },
-                        ...(viewerIsOwner ? [{ value: 'manager', label: 'manager' }] : []),
-                      ]}
+                      options={roleOptions(viewerIsOwner)}
                     />
                   </div>
                   <button type="button" onClick={() => removeRow(i)} disabled={rows.length === 1}
@@ -877,10 +884,7 @@ export default function UsersSettings() {
                     <Select
                       value={r.role}
                       onChange={v => updateERow(i, { role: v as 'manager' | 'user' })}
-                      options={[
-                        { value: 'user', label: 'user' },
-                        ...(viewerIsOwner ? [{ value: 'manager', label: 'manager' }] : []),
-                      ]}
+                      options={roleOptions(viewerIsOwner)}
                     />
                   </div>
                   <button type="button" onClick={() => removeERow(i)} disabled={eRows.length === 1}
@@ -988,7 +992,7 @@ export default function UsersSettings() {
                           <button
                             type="button"
                             style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }}
-                            onClick={() => window.confirm(pt ? 'Revogar esta máquina?' : 'Revoke this machine?') && void revokeMachine(m.id)}
+                            onClick={() => setConfirmRevoke({ id: m.id, name: m.machineName })}
                           >
                             {pt ? 'Revogar' : 'Revoke'}
                           </button>
@@ -1087,10 +1091,90 @@ export default function UsersSettings() {
           )}
         </Section>
 
+        {/* SECURITY SECTION — password recovery (no OTP): generate a one-time temp password.
+            Only shown when the viewer can edit this account and it is NOT their own account. */}
+        {canEditEdit && editAccount && editAccount.id !== me?.id && (
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 12 }}>
+              {pt ? 'Segurança' : 'Security'}
+            </div>
+            {tempPassword ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 14px', background: 'var(--bg-elevated)', border: '1px solid var(--anthropic-orange)', borderRadius: 7 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>
+                  {pt ? 'Senha temporária — copie agora' : 'Temporary password — copy now'}
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.4 }}>
+                  {pt ? 'Não será exibida novamente. O usuário deverá trocá-la no próximo login.' : 'It will not be shown again. The user must change it on next login.'}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {pt ? 'Senha temporária' : 'Temp password'}
+                  </span>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <code style={{ flex: 1, fontSize: 11.5, fontFamily: 'var(--font-mono, monospace)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: 'var(--text-primary)' }}>{tempPassword}</code>
+                    <button type="button" style={ghostBtn} onClick={e => { e.stopPropagation(); void copy('temp-password', tempPassword) }} aria-label="Copy temp password">
+                      {copied === 'temp-password' ? <Check size={13} /> : <Copy size={13} />}
+                    </button>
+                  </div>
+                  {copyFailed === 'temp-password' && (
+                    <span style={{ fontSize: 10, color: '#ef4444', lineHeight: 1.4 }}>
+                      {pt ? 'falha ao copiar — selecione manualmente' : 'copy failed — select manually'}
+                    </span>
+                  )}
+                </div>
+                <button type="button" style={ghostBtn} onClick={() => setTempPassword(null)}>{pt ? 'Fechar' : 'Close'}</button>
+              </div>
+            ) : (
+              <button type="button" style={ghostBtn} onClick={() => setConfirmReset(true)}>
+                <KeyRound size={13} /> {pt ? 'Resetar senha (gera temporária)' : 'Reset password (generates temp)'}
+              </button>
+            )}
+          </div>
+        )}
+
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
           <button style={ghostBtn} onClick={() => setEditOpen(false)}>{pt ? 'Fechar' : 'Close'}</button>
         </div>
       </Drawer>
+
+      {/* Destructive-action confirmations */}
+      <ConfirmModal
+        open={confirmDelete !== null}
+        title={pt ? 'Excluir conta?' : 'Delete account?'}
+        message={confirmDelete
+          ? (pt
+            ? `A conta "${confirmDelete.name}" (${confirmDelete.email}) será excluída permanentemente. Esta ação não pode ser desfeita.`
+            : `The account "${confirmDelete.name}" (${confirmDelete.email}) will be permanently deleted. This cannot be undone.`)
+          : ''}
+        confirmLabel={pt ? 'Excluir' : 'Delete'}
+        cancelLabel={pt ? 'Cancelar' : 'Cancel'}
+        onConfirm={() => { if (confirmDelete) void deleteAccount(confirmDelete.id); setConfirmDelete(null) }}
+        onCancel={() => setConfirmDelete(null)}
+      />
+      <ConfirmModal
+        open={confirmRevoke !== null}
+        title={pt ? 'Revogar máquina?' : 'Revoke machine?'}
+        message={confirmRevoke
+          ? (pt
+            ? `O token da máquina "${confirmRevoke.name}" será revogado e ela deixará de enviar métricas.`
+            : `The token for machine "${confirmRevoke.name}" will be revoked and it will stop sending metrics.`)
+          : ''}
+        confirmLabel={pt ? 'Revogar' : 'Revoke'}
+        cancelLabel={pt ? 'Cancelar' : 'Cancel'}
+        onConfirm={() => { if (confirmRevoke) void revokeMachine(confirmRevoke.id); setConfirmRevoke(null) }}
+        onCancel={() => setConfirmRevoke(null)}
+      />
+      <ConfirmModal
+        open={confirmReset}
+        title={pt ? 'Resetar a senha desta conta?' : 'Reset this account’s password?'}
+        message={pt
+          ? 'Uma senha temporária será gerada e exibida uma única vez. O usuário deverá trocá-la no próximo login.'
+          : 'A temporary password will be generated and shown once. The user must change it on next login.'}
+        confirmLabel={pt ? 'Resetar senha' : 'Reset password'}
+        cancelLabel={pt ? 'Cancelar' : 'Cancel'}
+        onConfirm={() => { setConfirmReset(false); void resetPassword() }}
+        onCancel={() => setConfirmReset(false)}
+      />
     </div>
   )
 }
