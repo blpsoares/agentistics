@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { GitBranch, Plus, Trash2, Copy, CheckCheck, AlertCircle, RefreshCw, Zap, ShieldCheck, ChevronRight } from 'lucide-react'
 import { repoShortName } from '@agentistics/core'
 import { copyText } from '../lib/clipboard'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 export interface RepoInfo {
   remote: string
@@ -95,6 +96,7 @@ export function TeamRepos({ lang }: Props) {
   const [centralUrl, setCentralUrl] = useState('')
   const [showFallback, setShowFallback] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
+  const isMobile = useIsMobile()
   const [removing, setRemoving] = useState<Record<string, boolean>>({})
 
   useEffect(() => { setCentralUrl(window.location.origin) }, [])
@@ -149,16 +151,21 @@ export function TeamRepos({ lang }: Props) {
     color: 'var(--text-primary)', background: 'var(--bg-card)', border: '1px solid var(--border)',
     borderRadius: 7, padding: '8px 10px', outline: 'none',
   }
+  // Wrapping is deliberately avoided: YAML and shell commands break when wrapped, and copying —
+  // not reading — is the real task on a phone. Cap the height instead so a 40-line workflow
+  // snippet cannot push the rest of the panel off screen.
   const codeBox: React.CSSProperties = {
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 11.5, lineHeight: 1.55,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: isMobile ? 11 : 11.5, lineHeight: 1.55,
     color: 'var(--text-secondary)', background: 'var(--bg-card)', border: '1px solid var(--border)',
     borderRadius: 7, padding: '10px 12px', whiteSpace: 'pre', overflowX: 'auto', margin: 0,
+    ...(isMobile ? { maxHeight: 240, overflowY: 'auto' as const } : {}),
   }
   const copyBtn = (key: string, text: string, label: string): React.ReactNode => (
     <button onClick={() => doCopy(key, text)} style={{
       display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600, fontFamily: 'inherit',
       color: copied === key ? '#22c55e' : 'var(--anthropic-orange)', background: 'transparent',
-      border: '1px solid var(--border)', borderRadius: 6, padding: '4px 9px', cursor: 'pointer',
+      border: '1px solid var(--border)', borderRadius: 6, padding: isMobile ? '0 9px' : '4px 9px', cursor: 'pointer',
+      ...(isMobile ? { width: '100%', minHeight: 44, justifyContent: 'center' } : {}),
     }}>
       {copied === key ? <CheckCheck size={12} /> : <Copy size={12} />} {copied === key ? t('copied', lang) : label}
     </button>
