@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Plus, Trash2, Settings } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
-import { SectionHeader, Select } from './primitives'
+import { SectionHeader, Section, Select } from './primitives'
 import { Drawer } from './Drawer'
 
 interface Team { _id: string; name: string }
@@ -103,6 +103,8 @@ export default function TeamsSettings() {
   const [addAccountId, setAddAccountId] = useState('')
   const [addAccountRole, setAddAccountRole] = useState<'manager' | 'user'>('user')
   const [addMachineId, setAddMachineId] = useState('')
+  // Per-section edit toggle inside the (read-first) manage drawer. Only one section edits at a time.
+  const [editingSection, setEditingSection] = useState<null | 'members' | 'machines'>(null)
 
   function openManageDrawer(teamId: string) {
     setManageTeamId(teamId)
@@ -110,6 +112,7 @@ export default function TeamsSettings() {
     setAddAccountId('')
     setAddAccountRole('user')
     setAddMachineId('')
+    setEditingSection(null)
     setManageOpen(true)
   }
 
@@ -173,6 +176,12 @@ export default function TeamsSettings() {
 
   const canManageTeam = (teamId: string) => viewerIsOwner || managedTeamIds.has(teamId)
   const manageTeam = teams.find(t => t._id === manageTeamId)
+  const canEditManage = manageTeamId ? canManageTeam(manageTeamId) : false
+  const sectionLabels = {
+    edit: pt ? 'Editar' : 'Edit',
+    save: pt ? 'Salvar' : 'Save',
+    cancel: pt ? 'Cancelar' : 'Cancel',
+  }
   const teamMembers = manageTeamId ? accounts.filter(a => a.memberships.some(m => m.teamId === manageTeamId)) : []
   const teamMachines = manageTeamId ? machines.filter(m => m.teamId === manageTeamId) : []
   const eligibleAccounts = accounts.filter(a => {
@@ -285,112 +294,168 @@ export default function TeamsSettings() {
       <Drawer open={manageOpen} onClose={() => setManageOpen(false)} title={manageTeam?.name ?? ''}>
         {drawerErr(manageErr)}
 
-        {/* Members section */}
-        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginTop: 4 }}>
-          {pt ? 'Membros' : 'Members'}
-        </div>
-        {teamMembers.length === 0 ? (
-          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '12px 0' }}>
-            {pt ? 'Nenhum membro neste time.' : 'No members in this team.'}
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {teamMembers.map(a => {
-              const membership = a.memberships.find(m => m.teamId === manageTeamId)
-              return (
-                <div key={a.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+        {/* MEMBERS SECTION (read-first; add/remove behind the section's Edit toggle) */}
+        <Section
+          title={pt ? 'Membros' : 'Members'}
+          editing={editingSection === 'members'}
+          canEdit={canEditManage}
+          onEdit={() => { setManageErr(null); setAddAccountId(''); setAddAccountRole('user'); setEditingSection('members') }}
+          onCancel={() => { setAddAccountId(''); setAddAccountRole('user'); setEditingSection(null) }}
+          onSave={() => { setAddAccountId(''); setAddAccountRole('user'); setEditingSection(null) }}
+          labels={sectionLabels}
+          editChildren={
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {teamMembers.length === 0 ? (
+                <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '4px 0' }}>
+                  {pt ? 'Nenhum membro neste time.' : 'No members in this team.'}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {teamMembers.map(a => {
+                    const membership = a.memberships.find(m => m.teamId === manageTeamId)
+                    return (
+                      <div key={a.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{a.name}</span>
+                            {membership && <RoleBadge role={membership.role} />}
+                          </div>
+                          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{a.email}</span>
+                        </div>
+                        <button type="button" style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }} onClick={() => window.confirm(pt ? 'Remover este membro?' : 'Remove this member?') && void removeAccountFromTeam(a.id, manageTeamId!)}>
+                          {pt ? 'Remover' : 'Remove'}
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* Add member row */}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+                <div style={{ flex: 2 }}>
+                  <Field label={pt ? 'Adicionar membro' : 'Add member'}>
+                    <Select
+                      value={addAccountId}
+                      onChange={v => setAddAccountId(v)}
+                      options={[
+                        { value: '', label: pt ? 'Selecione…' : 'Select…' },
+                        ...eligibleAccounts.map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
+                      ]}
+                      placeholder={pt ? 'Selecione…' : 'Select…'}
+                    />
+                  </Field>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <Field label={pt ? 'Papel' : 'Role'}>
+                    <Select
+                      value={addAccountRole}
+                      onChange={v => setAddAccountRole(v as 'manager' | 'user')}
+                      options={roleOptions}
+                    />
+                  </Field>
+                </div>
+                <button type="button" style={{ ...primaryBtn, marginBottom: 0 }} onClick={() => void addAccountToTeam()} disabled={!addAccountId}>
+                  <Plus size={13} />
+                </button>
+              </div>
+            </div>
+          }
+        >
+          {teamMembers.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '4px 0' }}>
+              {pt ? 'Nenhum membro neste time.' : 'No members in this team.'}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {teamMembers.map(a => {
+                const membership = a.memberships.find(m => m.teamId === manageTeamId)
+                return (
+                  <div key={a.id} style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{a.name}</span>
                       {membership && <RoleBadge role={membership.role} />}
                     </div>
                     <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{a.email}</span>
                   </div>
-                  <button type="button" style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }} onClick={() => window.confirm(pt ? 'Remover este membro?' : 'Remove this member?') && void removeAccountFromTeam(a.id, manageTeamId!)}>
-                    {pt ? 'Remover' : 'Remove'}
-                  </button>
+                )
+              })}
+            </div>
+          )}
+        </Section>
+
+        {/* MACHINES SECTION (read-first; attach/detach behind the section's Edit toggle) */}
+        <Section
+          title={pt ? 'Máquinas' : 'Machines'}
+          editing={editingSection === 'machines'}
+          canEdit={canEditManage}
+          onEdit={() => { setManageErr(null); setAddMachineId(''); setEditingSection('machines') }}
+          onCancel={() => { setAddMachineId(''); setEditingSection(null) }}
+          onSave={() => { setAddMachineId(''); setEditingSection(null) }}
+          labels={sectionLabels}
+          editChildren={
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {teamMachines.length === 0 ? (
+                <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '4px 0' }}>
+                  {pt ? 'Nenhuma máquina neste time.' : 'No machines in this team.'}
                 </div>
-              )
-            })}
-          </div>
-        )}
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {teamMachines.map(m => (
+                    <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                          {m.accountName ? `${m.accountName} — ${m.accountEmail}` : m.user} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
+                        </span>
+                      </div>
+                      <button type="button" style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }} onClick={() => window.confirm(pt ? 'Remover desta equipe?' : 'Remove from team?') && void removeMachineFromTeam(m.id)}>
+                        {pt ? 'Remover' : 'Remove'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
 
-        {/* Add member row */}
-        <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', marginTop: 8 }}>
-          <div style={{ flex: 2 }}>
-            <Field label={pt ? 'Adicionar membro' : 'Add member'}>
-              <Select
-                value={addAccountId}
-                onChange={v => setAddAccountId(v)}
-                options={[
-                  { value: '', label: pt ? 'Selecione…' : 'Select…' },
-                  ...eligibleAccounts.map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
-                ]}
-                placeholder={pt ? 'Selecione…' : 'Select…'}
-              />
-            </Field>
-          </div>
-          <div style={{ flex: 1 }}>
-            <Field label={pt ? 'Papel' : 'Role'}>
-              <Select
-                value={addAccountRole}
-                onChange={v => setAddAccountRole(v as 'manager' | 'user')}
-                options={roleOptions}
-              />
-            </Field>
-          </div>
-          <button type="button" style={{ ...primaryBtn, marginBottom: 0 }} onClick={() => void addAccountToTeam()} disabled={!addAccountId}>
-            <Plus size={13} />
-          </button>
-        </div>
-
-        {/* Machines section */}
-        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 18, marginTop: 12 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 14 }}>
-            {pt ? 'Máquinas' : 'Machines'}
-          </div>
+              {/* Add machine row */}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+                <div style={{ flex: 1 }}>
+                  <Field label={pt ? 'Adicionar máquina' : 'Add machine'}>
+                    <Select
+                      value={addMachineId}
+                      onChange={v => setAddMachineId(v)}
+                      options={[
+                        { value: '', label: pt ? 'Selecione…' : 'Select…' },
+                        ...eligibleMachines.map(m => ({ value: m.id, label: `${m.machineName} — ${m.accountName ?? m.user}` })),
+                      ]}
+                      placeholder={pt ? 'Selecione…' : 'Select…'}
+                    />
+                  </Field>
+                </div>
+                <button type="button" style={{ ...primaryBtn, marginBottom: 0 }} onClick={() => void addMachineToTeam()} disabled={!addMachineId}>
+                  <Plus size={13} />
+                </button>
+              </div>
+            </div>
+          }
+        >
           {teamMachines.length === 0 ? (
-            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '12px 0' }}>
+            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', padding: '4px 0' }}>
               {pt ? 'Nenhuma máquina neste time.' : 'No machines in this team.'}
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {teamMachines.map(m => (
-                <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                      {m.accountName ? `${m.accountName} — ${m.accountEmail}` : m.user} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
-                    </span>
-                  </div>
-                  <button type="button" style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }} onClick={() => window.confirm(pt ? 'Remover desta equipe?' : 'Remove from team?') && void removeMachineFromTeam(m.id)}>
-                    {pt ? 'Remover' : 'Remove'}
-                  </button>
+                <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                    {m.accountName ? `${m.accountName} — ${m.accountEmail}` : m.user} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
+                  </span>
                 </div>
               ))}
             </div>
           )}
-
-          {/* Add machine row */}
-          <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', marginTop: 8 }}>
-            <div style={{ flex: 1 }}>
-              <Field label={pt ? 'Adicionar máquina' : 'Add machine'}>
-                <Select
-                  value={addMachineId}
-                  onChange={v => setAddMachineId(v)}
-                  options={[
-                    { value: '', label: pt ? 'Selecione…' : 'Select…' },
-                    ...eligibleMachines.map(m => ({ value: m.id, label: `${m.machineName} — ${m.accountName ?? m.user}` })),
-                  ]}
-                  placeholder={pt ? 'Selecione…' : 'Select…'}
-                />
-              </Field>
-            </div>
-            <button type="button" style={{ ...primaryBtn, marginBottom: 0 }} onClick={() => void addMachineToTeam()} disabled={!addMachineId}>
-              <Plus size={13} />
-            </button>
-          </div>
-        </div>
+        </Section>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border-subtle)' }}>
           <button style={ghostBtn} onClick={() => setManageOpen(false)}>{pt ? 'Fechar' : 'Close'}</button>
