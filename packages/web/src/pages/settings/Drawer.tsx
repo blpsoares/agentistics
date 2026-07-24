@@ -5,8 +5,10 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 // Right-side slide-in panel + backdrop, full-screen on mobile.
 // Shared by the governance settings pages (Users / Teams). Extracted from the
 // old combined governance page so both split pages reuse the same panel.
-export function Drawer({ open, title, onClose, children }: {
+export function Drawer({ open, title, onClose, children, footer }: {
   open: boolean; title: string; onClose: () => void; children: React.ReactNode
+  /** Optional action bar pinned to the bottom of the panel — for a drawer-wide save button. */
+  footer?: React.ReactNode
 }) {
   const isMobile = useIsMobile()
   if (!open) return null
@@ -47,9 +49,18 @@ export function Drawer({ open, title, onClose, children }: {
             <X size={18} />
           </button>
         </div>
-        <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12, flex: 1 }}>
           {children}
         </div>
+        {footer && (
+          <div style={{
+            position: 'sticky', bottom: 0, zIndex: 1,
+            padding: '12px 18px', borderTop: '1px solid var(--border)', background: 'var(--bg-card)',
+            display: 'flex', gap: 8, justifyContent: 'flex-end',
+          }}>
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   )

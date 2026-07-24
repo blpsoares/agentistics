@@ -182,13 +182,15 @@ export function Section({ title, editing, onEdit, onCancel, onSave, canEdit = tr
   labels?: { edit: string; save: string; cancel: string }
 }) {
   const l = labels ?? { edit: 'Edit', save: 'Save', cancel: 'Cancel' }
+  const isMobile = useIsMobile()
   return (
     <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase' }}>{title}</div>
         {canEdit && !editing && (
           <button type="button" onClick={onEdit} style={{
-            display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 7,
+            display: 'inline-flex', alignItems: 'center', gap: 5, padding: isMobile ? '0 12px' : '5px 10px',
+            minHeight: isMobile ? 40 : undefined, borderRadius: 7,
             border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)',
             fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
           }}><Pencil size={12} /> {l.edit}</button>
@@ -197,14 +199,23 @@ export function Section({ title, editing, onEdit, onCancel, onSave, canEdit = tr
       {editing ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {editChildren}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          {/* column-reverse puts Save above Cancel visually while keeping Cancel first in the
+              DOM, so the thumb lands on the confirming action, not the discarding one. */}
+          <div style={{
+            display: 'flex', gap: 8, justifyContent: 'flex-end',
+            flexDirection: isMobile ? 'column-reverse' : 'row',
+          }}>
             <button type="button" onClick={onCancel} style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 7,
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              padding: isMobile ? '0 12px' : '7px 12px', minHeight: isMobile ? 44 : undefined,
+              width: isMobile ? '100%' : undefined, borderRadius: 7,
               border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)',
               fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
             }}>{l.cancel}</button>
             <button type="button" onClick={onSave} style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '8px 14px', borderRadius: 7,
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              padding: isMobile ? '0 14px' : '8px 14px', minHeight: isMobile ? 44 : undefined,
+              width: isMobile ? '100%' : undefined, borderRadius: 7,
               border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
               fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
             }}><Check size={14} /> {l.save}</button>
