@@ -120,7 +120,7 @@ English by project convention; conversation with the user is Portuguese.
 - **Recommendation:** build next session with the pending security review (touches the same
   Teams/Users/Machines authz surface). Bounded part (#auto-suggest) could ship first.
 
-#### C4 — Dedicated mobile UI (ULTRA IMPORTANT) ⬜
+#### C4 — Dedicated mobile UI (ULTRA IMPORTANT) 🟨
 - **Problem:** after heavy desktop UI work (settings pages, governance/Users/Teams/Machines drawers,
   Select/Checkbox primitives, machine edit drawer, member sidebar status, filters), the **mobile
   experience needs a dedicated pass** to keep UI/UX quality. Governance drawers, tables, the new
@@ -128,7 +128,29 @@ English by project convention; conversation with the user is Portuguese.
 - **Follow the existing mobile conventions** (CLAUDE.md): `useIsMobile()` (768px), `MobileBottomNav`
   + "More" sheet, full-screen modals/drawers on mobile, `overflow-x: clip` iOS fix, collapsible
   `FiltersBar`. Audit every governance/settings surface added during B4-EXT for mobile.
-- **Spec:** _(write next session)_
+- **Spec:** [2026-07-24-c4-mobile-ui-design.md](specs/2026-07-24-c4-mobile-ui-design.md)
+- **Plan:** [plans/2026-07-24-c4-mobile-ui.md](plans/2026-07-24-c4-mobile-ui.md) — 10 tasks, executed inline
+- **Implemented** (commits `c779325`..`c7e7929` on `dev`; tsc clean, 362 tests, build ok after each task):
+  1. **Account access on mobile** — the profile menu lived only in `SideNav`, which is `!isMobile`,
+     so a phone had **no way to log out or change the password**. The "More" sheet gains an account
+     block that swaps the tile grid for Change password / Log out, plus Theme and Language tiles.
+  2. **Governance lists** — Users / Teams / Machines branch `isMobile` into a `RecordCard` list
+     (new primitive); the desktop `<table>` is untouched. Machines cards carry all three row
+     actions (edit / rotate / revoke) and a 44px select-all row.
+  3. **Primitives** — `Drawer` gains an optional sticky `footer`; `Section` actions go full-width
+     44px (Save above Cancel); `Select` flips its popover up when it would overflow, guards iOS
+     zoom, hits 44px, and its hardcoded PT `"Buscar…"` became a `searchPlaceholder` prop defaulting
+     to `'Search…'`; `ConfirmModal` stacks its actions.
+  4. **Header parity** — mobile gets the filtered totals strip + the fleet chips, reusing the
+     existing `fleetOpen`/`toggleFleet` state so the choice survives a resize.
+  5. **Sweep** — `TeamRepos` code blocks capped + full-width copy; `DeployCentral`'s ~19px floating
+     copy icon became a 44px full-width control; `FiltersBar` `PickerRow` (every dimension, incl.
+     the C3 teams/machines/members) hits 44px. A **global iOS zoom guard** went into `index.css`
+     (`@media (max-width: 767px)`, `font-size: 16px !important` on fields) because the governance
+     pages style inputs with module-level inline objects a hook cannot reach.
+- **Remaining:** the 390px visual sweep on the real central, as owner and as a plain user. Blocked
+  when implemented: both running `dev:central` vite instances were serving a **stale `App.tsx`
+  transform** and `bun.exe` (Windows) held 47291 — restart one run from the Linux bun first.
 
 #### B4-EXT — Accounts ↔ Machines governance + first-login password ✅
 - **What:** machines owned by accounts (token gains `accountId`+machineName); create account with/without a machine; random password + **forced first-login change** (`mustChangePassword` + `POST /api/iam/change-password`); **1 account : N machines**; owner registers machines for any account & grants managers visibility via team memberships (**account PATCH/edit**); Machines page becomes a **scoped view**; `whoami` extended so the machine shows its identity; **Central connection** settings section restored on solo/member (regression fix `87f6671`).
