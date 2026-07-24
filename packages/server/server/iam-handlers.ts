@@ -460,6 +460,10 @@ export async function handleMachines(req: Request): Promise<Response> {
     if (reassignId) {
       const machine = (await listMachines()).find(m => m.id === reassignId)
       if (!machine) return json({ error: 'machine not found' }, 404)
+      // You must ALREADY manage the machine to change its teams — otherwise a manager could seize a
+      // machine they only observed the id of (via a shared/Default team) by attaching it to a team
+      // they manage, then rotate/revoke/re-own it. Owner bypasses.
+      if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
       const current = machine.teamIds && machine.teamIds.length ? machine.teamIds : (machine.teamId ? [machine.teamId] : [])
       const addTeamId = typeof b.addTeamId === 'string' && b.addTeamId ? b.addTeamId : ''
       const removeTeamId = typeof b.removeTeamId === 'string' && b.removeTeamId ? b.removeTeamId : ''
@@ -473,15 +477,15 @@ export async function handleMachines(req: Request): Promise<Response> {
         if (!canManageMachineTeam(principal, removeTeamId)) return json({ error: 'forbidden' }, 403)
         next = current.filter(t => t !== removeTeamId)
       } else {
-        // Replace the whole set. A non-owner must manage every team involved (old ∪ new, except the
-        // Default catch-all) so a replace can't drop or add teams outside their scope.
+        // Replace the whole set. A non-owner must manage EVERY team involved (old ∪ new) — no Default
+        // exemption — so a replace can't drop or add teams outside their scope.
         const raw = Array.isArray(b.teamIds) ? b.teamIds.filter((x): x is string => typeof x === 'string' && !!x)
           : (typeof b.teamId === 'string' && b.teamId ? [b.teamId] : [])
         next = [...new Set(raw)]
         for (const t of next) if (!(await getTeam(t))) return json({ error: 'team not found' }, 404)
         if (principal.role !== 'owner') {
           const involved = [...new Set([...current, ...next])]
-          const ok = involved.every(t => t === DEFAULT_TEAM_ID || canManageMachineTeam(principal, t))
+          const ok = involved.every(t => canManageMachineTeam(principal, t))
           if (!ok) return json({ error: 'forbidden' }, 403)
         }
       }
