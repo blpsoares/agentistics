@@ -24,12 +24,13 @@ packages/server/bin/cli.ts  (binary entry point — agentop)
   ├── agentop start        → server/cli-start.ts (interactive arrow-key launcher; EN default + pt-BR toggle; non-TTY stdin falls through to `server`)
   ├── agentop setup        → server/cli-setup.ts (interactive solo/central/member wizard; bare `agentop` on a TTY when unconfigured)
   ├── agentop server       → server/index.ts + server/otel-watcher.ts (always together)
-  ├── agentop restart …    → server/autostart.ts restartAutostart (bounce a mode's systemd service; `central` → central.sh restart)
+  ├── agentop restart …    → bounce a mode's service (`server`/`watch` → systemd; `central` → central.sh restart; `--all` → cli-start.ts restartAllServices over every running service). `--rebuild` recreates the Docker image/container instead of bouncing (`central` → `up`; machine → `compose up -d --build`); native server ignores it (use `bun bin`/`upgrade`)
   ├── agentop tui          → ../../web/src/tui/index.ts (standalone)
   ├── agentop watch        → server/otel-watcher.ts (daemon only)
   ├── agentop central …    → server/cli-central.ts (wraps central.sh: up/init/down/logs/status/restart/pull)
   ├── agentop member …     → server/cli-member.ts (connect/leave/status; whoami-verified, no browser)
-  ├── agentop autostart …  → server/autostart.ts (systemd user service + linger + ~/.bashrc update-check hook)
+  ├── agentop ci-push      → server/ci-push.ts (one-shot GitHub Actions runner → central push; env AGENTISTICS_CENTRAL_URL/AGENTISTICS_CI_TOKEN)
+  ├── agentop autostart …  → server/autostart.ts (systemd user service + linger + ~/.bashrc + ~/.zshrc update-check hook)
   ├── agentop upgrade      → server/upgrade.ts
   └── agentop check-update → server/version.ts (prints a banner only when outdated; silent otherwise)
 
@@ -51,9 +52,9 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── otel-watcher.ts      → chokidar file watcher + OTLP metrics export daemon
   ├── preferences.ts       → ~/.agentistics prefs incl. team config (mode/endpoint/token/user)
   ├── version.ts           → getVersionInfo (current vs latest); drives update banners/notifications
-  ├── autostart.ts         → systemd user service + loginctl linger + ~/.bashrc update-check hook
+  ├── autostart.ts         → systemd user service + loginctl linger + ~/.bashrc + ~/.zshrc update-check hook
   ├── cli-setup.ts / cli-central.ts / cli-member.ts → the agentop setup/central/member command handlers
-  ├── cli-start.ts         → the `agentop start` interactive launcher (config vs running status, start agentistics / agentistics central, connect/disconnect, stop, language)
+  ├── cli-start.ts         → the `agentop start` interactive launcher (config vs running status, start agentistics / agentistics central, connect/disconnect, restart-all, stop, language)
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
   ├── cli-i18n.ts          → EN/PT strings for the launcher (CLI is English by default; language follows --lang / preferences.lang / the in-launcher toggle)
   ├── team-tokens.ts       → mint / rotate / revoke / validate tokens (stored as sha256 hashes only)
@@ -62,6 +63,9 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── team-source.ts / team-admin.ts → central-side team read for buildApiResponse + members-panel admin routes
   ├── team-uploader.ts     → member→central push: sent-state, sync-signature auto-reconcile, push-on-change (notifyDataChanged), auto-reset on revoke, /api/team/status pill
   ├── team-watch.ts        → central watches the team collection → SSE refresh (fallback)
+  ├── team-repos.ts        → central repo registry (`repos` collection): registerRepo (mints a repo-bound CI token + records name/remote; re-register rotates), listRepos, unregisterRepo
+  ├── ci-push.ts           → `agentop ci-push`: one-shot push of an ephemeral GitHub Actions runner's ~/.claude metrics to a central; prefers keyless OIDC (fetches the runner's id-token), falls back to a static token; never fails the CI job on a push error
+  ├── team-oidc.ts         → verifies GitHub Actions OIDC JWTs (jose createRemoteJWKSet + jwtVerify; issuer/audience/expiry) for keyless CI ingest; pure helpers pickCiClaims/looksLikeJwt/ciMemberId
   ├── team-agent.ts / team-agent-client.ts → reverse-channel WebSocket: WS-authoritative presence signals, ping/pong latency, on-demand chat fetch
   ├── team-presence.ts     → computePresence (WS-authoritative online/offline + latency; heartbeat only for pure-HTTP members)
   ├── central-config.ts    → Mongo central config: instanceId + pushIntervalSec + includeOfflineData
@@ -90,6 +94,9 @@ packages/web/src/ (React + Vite, port 47292 in dev)
   │   ├── CustomPage.tsx        → custom layout builder (/custom route)
   │   ├── CostsPage.tsx         → cost deep-dive page
   │   ├── ProjectsPage.tsx      → projects overview page
+  │   ├── RepositoriesPage.tsx  → repositories overview (/repositories): cards grouped by normalized git remote (RepositoriesList) so the same repo unifies across devs/paths/machines. **Only repos WITH a remote are shown by default** — remote-less sessions can't be attributed to a repo (and would split the same repo's metrics across machines), so they're hidden behind an "Unlinked · N" toggle. Links to /repo/:id
+  │   ├── RepoDetailPage.tsx    → per-repo detail (/repo/:id): scopes a repo via an overridden `repos` filter (no global filter mutation) + tabs Overview/Members/Actions/Sessions/Dynamic Workflows. The "Actions" tab shows only when the repo has CI sessions; the "Dynamic Workflows" tab shows only when the repo has workflow runs from a `dynamicWorkflows`-capable harness, and renders each run as a step-by-step timeline (phases → agents) with a harness badge, and offers an "All / By session" view toggle that groups runs per session (see `lib/workflowSteps.ts` `buildWorkflowSteps` + `groupRunsBySession`)
+  │   ├── ActionsPage.tsx       → /repositories/actions: all CI-runner sessions (SessionMeta.ci) grouped by repo — the GitHub Actions submenu of Repositories
   │   ├── ToolsPage.tsx         → tools breakdown page
   │   ├── HarnessPage.tsx       → generic per-harness dashboard at /h/:harness (validates param; sets harness filter; tab bar: "Overview" = dashboard, "Data & sources" = HarnessInfoPanel); replaced the old hardcoded CodexPage
   │   └── ComparePage.tsx       → unified side-by-side comparison at /compare (per-harness colors; N/A for incapable metrics; sessions/messages/tokens/cost + comparatives: usage-by-hour with peak hour, busiest day-of-week, activity-over-time sparkline, peak token day / peak session cost)
@@ -99,6 +106,7 @@ packages/web/src/ (React + Vite, port 47292 in dev)
       ├── HarnessInfoPanel.tsx  → inline panel explaining each harness's data sources / what's captured / what's missing (and why) / caveats; driven by HARNESS_INFO in lib/harness.ts
       ├── PreferencesModal.tsx  → unified Settings modal with tabs: Preferences / Live / Install (Environment tab removed)
       ├── TeamLogin.tsx / TeamMembers.tsx / TeamSettings.tsx → central: password login, members panel (mint/rotate/revoke/rename + presence), team settings (interval/express, offline-data policy)
+  ├── TeamRepos.tsx         → central admin panel rendered in its own **"GitHub Repositories"** Settings tab (central-only, separate from the Team tab): register/unregister repos (POST/DELETE /api/team/repos) + generates a ready-to-paste GitHub Actions workflow snippet + `gh` setup commands with the minted CI token
       ├── DeployCentral.tsx / PresenceFilter.tsx / MemberConnectionStatus.tsx → central deploy help, online/offline member filter, member-side connection pill
       └── NotificationToasts.tsx / NotificationBell.tsx / UpdateModal.tsx → auto-dismiss toasts, header bell (history + unread badge), mode-aware upgrade modal
 
@@ -128,7 +136,7 @@ Agentistics tracks sessions from multiple AI coding assistants (harnesses), not 
 
 ### N/A vs real 0 — `HARNESS_CAPABILITIES`
 
-`HARNESS_CAPABILITIES` in `@agentistics/core` (`packages/core/src/types.ts`) is the single source of truth for which metrics each harness can produce. When a capability flag is `false`, the frontend renders "N/A" via the `NAtag` component + `capable(harness, metric)` helper (re-exported from `lib/harness.ts`), rather than showing a misleading 0. Current limitations: Codex, Gemini, and Copilot do not produce agent metrics or git line counts (those capabilities are `false` for non-Claude harnesses).
+`HARNESS_CAPABILITIES` in `@agentistics/core` (`packages/core/src/types.ts`) is the single source of truth for which metrics each harness can produce. When a capability flag is `false`, the frontend renders "N/A" via the `NAtag` component + `capable(harness, metric)` helper (re-exported from `lib/harness.ts`), rather than showing a misleading 0. Current limitations: Codex, Gemini, and Copilot do not produce agent metrics or git line counts (those capabilities are `false` for non-Claude harnesses). `dynamicWorkflows` (runs of the multi-agent orchestration Workflow tool) is `true` only for `claude` — it gates the repo-detail "Dynamic Workflows" tab.
 
 ### Aggregation — stats-cache.json is Claude-only
 
@@ -155,6 +163,60 @@ The consolidate store is namespaced by harness: `~/.agentistics/sessions/<harnes
 - **Phase 3** (planned): Gemini OTel integration for real token/cost data.
 
 See `docs/superpowers/specs/2026-06-19-multi-harness-tracking-design.md` for the full design.
+
+---
+
+## Repository dimension (group by git remote)
+
+Metrics can be grouped **by repository** (git remote) independent of the local path or which
+machine produced them — so a repo's usage aggregates across all devs and CI agents. See
+`docs/github-actions.md` for the GitHub Actions half.
+
+### The key — `normalizeGitRemote` (single source of truth)
+
+`normalizeGitRemote(url)` in `@agentistics/core` (`packages/core/src/types.ts`) collapses any
+remote form (https / ssh / scp / git, with or without credentials/port/`.git`) into a stable,
+**protocol-less** key `host/org/repo` (e.g. `github.com/org/repo`). Host is lowercased, path case
+preserved. Returns `''` for local paths / `file://` / junk. **Never key repos by anything else.**
+`repoShortName(remote)` drops the host for display (`org/repo`).
+
+### How it's captured and threaded
+
+- `git.ts getGitRemote(projectPath)` reads `remote.origin.url` (same Windows/WSL + no-prompt guards
+  as the stats helpers) and normalizes it.
+- `data.ts scanProjectDir` resolves the remote once per project and **stamps `SessionMeta.git_remote`
+  onto every session** (+ `ServerProject.gitRemote`). Because it lives on the session, the remote
+  travels into the consolidate store → team uploader → Mongo — the central has no filesystem access
+  to members' repos, so per-session is the only place it can live.
+- Frontend: `useDerivedStats` builds `repoStats` (per-remote aggregate; `remote === ''` = the
+  "no linked repository" bucket, never hidden) and honors a `Filters.repos` filter (scopes cost/
+  tokens session-side like a project filter). `RepoStat` is exported from `hooks/useData.ts`.
+
+### GitHub Actions — `SessionMeta.ci` + repo-bound tokens
+
+An ephemeral Claude Code Actions runner pushes its metrics via `agentop ci-push` →
+`POST /api/team/ingest`. Auth is **keyless GitHub OIDC** (preferred): the runner presents a
+short-lived GitHub-signed JWT, the central verifies it against GitHub's JWKS (`team-oidc.ts`, uses
+`jose`) and checks the `repository` claim against the **registered repos allowlist** — no secret is
+stored. A **repo-bound static token** (minted by `POST /api/team/repos`) is the fallback. Either
+way the central **authoritatively stamps** `git_remote` + `ci: true` + `user = github-actions` (via
+`stampCiSessions`) — a runner cannot mis-report its repo. CI sessions are keyed by `ciMemberId`
+(`repo:<remote>`). `ci === true` sessions power the **Repositories → Actions** view. Enable OIDC by
+setting `AGENTISTICS_OIDC_AUDIENCE` on the central (the workflow requests that same audience).
+
+Cloud runners need the central reachable without exposing the dashboard. `AGENTISTICS_INGEST_ONLY=1`
+(config.ts) makes a central serve **only** `POST /api/team/ingest` (404 for everything else, checked
+right after the OPTIONS handler in `index.ts`) — run it as a public ingest instance sharing Mongo
+with a separate private dashboard instance. See `docs/github-actions.md`.
+
+### Repository rules
+
+- **`normalizeGitRemote` is the only way to key a repo** — never parse `project_path` strings.
+- **`git_remote` lives on the session** (not only the project) so it reaches the central.
+- **CI attribution is server-authoritative** — stamped from the repo token, never trusted from the
+  runner's payload.
+- **`stats-cache.json` stays Claude-only** — repo/CI aggregates come from per-session sums, same as
+  every non-Claude dimension.
 
 ---
 
@@ -340,7 +402,8 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
   - **Sticky header** holds everything needed for interaction. On mobile the header shows only the logo; the lang/theme/export/settings/health/live/refresh controls are **not** in the top row — they live in the bottom-nav "More" sheet (see below). Desktop keeps the full action row.
   - **`MobileBottomNav`** (in `App.tsx`) is the only mobile chrome: 4 primary tabs (Home/Costs/Projects/Tools) + a **"More" bottom sheet rendered as a 3-column grid of square tiles** (Custom / Export / Compare when >1 harness, plus the moved actions: Live toggle w/ interval badge, Refresh, Settings, Warnings w/ issue count). The More button shows a dot when health warnings exist. The sheet slides in via a `transform` transition. Do not move these actions back into the top header on mobile, and keep the tiles compact (no square `aspect-ratio`).
   - **Collapsible filter bar**: on mobile the full `FiltersBar` (harness chips + date/projects/models) sits in the sticky header and can be minimized to a slim "Filters" row (with an active-filter count badge) via `filtersCollapsed`. The open/close is animated with a `grid-template-rows: 0fr↔1fr` transition. The animation wrapper needs `overflow: hidden`, which would clip the Models popover — so it's only clipped while animating/collapsed (`filtersClip` + `onTransitionEnd`), then switches to `visible`.
-  - **`FiltersBar` `compact` prop** (used on mobile): hides the vestigial vertical dividers and tightens padding. On mobile the controls also stretch to fill each row (date presets `flex:1`, custom range full-width, Projects/Models 50/50) so there's no ragged empty space. Harness chips use short labels (first word) and flex-grow.
+  - **`FiltersBar` `compact` prop** (used on mobile): hides the vestigial vertical dividers and tightens padding. On mobile the controls also stretch to fill each row (date presets `flex:1`, custom range full-width, the ＋ Filtro button full-width).
+  - **`FiltersBar` "＋ Filtro" model**: the top bar shows only the date presets + custom range + a single dashed **＋ Filtro** button (with an active-dimension count badge). It opens a menu of the *available* dimensions (Members/Harnesses/Presence shown only on central-with-data; Repos only when a repo dimension exists; Projects/Models when present); picking one opens that dimension's inline value picker (Projects opens the full `ProjectsModal`). The selected values are NOT shown in the top bar — they render in the animated per-category chip rows below (`AnimatedRow`/`ChipRow`/`FilterChip`, one row per dimension incl. Presence). Do not re-add always-visible dimension dropdowns to the top bar.
   - **Full-screen modals on mobile**: ProjectsModal, SessionDrilldownModal, PreferencesModal, the transcript viewer, etc. render full-screen (overlay padding 0, width/height 100%, `borderRadius: 0`) — iOS Safari pushes centered fixed-width modals off-screen when the page overflows horizontally.
   - **iOS sticky fix**: mobile `html, body, #root` use `overflow-x: clip` (NOT `hidden`) in `index.css` — `hidden` forces `overflow-y` to compute to `auto`, creating a scroll container that breaks `position: sticky`. `clip` clips without that side effect.
   - **iOS install/PWA**: iOS has no `beforeinstallprompt`; InstallModal/Install tab detect iOS and show Add-to-Home-Screen steps instead of an install button. The data cache in `useData.ts` (`agentistics-data-cache-v1` in localStorage) gives instant reopen over plain HTTP (service worker needs HTTPS/localhost).

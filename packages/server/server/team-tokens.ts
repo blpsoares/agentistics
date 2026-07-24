@@ -20,6 +20,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import type { Collection } from 'mongodb'
 import { getMongoDb } from './mongo'
 import { teamDocId, type TeamSessionDoc } from './team-store'
+import { DEFAULT_TEAM_ID } from './teams'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,6 +32,31 @@ export interface TokenDoc {
   label: string
   createdAt: string
   lastSeenAt: string | null
+  /** Normalized git remote (`host/org/repo`) this token is bound to, for repo/CI tokens.
+   *  When set, ingest stamps every pushed session's `git_remote` with this value authoritatively. */
+  repo?: string
+  /** True for GitHub Actions / CI tokens — ingest stamps `ci: true` on every pushed session. */
+  ci?: boolean
+  /** Primary team (teamIds[0]) — kept for back-compat / read-time single-value consumers. */
+  teamId?: string
+  /** All teams a machine belongs to — a machine can be in several teams (visible to any of them). */
+  teamIds?: string[]
+  /** Primary owning account (accountIds[0]) — kept for whoami/back-compat. */
+  accountId?: string
+  /** All owning accounts for machine tokens — a machine can be owned/managed by several accounts. */
+  accountIds?: string[]
+}
+
+/** Canonical owner-account id list for a token (handles legacy single-accountId docs). */
+export function ownerIdsOf(doc: Pick<TokenDoc, 'accountId' | 'accountIds'>): string[] {
+  if (doc.accountIds && doc.accountIds.length) return doc.accountIds
+  return doc.accountId ? [doc.accountId] : []
+}
+
+/** Canonical team-id list for a token (handles legacy single-teamId docs). */
+export function teamIdsOf(doc: Pick<TokenDoc, 'teamId' | 'teamIds'>): string[] {
+  if (doc.teamIds && doc.teamIds.length) return doc.teamIds
+  return doc.teamId ? [doc.teamId] : []
 }
 
 export type MemberInfo = {
@@ -42,6 +68,18 @@ export type MemberInfo = {
   /** Live status — populated by the members endpoint from the presence snapshot. */
   online?: boolean
   latencyMs?: number | null
+}
+
+export type MachineInfo = {
+  id: string
+  accountId?: string        // primary owner (accountIds[0]) — kept for compatibility
+  accountIds: string[]      // all owner accounts
+  machineName: string
+  user: string
+  teamId?: string           // primary team (teamIds[0]) — kept for compatibility
+  teamIds: string[]         // all teams the machine belongs to
+  createdAt: string
+  lastSeenAt: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -73,9 +111,10 @@ async function getTokensCollection(): Promise<Collection<TokenDoc>> {
  * Mint a new random ingest token. Stores only the SHA-256 hash in Mongo.
  * Returns the plaintext token (shown once; never stored or logged here).
  */
-export async function mintToken(user: string, label: string): Promise<string> {
-  // 32 random bytes → 64-char hex string (256 bits of entropy)
-  const token = randomBytes(32).toString('hex')
+export async function mintToken(user: string, label: string, opts?: { repo?: string; ci?: boolean; accountId?: string; teamId?: string }): Promise<string> {
+  // 32 random bytes → 64-char hex string (256 bits of entropy). Repo/CI tokens use 48 bytes
+  // (96-char) — longer since they live as a GitHub Actions secret with broader blast radius.
+  const token = randomBytes(opts?.ci ? 48 : 32).toString('hex')
   const id = hashToken(token)
   const doc: TokenDoc = {
     _id: id,
@@ -83,6 +122,10 @@ export async function mintToken(user: string, label: string): Promise<string> {
     label,
     createdAt: new Date().toISOString(),
     lastSeenAt: null,
+    teamId: opts?.teamId ?? DEFAULT_TEAM_ID,
+    ...(opts?.repo ? { repo: opts.repo } : {}),
+    ...(opts?.ci ? { ci: true } : {}),
+    ...(opts?.accountId ? { accountId: opts.accountId, accountIds: [opts.accountId] } : {}),
   }
   const col = await getTokensCollection()
   await col.insertOne(doc)
@@ -142,13 +185,11 @@ export async function rotateToken(oldId: string): Promise<string | null> {
     await memberStats.deleteOne({ _id: oldId })
   }
 
-  // Replace the token doc (new hash id, same metadata).
+  // Replace the token doc (new hash id, same metadata) — preserve team + owner assignment so
+  // rotating a machine's token keeps its teams/owners (previously these were silently dropped).
   await col.insertOne({
+    ...doc,
     _id: newId,
-    user: doc.user,
-    label: doc.label,
-    createdAt: doc.createdAt,
-    lastSeenAt: doc.lastSeenAt,
   })
   await col.deleteOne({ _id: oldId })
 
@@ -190,7 +231,7 @@ export async function hasAnyTokens(): Promise<boolean> {
  */
 export async function validateIngestToken(
   bearer: string | null,
-): Promise<{ ok: true; user: string; memberId: string } | { ok: false }> {
+): Promise<{ ok: true; user: string; memberId: string; repo?: string; ci?: boolean; label?: string; teamId?: string; accountId?: string } | { ok: false }> {
   if (!bearer) return { ok: false }
   const id = hashToken(bearer)
   const col = await getTokensCollection()
@@ -198,7 +239,7 @@ export async function validateIngestToken(
   if (!doc) return { ok: false }
   // Update last-seen — fire and forget (non-critical, must not block the caller).
   void col.updateOne({ _id: id }, { $set: { lastSeenAt: new Date().toISOString() } }).catch(() => {})
-  return { ok: true, user: doc.user, memberId: id }
+  return { ok: true, user: doc.user, memberId: id, repo: doc.repo, ci: doc.ci, label: doc.label, teamId: doc.teamId, accountId: doc.accountId }
 }
 
 /**
@@ -226,4 +267,141 @@ export async function getMemberNameMap(): Promise<Record<string, string>> {
     map[doc._id] = doc.user
   }
   return map
+}
+
+/** memberId (token hash) → primary teamId, for read-time team tagging. Defaults to DEFAULT_TEAM_ID. */
+export async function getMemberTeamMap(): Promise<Record<string, string>> {
+  const col = await getTokensCollection()
+  const docs = await col.find({}, { projection: { _id: 1, teamId: 1, teamIds: 1 } }).toArray()
+  const map: Record<string, string> = {}
+  for (const d of docs) map[d._id] = teamIdsOf(d)[0] ?? DEFAULT_TEAM_ID
+  return map
+}
+
+/** memberId (token hash) → ALL teams the machine belongs to. Defaults to [DEFAULT_TEAM_ID].
+ *  Used for read-time multi-team tagging + scoping (a session is visible to any of its teams). */
+export async function getMemberTeamsMap(): Promise<Record<string, string[]>> {
+  const col = await getTokensCollection()
+  const docs = await col.find({}, { projection: { _id: 1, teamId: 1, teamIds: 1 } }).toArray()
+  const map: Record<string, string[]> = {}
+  for (const d of docs) {
+    const ids = teamIdsOf(d)
+    map[d._id] = ids.length ? ids : [DEFAULT_TEAM_ID]
+  }
+  return map
+}
+
+/**
+ * Mint a machine token bound to an accountId and team.
+ * Returns the token hash (id) and plaintext token.
+ */
+export async function mintMachineToken(input: { accountId: string; user: string; machineName: string; teamId: string }): Promise<{ id: string; token: string }> {
+  const token = await mintToken(input.user, input.machineName, { accountId: input.accountId, teamId: input.teamId })
+  const id = hashToken(token)
+  return { id, token }
+}
+
+/**
+ * Mint a flexible machine token with optional owner(s) and team.
+ * A machine can be:
+ *   - loose (no owner + no team): accountIds empty/undefined, teamId undefined
+ *   - team-only: accountIds empty/undefined, teamId set
+ *   - owner(s)-only: accountIds set, teamId undefined
+ *   - both: accountIds set, teamId set
+ * Returns the token hash (id) and plaintext token.
+ */
+export async function mintMachine(input: { machineName: string; user: string; accountIds?: string[]; teamId?: string; teamIds?: string[] }): Promise<{ id: string; token: string }> {
+  const token = randomBytes(32).toString('hex')
+  const id = hashToken(token)
+  const unique = input.accountIds && input.accountIds.length ? [...new Set(input.accountIds.filter(Boolean))] : []
+  // teams: accept teamIds[] (+ single teamId alias); dedupe. Empty = loose (no team → owner-only visible).
+  const teams = [...new Set([...(input.teamIds ?? []), ...(input.teamId ? [input.teamId] : [])].filter(Boolean))]
+  const doc: TokenDoc = {
+    _id: id,
+    user: input.user,
+    label: input.machineName,
+    createdAt: new Date().toISOString(),
+    lastSeenAt: null,
+    ...(unique.length > 0 ? { accountId: unique[0], accountIds: unique } : {}),
+    ...(teams.length > 0 ? { teamId: teams[0], teamIds: teams } : {}),
+  }
+  const col = await getTokensCollection()
+  await col.insertOne(doc)
+  return { id, token }
+}
+
+/**
+ * List all machine tokens (excludes CI and repo tokens).
+ * Returns machine records with the token hash as id (no plaintext).
+ */
+export async function listMachines(): Promise<MachineInfo[]> {
+  const col = await getTokensCollection()
+  const docs = await col.find({ ci: { $ne: true }, repo: { $exists: false } }).toArray()
+  return docs.map(d => {
+    const accountIds = ownerIdsOf(d)
+    const teamIds = teamIdsOf(d)
+    return {
+      id: d._id,
+      accountId: accountIds[0],
+      accountIds,
+      machineName: d.label || d.user,
+      user: d.user,
+      teamId: teamIds[0],
+      teamIds,
+      createdAt: d.createdAt,
+      lastSeenAt: d.lastSeenAt,
+    }
+  })
+}
+
+/** Set of every live token id (hash). Central reads filter team data by this so a revoked
+ *  member's orphaned sessions/stats/workflows never keep showing after the token is gone. */
+export async function getLiveTokenIds(): Promise<Set<string>> {
+  const col = await getTokensCollection()
+  const docs = await col.find({}, { projection: { _id: 1 } }).toArray()
+  return new Set(docs.map(d => d._id))
+}
+
+/** Replace a machine's set of teams. teamIds[0] becomes the primary (teamId). Empty clears teams
+ *  (loose → owner-only visibility). */
+export async function setMachineTeams(id: string, teamIds: string[]): Promise<boolean> {
+  const col = await getTokensCollection()
+  const unique = [...new Set(teamIds.filter(Boolean))]
+  const res = await col.updateOne({ _id: id }, { $set: { teamIds: unique, teamId: unique[0] } })
+  return res.matchedCount > 0
+}
+
+/** Reassign a machine token to a single team (legacy helper). Returns true if a doc was matched. */
+export async function setMachineTeam(id: string, teamId: string): Promise<boolean> {
+  return setMachineTeams(id, teamId ? [teamId] : [])
+}
+
+/** Rename a machine (updates the token doc's `label`). Returns true if a doc was matched. The new
+ *  name reflects on the machine on its next whoami handshake (machineName = label). */
+export async function setMachineLabel(id: string, label: string): Promise<boolean> {
+  const col = await getTokensCollection()
+  const res = await col.updateOne({ _id: id }, { $set: { label } })
+  return res.matchedCount > 0
+}
+
+/** Replace a machine's set of owner accounts. accountIds[0] becomes the primary (accountId), kept
+ *  for whoami/back-compat. Passing an empty list clears ownership. The `user` (push identity) is
+ *  left untouched — ownership is about visibility/management, not the machine's display name. */
+export async function setMachineOwners(id: string, accountIds: string[]): Promise<boolean> {
+  const col = await getTokensCollection()
+  const unique = [...new Set(accountIds.filter(Boolean))]
+  const res = await col.updateOne({ _id: id }, { $set: { accountIds: unique, accountId: unique[0] } })
+  return res.matchedCount > 0
+}
+
+/** Assign the Default team to any token minted before teams existed, and backfill the multi-team
+ *  `teamIds[]` from the legacy single `teamId`. Idempotent. */
+export async function backfillTokenTeamIds(): Promise<void> {
+  const col = await getTokensCollection()
+  await col.updateMany({ teamId: { $exists: false }, teamIds: { $exists: false } }, { $set: { teamId: DEFAULT_TEAM_ID } })
+  // Legacy docs have teamId but no teamIds → seed teamIds from teamId (aggregation pipeline update).
+  await col.updateMany(
+    { teamId: { $exists: true }, teamIds: { $exists: false } },
+    [{ $set: { teamIds: ['$teamId'] } }],
+  )
 }

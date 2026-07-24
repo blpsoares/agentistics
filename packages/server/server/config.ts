@@ -26,6 +26,11 @@ export const WEB_PORT = parseInt(process.env.WEB_PORT ?? String(PORT + 1), 10)
 // Reads union live + archive (live always wins); set AGENTISTICS_ARCHIVE=0 to disable.
 // ---------------------------------------------------------------------------
 export const ARCHIVE_ENABLED = process.env.AGENTISTICS_ARCHIVE !== '0'
+// The app's own writable data dir. In Docker (machine + self-contributing central) this is
+// the read-WRITE ~/.agentistics mount, whereas CLAUDE_DIR is the host ~/.claude mounted
+// read-only — so anything the app must persist (preferences, consolidate store, sync state)
+// belongs here, never under CLAUDE_DIR.
+export const AGENTISTICS_DATA_DIR = process.env.AGENTISTICS_DIR ?? join(HOME_DIR, '.agentistics')
 export const ARCHIVE_DIR = process.env.AGENTISTICS_ARCHIVE_DIR ?? join(HOME_DIR, '.agentistics', 'archive')
 export const ARCHIVE_PROJECTS_DIR = join(ARCHIVE_DIR, 'projects')
 export const ARCHIVE_SESSION_META_DIR = join(ARCHIVE_DIR, 'usage-data', 'session-meta')
@@ -50,8 +55,26 @@ export const TEAM_DIR = process.env.AGENTISTICS_TEAM_DIR ?? join(HOME_DIR, '.age
 // TEAM_ORG namespaces docs; TEAM_INGEST_TOKEN (optional) gates ingestion.
 // ---------------------------------------------------------------------------
 export const TEAM_CENTRAL = process.env.AGENTISTICS_TEAM_CENTRAL === '1'
-export const MONGO_URL = process.env.MONGO_URL ?? 'mongodb://localhost:27017'
-export const MONGO_DB = process.env.MONGO_DB ?? 'agentistics'
+// Ingest-only hardening: when set on a central, the instance serves ONLY
+// `POST /api/team/ingest` (+ its OPTIONS preflight) and returns 404 for everything else —
+// the dashboard, login, /api/data, static assets, all of it. Intended for a public-facing
+// central (for cloud GitHub Actions runners to push to) that shares its MongoDB with a
+// SEPARATE, private admin/dashboard instance. Exposing an ingest-only instance is low-risk:
+// there is nothing to read, only a token-gated write endpoint.
+export const INGEST_ONLY = process.env.AGENTISTICS_INGEST_ONLY === '1'
+// ---------------------------------------------------------------------------
+// GitHub Actions OIDC (keyless CI auth). A runner presents a short-lived,
+// GitHub-signed JWT instead of a static secret; the central verifies it against
+// GitHub's public JWKS and checks the `repository` claim against the registered
+// repos. Enabled only when an AUDIENCE is configured (forces a deliberate, secure
+// config — the workflow must request that same audience). Issuer defaults to GitHub.
+// ---------------------------------------------------------------------------
+export const OIDC_ISSUER = process.env.AGENTISTICS_OIDC_ISSUER ?? 'https://token.actions.githubusercontent.com'
+export const OIDC_AUDIENCE = process.env.AGENTISTICS_OIDC_AUDIENCE || undefined
+// Trim surrounding whitespace: a stray space in `MONGO_URL= mongodb+srv://…` (easy to leave
+// in an env file) otherwise reaches the driver as an invalid connection string.
+export const MONGO_URL = (process.env.MONGO_URL ?? 'mongodb://localhost:27017').trim()
+export const MONGO_DB = (process.env.MONGO_DB ?? 'agentistics').trim()
 export const TEAM_ORG = process.env.AGENTISTICS_TEAM_ORG ?? 'default'
 export const TEAM_INGEST_TOKEN = process.env.AGENTISTICS_TEAM_INGEST_TOKEN || undefined
 // Self-contribution: when set on a central, the central machine's own local sessions

@@ -4,6 +4,8 @@ interface Status {
   mode: string
   lastSuccessAt: number | null
   errKind: 'auth' | 'net' | null
+  /** Round-trip latency to the central in ms (null when offline/unknown). */
+  latencyMs?: number | null
 }
 
 function relTime(ts: number, pt: boolean): string {
@@ -22,7 +24,7 @@ function relTime(ts: number, pt: boolean): string {
  * central and when it last succeeded. Polls /api/team/status every 5s. Renders nothing
  * unless this instance is configured as a team member.
  */
-export function MemberConnectionStatus({ lang }: { lang: 'pt' | 'en' }) {
+export function MemberConnectionStatus({ lang, compact }: { lang: 'pt' | 'en'; compact?: boolean }) {
   const pt = lang === 'pt'
   const [st, setSt] = useState<Status | null>(null)
   // Re-render on a ticker so the relative "last sync" time stays fresh between polls.
@@ -61,10 +63,25 @@ export function MemberConnectionStatus({ lang }: { lang: 'pt' | 'en' }) {
     color = '#22c55e'; dot = '#22c55e'
     label = pt ? 'Conectado' : 'Connected'
     sub = pt ? `último envio ${relTime(st.lastSuccessAt, true)}` : `last sync ${relTime(st.lastSuccessAt, false)}`
+    if (st.latencyMs != null) sub += ` · ${st.latencyMs}ms`
   } else {
     color = 'var(--text-tertiary)'; dot = 'var(--text-tertiary)'
     label = pt ? 'Conectando…' : 'Connecting…'
     sub = pt ? 'primeiro envio em instantes' : 'first sync shortly'
+  }
+
+  if (compact) {
+    // Slim variant for the sidebar aside: dot + label + sub on one tight line.
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 10.5, lineHeight: 1.4, minWidth: 0 }}>
+        <span style={{
+          width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: dot,
+          boxShadow: st.errKind === null && st.lastSuccessAt ? `0 0 5px ${dot}` : 'none',
+        }} />
+        <span style={{ fontWeight: 600, color, whiteSpace: 'nowrap' }}>{label}</span>
+        <span style={{ color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>· {sub}</span>
+      </div>
+    )
   }
 
   return (

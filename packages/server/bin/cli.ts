@@ -8,6 +8,40 @@
 const command = process.argv[2]
 const args = process.argv.slice(3)
 
+/**
+ * Load a central env file (KEY=VALUE) into process.env for keys not already set, so a NATIVE
+ * central (no Docker) picks up MONGO_URL + the AGENTISTICS_TEAM_* secrets the same way the Docker
+ * central reads central.env. Search order: $AGENTISTICS_CENTRAL_ENV, ./central.env,
+ * ~/.agentistics/central.env. Values are trimmed (a stray space in `MONGO_URL= mongodb+srv…` would
+ * otherwise break the driver). Never throws.
+ */
+function loadCentralEnv(): string | null {
+  try {
+    const { existsSync, readFileSync } = require('node:fs') as typeof import('node:fs')
+    const { join } = require('node:path') as typeof import('node:path')
+    const { homedir } = require('node:os') as typeof import('node:os')
+    const candidates = [
+      process.env.AGENTISTICS_CENTRAL_ENV,
+      join(process.cwd(), 'central.env'),
+      join(homedir(), '.agentistics', 'central.env'),
+    ].filter((p): p is string => !!p)
+    const file = candidates.find(p => existsSync(p))
+    if (!file) return null
+    for (const line of readFileSync(file, 'utf8').split('\n')) {
+      const t = line.trim()
+      if (!t || t.startsWith('#')) continue
+      const eq = t.indexOf('=')
+      if (eq < 0) continue
+      const key = t.slice(0, eq).trim()
+      const value = t.slice(eq + 1).trim()
+      if (key && process.env[key] === undefined) process.env[key] = value
+    }
+    return file
+  } catch {
+    return null
+  }
+}
+
 const HELP = `
 Usage: agentop <command> [options]
 
@@ -15,6 +49,7 @@ Commands:
   start         Interactive launcher — pick mode + how to run (foreground/bg/docker/boot)
   setup         Interactive first-run wizard (solo / central / member)
   server        Start the web dashboard + background daemon (non-interactive)
+                (add --central to run the team central natively, no Docker; --bg to detach)
   restart       Restart a running mode's service so it picks up new code/config
   status        Show services (server/central/member) + health
   tui           Start the live terminal dashboard (standalone)
@@ -29,6 +64,16 @@ Options:
   --help, -h       Show this help message
   --version, -v    Show current version
   --port <n>       Port for the web server (default: 47291)  [server only]
+  --central        Run as the team central natively (no Docker) — reads central.env for
+                   MONGO_URL + secrets; requires an external MONGO_URL (Atlas/mongod)  [server only]
+  --bg             Start detached in the background (logs to ~/.agentistics)  [server only]
+
+Native central (no Docker):
+  agentop server --central [--bg] [--port <n>]
+    Runs the same server process with AGENTISTICS_TEAM_CENTRAL=1, loading central.env
+    (search: $AGENTISTICS_CENTRAL_ENV, ./central.env, ~/.agentistics/central.env). There is no
+    bundled Mongo — set MONGO_URL to an external cluster. Use --bg to run in the background like
+    the local server. For the all-in-one Docker flow (bundled Mongo) use \`agentop central up\`.
 
 Start:
   agentop start
@@ -37,9 +82,12 @@ Start:
     A central is started via its Docker flow. Non-interactive stdin runs like 'agentop server'.
 
 Restart:
-  agentop restart [server|watch|central]
+  agentop restart [server|watch|central|--all] [--rebuild]
     Restart a running mode so it picks up new code (after an upgrade/pull) or config.
-    server/watch bounce the systemd user service; central rebuilds/restarts its container.
+    server/watch bounce the systemd user service; central restarts its container.
+    --all bounces every service currently up (local + central + machine), non-interactively.
+    --rebuild recreates the Docker image/container (central + machine) instead of just bouncing
+    it — use it to pick up new code in Docker deployments (native server: use bun bin / upgrade).
 
 Setup:
   agentop setup
@@ -59,6 +107,14 @@ Member:
     Notify the central and reset back to solo.
   agentop member status
     Show the current mode/endpoint/user and last sync state.
+
+CI (GitHub Actions):
+  agentop ci-push [--endpoint <url>] [--token <ci-token>] [--org <org>]
+    One-shot push of this runner's metrics to a central. Prefers keyless
+    GitHub OIDC (needs permissions: id-token: write); falls back to a
+    static token. Reads AGENTISTICS_CENTRAL_URL / AGENTISTICS_CI_TOKEN /
+    AGENTISTICS_OIDC_AUDIENCE / AGENTISTICS_TEAM_ORG when flags are omitted.
+    Never fails the job on a push error.
 
 Autostart:
   agentop autostart <mode> <enable|disable|status>
@@ -206,6 +262,21 @@ if (command === 'member') {
   process.exit(1)
 }
 
+if (command === 'ci-push') {
+  // One-shot push of this (ephemeral GitHub Actions) runner's metrics to a central.
+  const readFlag = (name: string): string | undefined => {
+    const idx = args.indexOf(name)
+    return idx !== -1 && args[idx + 1] ? args[idx + 1] : undefined
+  }
+  const { runCiPush } = await import('../server/ci-push.ts')
+  const code = await runCiPush({
+    endpoint: readFlag('--endpoint'),
+    token: readFlag('--token'),
+    org: readFlag('--org'),
+  })
+  process.exit(code)
+}
+
 if (command === '--version' || command === '-v') {
   const { CURRENT_VERSION, getVersionInfo } = await import('../server/version.ts')
   process.stdout.write(`agentop v${CURRENT_VERSION}\n`)
@@ -285,17 +356,37 @@ if (command === 'status') {
 }
 
 if (command === 'restart') {
-  const modeArg = args[0] ?? 'server'
-  // The central runs in Docker — delegate to its own restart (systemctl can't bounce a container).
+  // `--rebuild` recreates Docker images/containers (central + machine) instead of just bouncing.
+  const rebuild = args.includes('--rebuild')
+  const positional = args.filter(a => !a.startsWith('-'))
+  const modeArg = positional[0] ?? (args.includes('--all') ? 'all' : 'server')
+  // `agentop restart --all [--rebuild]` — bounce (or rebuild) every service currently up.
+  if (modeArg === 'all') {
+    const { restartAllServices } = await import('../server/cli-start.ts')
+    process.exit(await restartAllServices(rebuild))
+  }
+  // The central runs in Docker — delegate to its own compose. `up` rebuilds/pulls + recreates;
+  // `restart` just bounces the running container.
   if (modeArg === 'central') {
     const { runCentral } = await import('../server/cli-central.ts')
-    const code = await runCentral('restart', [])
+    const code = await runCentral(rebuild ? 'up' : 'restart', [])
     process.exit(code)
   }
   const { restartAutostart, isAutostartMode } = await import('../server/autostart.ts')
   if (!isAutostartMode(modeArg)) {
     console.error(`Invalid mode: ${modeArg}. Expected one of: server, watch, central.\n`)
     process.exit(1)
+  }
+  // --rebuild on a native mode (server/watch) rebuilds + reinstalls the binary from the repo so
+  // the restart serves new frontend/code (a plain bounce would keep the old build).
+  if (rebuild) {
+    const { rebuildNativeBinary } = await import('../server/cli-start.ts')
+    const r = await rebuildNativeBinary()
+    if (r === 'not-repo') {
+      console.error('--rebuild for the native server needs the repo checkout. Run it from the agentistics repo (or `agentop upgrade`).\n')
+      process.exit(1)
+    }
+    if (r === 'failed') { console.error('native rebuild failed.\n'); process.exit(1) }
   }
   const res = await restartAutostart(modeArg)
   process.stdout.write(res.message + '\n')
@@ -317,6 +408,44 @@ if (command === 'server' || command === 'start') {
   if (portIdx !== -1 && args[portIdx + 1]) {
     process.env.PORT = args[portIdx + 1]
   }
+  // Native central (no Docker): same server process with TEAM_CENTRAL=1, reading central.env for
+  // MONGO_URL + secrets. Unlike the Docker central there is NO bundled Mongo, so an external
+  // MONGO_URL (Atlas or your own mongod) is required.
+  const central = args.includes('--central')
+  if (central) {
+    const envFile = loadCentralEnv()
+    process.env.AGENTISTICS_TEAM_CENTRAL = '1'
+    if (!process.env.MONGO_URL) {
+      console.error('\n  ✗ native central needs MONGO_URL — there is no bundled Mongo without Docker.')
+      console.error('    Set MONGO_URL (external Mongo/Atlas) in central.env or the environment.')
+      console.error('    (Or use `agentop central up` for the all-in-one Docker flow.)\n')
+      process.exit(1)
+    }
+    if (envFile) console.log(`  central: loaded ${envFile}`)
+  }
+
+  // Background: spawn a detached copy (logging to ~/.agentistics) and return the terminal.
+  if (args.includes('--bg') || args.includes('--background')) {
+    const { spawn } = await import('node:child_process')
+    const { homedir } = await import('node:os')
+    const { join } = await import('node:path')
+    const log = join(homedir(), '.agentistics', 'agentop-server.log')
+    const script = process.argv[1]
+    const fromSource = !!script && (script.endsWith('.ts') || script.endsWith('.js'))
+    const selfBase = fromSource ? `"${process.execPath}" "${script}"` : `"${process.execPath}"`
+    // Re-invoke `server` in the foreground (drop --bg), forwarding --central / --port.
+    const fwd = [central ? '--central' : '', portIdx !== -1 && args[portIdx + 1] ? `--port ${args[portIdx + 1]}` : '']
+      .filter(Boolean).join(' ')
+    const cmd = `${selfBase} server ${fwd}`.trim()
+    const child = spawn('sh', ['-c', `nohup ${cmd} >> "${log}" 2>&1 &`], { stdio: 'ignore', detached: true })
+    child.unref()
+    const webPort = parseInt(process.env.WEB_PORT ?? String((parseInt(process.env.PORT ?? '47291', 10)) + 1), 10)
+    console.log(`\n  started ${central ? 'central ' : ''}in the background.`)
+    console.log(`  web:  http://localhost:${webPort}`)
+    console.log(`  logs: ${log}\n`)
+    process.exit(0)
+  }
+
   process.env.SERVE_STATIC = '1'
   // Server, daemon and version check run in parallel
   await Promise.all([

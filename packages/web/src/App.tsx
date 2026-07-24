@@ -10,6 +10,7 @@ import {
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Workflow as WorkflowIcon,
+  GitBranch, Users, LogOut, Server,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -40,13 +41,17 @@ import { CacheHitRatePanel } from './components/CacheHitRatePanel'
 import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
 import { TranscriptModal } from './components/TranscriptModal'
-import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
+import type { PrefsDraft } from './lib/app-context'
 import { TtyChat } from './components/TtyChat'
 import { UpdateModal } from './components/UpdateModal'
 import { InstallModal } from './components/InstallModal'
 import { ArchiveConsentModal, type ArchiveMode } from './components/ArchiveConsentModal'
 import { resolveArchiveChoice } from './lib/archive'
 import { TeamLogin } from './components/TeamLogin'
+import { Login } from './components/Login'
+import { MemberConnectionStatus } from './components/MemberConnectionStatus'
+import { OwnerSetup } from './components/OwnerSetup'
+import { ChangePassword } from './components/ChangePassword'
 import { type ChatModelId } from './lib/chatModels'
 import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
@@ -61,6 +66,9 @@ interface TeamSessionState {
    *  (archive consent gate, Nay chat) that only makes sense with a local harness installed. */
   aggregatorOnly?: boolean
 }
+
+export interface IamAccount { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: { teamId: string; role: 'manager' | 'user' }[]; mustChangePassword: boolean }
+interface IamState { needsBootstrap: boolean; authed: boolean; account?: IamAccount }
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
 const LOAD_STAGES: { key: string; labelPt: string; labelEn: string; icon: React.ReactNode; phase: 1 | 2 | 3 }[] = [
@@ -607,11 +615,10 @@ function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): st
 }
 
 function MobileBottomNav({
-  lang, harnesses, onSettings, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues, isCentral, hasWorkflows,
+  lang, harnesses, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues, isCentral, hasWorkflows,
 }: {
   lang: Lang
   harnesses?: HarnessId[]
-  onSettings: () => void
   onRefresh: () => void
   liveUpdates: boolean
   onToggleLive: () => void
@@ -649,9 +656,7 @@ function MobileBottomNav({
   }
   const navTiles: Tile[] = [
     { key: 'sessions', label: pt ? 'Sessões' : 'Sessions', icon: Clock, onClick: () => { setMoreOpen(false); navigate('/sessions') }, active: location.pathname.startsWith('/sessions') },
-    ...(hasWorkflows
-      ? [{ key: 'workflows', label: pt ? 'Workflows' : 'Workflows', icon: WorkflowIcon, onClick: () => { setMoreOpen(false); navigate('/workflows') }, active: location.pathname.startsWith('/workflows') } as Tile]
-      : []),
+    { key: 'repositories', label: pt ? 'Repositórios' : 'Repositories', icon: GitBranch, onClick: () => { setMoreOpen(false); navigate('/repositories') }, active: location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo') },
     { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { setMoreOpen(false); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
     { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { setMoreOpen(false); navigate('/export') }, active: location.pathname.startsWith('/export') },
     ...(harnesses && harnesses.length > 1
@@ -667,7 +672,7 @@ function MobileBottomNav({
       badge: liveUpdates ? (updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`) : undefined,
     } as Tile]),
     { key: 'refresh', label: pt ? 'Atualizar' : 'Refresh', icon: RefreshCw, onClick: () => { onRefresh(); setMoreOpen(false) } },
-    { key: 'settings', label: pt ? 'Ajustes' : 'Settings', icon: SlidersHorizontal, onClick: () => { onSettings(); setMoreOpen(false) } },
+    { key: 'settings', label: pt ? 'Ajustes' : 'Settings', icon: SlidersHorizontal, onClick: () => { setMoreOpen(false); navigate('/settings') }, active: location.pathname.startsWith('/settings') },
     // Health warnings moved next to the notification bell in the mobile top bar (its own popover).
   ]
   const allTiles = [...navTiles, ...actionTiles]
@@ -842,20 +847,24 @@ function CollapsedTip({ label, show, children }: { label: string; show: boolean;
   )
 }
 
-function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle, updatedText, sinceText, theme, onToggleTheme, onToggleLang, onSettings, onExport }: {
+function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle, theme, onToggleTheme, onToggleLang, onExport, principal }: {
   lang: Lang; harnesses?: HarnessId[]; isCentral?: boolean; hasWorkflows?: boolean
-  collapsed: boolean; onToggle: () => void; updatedText: string; sinceText?: string
-  theme: Theme; onToggleTheme: () => void; onToggleLang: () => void; onSettings: () => void; onExport: () => void
+  collapsed: boolean; onToggle: () => void
+  theme: Theme; onToggleTheme: () => void; onToggleLang: () => void; onExport: () => void
+  principal?: IamAccount
 }) {
   const location = useLocation()
   const pt = lang === 'pt'
+  // Repositories highlights across the whole section (list, detail, actions) — Actions lives as a
+  // tab inside each repo, so there's no sidebar submenu.
+  const inReposSection = location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo')
   const items: { to: string; labelPt: string; labelEn: string; icon: React.ReactNode }[] = [
     { to: '/',          labelPt: 'Home',         labelEn: 'Home',         icon: <Home size={17} /> },
     { to: '/sessions', labelPt: 'Sessões', labelEn: 'Sessions', icon: <Clock size={17} /> },
     { to: '/costs',     labelPt: 'Custos',       labelEn: 'Costs',        icon: <DollarSign size={17} /> },
     { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={17} /> },
+    { to: '/repositories', labelPt: 'Repositórios', labelEn: 'Repositories', icon: <GitBranch size={17} /> },
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={17} /> },
-    ...(hasWorkflows ? [{ to: '/workflows', labelPt: 'Workflows', labelEn: 'Workflows', icon: <WorkflowIcon size={17} /> }] : []),
     { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={17} /> },
     ...(harnesses && harnesses.length > 1 ? [{ to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={17} /> }] : []),
   ]
@@ -871,7 +880,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
       display: 'flex', flexDirection: 'column', padding: '14px 12px', boxSizing: 'border-box',
       transition: 'width 0.22s cubic-bezier(0.22, 1, 0.36, 1)', overflow: 'hidden',
     }}>
-      {/* Logo + collapse toggle, then the "updated / since / sessions" summary */}
+      {/* Logo + collapse toggle */}
       <div style={{ padding: '0 4px 12px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 44 }}>
           {!collapsed && <img src='/minimalistLogo.png' alt="agentistics" style={{ height: 40, width: 'auto', flexShrink: 0 }} />}
@@ -880,17 +889,18 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
             {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
           </button>
         </div>
-        {!collapsed && (updatedText || sinceText) && (
-          <div style={{ marginTop: 6, fontSize: 10.5, lineHeight: 1.55 }}>
-            {updatedText && <div style={{ color: 'var(--text-tertiary)' }}>{updatedText}</div>}
-            {sinceText && <div style={{ color: 'var(--text-secondary)' }}>{sinceText}</div>}
-          </div>
-        )}
+        {/* Member machine: live connection status + latency to the central (mirrors the
+            central's presence line). Renders null unless this instance is a connected member. */}
+        {!collapsed && !isCentral && <div style={{ marginTop: 6 }}><MemberConnectionStatus lang={lang} compact /></div>}
       </div>
 
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
+      <nav className="ag-noscroll" style={{ display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
         {items.map(item => {
-          const active = item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to)
+          const active = item.to === '/'
+            ? location.pathname === '/'
+            : item.to === '/repositories'
+              ? inReposSection
+              : location.pathname.startsWith(item.to)
           const label = pt ? item.labelPt : item.labelEn
           return (
             <CollapsedTip key={item.to} label={label} show={collapsed}>
@@ -899,7 +909,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
                 end={item.to === '/'}
                 aria-label={collapsed ? label : undefined}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 11,
+                  display: 'flex', alignItems: 'center', gap: 11, minWidth: 0,
                   padding: collapsed ? '10px 0' : '10px 12px', justifyContent: collapsed ? 'center' : 'flex-start',
                   borderRadius: 9, textDecoration: 'none',
                   fontSize: 13.5, fontWeight: active ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap',
@@ -918,39 +928,69 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
         })}
       </nav>
 
-      {/* Footer — config controls */}
-      <div style={{
-        display: 'flex', flexWrap: 'wrap', gap: 6, paddingTop: 10, marginTop: 6,
-        borderTop: '1px solid var(--border)', justifyContent: collapsed ? 'center' : 'flex-start',
-      }}>
-        <CollapsedTip label={pt ? 'Configurações' : 'Settings'} show={collapsed}>
-          <button onClick={onSettings} aria-label={pt ? 'Configurações' : 'Settings'} title={collapsed ? undefined : (pt ? 'Configurações' : 'Settings')} style={footBtn}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
-            <SlidersHorizontal size={15} />
-          </button>
-        </CollapsedTip>
-        <CollapsedTip label={pt ? 'Tema' : 'Theme'} show={collapsed}>
-          <button onClick={onToggleTheme} aria-label={pt ? 'Tema' : 'Theme'} title={collapsed ? undefined : (theme === 'dark' ? (pt ? 'Tema claro' : 'Light theme') : (pt ? 'Tema escuro' : 'Dark theme'))} style={footBtn}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
-            {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
-          </button>
-        </CollapsedTip>
-        <CollapsedTip label={pt ? 'Idioma' : 'Language'} show={collapsed}>
-          <button onClick={onToggleLang} aria-label={pt ? 'Idioma' : 'Language'} title={collapsed ? undefined : (pt ? 'Switch to English' : 'Mudar para Português')} style={{ ...footBtn, width: 'auto', padding: '0 10px', gap: 5, fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
-            <Globe size={14} />{!collapsed && (pt ? 'EN' : 'PT')}
-          </button>
-        </CollapsedTip>
-        {/* Export (PDF) — kept last so the orange download action sits at the right end. */}
-        <CollapsedTip label={pt ? 'Exportar' : 'Export'} show={collapsed}>
-          <button onClick={onExport} aria-label={pt ? 'Exportar relatório PDF' : 'Export PDF report'} title={collapsed ? undefined : (pt ? 'Exportar relatório PDF' : 'Export PDF report')}
-            style={{ ...footBtn, marginLeft: collapsed ? undefined : 'auto', borderColor: 'var(--anthropic-orange)50', color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)' }}>
-            <Download size={15} />
-          </button>
-        </CollapsedTip>
+      {/* Footer — Row A account · thin divider · Row B config actions */}
+      <div style={{ paddingTop: 10, marginTop: 6, borderTop: '1px solid var(--border)' }}>
+        {/* Row A — account (avatar + name + role, logout right-aligned) */}
+        {principal && (collapsed ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingBottom: 10 }}>
+            <div title={principal.name} style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--bg-elevated)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', flexShrink: 0 }}>{principal.name.slice(0, 2)}</div>
+            <CollapsedTip label={pt ? 'Sair' : 'Log out'} show>
+              <button title={pt ? 'Sair' : 'Log out'} aria-label={pt ? 'Sair' : 'Log out'} onClick={() => { void fetch('/api/iam/logout', { method: 'POST' }).then(() => window.location.reload()) }} style={footBtn}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
+                <LogOut size={15} />
+              </button>
+            </CollapsedTip>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 2px 10px', minWidth: 0 }}>
+            <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--bg-elevated)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', flexShrink: 0 }}>{principal.name.slice(0, 2)}</div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{principal.name}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{principal.role === 'owner' ? 'Owner' : (principal.memberships.some(m => m.role === 'manager') ? 'Manager' : 'User')}</div>
+            </div>
+            <button title={pt ? 'Sair' : 'Log out'} aria-label={pt ? 'Sair' : 'Log out'} onClick={() => { void fetch('/api/iam/logout', { method: 'POST' }).then(() => window.location.reload()) }}
+              style={{ display: 'inline-flex', padding: 7, borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', flexShrink: 0, transition: 'color 0.15s' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)' }}>
+              <LogOut size={15} />
+            </button>
+          </div>
+        ))}
+
+        {/* Thin divider between account and actions */}
+        {principal && <div style={{ height: 1, background: 'var(--border)', marginBottom: 10 }} />}
+
+        {/* Row B — config actions (theme · language · export · settings), evenly spaced */}
+        <div style={{ display: 'flex', flexDirection: collapsed ? 'column' : 'row', alignItems: 'center', gap: 6 }}>
+          <CollapsedTip label={pt ? 'Tema' : 'Theme'} show={collapsed}>
+            <button onClick={onToggleTheme} aria-label={pt ? 'Tema' : 'Theme'} title={collapsed ? undefined : (theme === 'dark' ? (pt ? 'Tema claro' : 'Light theme') : (pt ? 'Tema escuro' : 'Dark theme'))} style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1 }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
+              {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+            </button>
+          </CollapsedTip>
+          <CollapsedTip label={pt ? 'Idioma' : 'Language'} show={collapsed}>
+            <button onClick={onToggleLang} aria-label={pt ? 'Idioma' : 'Language'} title={collapsed ? undefined : (pt ? 'Switch to English' : 'Mudar para Português')} style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1, gap: 5, fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
+              <Globe size={14} />{!collapsed && (pt ? 'EN' : 'PT')}
+            </button>
+          </CollapsedTip>
+          <CollapsedTip label={pt ? 'Exportar' : 'Export'} show={collapsed}>
+            <button onClick={onExport} aria-label={pt ? 'Exportar relatório PDF' : 'Export PDF report'} title={collapsed ? undefined : (pt ? 'Exportar relatório PDF' : 'Export PDF report')}
+              style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1, borderColor: 'var(--anthropic-orange)50', color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)' }}>
+              <Download size={15} />
+            </button>
+          </CollapsedTip>
+          <CollapsedTip label={pt ? 'Configurações' : 'Settings'} show={collapsed}>
+            <NavLink to="/settings" aria-label={pt ? 'Configurações' : 'Settings'} title={collapsed ? undefined : (pt ? 'Configurações' : 'Settings')} style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1, textDecoration: 'none' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-secondary)' }}>
+              <SlidersHorizontal size={15} />
+            </NavLink>
+          </CollapsedTip>
+        </div>
       </div>
     </aside>
   )
@@ -959,6 +999,9 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
 export default function AppLayout() {
   const location = useLocation()
   const navigate = useNavigate()
+  // Reset scroll to the top on every route change — otherwise navigating away while scrolled to the
+  // bottom of a page lands the next page still scrolled down.
+  useEffect(() => { window.scrollTo(0, 0) }, [location.pathname])
   const isCustomPage = location.pathname === '/custom'
   const isMobile = useIsMobile()
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
@@ -971,6 +1014,17 @@ export default function AppLayout() {
   // true when this instance is a team member pushing to a central (mode === 'member').
   // Used only to tailor the upgrade command shown in the UpdateModal.
   const [isMember, setIsMember] = useState(false)
+
+  // ── IAM gate (central only) ────────────────────────────────────────────────────
+  const [iam, setIam] = useState<IamState | undefined>(undefined)
+  const reloadIam = useCallback(() => {
+    Promise.all([
+      fetch('/api/iam/status').then(r => r.ok ? r.json() : { needsBootstrap: false }),
+      fetch('/api/iam/me').then(r => r.ok ? r.json() : { authed: false }),
+    ]).then(([st, me]) => setIam({ needsBootstrap: !!st.needsBootstrap, authed: !!me.authed, account: me.account }))
+      .catch(() => setIam({ needsBootstrap: false, authed: false }))
+  }, [])
+  useEffect(() => { if (teamSession?.central) reloadIam() }, [teamSession?.central, reloadIam])
 
   useEffect(() => {
     fetch('/api/team/session')
@@ -991,7 +1045,8 @@ export default function AppLayout() {
     if (error && error.includes('401') && teamSession?.required) {
       setTeamSession({ required: true, authed: false })
     }
-  }, [error, teamSession?.required])
+    if (teamSession?.central && String(error).includes('401')) reloadIam()
+  }, [error, teamSession?.required, teamSession?.central, reloadIam])
   const [theme, setThemeState] = useState<Theme>('dark')
   const [currency, setCurrencyState] = useState<'USD' | 'BRL'>('USD')
 
@@ -1072,7 +1127,6 @@ export default function AppLayout() {
     } catch {}
     return DEFAULT_CARD_ORDER
   })
-  const [showPrefsModal, setShowPrefsModal] = useState(false)
   // Mobile-only: lets the user minimize the sticky filter bar while scrolling so
   // it doesn't eat the viewport on small screens. Expanded by default.
   const [filtersCollapsed, setFiltersCollapsed] = useState(false)
@@ -1167,6 +1221,33 @@ export default function AppLayout() {
       return next
     })
   }, [])
+
+  // Persist a full preferences draft — applies to global state + PUTs /api/preferences.
+  // Threaded to the Preferences settings page (and reused by the legacy Settings modal onSave).
+  const savePreferences = useCallback((draft: PrefsDraft) => {
+    setLangState(draft.lang)
+    setThemeState(draft.theme)
+    setCurrencyState(draft.currency)
+    setCardOrder(draft.cardOrder as CardId[])
+    setCardPrecisionState(draft.cardPrecision)
+    if (draft.chatModel) setChatModel(draft.chatModel)
+    setChatSoundEnabled(draft.chatSoundEnabled)
+    setChatSoundId(draft.chatSoundId)
+    fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        lang: draft.lang,
+        theme: draft.theme,
+        currency: draft.currency,
+        cardOrder: draft.cardOrder,
+        cardPrecision: draft.cardPrecision,
+        chatModel: draft.chatModel,
+        chatSoundEnabled: draft.chatSoundEnabled,
+        chatSoundId: draft.chatSoundId,
+      }),
+    }).catch(() => {})
+  }, [setCardOrder])
   const [scrolled, setScrolled] = useState(false)
   const [highlightUpdates, setHighlightUpdates] = useState(true)
   const highlightUpdatesRef = useRef(true)
@@ -1419,6 +1500,39 @@ export default function AppLayout() {
 
   const users = useMemo(() => (data ? distinctUsers(data.sessions) : []), [data])
 
+  // Central-only: fetch teams and machines for filter dimensions
+  const [teamsList, setTeamsList] = useState<{ id: string; name: string }[]>([])
+  const [machinesList, setMachinesList] = useState<{ id: string; name: string; user: string; teamId?: string; teamIds?: string[] }[]>([])
+  useEffect(() => {
+    if (!teamSession?.central) {
+      setTeamsList([])
+      setMachinesList([])
+      return
+    }
+    Promise.all([
+      fetch('/api/iam/teams').then(r => r.ok ? r.json() : { teams: [] }),
+      fetch('/api/iam/machines').then(r => r.ok ? r.json() : { machines: [] }),
+    ]).then(([teamsResp, machinesResp]) => {
+      setTeamsList((teamsResp.teams ?? []).map((t: { _id: string; name: string }) => ({ id: t._id, name: t.name })))
+      setMachinesList((machinesResp.machines ?? []).map((m: { id: string; machineName: string; user: string; teamId?: string; teamIds?: string[] }) => ({ id: m.id, name: m.machineName, user: m.user, teamId: m.teamId, teamIds: m.teamIds })))
+    }).catch(() => {
+      setTeamsList([])
+      setMachinesList([])
+    })
+  }, [teamSession?.central])
+
+  // Header summary counts (desktop only)
+  const memberCount = users.length
+  const onlineCount = data?.presence ? Object.values(data.presence).filter(p => p.online).length : 0
+  const offlineCount = data?.presence ? Object.values(data.presence).filter(p => !p.online).length : 0
+  const machineCount = machinesList.length
+  const projectCount = data?.projects?.length ?? 0
+  const repoCount = useMemo(() => new Set((data?.sessions ?? []).map(s => s.git_remote).filter(Boolean)).size, [data])
+
+  // Members list = users WITH machines only
+  const machineUsers = useMemo(() => new Set(machinesList.map(m => m.user)), [machinesList])
+  const usersWithMachines = useMemo(() => users.filter(u => machineUsers.has(u)), [users, machineUsers])
+
   // Harnesses available in the harness filter, scoped to the SELECTED users (empty = all
   // users). So picking one member narrows the harness options to the harnesses that member
   // actually used; "All members" shows the union. Falls back to all harnesses in the data
@@ -1623,12 +1737,15 @@ export default function AppLayout() {
   if (teamSession === undefined) {
     return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
   }
-  if (teamSession.required && !teamSession.authed) {
-    return (
-      <TeamLogin
-        onAuthed={() => { setTeamSession(s => ({ ...(s ?? { required: true }), required: true, authed: true })); refetch() }}
-      />
-    )
+  // Central: account-based IAM gate (bootstrap → login → app).
+  if (teamSession.central) {
+    if (iam === undefined) return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
+    if (iam.needsBootstrap) return <OwnerSetup onDone={() => { reloadIam(); refetch() }} />
+    if (!iam.authed) return <Login onAuthed={() => { reloadIam(); refetch() }} />
+    if (iam.account?.mustChangePassword) return <ChangePassword onDone={() => { reloadIam(); refetch() }} />
+  } else if (teamSession.required && !teamSession.authed) {
+    // Non-central (member/solo) keeps the legacy password gate.
+    return <TeamLogin onAuthed={() => { setTeamSession(s => ({ ...(s ?? { required: true }), required: true, authed: true })); refetch() }} />
   }
 
   if (loading) {
@@ -1702,9 +1819,10 @@ export default function AppLayout() {
   if (archiveChoice === undefined || teamSession === undefined) {
     return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
   }
-  // A pure central (aggregator, no local harness data) has no local sessions to archive —
-  // never show the consent gate there.
-  if (archiveChoice === null && !teamSession.aggregatorOnly) {
+  // A central never shows the archive consent gate: it aggregates members' computed metrics
+  // (stored in Mongo) and any self-contributed host data defaults server-side — there's nothing
+  // for the operator to consent to here, so the blocking prompt would only annoy.
+  if (archiveChoice === null && !teamSession.aggregatorOnly && !isCentral) {
     return (
       <ArchiveConsentModal
         lang={lang}
@@ -1722,7 +1840,7 @@ export default function AppLayout() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg-base)', paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W), transition: 'padding-left 0.22s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg-base)', display: 'flex', flexDirection: 'column', paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W), transition: 'padding-left 0.22s cubic-bezier(0.22, 1, 0.36, 1)' }}>
       {/* Left sidebar nav — desktop only (mobile uses the bottom nav) */}
       {!isMobile && <SideNav
         lang={lang}
@@ -1731,19 +1849,11 @@ export default function AppLayout() {
         hasWorkflows={(data.workflows?.length ?? 0) > 0}
         collapsed={sidebarCollapsed}
         onToggle={toggleSidebar}
-        updatedText={`${lang === 'pt' ? 'Atualizado em' : 'Updated'} ${
-          singleHarness && singleHarness !== 'claude'
-            ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
-            : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
-        }`}
-        sinceText={(singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate)
-          ? `${lang === 'pt' ? 'Desde' : 'Since'} ${format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')} · ${derived.allTimeTotalSessions.toLocaleString()} ${lang === 'pt' ? 'sessões' : 'sessions'}${singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}`
-          : undefined}
         theme={theme}
         onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
         onToggleLang={() => { const next = lang === 'pt' ? 'en' : 'pt'; setLang(next); if (next === 'pt') setCurrency('BRL'); else if (currency === 'BRL') setCurrency('USD') }}
-        onSettings={() => setShowPrefsModal(true)}
         onExport={() => navigate('/export')}
+        principal={iam?.account}
       />}
       {/* Header */}
       <header style={{
@@ -1779,6 +1889,7 @@ export default function AppLayout() {
             </div>
           </div>
         )}
+
 
         {/* Filters — full bar, fixed in the sticky header so it's reachable at any
             scroll position. Hidden on /custom. On mobile the bar is collapsible
@@ -1832,11 +1943,13 @@ export default function AppLayout() {
                   models={models}
                   modelGroups={modelGroups}
                   modelsInProject={modelsInProject}
-                  users={users}
+                  users={usersWithMachines}
                   harnesses={availableHarnesses}
                   presence={data?.presence}
                   lang={lang}
                   compact
+                  teams={teamsList}
+                  machines={machinesList}
                 />
                 {/* Collapse handle */}
                 <button
@@ -1869,18 +1982,25 @@ export default function AppLayout() {
                 models={models}
                 modelGroups={modelGroups}
                 modelsInProject={modelsInProject}
-                users={users}
+                users={usersWithMachines}
                 harnesses={availableHarnesses}
                 presence={data?.presence}
                 lang={lang}
+                summary={{
+                  sessions: derived.totalSessions.toLocaleString(),
+                  cost: fmtCost(derived.totalCostUSD, currency, brlRate),
+                  tokens: fmt(derived.inputTokens + derived.outputTokens),
+                }}
+                teams={teamsList}
+                machines={machinesList}
               />
             </div>
 
-            {/* Right cluster: alerts (warnings + notifications), live toggle, refresh —
-                consolidated here so the header is a single row. Pinned to the top (flex-start
-                on the parent) so it stays in front of the filter controls and doesn't drift
-                down when the active-filter chip bar expands below. */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, paddingTop: 3 }}>
+            {/* Right column: the action cluster (alerts/live/refresh) on top, and the fleet
+                stats strip right-aligned directly beneath it — so "Updated · members · machines ·
+                projects · repos" lines up under the refresh button instead of stretching the bar. */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0, paddingTop: 3 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {data?.healthIssues && data.healthIssues.length > 0 && (
                 <HealthWarnings issues={data.healthIssues} lang={lang} />
               )}
@@ -1921,6 +2041,51 @@ export default function AppLayout() {
                 <RefreshCw size={14} />
               </button>
             </div>
+
+            {/* Fleet stats strip — right-aligned under the action cluster. */}
+            {(() => {
+            const fleetUpdated = singleHarness && singleHarness !== 'claude'
+              ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+              : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+            const fleetFirstDate = singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate
+            const fleetSince = fleetFirstDate
+              ? `${lang === 'pt' ? 'Desde' : 'Since'} ${format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')} · ${derived.allTimeTotalSessions.toLocaleString()} ${lang === 'pt' ? (derived.allTimeTotalSessions === 1 ? 'sessão' : 'sessões') : (derived.allTimeTotalSessions === 1 ? 'session' : 'sessions')}${singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}`
+              : undefined
+            return (
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '2px 8px',
+              fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', maxWidth: '60vw',
+            }}>
+              <span>{lang === 'pt' ? 'Atualizado em' : 'Updated'} <span style={{ color: 'var(--text-secondary)' }}>{fleetUpdated}</span></span>
+              {fleetSince && (<><span style={{ color: 'var(--border)' }}>·</span><span style={{ color: 'var(--text-secondary)' }}>{fleetSince}</span></>)}
+              {isCentral && (<>
+                <span style={{ color: 'var(--border)' }}>·</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <Users size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                  <span style={{ color: 'var(--text-secondary)' }}>{memberCount} {lang === 'pt' ? (memberCount === 1 ? 'membro' : 'membros') : (memberCount === 1 ? 'member' : 'members')}</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{onlineCount}</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{offlineCount}</span>
+                </span>
+                <span style={{ color: 'var(--border)' }}>·</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <Server size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                  <span style={{ color: 'var(--text-secondary)' }}>{machineCount} {lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}</span>
+                </span>
+              </>)}
+              <span style={{ color: 'var(--border)' }}>·</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <FolderOpen size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                <span style={{ color: 'var(--text-secondary)' }}>{projectCount} {lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}</span>
+              </span>
+              <span style={{ color: 'var(--border)' }}>·</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <GitBranch size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                <span style={{ color: 'var(--text-secondary)' }}>{repoCount} {lang === 'pt' ? (repoCount === 1 ? 'repositório' : 'repositórios') : (repoCount === 1 ? 'repository' : 'repositories')}</span>
+              </span>
+            </div>
+            )
+            })()}
+            </div>
           </div>
         )}
 
@@ -1931,6 +2096,12 @@ export default function AppLayout() {
       <main style={{
         maxWidth: 1400,
         margin: '0 auto',
+        width: '100%',
+        boxSizing: 'border-box',
+        flex: 1,
+        // Fill at least the viewport so the footer always sits below the fold (a scroll away),
+        // even on short pages — it never floats up into a half-empty screen.
+        minHeight: '100vh',
         padding: isMobile ? '16px 16px 80px' : '24px 32px',
         display: 'flex',
         flexDirection: 'column',
@@ -1942,62 +2113,26 @@ export default function AppLayout() {
           statsCache,
           filters, setFilters,
           lang, theme, currency, setCurrency, brlRate,
+          chatModel, chatSoundEnabled, chatSoundId,
+          savePreferences,
+          pwaPrompt,
+          onPwaInstalled: () => { setPwaInstalled(true); setPwaPrompt(null) },
+          liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval,
+          riskyMode, setRiskyMode, highlightUpdates, setHighlightUpdates,
           monthlyBudgetUSD, updateBudget,
           totalInputTokens, totalOutputTokens,
           setExpandedChart, setSelectedSession, setInfoModalIndex,
           infoItems,
           cardOrder, setCardOrder: setCardOrder as (o: string[]) => void,
           cardPrecision, setCardPrecision,
-          sessionCountByProject, models, modelGroups, modelsInProject, users,
+          sessionCountByProject, models, modelGroups, modelsInProject, users: usersWithMachines,
           harnesses: data.harnesses,
           isCentral,
+          me: iam?.account,
+          teams: teamsList,
+          machines: machinesList,
         }} />
       </main>
-
-      {/* Unified Settings modal (Preferences + Live + Environment) */}
-      {showPrefsModal && (
-        <PreferencesModal
-          initial={{ lang, theme, currency, cardOrder, cardPrecision, chatModel, chatSoundEnabled, chatSoundId }}
-          onSave={(draft: PrefsDraft) => {
-            setLangState(draft.lang)
-            setThemeState(draft.theme)
-            setCurrencyState(draft.currency)
-            setCardOrder(draft.cardOrder as CardId[])
-            setCardPrecisionState(draft.cardPrecision)
-            if (draft.chatModel) setChatModel(draft.chatModel)
-            setChatSoundEnabled(draft.chatSoundEnabled)
-            setChatSoundId(draft.chatSoundId)
-            fetch('/api/preferences', {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                lang: draft.lang,
-                theme: draft.theme,
-                currency: draft.currency,
-                cardOrder: draft.cardOrder,
-                cardPrecision: draft.cardPrecision,
-                chatModel: draft.chatModel,
-                chatSoundEnabled: draft.chatSoundEnabled,
-                chatSoundId: draft.chatSoundId,
-              }),
-            }).catch(() => {})
-            setShowPrefsModal(false)
-          }}
-          onClose={() => setShowPrefsModal(false)}
-          pwaPrompt={pwaPrompt}
-          onPwaInstalled={() => { setPwaInstalled(true); setPwaPrompt(null) }}
-          liveUpdates={liveUpdates}
-          setLiveUpdates={setLiveUpdates}
-          updateInterval={updateInterval}
-          setUpdateInterval={setUpdateInterval}
-          riskyMode={riskyMode}
-          setRiskyMode={setRiskyMode}
-          highlightUpdates={highlightUpdates}
-          setHighlightUpdates={setHighlightUpdates}
-          harnesses={data.harnesses}
-          presence={data?.presence}
-          />
-      )}
 
       {/* Install Modal — shown once after first data load */}
       {showInstallModal && (
@@ -2094,6 +2229,7 @@ export default function AppLayout() {
           brlRate={brlRate}
           lang={lang}
           central={teamSession?.central === true}
+          workflows={data.workflows}
           onClose={() => setSelectedSession(null)}
         />
       )}
@@ -2118,8 +2254,7 @@ export default function AppLayout() {
         <MobileBottomNav
           lang={lang}
           harnesses={data.harnesses}
-          onSettings={() => setShowPrefsModal(true)}
-          onRefresh={refetch}
+            onRefresh={refetch}
           liveUpdates={liveUpdates}
           onToggleLive={() => setLiveUpdates(v => !v)}
           updateInterval={updateInterval}
@@ -2154,7 +2289,6 @@ export default function AppLayout() {
 
       {/* Footer */}
       <footer style={{
-        marginTop: 64,
         borderTop: '1px solid var(--border)',
         background: 'var(--bg-surface)',
       }}>

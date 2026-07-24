@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries } from './useData'
+import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, sortRepos } from './useData'
+import type { RepoSortKey, RepoStat } from './useData'
 import { format, subDays } from 'date-fns'
 
 // ── calcStreak ────────────────────────────────────────────────────────────────
@@ -948,4 +949,32 @@ describe('computeHarnessSummaries — models[] and costPerMTokens', () => {
     expect(c.models[0]!.costUSD).toBeGreaterThan(0)
     expect(c.costPerMTokens).toBeGreaterThan(0)
   })
+})
+
+// ── sortRepos ──────────────────────────────────────────────────────────────
+
+function repo(p: Partial<RepoStat>): RepoStat {
+  return {
+    id: 'x', remote: '', linked: true, name: 'x', path: '', sessions: 0, messages: 0, tools: 0,
+    costUSD: 0, inputTokens: 0, outputTokens: 0, gitCommits: 0, linesAdded: 0, linesRemoved: 0,
+    filesModified: 0, ciSessions: 0, members: [], harnesses: ['claude'], firstActive: '', lastActive: '',
+    activityByDay: {}, _users: new Set(), _harnesses: new Set(), _paths: {}, ...p,
+  }
+}
+
+test('sortRepos by cost descending then ascending', () => {
+  const repos = [repo({ id: 'a', costUSD: 5 }), repo({ id: 'b', costUSD: 10 }), repo({ id: 'c', costUSD: 3 })]
+  expect(sortRepos(repos, 'cost', 'desc').map(r => r.id)).toEqual(['b', 'a', 'c'])
+  expect(sortRepos(repos, 'cost', 'asc').map(r => r.id)).toEqual(['c', 'a', 'b'])
+})
+
+test('sortRepos by name uses locale compare', () => {
+  const repos = [repo({ id: 'a', name: 'zeta' }), repo({ id: 'b', name: 'alpha' })]
+  expect(sortRepos(repos, 'name', 'asc').map(r => r.name)).toEqual(['alpha', 'zeta'])
+})
+
+test('sortRepos does not mutate the input array', () => {
+  const repos = [repo({ id: 'a', costUSD: 1 }), repo({ id: 'b', costUSD: 2 })]
+  sortRepos(repos, 'cost', 'desc')
+  expect(repos.map(r => r.id)).toEqual(['a', 'b'])
 })

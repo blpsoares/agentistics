@@ -1,34 +1,10 @@
 services:
-  mongo:
-    image: mongo:7
-    command: --replSet rs0
-    restart: unless-stopped
-    healthcheck:
-      test:
-        - CMD
-        - mongosh
-        - --quiet
-        - --eval
-        - |
-          try {
-            rs.status();
-          } catch (e) {
-            rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] });
-          }
-      interval: 10s
-      timeout: 10s
-      retries: 10
-      start_period: 20s
-    # mongo does NOT publish 27017 to the host — only the app service reaches it
-    volumes:
-      - mongo_data:/data/db
-
   app:
     build: .
-    depends_on:
-      mongo:
-        condition: service_healthy
     environment:
+      # Defaults to the bundled local Mongo (added by docker-compose.localdb.yml). Set MONGO_URL
+      # in central.env to an external cluster (e.g. mongodb+srv://…@atlas/) and central.sh will
+      # NOT start the local Mongo — the app connects straight to the external one.
       MONGO_URL: ${MONGO_URL:-mongodb://mongo:27017/?replicaSet=rs0}
       MONGO_DB: ${MONGO_DB:-agentistics}
       AGENTISTICS_TEAM_CENTRAL: "1"
@@ -43,6 +19,10 @@ services:
       PORT: "47291"
       SERVE_STATIC: "1"
     volumes:
+      # The app's writable data dir (preferences, consolidate store, sync state). A named
+      # volume so it survives container recreation (down/up, image upgrade) — otherwise the
+      # archive-mode consent gate + install prompt reappear on every recreate.
+      - agentistics_data:/root/.agentistics
       # Host harness dirs mounted read-only — only read when AGENTISTICS_CENTRAL_USER is
       # set (self-contribution). Harmless (and unused) on a dedicated central; remove these
       # lines if you prefer not to expose the host directories to the container at all.
@@ -57,4 +37,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  mongo_data:
+  agentistics_data:

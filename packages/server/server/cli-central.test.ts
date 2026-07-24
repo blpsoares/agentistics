@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { buildCentralEnv, STANDALONE_COMPOSE, isCentralAction, CENTRAL_ACTIONS } from './cli-central'
+import { buildCentralEnv, STANDALONE_COMPOSE, isCentralAction, CENTRAL_ACTIONS, isBundledMongo, looksLikeMongoUri, BUNDLED_MONGO_URL } from './cli-central'
 
 /** Parse the `KEY=value` lines of a central.env blob into a map (ignores comments/blanks). */
 function parseEnv(blob: string): Record<string, string> {
@@ -84,5 +84,40 @@ describe('isCentralAction', () => {
     for (const a of CENTRAL_ACTIONS) expect(isCentralAction(a)).toBe(true)
     expect(isCentralAction('bogus')).toBe(false)
     expect(isCentralAction('')).toBe(false)
+  })
+})
+
+describe('external database (Atlas) support', () => {
+  function parseEnv(blob: string): Record<string, string> {
+    const out: Record<string, string> = {}
+    for (const line of blob.split('\n')) {
+      if (!line || line.startsWith('#')) continue
+      const eq = line.indexOf('=')
+      if (eq !== -1) out[line.slice(0, eq)] = line.slice(eq + 1)
+    }
+    return out
+  }
+
+  test('buildCentralEnv writes an external MONGO_URL when given, else the bundled one', () => {
+    expect(parseEnv(buildCentralEnv()).MONGO_URL).toBe(BUNDLED_MONGO_URL)
+    const atlas = 'mongodb+srv://u:p@cluster.abc.mongodb.net/?retryWrites=true'
+    expect(parseEnv(buildCentralEnv({ mongoUrl: atlas })).MONGO_URL).toBe(atlas)
+  })
+
+  test('isBundledMongo distinguishes the Docker service from external URIs', () => {
+    expect(isBundledMongo(BUNDLED_MONGO_URL)).toBe(true)
+    expect(isBundledMongo('mongodb://mongo:27017/?replicaSet=rs0')).toBe(true)
+    expect(isBundledMongo('mongodb+srv://u:p@cluster.abc.mongodb.net/')).toBe(false)
+    expect(isBundledMongo('mongodb://my-vps.example.com:27017/db')).toBe(false)
+    expect(isBundledMongo('')).toBe(false)
+  })
+
+  test('looksLikeMongoUri validates connection strings', () => {
+    expect(looksLikeMongoUri('mongodb://host:27017/db')).toBe(true)
+    expect(looksLikeMongoUri('mongodb+srv://u:p@c.mongodb.net/')).toBe(true)
+    expect(looksLikeMongoUri('  mongodb+srv://x  ')).toBe(true)
+    expect(looksLikeMongoUri('http://nope')).toBe(false)
+    expect(looksLikeMongoUri('mongodb://')).toBe(false)
+    expect(looksLikeMongoUri('')).toBe(false)
   })
 })

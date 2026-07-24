@@ -6,7 +6,8 @@ import { TEAM_DIR } from './config'
 import { getTeamCollection } from './mongo'
 import { fromTeamDoc } from './team-store'
 import { loadAllTeamWorkflows } from './team-workflows'
-import { getMemberNameMap } from './team-tokens'
+import { getMemberNameMap, getMemberTeamsMap, getLiveTokenIds } from './team-tokens'
+import { DEFAULT_TEAM_ID } from './teams'
 
 /**
  * Phase-1 "folder union" transport. Reads consolidated SessionMeta JSONs from
@@ -42,14 +43,27 @@ export async function loadTeamSessions(root: string = TEAM_DIR): Promise<Session
  */
 export async function loadTeamSessionsFromMongo(): Promise<SessionMeta[]> {
   const col = await getTeamCollection()
-  const [docs, nameMap] = await Promise.all([
+  const [docs, nameMap, teamMap, liveIds] = await Promise.all([
     col.find({}).toArray(),
     getMemberNameMap().catch(() => ({} as Record<string, string>)),
+    getMemberTeamsMap().catch(() => ({} as Record<string, string[]>)),
+    getLiveTokenIds().catch(() => null),
   ])
-  return docs.map(doc => {
+  // Drop orphaned sessions whose member token was revoked/deleted — otherwise a removed
+  // machine keeps contributing metrics. Only filter when the live-token set loaded cleanly
+  // (null = lookup failed → passthrough rather than hide everything on a transient error).
+  const live = liveIds
+  return docs
+    .filter(doc => !live || live.has(doc.memberId))
+    .map(doc => {
     // Resolve current name from the live tokens table; fall back to the cached value in the doc.
     const resolved = { ...doc, user: nameMap[doc.memberId] ?? doc.user }
-    return fromTeamDoc(resolved)
+    const meta = fromTeamDoc(resolved)
+    const teamIds = teamMap[doc.memberId] ?? [DEFAULT_TEAM_ID]
+    meta.teamIds = teamIds
+    meta.teamId = teamIds[0] ?? DEFAULT_TEAM_ID // primary, for single-value consumers
+    meta.memberId = doc.memberId // re-attach the machine id (fromTeamDoc strips it) for machine filtering
+    return meta
   })
 }
 
@@ -60,6 +74,9 @@ export async function loadTeamSessionsFromMongo(): Promise<SessionMeta[]> {
  * Never throws (best-effort — name-map lookup falls back to {} on failure).
  */
 export async function loadTeamWorkflowsFromMongo(): Promise<WorkflowRun[]> {
-  const nameMap = await getMemberNameMap().catch(() => ({} as Record<string, string>))
-  return loadAllTeamWorkflows(nameMap)
+  const [nameMap, liveIds] = await Promise.all([
+    getMemberNameMap().catch(() => ({} as Record<string, string>)),
+    getLiveTokenIds().catch(() => null),
+  ])
+  return loadAllTeamWorkflows(nameMap, liveIds)
 }

@@ -192,5 +192,16 @@ export function onAgentMessage(
   _ws: ServerWebSocket<AgentSocketData>,
   _raw: string | Buffer,
 ): void {
-  // No message types are currently handled.
+  // No inbound message types are currently handled.
+}
+
+/** Push a JSON message to every live socket of a member (by resolved user). Best-effort — dead
+ *  sockets are skipped. Used by the central to notify a machine of admin actions (e.g. rename). */
+export function notifyMember(user: string, payload: Record<string, unknown>): void {
+  const socks = agentSockets.get(user)
+  if (!socks || socks.size === 0) return
+  const msg = JSON.stringify(payload)
+  for (const ws of socks) {
+    try { ws.send(msg) } catch { /* dead socket — the ping loop will reap it */ }
+  }
 }

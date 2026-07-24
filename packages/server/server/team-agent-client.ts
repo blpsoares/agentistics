@@ -72,9 +72,20 @@ function openConnection(endpoint: string, token: string): void {
     backoffIdx = 0 // successful open — reset backoff
   })
 
-  // No inbound message types are currently handled — the central no longer
-  // requests chat over this channel, and liveness is carried entirely by the
-  // WebSocket ping/pong protocol frames (handled by the runtime, not here).
+  // Inbound admin actions from the central. Currently: 'renamed' — the central renamed this
+  // machine; surface a local notification (with who did it) on the machine's own dashboard.
+  socket.addEventListener('message', (ev: MessageEvent) => {
+    try {
+      const raw = typeof ev.data === 'string' ? ev.data : ''
+      if (!raw) return
+      const data = JSON.parse(raw) as { type?: string; name?: string; actor?: string }
+      if (data?.type === 'renamed') {
+        void import('./sse').then(m => m.broadcastNotification({
+          type: 'info', code: 'machine.renamed', meta: { name: data.name ?? '', actor: data.actor ?? '' },
+        })).catch(() => { /* best-effort */ })
+      }
+    } catch { /* ignore malformed frames */ }
+  })
 
   socket.addEventListener('close', () => {
     if (activeWs === socket) activeWs = null

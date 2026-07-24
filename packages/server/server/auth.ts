@@ -18,6 +18,8 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { TEAM_CENTRAL, TEAM_PASSWORD, TEAM_SESSION_SECRET, TEAM_TLS, CENTRAL_USER } from './config'
+import { getAccount } from './accounts'
+import type { Principal } from './iam-types'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -66,6 +68,57 @@ export function verifySession(
   if (isNaN(expiry) || expiry <= nowMs) return false
   const expected = createHmac('sha256', secret).update(expiryStr).digest('hex')
   return constantTimeEqual(mac, expected)
+}
+
+// ---------------------------------------------------------------------------
+// Principal-carrying session (IAM) — additive; coexists with the legacy
+// password session above until Phase 2 switches login over to accounts.
+// Cookie value: `${expiryMs}.${accountId}.${sessionVersion}.${HMAC(payload)}`.
+// ---------------------------------------------------------------------------
+
+export interface PrincipalCookie {
+  accountId: string
+  sessionVersion: number
+}
+
+/** Sign a principal session. The signed payload is `expiryMs.accountId.sessionVersion`. */
+export function signPrincipalSession(
+  expiryMs: number,
+  accountId: string,
+  sessionVersion: number,
+  secret: string,
+): string {
+  const payload = `${expiryMs}.${accountId}.${sessionVersion}`
+  const mac = createHmac('sha256', secret).update(payload).digest('hex')
+  return `${payload}.${mac}`
+}
+
+/**
+ * Verify a principal session cookie:
+ *   - splits off the trailing `.mac`, verifies HMAC over the payload (constant-time),
+ *   - parses `expiryMs.accountId.sessionVersion`, checks expiry > nowMs.
+ * Returns { accountId, sessionVersion } or null for any malformed/expired/tampered cookie.
+ */
+export function verifyPrincipalSession(
+  cookieValue: string | undefined,
+  secret: string,
+  nowMs: number,
+): PrincipalCookie | null {
+  if (!cookieValue) return null
+  const lastDot = cookieValue.lastIndexOf('.')
+  if (lastDot === -1) return null
+  const payload = cookieValue.slice(0, lastDot)
+  const mac = cookieValue.slice(lastDot + 1)
+  const expected = createHmac('sha256', secret).update(payload).digest('hex')
+  if (!constantTimeEqual(mac, expected)) return null
+  const parts = payload.split('.')
+  if (parts.length !== 3) return null
+  const expiry = parseInt(parts[0]!, 10)
+  const accountId = parts[1]!
+  const sessionVersion = parseInt(parts[2]!, 10)
+  if (isNaN(expiry) || expiry <= nowMs) return null
+  if (!accountId || isNaN(sessionVersion)) return null
+  return { accountId, sessionVersion }
 }
 
 /**
@@ -210,4 +263,30 @@ export function hasValidSession(req: Request): boolean {
   const cookieHeader = req.headers.get('cookie')
   const cookies = parseCookies(cookieHeader)
   return verifySession(cookies[COOKIE_NAME], TEAM_SESSION_SECRET, Date.now())
+}
+
+/**
+ * Resolve the authenticated principal for a request, or null.
+ * Verifies the principal cookie, loads the account, and rejects if the account's
+ * sessionVersion no longer matches the cookie (revocation / password change / logout-all).
+ * Role + memberships are read FRESH from the DB so permission changes take effect immediately.
+ */
+export async function getPrincipal(req: Request): Promise<Principal | null> {
+  const cookies = parseCookies(req.headers.get('cookie'))
+  const parsed = verifyPrincipalSession(cookies[COOKIE_NAME], TEAM_SESSION_SECRET, Date.now())
+  if (!parsed) return null
+  const account = await getAccount(parsed.accountId)
+  if (!account) return null
+  if (account.sessionVersion !== parsed.sessionVersion) return null
+  return { accountId: account._id, role: account.role, memberships: account.memberships }
+}
+
+/**
+ * Build a Set-Cookie header string for a freshly-issued principal session (7-day expiry).
+ * Reuses the module's cookie internals so login/bootstrap flows never re-implement them.
+ */
+export function makePrincipalSessionCookieHeader(accountId: string, sessionVersion: number): string {
+  const expiryMs = Date.now() + SESSION_DURATION_MS
+  const value = signPrincipalSession(expiryMs, accountId, sessionVersion, TEAM_SESSION_SECRET)
+  return makeCookieHeader(value, MAX_AGE_SECONDS)
 }

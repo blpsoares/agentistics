@@ -108,10 +108,23 @@ async function detectServices(): Promise<Services> {
 }
 
 // ── stopping ────────────────────────────────────────────────────────────────
+
+/** Parse `lsof -ti` output into a pid list, dropping blanks and the caller's OWN
+ *  pid. The health check (`isServerRunning` → fetch to PORT) leaves a keep-alive
+ *  client socket open, so `lsof -ti tcp:PORT` returns the CLI's own pid alongside
+ *  the server's — killing the raw list SIGTERM'd the CLI itself before it could
+ *  restart the server. */
+export function pidsToKill(lsofOut: string, selfPid: number): string[] {
+  const self = String(selfPid)
+  return lsofOut.split(/\s+/).filter(Boolean).filter((pid) => pid !== self)
+}
+
 async function stopLocal(s: CliStrings): Promise<void> {
   process.stdout.write(`  ${D}${s.stoppingLocal}${R}\n`)
-  const lsof = await sh(['lsof', '-ti', `tcp:${PORT}`])
-  const pids = lsof.out.split(/\s+/).filter(Boolean)
+  // `-sTCP:LISTEN` targets only the listening server, never a client connection
+  // (e.g. our own health-check socket); pidsToKill drops our pid as a safety net.
+  const lsof = await sh(['lsof', '-ti', `tcp:${PORT}`, '-sTCP:LISTEN'])
+  const pids = pidsToKill(lsof.out, process.pid)
   if (pids.length) { for (const pid of pids) await sh(['kill', pid]) }
   else await sh(['pkill', '-f', 'agentop server'])
   for (let i = 0; i < 20; i++) { if (!(await isServerRunning())) return; await sleep(150) }
@@ -273,6 +286,94 @@ async function runAgentistics(s: CliStrings, localRunning: boolean): Promise<Sta
   return 'handled'
 }
 
+// ── restart (per-service helpers) ───────────────────────────────────────────────
+// `rebuild` (from `--rebuild`) recreates Docker images/containers instead of just bouncing them.
+/** Rebuild + reinstall the native binary from the repo (`bun run bin`: web build → embed assets →
+ *  compile → install to ~/.local/bin/agentop). Returns 'not-repo' when not run from a checkout. */
+export async function rebuildNativeBinary(): Promise<'built' | 'not-repo' | 'failed'> {
+  const inRepo = await Bun.file(join(process.cwd(), 'packages/server/bin/cli.ts')).exists()
+  if (!inRepo) return 'not-repo'
+  const child = spawn('bun', ['run', 'bin'], { cwd: process.cwd(), stdio: 'inherit' })
+  const code = await new Promise<number>(resolve => child.on('exit', c => resolve(c ?? 1)))
+  return code === 0 ? 'built' : 'failed'
+}
+
+async function restartLocalSvc(s: CliStrings, rebuild = false): Promise<void> {
+  // With --rebuild, actually rebuild the native binary (web + embedded assets) so the restart
+  // serves the new frontend/code — not just bounce the old build. Needs the repo checkout.
+  if (rebuild) {
+    process.stdout.write(`  ${D}${s.rebuildingLocal}${R}\n`)
+    const r = await rebuildNativeBinary()
+    if (r === 'not-repo') process.stderr.write(`  ${YE}${s.localRebuildHint}${R}\n`)
+    else if (r === 'failed') process.stderr.write(`  ${YE}${s.localRebuildFailed}${R}\n`)
+  }
+  process.stdout.write(`  ${D}${s.restartingLocal}${R}\n`)
+  await stopLocal(s)
+  startBackground(s)
+}
+async function restartCentralSvc(s: CliStrings, rebuild = false): Promise<void> {
+  process.stdout.write(`  ${D}${rebuild ? s.rebuildingCentral : s.restartingCentral}${R}\n`)
+  // `up` rebuilds/pulls the image and recreates; `restart` just bounces the running container.
+  await runCentral(rebuild ? 'up' : 'restart', [])
+}
+async function restartMachineSvc(s: CliStrings, rebuild = false): Promise<void> {
+  process.stdout.write(`  ${D}${rebuild ? s.rebuildingMachine : s.restartingMachine}${R}\n`)
+  if (rebuild) {
+    const compose = join(process.cwd(), 'docker-compose.machine.yml')
+    if (await Bun.file(compose).exists()) {
+      const child = spawn('docker', ['compose', '-f', compose, 'up', '-d', '--build'], { stdio: 'inherit' })
+      await new Promise<void>((resolve) => child.on('exit', () => resolve()))
+      return
+    }
+    process.stderr.write(`  ${YE}${s.noComposeFrom(process.cwd())}${R}\n`)
+    // fall through to a plain restart so the machine still comes back up
+  }
+  const ids = await dockerIds(`ancestor=${MACHINE_IMAGE}`)
+  if (ids.length) await sh(['docker', 'restart', ...ids])
+}
+
+/** Restart every service currently up. `rebuild` recreates Docker images (central + machine). */
+async function restartRunning(s: CliStrings, svc: Services, rebuild = false): Promise<boolean> {
+  if (!(svc.local || svc.central || svc.machine)) return false
+  if (svc.local) await restartLocalSvc(s, rebuild)
+  if (svc.central) await restartCentralSvc(s, rebuild)
+  if (svc.machine) await restartMachineSvc(s, rebuild)
+  process.stdout.write(`\n  ${GR}${s.restartedAll}${R}\n`)
+  return true
+}
+
+// ── restart submenu (pick one running service, or all) ───────────────────────────
+async function restartMenu(s: CliStrings, svc: Services): Promise<boolean> {
+  const choices: { name: string; value: string }[] = []
+  if (svc.local) choices.push({ name: s.stopLocal, value: 'local' })
+  if (svc.central) choices.push({ name: s.stopCentral, value: 'central' })
+  if (svc.machine) choices.push({ name: s.stopMachine, value: 'machine' })
+  if (choices.length > 1) choices.push({ name: s.stopEverything, value: 'all' })
+  choices.push({ name: s.cancel, value: 'cancel' })
+
+  const pick = await select({ message: s.restartWhich, choices })
+  if (pick === 'cancel') return false
+  if (pick === 'all') return restartRunning(s, svc)
+  if (pick === 'local') await restartLocalSvc(s)
+  if (pick === 'central') await restartCentralSvc(s)
+  if (pick === 'machine') await restartMachineSvc(s)
+  process.stdout.write(`\n  ${GR}${s.restartedDone}${R}\n`)
+  return true
+}
+
+/** Non-interactive `agentop restart --all [--rebuild]`: bounce (or rebuild) every running
+ *  service. Returns an exit code. */
+export async function restartAllServices(rebuild = false): Promise<number> {
+  const s = cliStrings(await resolveLang())
+  const svc = await detectServices()
+  if (!(svc.local || svc.central || svc.machine)) {
+    process.stdout.write(`  ${D}○ ${s.nothingRunning}${R}\n`)
+    return 0
+  }
+  await restartRunning(s, svc, rebuild)
+  return 0
+}
+
 // ── main loop ─────────────────────────────────────────────────────────────────
 export async function runStart(): Promise<StartResult> {
   if (!process.stdin.isTTY) return 'foreground'
@@ -295,6 +396,7 @@ export async function runStart(): Promise<StartResult> {
     ]
     if (mode === 'member') choices.push({ name: s.itemDisconnect, value: 'disconnect', hint: s.itemDisconnectHint })
     else choices.push({ name: s.itemConnect, value: 'connect', hint: s.itemConnectHint })
+    if (anyRunning) choices.push({ name: s.itemRestart, value: 'restart', hint: s.itemRestartHint })
     if (anyRunning) choices.push({ name: s.itemStop, value: 'stop' })
     choices.push({ name: s.itemLanguage, value: 'language' })
     choices.push({ name: s.quit, value: 'quit' })
@@ -322,6 +424,9 @@ export async function runStart(): Promise<StartResult> {
       case 'disconnect':
         await disconnectFlow(s)
         acted = true
+        break
+      case 'restart':
+        acted = await restartMenu(s, svc)
         break
       case 'stop':
         acted = await stopMenu(s, svc)

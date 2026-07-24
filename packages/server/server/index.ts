@@ -1,7 +1,7 @@
 // embeddedDist is loaded inside server/sse.ts (conditional on SERVE_STATIC=1)
 
 import { readFile } from 'node:fs/promises'
-import { PORT, WEB_PORT, TEAM_CENTRAL, TEAM_PASSWORD, TEAM_ORG } from './config'
+import { PORT, WEB_PORT, TEAM_CENTRAL, TEAM_PASSWORD, TEAM_ORG, INGEST_ONLY } from './config'
 import type { Server, ServerWebSocket } from 'bun'
 import { getRates } from './rates'
 import { getVersionInfo, startVersionRecheck } from './version'
@@ -19,7 +19,7 @@ import { PROJECTS_DIR } from './config'
 import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
-import { handleLogin, handleLogout, handleSession, isAuthed, hasValidSession } from './auth'
+import { handleLogout, handleSession, getPrincipal } from './auth'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -42,6 +42,8 @@ import { getArchiveMode } from './preferences'
 import { registerAgent, unregisterAgent, onAgentMessage, onAgentPong, setPresenceChangeHook } from './team-agent'
 import { startAgentClient, reconcileNow } from './team-agent-client'
 import { validateIngestToken } from './team-tokens'
+import { getAccount } from './accounts'
+import { getTeam } from './teams'
 
 // ---------------------------------------------------------------------------
 // Reads the first `cwd` field found in a JSONL session file.
@@ -87,6 +89,48 @@ if (TEAM_CENTRAL) {
   // per request (not cached), so this needs no cache invalidation and no debounce.
   setPresenceChangeHook(() => notifySseClients())
 }
+
+// IAM bootstrap init (central only): ensure indexes + Default team, backfill teamId, and —
+// when no owner exists yet — mint a one-time setup token and print it to the logs.
+if (TEAM_CENTRAL) {
+  void (async () => {
+    try {
+      const { ensureAccountIndexes, hasAnyOwner } = await import('./accounts')
+      const { seedDefaultTeam } = await import('./teams')
+      const { backfillTokenTeamIds } = await import('./team-tokens')
+      const { backfillRepoTeamIds } = await import('./team-repos')
+      await ensureAccountIndexes()
+      await seedDefaultTeam()
+      await backfillTokenTeamIds()
+      await backfillRepoTeamIds()
+      if (!(await hasAnyOwner())) {
+        const { getBootstrapDoc, generateBootstrapToken } = await import('./bootstrap')
+        const existing = await getBootstrapDoc()
+        if (!existing || existing.consumedAt || !existing.tokenHash) {
+          const token = await generateBootstrapToken(new Date().toISOString())
+          console.log(
+            '\n' +
+            '========================================================\n' +
+            '  agentistics — OWNER SETUP REQUIRED\n' +
+            '  No owner account exists yet. Create it with this\n' +
+            '  one-time setup token (POST /api/iam/bootstrap):\n\n' +
+            `      ${token}\n\n` +
+            '  Keep it secret. It is shown only once.\n' +
+            '========================================================\n',
+          )
+        } else {
+          console.log(
+            '\n[agentistics] Owner setup pending — a setup token was already issued ' +
+            '(see earlier logs). Restart with the DB reset, or reissue later via the CLI.\n',
+          )
+        }
+      }
+    } catch (err) {
+      console.error('[agentistics] IAM bootstrap init skipped:', err instanceof Error ? err.message : err)
+    }
+  })()
+}
+
 import('./team-uploader').then(m => m.startUploader()).catch(err => console.error('[team-uploader] failed to start:', err))
 startAgentClient()
 maybeSpawnWatcher()
@@ -109,6 +153,7 @@ const CORS_HEADERS = {
 
 // Routes that are always public (no auth gate applied)
 const AUTH_PUBLIC = new Set([
+  '/api/health',
   '/api/team/login',
   '/api/team/logout',
   '/api/team/session',
@@ -119,6 +164,15 @@ const AUTH_PUBLIC = new Set([
   // validateIngestToken (Bearer token in the Upgrade request headers).
   '/api/team/whoami',
   '/api/team/agent',
+  '/api/iam/status',
+  '/api/iam/bootstrap',
+  '/api/iam/login',
+  '/api/iam/logout',
+  '/api/iam/me',
+  '/api/iam/change-password',
+  '/api/iam/accounts',
+  '/api/iam/teams',
+  '/api/iam/machines',
 ])
 
 // Admin routes that require a real session cookie even on a passwordless central
@@ -126,6 +180,7 @@ const ADMIN_PATHS = new Set([
   '/api/team/members',
   '/api/team/tokens',
   '/api/team/tokens/rotate',
+  '/api/team/repos',
   '/api/team/config',
 ])
 
@@ -157,27 +212,31 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     }
 
     // ---------------------------------------------------------------------------
-    // Auth gate (Phase 3): when central + password set, all /api/* routes require
-    // a valid session cookie except the public allowlist below.
-    // Static assets are always served (the SPA + login UI must load without auth).
+    // Ingest-only hardening: a public-facing central that accepts CI pushes but
+    // exposes nothing else. Everything except POST /api/team/ingest → 404, so an
+    // exposed instance leaks no dashboard, no data, no login — only a token-gated
+    // write endpoint. Pair with a separate PRIVATE dashboard instance on the same Mongo.
     // ---------------------------------------------------------------------------
-    if (
-      TEAM_CENTRAL &&
-      TEAM_PASSWORD &&
-      url.pathname.startsWith('/api/') &&
-      !AUTH_PUBLIC.has(url.pathname) &&
-      !isAuthed(req)
-    ) {
-      return new Response(JSON.stringify({ error: 'auth required' }), {
-        status: 401,
-        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-      })
+    if (INGEST_ONLY && !(url.pathname === '/api/team/ingest' && req.method === 'POST')) {
+      return new Response('Not found', { status: 404, headers: CORS_HEADERS })
     }
 
-    // Admin gate: admin routes require a real session even on a passwordless central.
-    if (TEAM_CENTRAL && ADMIN_PATHS.has(url.pathname) && !hasValidSession(req)) {
-      return new Response(JSON.stringify({ error: 'auth required' }), { status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+    // ---------------------------------------------------------------------------
+    // Auth gate (Phase 5): account-principal auth on the central.
+    // All /api/* routes require a valid account session except the public allowlist.
+    // Static assets are always served (the SPA + login UI must load without auth).
+    // ---------------------------------------------------------------------------
+    if (TEAM_CENTRAL && url.pathname.startsWith('/api/') && !AUTH_PUBLIC.has(url.pathname)) {
+      const principal = await getPrincipal(req)
+      if (!principal) {
+        return new Response(JSON.stringify({ error: 'auth required' }), { status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+      }
+      // Admin routes require the owner.
+      if (ADMIN_PATHS.has(url.pathname) && principal.role !== 'owner') {
+        return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+      }
     }
+
 
     if (url.pathname === '/api/events' && req.method === 'GET') {
       const stream = new ReadableStream<Uint8Array>({
@@ -795,7 +854,7 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
 
     if (url.pathname === '/api/data' && req.method === 'GET') {
       try {
-        const data = await buildApiResponse()
+        let data = await buildApiResponse()
         // Presence is live (in-memory sockets + heartbeat) — merge it in AFTER the cached
         // build so online/offline + latency stay fresh without recomputing the whole response.
         let extra: { presence?: unknown; includeOfflineData?: boolean } = {}
@@ -809,6 +868,12 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
             getCentralConfig().catch(() => null),
           ])
           extra = { presence, includeOfflineData: cfg?.includeOfflineData ?? true }
+          // Apply per-team scoping for non-owner principals
+          const principal = await getPrincipal(req)
+          if (principal && principal.role !== 'owner') {
+            const { scopeAppDataToTeams, visibleTeamIdsOf } = await import('./team-scope')
+            data = scopeAppDataToTeams(data, visibleTeamIdsOf(principal))
+          }
         }
         // Live open-session detection — computed per request (not part of the cached build)
         // so it reflects `claude` processes in real time.
@@ -833,10 +898,7 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     // ---------------------------------------------------------------------------
 
     if (url.pathname === '/api/team/login' && req.method === 'POST') {
-      const res = await handleLogin(req)
-      const headers = new Headers(res.headers)
-      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
-      return new Response(res.body, { status: res.status, headers })
+      return new Response(JSON.stringify({ ok: false, error: 'shared-password login retired; use account login' }), { status: 410, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
     }
 
     if (url.pathname === '/api/team/logout' && req.method === 'POST') {
@@ -853,6 +915,91 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       return new Response(res.body, { status: res.status, headers })
     }
 
+    if (url.pathname === '/api/iam/status' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleIamStatus } = await import('./iam-handlers')
+      const res = await handleIamStatus()
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/bootstrap' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleBootstrap } = await import('./iam-handlers')
+      const res = await handleBootstrap(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/login' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleIamLogin } = await import('./iam-handlers')
+      const res = await handleIamLogin(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/logout' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleLogout } = await import('./auth')
+      const res = handleLogout(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/me' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleIamMe } = await import('./iam-handlers')
+      const res = await handleIamMe(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/change-password' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleChangePassword } = await import('./iam-handlers')
+      const res = await handleChangePassword(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/accounts' && (req.method === 'GET' || req.method === 'POST' || req.method === 'PATCH' || req.method === 'DELETE')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleAccounts } = await import('./iam-handlers')
+      const res = await handleAccounts(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/teams' && (req.method === 'GET' || req.method === 'POST' || req.method === 'DELETE')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleTeams } = await import('./iam-handlers')
+      const res = await handleTeams(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/machines' && (req.method === 'GET' || req.method === 'POST' || req.method === 'DELETE')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleMachines } = await import('./iam-handlers')
+      const res = await handleMachines(req)
+      // Revoke/rotate change the member set — refresh dashboards.
+      if ((req.method === 'DELETE' || req.method === 'POST') && res.status >= 200 && res.status < 300) {
+        const { triggerSseNotification } = await import('./sse'); triggerSseNotification()
+      }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
     // GET /api/team/status — member-side live connection status for the status pill.
     // Reports this machine's last successful contact with the central + current error state.
     if (url.pathname === '/api/team/status' && req.method === 'GET') {
@@ -862,12 +1009,24 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       ])
       const team = (await readPreferences()).team
       const st = getUploaderStatus()
+      // Best-effort round-trip latency to the central (member mode only) — a quick timed ping of
+      // the public policy endpoint. null when solo, offline, or the request fails.
+      let latencyMs: number | null = null
+      if (team?.mode === 'member' && team.endpoint) {
+        try {
+          const base = team.endpoint.replace(/\/+$/, '')
+          const t0 = Date.now()
+          const r = await fetch(`${base}/api/team/policy`, { signal: AbortSignal.timeout(4000) })
+          if (r.ok) latencyMs = Date.now() - t0
+        } catch { /* offline — leave null */ }
+      }
       return new Response(JSON.stringify({
         mode: team?.mode ?? 'solo',
         user: team?.user ?? '',
         endpoint: team?.endpoint ?? '',
         lastSuccessAt: st.lastSuccessAt,
         errKind: st.errKind,
+        latencyMs,
       }), { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
     }
 
@@ -945,6 +1104,35 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       const { handleRotateToken } = await import('./team-admin')
       const res = await handleRotateToken(req)
       // Rotation migrates the member's history to the new identity key — refresh the dashboard.
+      if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // Repositories — GitHub Actions registration (admin-gated on the central).
+    if (url.pathname === '/api/team/repos' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleListRepos } = await import('./team-admin')
+      const res = await handleListRepos(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/team/repos' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleRegisterRepo } = await import('./team-admin')
+      const res = await handleRegisterRepo(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/team/repos' && req.method === 'DELETE') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleUnregisterRepo } = await import('./team-admin')
+      const res = await handleUnregisterRepo(req)
       if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
@@ -1078,11 +1266,17 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
 
     if (url.pathname === '/api/team/config' && req.method === 'PUT') {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
-      let body: { pushIntervalSec?: unknown; includeOfflineData?: unknown }
+      let body: { pushIntervalSec?: unknown; includeOfflineData?: unknown; publicUrl?: unknown }
       try {
-        body = await req.json() as { pushIntervalSec?: unknown; includeOfflineData?: unknown }
+        body = await req.json() as { pushIntervalSec?: unknown; includeOfflineData?: unknown; publicUrl?: unknown }
       } catch {
         return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      if (body.publicUrl !== undefined && typeof body.publicUrl !== 'string') {
+        return new Response(JSON.stringify({ error: 'publicUrl must be a string' }), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -1099,9 +1293,10 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
-      const { setPushInterval, setIncludeOfflineData, getCentralConfig } = await import('./central-config')
+      const { setPushInterval, setIncludeOfflineData, setPublicUrl, getCentralConfig } = await import('./central-config')
       if (typeof body.pushIntervalSec === 'number') await setPushInterval(body.pushIntervalSec)
       if (typeof body.includeOfflineData === 'boolean') await setIncludeOfflineData(body.includeOfflineData)
+      if (typeof body.publicUrl === 'string') await setPublicUrl(body.publicUrl)
       const config = await getCentralConfig()
       // A policy change (offline-data default) affects every viewer → nudge them to refetch.
       if (typeof body.includeOfflineData === 'boolean') triggerSseNotification()
@@ -1163,7 +1358,28 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
       const tokenResult = await validateIngestToken(bearer)
       if (tokenResult.ok) {
-        return new Response(JSON.stringify({ ok: true, user: tokenResult.user, org: TEAM_ORG }), {
+        // For machine tokens (bound to an account), also surface the machine's
+        // bound identity: machineName (token label), teamId, team name, and the owner's email.
+        // Only non-secret account fields are exposed — never passwordHash.
+        const body: { ok: true; user: string; org: string; machineName?: string; teamId?: string; email?: string; team?: string } = {
+          ok: true,
+          user: tokenResult.user,
+          org: TEAM_ORG,
+        }
+        // machineName (token label) + teamId are available for EVERY machine token, not just
+        // account-bound ones — so a machine always shows its own name + owner user, even legacy
+        // (no-account) tokens. email requires the linked account.
+        if (tokenResult.label) body.machineName = tokenResult.label
+        if (tokenResult.teamId) {
+          body.teamId = tokenResult.teamId
+          const t = await getTeam(tokenResult.teamId)
+          if (t) body.team = t.name
+        }
+        if (tokenResult.accountId) {
+          const account = await getAccount(tokenResult.accountId)
+          if (account?.email) body.email = account.email
+        }
+        return new Response(JSON.stringify(body), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })

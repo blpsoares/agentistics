@@ -50,6 +50,10 @@ export const NOTIFICATION_TEXT: Record<string, { pt: Localized; en: Localized }>
     pt: { title: 'Máquina conectada', message: '{user} conectou à central.' },
     en: { title: 'Machine connected', message: '{user} connected to the central.' },
   },
+  'machine.renamed': {
+    pt: { title: 'Máquina renomeada', message: 'Esta máquina foi renomeada para "{name}" por {actor}.' },
+    en: { title: 'Machine renamed', message: 'This machine was renamed to "{name}" by {actor}.' },
+  },
   'app.update_available': {
     pt: { title: 'Atualização disponível', message: 'Uma nova versão do agentistics ({version}) está disponível.' },
     en: { title: 'Update available', message: 'A new version of agentistics ({version}) is available.' },
@@ -71,6 +75,9 @@ export function resolveNotification(n: AppNotification, lang: 'pt' | 'en'): Loca
   if (message && n.meta?.version) {
     message = message.replace('{version}', `v${String(n.meta.version).replace(/^v/, '')}`)
   }
+  // Interpolate {name}/{actor} from meta (e.g. machine.renamed).
+  if (message && n.meta?.name) message = message.replace('{name}', String(n.meta.name))
+  if (message && n.meta?.actor) message = message.replace('{actor}', String(n.meta.actor))
   // Append the HTTP status to the auth-rejected message when the central provided one.
   if (n.code === 'member.auth_rejected' && n.meta?.status && message) {
     message = `${message} (HTTP ${n.meta.status})`

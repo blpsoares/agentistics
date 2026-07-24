@@ -199,6 +199,35 @@ The members panel (`TeamMembers.tsx`, central Settings → Team) can **mint**, *
 
 `packages/web/src/lib/notifications.ts` is a small external store rendered by `NotificationToasts.tsx` (auto-dismiss, animated) and `NotificationBell.tsx` (history + unread badge). Notifications carry a `code` (+ `meta`) and are localized **at render time** (`NOTIFICATION_TEXT`, pt/en) so they follow the language toggle. The server emits them via `broadcastNotification()` (SSE). Fired on member auth/connection errors, "removed from central", "machine connected", and "update available".
 
+## Repository dimension (group by git remote)
+
+Metrics can be grouped **by repository** — the git remote — independently of the local checkout path or which machine produced the session. So a repo's usage aggregates across every dev's laptop *and* its CI runs, even though those live on different machines with different paths.
+
+### The key — `normalizeGitRemote`
+
+`normalizeGitRemote(url)` in `@agentistics/core` collapses any remote form (https / ssh / scp / git, with or without credentials / port / `.git`) into a stable, **protocol-less** key `host/org/repo` (e.g. `github.com/org/repo`). It is the **single source of truth** — repos are never keyed by parsing the local path. `repoShortName(remote)` drops the host for display (`org/repo`); a session with no resolvable remote falls into the "no linked repository" bucket (shown, never hidden).
+
+### How it is captured and threaded
+
+- `server/git.ts getGitRemote(projectPath)` reads `remote.origin.url` and normalizes it (same Windows/WSL + no-prompt guards as the other git helpers).
+- `server/data.ts scanProjectDir` resolves the remote **once per project** and **stamps `SessionMeta.git_remote` onto every session** (plus `ServerProject.gitRemote`). Because it lives on the session, the remote travels into the consolidate store → team uploader → Mongo — the central has no filesystem access to members' repos, so per-session is the only place it can live.
+- Frontend: `useDerivedStats` builds `repoStats` (per-remote aggregate) and honors a `Filters.repos` filter, scoping cost/tokens session-side like a project filter. The **Repositories** page (`RepositoriesPage` → `RepoDetailPage`) renders cards → per-repo detail (Overview / Members / Actions / Sessions / Workflows).
+
+### GitHub Actions — `SessionMeta.ci` + repo registration
+
+An ephemeral Claude Code Actions runner pushes its metrics with `agentop ci-push` → `POST /api/team/ingest`, so a repo's dashboard shows **local devs + cloud agents together**. Attribution is **server-authoritative**: the central stamps `git_remote` + `ci: true` + `user = github-actions` from a *verified* identity (`stampCiSessions`) — a runner can never mis-report its repo. Two auth paths:
+
+- **Keyless GitHub OIDC (recommended)** — the runner presents a short-lived GitHub-signed JWT; the central verifies it against GitHub's JWKS (`server/team-oidc.ts`, via `jose`: issuer / audience / expiry) and checks the `repository` claim against the **registered-repos allowlist**. No secret stored. Enabled by `AGENTISTICS_OIDC_AUDIENCE` on the central.
+- **Repo-bound static token (fallback)** — minted by registration, stored only as a sha256 hash, sent as `Authorization: Bearer`.
+
+**Registering a repo** is an admin action (central **Settings → Team → Repositories**, the `TeamRepos` panel, or `POST /api/team/repos`). It allowlists the normalized remote and mints the fallback CI token; the panel also generates a ready-to-paste workflow push step. Re-registering **rotates** the token; unregistering revokes it (both drop that repo's CI data). CI sessions are keyed by `ciMemberId` (`repo:<remote>`) and power the **Repositories → Actions** view.
+
+### Ingest-only hardening
+
+A cloud runner needs the central reachable without exposing the dashboard. `AGENTISTICS_INGEST_ONLY=1` makes a central serve **only** `POST /api/team/ingest` (404 for everything else, gated right after the OPTIONS handler in `index.ts`) — run it as a public ingest instance sharing Mongo with a separate private dashboard instance.
+
+See [`docs/github-actions.md`](./github-actions.md) for the end-to-end GitHub Actions setup.
+
 ## CLI (`agentop`)
 
 `packages/server/bin/cli.ts` is the single command surface for the compiled binary:

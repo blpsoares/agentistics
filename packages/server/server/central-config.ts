@@ -20,6 +20,9 @@ export interface CentralConfig {
   pushIntervalSec: number
   /** Central policy: whether offline members' data is included in aggregates by default. */
   includeOfflineData: boolean
+  /** Public base URL of this central (no trailing slash). When set, minted machine tokens embed
+   *  it so a machine can auto-fill the endpoint from the pasted token. Empty = not configured. */
+  publicUrl?: string
 }
 
 interface CentralConfigDoc extends Partial<CentralConfig> {
@@ -50,6 +53,7 @@ export async function getCentralConfig(): Promise<CentralConfig> {
     return {
       pushIntervalSec: clampPushInterval(doc.pushIntervalSec ?? PUSH_INTERVAL.DEFAULT_SEC, PUSH_INTERVAL.EXPRESS_MIN_SEC),
       includeOfflineData: doc.includeOfflineData ?? DEFAULT_INCLUDE_OFFLINE,
+      ...(doc.publicUrl ? { publicUrl: doc.publicUrl } : {}),
     }
   } catch {
     // DB unreachable — return safe defaults
@@ -87,6 +91,17 @@ export async function getInstanceId(): Promise<string | null> {
  * Set the includeOfflineData policy, upsert into Mongo, and return the stored value.
  * If Mongo is unreachable, the value is returned without being persisted.
  */
+/** Set the central's public URL (trailing slash stripped; empty clears it). Upsert into Mongo. */
+export async function setPublicUrl(url: string): Promise<string> {
+  const clean = url.trim().replace(/\/+$/, '')
+  try {
+    const db = await getMongoDb()
+    const col = db.collection<CentralConfigDoc>(COLLECTION)
+    await col.updateOne({ _id: DOC_ID }, { $set: { publicUrl: clean } }, { upsert: true })
+  } catch { /* DB unreachable — return the value anyway */ }
+  return clean
+}
+
 export async function setIncludeOfflineData(value: boolean): Promise<boolean> {
   try {
     const db = await getMongoDb()

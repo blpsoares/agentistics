@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Loader2, CheckCircle, XCircle, Users, User, Server, LogOut } from 'lucide-react'
 import { TeamMembers } from './TeamMembers'
-import { PUSH_INTERVAL, type TeamConfig, type MemberPresence } from '@agentistics/core'
+import { PUSH_INTERVAL, type TeamConfig, type MemberPresence, unpackConnectToken } from '@agentistics/core'
 import { pushNotification } from '../lib/notifications'
 import { MemberConnectionStatus } from './MemberConnectionStatus'
 
@@ -39,6 +39,10 @@ interface TestResult {
   error?: string
   user?: string
   org?: string
+  machineName?: string
+  email?: string
+  teamId?: string
+  team?: string
 }
 
 // ── i18n ──────────────────────────────────────────────────────────────────
@@ -59,7 +63,7 @@ const COPY = {
   org:               { en: 'Organization',                 pt: 'Organização' },
   orgSub:            { en: "Namespace for this member's data on the central server", pt: 'Namespace dos dados deste membro no servidor central' },
   token:             { en: 'Bearer token',                 pt: 'Token de acesso' },
-  tokenSub:          { en: 'Matches TEAM_INGEST_TOKEN on the central server; leave blank if none', pt: 'Deve coincidir com TEAM_INGEST_TOKEN no servidor central; deixe em branco se não configurado' },
+  tokenSub:          { en: 'The per-machine token minted for you on the central (Settings → Machines).', pt: 'O token desta máquina, gerado para você na central (Configurações → Máquinas).' },
   testConnection:    { en: 'Test connection',              pt: 'Testar conexão' },
   testing:           { en: 'Testing…',                     pt: 'Testando…' },
   connected:         { en: 'Connected',                    pt: 'Conectado' },
@@ -106,6 +110,10 @@ const COPY = {
     en: "Your team's central enforces a minimum; you can only push less often.",
     pt: 'O central do time exige um mínimo; você só pode enviar com menos frequência.',
   },
+  connectedAs: { en: 'Connected as', pt: 'Conectado como' },
+  machine: { en: 'Machine', pt: 'Máquina' },
+  email: { en: 'Email', pt: 'Email' },
+  teamLabel: { en: 'Team', pt: 'Time' },
 } satisfies Record<string, { en: string; pt: string }>
 
 function c(key: keyof typeof COPY, lang: 'pt' | 'en'): string {
@@ -273,6 +281,16 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
   // There is NO display-name input on the machine: the CENTRAL owns the name (set on the
   // minted token). The member resolves it from the central via whoami on Save and only
   // ever displays it read-only.
+  const [identity, setIdentity] = useState<{
+    user?: string
+    org?: string
+    machineName?: string
+    email?: string
+    team?: string
+  } | null>(null)
+
+  // Track whether the endpoint was auto-filled from the token
+  const [endpointAutoFilled, setEndpointAutoFilled] = useState(false)
 
   // ── Edit/lock state for the member connect form ──────────────────────────
   // Starts locked when already configured; starts open for fresh setup.
@@ -338,13 +356,60 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
       .finally(() => { setIntervalSaving(false) })
   }
 
+  // ── Fetch identity when not editing (member mode, connected) ──────────────
+  useEffect(() => {
+    if (central !== false) return
+    if (team.mode !== 'member') return
+    if (!team.endpoint || !team.token) return
+    if (editing) return
+
+    fetch('/api/team/test-connection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint: team.endpoint, token: team.token }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then((data: TestResult) => {
+        if (data.ok) {
+          setIdentity({
+            user: data.user,
+            org: data.org,
+            machineName: data.machineName,
+            email: data.email,
+            team: data.team,
+          })
+        }
+      })
+      .catch(() => { /* best-effort */ })
+  }, [central, team.mode, team.endpoint, team.token, editing])
+
   function set<K extends keyof TeamConfig>(key: K, value: TeamConfig[K]) {
     userTouched.current = true // user is editing — don't let the async-load lock fire
+
+    // Special handling for token: unpack and auto-fill endpoint if embedded
+    if (key === 'token' && typeof value === 'string') {
+      const { endpoint, secret } = unpackConnectToken(value)
+      if (endpoint) {
+        // Auto-fill the endpoint from the token
+        onChange({ ...team, token: secret, endpoint })
+        setEndpointAutoFilled(true)
+      } else {
+        onChange({ ...team, token: secret })
+        setEndpointAutoFilled(false)
+      }
+      setTestResult(null)
+      setSaveResult(null)
+      return
+    }
+
     onChange({ ...team, [key]: value })
     // Clear test/save results when connection details change
     if (key === 'endpoint' || key === 'org' || key === 'user' || key === 'token') {
       setTestResult(null)
       setSaveResult(null)
+      if (key === 'endpoint') {
+        setEndpointAutoFilled(false) // user manually changed endpoint
+      }
     }
   }
 
@@ -405,6 +470,14 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
         pushNotification({ type: 'error', code: 'central.token_unrecognized' })
         return
       }
+      // Store enriched identity for display
+      setIdentity({
+        user: testData.user,
+        org: testData.org,
+        machineName: testData.machineName,
+        email: testData.email,
+        team: testData.team,
+      })
       // Store the endpoint WITHOUT a trailing slash — otherwise URL builds produce `//api/...`
       // which misses the central's exact-match routes (pushes hit static, WS won't upgrade).
       const teamWithIdentity: typeof team = { ...team, mode: 'member', user: resolvedUser, org: resolvedOrg, endpoint: team.endpoint.replace(/\/+$/, '') }
@@ -630,9 +703,18 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
             disabled={!editing}
           />
 
+          {/* Show note when endpoint was auto-filled from token */}
+          {editing && endpointAutoFilled && (
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '-4px 0 14px', lineHeight: 1.5, fontStyle: 'italic' }}>
+              {pt
+                ? 'URL preenchida a partir do token.'
+                : 'URL filled from the token.'}
+            </div>
+          )}
+
           {/* NO name input — the central owns the machine's name (set on the minted token).
               It's resolved via whoami on Save and shown read-only below. */}
-          {editing && (
+          {editing && !endpointAutoFilled && (
             <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', margin: '-4px 0 14px', lineHeight: 1.5 }}>
               {pt
                 ? 'O nome desta máquina é definido pela central (no token). Nada a preencher aqui.'
@@ -641,17 +723,39 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
           )}
 
           {/* Read-only identity resolved from the central via the bearer token */}
-          {!editing && team.user && (
+          {!editing && (identity || team.user) && (
             <div style={{
-              padding: '8px 12px', borderRadius: 7, marginBottom: 14,
+              padding: '10px 14px', borderRadius: 7, marginBottom: 14,
               background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-              fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6,
             }}>
-              {c('appearsAs', lang)}{' '}
-              <strong style={{ color: 'var(--text-primary)' }}>{team.user}</strong>
-              {team.org && (
-                <span style={{ color: 'var(--text-tertiary)' }}> · org: {team.org}</span>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: 8 }}>
+                {c('connectedAs', lang)}
+              </div>
+              {identity?.machineName && (
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                  <span style={{ color: 'var(--text-tertiary)' }}>{c('machine', lang)}:</span>{' '}
+                  <strong style={{ color: 'var(--text-primary)' }}>{identity.machineName}</strong>
+                </div>
               )}
+              {identity?.email && (
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                  <span style={{ color: 'var(--text-tertiary)' }}>{c('email', lang)}:</span>{' '}
+                  <strong style={{ color: 'var(--text-primary)' }}>{identity.email}</strong>
+                </div>
+              )}
+              {identity?.team && (
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                  <span style={{ color: 'var(--text-tertiary)' }}>{c('teamLabel', lang)}:</span>{' '}
+                  <strong style={{ color: 'var(--text-primary)' }}>{identity.team}</strong>
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                <span style={{ color: 'var(--text-tertiary)' }}>{c('appearsAs', lang)}</span>{' '}
+                <strong style={{ color: 'var(--text-primary)' }}>{identity?.user ?? team.user}</strong>
+                {(identity?.org ?? team.org) && (identity?.org ?? team.org) !== 'default' && (
+                  <span style={{ color: 'var(--text-tertiary)' }}> · org: {identity?.org ?? team.org}</span>
+                )}
+              </div>
             </div>
           )}
 

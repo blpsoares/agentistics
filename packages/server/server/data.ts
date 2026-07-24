@@ -6,7 +6,7 @@ import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
 import { writeWorkflowRuns, loadWorkflowRuns } from './workflow-store'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
-import { UUID_RE, decodeProjectDir, getProjectGitStats } from './git'
+import { UUID_RE, decodeProjectDir, getProjectGitStats, getGitRemote } from './git'
 import { parseSessionJsonl } from './jsonl'
 import { runHealthChecks, analyzeToolHealthIssues, analyzeCacheStaleness } from './health'
 import { extractAgentMetricsFromFile } from './agent-metrics'
@@ -37,6 +37,8 @@ export interface ServerProject {
   name: string
   sessions: { sessionId: string; created: string }[]
   git_stats?: ProjectGitStats
+  /** Normalized git remote (`host/org/repo`, no protocol) of this project's repo, when known. */
+  gitRemote?: string
   /** Team/central only: display names of members who own sessions in this project. */
   users?: string[]
 }
@@ -127,6 +129,7 @@ export async function loadSessionMetas(roots: string[] = [SESSION_META_DIR]): Pr
             })(),
             user_message_timestamps: (data.user_message_timestamps as string[]) ?? [],
             harness: 'claude',
+            git_remote: (data.git_remote as string) || undefined,
             _source: 'meta',
           }
 
@@ -309,6 +312,20 @@ async function scanProjectDir(
     ? sessionDates.reduce((a, b) => a < b ? a : b)
     : undefined
   const git_stats = await getProjectGitStats(projectPath, earliestSession)
+  // Resolve the repo's origin remote once per project. This is the local-machine source of
+  // the group-by-repository key; it's stamped onto every session below so it survives being
+  // pushed to a central (which has no filesystem access to the member's repos) and persisted
+  // to the consolidate store.
+  const gitRemote = await getGitRemote(projectPath)
+
+  // Stamp the remote onto this project's sessions so the dimension travels with each session.
+  if (gitRemote) {
+    for (const s of extraSessions) s.git_remote = gitRemote
+    for (const ps of projectSessions) {
+      const meta = metaMap.get(ps.sessionId)
+      if (meta && !meta.git_remote) meta.git_remote = gitRemote
+    }
+  }
 
   return {
     project: {
@@ -316,6 +333,7 @@ async function scanProjectDir(
       name: projectPath.split('/').filter(Boolean).pop() ?? projDir,
       sessions: projectSessions.sort((a, b) => b.created.localeCompare(a.created)),
       git_stats,
+      gitRemote,
     },
     extraSessions,
     workflowRuns,
@@ -410,6 +428,33 @@ let _resolvedAt = 0
 export function invalidateCache(): void {
   if (_status === 'done') _status = 'idle'
   // 'computing': no-op — let the in-flight computation finish
+}
+
+/** Backfill `git_remote` onto remote-less sessions (and their projects) from any session/project
+ *  at the same `project_path` that already carries a remote. Members stamp git_remote at push time
+ *  from their local repo, but legacy pushes / older consolidated sessions lack it — without this an
+ *  old remote-less session at a now-linked repo shows as a duplicate "no linked repository" card.
+ *  The central has NO filesystem access to members' repos (so a git scan can't resolve it there),
+ *  which is why the remote is sourced from the sessions themselves. Mutates in place; returns the
+ *  number of sessions stamped. */
+function backfillGitRemote(sessions: SessionMeta[], projects: ServerProject[]): number {
+  const pathToRemote = new Map<string, string>()
+  for (const p of projects) if (p.gitRemote) pathToRemote.set(p.path, p.gitRemote)
+  for (const s of sessions) {
+    if (s.git_remote && s.project_path && !pathToRemote.has(s.project_path)) pathToRemote.set(s.project_path, s.git_remote)
+  }
+  if (pathToRemote.size === 0) return 0
+  let n = 0
+  for (const s of sessions) {
+    if (!s.git_remote && s.project_path) {
+      const r = pathToRemote.get(s.project_path)
+      if (r) { s.git_remote = r; n++ }
+    }
+  }
+  for (const p of projects) {
+    if (!p.gitRemote) { const r = pathToRemote.get(p.path); if (r) p.gitRemote = r }
+  }
+  return n
 }
 
 export async function buildApiResponse(): Promise<ApiResponse> {
@@ -643,7 +688,9 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     for (const r of liveWorkflows) workflowsById.set(r.runId, r)
     // `workflows` stays mutable — team/central workflow runs (from Mongo) are unioned in
     // below, after the team-sessions block, then a final sort is applied.
-    let workflows: WorkflowRun[] = [...workflowsById.values()]
+    // Hide empty runs (0 agents) — including any persisted before extraction started dropping
+    // them — so the Dynamic Workflows view never shows "0 agents · nothing ran" skeletons.
+    let workflows: WorkflowRun[] = [...workflowsById.values()].filter(r => r.agents.length > 0)
     if (mode === 'consolidate') {
       const stored = await loadConsolidated()
       const liveIds = new Set(sessions.map(s => s.session_id))
@@ -659,11 +706,25 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
             path: s.project_path,
             name: s.project_path.split('/').filter(Boolean).pop() ?? s.project_path,
             sessions: [{ sessionId: id, created: s.start_time }],
+            gitRemote: s.git_remote || undefined,
           }
           projects.push(np)
           projByPath.set(s.project_path, np)
         }
       }
+    }
+
+    // Backfill git_remote onto remote-less sessions from any session/project at the same path
+    // (see backfillGitRemote). This first pass covers LOCAL sessions; on a MEMBER, persist the
+    // result to the store so the uploader pushes git_remote (the central can only group by remote
+    // and has no filesystem to recover it). It runs AGAIN after the team merge below so a central
+    // also backfills the members' sessions it just read from Mongo.
+    const localBackfilled = backfillGitRemote(sessions, projects)
+    if (localBackfilled > 0 && !TEAM_CENTRAL && mode !== 'off') {
+      await writeConsolidated(sessions).catch(err => console.warn('[repo] store git_remote heal failed:', String(err)))
+      // The healed sessions now differ (git_remote added) → nudge the uploader to re-push so the
+      // central links them without a manual sent-state reset. No-op if not a running member.
+      import('./team-uploader').then(m => m.notifyDataChanged()).catch(() => {})
     }
 
     // Sort sessions by start_time descending (most recent first)
@@ -694,11 +755,14 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
         const existing = projects.find(p => p.path === s.project_path && p.path)
         if (existing) {
           existing.sessions.push({ sessionId: s.session_id, created: s.start_time })
+          // Backfill the repo remote if the project was created from a session that lacked it.
+          if (!existing.gitRemote && s.git_remote) existing.gitRemote = s.git_remote
         } else if (s.project_path) {
           projects.push({
             path: s.project_path,
             name: s.project_path.split('/').filter(Boolean).pop() ?? s.project_path,
             sessions: [{ sessionId: s.session_id, created: s.start_time }],
+            gitRemote: s.git_remote || undefined,
           })
         }
       }
@@ -729,11 +793,14 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
         const existing = projects.find(p => p.path === s.project_path && p.path)
         if (existing) {
           existing.sessions.push({ sessionId: s.session_id, created: s.start_time })
+          // Backfill the repo remote if the project was created from a session that lacked it.
+          if (!existing.gitRemote && s.git_remote) existing.gitRemote = s.git_remote
         } else if (s.project_path) {
           projects.push({
             path: s.project_path,
             name: s.project_path.split('/').filter(Boolean).pop() ?? s.project_path,
             sessions: [{ sessionId: s.session_id, created: s.start_time }],
+            gitRemote: s.git_remote || undefined,
           })
         }
       }
@@ -745,6 +812,12 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       // Each member's deep history is exposed separately via `userStatsCaches` (below) and
       // aggregated per-selected-member on the frontend, so the numbers match each machine
       // exactly. `statsCache` stays the central machine's own (used for CENTRAL_USER).
+
+      // Second backfill pass: now that the members' sessions (from Mongo) are merged in, link any
+      // remote-less session to a repo that ANOTHER session at the same path resolved. Without this
+      // the central's own first pass (local sessions only) never touched the team data, so the
+      // same repo showed up both linked and unlinked. In-memory only (never persisted centrally).
+      backfillGitRemote(sessions, projects)
     }
 
     // Central self-contribution: the central machine's OWN local sessions have no `user`
@@ -786,13 +859,16 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     let userStatsCaches: Record<string, StatsCache> | undefined
     if (TEAM_CENTRAL) {
       const { loadAllMemberStats } = await import('./team-stats')
-      const { getMemberNameMap } = await import('./team-tokens')
-      const [memberStats, nameMap] = await Promise.all([
+      const { getMemberNameMap, getLiveTokenIds } = await import('./team-tokens')
+      const [memberStats, nameMap, liveIds] = await Promise.all([
         loadAllMemberStats().catch(() => [] as { memberId: string; user: string; statsCache: StatsCache }[]),
         getMemberNameMap().catch(() => ({} as Record<string, string>)),
+        getLiveTokenIds().catch(() => null),
       ])
       userStatsCaches = {}
       for (const m of memberStats) {
+        // Skip revoked members — their orphaned statsCache must not keep inflating team KPIs.
+        if (liveIds && !liveIds.has(m.memberId)) continue
         userStatsCaches[nameMap[m.memberId] ?? m.user] = m.statsCache
       }
       if (CENTRAL_USER) userStatsCaches[CENTRAL_USER] = statsCache

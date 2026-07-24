@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcCost, getModelPrice, formatModel, getModelColor, formatProjectName, setHomeDir, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches } from './types'
+import { calcCost, getModelPrice, formatModel, getModelColor, formatProjectName, setHomeDir, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName } from './types'
 import type { ModelUsage, StatsCache } from './types'
 
 describe('mergeStatsCaches', () => {
@@ -282,4 +282,64 @@ test('claude is fully capable; gemini and copilot have tokens/cost/model', () =>
   expect(HARNESS_CAPABILITIES.copilot.tools).toBe(false)
   expect(HARNESS_CAPABILITIES.copilot.agents).toBe(false)
   expect(HARNESS_CAPABILITIES.copilot.gitLines).toBe(true)
+})
+
+test('dynamicWorkflows capability is Claude-only', () => {
+  expect(HARNESS_CAPABILITIES.claude.dynamicWorkflows).toBe(true)
+  expect(HARNESS_CAPABILITIES.codex.dynamicWorkflows).toBe(false)
+  expect(HARNESS_CAPABILITIES.gemini.dynamicWorkflows).toBe(false)
+  expect(HARNESS_CAPABILITIES.copilot.dynamicWorkflows).toBe(false)
+})
+
+describe('normalizeGitRemote', () => {
+  test('collapses https, ssh, scp, and git protocols to host/org/repo', () => {
+    const cases: [string, string][] = [
+      ['https://github.com/org/repo.git', 'github.com/org/repo'],
+      ['https://github.com/org/repo', 'github.com/org/repo'],
+      ['git@github.com:org/repo.git', 'github.com/org/repo'],
+      ['git@github.com:org/repo', 'github.com/org/repo'],
+      ['ssh://git@github.com/org/repo', 'github.com/org/repo'],
+      ['ssh://git@github.com:22/org/repo.git', 'github.com/org/repo'],
+      ['git://github.com/org/repo.git', 'github.com/org/repo'],
+      ['github.com/org/repo', 'github.com/org/repo'],
+    ]
+    for (const [input, expected] of cases) {
+      expect(normalizeGitRemote(input)).toBe(expected)
+    }
+  })
+
+  test('strips embedded credentials incl. CI tokens', () => {
+    expect(normalizeGitRemote('https://user:token@github.com/org/repo.git')).toBe('github.com/org/repo')
+    expect(normalizeGitRemote('https://x-access-token:ghs_abc123@github.com/org/repo')).toBe('github.com/org/repo')
+  })
+
+  test('lowercases host but preserves path case', () => {
+    expect(normalizeGitRemote('https://GitHub.com/Org/Repo.git')).toBe('github.com/Org/Repo')
+  })
+
+  test('handles trailing slashes and nested paths (self-hosted / subgroups)', () => {
+    expect(normalizeGitRemote('https://gitlab.example.com/group/subgroup/repo.git/')).toBe('gitlab.example.com/group/subgroup/repo')
+  })
+
+  test('returns "" for non-remotes, local paths, and junk', () => {
+    expect(normalizeGitRemote('')).toBe('')
+    expect(normalizeGitRemote(undefined)).toBe('')
+    expect(normalizeGitRemote(null)).toBe('')
+    expect(normalizeGitRemote('file:///home/user/repo.git')).toBe('')
+    expect(normalizeGitRemote('/home/user/repo')).toBe('')
+    expect(normalizeGitRemote('justastring')).toBe('')
+  })
+
+  test('is idempotent — normalizing an already-normalized value is a no-op', () => {
+    const once = normalizeGitRemote('git@github.com:org/repo.git')
+    expect(normalizeGitRemote(once)).toBe(once)
+  })
+})
+
+describe('repoShortName', () => {
+  test('drops the host, keeping org/repo', () => {
+    expect(repoShortName('github.com/org/repo')).toBe('org/repo')
+    expect(repoShortName('gitlab.example.com/group/subgroup/repo')).toBe('group/subgroup/repo')
+    expect(repoShortName('')).toBe('')
+  })
 })

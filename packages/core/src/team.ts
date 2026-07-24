@@ -96,3 +96,54 @@ export function filterByHarnesses<T extends { harness?: HarnessId }>(sessions: T
   return sessions.filter(s => set.has(s.harness ?? 'claude'))
 }
 
+/** Multi-select team predicate (central). Empty/undefined = all pass. A session passes if ANY of its
+ *  teams is selected (a machine can be in several teams); falls back to the single `teamId` on legacy
+ *  data. Sessions with no team are excluded when a selection is active. Pure. */
+export function filterByTeams<T extends { teamId?: string; teamIds?: string[] }>(sessions: T[], teams: string[]): T[] {
+  if (!teams || teams.length === 0) return sessions
+  const set = new Set(teams)
+  return sessions.filter(s => {
+    const ids = (s.teamIds && s.teamIds.length) ? s.teamIds : (s.teamId ? [s.teamId] : [])
+    return ids.some(t => set.has(t))
+  })
+}
+
+/** Multi-select machine predicate (central). Empty/undefined = all pass. Matches `session.memberId`
+ *  (the machine's token hash); sessions with no memberId are excluded when active. Pure. */
+export function filterByMachines<T extends { memberId?: string }>(sessions: T[], machines: string[]): T[] {
+  if (!machines || machines.length === 0) return sessions
+  const set = new Set(machines)
+  return sessions.filter(s => !!s.memberId && set.has(s.memberId))
+}
+
+
+// ── Machine connect token (optionally carries the central endpoint) ──────────────
+// The bearer sent to the central is ALWAYS the raw secret. When the central has a public URL
+// configured, the token shown to the user is a composite that also carries the endpoint, so
+// pasting it on a machine auto-fills the URL. Backward compatible: a raw secret parses fine.
+
+/** Pack a connect token, embedding the endpoint when provided. */
+export function packConnectToken(secret: string, endpoint?: string): string {
+  const url = (endpoint ?? '').trim().replace(/\/+$/, '')
+  if (!url) return secret
+  // btoa exists in Bun + browsers; make it URL-safe (no +,/,=).
+  const enc = btoa(url).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  return `act1_${enc}.${secret}`
+}
+
+/** Parse a connect token → { endpoint?, secret }. A raw secret (no embedded URL) returns
+ *  just { secret }. The secret is what must be sent to the central as the bearer. */
+export function unpackConnectToken(token: string): { endpoint?: string; secret: string } {
+  const t = (token ?? '').trim()
+  if (t.startsWith('act1_') && t.includes('.')) {
+    const rest = t.slice('act1_'.length)
+    const dot = rest.indexOf('.')
+    const enc = rest.slice(0, dot)
+    const secret = rest.slice(dot + 1)
+    try {
+      const endpoint = atob(enc.replace(/-/g, '+').replace(/_/g, '/'))
+      if (endpoint && secret) return { endpoint, secret }
+    } catch { /* fall through to raw */ }
+  }
+  return { secret: t }
+}

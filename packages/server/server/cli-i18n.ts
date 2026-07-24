@@ -31,6 +31,8 @@ export interface CliStrings {
   itemDisconnect: string
   itemDisconnectHint: string
   itemStop: string
+  itemRestart: string
+  itemRestartHint: string
   itemLanguage: string
   quit: string
   back: string
@@ -69,6 +71,17 @@ export interface CliStrings {
   stoppingLocal: string
   stoppingCentral: string
   stoppingMachine: string
+  restartWhich: string
+  restartingLocal: string
+  restartingCentral: string
+  restartingMachine: string
+  rebuildingCentral: string
+  rebuildingMachine: string
+  rebuildingLocal: string
+  localRebuildHint: string
+  localRebuildFailed: string
+  restartedAll: string
+  restartedDone: string
   disconnected: string
   noComposeFrom: (dir: string) => string
   runFromRepo: string
@@ -97,6 +110,8 @@ const EN: CliStrings = {
   itemDisconnect: 'Disconnect from the central',
   itemDisconnectHint: 'back to solo',
   itemStop: 'Stop a running service…',
+  itemRestart: 'Restart a running service…',
+  itemRestartHint: 'one, or all',
   itemLanguage: 'Switch to Português',
   quit: 'Quit',
   back: 'Back',
@@ -135,6 +150,17 @@ const EN: CliStrings = {
   stoppingLocal: 'stopping the local server…',
   stoppingCentral: 'stopping the central container…',
   stoppingMachine: 'stopping the machine container…',
+  restartWhich: 'Restart which?',
+  restartingLocal: 'restarting the local server…',
+  restartingCentral: 'restarting the central container…',
+  restartingMachine: 'restarting the machine container…',
+  rebuildingCentral: 'rebuilding the central image and recreating…',
+  rebuildingMachine: 'rebuilding the machine image and recreating…',
+  rebuildingLocal: 'rebuilding the native server (bun run bin)…',
+  localRebuildHint: '--rebuild needs the repo to rebuild the native server. Run this from the agentistics checkout, or `agentop upgrade`. Restarting the existing build.',
+  localRebuildFailed: 'native rebuild failed — restarting the existing build.',
+  restartedAll: 'restarted all running services.',
+  restartedDone: 'service restarted.',
   disconnected: 'disconnected — this machine is back to solo.',
   noComposeFrom: (dir) => `couldn't find docker-compose.machine.yml in ${dir}.`,
   runFromRepo: 'Run agentop start from the agentistics repo to use Docker.',
@@ -163,6 +189,8 @@ const PT: CliStrings = {
   itemDisconnect: 'Desconectar da central',
   itemDisconnectHint: 'voltar para solo',
   itemStop: 'Parar um serviço…',
+  itemRestart: 'Reiniciar um serviço…',
+  itemRestartHint: 'um, ou todos',
   itemLanguage: 'Trocar para English',
   quit: 'Sair',
   back: 'Voltar',
@@ -201,6 +229,17 @@ const PT: CliStrings = {
   stoppingLocal: 'parando o server local…',
   stoppingCentral: 'parando o container da central…',
   stoppingMachine: 'parando o container da máquina…',
+  restartWhich: 'Reiniciar o quê?',
+  restartingLocal: 'reiniciando o server local…',
+  restartingCentral: 'reiniciando o container da central…',
+  restartingMachine: 'reiniciando o container da máquina…',
+  rebuildingCentral: 'reconstruindo a imagem da central e recriando…',
+  rebuildingMachine: 'reconstruindo a imagem da máquina e recriando…',
+  rebuildingLocal: 'reconstruindo o server nativo (bun run bin)…',
+  localRebuildHint: '--rebuild precisa do repo para reconstruir o server nativo. Rode de dentro do checkout do agentistics, ou use `agentop upgrade`. Reiniciando o build atual.',
+  localRebuildFailed: 'falha ao reconstruir o server nativo — reiniciando o build atual.',
+  restartedAll: 'todos os serviços no ar foram reiniciados.',
+  restartedDone: 'serviço reiniciado.',
   disconnected: 'desconectado — esta máquina voltou para solo.',
   noComposeFrom: (dir) => `não achei docker-compose.machine.yml em ${dir}.`,
   runFromRepo: 'Rode agentop start de dentro do repo agentistics para usar Docker.',
