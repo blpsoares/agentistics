@@ -1527,7 +1527,13 @@ export default function AppLayout() {
   const offlineCount = data?.presence ? Object.values(data.presence).filter(p => !p.online).length : 0
   const machineCount = machinesList.length
   const projectCount = data?.projects?.length ?? 0
+  const teamCount = teamsList.length
   const repoCount = useMemo(() => new Set((data?.sessions ?? []).map(s => s.git_remote).filter(Boolean)).size, [data])
+  // Collapsible "fleet stats" tab below the header (updated/members/machines/teams/projects/repos).
+  const [fleetOpen, setFleetOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem('agentistics-fleet-open') !== '0' } catch { return true }
+  })
+  const toggleFleet = () => setFleetOpen(v => { const n = !v; try { localStorage.setItem('agentistics-fleet-open', n ? '1' : '0') } catch { /* ignore */ } return n })
 
   // Members list = users WITH machines only
   const machineUsers = useMemo(() => new Set(machinesList.map(m => m.user)), [machinesList])
@@ -1994,8 +2000,7 @@ export default function AppLayout() {
             {/* Right column: the action cluster (alerts/live/refresh) on top, and the fleet
                 stats strip right-aligned directly beneath it — so "Updated · members · machines ·
                 projects · repos" lines up under the refresh button instead of stretching the bar. */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0, paddingTop: 3 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, paddingTop: 3 }}>
               {/* Filtered totals, immediately left of the action icons */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                 <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{derived.totalSessions.toLocaleString()}</strong> {lang === 'pt' ? 'sessões' : 'sessions'}</span>
@@ -2044,56 +2049,86 @@ export default function AppLayout() {
                 <RefreshCw size={14} />
               </button>
             </div>
-
-            {/* Fleet stats strip — right-aligned under the action cluster. */}
-            {(() => {
-            const fleetUpdated = singleHarness && singleHarness !== 'claude'
-              ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
-              : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
-            const fleetFirstDate = singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate
-            const fleetSince = fleetFirstDate
-              ? `${lang === 'pt' ? 'Desde' : 'Since'} ${format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')} · ${derived.allTimeTotalSessions.toLocaleString()} ${lang === 'pt' ? (derived.allTimeTotalSessions === 1 ? 'sessão' : 'sessões') : (derived.allTimeTotalSessions === 1 ? 'session' : 'sessions')}${singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}`
-              : undefined
-            return (
-            <div style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '2px 8px',
-              fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', maxWidth: '60vw',
-            }}>
-              <span>{lang === 'pt' ? 'Atualizado em' : 'Updated'} <span style={{ color: 'var(--text-secondary)' }}>{fleetUpdated}</span></span>
-              {fleetSince && (<><span style={{ color: 'var(--border)' }}>·</span><span style={{ color: 'var(--text-secondary)' }}>{fleetSince}</span></>)}
-              {isCentral && (<>
-                <span style={{ color: 'var(--border)' }}>·</span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                  <Users size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
-                  <span style={{ color: 'var(--text-secondary)' }}>{memberCount} {lang === 'pt' ? (memberCount === 1 ? 'membro' : 'membros') : (memberCount === 1 ? 'member' : 'members')}</span>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{onlineCount}</span>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{offlineCount}</span>
-                </span>
-                <span style={{ color: 'var(--border)' }}>·</span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                  <Server size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
-                  <span style={{ color: 'var(--text-secondary)' }}>{machineCount} {lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}</span>
-                </span>
-              </>)}
-              <span style={{ color: 'var(--border)' }}>·</span>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <FolderOpen size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
-                <span style={{ color: 'var(--text-secondary)' }}>{projectCount} {lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}</span>
-              </span>
-              <span style={{ color: 'var(--border)' }}>·</span>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <GitBranch size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
-                <span style={{ color: 'var(--text-secondary)' }}>{repoCount} {lang === 'pt' ? (repoCount === 1 ? 'repositório' : 'repositórios') : (repoCount === 1 ? 'repository' : 'repositories')}</span>
-              </span>
-            </div>
-            )
-            })()}
-            </div>
           </div>
         )}
 
         {/* Nav moved to the left sidebar (SideNav) on desktop; mobile uses the bottom nav. */}
       </header>
+
+      {/* Collapsible "fleet stats" tab — a little ear clipped under the header. Expands to show
+          updated/since + members/machines/teams/projects/repos; collapses to just the chevron. */}
+      {data && !isCustomPage && !isMobile && (() => {
+        const fleetUpdated = singleHarness && singleHarness !== 'claude'
+          ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+          : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+        const fleetFirstDate = singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate
+        const fleetSince = fleetFirstDate
+          ? `${lang === 'pt' ? 'Desde' : 'Since'} ${format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')} · ${derived.allTimeTotalSessions.toLocaleString()} ${lang === 'pt' ? (derived.allTimeTotalSessions === 1 ? 'sessão' : 'sessões') : (derived.allTimeTotalSessions === 1 ? 'session' : 'sessions')}${singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}`
+          : undefined
+        const sep = <span style={{ color: 'var(--border)' }}>·</span>
+        const iconSt: React.CSSProperties = { color: 'var(--text-tertiary)', flexShrink: 0 }
+        return (
+          <div style={{ position: 'sticky', top: 0, zIndex: 90, display: 'flex', justifyContent: 'center' }}>
+            <div style={{ position: 'absolute', top: 0, maxWidth: 1400, width: '100%', display: 'flex', justifyContent: 'flex-end', pointerEvents: 'none' }}>
+              <div style={{ pointerEvents: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', marginRight: 32 }}>
+                <button
+                  onClick={toggleFleet}
+                  title={fleetOpen ? (lang === 'pt' ? 'Minimizar' : 'Collapse') : (lang === 'pt' ? 'Mostrar estatísticas' : 'Show stats')}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 5, padding: '2px 10px 3px',
+                    border: '1px solid var(--border)', borderTop: 'none',
+                    borderRadius: '0 0 8px 8px', background: 'var(--bg-surface)',
+                    color: 'var(--text-tertiary)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10.5,
+                  }}
+                >
+                  {lang === 'pt' ? 'Estatísticas' : 'Stats'}
+                  {fleetOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </button>
+                {fleetOpen && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', gap: '2px 9px',
+                    marginTop: 4, padding: '7px 12px', borderRadius: 8, maxWidth: '80vw',
+                    border: '1px solid var(--border)', background: 'var(--bg-surface)', boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
+                    fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums',
+                  }}>
+                    <span>{lang === 'pt' ? 'Atualizado em' : 'Updated'} <span style={{ color: 'var(--text-secondary)' }}>{fleetUpdated}</span></span>
+                    {fleetSince && (<>{sep}<span style={{ color: 'var(--text-secondary)' }}>{fleetSince}</span></>)}
+                    {isCentral && (<>
+                      {sep}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                        <Users size={11} style={iconSt} />
+                        <span style={{ color: 'var(--text-secondary)' }}>{memberCount} {lang === 'pt' ? (memberCount === 1 ? 'membro' : 'membros') : (memberCount === 1 ? 'member' : 'members')}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{onlineCount}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{offlineCount}</span>
+                      </span>
+                      {sep}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                        <Server size={11} style={iconSt} />
+                        <span style={{ color: 'var(--text-secondary)' }}>{machineCount} {lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}</span>
+                      </span>
+                      {sep}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                        <Users size={11} style={iconSt} />
+                        <span style={{ color: 'var(--text-secondary)' }}>{teamCount} {lang === 'pt' ? (teamCount === 1 ? 'time' : 'times') : (teamCount === 1 ? 'team' : 'teams')}</span>
+                      </span>
+                    </>)}
+                    {sep}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <FolderOpen size={11} style={iconSt} />
+                      <span style={{ color: 'var(--text-secondary)' }}>{projectCount} {lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}</span>
+                    </span>
+                    {sep}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <GitBranch size={11} style={iconSt} />
+                      <span style={{ color: 'var(--text-secondary)' }}>{repoCount} {lang === 'pt' ? (repoCount === 1 ? 'repositório' : 'repositórios') : (repoCount === 1 ? 'repository' : 'repositories')}</span>
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Main content — routed pages render here via <Outlet /> */}
       <main style={{
