@@ -4,7 +4,8 @@
  * Sessions are kept by their read-time `teamId` tag; workflows follow their session;
  * projects + user-keyed maps (userStatsCaches, presence) are pruned to visible users.
  */
-import type { SessionMeta } from '@agentistics/core'
+import type { SessionMeta, StatsCache } from '@agentistics/core'
+import { mergeStatsCaches, emptyStatsCache } from '@agentistics/core'
 import type { ServerProject } from './data'
 import type { WorkflowRun } from '@agentistics/core'
 import type { Principal } from './iam-types'
@@ -24,25 +25,36 @@ export function scopeAppDataToTeams<T extends {
   sessions?: SessionMeta[]
   workflows?: WorkflowRun[]
   projects?: ServerProject[]
-  userStatsCaches?: Record<string, unknown>
+  statsCache?: StatsCache
+  userStatsCaches?: Record<string, StatsCache>
   presence?: Record<string, unknown>
-}>(data: T, visible: Set<string>): T {
+}>(data: T, visible: Set<string>, ownedMachineIds: Set<string> = new Set()): T {
   // A session is visible if ANY of its machine's teams is visible to the principal (a machine can
-  // belong to several teams); falls back to the single teamId on legacy data.
+  // belong to several teams; falls back to the single teamId on legacy data), OR the principal owns
+  // the machine that produced it — so a loose machine (no team) is still visible to its owner.
   const sessions = (data.sessions ?? []).filter(s => {
     const ids = (s.teamIds && s.teamIds.length) ? s.teamIds : (s.teamId != null ? [s.teamId] : [])
-    return ids.some(t => visible.has(t))
+    if (ids.some(t => visible.has(t))) return true
+    return !!s.memberId && ownedMachineIds.has(s.memberId)
   })
   const visibleSessionIds = new Set(sessions.map(s => s.session_id))
   const visibleUsers = new Set(sessions.map(s => s.user).filter((u): u is string => Boolean(u)))
   const workflows = (data.workflows ?? []).filter(w => visibleSessionIds.has(w.sessionId))
   const projects = (data.projects ?? []).filter(p => (p.users ?? []).some(u => visibleUsers.has(u)))
+  const userStatsCaches = pickKeys(data.userStatsCaches, visibleUsers)
+  // Rebuild statsCache from ONLY the visible members' caches. The top-level statsCache on a central
+  // is the central machine's own history — exposing it to a scoped principal would leak every
+  // member's totals (Cost/Tokens KPIs fall back to statsCache when no member cache matches). Merging
+  // the visible caches mirrors the frontend's per-member merge; empty when nothing is visible.
+  const visibleCaches = Object.values(userStatsCaches ?? {})
+  const statsCache = visibleCaches.length ? mergeStatsCaches(visibleCaches) : emptyStatsCache()
   return {
     ...data,
     sessions,
     workflows,
     projects,
-    userStatsCaches: pickKeys(data.userStatsCaches, visibleUsers),
+    statsCache,
+    userStatsCaches,
     presence: pickKeys(data.presence, visibleUsers),
   } as T
 }

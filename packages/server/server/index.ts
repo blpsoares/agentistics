@@ -874,11 +874,16 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
             getCentralConfig().catch(() => null),
           ])
           extra = { presence, includeOfflineData: cfg?.includeOfflineData ?? true }
-          // Apply per-team scoping for non-owner principals
+          // Apply per-team scoping for non-owner principals. A non-owner sees sessions from teams
+          // they belong to PLUS any machine they own (a loose machine with no team is visible only
+          // to its owner) — so their own machines never disappear just because they have no team.
           const principal = await getPrincipal(req)
           if (principal && principal.role !== 'owner') {
             const { scopeAppDataToTeams, visibleTeamIdsOf } = await import('./team-scope')
-            data = scopeAppDataToTeams(data, visibleTeamIdsOf(principal))
+            const { listMachines } = await import('./team-tokens')
+            const machines = await listMachines().catch(() => [])
+            const owned = new Set(machines.filter(m => m.accountIds.includes(principal.accountId)).map(m => m.id))
+            data = scopeAppDataToTeams(data, visibleTeamIdsOf(principal), owned)
           }
         }
         // Live open-session detection — computed per request (not part of the cached build)

@@ -52,3 +52,46 @@ test('scopeAppDataToTeams: a multi-team session is visible if ANY of its teamIds
   const scoped = scopeAppDataToTeams(data, new Set(['A']))
   expect(scoped.sessions.map(s => s.session_id)).toEqual(['m1'])
 })
+
+test('scopeAppDataToTeams: a loose session on an OWNED machine stays visible (no team needed)', () => {
+  const data = {
+    sessions: [
+      { session_id: 'own', user: 'me', project_path: '/a', teamIds: [], memberId: 'mine' },   // loose, my machine
+      { session_id: 'other', user: 'x', project_path: '/b', teamIds: [], memberId: 'theirs' }, // loose, not mine
+    ],
+    projects: [{ path: '/a', users: ['me'] }, { path: '/b', users: ['x'] }],
+    userStatsCaches: { me: { x: 1 }, x: { x: 2 } },
+  } as unknown as AppData
+  const scoped = scopeAppDataToTeams(data, new Set<string>(), new Set(['mine']))
+  expect(scoped.sessions.map(s => s.session_id)).toEqual(['own'])
+  expect(Object.keys(scoped.userStatsCaches ?? {})).toEqual(['me'])
+})
+
+test('scopeAppDataToTeams: statsCache is rebuilt from visible member caches, never the global one', () => {
+  const global = { version: 1, totalSessions: 9999, totalMessages: 9999, modelUsage: {}, dailyActivity: [], dailyModelTokens: [], hourCounts: {} }
+  const data = {
+    sessions: [{ session_id: 's1', user: 'alice', project_path: '/a', teamId: 'A' }],
+    projects: [{ path: '/a', users: ['alice'] }],
+    statsCache: global,
+    userStatsCaches: {
+      alice: { version: 1, totalSessions: 5, totalMessages: 50, modelUsage: {}, dailyActivity: [], dailyModelTokens: [], hourCounts: {} },
+      bob: { version: 1, totalSessions: 100, totalMessages: 100, modelUsage: {}, dailyActivity: [], dailyModelTokens: [], hourCounts: {} },
+    },
+  } as unknown as AppData
+  const scoped = scopeAppDataToTeams(data, new Set(['A']))
+  // The central's own global statsCache (9999) must NOT leak; only alice's cache is visible.
+  expect(scoped.statsCache.totalSessions).toBe(5)
+  expect(scoped.statsCache.totalMessages).toBe(50)
+})
+
+test('scopeAppDataToTeams: statsCache is empty when nothing is visible (no leak, no crash)', () => {
+  const global = { version: 1, totalSessions: 9999, totalMessages: 9999, modelUsage: {}, dailyActivity: [], dailyModelTokens: [], hourCounts: {} }
+  const data = {
+    sessions: [{ session_id: 's1', user: 'alice', project_path: '/a', teamId: 'A' }],
+    statsCache: global,
+    userStatsCaches: { alice: { version: 1, totalSessions: 5, totalMessages: 50, modelUsage: {}, dailyActivity: [], dailyModelTokens: [], hourCounts: {} } },
+  } as unknown as AppData
+  const scoped = scopeAppDataToTeams(data, new Set(['ZZZ']))
+  expect(scoped.sessions).toEqual([])
+  expect(scoped.statsCache.totalSessions).toBe(0)
+})
