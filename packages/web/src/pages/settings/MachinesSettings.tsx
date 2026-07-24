@@ -762,17 +762,20 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                       {(() => {
                         const ids = machineTeamIds(m)
                         if (ids.length === 0) return '—'
+                        const names = ids.map(id => teamNameById.get(id) ?? id)
+                        const chip: React.CSSProperties = {
+                          display: 'inline-block', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap', verticalAlign: 'middle',
+                          padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600,
+                          color: 'var(--text-secondary)', background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                        }
+                        // One chip (truncated) + a "+N" pill; full list on hover. Never wraps → scales to many teams.
                         return (
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                            {ids.map(id => (
-                              <span key={id} style={{
-                                display: 'inline-block', padding: '2px 7px', borderRadius: 999, fontSize: 11,
-                                fontWeight: 600, color: 'var(--text-secondary)',
-                                background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                              }}>
-                                {teamNameById.get(id) ?? id}
-                              </span>
-                            ))}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap', minWidth: 0 }} title={names.join(', ')}>
+                            <span style={chip}>{names[0]}</span>
+                            {names.length > 1 && (
+                              <span style={{ ...chip, maxWidth: 'none', flexShrink: 0, color: 'var(--text-tertiary)' }}>+{names.length - 1}</span>
+                            )}
                           </div>
                         )
                       })()}
