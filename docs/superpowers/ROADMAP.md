@@ -120,7 +120,7 @@ English by project convention; conversation with the user is Portuguese.
 - **Recommendation:** build next session with the pending security review (touches the same
   Teams/Users/Machines authz surface). Bounded part (#auto-suggest) could ship first.
 
-#### C4 — Dedicated mobile UI (ULTRA IMPORTANT) 🟨
+#### C4 — Dedicated mobile UI (ULTRA IMPORTANT) ✅
 - **Problem:** after heavy desktop UI work (settings pages, governance/Users/Teams/Machines drawers,
   Select/Checkbox primitives, machine edit drawer, member sidebar status, filters), the **mobile
   experience needs a dedicated pass** to keep UI/UX quality. Governance drawers, tables, the new
@@ -148,9 +148,17 @@ English by project convention; conversation with the user is Portuguese.
      the C3 teams/machines/members) hits 44px. A **global iOS zoom guard** went into `index.css`
      (`@media (max-width: 767px)`, `font-size: 16px !important` on fields) because the governance
      pages style inputs with module-level inline objects a hook cannot reach.
-- **Remaining:** the 390px visual sweep on the real central, as owner and as a plain user. Blocked
-  when implemented: both running `dev:central` vite instances were serving a **stale `App.tsx`
-  transform** and `bun.exe` (Windows) held 47291 — restart one run from the Linux bun first.
+- **Verified at 390px** on the real central (Playwright), signed in as owner *and* as a plain user:
+  account face reachable (Change password / Log out), Users/Machines cards render with 44px actions,
+  the drawer is full-screen with stacked Save/Cancel, the `Select` **flips up** when starved of room
+  below (measured: popover bottom 344 vs trigger top 348, fully inside the viewport), `ConfirmModal`
+  stacks, the C3 member/presence dimensions **hide for a plain user**, and
+  `scrollWidth <= innerWidth` holds on all 11 routes. Desktop at 1440px unchanged (table back,
+  sidebar present, no bottom nav). One target the static pass missed was found and fixed here: the
+  filter picker's **"Back" button was 22px** (`04b5df8`).
+- **Env note:** the sweep required killing two stale `dev:central` runs — both vite instances were
+  serving a stale `App.tsx` transform and `bun.exe` (Windows) held 47291. Always run one instance
+  from the Linux bun.
 
 #### B4-EXT — Accounts ↔ Machines governance + first-login password ✅
 - **What:** machines owned by accounts (token gains `accountId`+machineName); create account with/without a machine; random password + **forced first-login change** (`mustChangePassword` + `POST /api/iam/change-password`); **1 account : N machines**; owner registers machines for any account & grants managers visibility via team memberships (**account PATCH/edit**); Machines page becomes a **scoped view**; `whoami` extended so the machine shows its identity; **Central connection** settings section restored on solo/member (regression fix `87f6671`).
