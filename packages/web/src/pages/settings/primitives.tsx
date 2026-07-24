@@ -1,5 +1,56 @@
 import React from 'react'
-import { Pencil, Check } from 'lucide-react'
+import { Pencil, Check, AlertTriangle } from 'lucide-react'
+
+// ── ConfirmModal ──────────────────────────────────────────────────────────────
+// Centered confirmation dialog for destructive actions (delete/revoke/remove). Renders nothing
+// when `open` is false. Backdrop click + Escape = cancel. The confirm button is red (danger).
+export function ConfirmModal({ open, title, message, confirmLabel, cancelLabel, onConfirm, onCancel }: {
+  open: boolean
+  title: string
+  message: string
+  confirmLabel: string
+  cancelLabel: string
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  React.useEffect(() => {
+    if (!open) return
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel() }
+    document.addEventListener('keydown', h)
+    return () => document.removeEventListener('keydown', h)
+  }, [open, onCancel])
+  if (!open) return null
+  return (
+    <div onClick={onCancel} style={{
+      position: 'fixed', inset: 0, zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(3px)', padding: 16,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width: '100%', maxWidth: 420, background: 'var(--bg-card)', border: '1px solid var(--border)',
+        borderRadius: 12, padding: 22, boxShadow: '0 12px 48px rgba(0,0,0,0.5)',
+        display: 'flex', flexDirection: 'column', gap: 14,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ display: 'inline-flex', padding: 8, borderRadius: 9, background: 'color-mix(in srgb, #ef4444 15%, transparent)', color: '#ef4444' }}>
+            <AlertTriangle size={17} />
+          </span>
+          <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</span>
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.55, margin: 0 }}>{message}</p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 2 }}>
+          <button type="button" onClick={onCancel} style={{
+            padding: '8px 14px', borderRadius: 7, border: '1px solid var(--border)', background: 'transparent',
+            color: 'var(--text-secondary)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+          }}>{cancelLabel}</button>
+          <button type="button" onClick={onConfirm} style={{
+            padding: '8px 14px', borderRadius: 7, border: '1px solid #ef4444', background: '#ef4444',
+            color: '#fff', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+          }}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 // Shared presentational primitives for the settings pages. Extracted from the old
 // PreferencesModal so the settings pages (which replace the modal tabs) keep an
