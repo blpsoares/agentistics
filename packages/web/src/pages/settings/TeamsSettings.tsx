@@ -190,6 +190,22 @@ export default function TeamsSettings() {
     void load()
   }
 
+  // Update the role of a member already in the team (this team's membership only).
+  async function changeMemberRole(accountId: string, role: 'manager' | 'user') {
+    if (!manageTeamId) return
+    const account = accounts.find(a => a.id === accountId)
+    if (!account) return
+    const newMemberships = account.memberships.map(m =>
+      m.teamId === manageTeamId ? { ...m, role } : m)
+    const res = await fetch('/api/iam/accounts', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: accountId, memberships: newMemberships }),
+    })
+    if (!res.ok) { const d = await res.json() as { error?: string }; setManageErr(d.error || `HTTP ${res.status}`); return }
+    void load()
+  }
+
   async function removeMachineFromTeam(machineId: string) {
     if (!manageTeamId) return
     const res = await fetch('/api/iam/machines', {
@@ -473,7 +489,7 @@ export default function TeamsSettings() {
           canEdit={canEditManage}
           onEdit={() => { setManageErr(null); setAddAccountId(''); setAddAccountRole('user'); setEditingSection('members') }}
           onCancel={() => { setAddAccountId(''); setAddAccountRole('user'); setEditingSection(null) }}
-          onSave={() => { setAddAccountId(''); setAddAccountRole('user'); setEditingSection(null) }}
+          onSave={() => { void (async () => { if (addAccountId) await addAccountToTeam(); setAddAccountId(''); setAddAccountRole('user'); setEditingSection(null) })() }}
           labels={manageSectionLabels}
           editChildren={
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -486,14 +502,22 @@ export default function TeamsSettings() {
                   {teamMembers.map(a => {
                     const membership = a.memberships.find(m => m.teamId === manageTeamId)
                     return (
-                      <div key={a.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{a.name}</span>
-                            {membership && <RoleBadge role={membership.role} />}
-                          </div>
+                      <div key={a.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
+                          <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{a.name}</span>
                           <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{a.email}</span>
                         </div>
+                        {canEditManage
+                          ? (
+                            <div style={{ width: 120, flexShrink: 0 }}>
+                              <Select
+                                value={membership?.role ?? 'user'}
+                                onChange={v => void changeMemberRole(a.id, v as 'manager' | 'user')}
+                                options={roleOptions}
+                              />
+                            </div>
+                          )
+                          : membership && <RoleBadge role={membership.role} />}
                         <button type="button" style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }} onClick={() => window.confirm(pt ? 'Remover este membro?' : 'Remove this member?') && void removeAccountFromTeam(a.id, manageTeamId!)}>
                           {pt ? 'Remover' : 'Remove'}
                         </button>
@@ -529,8 +553,8 @@ export default function TeamsSettings() {
                 </div>
                 {addAccountId
                   ? (
-                    <button type="button" style={{ ...primaryBtn, marginBottom: 0 }} onClick={() => void addAccountToTeam()}>
-                      <Plus size={13} />
+                    <button type="button" style={{ ...primaryBtn, marginBottom: 0, whiteSpace: 'nowrap' }} onClick={() => void addAccountToTeam()}>
+                      <Plus size={13} /> {pt ? 'Adicionar' : 'Add'}
                     </button>
                   )
                   : (
@@ -551,12 +575,22 @@ export default function TeamsSettings() {
               {teamMembers.map(a => {
                 const membership = a.memberships.find(m => m.teamId === manageTeamId)
                 return (
-                  <div key={a.id} style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div key={a.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
                       <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{a.name}</span>
-                      {membership && <RoleBadge role={membership.role} />}
+                      <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{a.email}</span>
                     </div>
-                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{a.email}</span>
+                    {canEditManage
+                      ? (
+                        <div style={{ width: 120, flexShrink: 0 }}>
+                          <Select
+                            value={membership?.role ?? 'user'}
+                            onChange={v => void changeMemberRole(a.id, v as 'manager' | 'user')}
+                            options={roleOptions}
+                          />
+                        </div>
+                      )
+                      : membership && <RoleBadge role={membership.role} />}
                   </div>
                 )
               })}
@@ -571,7 +605,7 @@ export default function TeamsSettings() {
           canEdit={canEditManage}
           onEdit={() => { setManageErr(null); setAddMachineId(''); setEditingSection('machines') }}
           onCancel={() => { setAddMachineId(''); setEditingSection(null) }}
-          onSave={() => { setAddMachineId(''); setEditingSection(null) }}
+          onSave={() => { void (async () => { if (addMachineId) await addMachineToTeam(); setAddMachineId(''); setEditingSection(null) })() }}
           labels={manageSectionLabels}
           editChildren={
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -614,8 +648,8 @@ export default function TeamsSettings() {
                 </div>
                 {addMachineId
                   ? (
-                    <button type="button" style={{ ...primaryBtn, marginBottom: 0 }} onClick={() => void addMachineToTeam()}>
-                      <Plus size={13} />
+                    <button type="button" style={{ ...primaryBtn, marginBottom: 0, whiteSpace: 'nowrap' }} onClick={() => void addMachineToTeam()}>
+                      <Plus size={13} /> {pt ? 'Adicionar máquina' : 'Add machine'}
                     </button>
                   )
                   : (
