@@ -617,6 +617,7 @@ function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): st
 
 function MobileBottomNav({
   lang, harnesses, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues, isCentral, hasWorkflows,
+  principal, theme, onToggleTheme, onToggleLang,
 }: {
   lang: Lang
   harnesses?: HarnessId[]
@@ -628,12 +629,27 @@ function MobileBottomNav({
   /** A central updates in real time via SSE — no Live toggle. */
   isCentral?: boolean
   hasWorkflows?: boolean
+  /** Signed-in account. Absent on a solo machine with no IAM — the account block then hides. */
+  principal?: IamAccount
+  theme: Theme
+  onToggleTheme: () => void
+  onToggleLang: () => void
 }) {
   const location = useLocation()
   const navigate = useNavigate()
   const pt = lang === 'pt'
   const [moreOpen, setMoreOpen] = useState(false)
   const orange = 'var(--anthropic-orange)'
+  // The sheet has two faces: the tile grid, and (after tapping the account row) the account
+  // actions. A nested popover behaves badly on a phone, so we swap the body in place instead
+  // of stacking another floating layer over the sheet.
+  const [accountOpen, setAccountOpen] = useState(false)
+  const [pwOpen, setPwOpen] = useState(false)
+  const roleLabel = principal
+    ? (principal.role === 'owner' ? 'Owner' : (principal.memberships.some(m => m.role === 'manager') ? 'Manager' : 'User'))
+    : ''
+  const logout = () => { void fetch('/api/iam/logout', { method: 'POST' }).then(() => window.location.reload()) }
+  const closeSheet = () => { setMoreOpen(false); setAccountOpen(false) }
 
   // Primary destinations live in the bar; the rest go behind a "More" sheet so
   // the bar never crams more than 5 slots on a narrow phone.
@@ -656,12 +672,12 @@ function MobileBottomNav({
     badge?: string
   }
   const navTiles: Tile[] = [
-    { key: 'sessions', label: pt ? 'Sessões' : 'Sessions', icon: Clock, onClick: () => { setMoreOpen(false); navigate('/sessions') }, active: location.pathname.startsWith('/sessions') },
-    { key: 'repositories', label: pt ? 'Repositórios' : 'Repositories', icon: GitBranch, onClick: () => { setMoreOpen(false); navigate('/repositories') }, active: location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo') },
-    { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { setMoreOpen(false); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
-    { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { setMoreOpen(false); navigate('/export') }, active: location.pathname.startsWith('/export') },
+    { key: 'sessions', label: pt ? 'Sessões' : 'Sessions', icon: Clock, onClick: () => { closeSheet(); navigate('/sessions') }, active: location.pathname.startsWith('/sessions') },
+    { key: 'repositories', label: pt ? 'Repositórios' : 'Repositories', icon: GitBranch, onClick: () => { closeSheet(); navigate('/repositories') }, active: location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo') },
+    { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { closeSheet(); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
+    { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { closeSheet(); navigate('/export') }, active: location.pathname.startsWith('/export') },
     ...(harnesses && harnesses.length > 1
-      ? [{ key: 'compare', label: pt ? 'Comparar' : 'Compare', icon: GitCompare, onClick: () => { setMoreOpen(false); navigate('/compare') }, active: location.pathname.startsWith('/compare') } as Tile]
+      ? [{ key: 'compare', label: pt ? 'Comparar' : 'Compare', icon: GitCompare, onClick: () => { closeSheet(); navigate('/compare') }, active: location.pathname.startsWith('/compare') } as Tile]
       : []),
   ]
   const activeIssueCount = healthIssues?.length ?? 0
@@ -672,8 +688,12 @@ function MobileBottomNav({
       onClick: () => onToggleLive(), accent: liveUpdates,
       badge: liveUpdates ? (updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`) : undefined,
     } as Tile]),
-    { key: 'refresh', label: pt ? 'Atualizar' : 'Refresh', icon: RefreshCw, onClick: () => { onRefresh(); setMoreOpen(false) } },
-    { key: 'settings', label: pt ? 'Ajustes' : 'Settings', icon: SlidersHorizontal, onClick: () => { setMoreOpen(false); navigate('/settings') }, active: location.pathname.startsWith('/settings') },
+    { key: 'refresh', label: pt ? 'Atualizar' : 'Refresh', icon: RefreshCw, onClick: () => { onRefresh(); closeSheet() } },
+    { key: 'settings', label: pt ? 'Ajustes' : 'Settings', icon: SlidersHorizontal, onClick: () => { closeSheet(); navigate('/settings') }, active: location.pathname.startsWith('/settings') },
+    // Theme and language live here because the sidebar that hosts them on desktop is not
+    // rendered on mobile. Neither closes the sheet — you toggle and immediately re-judge.
+    { key: 'theme', label: pt ? 'Tema' : 'Theme', icon: theme === 'dark' ? Sun : Moon, onClick: () => onToggleTheme() },
+    { key: 'lang', label: pt ? 'Idioma' : 'Language', icon: Globe, onClick: () => onToggleLang(), badge: pt ? 'EN' : 'PT' },
     // Health warnings moved next to the notification bell in the mobile top bar (its own popover).
   ]
   const allTiles = [...navTiles, ...actionTiles]
@@ -705,11 +725,18 @@ function MobileBottomNav({
     width: '100%', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   }
 
+  const accountActionStyle: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: 10, width: '100%', minHeight: 44,
+    padding: '0 14px', borderRadius: 12, border: '1px solid var(--border)',
+    background: 'var(--bg-elevated)', color: 'var(--text-primary)',
+    fontSize: 13.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', textAlign: 'left',
+  }
+
   return (
     <>
       {/* "More" bottom sheet — square tiles for bigger, friendlier tap targets */}
       <div
-        onClick={() => setMoreOpen(false)}
+        onClick={() => closeSheet()}
         style={{
           position: 'fixed', inset: 0, zIndex: 310, background: 'rgba(0,0,0,0.45)',
           opacity: moreOpen ? 1 : 0,
@@ -729,6 +756,49 @@ function MobileBottomNav({
           width: 36, height: 4, borderRadius: 2, background: 'var(--border)',
           margin: '4px auto 12px',
         }} />
+        {/* Account block — the mobile home for the profile menu that lives in the desktop
+            sidebar. Without it a phone user has no way to change their password or log out. */}
+        {principal && (
+          <button
+            onClick={() => setAccountOpen(o => !o)}
+            aria-expanded={accountOpen}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10, width: '100%', minHeight: 44,
+              padding: '8px 10px', marginBottom: 10, borderRadius: 12,
+              border: `1px solid ${accountOpen ? orange : 'var(--border)'}`,
+              background: accountOpen ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+              cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+            }}
+          >
+            <span style={{
+              width: 32, height: 32, borderRadius: '50%', background: 'var(--bg-surface)',
+              border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', flexShrink: 0,
+            }}>{principal.name.slice(0, 2)}</span>
+            <span style={{ minWidth: 0, flex: 1 }}>
+              <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{principal.name}</span>
+              <span style={{ display: 'block', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{roleLabel}</span>
+              {!isCentral && <span style={{ display: 'block', marginTop: 3 }}><MemberConnectionStatus lang={lang} compact /></span>}
+            </span>
+            <ChevronDown size={16} style={{ flexShrink: 0, color: 'var(--text-tertiary)', transform: accountOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+          </button>
+        )}
+        {accountOpen && principal ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button
+              onClick={() => { setAccountOpen(false); setMoreOpen(false); setPwOpen(true) }}
+              style={accountActionStyle}
+            >
+              <KeyRound size={16} /> {pt ? 'Trocar senha' : 'Change password'}
+            </button>
+            <button
+              onClick={logout}
+              style={{ ...accountActionStyle, color: '#ef4444', borderColor: 'color-mix(in srgb, #ef4444 40%, transparent)' }}
+            >
+              <LogOut size={16} /> {pt ? 'Sair' : 'Log out'}
+            </button>
+          </div>
+        ) : (
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(3, 1fr)',
@@ -770,6 +840,7 @@ function MobileBottomNav({
             )
           })}
         </div>
+        )}
       </div>
 
       <nav
@@ -797,7 +868,7 @@ function MobileBottomNav({
               key={tab.to}
               to={tab.to}
               end={tab.to === '/'}
-              onClick={() => setMoreOpen(false)}
+              onClick={() => closeSheet()}
               style={itemStyle(active)}
             >
               <Icon size={18} />
@@ -805,13 +876,18 @@ function MobileBottomNav({
             </NavLink>
           )
         })}
-        <button onClick={() => setMoreOpen(v => !v)} style={itemStyle(navAction || moreOpen)}>
+        <button
+          onClick={() => { if (moreOpen) closeSheet(); else setMoreOpen(true) }}
+          style={itemStyle(navAction || moreOpen)}
+        >
           <div style={{ position: 'relative' }}>
             <MoreHorizontal size={18} />
           </div>
           <span style={labelStyle}>{pt ? 'Mais' : 'More'}</span>
         </button>
       </nav>
+
+      {pwOpen && <ChangePasswordSelf lang={lang} onClose={() => setPwOpen(false)} />}
     </>
   )
 }
@@ -2366,6 +2442,10 @@ export default function AppLayout() {
           healthIssues={data.healthIssues}
           isCentral={isCentral}
           hasWorkflows={(data.workflows?.length ?? 0) > 0}
+          principal={iam?.account}
+          theme={theme}
+          onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          onToggleLang={() => { const next = lang === 'pt' ? 'en' : 'pt'; setLang(next); if (next === 'pt') setCurrency('BRL'); else if (currency === 'BRL') setCurrency('USD') }}
         />
       )}
 
