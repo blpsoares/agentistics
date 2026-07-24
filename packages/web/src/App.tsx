@@ -1986,11 +1986,6 @@ export default function AppLayout() {
                 harnesses={availableHarnesses}
                 presence={data?.presence}
                 lang={lang}
-                summary={{
-                  sessions: derived.totalSessions.toLocaleString(),
-                  cost: fmtCost(derived.totalCostUSD, currency, brlRate),
-                  tokens: fmt(derived.inputTokens + derived.outputTokens),
-                }}
                 teams={teamsList}
                 machines={machinesList}
               />
@@ -2000,7 +1995,15 @@ export default function AppLayout() {
                 stats strip right-aligned directly beneath it — so "Updated · members · machines ·
                 projects · repos" lines up under the refresh button instead of stretching the bar. */}
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0, paddingTop: 3 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              {/* Filtered totals, immediately left of the action icons */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{derived.totalSessions.toLocaleString()}</strong> {lang === 'pt' ? 'sessões' : 'sessions'}</span>
+                <span style={{ opacity: 0.35 }}>·</span>
+                <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{fmtCost(derived.totalCostUSD, currency, brlRate)}</span>
+                <span style={{ opacity: 0.35 }}>·</span>
+                <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(derived.inputTokens + derived.outputTokens)}</strong> tok</span>
+              </div>
               {data?.healthIssues && data.healthIssues.length > 0 && (
                 <HealthWarnings issues={data.healthIssues} lang={lang} />
               )}
