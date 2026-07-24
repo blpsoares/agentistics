@@ -2,8 +2,9 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Plus, Trash2, Settings } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
-import { SectionHeader, Section, Select, ConfirmModal } from './primitives'
+import { SectionHeader, Section, Select, ConfirmModal, RecordCard, RecordCardAction } from './primitives'
 import { Drawer } from './Drawer'
+import { useIsMobile } from '../../hooks/useIsMobile'
 
 interface Team { _id: string; name: string }
 interface Membership { teamId: string; role: 'manager' | 'user' }
@@ -56,6 +57,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 export default function TeamsSettings() {
   const { lang, me } = useOutletContext<AppContext>()
   const pt = lang === 'pt'
+  const isMobile = useIsMobile()
   const viewerIsOwner = me?.role === 'owner'
   const managedTeamIds = new Set((me?.memberships ?? []).filter(m => m.role === 'manager').map(m => m.teamId))
 
@@ -322,6 +324,36 @@ export default function TeamsSettings() {
         <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{pt ? 'Times' : 'Teams'}</div>
         <button style={primaryBtn} onClick={openTeamDrawer}><Plus size={14} /> {pt ? 'Novo time' : 'New team'}</button>
       </div>
+      {isMobile ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {teams.length === 0 && (
+            <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', padding: '16px 2px' }}>
+              {pt ? 'Nenhum time.' : 'No teams.'}
+            </div>
+          )}
+          {teams.map(t => (
+            <RecordCard
+              key={t._id}
+              title={t.name}
+              onClick={canManageTeam(t._id) ? () => openManageDrawer(t._id) : undefined}
+              fields={[{ label: pt ? 'Membros' : 'Members', value: memberCountOf(t._id) }]}
+              actions={
+                <>
+                  {canManageTeam(t._id) && (
+                    <RecordCardAction label="Manage team" onClick={() => openManageDrawer(t._id)}>
+                      <Settings size={14} /> {pt ? 'Gerenciar' : 'Manage'}
+                    </RecordCardAction>
+                  )}
+                  {/* Any team is deletable now (no special Default) — deletion cascades to detach it. */}
+                  <RecordCardAction label="Delete team" danger onClick={() => setConfirm({ kind: 'team', id: t._id, label: t.name })}>
+                    <Trash2 size={14} /> {pt ? 'Excluir' : 'Delete'}
+                  </RecordCardAction>
+                </>
+              }
+            />
+          ))}
+        </div>
+      ) : (
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
@@ -362,6 +394,7 @@ export default function TeamsSettings() {
           </tbody>
         </table>
       </div>
+      )}
 
       {/* Team create drawer */}
       <Drawer open={teamOpen} onClose={() => setTeamOpen(false)} title={pt ? 'Novo time' : 'New team'}>
