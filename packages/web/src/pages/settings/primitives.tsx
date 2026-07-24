@@ -340,7 +340,7 @@ export function Checkbox({ checked, onChange, label }: { checked: boolean; onCha
   )
 }
 
-export function Select({ value, onChange, options, placeholder, disabled, searchable }: {
+export function Select({ value, onChange, options, placeholder, disabled, searchable, searchPlaceholder }: {
   value: string
   onChange: (v: string) => void
   options: { value: string; label: string }[]
@@ -348,6 +348,8 @@ export function Select({ value, onChange, options, placeholder, disabled, search
   disabled?: boolean
   /** Show a type-to-filter box in the popover. Defaults on when there are many options. */
   searchable?: boolean
+  /** Placeholder for the type-to-filter box. English by default, per the project language rule. */
+  searchPlaceholder?: string
 }) {
   const [open, setOpen] = React.useState(false)
   const [activeIndex, setActiveIndex] = React.useState(-1)
@@ -355,6 +357,11 @@ export function Select({ value, onChange, options, placeholder, disabled, search
   const wrapperRef = React.useRef<HTMLDivElement>(null)
   const listRef = React.useRef<HTMLDivElement>(null)
   const searchRef = React.useRef<HTMLInputElement>(null)
+  const isMobile = useIsMobile()
+  // Inside the settings Drawer the popover can render past the viewport bottom, where it is
+  // unreachable. Measure on open and flip above the trigger when there is not enough room below.
+  const [dropUp, setDropUp] = React.useState(false)
+  const POPOVER_MAX_H = 280
 
   const showSearch = searchable ?? options.length > 8
   const filtered = (showSearch && query.trim())
@@ -386,6 +393,12 @@ export function Select({ value, onChange, options, placeholder, disabled, search
     setQuery('')
     const i = options.findIndex(o => o.value === value)
     setActiveIndex(i >= 0 ? i : 0)
+    const rect = wrapperRef.current?.getBoundingClientRect()
+    if (rect) {
+      const below = window.innerHeight - rect.bottom
+      // Only flip when the space above is actually better — flipping into even less room is worse.
+      setDropUp(below < POPOVER_MAX_H && rect.top > below)
+    }
     setOpen(true)
     if (showSearch) setTimeout(() => searchRef.current?.focus(), 0)
   }
@@ -496,7 +509,7 @@ export function Select({ value, onChange, options, placeholder, disabled, search
           role="listbox"
           style={{
             position: 'absolute',
-            top: 'calc(100% + 4px)',
+            ...(dropUp ? { bottom: 'calc(100% + 4px)' } : { top: 'calc(100% + 4px)' }),
             left: 0,
             right: 0,
             zIndex: 50,
@@ -504,7 +517,7 @@ export function Select({ value, onChange, options, placeholder, disabled, search
             border: '1px solid var(--border)',
             borderRadius: 8,
             boxShadow: '0 8px 28px rgba(0,0,0,0.35)',
-            maxHeight: 280,
+            maxHeight: POPOVER_MAX_H,
             overflowY: 'auto',
             padding: 4,
           }}
@@ -515,11 +528,13 @@ export function Select({ value, onChange, options, placeholder, disabled, search
               value={query}
               onChange={e => { setQuery(e.target.value); setActiveIndex(0) }}
               onKeyDown={handleKeyDown}
-              placeholder="Buscar…"
+              placeholder={searchPlaceholder ?? 'Search…'}
               style={{
                 position: 'sticky', top: 0, zIndex: 1, width: '100%', boxSizing: 'border-box',
-                margin: '0 0 4px', padding: '7px 9px', background: 'var(--bg-elevated)',
-                border: '1px solid var(--border)', borderRadius: 6, fontSize: 13,
+                margin: '0 0 4px', padding: isMobile ? '10px 9px' : '7px 9px', background: 'var(--bg-elevated)',
+                border: '1px solid var(--border)', borderRadius: 6,
+                // 16px minimum on mobile: below it, iOS Safari auto-zooms the viewport on focus.
+                fontSize: isMobile ? 16 : 13,
                 color: 'var(--text-primary)', outline: 'none', fontFamily: 'inherit',
               }}
             />
@@ -538,7 +553,9 @@ export function Select({ value, onChange, options, placeholder, disabled, search
                 onClick={() => handleSelect(opt.value)}
                 onMouseEnter={() => setActiveIndex(idx)}
                 style={{
-                  padding: '8px 10px',
+                  padding: isMobile ? '11px 12px' : '8px 10px',
+                  minHeight: isMobile ? 44 : undefined,
+                  boxSizing: 'border-box',
                   borderRadius: 6,
                   fontSize: 13,
                   cursor: 'pointer',
