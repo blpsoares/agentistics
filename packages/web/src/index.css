@@ -231,6 +231,19 @@ html, body {
   }
 }
 
+/* iOS zoom guard.
+   Safari auto-zooms the viewport whenever a focused field's font-size is under 16px, which
+   leaves the page scrolled sideways and breaks the sticky header. The app styles its fields
+   with inline `style` objects (mostly fontSize 13), and inline styles beat plain CSS rules —
+   hence `!important`. Scoped to mobile and to font-size only, so no desktop styling changes. */
+@media (max-width: 767px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
 /* Horizontal-only scroll for the repo-detail tab bar: keep left/right scroll on
    mobile but hide the scrollbar chrome. overflow-x:auto otherwise promotes
    overflow-y to auto and the tabs' -1px marginBottom shows a vertical scrollbar. */
