@@ -1944,6 +1944,16 @@ export default function AppLayout() {
   const d = derived
   const { statsCache } = data
 
+  // Fleet-strip strings. Lifted out of the desktop-only block so the mobile header can render
+  // the same two facts without duplicating the expressions.
+  const fleetUpdated = singleHarness && singleHarness !== 'claude'
+    ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+    : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+  const fleetFirstDate = singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate
+  const fleetSince = fleetFirstDate
+    ? `${lang === 'pt' ? 'Desde' : 'Since'} ${format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')} · ${derived.allTimeTotalSessions.toLocaleString()} ${lang === 'pt' ? (derived.allTimeTotalSessions === 1 ? 'sessão' : 'sessões') : (derived.allTimeTotalSessions === 1 ? 'session' : 'sessions')}${singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}`
+    : undefined
+
   // Tokens: use model usage totals when available (non-project-filtered), fallback to session-level
   const totalInputTokens = Object.keys(derived.modelUsage).length > 0
     ? Object.values(derived.modelUsage).reduce((s, u) => s + u.inputTokens, 0)
@@ -2113,6 +2123,56 @@ export default function AppLayout() {
                 </button>
               </div>
             </div>
+
+            {/* Totals + fleet stats — the mobile counterpart of the desktop action-cluster numbers
+                and the collapsible fleet tab that hangs under the desktop header. Shares fleetOpen
+                with the desktop tab, so the choice survives a resize. */}
+            <div style={{ borderTop: '1px solid var(--border)' }}>
+              <button
+                onClick={toggleFleet}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, width: '100%', minHeight: 40,
+                  padding: '0 14px', background: 'transparent', border: 'none',
+                  fontFamily: 'inherit', fontSize: 12, cursor: 'pointer',
+                  color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{derived.totalSessions.toLocaleString()}</strong> {lang === 'pt' ? 'sessões' : 'sessions'}</span>
+                <span style={{ opacity: 0.35 }}>·</span>
+                <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{fmtCost(derived.totalCostUSD, currency, brlRate)}</span>
+                <span style={{ opacity: 0.35 }}>·</span>
+                <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(derived.inputTokens + derived.outputTokens)}</strong> tok</span>
+                <ChevronDown size={16} style={{ marginLeft: 'auto', opacity: 0.6, transform: fleetOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+              </button>
+              {fleetOpen && (() => {
+                const chip: React.CSSProperties = {
+                  display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: 999,
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                }
+                const val: React.CSSProperties = { color: 'var(--text-secondary)', fontWeight: 600 }
+                return (
+                  <div style={{
+                    display: 'flex', flexWrap: 'wrap', gap: 6, padding: '2px 14px 10px',
+                    fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums',
+                  }}>
+                    <span style={chip}>{lang === 'pt' ? 'Atualizado' : 'Updated'} <span style={val}>{fleetUpdated}</span></span>
+                    {fleetSince && <span style={chip}><span style={val}>{fleetSince}</span></span>}
+                    {isCentral && (<>
+                      <span style={chip}>
+                        <Users size={11} />
+                        <span style={val}>{memberCount}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{onlineCount}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{offlineCount}</span>
+                      </span>
+                      <span style={chip}><Server size={11} /> <span style={val}>{machineCount}</span> {lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}</span>
+                      <span style={chip}><Users size={11} /> <span style={val}>{teamCount}</span> {lang === 'pt' ? (teamCount === 1 ? 'time' : 'times') : (teamCount === 1 ? 'team' : 'teams')}</span>
+                    </>)}
+                    <span style={chip}><FolderOpen size={11} /> <span style={val}>{projectCount}</span> {lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}</span>
+                    <span style={chip}><GitBranch size={11} /> <span style={val}>{repoCount}</span> {lang === 'pt' ? (repoCount === 1 ? 'repositório' : 'repositórios') : (repoCount === 1 ? 'repository' : 'repositories')}</span>
+                  </div>
+                )
+              })()}
+            </div>
           </div>
         )}
         {data && !isCustomPage && !isMobile && (
@@ -2200,13 +2260,6 @@ export default function AppLayout() {
           lives inside the sticky header so it stays pinned and scrolls down with it; high z-index
           overlays the page. Expands to show updated/since + members/machines/teams/projects/repos. */}
       {data && !isCustomPage && !isMobile && (() => {
-        const fleetUpdated = singleHarness && singleHarness !== 'claude'
-          ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
-          : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
-        const fleetFirstDate = singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate
-        const fleetSince = fleetFirstDate
-          ? `${lang === 'pt' ? 'Desde' : 'Since'} ${format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')} · ${derived.allTimeTotalSessions.toLocaleString()} ${lang === 'pt' ? (derived.allTimeTotalSessions === 1 ? 'sessão' : 'sessões') : (derived.allTimeTotalSessions === 1 ? 'session' : 'sessions')}${singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}`
-          : undefined
         const sep = <span style={{ color: 'var(--border)' }}>·</span>
         const iconSt: React.CSSProperties = { color: 'var(--text-tertiary)', flexShrink: 0 }
         return (
