@@ -10,7 +10,7 @@ import {
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Workflow as WorkflowIcon,
-  GitBranch, Users, LogOut, Server,
+  GitBranch, Users, LogOut, Server, KeyRound,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -52,6 +52,7 @@ import { Login } from './components/Login'
 import { MemberConnectionStatus } from './components/MemberConnectionStatus'
 import { OwnerSetup } from './components/OwnerSetup'
 import { ChangePassword } from './components/ChangePassword'
+import { ChangePasswordSelf } from './components/ChangePasswordSelf'
 import { type ChatModelId } from './lib/chatModels'
 import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
@@ -855,6 +856,33 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
 }) {
   const location = useLocation()
   const pt = lang === 'pt'
+  // Profile menu (popover anchored to the avatar) + self-service change-password modal.
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [pwOpen, setPwOpen] = useState(false)
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
+  const avatarRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (menuRef.current?.contains(t) || avatarRef.current?.contains(t)) return
+      setMenuOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false) }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey) }
+  }, [menuOpen])
+  const openMenu = () => {
+    const r = avatarRef.current?.getBoundingClientRect()
+    if (r) setMenuPos({ top: r.top, left: r.right + 10 })
+    setMenuOpen(o => !o)
+  }
+  const roleLabel = principal
+    ? (principal.role === 'owner' ? 'Owner' : (principal.memberships.some(m => m.role === 'manager') ? 'Manager' : 'User'))
+    : ''
+  const logout = () => { void fetch('/api/iam/logout', { method: 'POST' }).then(() => window.location.reload()) }
   // Repositories highlights across the whole section (list, detail, actions) — Actions lives as a
   // tab inside each repo, so there's no sidebar submenu.
   const inReposSection = location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo')
@@ -930,33 +958,63 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
 
       {/* Footer — Row A account · thin divider · Row B config actions */}
       <div style={{ paddingTop: 10, marginTop: 6, borderTop: '1px solid var(--border)' }}>
-        {/* Row A — account (avatar + name + role, logout right-aligned) */}
-        {principal && (collapsed ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, paddingBottom: 10 }}>
-            <div title={principal.name} style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--bg-elevated)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', flexShrink: 0 }}>{principal.name.slice(0, 2)}</div>
-            <CollapsedTip label={pt ? 'Sair' : 'Log out'} show>
-              <button title={pt ? 'Sair' : 'Log out'} aria-label={pt ? 'Sair' : 'Log out'} onClick={() => { void fetch('/api/iam/logout', { method: 'POST' }).then(() => window.location.reload()) }} style={footBtn}
-                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
-                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
-                <LogOut size={15} />
+        {/* Row A — account: a single profile button (avatar) opening a popover menu */}
+        {principal && (
+          <div style={{ display: 'flex', justifyContent: collapsed ? 'center' : 'stretch', paddingBottom: 10 }}>
+            <CollapsedTip label={principal.name} show={collapsed}>
+              <button ref={avatarRef} onClick={openMenu} aria-haspopup="menu" aria-expanded={menuOpen}
+                title={collapsed ? undefined : principal.name}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, width: collapsed ? 'auto' : '100%',
+                  padding: collapsed ? 0 : '4px 6px', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit',
+                  border: '1px solid transparent', background: menuOpen ? 'var(--bg-elevated)' : 'transparent', transition: 'background 0.15s',
+                }}
+                onMouseEnter={e => { if (!menuOpen) (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-elevated)' }}
+                onMouseLeave={e => { if (!menuOpen) (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}>
+                <span style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--bg-elevated)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', flexShrink: 0 }}>{principal.name.slice(0, 2)}</span>
+                {!collapsed && (
+                  <span style={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
+                    <span style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{principal.name}</span>
+                    <span style={{ display: 'block', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{roleLabel}</span>
+                  </span>
+                )}
+                {!collapsed && <ChevronDown size={14} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />}
               </button>
             </CollapsedTip>
           </div>
-        ) : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 2px 10px', minWidth: 0 }}>
-            <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--bg-elevated)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', flexShrink: 0 }}>{principal.name.slice(0, 2)}</div>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{principal.name}</div>
-              <div style={{ fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{principal.role === 'owner' ? 'Owner' : (principal.memberships.some(m => m.role === 'manager') ? 'Manager' : 'User')}</div>
+        )}
+
+        {/* Profile popover — rendered via portal so it escapes the sidebar's overflow clip */}
+        {principal && menuOpen && menuPos && createPortal(
+          <div ref={menuRef} role="menu"
+            style={{
+              position: 'fixed', top: menuPos.top, left: menuPos.left, transform: 'translateY(-100%)',
+              minWidth: 220, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
+              boxShadow: '0 10px 30px rgba(0,0,0,0.35)', zIndex: 600, padding: 6,
+            }}>
+            <div style={{ padding: '8px 10px 10px', borderBottom: '1px solid var(--border)', marginBottom: 6 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{principal.name}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{principal.email}</div>
+              <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{roleLabel}</div>
             </div>
-            <button title={pt ? 'Sair' : 'Log out'} aria-label={pt ? 'Sair' : 'Log out'} onClick={() => { void fetch('/api/iam/logout', { method: 'POST' }).then(() => window.location.reload()) }}
-              style={{ display: 'inline-flex', padding: 7, borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', flexShrink: 0, transition: 'color 0.15s' }}
-              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)' }}>
-              <LogOut size={15} />
+            <button role="menuitem" onClick={() => { setMenuOpen(false); setPwOpen(true) }}
+              style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 10px', borderRadius: 7, border: 'none', background: 'transparent', color: 'var(--text-secondary)', fontSize: 13, fontWeight: 500, fontFamily: 'inherit', cursor: 'pointer', textAlign: 'left' }}
+              onMouseEnter={e => { const t = e.currentTarget as HTMLButtonElement; t.style.background = 'var(--bg-elevated)'; t.style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { const t = e.currentTarget as HTMLButtonElement; t.style.background = 'transparent'; t.style.color = 'var(--text-secondary)' }}>
+              <KeyRound size={15} /> {pt ? 'Trocar senha' : 'Change password'}
             </button>
-          </div>
-        ))}
+            <button role="menuitem" onClick={() => { setMenuOpen(false); logout() }}
+              style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 10px', borderRadius: 7, border: 'none', background: 'transparent', color: 'var(--text-secondary)', fontSize: 13, fontWeight: 500, fontFamily: 'inherit', cursor: 'pointer', textAlign: 'left' }}
+              onMouseEnter={e => { const t = e.currentTarget as HTMLButtonElement; t.style.background = 'var(--bg-elevated)'; t.style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { const t = e.currentTarget as HTMLButtonElement; t.style.background = 'transparent'; t.style.color = 'var(--text-secondary)' }}>
+              <LogOut size={15} /> {pt ? 'Sair' : 'Log out'}
+            </button>
+          </div>,
+          document.body,
+        )}
+
+        {/* Self-service change-password modal */}
+        {pwOpen && <ChangePasswordSelf lang={lang} onClose={() => setPwOpen(false)} />}
 
         {/* Thin divider between account and actions */}
         {principal && <div style={{ height: 1, background: 'var(--border)', marginBottom: 10 }} />}
