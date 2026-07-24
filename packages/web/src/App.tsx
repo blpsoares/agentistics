@@ -1986,44 +1986,21 @@ export default function AppLayout() {
                 harnesses={availableHarnesses}
                 presence={data?.presence}
                 lang={lang}
-                summary={(() => {
-                  // Updated date: use harness-specific last date when filtering a single non-Claude
-                  // harness, otherwise fall back to statsCache (Claude-canonical).
-                  const updated = singleHarness && singleHarness !== 'claude'
-                    ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
-                    : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
-                  // Since/sessions line (only when firstDate is available)
-                  const firstDate = singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate
-                  const since = firstDate
-                    ? `${lang === 'pt' ? 'Desde' : 'Since'} ${format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')} · ${derived.allTimeTotalSessions.toLocaleString()} ${lang === 'pt' ? (derived.allTimeTotalSessions === 1 ? 'sessão' : 'sessões') : (derived.allTimeTotalSessions === 1 ? 'session' : 'sessions')}${singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}`
-                    : undefined
-                  return {
-                    sessions: derived.totalSessions.toLocaleString(),
-                    cost: fmtCost(derived.totalCostUSD, currency, brlRate),
-                    tokens: fmt(derived.inputTokens + derived.outputTokens),
-                    fleet: {
-                      updated,
-                      since,
-                      members: isCentral ? memberCount : undefined,
-                      online: isCentral ? onlineCount : undefined,
-                      offline: isCentral ? offlineCount : undefined,
-                      machines: isCentral ? machineCount : undefined,
-                      projects: projectCount,
-                      repos: repoCount,
-                      isCentral,
-                    },
-                  }
-                })()}
+                summary={{
+                  sessions: derived.totalSessions.toLocaleString(),
+                  cost: fmtCost(derived.totalCostUSD, currency, brlRate),
+                  tokens: fmt(derived.inputTokens + derived.outputTokens),
+                }}
                 teams={teamsList}
                 machines={machinesList}
               />
             </div>
 
-            {/* Right cluster: alerts (warnings + notifications), live toggle, refresh —
-                consolidated here so the header is a single row. Pinned to the top (flex-start
-                on the parent) so it stays in front of the filter controls and doesn't drift
-                down when the active-filter chip bar expands below. */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, paddingTop: 3 }}>
+            {/* Right column: the action cluster (alerts/live/refresh) on top, and the fleet
+                stats strip right-aligned directly beneath it — so "Updated · members · machines ·
+                projects · repos" lines up under the refresh button instead of stretching the bar. */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0, paddingTop: 3 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {data?.healthIssues && data.healthIssues.length > 0 && (
                 <HealthWarnings issues={data.healthIssues} lang={lang} />
               )}
@@ -2063,6 +2040,51 @@ export default function AppLayout() {
               >
                 <RefreshCw size={14} />
               </button>
+            </div>
+
+            {/* Fleet stats strip — right-aligned under the action cluster. */}
+            {(() => {
+            const fleetUpdated = singleHarness && singleHarness !== 'claude'
+              ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+              : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+            const fleetFirstDate = singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate
+            const fleetSince = fleetFirstDate
+              ? `${lang === 'pt' ? 'Desde' : 'Since'} ${format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')} · ${derived.allTimeTotalSessions.toLocaleString()} ${lang === 'pt' ? (derived.allTimeTotalSessions === 1 ? 'sessão' : 'sessões') : (derived.allTimeTotalSessions === 1 ? 'session' : 'sessions')}${singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}`
+              : undefined
+            return (
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '2px 8px',
+              fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', maxWidth: '60vw',
+            }}>
+              <span>{lang === 'pt' ? 'Atualizado em' : 'Updated'} <span style={{ color: 'var(--text-secondary)' }}>{fleetUpdated}</span></span>
+              {fleetSince && (<><span style={{ color: 'var(--border)' }}>·</span><span style={{ color: 'var(--text-secondary)' }}>{fleetSince}</span></>)}
+              {isCentral && (<>
+                <span style={{ color: 'var(--border)' }}>·</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <Users size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                  <span style={{ color: 'var(--text-secondary)' }}>{memberCount} {lang === 'pt' ? (memberCount === 1 ? 'membro' : 'membros') : (memberCount === 1 ? 'member' : 'members')}</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{onlineCount}</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{offlineCount}</span>
+                </span>
+                <span style={{ color: 'var(--border)' }}>·</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <Server size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                  <span style={{ color: 'var(--text-secondary)' }}>{machineCount} {lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}</span>
+                </span>
+              </>)}
+              <span style={{ color: 'var(--border)' }}>·</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <FolderOpen size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                <span style={{ color: 'var(--text-secondary)' }}>{projectCount} {lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}</span>
+              </span>
+              <span style={{ color: 'var(--border)' }}>·</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <GitBranch size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                <span style={{ color: 'var(--text-secondary)' }}>{repoCount} {lang === 'pt' ? (repoCount === 1 ? 'repositório' : 'repositórios') : (repoCount === 1 ? 'repository' : 'repositories')}</span>
+              </span>
+            </div>
+            )
+            })()}
             </div>
           </div>
         )}
