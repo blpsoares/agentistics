@@ -1050,13 +1050,16 @@ function PickerRow({ selected, onClick, icon, label, count, disabled, tag, dotCo
   tag?: string
   dotColor?: string
 }) {
+  const isMobile = useIsMobile()
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       style={{
         display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-        padding: '7px 10px', borderRadius: 6, border: 'none',
+        padding: isMobile ? '0 10px' : '7px 10px',
+        minHeight: isMobile ? 44 : undefined, boxSizing: 'border-box',
+        borderRadius: 6, border: 'none',
         cursor: disabled ? 'not-allowed' : 'pointer',
         background: selected ? 'var(--anthropic-orange-dim)' : 'transparent',
         color: disabled ? 'var(--text-tertiary)' : selected ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
