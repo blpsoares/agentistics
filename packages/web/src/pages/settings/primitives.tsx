@@ -170,17 +170,26 @@ export function Checkbox({ checked, onChange, label }: { checked: boolean; onCha
   )
 }
 
-export function Select({ value, onChange, options, placeholder, disabled }: {
+export function Select({ value, onChange, options, placeholder, disabled, searchable }: {
   value: string
   onChange: (v: string) => void
   options: { value: string; label: string }[]
   placeholder?: string
   disabled?: boolean
+  /** Show a type-to-filter box in the popover. Defaults on when there are many options. */
+  searchable?: boolean
 }) {
   const [open, setOpen] = React.useState(false)
   const [activeIndex, setActiveIndex] = React.useState(-1)
+  const [query, setQuery] = React.useState('')
   const wrapperRef = React.useRef<HTMLDivElement>(null)
   const listRef = React.useRef<HTMLDivElement>(null)
+  const searchRef = React.useRef<HTMLInputElement>(null)
+
+  const showSearch = searchable ?? options.length > 8
+  const filtered = (showSearch && query.trim())
+    ? options.filter(o => o.label.toLowerCase().includes(query.trim().toLowerCase()))
+    : options
 
   const selectedLabel = options.find(o => o.value === value)?.label ?? placeholder ?? ''
   const isEmpty = !value
@@ -204,9 +213,11 @@ export function Select({ value, onChange, options, placeholder, disabled }: {
   }, [open, activeIndex])
 
   const openMenu = () => {
+    setQuery('')
     const i = options.findIndex(o => o.value === value)
     setActiveIndex(i >= 0 ? i : 0)
     setOpen(true)
+    if (showSearch) setTimeout(() => searchRef.current?.focus(), 0)
   }
   const handleToggle = () => {
     if (disabled) return
@@ -217,6 +228,7 @@ export function Select({ value, onChange, options, placeholder, disabled }: {
   const handleSelect = (optValue: string) => {
     onChange(optValue)
     setOpen(false)
+    setQuery('')
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -228,14 +240,16 @@ export function Select({ value, onChange, options, placeholder, disabled }: {
       return
     }
     switch (e.key) {
-      case 'ArrowDown': e.preventDefault(); setActiveIndex(i => Math.min(options.length - 1, i + 1)); break
+      case 'ArrowDown': e.preventDefault(); setActiveIndex(i => Math.min(filtered.length - 1, i + 1)); break
       case 'ArrowUp': e.preventDefault(); setActiveIndex(i => Math.max(0, i - 1)); break
       case 'Home': e.preventDefault(); setActiveIndex(0); break
-      case 'End': e.preventDefault(); setActiveIndex(options.length - 1); break
+      case 'End': e.preventDefault(); setActiveIndex(filtered.length - 1); break
       case 'Enter':
       case ' ': {
+        // Space types into the search box; only Enter selects.
+        if (e.key === ' ' && showSearch) return
         e.preventDefault()
-        const opt = options[activeIndex]
+        const opt = filtered[activeIndex]
         if (opt) handleSelect(opt.value)
         break
       }
@@ -320,12 +334,30 @@ export function Select({ value, onChange, options, placeholder, disabled }: {
             border: '1px solid var(--border)',
             borderRadius: 8,
             boxShadow: '0 8px 28px rgba(0,0,0,0.35)',
-            maxHeight: 240,
+            maxHeight: 280,
             overflowY: 'auto',
             padding: 4,
           }}
         >
-          {options.map((opt, idx) => {
+          {showSearch && (
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={e => { setQuery(e.target.value); setActiveIndex(0) }}
+              onKeyDown={handleKeyDown}
+              placeholder="Buscar…"
+              style={{
+                position: 'sticky', top: 0, zIndex: 1, width: '100%', boxSizing: 'border-box',
+                margin: '0 0 4px', padding: '7px 9px', background: 'var(--bg-elevated)',
+                border: '1px solid var(--border)', borderRadius: 6, fontSize: 13,
+                color: 'var(--text-primary)', outline: 'none', fontFamily: 'inherit',
+              }}
+            />
+          )}
+          {filtered.length === 0 && (
+            <div style={{ padding: '8px 10px', fontSize: 12.5, color: 'var(--text-tertiary)' }}>—</div>
+          )}
+          {filtered.map((opt, idx) => {
             const isSelected = opt.value === value
             const isActive = idx === activeIndex
             return (
