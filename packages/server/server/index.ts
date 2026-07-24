@@ -76,9 +76,10 @@ void (async () => {
   if (mode === 'full') {
     fullSync().catch(err => console.warn('[archive] startup sync failed:', String(err)))
   }
-  if (mode && mode !== 'off') {
-    buildApiResponse().catch(err => console.warn('[archive] startup consolidation failed:', String(err)))
-  }
+  // Warm the response cache at boot so the FIRST user request is served instantly instead of paying
+  // the full cold build (tens of seconds on a busy central). Runs for every mode — non-'off' modes
+  // also persist the consolidated per-session store as a side effect; 'off' just warms the cache.
+  buildApiResponse().catch(err => console.warn('[startup] cache warm-up failed:', String(err)))
 })()
 
 void setupFileWatcher()
