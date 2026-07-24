@@ -345,7 +345,6 @@ export default function TeamsSettings() {
                 onMouseLeave={clickable ? e => { e.currentTarget.style.background = '' } : undefined}>
                 <td style={{ ...td, color: 'var(--text-primary)', fontWeight: 500 }}>
                   {t.name}
-                  {t._id === 'default' && <em style={{ color: 'var(--text-tertiary)', fontWeight: 400, marginLeft: 6 }}>({pt ? 'padrão' : 'default'})</em>}
                 </td>
                 <td style={td}>{memberCountOf(t._id)}</td>
                 <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
@@ -354,9 +353,8 @@ export default function TeamsSettings() {
                       <Settings size={14} />
                     </button>
                   )}
-                  {t._id !== 'default' && (
-                    <button onClick={e => { e.stopPropagation(); setConfirm({ kind: 'team', id: t._id, label: t.name }) }} style={trashBtn} aria-label="Delete team"><Trash2 size={14} /></button>
-                  )}
+                  {/* Any team is deletable now (no special Default) — deletion cascades to detach it. */}
+                  <button onClick={e => { e.stopPropagation(); setConfirm({ kind: 'team', id: t._id, label: t.name }) }} style={trashBtn} aria-label="Delete team"><Trash2 size={14} /></button>
                 </td>
               </tr>
               )

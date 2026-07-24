@@ -95,13 +95,20 @@ if (TEAM_CENTRAL) {
 if (TEAM_CENTRAL) {
   void (async () => {
     try {
-      const { ensureAccountIndexes, hasAnyOwner } = await import('./accounts')
-      const { backfillTokenTeamIds } = await import('./team-tokens')
+      const { ensureAccountIndexes, hasAnyOwner, purgeUnknownTeamsFromAccounts } = await import('./accounts')
+      const { backfillTokenTeamIds, purgeUnknownTeamsFromMachines } = await import('./team-tokens')
       const { backfillRepoTeamIds } = await import('./team-repos')
       await ensureAccountIndexes()
       // No Default team is seeded — machines/accounts are loose until assigned to real teams.
       await backfillTokenTeamIds()
       await backfillRepoTeamIds()
+      // Retroactively purge references to deleted teams (orphaned before the delete-cascade existed).
+      try {
+        const { listTeams } = await import('./teams')
+        const validTeamIds = (await listTeams()).map(t => t._id)
+        await purgeUnknownTeamsFromMachines(validTeamIds)
+        await purgeUnknownTeamsFromAccounts(validTeamIds)
+      } catch { /* best-effort */ }
       if (!(await hasAnyOwner())) {
         const { getBootstrapDoc, generateBootstrapToken } = await import('./bootstrap')
         const existing = await getBootstrapDoc()

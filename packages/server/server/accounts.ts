@@ -95,6 +95,19 @@ export async function countAccounts(): Promise<number> {
   return col.countDocuments({})
 }
 
+/** Drop memberships whose team no longer exists (deleted teams) from ALL accounts — retroactive
+ *  cleanup for refs orphaned before the delete-cascade existed. Idempotent; runs at boot. */
+export async function purgeUnknownTeamsFromAccounts(validTeamIds: string[]): Promise<void> {
+  const valid = new Set(validTeamIds)
+  const col = await getAccountsCollection()
+  const docs = await col.find({}).toArray()
+  for (const a of docs) {
+    const kept = a.memberships.filter(m => valid.has(m.teamId))
+    if (kept.length === a.memberships.length) continue
+    await col.updateOne({ _id: a._id }, { $set: { memberships: kept, updatedAt: new Date().toISOString() } })
+  }
+}
+
 /** True once at least one owner account exists — drives the bootstrap gate (Phase 2). */
 export async function hasAnyOwner(): Promise<boolean> {
   const col = await getAccountsCollection()

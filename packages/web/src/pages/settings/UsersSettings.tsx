@@ -527,14 +527,18 @@ export default function UsersSettings() {
                 <td style={td}><RoleBadge role={a.role === 'owner' ? 'owner' : (a.memberships[0]?.role ?? 'user')} /></td>
                 <td style={td}>
                   <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>
-                    {a.role === 'owner'
-                      ? <span style={{ color: 'var(--text-tertiary)' }}>—</span>
-                      : a.memberships.map(m => (
+                    {(() => {
+                      // Only show memberships whose team still exists (drop refs to deleted teams so
+                      // a raw _id never shows — defensive on top of the server purge cascade).
+                      const live = a.role === 'owner' ? [] : a.memberships.filter(m => teams.some(t => t._id === m.teamId))
+                      if (a.role === 'owner' || live.length === 0) return <span style={{ color: 'var(--text-tertiary)' }}>—</span>
+                      return live.map(m => (
                         <span key={m.teamId} style={{
                           display: 'inline-block', padding: '2px 7px', borderRadius: 6, fontSize: 10.5,
                           background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text-secondary)',
                         }}>{teamNameOf(m.teamId)}</span>
-                      ))}
+                      ))
+                    })()}
                   </span>
                 </td>
                 <td style={td}>{machineCountFor(a.id)}</td>

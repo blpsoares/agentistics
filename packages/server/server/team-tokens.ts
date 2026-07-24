@@ -353,6 +353,22 @@ export async function listMachines(): Promise<MachineInfo[]> {
   })
 }
 
+/** Purge any team ids no longer present (deleted teams) from ALL machine tokens — retroactive
+ *  cleanup for refs orphaned before the delete-cascade existed. Idempotent; runs at boot. */
+export async function purgeUnknownTeamsFromMachines(validTeamIds: string[]): Promise<void> {
+  const valid = new Set(validTeamIds)
+  const col = await getTokensCollection()
+  const docs = await col.find({ $or: [{ teamId: { $exists: true } }, { teamIds: { $exists: true } }] }).toArray()
+  for (const d of docs) {
+    const kept = teamIdsOf(d).filter(t => valid.has(t))
+    const before = teamIdsOf(d)
+    if (kept.length === before.length) continue // nothing orphaned
+    await col.updateOne({ _id: d._id }, kept.length
+      ? { $set: { teamIds: kept, teamId: kept[0] } }
+      : { $unset: { teamIds: '', teamId: '' } })
+  }
+}
+
 /** Remove a deleted team from every machine token (pull from teamIds + clear a stale primary
  *  teamId). Machines are NOT deleted — they just lose the dead team relation. */
 export async function detachTeamFromAllMachines(teamId: string): Promise<void> {
