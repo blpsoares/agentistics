@@ -31,7 +31,7 @@ import { cliStrings, type CliLang, type CliStrings } from './cli-i18n'
 
 export type StartResult = number | 'foreground'
 
-// ── ANSI ────────────────────────────────────────────────────────────────────
+// ANSI
 const ESC = '\x1b'
 const R = `${ESC}[0m`
 const B = `${ESC}[1m`
@@ -45,7 +45,7 @@ const WH = `${ESC}[97m`
 const CENTRAL_PROJECT = 'team-mode'      // central.sh: PROJECT=${PROJECT:-team-mode}
 const MACHINE_IMAGE = 'agentistics-machine' // docker-compose.machine.yml: image
 
-// ── shell helpers ─────────────────────────────────────────────────────────────
+// shell helpers
 async function sh(cmd: string[]): Promise<{ code: number; out: string }> {
   try {
     const p = Bun.spawn(cmd, { stdout: 'pipe', stderr: 'ignore' })
@@ -57,7 +57,7 @@ async function sh(cmd: string[]): Promise<{ code: number; out: string }> {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-// ── language ───────────────────────────────────────────────────────────────────
+// language
 async function resolveLang(): Promise<CliLang> {
   const i = process.argv.indexOf('--lang')
   const flag = i >= 0 ? process.argv[i + 1] : undefined
@@ -70,7 +70,7 @@ async function resolveLang(): Promise<CliLang> {
   }
 }
 
-// ── state + detection ──────────────────────────────────────────────────────────
+// state + detection
 type Mode = 'solo' | 'central' | 'member'
 
 async function loadState(): Promise<{ mode: Mode; endpoint?: string }> {
@@ -107,7 +107,7 @@ async function detectServices(): Promise<Services> {
   return { local, central, machine }
 }
 
-// ── stopping ────────────────────────────────────────────────────────────────
+// stopping
 
 /** Parse `lsof -ti` output into a pid list, dropping blanks and the caller's OWN
  *  pid. The health check (`isServerRunning` → fetch to PORT) leaves a keep-alive
@@ -137,7 +137,7 @@ async function stopContainers(filter: string, msg: string): Promise<void> {
   await sh(['docker', 'stop', ...ids])
 }
 
-// ── banner + status ────────────────────────────────────────────────────────────
+// banner + status
 function printBanner(s: CliStrings): void {
   const art = [
     '▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀ ▀█▀ █ █▀▀ █▀',
@@ -148,7 +148,7 @@ function printBanner(s: CliStrings): void {
   process.stdout.write(`  ${D}${s.tagline}${R}\n`)
 }
 
-const RULE = `  ${D}──────────────────────────────────────${R}`
+const RULE = `  ${D}${R}`
 
 function printStatus(s: CliStrings, mode: Mode, endpoint: string | undefined, svc: Services): void {
   const config =
@@ -170,7 +170,7 @@ function printStatus(s: CliStrings, mode: Mode, endpoint: string | undefined, sv
   )
 }
 
-// ── run methods ─────────────────────────────────────────────────────────────────
+// run methods
 function serverReinvocation(): string {
   const script = process.argv[1]
   const fromSource = !!script && (script.endsWith('.ts') || script.endsWith('.js'))
@@ -223,7 +223,7 @@ async function clearPortOrAbort(s: CliStrings, localRunning: boolean): Promise<b
   return true
 }
 
-// ── connect / disconnect ──────────────────────────────────────────────────────
+// connect / disconnect
 async function connectFlow(s: CliStrings): Promise<void> {
   const endpoint = await input(s.promptEndpoint)
   const token = await input(s.promptToken)
@@ -236,7 +236,7 @@ async function disconnectFlow(s: CliStrings): Promise<void> {
   process.stdout.write(`  ${GR}${s.disconnected}${R}\n`)
 }
 
-// ── stop submenu ───────────────────────────────────────────────────────────────
+// stop submenu
 async function stopMenu(s: CliStrings, svc: Services): Promise<boolean> {
   const choices: { name: string; value: string }[] = []
   if (svc.local) choices.push({ name: s.stopLocal, value: 'local' })
@@ -253,7 +253,7 @@ async function stopMenu(s: CliStrings, svc: Services): Promise<boolean> {
   return true
 }
 
-// ── "agentistics" (this machine) → how to run ────────────────────────────────────
+// "agentistics" (this machine) → how to run
 async function runAgentistics(s: CliStrings, localRunning: boolean): Promise<StartResult | 'handled'> {
   const how = await select<string>({
     message: s.howTitle,
@@ -286,7 +286,7 @@ async function runAgentistics(s: CliStrings, localRunning: boolean): Promise<Sta
   return 'handled'
 }
 
-// ── restart (per-service helpers) ───────────────────────────────────────────────
+// restart (per-service helpers)
 // `rebuild` (from `--rebuild`) recreates Docker images/containers instead of just bouncing them.
 /** Rebuild + reinstall the native binary from the repo (`bun run bin`: web build → embed assets →
  *  compile → install to ~/.local/bin/agentop). Returns 'not-repo' when not run from a checkout. */
@@ -342,7 +342,7 @@ async function restartRunning(s: CliStrings, svc: Services, rebuild = false): Pr
   return true
 }
 
-// ── restart submenu (pick one running service, or all) ───────────────────────────
+// restart submenu (pick one running service, or all)
 async function restartMenu(s: CliStrings, svc: Services): Promise<boolean> {
   const choices: { name: string; value: string }[] = []
   if (svc.local) choices.push({ name: s.stopLocal, value: 'local' })
@@ -374,7 +374,7 @@ export async function restartAllServices(rebuild = false): Promise<number> {
   return 0
 }
 
-// ── main loop ─────────────────────────────────────────────────────────────────
+// main loop
 export async function runStart(): Promise<StartResult> {
   if (!process.stdin.isTTY) return 'foreground'
 

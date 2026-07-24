@@ -21,7 +21,7 @@ function calcCostUSD(input: number, output: number, cacheRead: number, cacheWrit
   }, model);
 }
 
-// ─── Multi-harness helpers ────────────────────────────────────────────────────
+// Multi-harness helpers
 // agentistics tracks several harnesses (Claude Code, Codex CLI, Gemini CLI,
 // Copilot CLI). Sessions carry a `harness` field; legacy/missing defaults to claude.
 
@@ -175,7 +175,7 @@ function fillGaps(
   }
 }
 
-// ─── Server ─────────────────────────────────────────────────────────────────
+// Server
 
 const server = new Server(
   { name: "agentistics", version: "1.0.0" },

@@ -3,7 +3,7 @@ import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, com
 import type { RepoSortKey, RepoStat } from './useData'
 import { format, subDays } from 'date-fns'
 
-// ── calcStreak ────────────────────────────────────────────────────────────────
+// calcStreak
 
 describe('calcStreak', () => {
   // Fixed reference date at noon UTC — safe for all timezones (no day boundary ambiguity)
@@ -53,7 +53,7 @@ describe('calcStreak', () => {
   })
 })
 
-// ── calcLongestStreak ─────────────────────────────────────────────────────────
+// calcLongestStreak
 
 describe('calcLongestStreak', () => {
   const TODAY = new Date('2026-04-10T12:00:00.000Z')
@@ -87,7 +87,7 @@ describe('calcLongestStreak', () => {
   })
 })
 
-// ── getDateRangeFilter ────────────────────────────────────────────────────────
+// getDateRangeFilter
 
 describe('getDateRangeFilter', () => {
   test('"all" sem customização → início do epoch até agora', () => {
@@ -139,7 +139,7 @@ describe('getDateRangeFilter', () => {
   })
 })
 
-// ── filterByHarness ───────────────────────────────────────────────────────────
+// filterByHarness
 
 describe('filterByHarness', () => {
   const sessions = [
@@ -165,7 +165,7 @@ describe('filterByHarness', () => {
 })
 
 
-// ── computeHarnessSummaries ───────────────────────────────────────────────────
+// computeHarnessSummaries
 
 describe('computeHarnessSummaries', () => {
   function makeAppData(overrides: Partial<import('@agentistics/core').AppData> = {}): import('@agentistics/core').AppData {
@@ -387,7 +387,7 @@ describe('computeHarnessSummaries', () => {
   })
 })
 
-// ── computeHarnessSummaries — new fields (hour/dow/activity/peaks) ─────────────
+// computeHarnessSummaries — new fields (hour/dow/activity/peaks)
 
 describe('computeHarnessSummaries — hourCounts and peakHour', () => {
   function makeSession(overrides: Partial<import('@agentistics/core').SessionMeta>): import('@agentistics/core').SessionMeta {
@@ -793,7 +793,7 @@ describe('computeHarnessSummaries — dailyActivity', () => {
   })
 })
 
-// ── computeHarnessSummaries — models[] and costPerMTokens ─────────────────────
+// computeHarnessSummaries — models[] and costPerMTokens
 
 describe('computeHarnessSummaries — models[] and costPerMTokens', () => {
   function makeSession(
@@ -951,7 +951,7 @@ describe('computeHarnessSummaries — models[] and costPerMTokens', () => {
   })
 })
 
-// ── sortRepos ──────────────────────────────────────────────────────────────
+// sortRepos
 
 function repo(p: Partial<RepoStat>): RepoStat {
   return {

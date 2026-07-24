@@ -82,7 +82,7 @@ function kpiCard(
 }
 
 export const CATALOG: CatalogItem[] = [
-  // ── KPI cards ──────────────────────────────────────────────────────────────
+  // KPI cards
   {
     id: 'kpi.messages', labelPt: 'Mensagens', labelEn: 'Messages', category: 'kpi',
     icon: MessageSquare, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
@@ -232,7 +232,7 @@ export const CATALOG: CatalogItem[] = [
     ),
   },
 
-  // ── Activity & charts ──────────────────────────────────────────────────────
+  // Activity & charts
   {
     id: 'activity.chart', labelPt: 'Gráfico de atividade (completo)', labelEn: 'Activity chart (full)', category: 'activity',
     icon: BarChart2, defaultW: 8, defaultH: 7, minW: 4, minH: 4,
@@ -301,7 +301,7 @@ export const CATALOG: CatalogItem[] = [
     ),
   },
 
-  // ── Costs ──────────────────────────────────────────────────────────────────
+  // Costs
   {
     id: 'costs.models', labelPt: 'Uso por modelo', labelEn: 'Model usage', category: 'costs',
     icon: TrendingUp, defaultW: 12, defaultH: 7, minW: 6, minH: 4,
@@ -337,7 +337,7 @@ export const CATALOG: CatalogItem[] = [
     ),
   },
 
-  // ── Projects ───────────────────────────────────────────────────────────────
+  // Projects
   {
     id: 'projects.top', labelPt: 'Principais projetos', labelEn: 'Top projects', category: 'projects',
     icon: FolderOpen, defaultW: 7, defaultH: 7, minW: 4, minH: 4,
@@ -357,7 +357,7 @@ export const CATALOG: CatalogItem[] = [
     ),
   },
 
-  // ── Tools / Agents ─────────────────────────────────────────────────────────
+  // Tools / Agents
   {
     id: 'tools.metrics', labelPt: 'Métricas de ferramentas (completo)', labelEn: 'Tool metrics (full)', category: 'tools',
     icon: Wrench, defaultW: 12, defaultH: 8, minW: 6, minH: 4,
@@ -397,7 +397,7 @@ export const CATALOG: CatalogItem[] = [
     ),
   },
 
-  // ── Sessions / Highlights ──────────────────────────────────────────────────
+  // Sessions / Highlights
   {
     id: 'sessions.highlights', labelPt: 'Recordes (Highlights)', labelEn: 'Highlights', category: 'sessions',
     icon: Trophy, defaultW: 12, defaultH: 6, minW: 6, minH: 3,

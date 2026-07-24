@@ -21,7 +21,7 @@ import { select, input, confirm } from '@inquirer/prompts'
 import { calcCost, getModelPrice } from '@agentistics/core'
 import type { ModelUsage, SessionMeta, HarnessId } from '@agentistics/core'
 
-// ── Paths ──────────────────────────────────────────────────────────────────
+// Paths
 
 const HOME_DIR    = process.env.HOME ?? process.env.USERPROFILE ?? ''
 const CLAUDE_DIR  = join(HOME_DIR, '.claude')
@@ -53,7 +53,7 @@ function showGoodbye(opts?: {
   process.stdout.write(lines.join('\n') + '\n')
 }
 
-// ── ANSI ───────────────────────────────────────────────────────────────────
+// ANSI
 
 const E = '\x1b'
 const R  = `${E}[0m`
@@ -85,7 +85,7 @@ const padStr  = (s: string, w: number, align: 'l'|'r' = 'r') => {
 }
 const sepLine = (w: number) => `${D}${'-'.repeat(w)}${R}`
 
-// ── Tipos ──────────────────────────────────────────────────────────────────
+// Tipos
 
 type ViewMode = 'separado' | 'junto' | 'ambos'
 type DataSrc  = 'api' | 'files'
@@ -123,7 +123,7 @@ interface AppState {
   dataSource:       DataSrc
 }
 
-// ── API ────────────────────────────────────────────────────────────────────
+// API
 
 interface ApiProject {
   path: string
@@ -171,7 +171,7 @@ async function probeApi(timeout = 1000): Promise<boolean> {
 }
 
 
-// ── Cálculo de snapshot — espelha useDerivedStats ─────────────────────────
+// Cálculo de snapshot — espelha useDerivedStats
 
 function blendedCost(mu: Record<string, ModelUsage>) {
   let tIn = 0, tOut = 0, tCR = 0, tCW = 0
@@ -203,9 +203,9 @@ function computeSnapshot(
   const daily = statsCache.dailyActivity ?? []
   const mu    = statsCache.modelUsage ?? {}
 
-  // ── Messages/sessions — mirrors useDerivedStats exactly ──
-  //   with filter    → sum filtered sessions
-  //   without filter → extendedDailyActivity (statsCache + sessions on days not yet cached)
+  // Messages/sessions — mirrors useDerivedStats exactly
+  // with filter    → sum filtered sessions
+  // without filter → extendedDailyActivity (statsCache + sessions on days not yet cached)
   let messages: number
   let sessCnt:  number
   if (isF) {
@@ -231,11 +231,11 @@ function computeSnapshot(
     sessCnt  = extended.reduce((s, d) => s + d.sessionCount, 0)
   }
 
-  // ── Tokens — always from filtered sessions ──
+  // Tokens — always from filtered sessions
   const inTok  = filt.reduce((s, x) => s + (x.input_tokens  ?? 0), 0)
   const outTok = filt.reduce((s, x) => s + (x.output_tokens ?? 0), 0)
 
-  // ── Cost — mirrors useDerivedStats ──
+  // Cost — mirrors useDerivedStats
   let cost = 0
   if (!isF) {
     cost = Object.entries(mu).reduce((s, [id, u]) => s + calcCost(u, id), 0)
@@ -258,9 +258,9 @@ function computeSnapshot(
     }
   }
 
-  // ── Streak — mirrors useDerivedStats exactly ──
-  //   with filter    → active dates from filtered sessions only
-  //   without filter → union of dailyActivity dates + ALL session dates (covers stale statsCache)
+  // Streak — mirrors useDerivedStats exactly
+  // with filter    → active dates from filtered sessions only
+  // without filter → union of dailyActivity dates + ALL session dates (covers stale statsCache)
   // Use local dates consistently (YYYY-MM-DD in local timezone) to avoid UTC boundary issues.
   const toLocalDate = (iso: string) => {
     const d = new Date(iso)
@@ -280,8 +280,8 @@ function computeSnapshot(
     else if (i > 0) break
   }
 
-  // ── Git stats — mirrors useDerivedStats: use project git_stats when exactly 1 project ──
-  //   (project-level git counts are more accurate than summing session fields)
+  // Git stats — mirrors useDerivedStats: use project git_stats when exactly 1 project
+  // (project-level git counts are more accurate than summing session fields)
   const singleProjectGitStats = isF && filter!.length === 1
     ? projects.find(p => p.path === filter![0])?.git_stats
     : undefined
@@ -299,7 +299,7 @@ function computeSnapshot(
     costUsd: cost, streak, gitCommits: gC, linesAdded: lA, linesRemoved: lR }
 }
 
-// ── Per-harness snapshot ───────────────────────────────────────────────────
+// Per-harness snapshot
 
 interface HarnessSnapshot {
   harness:      HarnessId
@@ -369,7 +369,7 @@ function computeHarnessSnapshots(
   })
 }
 
-// ── Reload de dados (apenas via API) ──────────────────────────────────────
+// Reload de dados (apenas via API)
 
 async function reloadData(config: WatchConfig): Promise<{
   snapshots:        Map<string, CliSnapshot>
@@ -398,7 +398,7 @@ async function reloadData(config: WatchConfig): Promise<{
   return { snapshots, harnessSnapshots, dataSource: 'api' }
 }
 
-// ── Loader ─────────────────────────────────────────────────────────────────
+// Loader
 // Braille spinner + gradient wave bar scrolling.
 // 7 linhas fixas, reescritas via cursor-up a cada 80ms.
 
@@ -427,7 +427,7 @@ async function withLoader<T>(msg: string, fn: () => Promise<T>): Promise<T> {
       : `${D}░${R}`
     ).join('')
 
-    const sep = `${D}${'─'.repeat(BAR_W)}${R}`
+    const sep = `${D}${''.repeat(BAR_W)}${R}`
 
     out(`\x1b[${H}A`)
     out(`\n`)
@@ -454,7 +454,7 @@ async function withLoader<T>(msg: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
-// ── Animação: Neural Wave ─────────────────────────────────────────────────
+// Animação: Neural Wave
 // Visualiza um forward-pass num transformer: onda de ativação atravessando
 // 3 "camadas de atenção" em paralelo, da esquerda (input) para a direita (output).
 // Dinâmica — calculada a partir de `frame` sem array estático.
@@ -507,7 +507,7 @@ function renderAnim(frame: number): string[] {
   ]
 }
 
-// ── Tabela de métricas ─────────────────────────────────────────────────────
+// Tabela de métricas
 
 const fmtN = (n: number) =>
   n >= 1_000_000 ? (n/1e6).toFixed(1)+'M' : n >= 1_000 ? (n/1e3).toFixed(1)+'k' : String(n)
@@ -540,7 +540,7 @@ const tRow = (s: CliSnapshot, name?: string) => {
   return c.join('  ')
 }
 
-// ── Painel ─────────────────────────────────────────────────────────────────
+// Painel
 
 function buildPanel(cfg: WatchConfig, st: AppState): string {
   const W = process.stdout.columns || 100
@@ -652,7 +652,7 @@ function buildPanel(cfg: WatchConfig, st: AppState): string {
   return lines.join('\n') + '\n'
 }
 
-// ── Watch loop ─────────────────────────────────────────────────────────────
+// Watch loop
 
 async function watchLoop(cfg: WatchConfig): Promise<void> {
   const st: AppState = {
@@ -717,7 +717,7 @@ async function watchLoop(cfg: WatchConfig): Promise<void> {
     .on('all', () => { if (dbt) clearTimeout(dbt); dbt = setTimeout(refresh, 1500) })
 }
 
-// ── Custom prompt: checkbox com busca reativa ──────────────────────────────
+// Custom prompt: checkbox com busca reativa
 
 type RlKey = KeypressEvent & { meta?: boolean; sequence?: string }
 interface CbChoice { name: string; value: string; path: string }
@@ -766,9 +766,9 @@ const checkboxSearch = createPrompt<string[], {
   const cur = `${E}[7m ${R}`  // blinking-cursor block
   const termPad = ' '.repeat(Math.max(0, BOX - 4 - visLen(term)))
   const searchBar = [
-    `  ${D}┌${'─'.repeat(BOX)}┐${R}`,
+    `  ${D}┌${''.repeat(BOX)}┐${R}`,
     `  ${D}│${R}  ${AM}${B}❯${R}  ${B}${term}${R}${cur}${termPad}${D}│${R}`,
-    `  ${D}└${'─'.repeat(BOX)}┘${R}`,
+    `  ${D}└${''.repeat(BOX)}┘${R}`,
   ].join('\n')
 
   const page = usePagination({
@@ -804,7 +804,7 @@ const checkboxSearch = createPrompt<string[], {
   ].join('\n')
 })
 
-// ── Prompts de configuração ────────────────────────────────────────────────
+// Prompts de configuração
 
 async function askConfig(all: ProjectInfo[]): Promise<WatchConfig> {
   const intStr = await input({
@@ -847,7 +847,7 @@ async function askConfig(all: ProjectInfo[]): Promise<WatchConfig> {
     intervalSec: parseInt(intStr, 10), otlpEndpoint: otlp, showAnim }
 }
 
-// ── Auto-start do servidor API ────────────────────────────────────────────
+// Auto-start do servidor API
 
 let spawnedServer: ReturnType<typeof Bun.spawn> | null = null
 
@@ -895,7 +895,7 @@ function registerServerCleanup() {
   process.on('SIGTERM', () => { killServer(); process.exit(0) })
 }
 
-// ── Entry point ────────────────────────────────────────────────────────────
+// Entry point
 
 async function main() {
   console.log(`\n${B}${AM}Claude Stats${R}${D} · ${R}${B}Watch CLI${R}\n`)

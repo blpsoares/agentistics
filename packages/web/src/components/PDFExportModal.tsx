@@ -8,7 +8,7 @@ import { formatModel, formatProjectName, repoShortName, calcCost, sessionLabel, 
 import { useDerivedStats, blendedCostPerToken, type HarnessSummary } from '../hooks/useData'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// Types
 
 export type PDFTheme = 'light' | 'dark'
 
@@ -23,7 +23,7 @@ interface Colors {
 
 interface HeatmapDay { date: string; value: number; sessions: number; tools: number }
 
-// ── Constants ──────────────────────────────────────────────────────────────────
+// Constants
 
 export const COLORS: Record<PDFTheme, Colors> = {
   light: {
@@ -59,7 +59,7 @@ export const DATE_OPTIONS = [
   { value: '90d',  labelPt: '90 dias',   labelEn: '90 days' },
 ] as const
 
-// ── Helper formatters ──────────────────────────────────────────────────────────
+// Helper formatters
 // Token/count values go through the shared `fmt()` (K/M abbreviated) and costs
 // through the shared `fmtCost()` (thousands-separated, e.g. "USD 4,729.65") from
 // @agentistics/core — never inline ad-hoc formatting here.
@@ -96,7 +96,7 @@ function bucketize(
   return buckets
 }
 
-// ── Mini chart components (all use inline styles + actual hex colors) ──────────
+// Mini chart components (all use inline styles + actual hex colors)
 
 function SectionTitle({ title, c }: { title: string; c: Colors }) {
   return (
@@ -654,7 +654,7 @@ function MiniHighlightsSection({ sessions, c, lang }: {
   )
 }
 
-// ── Standalone PDF generation (used by PDFDirectExporter and ExportPage) ──────
+// Standalone PDF generation (used by PDFDirectExporter and ExportPage)
 
 export async function runPDFCapture(el: HTMLElement, pdfTheme: PDFTheme, filename?: string): Promise<void> {
   const resolvedFilename = filename ?? `claude-stats-${format(new Date(), 'yyyy-MM-dd')}.pdf`
@@ -716,7 +716,7 @@ export async function runPDFCapture(el: HTMLElement, pdfTheme: PDFTheme, filenam
   }
 }
 
-// ── Direct PDF export (no modal) — renders content offscreen and downloads ───
+// Direct PDF export (no modal) — renders content offscreen and downloads
 
 export interface PDFDirectExporterProps {
   data: AppData
@@ -794,11 +794,11 @@ export function PDFDirectExporter({ data, range, currentFilters, lang, currency,
   )
 }
 
-// ── Compare section — rendered INSIDE the unified report when the "compare"
+// Compare section — rendered INSIDE the unified report when the "compare"
 // section is enabled. Content mirrors the harness-comparison view (overview
 // cards, comparison table, usage by hour/dow, activity, peaks, cost by model)
 // but as one section among others, not a standalone whole-page mode. Always
-// fed the same filtered summaries as the rest of the report (see ExportPage). ──
+// fed the same filtered summaries as the rest of the report (see ExportPage).
 
 function CompareSectionContent({ summaries, harnesses, c, pt, currency, brlRate }: {
   summaries: Record<HarnessId, HarnessSummary>
@@ -1145,7 +1145,7 @@ function CompareSectionContent({ summaries, harnesses, c, pt, currency, brlRate 
   )
 }
 
-// ── PDF Content (the exportable A4 page, 794px wide) ─────────────────────────
+// PDF Content (the exportable A4 page, 794px wide)
 
 export interface PDFContentProps {
   pdfTheme: PDFTheme

@@ -94,7 +94,7 @@ export default function PreferencesSettings() {
 
   return (
     <>
-      {/* ── Display ── */}
+      {/*  Display  */}
       <SectionHeader label={pt ? 'Exibição' : 'Display'} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
@@ -137,7 +137,7 @@ export default function PreferencesSettings() {
 
       <Divider />
 
-      {/* ── Card order ── */}
+      {/*  Card order  */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <SectionHeader label={pt ? 'Ordem dos cards' : 'Card order'} />
         <button
@@ -175,7 +175,7 @@ export default function PreferencesSettings() {
 
       <Divider />
 
-      {/* ── Chat ── */}
+      {/*  Chat  */}
       <SectionHeader label="Chat" />
       <PrefRow
         label={pt ? 'Som de notificação' : 'Notification sound'}
@@ -256,7 +256,7 @@ export default function PreferencesSettings() {
         {pt ? 'USD por 1M tokens (entrada / saída)' : 'USD per 1M tokens (input / output)'}
       </div>
 
-      {/* ── Save / Reset row ── */}
+      {/*  Save / Reset row  */}
       <div style={{
         display: 'flex', justifyContent: 'flex-end', gap: 8,
         marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--border)',

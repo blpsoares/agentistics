@@ -1,4 +1,4 @@
-// ── Chat notification sounds ─────────────────────────────────────────────────
+// Chat notification sounds
 // All sounds are synthesized via Web Audio API — no audio files needed.
 
 export interface ChatSound {

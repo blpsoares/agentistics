@@ -16,7 +16,7 @@ import {
   ExternalLink,
 } from 'lucide-react'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// Types
 
 interface Props {
   sessions: SessionMeta[]
@@ -29,7 +29,7 @@ interface Props {
 type SortKey = 'date' | 'tokens' | 'messages' | 'tools' | 'files'
 
 
-// ─── Translations ─────────────────────────────────────────────────────────────
+// Translations
 
 const T = {
   pt: {
@@ -66,7 +66,7 @@ const T = {
   },
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// Helpers
 
 function fmt(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -91,7 +91,7 @@ function truncate(str: string, max: number): string {
   return str.length <= max ? str : str.slice(0, max) + '…'
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
+// Sub-components
 
 function Chip({
   icon,
@@ -241,7 +241,7 @@ function IconButton({
   )
 }
 
-// ─── Open in Claude / Nay helpers ─────────────────────────────────────────────
+// Open in Claude / Nay helpers
 
 function isNayChatSession(projectPath: string): boolean {
   return projectPath.includes('.agentistics/nay-chat')
@@ -273,7 +273,7 @@ function openSession(s: SessionMeta, e: React.MouseEvent) {
   }
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
+// Main Component
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50]
 

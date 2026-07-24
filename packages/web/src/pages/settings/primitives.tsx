@@ -1,7 +1,25 @@
 import React from 'react'
-import { Pencil, Check, AlertTriangle } from 'lucide-react'
+import { Pencil, Check, AlertTriangle, Info } from 'lucide-react'
 
-// ── ConfirmModal ──────────────────────────────────────────────────────────────
+// ScopeNote
+// A subtle info banner explaining WHICH resources the signed-in account can see on a governance
+// page (so a scoped manager/user understands the list is their access, not missing data).
+export function ScopeNote({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 16,
+      padding: '9px 12px', borderRadius: 8,
+      background: 'color-mix(in srgb, var(--anthropic-orange) 8%, transparent)',
+      border: '1px solid color-mix(in srgb, var(--anthropic-orange) 28%, transparent)',
+      fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5,
+    }}>
+      <Info size={14} style={{ color: 'var(--anthropic-orange)', flexShrink: 0, marginTop: 1 }} />
+      <span>{children}</span>
+    </div>
+  )
+}
+
+// ConfirmModal
 // Centered confirmation dialog for destructive actions (delete/revoke/remove). Renders nothing
 // when `open` is false. Backdrop click + Escape = cancel. The confirm button is red (danger).
 export function ConfirmModal({ open, title, message, confirmLabel, cancelLabel, onConfirm, onCancel }: {
@@ -56,7 +74,7 @@ export function ConfirmModal({ open, title, message, confirmLabel, cancelLabel, 
 // PreferencesModal so the settings pages (which replace the modal tabs) keep an
 // identical look without depending on the soon-to-be-removed modal.
 
-// ── Section ─────────────────────────────────────────────────────────────────
+// Section
 // A titled block that is READ-ONLY by default with a right-aligned "Edit" button
 // (shown only when `canEdit` and not already editing). Renders `children` (read
 // view) by default; when `editing` it renders `editChildren` + Save/Cancel. The

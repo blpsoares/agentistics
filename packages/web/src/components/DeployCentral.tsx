@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { Server, Copy, CheckCheck, AlertTriangle, Terminal, RefreshCw } from 'lucide-react'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// Types
 
 interface DeployResult {
   env: string
@@ -10,7 +10,7 @@ interface DeployResult {
 
 type OsPlatform = 'linux' | 'macos' | 'windows'
 
-// ── Static autostart snippets (member-side, keep local agentop running) ───────
+// Static autostart snippets (member-side, keep local agentop running)
 // NOTE: The server-side counterpart is autostartSnippet() in
 // packages/server/server/deploy.ts — keep them in sync when content changes.
 
@@ -75,7 +75,7 @@ const DEFAULT_EXEC_PATH: Record<OsPlatform, string> = {
   windows: 'agentop',
 }
 
-// ── Small helpers ─────────────────────────────────────────────────────────────
+// Small helpers
 
 function CopyBlock({ text, label }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false)
@@ -174,7 +174,7 @@ function InputField({
   )
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
+// Main component
 
 export function DeployCentral({ pt }: { pt: boolean }) {
   const [org, setOrg] = useState('default')

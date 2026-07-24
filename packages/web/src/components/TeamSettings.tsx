@@ -5,7 +5,7 @@ import { PUSH_INTERVAL, type TeamConfig, type MemberPresence, unpackConnectToken
 import { pushNotification } from '../lib/notifications'
 import { MemberConnectionStatus } from './MemberConnectionStatus'
 
-// ── Types ──────────────────────────────────────────────────────────────────
+// Types
 
 // TeamConfig is imported from @agentistics/core — single source of truth.
 export type { TeamConfig }
@@ -45,7 +45,7 @@ interface TestResult {
   team?: string
 }
 
-// ── i18n ──────────────────────────────────────────────────────────────────
+// i18n
 
 const COPY = {
   mode:              { en: 'Mode',                         pt: 'Modo' },
@@ -120,7 +120,7 @@ function c(key: keyof typeof COPY, lang: 'pt' | 'en'): string {
   return COPY[key][lang]
 }
 
-// ── Local primitives (mirrors PreferencesModal conventions) ───────────────
+// Local primitives (mirrors PreferencesModal conventions)
 
 function SectionHeader({ label }: { label: string }) {
   return (
@@ -210,7 +210,7 @@ function FieldInput({
   )
 }
 
-// ── Interval helpers ──────────────────────────────────────────────────────
+// Interval helpers
 
 function formatInterval(sec: number): string {
   if (sec < 60) return `${sec} s`
@@ -262,7 +262,7 @@ function IntervalSelect({
   )
 }
 
-// ── Main component ────────────────────────────────────────────────────────
+// Main component
 
 interface SaveResult {
   ok: boolean
@@ -292,7 +292,7 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
   // Track whether the endpoint was auto-filled from the token
   const [endpointAutoFilled, setEndpointAutoFilled] = useState(false)
 
-  // ── Edit/lock state for the member connect form ──────────────────────────
+  // Edit/lock state for the member connect form
   // Starts locked when already configured; starts open for fresh setup.
   const [editing, setEditing] = useState<boolean>(
     () => !(team.endpoint && team.token),
@@ -313,7 +313,7 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
     }
   }, [team.endpoint, team.token])
 
-  // ── Central push-interval state (loaded from /api/team/config) ──────────
+  // Central push-interval state (loaded from /api/team/config)
   const [centralInterval, setCentralInterval] = useState<number>(PUSH_INTERVAL.DEFAULT_SEC)
   // Express mode: reveals sub-15s options. Derived from the loaded value (<15s ⇒ express).
   const [express, setExpress] = useState(false)
@@ -356,7 +356,7 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
       .finally(() => { setIntervalSaving(false) })
   }
 
-  // ── Fetch identity when not editing (member mode, connected) ──────────────
+  // Fetch identity when not editing (member mode, connected)
   useEffect(() => {
     if (central !== false) return
     if (team.mode !== 'member') return
@@ -516,7 +516,7 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
     setSaveResult(null)
     try {
       // (a) Ask the central to drop this member's data (best-effort — proxied so the token
-      //     stays server-side). A failure here still lets us reset the local machine.
+      // stays server-side). A failure here still lets us reset the local machine.
       await fetch('/api/team/leave-central', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -542,12 +542,12 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
     }
   }
 
-  // ── Central: null while /api/team/session is still in flight — show neutral placeholder ──
+  // Central: null while /api/team/session is still in flight — show neutral placeholder
   if (central === null) {
     return <div style={{ minHeight: 80 }} />
   }
 
-  // ── Central mode: show admin panel only ──────────────────────────────────
+  // Central mode: show admin panel only
   if (central) {
     return (
       <div>
@@ -569,7 +569,7 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
           </div>
         </div>
 
-        {/* ── Push interval control (central admin) ── */}
+        {/*  Push interval control (central admin)  */}
         <SectionHeader label={pt ? 'Configurações de envio' : 'Push settings'} />
         <PrefRow
           label={c('pushInterval', lang)}
@@ -614,7 +614,7 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
     )
   }
 
-  // ── Member / solo mode: show connect config ───────────────────────────────
+  // Member / solo mode: show connect config
   return (
     <div>
       {/* Machine mode banner — informational, blue/neutral styling */}
@@ -635,7 +635,7 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
         </div>
       </div>
 
-      {/* ── Mode selector ── */}
+      {/*  Mode selector  */}
       <SectionHeader label={c('mode', lang)} />
       <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
         {(['solo', 'member'] as const).map(m => {
@@ -681,7 +681,7 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
           {/* Live connection pill — is this machine syncing to the central right now? */}
           <MemberConnectionStatus lang={lang} />
 
-          {/* ── Connection fields ── */}
+          {/*  Connection fields  */}
           <SectionHeader label={pt ? 'Conexão' : 'Connection'} />
 
           <FieldInput
@@ -759,7 +759,7 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
             </div>
           )}
 
-          {/* ── Push interval — read-only: the central is the sole authority ── */}
+          {/*  Push interval — read-only: the central is the sole authority  */}
           <PrefRow
             label={c('pushInterval', lang)}
             sub={c('intervalByCentral', lang)}
@@ -769,7 +769,7 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
             </span>
           </PrefRow>
 
-          {/* ── Save / Edit button + result area ── */}
+          {/*  Save / Edit button + result area  */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
             {editing ? (
               <button

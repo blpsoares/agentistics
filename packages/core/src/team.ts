@@ -117,7 +117,7 @@ export function filterByMachines<T extends { memberId?: string }>(sessions: T[],
 }
 
 
-// ── Machine connect token (optionally carries the central endpoint) ──────────────
+// Machine connect token (optionally carries the central endpoint)
 // The bearer sent to the central is ALWAYS the raw secret. When the central has a public URL
 // configured, the token shown to the user is a composite that also carries the endpoint, so
 // pasting it on a machine auto-fills the URL. Backward compatible: a raw secret parses fine.

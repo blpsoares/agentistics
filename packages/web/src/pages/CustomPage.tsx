@@ -629,7 +629,7 @@ export default function CustomPage() {
     )
   }
 
-  // ── Mobile view: render items as a vertical list, no drag/resize ───────────
+  // Mobile view: render items as a vertical list, no drag/resize
   if (isMobile) {
     const sortedItems = [...items].sort((a, b) => a.y !== b.y ? a.y - b.y : a.x - b.x)
     return (
@@ -766,14 +766,14 @@ export default function CustomPage() {
         .live-flash { animation: liveFlash 1.2s ease-out forwards; border-radius: var(--radius-lg); }
       `}</style>
 
-      {/* ─── Toolbar ─── */}
+      {/*  Toolbar  */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 4, marginBottom: 14,
         background: 'var(--bg-card)', border: '1px solid var(--border)',
         borderRadius: 10, padding: '5px 10px', flexWrap: 'wrap', minHeight: 42,
       }}>
 
-        {/* ── Layout selector ── always visible */}
+        {/*  Layout selector  always visible */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           {renaming ? (
             <>
@@ -811,7 +811,7 @@ export default function CustomPage() {
           )}
         </div>
 
-        {/* ── Layout management — edit mode only ── */}
+        {/*  Layout management — edit mode only  */}
         {!locked && !renaming && (
           <>
             <div style={{ width: 1, height: 16, background: 'var(--border)', flexShrink: 0, margin: '0 2px' }} />
@@ -928,10 +928,10 @@ export default function CustomPage() {
           </>
         )}
 
-        {/* ── Spacer pushes everything right ── */}
+        {/*  Spacer pushes everything right  */}
         <div style={{ flex: 1 }} />
 
-        {/* ── RIGHT GROUP: download | upload | [clear] | [cancel | save] | [edit] ── */}
+        {/*  RIGHT GROUP: download | upload | [clear] | [cancel | save] | [edit]  */}
 
 
         {/* Export / Import */}
@@ -1011,10 +1011,10 @@ export default function CustomPage() {
         )}
       </div>
 
-      {/* ─── Main row: aside + canvas ─── */}
+      {/*  Main row: aside + canvas  */}
       <div ref={outerRowRef} style={{ display: 'flex', gap: sidebarOpen ? ASIDE_GAP : 0, alignItems: 'flex-start', minHeight: 'calc(100vh - 300px)' }}>
 
-        {/* ─── Aside / Palette ─── */}
+        {/*  Aside / Palette  */}
         {sidebarOpen && !locked && (
         <aside
           className="custom-aside"
@@ -1028,7 +1028,7 @@ export default function CustomPage() {
             gap: 10,
           }}
         >
-          {/* ── Filters (date, projects, models) — replaces the global header filter bar ── */}
+          {/*  Filters (date, projects, models) — replaces the global header filter bar  */}
           <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', flexShrink: 0, overflow: 'hidden' }}>
             <FiltersBar
               filters={filters}
@@ -1048,7 +1048,7 @@ export default function CustomPage() {
             />
           </div>
 
-          {/* ── Palette search ── */}
+          {/*  Palette search  */}
           <div style={{
             background: 'var(--bg-card)',
             border: '1px solid var(--border)',
@@ -1082,7 +1082,7 @@ export default function CustomPage() {
             </div>
           </div>
 
-          {/* ── Palette item list ── */}
+          {/*  Palette item list  */}
           <div style={{
             background: 'var(--bg-card)',
             border: '1px solid var(--border)',
@@ -1158,7 +1158,7 @@ export default function CustomPage() {
         </aside>
         )}
 
-        {/* ─── Main canvas ─── */}
+        {/*  Main canvas  */}
         <div
           style={{
             flex: 1,
@@ -1240,7 +1240,7 @@ export default function CustomPage() {
         </div>
       </div>
 
-      {/* ─── Duplicate layout modal ─── */}
+      {/*  Duplicate layout modal  */}
       {dupModal && (
         <div
           style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
@@ -1317,7 +1317,7 @@ export default function CustomPage() {
         </div>
       )}
 
-      {/* ─── Delete-layout confirmation modal ─── */}
+      {/*  Delete-layout confirmation modal  */}
       {confirmDeleteName !== null && (
         <div
           style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)', padding: isMobile ? 16 : 0 }}
@@ -1352,7 +1352,7 @@ export default function CustomPage() {
         </div>
       )}
 
-      {/* ─── Manage layouts modal (bulk delete) ─── */}
+      {/*  Manage layouts modal (bulk delete)  */}
       {manageOpen && (
         <div
           style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
@@ -1437,7 +1437,7 @@ export default function CustomPage() {
         </div>
       )}
 
-      {/* ─── Import modal ─── */}
+      {/*  Import modal  */}
       {importState && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 1000,

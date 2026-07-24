@@ -13,7 +13,7 @@ import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { PrecisionToggle } from './PrecisionToggle'
 import { useIsMobile } from '../hooks/useIsMobile'
 
-// ─── splitInlinedHistory ──────────────────────────────────────────────────────
+// splitInlinedHistory
 // Non-Claude harnesses sometimes concatenate a whole conversation into a single
 // user-turn (e.g. "User: hi\nAssistant: hello"). This helper splits such blocks
 // into individual bubbles so the transcript renders correctly.

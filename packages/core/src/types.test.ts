@@ -46,7 +46,7 @@ describe('mergeStatsCaches', () => {
   })
 })
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// Helpers
 
 function usage(overrides: Partial<ModelUsage> = {}): ModelUsage {
   return {
@@ -60,7 +60,7 @@ function usage(overrides: Partial<ModelUsage> = {}): ModelUsage {
   }
 }
 
-// ── getModelPrice ─────────────────────────────────────────────────────────────
+// getModelPrice
 
 describe('getModelPrice', () => {
   test('retorna preço exato para modelo conhecido', () => {
@@ -102,7 +102,7 @@ describe('getModelPrice', () => {
   })
 })
 
-// ── calcCost ──────────────────────────────────────────────────────────────────
+// calcCost
 
 describe('calcCost', () => {
   test('zero tokens → custo zero', () => {
@@ -153,7 +153,7 @@ describe('calcCost', () => {
   })
 })
 
-// ── formatModel ───────────────────────────────────────────────────────────────
+// formatModel
 
 describe('formatModel', () => {
   test('retorna nome legível para modelos conhecidos', () => {
@@ -167,7 +167,7 @@ describe('formatModel', () => {
   })
 })
 
-// ── getModelColor ─────────────────────────────────────────────────────────────
+// getModelColor
 
 describe('getModelColor', () => {
   test('opus tem cor âmbar', () => {
@@ -187,7 +187,7 @@ describe('getModelColor', () => {
   })
 })
 
-// ── formatProjectName ─────────────────────────────────────────────────────────
+// formatProjectName
 
 describe('formatProjectName', () => {
   test('retorna "Unknown" para string vazia', () => {
@@ -211,7 +211,7 @@ describe('formatProjectName', () => {
   })
 })
 
-// ── OpenAI/Codex pricing ────────────────────────────────────────────────────────
+// OpenAI/Codex pricing
 
 test('gpt-5.5 resolves to a non-fallback price', () => {
   const price = getModelPrice('gpt-5.5')
@@ -231,7 +231,7 @@ test('formatModel renders gpt-5.5 readably', () => {
   expect(formatModel('gpt-5.5')).toBe('GPT-5.5')
 })
 
-// ── Google/Gemini pricing ────────────────────────────────────────────────────────
+// Google/Gemini pricing
 
 test('gemini-3-flash-preview resolves to a non-fallback price', () => {
   const price = getModelPrice('gemini-3-flash-preview')
@@ -257,7 +257,7 @@ test('gemini-2.5-flash resolves to correct price', () => {
   expect(price.output).toBe(2.5)
 })
 
-// ── HARNESS_CAPABILITIES ──────────────────────────────────────────────────────
+// HARNESS_CAPABILITIES
 
 test('HARNESS_CAPABILITIES declares all four harnesses', () => {
   expect(Object.keys(HARNESS_CAPABILITIES).sort()).toEqual(['claude', 'codex', 'copilot', 'gemini'])

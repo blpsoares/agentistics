@@ -216,7 +216,7 @@ export default function RepoDetailPage() {
   )
 }
 
-// ── Compare members (repo-scoped, mirrors the /compare page but keyed by member) ──────────────
+// Compare members (repo-scoped, mirrors the /compare page but keyed by member)
 const MEMBER_COLORS = ['#D97706', '#6366f1', '#10b981', '#ef4444', '#06b6d4', '#8b5cf6', '#f59e0b', '#ec4899']
 const mcolor = (i: number): string => MEMBER_COLORS[i % MEMBER_COLORS.length]!
 const DOW_NAMES: Record<'pt' | 'en', string[]> = {

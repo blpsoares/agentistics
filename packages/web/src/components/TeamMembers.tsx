@@ -16,7 +16,7 @@ const mobileFieldLabel: React.CSSProperties = {
   letterSpacing: '0.06em', textTransform: 'uppercase', flexShrink: 0,
 }
 
-// ── Types ──────────────────────────────────────────────────────────────────
+// Types
 
 export interface TeamMember {
   id: string
@@ -28,7 +28,7 @@ export interface TeamMember {
   latencyMs?: number | null
 }
 
-// ── i18n ──────────────────────────────────────────────────────────────────
+// i18n
 
 const COPY = {
   title:           { en: 'Members (central admin)',               pt: 'Membros (admin central)' },
@@ -79,7 +79,7 @@ function t(key: keyof typeof COPY, lang: 'en' | 'pt'): string {
   return COPY[key][lang]
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
+// Helpers
 
 function relativeTime(isoStr: string, lang: 'en' | 'pt'): string {
   const diff = Date.now() - new Date(isoStr).getTime()
@@ -100,7 +100,7 @@ function relativeTime(isoStr: string, lang: 'en' | 'pt'): string {
   return 'just now'
 }
 
-// ── Main component ────────────────────────────────────────────────────────
+// Main component
 
 interface Props {
   lang: 'en' | 'pt'
@@ -891,7 +891,7 @@ export function TeamMembers({ lang, presence }: Props) {
   )
 }
 
-// ── Confirmation modal ──────────────────────────────────────────────────────
+// Confirmation modal
 
 interface ConfirmModalProps {
   title: string

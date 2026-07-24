@@ -523,7 +523,7 @@ export function claudeSummaryFromStatsCache(
   const outputTokens = Object.values(modelUsage).reduce((s, u) => s + (u.outputTokens ?? 0), 0)
   const costUSD = Object.entries(modelUsage).reduce((s, [modelId, u]) => s + calcCost(u, modelId), 0)
 
-  // ── Claude: per-model breakdown from sc.modelUsage ──
+  // Claude: per-model breakdown from sc.modelUsage
   // Skip entries with empty or 'unknown' model keys — they cannot be priced.
   const claudeModels = Object.entries(modelUsage)
     .filter(([model]) => model && model !== 'unknown')
@@ -535,26 +535,26 @@ export function claudeSummaryFromStatsCache(
     }))
     .sort((a, b) => b.costUSD - a.costUSD)
 
-  // ── Claude: blended cost per 1M tokens (input + output) ──
+  // Claude: blended cost per 1M tokens (input + output)
   const claudeTokensM = (inputTokens + outputTokens) / 1e6
   const claudeCostPerMTokens = claudeTokensM > 0 ? costUSD / claudeTokensM : null
 
-  // ── Claude: hour-of-day from sc.hourCounts ──
+  // Claude: hour-of-day from sc.hourCounts
   const claudeHourCounts = Array.from({ length: 24 }, (_, i) => sc.hourCounts?.[String(i)] ?? 0)
 
-  // ── Claude: dow from sc.dailyActivity ──
+  // Claude: dow from sc.dailyActivity
   const claudeDowCounts = Array.from({ length: 7 }, () => 0)
   for (const d of sc.dailyActivity ?? []) {
     const dow = getDay(parseISO(d.date))
     claudeDowCounts[dow] = (claudeDowCounts[dow] ?? 0) + d.sessionCount
   }
 
-  // ── Claude: daily activity for sparkline ──
+  // Claude: daily activity for sparkline
   const claudeDailyActivity = (sc.dailyActivity ?? [])
     .map(d => ({ date: d.date, sessions: d.sessionCount }))
     .sort((a, b) => a.date.localeCompare(b.date))
 
-  // ── Claude: peak token day from sc.dailyModelTokens ──
+  // Claude: peak token day from sc.dailyModelTokens
   let claudePeakTokenDay: { date: string; tokens: number } | null = null
   for (const d of sc.dailyModelTokens ?? []) {
     const tokens = Object.values(d.tokensByModel).reduce((s, t) => s + t, 0)
@@ -723,7 +723,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const userFiltered = users.length > 0
     const modelSet = filters.models && filters.models.length > 0 ? new Set(filters.models) : null
 
-    // ── Presence scope — team/central: restrict to online/offline members ──
+    // Presence scope — team/central: restrict to online/offline members
     // Effective presence: an explicit filter wins; otherwise the central policy
     // (includeOfflineData === false → online-only by default). null = all members.
     const presence = data.presence
@@ -738,7 +738,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
           )
         : null
 
-    // ── Harness filter — applied first so all downstream filters compose on top ──
+    // Harness filter — applied first so all downstream filters compose on top
     // Compose (all AND predicates): presence scope → legacy single-harness field (now always
     // unset) → user filter → multi-select harnesses filter (the sole harness selection mechanism).
     const presenceScoped = presenceAllowedUsers
@@ -761,7 +761,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const harnessActive = harnessSel.length > 0
     const nonClaudeHarness = harnessActive && !harnessSel.includes('claude')
 
-    // ── Effective statsCache — the deep aggregated Claude history for the SELECTED scope ──
+    // Effective statsCache — the deep aggregated Claude history for the SELECTED scope
     // On a central, each member pushes its own statsCache (data.userStatsCaches). We merge the
     // selected members' caches (or ALL of them when no user filter) so the totals match each
     // machine exactly — the deep history only exists aggregated, never as individual sessions.
@@ -778,7 +778,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
         )
       : data.statsCache
 
-    // ── Filter daily activity (date-range only — no project granularity in statsCache) ──
+    // Filter daily activity (date-range only — no project granularity in statsCache)
     const filteredDailyActivity = (effectiveStatsCache.dailyActivity ?? []).filter(d =>
       inRange(parseISO(d.date), start, end)
     )
@@ -786,11 +786,11 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       inRange(parseISO(d.date), start, end)
     )
 
-    // ── Shared date predicate — reused for filteredSessions and nonClaudeInRange ──
+    // Shared date predicate — reused for filteredSessions and nonClaudeInRange
     const inDateRange = (s: { start_time?: string }) =>
       !!s.start_time && inRange(parseISO(s.start_time), start, end)
 
-    // ── Filter sessions (date + projects + model) ──
+    // Filter sessions (date + projects + model)
     const filteredSessions = harnessSessions.filter(s => {
       if (!inDateRange(s)) return false
       if (projectFiltered && !projectSet.has(s.project_path)) return false
@@ -806,7 +806,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       ? harnessSessions.filter(s => (s.harness ?? 'claude') !== 'claude' && inDateRange(s))
       : []
 
-    // ── Extend dailyActivity with sessions on days not yet in statsCache ──
+    // Extend dailyActivity with sessions on days not yet in statsCache
     // statsCache can be stale (lastComputedDate < today); sessions from JSONL cover the gap.
     // Only applies when NOT project-filtered (project filter already uses filteredSessions directly).
     const dailyActivityDates = new Set(filteredDailyActivity.map(d => d.date))
@@ -825,11 +825,11 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       ...Object.entries(supplementByDay).map(([date, v]) => ({ date, ...v })),
     ]
 
-    // ── All-time total sessions (no date/project filter) — used by the header ──
+    // All-time total sessions (no date/project filter) — used by the header
     // statsCache.dailyActivity is CLAUDE-ONLY. So:
-    //  - non-Claude harness selected → pure per-session count of that harness
-    //  - Claude harness selected → Claude statsCache history + Claude sessions on gap days
-    //  - unified (no harness filter) → Claude history+gap PLUS all non-Claude sessions
+    // - non-Claude harness selected → pure per-session count of that harness
+    // - Claude harness selected → Claude statsCache history + Claude sessions on gap days
+    // - unified (no harness filter) → Claude history+gap PLUS all non-Claude sessions
     let allTimeTotalSessions: number
     if (nonClaudeHarness) {
       // Pure per-session count: non-Claude-only selection, or team/central data (statsCache
@@ -851,7 +851,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       allTimeTotalSessions = claudeBase + claudeGap + nonClaudeCount
     }
 
-    // ── Aggregate stats ──
+    // Aggregate stats
     // Use filteredSessions when project/model/non-claude-harness filter is active
     // (statsCache has no per-project/model/harness granularity)
     const harnessesFiltered = (filters.harnesses?.length ?? 0) > 0
@@ -871,7 +871,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       : extendedDailyActivity.reduce((s, d) => s + d.toolCallCount, 0)
         + nonClaudeInRange.reduce((s, sess) => s + Object.values(sess.tool_counts ?? {}).reduce((a, b) => a + b, 0), 0)
 
-    // ── Streak ──
+    // Streak
     // When project filter is active, derive active dates from filteredSessions only.
     // Otherwise, supplement stats-cache dates with all session start dates (fresher than stats-cache).
     // Session start_times are ISO UTC strings — format() normalises to local date.
@@ -902,7 +902,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       ? (Array.from(activeDates).sort().at(-1) ?? null)
       : null
 
-    // ── Per-project streaks (for streak breakdown popup) ──
+    // Per-project streaks (for streak breakdown popup)
     // Uses all sessions (no date-range filter) to mirror the global streak, which also
     // ignores the date filter (it reads from statsCache.dailyActivity covering all history).
     // Model filter is preserved when active so per-project streaks remain consistent.
@@ -922,7 +922,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
         if (sess.end_time) dates.add(format(parseISO(sess.end_time), 'yyyy-MM-dd'))
       }
     }
-    // ── Streak day breakdown: which projects were active on each day of the current streak ──
+    // Streak day breakdown: which projects were active on each day of the current streak
     const streakDayBreakdown: { date: string; projects: string[] }[] = []
     {
       const now = new Date()
@@ -937,7 +937,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       }
     }
 
-    // ── Longest streak ever (respects project/model/harness filter, ignores date range) ──
+    // Longest streak ever (respects project/model/harness filter, ignores date range)
     const allTimeActiveDates = (() => {
       const set = new Set<string>()
       if (projectFiltered || modelSet !== null || nonClaudeHarness) {
@@ -964,7 +964,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     })()
     const longestStreak = calcLongestStreak(allTimeActiveDates)
 
-    // ── Heatmap data ──
+    // Heatmap data
     let heatmapData: { date: string; value: number; sessions: number; tools: number }[]
     if (sessionFiltered) {
       const byDay: Record<string, { value: number; sessions: number; tools: number }> = {}
@@ -994,7 +994,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     }
     heatmapData.sort((a, b) => a.date.localeCompare(b.date))
 
-    // ── Model usage — respects date + model filters ──
+    // Model usage — respects date + model filters
     const globalModelUsage = effectiveStatsCache.modelUsage ?? {}
     const dateFiltered = filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd
 
@@ -1103,7 +1103,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       }
     }
 
-    // ── Cost calculation ──
+    // Cost calculation
     let totalCostUSD = 0
     if (projectFiltered || repoFiltered || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)) {
       // Use per-session calcCost with the session's model field (includes cache tokens).
@@ -1130,7 +1130,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       totalCostUSD = Object.entries(filteredModelUsage).reduce((s, [id, u]) => s + calcCost(u, id), 0)
     }
 
-    // ── Model tokens by model (for date range) ──
+    // Model tokens by model (for date range)
     const modelTokensByDate: Record<string, number> = {}
     for (const day of filteredDailyModelTokens) {
       for (const [model, tokens] of Object.entries(day.tokensByModel)) {
@@ -1139,7 +1139,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       }
     }
 
-    // ── Tools + Languages ──
+    // Tools + Languages
     const toolCounts: Record<string, number> = {}
     const toolOutputTokens: Record<string, number> = {}
     const agentFileReads: Record<string, number> = {}
@@ -1159,7 +1159,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       }
     }
 
-    // ── Git / Files ──
+    // Git / Files
     // When a project filter is active, prefer project-level git stats from data.projects
     // (computed via `git log --numstat` — captures ALL commits, not just those run through
     // Claude's Bash tool).  Session-level git_commits only counts commits that Claude
@@ -1209,11 +1209,11 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       ? sessionFilesModified
       : (projectLevelGitStats?.filesModified ?? 0)
 
-    // ── Tokens from sessions ──
+    // Tokens from sessions
     const inputTokens = filteredSessions.reduce((s, sess) => s + (sess.input_tokens ?? 0), 0)
     const outputTokens = filteredSessions.reduce((s, sess) => s + (sess.output_tokens ?? 0), 0)
 
-    // ── Hour distribution ──
+    // Hour distribution
     const hourCounts: Record<number, number> = {}
     for (const s of filteredSessions) {
       for (const h of s.message_hours ?? []) {
@@ -1221,7 +1221,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       }
     }
 
-    // ── Hour metadata: first/last timestamp per hour (for tooltip) ──
+    // Hour metadata: first/last timestamp per hour (for tooltip)
     const hourMeta: Record<number, { firstTs: string; lastTs: string }> = {}
     for (const s of filteredSessions) {
       for (const ts of s.user_message_timestamps ?? []) {
@@ -1237,7 +1237,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       }
     }
 
-    // ── Project stats ──
+    // Project stats
     const projectStats: Record<string, { sessions: number; messages: number; tools: number }> = {}
     for (const s of filteredSessions) {
       const p = s.project_path || 'Unknown'
@@ -1247,7 +1247,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       projectStats[p].tools += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
     }
 
-    // ── Repository stats (group by normalized git remote) ──
+    // Repository stats (group by normalized git remote)
     // The key is `git_remote || ''`; the empty-string bucket collects sessions with no linked
     // repo (shown as a flagged "no repository" card, never hidden). Cost is per-session (same
     // blended/calcCost path as the KPI total) so repo cards reconcile with the rest of the app.
@@ -1320,7 +1320,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     }
     const repoStats = Object.values(repoStatsMap).sort((a, b) => b.costUSD - a.costUSD || b.sessions - a.sessions)
 
-    // ── Agent metrics ──
+    // Agent metrics
     const agentInvocations: AgentInvocation[] = []
     const agentTypeBreakdown: Record<string, { count: number; tokens: number; costUSD: number; durationMs: number }> = {}
 
@@ -1342,13 +1342,13 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const totalAgentCostUSD = agentInvocations.reduce((s, i) => s + i.costUSD, 0)
     const totalAgentDurationMs = agentInvocations.reduce((s, i) => s + i.totalDurationMs, 0)
 
-    // ── Sessão mais longa (respeita filtros) ──
+    // Sessão mais longa (respeita filtros)
     const longestSession = filteredSessions.reduce<typeof filteredSessions[0] | null>((best, s) => {
       if (!best || (s.duration_minutes ?? 0) > (best.duration_minutes ?? 0)) return s
       return best
     }, null)
 
-    // ── Cache efficiency (filter-aware, derived from filteredModelUsage) ──
+    // Cache efficiency (filter-aware, derived from filteredModelUsage)
     // hit rate = cacheRead / (input + cacheRead + cacheCreation).
     // cacheCreation tokens are included in the denominator because they ARE tokens sent to the
     // model — including them avoids artificially inflated rates that approach 100% for heavy
@@ -1393,7 +1393,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       }
     }
 
-    // ── Meta coverage range (commits/files only exist in meta sessions) ──
+    // Meta coverage range (commits/files only exist in meta sessions)
     const allMetaDates = (data.sessions ?? [])
       .filter(s => s._source === 'meta' && s.start_time)
       .map(s => s.start_time.slice(0, 10))
@@ -1401,7 +1401,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const metaCoverageFrom = allMetaDates[0] ?? null
     const metaCoverageTo = allMetaDates[allMetaDates.length - 1] ?? null
 
-    // ── Session date range (reactive to active filters) ──
+    // Session date range (reactive to active filters)
     const sortedStartTimes = filteredSessions
       .filter(s => s.start_time)
       .map(s => s.start_time)

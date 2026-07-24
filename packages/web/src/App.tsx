@@ -57,7 +57,7 @@ import { type ChatModelId } from './lib/chatModels'
 import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
 
-// ── Team session state ────────────────────────────────────────────────────
+// Team session state
 interface TeamSessionState {
   required: boolean
   authed: boolean
@@ -1066,14 +1066,14 @@ export default function AppLayout() {
   const [riskyMode, setRiskyMode] = useState(false)
   const [lang, setLangState] = useState<Lang>('en')
 
-  // ── Team session gate ────────────────────────────────────────────────────
+  // Team session gate
   // undefined = not yet fetched, TeamSessionState after fetch
   const [teamSession, setTeamSession] = useState<TeamSessionState | undefined>(undefined)
   // true when this instance is a team member pushing to a central (mode === 'member').
   // Used only to tailor the upgrade command shown in the UpdateModal.
   const [isMember, setIsMember] = useState(false)
 
-  // ── IAM gate (central only) ────────────────────────────────────────────────────
+  // IAM gate (central only)
   const [iam, setIam] = useState<IamState | undefined>(undefined)
   const reloadIam = useCallback(() => {
     Promise.all([
@@ -1648,7 +1648,7 @@ export default function AppLayout() {
   const singleHarness: HarnessId | undefined =
     (filters.harnesses?.length === 1) ? filters.harnesses[0] : undefined
 
-  // ── Info items for all 8 stat cards ──────────────────────────────────────────
+  // Info items for all 8 stat cards
   const infoItems = useMemo(() => {
     const projectFiltered = filters.projects.length > 0
     const pt = lang === 'pt'

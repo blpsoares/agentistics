@@ -57,7 +57,7 @@ export function HarnessInfoPanel({ harness, lang }: Props) {
       gap: 20,
     }}>
 
-      {/* ── Header ─────────────────────────────────────────────────────── */}
+      {/*  Header  */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{
@@ -76,7 +76,7 @@ export function HarnessInfoPanel({ harness, lang }: Props) {
         )}
       </div>
 
-      {/* ── Two-column body ─────────────────────────────────────────────── */}
+      {/*  Two-column body  */}
       <div style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
@@ -214,7 +214,7 @@ export function HarnessInfoPanel({ harness, lang }: Props) {
         </div>
       </div>
 
-      {/* ── Cost basis (full-width) ─────────────────────────────────────── */}
+      {/*  Cost basis (full-width)  */}
       <section style={{
         background: 'var(--bg-elevated)', border: '1px solid var(--border)',
         borderRadius: 7, padding: '10px 12px',
@@ -247,7 +247,7 @@ export function HarnessInfoPanel({ harness, lang }: Props) {
         )}
       </section>
 
-      {/* ── Nay backend status (full-width) ────────────────────────────── */}
+      {/*  Nay backend status (full-width)  */}
       {!chatLoading && chatStatus && (
         <section style={{
           background: 'var(--bg-elevated)', border: '1px solid var(--border)',

@@ -6,7 +6,7 @@ import { TeamSettings, type TeamConfig } from '../../components/TeamSettings'
 import { SectionHeader, Section, Select, Checkbox, ConfirmModal } from './primitives'
 import { Drawer } from './Drawer'
 
-// ── interfaces ────────────────────────────────────────────────────────────────
+// interfaces
 interface MachineInfo {
   id: string
   machineName: string
@@ -37,7 +37,7 @@ interface Team {
   name: string
 }
 
-// ── shared inline styles ──────────────────────────────────────────────────────
+// shared inline styles
 const input: React.CSSProperties = {
   padding: '9px 11px', background: 'var(--bg-elevated)', border: '1px solid var(--border)',
   borderRadius: 7, fontSize: 13, color: 'var(--text-primary)', fontFamily: 'inherit',
@@ -86,7 +86,7 @@ function ReadField({ label, value }: { label: string; value: React.ReactNode }) 
   )
 }
 
-// ── solo/member fallback (unchanged) ──────────────────────────────────────────
+// solo/member fallback (unchanged)
 const DEFAULT_TEAM_CONFIG: TeamConfig = {
   mode: 'solo',
   endpoint: '',
@@ -132,7 +132,7 @@ function SoloMemberMachinesView({ pt }: { pt: boolean }) {
   )
 }
 
-// ── central machines governance ───────────────────────────────────────────────
+// central machines governance
 function CentralMachinesView({ pt }: { pt: boolean }) {
   const { me } = useOutletContext<AppContext>()
   const [machines, setMachines] = useState<MachineInfo[]>([])
@@ -1312,7 +1312,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   )
 }
 
-// ── main component ────────────────────────────────────────────────────────────
+// main component
 export default function MachinesSettings() {
   const ctx = useOutletContext<AppContext>()
   const pt = ctx.lang === 'pt'

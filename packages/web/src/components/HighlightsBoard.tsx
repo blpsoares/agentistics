@@ -56,7 +56,7 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
     )
   }
 
-  // ── Record finders ──────────────────────────────────────────────────────────
+  // Record finders
   // sessions[0] is guaranteed defined because of the sessions.length === 0 guard above
   const firstSession = sessions[0]!
   const longestSession = sessions.reduce((b, s) =>
@@ -86,7 +86,7 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
   }
   const topProjectEntry = Object.entries(projectSessionCounts).sort((a, b) => b[1] - a[1])[0]
 
-  // ── Averages for comparison ─────────────────────────────────────────────────
+  // Averages for comparison
   const avgDuration = avg(sessions.map(s => s.duration_minutes ?? 0).filter(v => v > 0))
   const avgInput    = avg(sessions.map(s => s.input_tokens ?? 0).filter(v => v > 0))
   const avgOutput   = avg(sessions.map(s => s.output_tokens ?? 0).filter(v => v > 0))

@@ -10,7 +10,7 @@
 import { PORT, WEB_PORT } from './config'
 import { readPreferences } from './preferences'
 
-// ── ANSI (same palette as cli-start.ts) ──────────────────────────────────────
+// ANSI (same palette as cli-start.ts)
 const ESC = '\x1b'
 const R = `${ESC}[0m`
 const B = `${ESC}[1m`
@@ -24,7 +24,7 @@ const WH = `${ESC}[97m`
 const CENTRAL_PROJECT = 'team-mode'      // central.sh: PROJECT=${PROJECT:-team-mode}
 const MACHINE_IMAGE = 'agentistics-machine' // docker-compose.machine.yml: image
 
-// ── shell helpers (local copy of cli-start.ts's pattern) ──────────────────────
+// shell helpers (local copy of cli-start.ts's pattern)
 async function sh(cmd: string[]): Promise<{ code: number; out: string }> {
   try {
     const p = Bun.spawn(cmd, { stdout: 'pipe', stderr: 'ignore' })
@@ -40,7 +40,7 @@ async function dockerIds(filter: string): Promise<string[]> {
   return r.out.split(/\s+/).filter(Boolean)
 }
 
-// ── detection ─────────────────────────────────────────────────────────────────
+// detection
 async function isServerRunning(): Promise<boolean> {
   try {
     const res = await fetch(`http://localhost:${PORT}/api/health`, { signal: AbortSignal.timeout(600) })
@@ -74,7 +74,7 @@ async function healthLine(): Promise<string> {
   }
 }
 
-const RULE = `  ${D}────────────────────────────────────────${R}`
+const RULE = `  ${D}${R}`
 
 type Mode = 'solo' | 'central' | 'member'
 

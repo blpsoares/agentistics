@@ -13,7 +13,7 @@ interface Machine { id: string; machineName: string; user: string; teamId?: stri
 // Resolve a machine's full team set (prefer teamIds, fall back to the single teamId).
 const machineTeams = (m: Machine): string[] => m.teamIds ?? (m.teamId ? [m.teamId] : [])
 
-// ── shared inline styles ──────────────────────────────────────────────────
+// shared inline styles
 const input: React.CSSProperties = {
   padding: '9px 11px', background: 'var(--bg-elevated)', border: '1px solid var(--border)',
   borderRadius: 7, fontSize: 13, color: 'var(--text-primary)', fontFamily: 'inherit',
@@ -52,7 +52,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-// ── page ──────────────────────────────────────────────────────────────────
+// page
 export default function TeamsSettings() {
   const { lang, me } = useOutletContext<AppContext>()
   const pt = lang === 'pt'
@@ -78,7 +78,7 @@ export default function TeamsSettings() {
   }, [])
   useEffect(() => { void load() }, [load])
 
-  // ── team create drawer ──
+  // team create drawer
   const [teamOpen, setTeamOpen] = useState(false)
   const [teamName, setTeamName] = useState('')
   const [teamErr, setTeamErr] = useState<string | null>(null)
@@ -140,7 +140,7 @@ export default function TeamsSettings() {
   const memberCountOf = (teamId: string) =>
     accounts.filter(a => a.role !== 'owner' && a.memberships.some(m => m.teamId === teamId)).length
 
-  // ── manage team drawer ──
+  // manage team drawer
   const [manageOpen, setManageOpen] = useState(false)
   const [manageTeamId, setManageTeamId] = useState<string | null>(null)
   const [manageErr, setManageErr] = useState<string | null>(null)
@@ -271,7 +271,7 @@ export default function TeamsSettings() {
     ? [{ value: 'user', label: userRoleLabel }, { value: 'manager', label: managerRoleLabel }]
     : [{ value: 'user', label: userRoleLabel }]
 
-  // ── create-drawer eligibility (no team yet, so independent of manageTeamId) ──
+  // create-drawer eligibility (no team yet, so independent of manageTeamId)
   const canCreateWithMembers = viewerIsOwner || managedTeamIds.size > 0
   const createEligibleAccounts = accounts.filter(a => {
     if (a.role === 'owner') return false

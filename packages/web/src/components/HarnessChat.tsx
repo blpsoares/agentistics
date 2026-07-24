@@ -162,7 +162,7 @@ export function HarnessChat({ harness, lang, initialProject, initialSessionId, o
   const [transcript, setTranscript] = useState<TranscriptMessage[]>([])
   const transcriptRef = useRef<HTMLDivElement>(null)
 
-  // ── Initial deep-link handling ─────────────────────────────────────────────
+  // Initial deep-link handling
   useEffect(() => {
     if (initialSessionId) {
       if (harness === 'claude' && initialProject) {
@@ -212,14 +212,14 @@ export function HarnessChat({ harness, lang, initialProject, initialSessionId, o
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ── Scroll transcript to bottom ───────────────────────────────────────────
+  // Scroll transcript to bottom
   useEffect(() => {
     if (view === 'transcript' && transcriptRef.current) {
       transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight
     }
   }, [transcript, view])
 
-  // ── Load projects ─────────────────────────────────────────────────────────
+  // Load projects
   useEffect(() => {
     if (view !== 'projects') return
     if (loading) return
@@ -252,7 +252,7 @@ export function HarnessChat({ harness, lang, initialProject, initialSessionId, o
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, harness])
 
-  // ── Load sessions for selected project ───────────────────────────────────
+  // Load sessions for selected project
   useEffect(() => {
     if (view !== 'sessions' || !selectedProject) return
     if (harness === 'claude') {
@@ -324,7 +324,7 @@ export function HarnessChat({ harness, lang, initialProject, initialSessionId, o
     ? projects.filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
     : projects
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // Render
 
   const containerStyle: React.CSSProperties = {
     display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden',

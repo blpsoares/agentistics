@@ -157,7 +157,7 @@ const _D   = `${_ESC}[2m`
 
 /** Prints the "new version available" banner for a resolved VersionInfo. */
 function printUpdateBanner(info: { current: string; latest: string }): void {
-  const sep = `${_D}${'─'.repeat(52)}${_R}`
+  const sep = `${_D}${''.repeat(52)}${_R}`
   process.stdout.write(
     `\n${sep}\n` +
     `  ${_Y}${_B}⚡ New version available!${_R}\n` +

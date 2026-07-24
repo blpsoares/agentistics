@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { BarChart2, Lock, AlertCircle } from 'lucide-react'
 
-// ── i18n ──────────────────────────────────────────────────────────────────
+// i18n
 
 const COPY = {
   title:       { en: 'agentistics',                              pt: 'agentistics' },
@@ -20,7 +20,7 @@ function t(key: keyof typeof COPY, lang: 'en' | 'pt'): string {
   return COPY[key][lang]
 }
 
-// ── Component ─────────────────────────────────────────────────────────────
+// Component
 
 interface Props {
   onAuthed: () => void

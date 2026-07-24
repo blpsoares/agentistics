@@ -92,7 +92,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
   const [memberQuery, setMemberQuery] = useState('')
   const [teamQuery, setTeamQuery] = useState('')
   const [machineQuery, setMachineQuery] = useState('')
-  // ── "+ Filter" menu: pick a dimension → open its value picker. One open at a time. ──
+  // "+ Filter" menu: pick a dimension → open its value picker. One open at a time.
   type Dimension = 'members' | 'harnesses' | 'presence' | 'repos' | 'models' | 'teams' | 'machines'
   const [showAddMenu, setShowAddMenu] = useState(false)
   const [openPicker, setOpenPicker] = useState<Dimension | null>(null)
@@ -115,7 +115,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
     onChange({ ...filters, models: next })
   }
 
-  // ── Repository filter (group-by-remote) — options derived from projects[].gitRemote ──
+  // Repository filter (group-by-remote) — options derived from projects[].gitRemote
   // Unlinked projects collapse into a single '' bucket (matches the Repositories page).
   const selectedRepos = filters.repos ?? []
   const hasRepoFilter = selectedRepos.length > 0

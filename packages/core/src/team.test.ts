@@ -45,7 +45,7 @@ test('filterByUsers supports multi-select (aggregate of a subset)', () => {
   expect(result.map(s => s.session_id).sort()).toEqual(['1', '2'])
 })
 
-// ── distinctHarnesses ─────────────────────────────────────────────────────
+// distinctHarnesses
 
 test('distinctHarnesses returns harnesses in canonical order, deduped', () => {
   const sessions = [
@@ -66,7 +66,7 @@ test('distinctHarnesses on an empty list returns an empty array', () => {
   expect(distinctHarnesses([])).toEqual([])
 })
 
-// ── filterByHarnesses ─────────────────────────────────────────────────────
+// filterByHarnesses
 
 function harnessSession(id: string, harness?: HarnessId): SessionMeta {
   return {
@@ -109,7 +109,7 @@ test('filterByHarnesses supports multi-select across a subset', () => {
   expect(result.map(s => s.session_id).sort()).toEqual(['1', '4'])
 })
 
-// ── clampPushInterval ─────────────────────────────────────────────────────
+// clampPushInterval
 
 test('clampPushInterval returns DEFAULT for NaN', () => {
   expect(clampPushInterval(NaN)).toBe(PUSH_INTERVAL.DEFAULT_SEC)

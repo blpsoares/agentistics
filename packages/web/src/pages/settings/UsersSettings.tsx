@@ -12,7 +12,7 @@ interface Account { id: string; name: string; email: string; role: 'owner' | 'me
 interface MachineRow { name: string; teamId: string }
 interface LinkedMachine { id: string; machineName: string; teamId?: string; accountId?: string; accountIds?: string[]; lastSeenAt: string | null }
 
-// ── shared inline styles ──────────────────────────────────────────────────
+// shared inline styles
 const input: React.CSSProperties = {
   padding: '9px 11px', background: 'var(--bg-elevated)', border: '1px solid var(--border)',
   borderRadius: 7, fontSize: 13, color: 'var(--text-primary)', fontFamily: 'inherit',
@@ -77,7 +77,7 @@ function RoleBadge({ role }: { role: string }) {
   )
 }
 
-// ── page ──────────────────────────────────────────────────────────────────
+// page
 export default function UsersSettings() {
   const { lang, me } = useOutletContext<AppContext>()
   const pt = lang === 'pt'
@@ -104,7 +104,7 @@ export default function UsersSettings() {
   const managedTeamIds = new Set((me?.memberships ?? []).filter(m => m.role === 'manager').map(m => m.teamId))
   const assignableTeams = viewerIsOwner ? teams : teams.filter(t => managedTeamIds.has(t._id))
 
-  // ── account drawer ──
+  // account drawer
   const [accountOpen, setAccountOpen] = useState(false)
   const [an, setAn] = useState(''); const [ae, setAe] = useState(''); const [ap, setAp] = useState('')
   const [accountType, setAccountType] = useState<'owner' | 'member'>('member')
@@ -118,7 +118,7 @@ export default function UsersSettings() {
   const [copied, setCopied] = useState<string | null>(null)
   const [copyFailed, setCopyFailed] = useState<string | null>(null)
 
-  // ── edit drawer ──
+  // edit drawer
   const [editOpen, setEditOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [editIsOwner, setEditIsOwner] = useState(false)
@@ -138,7 +138,7 @@ export default function UsersSettings() {
   // Rename machine in edit drawer
   const [renamingMachineId, setRenamingMachineId] = useState<string | null>(null)
   const [renameMachineValue, setRenameMachineValue] = useState('')
-  // ── destructive-action confirmations (no silent delete/revoke/reset) ──
+  // destructive-action confirmations (no silent delete/revoke/reset)
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string; email: string } | null>(null)
   const [confirmRevoke, setConfirmRevoke] = useState<{ id: string; name: string } | null>(null)
   const [confirmReset, setConfirmReset] = useState(false)

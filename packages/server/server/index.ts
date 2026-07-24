@@ -1430,7 +1430,7 @@ const _EM  = `${_ESC}[92m`
 const _CY  = `${_ESC}[96m`
 const _WH  = `${_ESC}[97m`
 
-const _SEP = `${_D}${'─'.repeat(44)}${_R}`
+const _SEP = `${_D}${''.repeat(44)}${_R}`
 const _DOT = `${_EM}●${_R}`
 const _URL = (u: string) => `${_CY}${_B}${u}${_R}`
 
