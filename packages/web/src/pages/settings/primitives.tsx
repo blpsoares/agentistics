@@ -1,5 +1,6 @@
 import React from 'react'
 import { Pencil, Check, AlertTriangle, Info } from 'lucide-react'
+import { useIsMobile } from '../../hooks/useIsMobile'
 
 // ScopeNote
 // A subtle info banner explaining WHICH resources the signed-in account can see on a governance
@@ -67,6 +68,95 @@ export function ConfirmModal({ open, title, message, confirmLabel, cancelLabel, 
         </div>
       </div>
     </div>
+  )
+}
+
+// RecordCard
+// The mobile stand-in for a governance table row. A table with 6-8 columns is unreadable at
+// 390px, so on mobile each row renders as a stacked card: title + badge, a subtitle, label/value
+// field rows, and a footer of full-width 44px actions. The desktop <table> is kept as-is beside
+// it — this is an additional branch, never a replacement.
+export function RecordCard({ title, subtitle, badge, fields, actions, onClick, leading }: {
+  title: React.ReactNode
+  subtitle?: React.ReactNode
+  /** Role / presence pill, rendered top-right on the title line. */
+  badge?: React.ReactNode
+  fields: { label: string; value: React.ReactNode }[]
+  /** Rendered in a bordered footer; each direct child stretches to an equal share. */
+  actions?: React.ReactNode
+  /** Whole-card tap — mirrors the desktop row's onClick (opens the detail drawer). */
+  onClick?: () => void
+  /** Optional control before the title, e.g. a bulk-select checkbox. */
+  leading?: React.ReactNode
+}) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        border: '1px solid var(--border)', borderRadius: 12, background: 'var(--bg-card)',
+        cursor: onClick ? 'pointer' : 'default', overflow: 'hidden',
+      }}
+    >
+      <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          {leading && <span onClick={e => e.stopPropagation()} style={{ display: 'flex', flexShrink: 0 }}>{leading}</span>}
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
+            {subtitle && (
+              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>{subtitle}</div>
+            )}
+          </div>
+          {badge && <span style={{ flexShrink: 0 }}>{badge}</span>}
+        </div>
+        {fields.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+            {fields.map(f => (
+              <div key={f.label} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 12 }}>
+                <span style={{ color: 'var(--text-tertiary)', flexShrink: 0, minWidth: 82 }}>{f.label}</span>
+                <span style={{ color: 'var(--text-secondary)', minWidth: 0, flex: 1, textAlign: 'right' }}>{f.value}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {actions && (
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            display: 'flex', gap: 1, borderTop: '1px solid var(--border)',
+            background: 'var(--border)',
+          }}
+        >
+          {actions}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// RecordCardAction
+// A footer button for RecordCard: equal share of the row, 44px tall, flat against its neighbours
+// (the 1px gaps in the parent's background show through as hairline dividers).
+export function RecordCardAction({ onClick, children, danger, label }: {
+  onClick: () => void
+  children: React.ReactNode
+  danger?: boolean
+  label: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      style={{
+        flex: 1, minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+        border: 'none', background: 'var(--bg-card)',
+        color: danger ? '#ef4444' : 'var(--text-secondary)',
+        fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+      }}
+    >
+      {children}
+    </button>
   )
 }
 
