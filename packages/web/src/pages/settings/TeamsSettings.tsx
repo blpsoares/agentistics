@@ -77,8 +77,23 @@ export default function TeamsSettings() {
   const [teamOpen, setTeamOpen] = useState(false)
   const [teamName, setTeamName] = useState('')
   const [teamErr, setTeamErr] = useState<string | null>(null)
+  // Optional member/machine editors in the create drawer: committed rows + a draft row.
+  const [newMembers, setNewMembers] = useState<{ accountId: string; role: 'manager' | 'user' }[]>([])
+  const [draftMemberId, setDraftMemberId] = useState('')
+  const [draftMemberRole, setDraftMemberRole] = useState<'manager' | 'user'>('user')
+  const [newMachineIds, setNewMachineIds] = useState<string[]>([])
+  const [draftMachineId, setDraftMachineId] = useState('')
 
-  function openTeamDrawer() { setTeamName(''); setTeamErr(null); setTeamOpen(true) }
+  function openTeamDrawer() {
+    setTeamName('')
+    setTeamErr(null)
+    setNewMembers([])
+    setDraftMemberId('')
+    setDraftMemberRole('user')
+    setNewMachineIds([])
+    setDraftMachineId('')
+    setTeamOpen(true)
+  }
   async function createTeam() {
     if (!teamName.trim()) { setTeamErr(pt ? 'Informe o nome do time.' : 'Enter a team name.'); return }
     const res = await fetch('/api/iam/teams', {
@@ -86,6 +101,30 @@ export default function TeamsSettings() {
       body: JSON.stringify({ name: teamName.trim() }),
     })
     if (!res.ok) { const d = await res.json().catch(() => ({})) as { error?: string }; setTeamErr(d.error || `HTTP ${res.status}`); return }
+    const created = await res.json().catch(() => ({})) as { team?: { _id: string } }
+    const newId = created.team?._id
+    if (newId) {
+      // Attach chosen members sequentially (append to each account's memberships).
+      for (const row of newMembers) {
+        const account = accounts.find(a => a.id === row.accountId)
+        if (!account) continue
+        const existing = account.memberships.find(m => m.teamId === newId)
+        const memberships = existing ? account.memberships : [...account.memberships, { teamId: newId, role: row.role }]
+        const r = await fetch('/api/iam/accounts', {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: row.accountId, memberships }),
+        })
+        if (!r.ok) { const d = await r.json().catch(() => ({})) as { error?: string }; setTeamErr(d.error || `HTTP ${r.status}`); void load(); return }
+      }
+      // Reassign chosen machines sequentially.
+      for (const machineId of newMachineIds) {
+        const r = await fetch('/api/iam/machines', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reassignId: machineId, teamId: newId }),
+        })
+        if (!r.ok) { const d = await r.json().catch(() => ({})) as { error?: string }; setTeamErr(d.error || `HTTP ${r.status}`); void load(); return }
+      }
+    }
     setTeamOpen(false); void load()
   }
   async function deleteTeam(id: string) {
@@ -177,10 +216,12 @@ export default function TeamsSettings() {
   const canManageTeam = (teamId: string) => viewerIsOwner || managedTeamIds.has(teamId)
   const manageTeam = teams.find(t => t._id === manageTeamId)
   const canEditManage = manageTeamId ? canManageTeam(manageTeamId) : false
-  const sectionLabels = {
+  // The Members/Machines sections persist each add/remove immediately, so their footer
+  // must not imply a pending save — it just closes the editor.
+  const manageSectionLabels = {
     edit: pt ? 'Editar' : 'Edit',
-    save: pt ? 'Salvar' : 'Save',
-    cancel: pt ? 'Cancelar' : 'Cancel',
+    save: pt ? 'Concluir' : 'Done',
+    cancel: pt ? 'Fechar' : 'Close',
   }
   const teamMembers = manageTeamId ? accounts.filter(a => a.memberships.some(m => m.teamId === manageTeamId)) : []
   const teamMachines = manageTeamId ? machines.filter(m => m.teamId === manageTeamId) : []
@@ -203,6 +244,25 @@ export default function TeamsSettings() {
   const roleOptions: { value: 'manager' | 'user'; label: string }[] = viewerIsOwner
     ? [{ value: 'user', label: 'user' }, { value: 'manager', label: 'manager' }]
     : [{ value: 'user', label: 'user' }]
+
+  // ── create-drawer eligibility (no team yet, so independent of manageTeamId) ──
+  const canCreateWithMembers = viewerIsOwner || managedTeamIds.size > 0
+  const createEligibleAccounts = accounts.filter(a => {
+    if (a.role === 'owner') return false
+    if (!viewerIsOwner) {
+      if (a.memberships.length === 0) return true
+      return a.memberships.every(m => m.role === 'user' && managedTeamIds.has(m.teamId))
+    }
+    return true
+  })
+  const draftMemberOptions = createEligibleAccounts.filter(a => !newMembers.some(r => r.accountId === a.id))
+  const createEligibleMachines = machines.filter(m => {
+    if (!viewerIsOwner && m.teamId && !managedTeamIds.has(m.teamId)) return false
+    return true
+  })
+  const draftMachineOptions = createEligibleMachines.filter(m => !newMachineIds.includes(m.id))
+  const accountById = (id: string) => accounts.find(a => a.id === id)
+  const machineById = (id: string) => machines.find(m => m.id === id)
 
   const ROLE_BADGE_COLORS: Record<string, string> = { manager: 'var(--anthropic-orange)', user: '#3b82f6' }
   function RoleBadge({ role }: { role: string }) {
@@ -284,6 +344,111 @@ export default function TeamsSettings() {
         <Field label={pt ? 'Nome do time' : 'Team name'}>
           <input style={input} value={teamName} onChange={e => setTeamName(e.target.value)} placeholder={pt ? 'Nome do time' : 'Team name'} />
         </Field>
+
+        {canCreateWithMembers && (
+          <>
+            {/* Optional members editor */}
+            <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase' }}>
+                {pt ? 'Membros (opcional)' : 'Members (optional)'}
+              </div>
+              {newMembers.map((row, i) => {
+                const account = accountById(row.accountId)
+                return (
+                  <div key={row.accountId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{account?.name ?? row.accountId}</span>
+                        <RoleBadge role={row.role} />
+                      </div>
+                      {account && <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{account.email}</span>}
+                    </div>
+                    <button type="button" style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }} onClick={() => setNewMembers(rows => rows.filter((_, idx) => idx !== i))}>
+                      {pt ? 'Remover' : 'Remove'}
+                    </button>
+                  </div>
+                )
+              })}
+              {/* Draft row */}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+                <div style={{ flex: 2 }}>
+                  <Field label={pt ? 'Adicionar membro' : 'Add member'}>
+                    <Select
+                      value={draftMemberId}
+                      onChange={v => setDraftMemberId(v)}
+                      options={[
+                        { value: '', label: pt ? 'Selecione…' : 'Select…' },
+                        ...draftMemberOptions.map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
+                      ]}
+                      placeholder={pt ? 'Selecione…' : 'Select…'}
+                    />
+                  </Field>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <Field label={pt ? 'Papel' : 'Role'}>
+                    <Select
+                      value={draftMemberRole}
+                      onChange={v => setDraftMemberRole(v as 'manager' | 'user')}
+                      options={roleOptions}
+                    />
+                  </Field>
+                </div>
+                {draftMemberId && (
+                  <button type="button" style={{ ...primaryBtn, marginBottom: 0 }} onClick={() => {
+                    setNewMembers(rows => [...rows, { accountId: draftMemberId, role: draftMemberRole }])
+                    setDraftMemberId('')
+                    setDraftMemberRole('user')
+                  }}>
+                    <Plus size={13} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Optional machines editor */}
+            <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase' }}>
+                {pt ? 'Máquinas (opcional)' : 'Machines (optional)'}
+              </div>
+              {newMachineIds.map((id, i) => {
+                const machine = machineById(id)
+                return (
+                  <div key={id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{machine?.machineName ?? id}</span>
+                    <button type="button" style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }} onClick={() => setNewMachineIds(ids => ids.filter((_, idx) => idx !== i))}>
+                      {pt ? 'Remover' : 'Remove'}
+                    </button>
+                  </div>
+                )
+              })}
+              {/* Draft row */}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+                <div style={{ flex: 1 }}>
+                  <Field label={pt ? 'Adicionar máquina' : 'Add machine'}>
+                    <Select
+                      value={draftMachineId}
+                      onChange={v => setDraftMachineId(v)}
+                      options={[
+                        { value: '', label: pt ? 'Selecione…' : 'Select…' },
+                        ...draftMachineOptions.map(m => ({ value: m.id, label: `${m.machineName} — ${m.accountName ?? m.user}` })),
+                      ]}
+                      placeholder={pt ? 'Selecione…' : 'Select…'}
+                    />
+                  </Field>
+                </div>
+                {draftMachineId && (
+                  <button type="button" style={{ ...primaryBtn, marginBottom: 0 }} onClick={() => {
+                    setNewMachineIds(ids => [...ids, draftMachineId])
+                    setDraftMachineId('')
+                  }}>
+                    <Plus size={13} />
+                  </button>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
           <button style={ghostBtn} onClick={() => setTeamOpen(false)}>{pt ? 'Cancelar' : 'Cancel'}</button>
           <button style={primaryBtn} onClick={() => void createTeam()}><Plus size={14} /> {pt ? 'Criar time' : 'Create team'}</button>
@@ -302,7 +467,7 @@ export default function TeamsSettings() {
           onEdit={() => { setManageErr(null); setAddAccountId(''); setAddAccountRole('user'); setEditingSection('members') }}
           onCancel={() => { setAddAccountId(''); setAddAccountRole('user'); setEditingSection(null) }}
           onSave={() => { setAddAccountId(''); setAddAccountRole('user'); setEditingSection(null) }}
-          labels={sectionLabels}
+          labels={manageSectionLabels}
           editChildren={
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {teamMembers.length === 0 ? (
@@ -355,9 +520,17 @@ export default function TeamsSettings() {
                     />
                   </Field>
                 </div>
-                <button type="button" style={{ ...primaryBtn, marginBottom: 0 }} onClick={() => void addAccountToTeam()} disabled={!addAccountId}>
-                  <Plus size={13} />
-                </button>
+                {addAccountId
+                  ? (
+                    <button type="button" style={{ ...primaryBtn, marginBottom: 0 }} onClick={() => void addAccountToTeam()}>
+                      <Plus size={13} />
+                    </button>
+                  )
+                  : (
+                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)', paddingBottom: 9, whiteSpace: 'nowrap' }}>
+                      {pt ? 'Selecione um membro' : 'Select a member'}
+                    </span>
+                  )}
               </div>
             </div>
           }
@@ -392,7 +565,7 @@ export default function TeamsSettings() {
           onEdit={() => { setManageErr(null); setAddMachineId(''); setEditingSection('machines') }}
           onCancel={() => { setAddMachineId(''); setEditingSection(null) }}
           onSave={() => { setAddMachineId(''); setEditingSection(null) }}
-          labels={sectionLabels}
+          labels={manageSectionLabels}
           editChildren={
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {teamMachines.length === 0 ? (
@@ -432,9 +605,17 @@ export default function TeamsSettings() {
                     />
                   </Field>
                 </div>
-                <button type="button" style={{ ...primaryBtn, marginBottom: 0 }} onClick={() => void addMachineToTeam()} disabled={!addMachineId}>
-                  <Plus size={13} />
-                </button>
+                {addMachineId
+                  ? (
+                    <button type="button" style={{ ...primaryBtn, marginBottom: 0 }} onClick={() => void addMachineToTeam()}>
+                      <Plus size={13} />
+                    </button>
+                  )
+                  : (
+                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)', paddingBottom: 9, whiteSpace: 'nowrap' }}>
+                      {pt ? 'Selecione uma máquina' : 'Select a machine'}
+                    </span>
+                  )}
               </div>
             </div>
           }
