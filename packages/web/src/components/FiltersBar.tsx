@@ -428,7 +428,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                   display: 'flex', alignItems: 'center', gap: 4,
                   background: 'transparent', border: 'none', cursor: 'pointer',
                   color: 'var(--text-tertiary)', fontSize: 11, fontFamily: 'inherit',
-                  padding: '2px 6px 6px',
+                  padding: isMobile ? '0 6px' : '2px 6px 6px',
+                  minHeight: isMobile ? 44 : undefined,
                 }}
               >
                 <ChevronDown size={11} style={{ transform: 'rotate(90deg)' }} />
