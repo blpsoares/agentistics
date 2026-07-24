@@ -236,3 +236,15 @@ html, body {
    overflow-y to auto and the tabs' -1px marginBottom shows a vertical scrollbar. */
 .tabscroll { scrollbar-width: none; }
 .tabscroll::-webkit-scrollbar { display: none; }
+
+/* Responsive card grids (shared)
+   Scale the column count with viewport width and CAP it, so a row of cards neither crams on
+   narrow screens nor over-spreads into lonely orphans on ultrawide. Pick the max with a cap
+   class: `ag-grid cols-3` … `ag-grid cols-6`. Default gap is 12px — override inline with `gap`.
+   minmax(0,1fr) lets cells shrink so long content never forces a horizontal scroll. */
+.ag-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 420px) { .ag-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (min-width: 560px)  { .ag-grid.cols-3, .ag-grid.cols-4, .ag-grid.cols-5, .ag-grid.cols-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 860px)  { .ag-grid.cols-4, .ag-grid.cols-5, .ag-grid.cols-6 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (min-width: 1160px) { .ag-grid.cols-5, .ag-grid.cols-6 { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+@media (min-width: 1460px) { .ag-grid.cols-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); } }

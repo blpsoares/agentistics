@@ -138,7 +138,7 @@ export function AgentMetricsPanel({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Summary cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
+      <div className="ag-grid cols-4" style={{ gap: 12 }}>
         <SummaryCard
           label={pt ? 'Invocações' : 'Invocations'}
           value={String(totalInvocations)}

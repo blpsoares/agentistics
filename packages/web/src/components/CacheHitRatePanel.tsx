@@ -223,11 +223,7 @@ export function CacheHitRatePanel({
         </div>
 
         {/* Money impact */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-          gap: 8,
-        }}>
+        <div className="ag-grid cols-3" style={{ gap: 8 }}>
           <Stat
             label={pt ? 'Economia bruta' : 'Gross savings'}
             value={fmtCost(grossSavedUSD, currency, brlRate)}
