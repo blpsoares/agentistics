@@ -1597,6 +1597,12 @@ export default function AppLayout() {
   const machineUsers = useMemo(() => new Set(machinesList.map(m => m.user)), [machinesList])
   const usersWithMachines = useMemo(() => users.filter(u => machineUsers.has(u)), [users, machineUsers])
 
+  // Only member-managers (owner, or a manager of any team) may filter BY member — a plain user
+  // sees only their own scoped data, so member/presence filtering would be meaningless for them.
+  // They still get Teams (their teams) + Machines (their linked machines).
+  const canFilterMembers = iam?.account?.role === 'owner'
+    || (iam?.account?.memberships ?? []).some(m => m.role === 'manager')
+
   // Harnesses available in the harness filter, scoped to the SELECTED users (empty = all
   // users). So picking one member narrows the harness options to the harnesses that member
   // actually used; "All members" shows the union. Falls back to all harnesses in the data
@@ -2014,6 +2020,7 @@ export default function AppLayout() {
                   compact
                   teams={teamsList}
                   machines={machinesList}
+                  canFilterMembers={canFilterMembers}
                 />
                 {/* Collapse handle */}
                 <button
@@ -2052,6 +2059,7 @@ export default function AppLayout() {
                 lang={lang}
                 teams={teamsList}
                 machines={machinesList}
+                canFilterMembers={canFilterMembers}
               />
             </div>
 

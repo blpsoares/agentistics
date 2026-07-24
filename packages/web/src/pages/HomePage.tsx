@@ -148,8 +148,14 @@ export default function HomePage() {
           100% { box-shadow: 0 0 0 0px rgba(217,119,6,0); }
         }
         .live-flash { animation: liveFlash 1.2s ease-out forwards; border-radius: var(--radius-lg); }
+        /* KPI grid: scale 2→3→4→5 columns by width and CAP at 5 — so it never crams on
+           tablet/laptop and never over-spreads past 5-per-row on ultrawide (10 cards = 5+5). */
+        .kpi-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        @media (min-width: 560px)  { .kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+        @media (min-width: 860px)  { .kpi-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+        @media (min-width: 1160px) { .kpi-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
       `}</style>
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+      <div className="kpi-grid">
         {(cardOrder as CardId[]).map(id => renderCard(id))}
       </div>
 

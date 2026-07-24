@@ -1045,6 +1045,7 @@ export default function CustomPage() {
               harnesses={ctx.harnesses}
               lang={lang}
               compact
+              canFilterMembers={ctx.me?.role === 'owner' || (ctx.me?.memberships ?? []).some(m => m.role === 'manager')}
             />
           </div>
 

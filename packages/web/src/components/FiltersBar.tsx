@@ -48,6 +48,10 @@ interface Props {
   teams?: { id: string; name: string }[]
   /** Central-only: available machines for filter. Empty when not a central or no machines. */
   machines?: { id: string; name: string; user: string; teamId?: string; teamIds?: string[] }[]
+  /** Whether the viewer may filter BY member/presence (owner or a team manager). A plain user
+   *  only sees their own scoped data, so those dimensions are hidden for them. Defaults to true
+   *  (solo/non-central usage where the concept doesn't apply). */
+  canFilterMembers?: boolean
 }
 
 const DATE_RANGES: { key: DateRange; labelPt: string; labelEn: string }[] = [
@@ -79,7 +83,7 @@ const SEARCH_INPUT: React.CSSProperties = {
   borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
 }
 
-export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines }: Props) {
+export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, canFilterMembers = true }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
@@ -333,7 +337,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               boxShadow: '0 4px 16px rgba(0,0,0,0.25)', zIndex: 1000,
               minWidth: 190, boxSizing: 'border-box', padding: 6,
             }}>
-              {users.length > 0 && (
+              {canFilterMembers && users.length > 0 && (
                 <MenuItem
                   icon={<Users size={13} />}
                   label={lang === 'pt' ? 'Membros' : 'Members'}
@@ -365,7 +369,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                   onClick={() => setOpenPicker('harnesses')}
                 />
               )}
-              {presence && Object.keys(presence).length > 0 && (
+              {canFilterMembers && presence && Object.keys(presence).length > 0 && (
                 <MenuItem
                   icon={<Radio size={13} />}
                   label={lang === 'pt' ? 'Presença' : 'Presence'}
