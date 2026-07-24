@@ -3,7 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import { Plus, Copy, Check, RotateCw, Trash2, Pencil, X } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
 import { TeamSettings, type TeamConfig } from '../../components/TeamSettings'
-import { SectionHeader, Select, Checkbox } from './primitives'
+import { SectionHeader, Section, Select, Checkbox } from './primitives'
 import { Drawer } from './Drawer'
 
 // ── interfaces ────────────────────────────────────────────────────────────────
@@ -72,6 +72,16 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>{label}</span>
       {children}
     </label>
+  )
+}
+
+// Read-only labelled value used in the read-first drawer sections.
+function ReadField({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
+      <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{value}</span>
+    </div>
   )
 }
 
@@ -155,6 +165,8 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   const [editTeamId, setEditTeamId] = useState('')
   const [editOwnerRows, setEditOwnerRows] = useState<string[]>([])
   const [editErr, setEditErr] = useState<string | null>(null)
+  // Per-section edit toggle inside the (read-first) edit drawer. Only one section edits at a time.
+  const [editingSection, setEditingSection] = useState<null | 'details' | 'owners'>(null)
 
   // Central URL state
   const [publicUrl, setPublicUrl] = useState('')
@@ -369,6 +381,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     const ids = m.accountIds ?? (m.accountId ? [m.accountId] : [])
     setEditOwnerRows(ids.length > 0 ? ids : [''])
     setEditErr(null)
+    setEditingSection(null)
     setEditMachineOpen(true)
   }
 
@@ -384,19 +397,15 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     setEditOwnerRows(rs => rs.map((r, idx) => idx === i ? accountId : r))
   }
 
-  async function saveEditMachine() {
+  // Per-section saves (read-first drawer): each Section saves only its own fields.
+  async function saveDetails() {
     if (!editingMachine) return
     if (!editName.trim()) {
       setEditErr(pt ? 'O nome não pode ficar vazio.' : 'Name cannot be empty.')
       return
     }
-
     const nameChanged = editName.trim() !== editingMachine.machineName
     const teamChanged = editTeamId !== (editingMachine.teamId ?? '')
-    const originalOwners = editingMachine.accountIds ?? (editingMachine.accountId ? [editingMachine.accountId] : [])
-    const newOwners = [...new Set(editOwnerRows.filter(id => id.trim()))]
-    const ownersChanged = JSON.stringify([...originalOwners].sort()) !== JSON.stringify([...newOwners].sort())
-
     try {
       if (nameChanged) {
         const res = await fetch('/api/iam/machines', {
@@ -406,7 +415,6 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
       }
-
       if (teamChanged) {
         const res = await fetch('/api/iam/machines', {
           method: 'POST',
@@ -415,7 +423,20 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
       }
+      setEditErr(null)
+      setEditingSection(null)
+      void load()
+    } catch (e) {
+      setEditErr(String(e))
+    }
+  }
 
+  async function saveOwners() {
+    if (!editingMachine) return
+    const originalOwners = editingMachine.accountIds ?? (editingMachine.accountId ? [editingMachine.accountId] : [])
+    const newOwners = [...new Set(editOwnerRows.filter(id => id.trim()))]
+    const ownersChanged = JSON.stringify([...originalOwners].sort()) !== JSON.stringify([...newOwners].sort())
+    try {
       if (ownersChanged) {
         const res = await fetch('/api/iam/machines', {
           method: 'POST',
@@ -424,8 +445,8 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
       }
-
-      setEditMachineOpen(false)
+      setEditErr(null)
+      setEditingSection(null)
       void load()
     } catch (e) {
       setEditErr(String(e))
@@ -498,6 +519,18 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   )
 
   const canManageFleet = me?.role === 'owner' || me?.memberships.some(m => m.role === 'manager')
+
+  // Edit-drawer derived data (read-first sections). Re-derive the machine from the
+  // fresh list by id so the read view reflects the latest data after a section save.
+  const editMachine = editingMachine ? (machines.find(m => m.id === editingMachine.id) ?? editingMachine) : null
+  const editCanManage = editMachine
+    ? (canManageFleet || (editMachine.accountIds ?? (editMachine.accountId ? [editMachine.accountId] : [])).includes(me?.id ?? ''))
+    : false
+  const sectionLabels = {
+    edit: pt ? 'Editar' : 'Edit',
+    save: pt ? 'Salvar' : 'Save',
+    cancel: pt ? 'Cancelar' : 'Cancel',
+  }
 
   return (
     <>
@@ -992,76 +1025,140 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
         </Drawer>
       )}
 
-      {/* Edit machine drawer */}
+      {/* Edit machine drawer — read-first with a per-section Edit toggle. */}
       <Drawer open={editMachineOpen} onClose={() => setEditMachineOpen(false)} title={pt ? 'Editar máquina' : 'Edit machine'}>
         {drawerErrPanel(editErr)}
 
-        <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
-          <input
-            style={input}
-            value={editName}
-            onChange={e => setEditName(e.target.value)}
-            placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'}
-          />
-        </Field>
-
-        <Field label={pt ? 'Time' : 'Team'}>
-          <Select
-            value={editTeamId}
-            onChange={v => setEditTeamId(v)}
-            options={[
-              { value: '', label: pt ? 'Padrão' : 'Default' },
-              ...teams.map(t => ({ value: t._id, label: t.name })),
-            ]}
-            placeholder={pt ? 'Selecione o time…' : 'Select team…'}
-          />
-        </Field>
-
-        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 18, marginTop: 6 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-            <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
-              {pt ? 'Contas (owners)' : 'Owners'}
-            </span>
-            <button type="button" style={ghostBtn} onClick={addEditOwnerRow}>
-              <Plus size={13} /> {pt ? 'Adicionar conta' : 'Add owner'}
-            </button>
-          </div>
-
-          {editOwnerRows.map((accountId, i) => (
-            <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
-              <div style={{ flex: 1 }}>
-                <Select
-                  value={accountId}
-                  onChange={v => updateEditOwnerRow(i, v)}
-                  options={[
-                    { value: '', label: pt ? 'Selecione a conta…' : 'Select account…' },
-                    ...accounts.map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
-                  ]}
-                  placeholder={pt ? 'Selecione a conta…' : 'Select account…'}
+        {/* DETAILS SECTION (name + team) — read-first */}
+        <Section
+          title={pt ? 'Detalhes' : 'Details'}
+          editing={editingSection === 'details'}
+          canEdit={editCanManage}
+          onEdit={() => {
+            setEditErr(null)
+            setEditName(editMachine?.machineName ?? '')
+            setEditTeamId(editMachine?.teamId ?? '')
+            setEditingSection('details')
+          }}
+          onCancel={() => {
+            setEditName(editMachine?.machineName ?? '')
+            setEditTeamId(editMachine?.teamId ?? '')
+            setEditingSection(null)
+          }}
+          onSave={() => void saveDetails()}
+          labels={sectionLabels}
+          editChildren={
+            <>
+              <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
+                <input
+                  style={input}
+                  value={editName}
+                  onChange={e => setEditName(e.target.value)}
+                  placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'}
                 />
+              </Field>
+              <Field label={pt ? 'Time' : 'Team'}>
+                <Select
+                  value={editTeamId}
+                  onChange={v => setEditTeamId(v)}
+                  options={[
+                    { value: '', label: pt ? 'Padrão' : 'Default' },
+                    ...teams.map(t => ({ value: t._id, label: t.name })),
+                  ]}
+                  placeholder={pt ? 'Selecione o time…' : 'Select team…'}
+                />
+              </Field>
+            </>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <ReadField label={pt ? 'Nome da máquina' : 'Machine name'} value={editMachine?.machineName ?? '—'} />
+            <ReadField label={pt ? 'Time' : 'Team'} value={editMachine?.teamId ? (teamNameById.get(editMachine.teamId) ?? editMachine.teamId) : '—'} />
+          </div>
+        </Section>
+
+        {/* OWNERS SECTION — read-first */}
+        <Section
+          title={pt ? 'Contas (owners)' : 'Owners'}
+          editing={editingSection === 'owners'}
+          canEdit={editCanManage}
+          onEdit={() => {
+            setEditErr(null)
+            const ids = editMachine?.accountIds ?? (editMachine?.accountId ? [editMachine.accountId] : [])
+            setEditOwnerRows(ids.length > 0 ? ids : [''])
+            setEditingSection('owners')
+          }}
+          onCancel={() => {
+            const ids = editMachine?.accountIds ?? (editMachine?.accountId ? [editMachine.accountId] : [])
+            setEditOwnerRows(ids.length > 0 ? ids : [''])
+            setEditingSection(null)
+          }}
+          onSave={() => void saveOwners()}
+          labels={sectionLabels}
+          editChildren={
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                  {pt ? 'Contas (owners)' : 'Owners'}
+                </span>
+                <button type="button" style={ghostBtn} onClick={addEditOwnerRow}>
+                  <Plus size={13} /> {pt ? 'Adicionar conta' : 'Add owner'}
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => removeEditOwnerRow(i)}
-                disabled={editOwnerRows.length === 1}
-                style={{
-                  ...trashBtn,
-                  opacity: editOwnerRows.length === 1 ? 0.35 : 1,
-                  cursor: editOwnerRows.length === 1 ? 'not-allowed' : 'pointer',
-                }}
-                aria-label={pt ? 'Remover conta' : 'Remove owner'}
-              >
-                <Trash2 size={14} />
-              </button>
+              {editOwnerRows.map((accountId, i) => (
+                <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <div style={{ flex: 1 }}>
+                    <Select
+                      value={accountId}
+                      onChange={v => updateEditOwnerRow(i, v)}
+                      options={[
+                        { value: '', label: pt ? 'Selecione a conta…' : 'Select account…' },
+                        ...accounts.map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
+                      ]}
+                      placeholder={pt ? 'Selecione a conta…' : 'Select account…'}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeEditOwnerRow(i)}
+                    disabled={editOwnerRows.length === 1}
+                    style={{
+                      ...trashBtn,
+                      opacity: editOwnerRows.length === 1 ? 0.35 : 1,
+                      cursor: editOwnerRows.length === 1 ? 'not-allowed' : 'pointer',
+                    }}
+                    aria-label={pt ? 'Remover conta' : 'Remove owner'}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          }
+        >
+          {(() => {
+            const owners = editMachine?.owners ?? []
+            if (owners.length === 0) {
+              return <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>{pt ? '— sem conta / loose' : '— no account / loose'}</span>
+            }
+            return (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {owners.map(o => (
+                  <span key={o.id} style={{
+                    display: 'inline-flex', flexDirection: 'column', gap: 1, padding: '5px 9px', borderRadius: 6,
+                    background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                  }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{o.name}</span>
+                    <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>{o.email}</span>
+                  </span>
+                ))}
+              </div>
+            )
+          })()}
+        </Section>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-          <button style={ghostBtn} onClick={() => setEditMachineOpen(false)}>{pt ? 'Cancelar' : 'Cancel'}</button>
-          <button style={primaryBtn} onClick={() => void saveEditMachine()}>
-            <Check size={14} /> {pt ? 'Salvar' : 'Save'}
-          </button>
+          <button style={ghostBtn} onClick={() => setEditMachineOpen(false)}>{pt ? 'Fechar' : 'Close'}</button>
         </div>
       </Drawer>
     </>
