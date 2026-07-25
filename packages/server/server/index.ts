@@ -183,6 +183,9 @@ const AUTH_PUBLIC = new Set([
 ])
 
 // Admin routes that require a real session cookie even on a passwordless central
+// NOTE: `/api/tags` is deliberately NOT here — tags are readable by any authed principal and
+// writable by managers (authority is source-derived, see tags-handlers.ts). It is still gated:
+// the auth check below 401s every /api/* path outside AUTH_PUBLIC, `/api/tags/<id>` included.
 const ADMIN_PATHS = new Set([
   '/api/team/members',
   '/api/team/tokens',
@@ -190,6 +193,17 @@ const ADMIN_PATHS = new Set([
   '/api/team/repos',
   '/api/team/config',
 ])
+
+/**
+ * ADMIN_PATHS is an exact-match Set, so a nested detail route (`/api/team/repos/<id>`) would
+ * otherwise escape the owner gate the moment one is added. Treat any path *under* an admin
+ * path as admin too.
+ */
+function isAdminPath(pathname: string): boolean {
+  if (ADMIN_PATHS.has(pathname)) return true
+  for (const p of ADMIN_PATHS) if (pathname.startsWith(p + '/')) return true
+  return false
+}
 
 // ---------------------------------------------------------------------------
 // Bun HTTP server
@@ -239,7 +253,7 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
         return new Response(JSON.stringify({ error: 'auth required' }), { status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
       }
       // Admin routes require the owner.
-      if (ADMIN_PATHS.has(url.pathname) && principal.role !== 'owner') {
+      if (isAdminPath(url.pathname) && principal.role !== 'owner') {
         return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
       }
     }
@@ -1146,6 +1160,19 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       const { handleUnregisterRepo } = await import('./team-admin')
       const res = await handleUnregisterRepo(req)
       if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // Tags (B5) — saved groupings of repos/projects/machines/teams/accounts. The handler owns the
+    // authority rules: writes require every source to be visible to the caller, and every response
+    // is aggregate-only (never the sessions behind a tag).
+    if ((url.pathname === '/api/tags' || url.pathname.startsWith('/api/tags/'))
+        && ['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method)) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleTags } = await import('./tags-handlers')
+      const res = await handleTags(req)
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })
