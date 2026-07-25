@@ -76,6 +76,7 @@ async function buildContext(p: Principal, sessions: SessionMeta[]): Promise<{ lo
       visibleAccountIds,
       visibleRepos,
       visibleProjects,
+      machinesByAccount,
     },
   }
 }

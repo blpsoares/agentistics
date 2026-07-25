@@ -15,6 +15,7 @@ import {
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
+import type { TagDef } from './lib/tagMatch'
 import type { Filters, HarnessId, HealthIssue } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
 import { formatProjectName, setHomeDir, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers } from '@agentistics/core'
@@ -1541,7 +1542,9 @@ export default function AppLayout() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const derived = useDerivedStats(data, filters)
+  // Tags visible to the viewer; back both the `tags` filter dimension and the derived stats.
+  const [tagsList, setTagsList] = useState<TagDef[]>([])
+  const derived = useDerivedStats(data, filters, tagsList)
 
   const models = useMemo(() => {
     if (!data) return []
@@ -1648,12 +1651,17 @@ export default function AppLayout() {
     Promise.all([
       fetch('/api/iam/teams').then(r => r.ok ? r.json() : { teams: [] }),
       fetch('/api/iam/machines').then(r => r.ok ? r.json() : { machines: [] }),
-    ]).then(([teamsResp, machinesResp]) => {
+      // Tags back the `tags` filter dimension. Without this the dimension stays hidden and any
+      // stored filters.tags selection is inert.
+      fetch('/api/tags').then(r => r.ok ? r.json() : { tags: [] }),
+    ]).then(([teamsResp, machinesResp, tagsResp]) => {
       setTeamsList((teamsResp.teams ?? []).map((t: { _id: string; name: string }) => ({ id: t._id, name: t.name })))
       setMachinesList((machinesResp.machines ?? []).map((m: { id: string; machineName: string; user: string; teamId?: string; teamIds?: string[] }) => ({ id: m.id, name: m.machineName, user: m.user, teamId: m.teamId, teamIds: m.teamIds })))
+      setTagsList(tagsResp.tags ?? [])
     }).catch(() => {
       setTeamsList([])
       setMachinesList([])
+      setTagsList([])
     })
   }, [teamSession?.central])
 
@@ -2108,6 +2116,7 @@ export default function AppLayout() {
                   compact
                   teams={teamsList}
                   machines={machinesList}
+                  tags={tagsList}
                   canFilterMembers={canFilterMembers}
                 />
                 {/* Collapse handle */}
@@ -2197,6 +2206,7 @@ export default function AppLayout() {
                 lang={lang}
                 teams={teamsList}
                 machines={machinesList}
+                tags={tagsList}
                 canFilterMembers={canFilterMembers}
               />
             </div>
