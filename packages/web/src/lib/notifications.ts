@@ -54,6 +54,10 @@ export const NOTIFICATION_TEXT: Record<string, { pt: Localized; en: Localized }>
     pt: { title: 'Máquina renomeada', message: 'Esta máquina foi renomeada para "{name}" por {actor}.' },
     en: { title: 'Machine renamed', message: 'This machine was renamed to "{name}" by {actor}.' },
   },
+  'machine.reassigned': {
+    pt: { title: 'Máquina reatribuída', message: 'Esta máquina agora pertence a {account} (alterado por {actor}).' },
+    en: { title: 'Machine reassigned', message: 'This machine now belongs to {account} (changed by {actor}).' },
+  },
   'app.update_available': {
     pt: { title: 'Atualização disponível', message: 'Uma nova versão do agentistics ({version}) está disponível.' },
     en: { title: 'Update available', message: 'A new version of agentistics ({version}) is available.' },
@@ -78,6 +82,11 @@ export function resolveNotification(n: AppNotification, lang: 'pt' | 'en'): Loca
   // Interpolate {name}/{actor} from meta (e.g. machine.renamed).
   if (message && n.meta?.name) message = message.replace('{name}', String(n.meta.name))
   if (message && n.meta?.actor) message = message.replace('{actor}', String(n.meta.actor))
+  // machine.reassigned carries the new owning account (empty when ownership was cleared).
+  if (message && n.meta?.account !== undefined) {
+    const acct = String(n.meta.account || '')
+    message = message.replace('{account}', acct || (lang === 'pt' ? 'nenhuma conta' : 'no account'))
+  }
   // Append the HTTP status to the auth-rejected message when the central provided one.
   if (n.code === 'member.auth_rejected' && n.meta?.status && message) {
     message = `${message} (HTTP ${n.meta.status})`

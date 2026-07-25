@@ -72,17 +72,30 @@ function openConnection(endpoint: string, token: string): void {
     backoffIdx = 0 // successful open — reset backoff
   })
 
-  // Inbound admin actions from the central. Currently: 'renamed' — the central renamed this
-  // machine; surface a local notification (with who did it) on the machine's own dashboard.
+  // Inbound admin actions from the central: 'renamed' (the central renamed this machine) and
+  // 'reassigned' (its owner account changed). Both surface a local notification naming the actor,
+  // and 'reassigned' also nudges the dashboard to re-resolve its identity so the "Connected as"
+  // panel stops showing the previous account until the next handshake.
   socket.addEventListener('message', (ev: MessageEvent) => {
     try {
       const raw = typeof ev.data === 'string' ? ev.data : ''
       if (!raw) return
-      const data = JSON.parse(raw) as { type?: string; name?: string; actor?: string }
+      const data = JSON.parse(raw) as { type?: string; name?: string; actor?: string; account?: string | null }
       if (data?.type === 'renamed') {
         void import('./sse').then(m => m.broadcastNotification({
           type: 'info', code: 'machine.renamed', meta: { name: data.name ?? '', actor: data.actor ?? '' },
         })).catch(() => { /* best-effort */ })
+      }
+      if (data?.type === 'reassigned') {
+        void import('./sse').then(m => {
+          m.broadcastNotification({
+            type: 'info', code: 'machine.reassigned',
+            meta: { account: data.account ?? '', actor: data.actor ?? '' },
+          })
+          // Push a refresh to any open dashboard so the whoami-backed connection panel
+          // re-resolves instead of showing the previous account.
+          m.notifySseClients()
+        }).catch(() => { /* best-effort */ })
       }
     } catch { /* ignore malformed frames */ }
   })
