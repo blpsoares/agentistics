@@ -45,3 +45,12 @@ test('helpers', () => {
   expect(isMemberOf(userA, 'A')).toBe(true)
   expect(isMemberOf(userA, undefined)).toBe(false)
 })
+
+test('tags:write is source-derived, not team-derived: any manager may create tags at all', () => {
+  // The real gate is canWriteTagSources (tags-authority.ts) — every source must be visible.
+  // This capability only answers "may this principal create tags at all", so it must not
+  // demand a teamId the tag model does not have.
+  expect(can(mgrA, 'tags:write')).toBe(true)
+  expect(can(owner, 'tags:write')).toBe(true)
+  expect(can(userA, 'tags:write')).toBe(false)
+})

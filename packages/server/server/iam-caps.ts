@@ -10,7 +10,7 @@ export type IamAction =
   | 'central:config'   // central settings (interval, offline policy) — owner only
   | 'tokens:write'     // mint/rotate/revoke machine tokens — owner or manager of ctx.teamId
   | 'members:write'    // add/remove members in a team — owner or manager of ctx.teamId
-  | 'tags:write'       // create/edit tags (B5) — owner or manager of ctx.teamId
+  | 'tags:write'       // create/edit tags (B5) — owner or any manager; sources gated separately
   | 'team:view'        // read a team's metrics — owner or any membership of ctx.teamId
   | 'accounts:manage'  // create/edit/delete accounts — owner (any), manager (user-role, own team)
 
@@ -37,8 +37,11 @@ export function can(p: Principal, action: IamAction, ctx: IamContext = {}): bool
       return false // owner-only
     case 'tokens:write':
     case 'members:write':
-    case 'tags:write':
       return isManagerOf(p, ctx.teamId)
+    case 'tags:write':
+      // Tag authority is source-derived, not team-derived: this only answers "may create tags at
+      // all". Whether the specific sources are allowed is decided by canWriteTagSources().
+      return p.memberships.some(m => m.role === 'manager')
     case 'team:view':
       return isMemberOf(p, ctx.teamId)
     case 'accounts:manage':
