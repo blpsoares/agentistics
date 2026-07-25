@@ -415,9 +415,19 @@ export default function UsersSettings() {
     )
   }
 
-  const roleLegend = pt
-    ? [['Owner', 'controle total'], ['Manager', 'gerencia usuários e tokens do seu time'], ['User', 'leitura restrita']]
-    : [['Owner', 'full control'], ['Manager', "manages their team's users & tokens"], ['User', 'scoped read']]
+  // Each entry carries the role key so the legend renders the SAME badge the table/cards show —
+  // the legend is what teaches the colour, so it must not invent its own styling.
+  const roleLegend: { role: string; desc: string }[] = pt
+    ? [
+      { role: 'owner', desc: 'controle total' },
+      { role: 'manager', desc: 'gerencia usuários e tokens do seu time' },
+      { role: 'user', desc: 'leitura restrita' },
+    ]
+    : [
+      { role: 'owner', desc: 'full control' },
+      { role: 'manager', desc: "manages their team's users & tokens" },
+      { role: 'user', desc: 'scoped read' },
+    ]
 
   const drawerErr = (m: string | null) => m && (
     <div style={{ fontSize: 12, color: '#ef4444', background: 'color-mix(in srgb, #ef4444 12%, transparent)', border: '1px solid color-mix(in srgb, #ef4444 35%, transparent)', borderRadius: 7, padding: '8px 10px' }}>{m}</div>
@@ -488,17 +498,19 @@ export default function UsersSettings() {
           : 'Accounts that sign in to the central dashboard. Each user belongs to one or more teams.'}
       </p>
 
-      {/* role legend */}
+      {/* Role legend — each row leads with the role's real badge, so the colour seen here is the
+          same one the accounts list uses. Rows wrap instead of sharing one line with dot
+          separators, which crammed the three descriptions together on narrow screens. */}
       <div style={{
-        display: 'flex', flexWrap: 'wrap', gap: '4px 14px', alignItems: 'center',
+        display: 'flex', flexWrap: 'wrap', gap: '8px 18px', alignItems: 'center',
         fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5,
-        border: '1px solid var(--border-subtle)', borderRadius: 8, padding: '10px 12px', marginBottom: 18,
+        border: '1px solid var(--border-subtle)', borderRadius: 8, padding: '11px 13px', marginBottom: 18,
       }}>
-        {roleLegend.map(([role, desc], i) => (
-          <React.Fragment key={role}>
-            <span><strong style={{ color: 'var(--text-secondary)' }}>{role}</strong> — {desc}</span>
-            {i < roleLegend.length - 1 && <span style={{ color: 'var(--border)' }}>·</span>}
-          </React.Fragment>
+        {roleLegend.map(({ role, desc }) => (
+          <span key={role} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+            <RoleBadge role={role} />
+            <span style={{ color: 'var(--text-tertiary)' }}>{desc}</span>
+          </span>
         ))}
       </div>
 
