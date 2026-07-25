@@ -208,14 +208,45 @@ English by project convention; conversation with the user is Portuguese.
 
 **✅ B4 GOVERNANCE/IAM FULLY IMPLEMENTED (phases 1-5).** E2E proven: bootstrap→cookie→me(no hash)→/api/data 200→CRUD; owner sees all, non-owner scoped (Ph4). A temp owner `e2e-owner@test.local` was created during verification (consumed the one-time token) — reset the `accounts`+`config.bootstrap` docs to re-run first-boot OwnerSetup.
 
-#### B5 — Tags (aggregate project metrics) ⬜
+#### B5 — Tags (aggregate project metrics) ✅
 - **Problem:** Create tags that aggregate metrics across "projects". A "project" can be:
   - a **repository** — when created on the central, selecting a repo pulls metrics from **all
     machines that have members on that repo**;
   - an **individual folder** (path) — can also be added to a tag.
 - **Storage:** tags saved in DB.
 - **Depends on:** B4 (gestor can create visualization tags; scoping by team).
-- **Spec:** _(link when written)_
+- **Spec:** [2026-07-25-b5-tags-design.md](specs/2026-07-25-b5-tags-design.md)
+- **Plan:** [plans/2026-07-25-b5-tags.md](plans/2026-07-25-b5-tags.md)
+- **✅ Shipped** (commits `60a5cf7`..`ced53f4` on `dev`; tsc clean, 415 tests pass):
+  - **Naming:** the grouping is a **tag**, not a "project" — `project` is already an occupied concept
+    in this codebase, and the grouping is many-to-many.
+  - **Two independent axes.** *Sources* (what it aggregates): `repo` | `project` | `machine` |
+    `team` | `account`, unioned (OR) into a deduped session set — a session matching two sources is
+    counted once; `team` and `account` resolve dynamically at query time. *Visibility* (who may see
+    it): an explicit `sharedWith` account list plus the creator plus every owner — **never** derived
+    from teams.
+  - **Rule 1 — write requires seeing every source.** `canWriteTagSources` gates every create and
+    edit; an `account` source additionally requires that every machine that account owns is visible.
+    `tags:write` became source-derived ("may create tags at all": owner or any manager) rather than
+    team-derived.
+  - **Rule 2 — responses are aggregate-only.** Counts and sums only: no session rows, transcripts or
+    agent metrics. Keys the viewer cannot otherwise see collapse into an `__other__` bucket
+    (`redactBuckets` / `redactTopValue`). A tag the viewer may not read returns **404**, not 403, so
+    a stranger cannot learn it exists.
+  - **Server:** `tags-store.ts` (Mongo `tags` collection), pure `tags-resolve.ts` /
+    `tags-aggregate.ts` / `tags-detail.ts` / `tags-authority.ts` (all unit-tested, no Mongo),
+    `tags-handlers.ts` (GET/POST/PATCH/DELETE `/api/tags`, GET `/api/tags/:id`). Aggregation runs
+    server-side over the **unscoped** session set, per-session — never from `stats-cache.json`.
+    Cost via `calcCost()`.
+  - **Frontend:** the `/tags` page (aggregate cards + grid/list layouts, a detail drawer with the
+    per-source breakdown and the projects/models/harnesses/repos/members distributions + daily
+    series, and a create/edit drawer with a colour picker); a `tags` dimension in `+ Filtro`; and
+    tag grants surfaced from the account drawers.
+  - **Documented limitation:** filtering the dashboard by a tag can only narrow what the viewer
+    already sees (the dashboard is built from the *scoped* `/api/data`), so a grantee may see smaller
+    numbers there than on the tag card — correct under rule 2, and stated in the UI.
+  - **Out of scope (unchanged):** granting a tag to a team, tag budgets/alerts, nested tags, and
+    drill-down from a tag into sessions (deliberately excluded by rule 2).
 
 #### B6 — Smart auto-update (critical vs optional) ⬜
 - **Problem:** Some updates are "critical" — the user shouldn't have to run update commands.
