@@ -80,6 +80,16 @@ function historyStatsCache(): StatsCache {
     messageCount: 100,
     toolCallCount: 50,
   })) as StatsCache['dailyActivity']
+  // modelUsage must match the history dailyActivity claims. Leaving it empty made the cache-backed
+  // unfiltered cost smaller than a SINGLE machine's session-derived cost, so "subset < total"
+  // failed for a reason that cannot occur in real data — the cache always covers that history.
+  sc.modelUsage = {
+    'claude-opus-5': {
+      inputTokens: 5_000_000, outputTokens: 1_000_000,
+      cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+      webSearchRequests: 0, costUSD: 0,
+    },
+  } as StatsCache['modelUsage']
   return sc
 }
 
@@ -196,6 +206,47 @@ describe('scope invariant: statsCache must not leak into a narrowed scope', () =
     // call sites should converge on.
     const d = derive(mkFilters({ harnesses: ['codex'] }))
     expect(d.allTimeTotalSessions).toBe(1)
+  })
+})
+
+// Machine scope — every number rendered next to a machine-filtered view
+
+describe('scope invariant: a machine filter scopes the whole derived object', () => {
+  // machine-1 owns c1 (claude, 1000 in / 500 out) and x1 (codex, 1000 in / 500 out).
+  const machine1 = () => derive(mkFilters({ machines: ['machine-1'] }))
+
+  test('token totals come from that machine only', () => {
+    const d = machine1()
+    expect(d.inputTokens).toBe(2000)
+    expect(d.outputTokens).toBe(1000)
+  })
+
+  test('heatmap contains no day that exists only in the global Claude aggregate', () => {
+    const d = machine1()
+    expect(d.heatmapData.some(p => p.date.startsWith('2026-01'))).toBe(false)
+  })
+
+  test('model breakdown lists only models that machine used', () => {
+    const d = machine1()
+    expect(Object.keys(d.modelUsage).sort()).toEqual(['claude-opus-5', 'gpt-5.4-mini'])
+  })
+
+  test('longestStreak counts only that machine\'s days', () => {
+    const d = machine1()
+    expect(d.longestStreak).toBeLessThanOrEqual(2)
+  })
+
+  test('allTimeTotalSessions counts only that machine\'s sessions', () => {
+    const d = machine1()
+    expect(d.allTimeTotalSessions).toBeLessThanOrEqual(2)
+  })
+
+  test('a machine filter changes the cost — two machines cannot both report the total', () => {
+    const one = machine1().totalCostUSD
+    const two = derive(mkFilters({ machines: ['machine-2'] })).totalCostUSD
+    const all = derive(mkFilters()).totalCostUSD
+    expect(one).toBeLessThan(all)
+    expect(two).toBeLessThan(all)
   })
 })
 

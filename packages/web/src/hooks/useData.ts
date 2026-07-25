@@ -849,7 +849,10 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
     // Narrowed along a dimension `stats-cache.json` cannot represent (it has no project/repo/tag/
     // model/user granularity). Every all-time number must then come from sessions, otherwise a
     // filtered view reports the whole global Claude history as if it were the filtered scope.
-    const cacheBlindScope = projectFiltered || repoFiltered || tagFiltered || modelSet !== null
+    // Annotated `boolean` on purpose: without it TypeScript treats this const as an aliased
+    // condition and narrows `modelSet` to null inside every `else` branch below, breaking the
+    // guards there. The annotation keeps the flag a plain boolean.
+    const cacheBlindScope: boolean = projectFiltered || repoFiltered || tagFiltered || modelSet !== null
       || teamsFiltered || machinesFiltered
       || (userFiltered && !hasUserStats)
 
@@ -1026,7 +1029,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
 
     let filteredModelUsage: Record<string, import('@agentistics/core').ModelUsage>
 
-    if (projectFiltered || repoFiltered || tagFiltered || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)) {
+    if (cacheBlindScope || nonClaudeHarness || harnessesFiltered) {
       // Build per-model breakdown from sessions that have a model field.
       // Sessions without a model field are excluded from the per-model breakdown.
       // Also used when a non-Claude harness is selected (statsCache has no harness granularity).
@@ -1131,7 +1134,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
 
     // Cost calculation
     let totalCostUSD = 0
-    if (projectFiltered || repoFiltered || tagFiltered || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)) {
+    if (cacheBlindScope || nonClaudeHarness || harnessesFiltered) {
       // Use per-session calcCost with the session's model field (includes cache tokens).
       // Also used when a non-Claude harness is selected (statsCache lacks harness granularity).
       // Sessions without a model fall back to blended rate on input+output only.

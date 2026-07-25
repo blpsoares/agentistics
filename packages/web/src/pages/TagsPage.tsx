@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useOutletContext } from 'react-router-dom'
-import { Plus, Trash2, X } from 'lucide-react'
+import { Plus, Trash2, X, ListChecks } from 'lucide-react'
 import { fmt, fmtCost, formatProjectName } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { HARNESS_LABELS } from '../lib/harness'
 import { Drawer } from './settings/Drawer'
-import { Section, Select, TabSelect } from './settings/primitives'
+import { Section, Select, TabSelect, Checkbox } from './settings/primitives'
 import { useIsMobile } from '../hooks/useIsMobile'
 
 // /api/tags response shapes. Aggregate-only by design (spec rule 2): the server never sends the
@@ -207,6 +207,11 @@ export default function TagsPage() {
   const [sharedWith, setSharedWith] = useState<string[]>([])
   const [draftType, setDraftType] = useState<TagSourceType>('repo')
   const [draftValue, setDraftValue] = useState('')
+  // Bulk picking: a checkbox list beside the single-value Select, so several repos/folders go in
+  // with one confirmation instead of reopening the dropdown once per source.
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkPicked, setBulkPicked] = useState<string[]>([])
+  const [bulkQuery, setBulkQuery] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveErr, setSaveErr] = useState<string | null>(null)
   const [sourcesEditing, setSourcesEditing] = useState(true)
@@ -246,6 +251,29 @@ export default function TagsPage() {
     setDraftValue('')
     if (sources.some(s => s.type === draftType && s.value === value)) return
     setSources(prev => [...prev, { type: draftType, value }])
+  }
+
+  /** Options of the current type that are not already sources — shared by both pickers so neither
+   *  can offer a duplicate. */
+  const availableOptions = useMemo(
+    () => optionsForType(draftType).filter(o => !sources.some(s => s.type === draftType && s.value === o.value)),
+    [optionsForType, draftType, sources],
+  )
+  const bulkFiltered = useMemo(() => {
+    const q = bulkQuery.trim().toLowerCase()
+    return q ? availableOptions.filter(o => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q)) : availableOptions
+  }, [availableOptions, bulkQuery])
+
+  /** Commit every checked value at once, then close the bulk panel. */
+  const addPickedSources = () => {
+    if (bulkPicked.length === 0) return
+    setSources(prev => [
+      ...prev,
+      ...bulkPicked
+        .filter(v => !prev.some(s => s.type === draftType && s.value === v))
+        .map(v => ({ type: draftType, value: v })),
+    ])
+    setBulkPicked([]); setBulkQuery(''); setBulkOpen(false)
   }
 
   const save = async () => {
@@ -517,15 +545,85 @@ export default function TagsPage() {
                     .map(t => ({ value: t, label: sourceTypeLabel(t) }))}
                 />
               </Field>
+              {/* One-at-a-time picking (fast for a single source) sits beside a bulk mode, because
+                  tagging a client usually means adding a handful of repos or folders at once and
+                  reopening the same dropdown N times is the slow part. */}
               <Field label={pt ? 'Valor' : 'Value'}>
-                <Select
-                  value={draftValue}
-                  onChange={addSource}
-                  options={optionsForType(draftType).filter(o => !sources.some(s => s.type === draftType && s.value === o.value))}
-                  placeholder={pt ? 'Selecione para adicionar…' : 'Select to add…'}
-                  searchPlaceholder={pt ? 'Buscar…' : 'Search…'}
-                />
+                <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <Select
+                      value={draftValue}
+                      onChange={addSource}
+                      options={availableOptions}
+                      placeholder={pt ? 'Selecione para adicionar…' : 'Select to add…'}
+                      searchPlaceholder={pt ? 'Buscar…' : 'Search…'}
+                      disabled={bulkOpen || availableOptions.length === 0}
+                    />
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => { setBulkOpen(o => !o); setBulkPicked([]); setBulkQuery('') }}
+                    aria-pressed={bulkOpen}
+                    title={pt ? 'Selecionar vários' : 'Select several'}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6, padding: '0 12px', minHeight: 44,
+                      borderRadius: 7, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
+                      border: `1px solid ${bulkOpen ? 'var(--anthropic-orange)' : 'var(--border)'}`,
+                      background: bulkOpen ? 'var(--anthropic-orange-dim)' : 'transparent',
+                      color: bulkOpen ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+                      whiteSpace: 'nowrap', flexShrink: 0,
+                    }}
+                  >
+                    <ListChecks size={14} /> {pt ? 'Vários' : 'Several'}
+                  </button>
+                </div>
               </Field>
+
+              {bulkOpen && (
+                <div style={{
+                  border: '1px solid var(--border)', borderRadius: 9, padding: 10,
+                  display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-elevated)',
+                }}>
+                  <input
+                    value={bulkQuery}
+                    onChange={e => setBulkQuery(e.target.value)}
+                    placeholder={pt ? 'Buscar…' : 'Search…'}
+                    style={input}
+                  />
+                  <div style={{ display: 'flex', alignItems: 'center', minHeight: 44 }}>
+                    <Checkbox
+                      checked={bulkFiltered.length > 0 && bulkFiltered.every(o => bulkPicked.includes(o.value))}
+                      onChange={c => setBulkPicked(c ? bulkFiltered.map(o => o.value) : [])}
+                      label={pt ? 'Selecionar tudo' : 'Select all'}
+                    />
+                  </div>
+                  <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+                    {bulkFiltered.length === 0 && (
+                      <span style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '8px 2px' }}>
+                        {pt ? 'Nada disponível.' : 'Nothing available.'}
+                      </span>
+                    )}
+                    {bulkFiltered.map(o => (
+                      <div key={o.value} style={{ display: 'flex', alignItems: 'center', minHeight: 44 }}>
+                        <Checkbox
+                          checked={bulkPicked.includes(o.value)}
+                          onChange={c => setBulkPicked(prev => c ? [...prev, o.value] : prev.filter(v => v !== o.value))}
+                          label={o.label}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    style={{ ...primaryBtn, opacity: bulkPicked.length ? 1 : 0.5 }}
+                    disabled={bulkPicked.length === 0}
+                    onClick={addPickedSources}
+                  >
+                    <Plus size={14} />
+                    {pt ? `Adicionar ${bulkPicked.length}` : `Add ${bulkPicked.length}`}
+                  </button>
+                </div>
+              )}
               <SourceList
                 sources={sources}
                 typeLabel={sourceTypeLabel}
