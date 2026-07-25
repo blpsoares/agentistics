@@ -366,6 +366,7 @@ export interface Filters {
   users?: string[]     // empty/undefined = all users (member = user; scoped to users with machines)
   teams?: string[]     // central: empty/undefined = all teams; matches session.teamId
   machines?: string[]  // central: empty/undefined = all machines; matches session.memberId (token hash)
+  tags?: string[]      // central: empty/undefined = all; a tag narrows to its resolved sessions (tag ids)
   models: string[]     // empty = all models
   harness?: HarnessId
   harnesses?: HarnessId[]  // multi-select harness filter; empty/undefined = all harnesses

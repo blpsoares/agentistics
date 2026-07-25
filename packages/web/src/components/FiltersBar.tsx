@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
 import type { Filters, DateRange, Project, Lang, HarnessId } from '@agentistics/core'
 import { formatModel, formatProjectName, repoShortName } from '@agentistics/core'
-import { Layers, Cpu, ChevronDown, X, CalendarDays, Check, Users, GitBranch, Search, Plus, Blocks, Radio, Server, FolderOpen } from 'lucide-react'
+import { Layers, Cpu, ChevronDown, X, CalendarDays, Check, Users, GitBranch, Search, Plus, Blocks, Radio, Server, FolderOpen, Tag as TagIcon } from 'lucide-react'
+import type { TagDef } from '../lib/tagMatch'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { ProjectsModal } from './ProjectsModal'
 import type { MemberPresence } from '@agentistics/core'
@@ -48,6 +49,9 @@ interface Props {
   teams?: { id: string; name: string }[]
   /** Central-only: available machines for filter. Empty when not a central or no machines. */
   machines?: { id: string; name: string; user: string; teamId?: string; teamIds?: string[] }[]
+  /** Tags visible to the viewer (from GET /api/tags) — drives the `tags` dimension. Empty/omitted
+   *  hides it. Selecting a tag can only NARROW the (already team-scoped) dashboard. */
+  tags?: TagDef[]
   /** Whether the viewer may filter BY member/presence (owner or a team manager). A plain user
    *  only sees their own scoped data, so those dimensions are hidden for them. Defaults to true
    *  (solo/non-central usage where the concept doesn't apply). */
@@ -83,7 +87,7 @@ const SEARCH_INPUT: React.CSSProperties = {
   borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
 }
 
-export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, canFilterMembers = true }: Props) {
+export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
@@ -96,8 +100,9 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
   const [memberQuery, setMemberQuery] = useState('')
   const [teamQuery, setTeamQuery] = useState('')
   const [machineQuery, setMachineQuery] = useState('')
+  const [tagQuery, setTagQuery] = useState('')
   // "+ Filter" menu: pick a dimension → open its value picker. One open at a time.
-  type Dimension = 'members' | 'harnesses' | 'presence' | 'repos' | 'models' | 'teams' | 'machines'
+  type Dimension = 'members' | 'harnesses' | 'presence' | 'repos' | 'models' | 'teams' | 'machines' | 'tags'
   const [showAddMenu, setShowAddMenu] = useState(false)
   const [openPicker, setOpenPicker] = useState<Dimension | null>(null)
   // Desktop: collapse the active-filter chip rows (mobile has its own whole-bar minimize).
@@ -148,12 +153,29 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
     onChange({ ...filters, repos: next })
   }
 
+  // Tag filter (saved groupings of repos/projects/machines/teams/accounts) — options come from
+  // the tags the viewer may see. Only exposed once there is at least one.
+  const tagOptions = tags ?? []
+  const selectedTags = filters.tags ?? []
+  const hasTagFilter = selectedTags.length > 0
+  const showTagFilter = tagOptions.length > 0
+  const tagFilteredOptions = useMemo(() => {
+    const q = tagQuery.trim().toLowerCase()
+    if (!q) return tagOptions
+    return tagOptions.filter(t => t.name.toLowerCase().includes(q))
+  }, [tagOptions, tagQuery])
+  const toggleTag = (id: string) => {
+    const next = selectedTags.includes(id) ? selectedTags.filter(x => x !== id) : [...selectedTags, id]
+    onChange({ ...filters, tags: next })
+  }
+
   // Number of dimensions currently active — shown as the badge on the "+ Filter" button.
   const activeFilterCount = [
     (filters.users?.length ?? 0) > 0,
     (filters.harnesses?.length ?? 0) > 0,
     filters.presence !== undefined,
     hasRepoFilter,
+    hasTagFilter,
     hasProjects,
     hasModelFilter,
     (filters.teams?.length ?? 0) > 0,
@@ -383,6 +405,14 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                   label={lang === 'pt' ? 'Repositórios' : 'Repositories'}
                   active={hasRepoFilter}
                   onClick={() => { setRepoQuery(''); setOpenPicker('repos') }}
+                />
+              )}
+              {showTagFilter && (
+                <MenuItem
+                  icon={<TagIcon size={13} />}
+                  label={lang === 'pt' ? 'Tags' : 'Tags'}
+                  active={hasTagFilter}
+                  onClick={() => { setTagQuery(''); setOpenPicker('tags') }}
                 />
               )}
               {projects.length > 0 && (
@@ -687,6 +717,43 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                 </>
               )}
 
+              {/* Tags (multi) — a tag selects the union of its sources. */}
+              {openPicker === 'tags' && (
+                <>
+                  <div style={{ position: 'relative', display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+                    <Search size={13} color="var(--text-tertiary)" style={{ position: 'absolute', left: 8, pointerEvents: 'none' }} />
+                    <input
+                      value={tagQuery}
+                      onChange={e => setTagQuery(e.target.value)}
+                      autoFocus
+                      placeholder={lang === 'pt' ? 'Buscar tag…' : 'Search tag…'}
+                      style={SEARCH_INPUT}
+                    />
+                  </div>
+                  <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                    {tagFilteredOptions.length === 0 && (
+                      <div style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '8px 10px', textAlign: 'center' }}>
+                        {lang === 'pt' ? 'Nenhuma tag' : 'No tags'}
+                      </div>
+                    )}
+                    {tagFilteredOptions.map(t => (
+                      <PickerRow
+                        key={t._id}
+                        selected={selectedTags.includes(t._id)}
+                        icon={t.color ? undefined : <TagIcon size={11} style={{ flexShrink: 0, opacity: 0.6 }} />}
+                        dotColor={t.color}
+                        label={t.name}
+                        count={t.sources.length}
+                        onClick={() => toggleTag(t._id)}
+                      />
+                    ))}
+                  </div>
+                  {hasTagFilter && (
+                    <ClearFooter onClick={() => onChange({ ...filters, tags: [] })} label={lang === 'pt' ? 'Limpar tags' : 'Clear tags'} />
+                  )}
+                </>
+              )}
+
               {/* Models (multi, grouped by harness) */}
               {openPicker === 'models' && (
                 <>
@@ -822,7 +889,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
             </button>
           )}
           <button
-            onClick={() => onChange({ ...filters, users: [], harnesses: [], presence: undefined, repos: [], projects: [], models: [], teams: [], machines: [] })}
+            onClick={() => onChange({ ...filters, users: [], harnesses: [], presence: undefined, repos: [], tags: [], projects: [], models: [], teams: [], machines: [] })}
             style={{
               marginLeft: compact ? 'auto' : 0,
               display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -900,6 +967,20 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{v === '' ? (lang === 'pt' ? 'Sem repositório' : 'No repository') : repoShortName(v)}</span>
               </FilterChip>
             ))}
+          </ChipRow>
+        </AnimatedRow>
+        <AnimatedRow show={hasTagFilter}>
+          <ChipRow label={lang === 'pt' ? 'Tags' : 'Tags'}>
+            {selectedTags.map(id => {
+              const t = tagOptions.find(x => x._id === id)
+              const label = t?.name ?? id
+              return (
+                <FilterChip key={`tag:${id}`} title={label} onRemove={() => onChange({ ...filters, tags: selectedTags.filter(x => x !== id) })} removeTitle={lang === 'pt' ? 'Remover tag' : 'Remove tag'}>
+                  <TagIcon size={10} style={{ flexShrink: 0, color: t?.color }} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+                </FilterChip>
+              )
+            })}
           </ChipRow>
         </AnimatedRow>
         <AnimatedRow show={(filters.harnesses?.length ?? 0) > 0}>

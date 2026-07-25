@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMeta } from '@agentistics/core'
 import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, filterByTeams, filterByMachines, distinctHarnesses, mergeStatsCaches, repoShortName } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
+import { makeTagFilter, type TagDef } from '../lib/tagMatch'
 
 export interface StageProgress {
   progress: number
@@ -705,7 +706,13 @@ export function computeFilteredHarnessSummaries(data: AppData, filters: Filters)
   return { activeHarnesses: cols, summaries: sums, lastActive: la }
 }
 
-export function useDerivedStats(data: AppData | null, filters: Filters) {
+/**
+ * @param tags Tag definitions (as returned by `GET /api/tags`) backing the `tags` filter
+ *   dimension. Optional: without them a `filters.tags` selection is inert rather than blanking
+ *   the dashboard. Note the tag filter can only NARROW what the viewer already sees — /api/data
+ *   is team-scoped, so a grantee may see smaller numbers here than on the tag's own card.
+ */
+export function useDerivedStats(data: AppData | null, filters: Filters, tags: TagDef[] = []) {
   return useMemo(() => {
     if (!data) return null
 
@@ -719,6 +726,10 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     const repos = filters.repos ?? []
     const repoFiltered = repos.length > 0
     const repoSet = new Set(repos)
+    // Tag filter — a session is kept when it matches ANY source of ANY selected tag, mirroring
+    // the server rule (see lib/tagMatch.ts). null = inert (nothing selected / unknown tag ids).
+    const tagMatches = makeTagFilter(filters.tags ?? [], tags)
+    const tagFiltered = tagMatches !== null
     const users = filters.users ?? []
     const userFiltered = users.length > 0
     const modelSet = filters.models && filters.models.length > 0 ? new Set(filters.models) : null
@@ -795,6 +806,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       if (!inDateRange(s)) return false
       if (projectFiltered && !projectSet.has(s.project_path)) return false
       if (repoFiltered && !repoSet.has(s.git_remote || '')) return false
+      if (tagMatches && !tagMatches(s)) return false
       if (modelSet && (!s.model || !modelSet.has(s.model))) return false
       return true
     })
@@ -855,7 +867,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
     // Use filteredSessions when project/model/non-claude-harness filter is active
     // (statsCache has no per-project/model/harness granularity)
     const harnessesFiltered = (filters.harnesses?.length ?? 0) > 0
-    const sessionFiltered = projectFiltered || repoFiltered || modelSet !== null || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)
+    const sessionFiltered = projectFiltered || repoFiltered || tagFiltered || modelSet !== null || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)
 
     const totalMessages = sessionFiltered
       ? filteredSessions.reduce((s, sess) => s + (sess.user_message_count ?? 0) + (sess.assistant_message_count ?? 0), 0)
@@ -1461,5 +1473,5 @@ export function useDerivedStats(data: AppData | null, filters: Filters) {
       cacheNetSavedUSD,
       cachePerModel,
     }
-  }, [data, filters])
+  }, [data, filters, tags])
 }
