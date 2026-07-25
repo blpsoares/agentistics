@@ -60,6 +60,23 @@ export function canDeleteAccount(p: Principal, target: AccountDoc): boolean {
   return target.memberships.length > 0 && target.memberships.every(m => m.role === 'user' && managed.has(m.teamId))
 }
 
+/** Which membership sets a principal may assign to another account.
+ *
+ *  Owner: anything. Manager: any role — `user` OR `manager` — but only inside teams they manage.
+ *  Promoting a peer to manager of a team you already manage is delegation *within* your own scope,
+ *  not escalation beyond it, so it is allowed. Assigning a membership in a team you do not manage
+ *  never is. A plain user may assign nothing.
+ *
+ *  Note the one-way door this creates for a manager: once the target holds a manager membership,
+ *  `canDeleteAccount` no longer matches them, so the promoter can no longer edit that account.
+ */
+export function canAssignMemberships(p: Principal, memberships: Membership[]): boolean {
+  if (p.role === 'owner') return true
+  const managed = new Set(p.memberships.filter(m => m.role === 'manager').map(m => m.teamId))
+  if (managed.size === 0) return false
+  return memberships.every(m => managed.has(m.teamId))
+}
+
 /** Owner sees every team; a member sees only teams they belong to. */
 export function teamVisibleTo(p: Principal, teamId: string): boolean {
   if (p.role === 'owner') return true

@@ -14,7 +14,7 @@ import { getCentralConfig } from './central-config'
 import { packConnectToken } from '@agentistics/core'
 import { backfillRepoTeamIds } from './team-repos'
 import { makePrincipalSessionCookieHeader, getPrincipal } from './auth'
-import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine } from './iam-view'
+import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships } from './iam-view'
 import type { AccountDoc, Membership, Role } from './iam-types'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
@@ -266,14 +266,12 @@ export async function handleAccounts(req: Request): Promise<Response> {
 
     if (b.memberships !== undefined) {
       const memberships = parseMemberships(b.memberships)
-      // A manager may only assign user-role memberships in teams they manage — never escalate a
-      // target to manager/owner. Unlike creation, EDIT may reduce to an empty set (removing a member
-      // from the manager's only team is allowed — the entry gate already proved every current
-      // membership was a user-role in a managed team, so the result stays within scope).
-      if (!isOwner) {
-        const managed = new Set(principal.memberships.filter(m => m.role === 'manager').map(m => m.teamId))
-        const ok = memberships.every(m => m.role === 'user' && managed.has(m.teamId))
-        if (!ok) return json({ error: 'forbidden' }, 403)
+      // A manager may assign EITHER role (user or manager) but only inside teams they manage —
+      // delegating within your own team is not escalation. Assigning into an unmanaged team is.
+      // Unlike creation, EDIT may reduce to an empty set (removing a member from the manager's only
+      // team is allowed — the entry gate already proved every current membership was in scope).
+      if (!isOwner && memberships.length > 0 && !canAssignMemberships(principal, memberships)) {
+        return json({ error: 'forbidden' }, 403)
       }
       patch.memberships = memberships
     }

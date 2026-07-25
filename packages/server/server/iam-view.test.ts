@@ -1,6 +1,6 @@
 // packages/server/server/iam-view.test.ts
 import { test, expect } from 'bun:test'
-import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine } from './iam-view'
+import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships } from './iam-view'
 import type { AccountDoc, Principal } from './iam-types'
 
 const owner: Principal = { accountId: 'o1', role: 'owner', memberships: [] }
@@ -13,6 +13,19 @@ test('canManageMachine: owner any; manager if managing ANY of the machine teams;
   expect(canManageMachine(mgrA, { teamId: 'A' })).toBe(true)           // legacy single
   expect(canManageMachine(mgrA, { teamIds: ['B'], accountIds: ['m1'] })).toBe(true) // owns it
   expect(canManageMachine(mgrA, {})).toBe(false)                        // loose, not owned
+})
+
+test('canAssignMemberships: a manager may grant manager OR user inside a team they manage', () => {
+  // Delegation within an already-managed team is not escalation — the manager already controls it.
+  expect(canAssignMemberships(mgrA, [{ teamId: 'A', role: 'user' }])).toBe(true)
+  expect(canAssignMemberships(mgrA, [{ teamId: 'A', role: 'manager' }])).toBe(true)
+  // Outside their managed teams, nothing is assignable — that WOULD be escalation.
+  expect(canAssignMemberships(mgrA, [{ teamId: 'B', role: 'user' }])).toBe(false)
+  expect(canAssignMemberships(mgrA, [{ teamId: 'A', role: 'user' }, { teamId: 'B', role: 'user' }])).toBe(false)
+  // Owner may assign anything; a plain user may assign nothing.
+  expect(canAssignMemberships(owner, [{ teamId: 'Z', role: 'manager' }])).toBe(true)
+  const plainUser: Principal = { accountId: 'u1', role: 'member', memberships: [{ teamId: 'A', role: 'user' }] }
+  expect(canAssignMemberships(plainUser, [{ teamId: 'A', role: 'user' }])).toBe(false)
 })
 
 test('canManageMachine: an owner may manage a LOOSE machine (no teams, no owner accounts)', () => {

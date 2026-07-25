@@ -483,9 +483,11 @@ export default function UsersSettings() {
   }
 
   // Team-role option labels (values stay 'user'/'manager'; only the display text clarifies the role).
-  const roleOptions = (owner: boolean) => [
+  // A manager may now delegate WITHIN a team they manage, so the manager option is offered to them
+  // too — the server still refuses any membership in a team the caller does not manage.
+  const roleOptions = (canGrantManager: boolean) => [
     { value: 'user', label: pt ? 'Usuário (leitura)' : 'User (read)' },
-    ...(owner ? [{ value: 'manager', label: pt ? 'Manager (gerencia o time)' : 'Manager (manages the team)' }] : []),
+    ...(canGrantManager ? [{ value: 'manager', label: pt ? 'Manager (gerencia o time)' : 'Manager (manages the team)' }] : []),
   ]
 
   return (
@@ -739,7 +741,7 @@ export default function UsersSettings() {
                     <Select
                       value={r.role}
                       onChange={v => updateRow(i, { role: v as 'manager' | 'user' })}
-                      options={roleOptions(viewerIsOwner)}
+                      options={roleOptions(viewerIsOwner || managedTeamIds.size > 0)}
                     />
                   </div>
                   <button type="button" onClick={() => removeRow(i)} disabled={rows.length === 1}
@@ -977,7 +979,7 @@ export default function UsersSettings() {
                     <Select
                       value={r.role}
                       onChange={v => updateERow(i, { role: v as 'manager' | 'user' })}
-                      options={roleOptions(viewerIsOwner)}
+                      options={roleOptions(viewerIsOwner || managedTeamIds.size > 0)}
                     />
                   </div>
                   <button type="button" onClick={() => removeERow(i)} disabled={eRows.length === 1}
