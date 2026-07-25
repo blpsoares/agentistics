@@ -888,7 +888,9 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
       )}
 
       {/* Add machine drawer */}
-      <Drawer open={drawerOpen} onClose={() => { if (!created) setDrawerOpen(false) }} title={pt ? 'Adicionar máquinas' : 'Add machines'}>
+      <Drawer open={drawerOpen} onClose={() => { if (!created) setDrawerOpen(false) }} title={pt ? 'Adicionar máquinas' : 'Add machines'}
+        lang={pt ? 'pt' : 'en'}
+        dirty={!created && machineRows.some(r => r.name.trim() !== '' || r.teamIds.length > 0 || r.accountIds.some(a => a.trim() !== ''))}>
         {drawerErrPanel(drawerErr)}
 
         {!created && (<>
@@ -1164,7 +1166,9 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
       )}
 
       {/* Edit machine drawer — read-first with a per-section Edit toggle. */}
-      <Drawer open={editMachineOpen} onClose={() => setEditMachineOpen(false)} title={pt ? 'Editar máquina' : 'Edit machine'}>
+      <Drawer open={editMachineOpen} onClose={() => setEditMachineOpen(false)} title={pt ? 'Editar máquina' : 'Edit machine'}
+        lang={pt ? 'pt' : 'en'}
+        dirty={editingSection !== null}>
         {drawerErrPanel(editErr)}
 
         {/* DETAILS SECTION (name + team) — read-first */}

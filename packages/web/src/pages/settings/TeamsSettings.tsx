@@ -397,7 +397,9 @@ export default function TeamsSettings() {
       )}
 
       {/* Team create drawer */}
-      <Drawer open={teamOpen} onClose={() => setTeamOpen(false)} title={pt ? 'Novo time' : 'New team'}>
+      <Drawer open={teamOpen} onClose={() => setTeamOpen(false)} title={pt ? 'Novo time' : 'New team'}
+        lang={lang}
+        dirty={teamName.trim() !== '' || newMembers.length > 0 || newMachineIds.length > 0 || draftMemberId !== '' || draftMachineId !== ''}>
         {drawerErr(teamErr)}
         <Field label={pt ? 'Nome do time' : 'Team name'}>
           <input style={input} value={teamName} onChange={e => setTeamName(e.target.value)} placeholder={pt ? 'Nome do time' : 'Team name'} />
@@ -514,7 +516,9 @@ export default function TeamsSettings() {
       </Drawer>
 
       {/* Manage team drawer */}
-      <Drawer open={manageOpen} onClose={() => setManageOpen(false)} title={manageTeam?.name ?? ''}>
+      <Drawer open={manageOpen} onClose={() => setManageOpen(false)} title={manageTeam?.name ?? ''}
+        lang={lang}
+        dirty={editingSection !== null}>
         {drawerErr(manageErr)}
 
         {/* MEMBERS SECTION (read-first; add/remove behind the section's Edit toggle) */}

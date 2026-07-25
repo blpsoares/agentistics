@@ -626,7 +626,9 @@ export default function UsersSettings() {
 
       {/* Account drawer — while showing shown-once secrets, only the explicit "Done" button closes it
           (backdrop/X are no-ops) so the machine token/command can't be lost to a stray click. */}
-      <Drawer open={accountOpen} onClose={() => { if (!created) setAccountOpen(false) }} title={pt ? 'Nova conta' : 'New account'}>
+      <Drawer open={accountOpen} onClose={() => { if (!created) setAccountOpen(false) }} title={pt ? 'Nova conta' : 'New account'}
+        lang={lang}
+        dirty={!created && (an.trim() !== '' || ae.trim() !== '' || ap.trim() !== '' || machineRows.length > 0 || rows.some(r => r.teamId !== ''))}>
         {drawerErr(accountErr)}
 
         {!created && (<>
@@ -874,7 +876,9 @@ export default function UsersSettings() {
 
       {/* Edit account drawer — while a shown-once temp password or machine token is on screen, backdrop/X are no-ops
           so it can't be lost to a stray click (Close/Save are explicit). */}
-      <Drawer open={editOpen} onClose={() => { if (!tempPassword && !addedMachineToken) setEditOpen(false) }} title={pt ? 'Editar conta' : 'Edit account'}>
+      <Drawer open={editOpen} onClose={() => { if (!tempPassword && !addedMachineToken) setEditOpen(false) }} title={pt ? 'Editar conta' : 'Edit account'}
+        lang={lang}
+        dirty={editingSection !== null}>
         {drawerErr(editErr)}
 
         {/* IDENTITY SECTION (read-first) */}

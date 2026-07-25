@@ -1,20 +1,50 @@
 import React from 'react'
 import { X } from 'lucide-react'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { ConfirmModal } from './primitives'
 
 // Right-side slide-in panel + backdrop, full-screen on mobile.
 // Shared by the governance settings pages (Users / Teams). Extracted from the
 // old combined governance page so both split pages reuse the same panel.
-export function Drawer({ open, title, onClose, children, footer }: {
+export function Drawer({ open, title, onClose, children, footer, dirty = false, lang = 'en' }: {
   open: boolean; title: string; onClose: () => void; children: React.ReactNode
   /** Optional action bar pinned to the bottom of the panel — for a drawer-wide save button. */
   footer?: React.ReactNode
+  /** When true, closing (backdrop / X / Escape) or leaving the tab asks to confirm first, so
+   *  unsaved edits are never silently discarded. Drawers compute this from their form state. */
+  dirty?: boolean
+  lang?: 'pt' | 'en'
 }) {
   const isMobile = useIsMobile()
+  const pt = lang === 'pt'
+  const [confirmDiscard, setConfirmDiscard] = React.useState(false)
+
+  // Any close attempt goes through here: warn first if there are unsaved changes.
+  const attemptClose = React.useCallback(() => {
+    if (dirty) setConfirmDiscard(true)
+    else onClose()
+  }, [dirty, onClose])
+
+  // Escape closes (via the same guard); native tab-close/refresh gets the browser's leave prompt.
+  React.useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') attemptClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [open, attemptClose])
+
+  React.useEffect(() => {
+    if (!open || !dirty) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [open, dirty])
+
   if (!open) return null
   return (
+    <>
     <div
-      onClick={onClose}
+      onClick={attemptClose}
       style={{
         position: 'fixed', inset: 0, zIndex: 1000, display: 'flex',
         justifyContent: 'flex-end', background: 'rgba(0,0,0,0.5)',
@@ -39,7 +69,7 @@ export function Drawer({ open, title, onClose, children, footer }: {
         }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</div>
           <button
-            onClick={onClose}
+            onClick={attemptClose}
             style={{
               border: 'none', background: 'transparent', color: 'var(--text-tertiary)',
               cursor: 'pointer', display: 'inline-flex', padding: 4,
@@ -63,6 +93,19 @@ export function Drawer({ open, title, onClose, children, footer }: {
         )}
       </div>
     </div>
+    {/* Rendered as a sibling (not inside the backdrop) so its clicks don't bubble to attemptClose. */}
+    <ConfirmModal
+      open={confirmDiscard}
+      title={pt ? 'Descartar alterações?' : 'Discard changes?'}
+      message={pt
+        ? 'Você tem alterações não salvas. Se sair agora, elas serão perdidas.'
+        : 'You have unsaved changes. If you leave now, they will be lost.'}
+      confirmLabel={pt ? 'Descartar' : 'Discard'}
+      cancelLabel={pt ? 'Continuar editando' : 'Keep editing'}
+      onConfirm={() => { setConfirmDiscard(false); onClose() }}
+      onCancel={() => setConfirmDiscard(false)}
+    />
+    </>
   )
 }
 
