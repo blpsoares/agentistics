@@ -143,7 +143,7 @@ export default function UsersSettings() {
   const [renameMachineValue, setRenameMachineValue] = useState('')
   // destructive-action confirmations (no silent delete/revoke/reset)
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string; email: string } | null>(null)
-  const [confirmRevoke, setConfirmRevoke] = useState<{ id: string; name: string } | null>(null)
+  const [confirmUnlink, setConfirmUnlink] = useState<{ id: string; name: string } | null>(null)
   const [confirmReset, setConfirmReset] = useState(false)
 
   function openAccountDrawer() {
@@ -337,18 +337,22 @@ export default function UsersSettings() {
     setLinkedMachines((mData.machines ?? []).filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).includes(editId)))
   }
 
-  async function revokeMachine(id: string) {
+  // Unlink a machine from THIS account only — the machine is NOT deleted, it just loses this
+  // account from its owner set (POST setMachineOwners with the reduced list). If this was its last
+  // owner, it becomes loose (owner-only visibility), which the server allows for an owner principal.
+  async function unlinkMachine(id: string) {
+    if (!editId) return
+    const m = linkedMachines.find(x => x.id === id)
+    const owners = (m?.accountIds ?? (m?.accountId ? [m.accountId] : [])).filter(a => a !== editId)
     const res = await fetch('/api/iam/machines', {
-      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ownerId: id, accountIds: owners }),
     })
     if (!res.ok) { setEditErr(`HTTP ${res.status}`); return }
-    // Refetch machines
-    if (editId) {
-      const mRes = await fetch('/api/iam/machines')
-      const mData = await mRes.json() as { machines: LinkedMachine[] }
-      setLinkedMachines((mData.machines ?? []).filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).includes(editId)))
-    }
+    // Refetch machines — the unlinked one drops out of this account's list (no longer an owner).
+    const mRes = await fetch('/api/iam/machines')
+    const mData = await mRes.json() as { machines: LinkedMachine[] }
+    setLinkedMachines((mData.machines ?? []).filter(mm => (mm.accountIds ?? (mm.accountId ? [mm.accountId] : [])).includes(editId)))
   }
 
   async function renameMachine(id: string, name: string) {
@@ -1058,10 +1062,11 @@ export default function UsersSettings() {
                           </button>
                           <button
                             type="button"
-                            style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }}
-                            onClick={() => setConfirmRevoke({ id: m.id, name: m.machineName })}
+                            style={{ ...ghostBtn, padding: '5px 10px', fontSize: 11.5 }}
+                            onClick={() => setConfirmUnlink({ id: m.id, name: m.machineName })}
+                            title={pt ? 'Desvincular desta conta' : 'Unlink from this account'}
                           >
-                            {pt ? 'Revogar' : 'Revoke'}
+                            {pt ? 'Desvincular' : 'Unlink'}
                           </button>
                         </div>
                       </div>
@@ -1238,17 +1243,17 @@ export default function UsersSettings() {
         onCancel={() => setConfirmDelete(null)}
       />
       <ConfirmModal
-        open={confirmRevoke !== null}
-        title={pt ? 'Revogar máquina?' : 'Revoke machine?'}
-        message={confirmRevoke
+        open={confirmUnlink !== null}
+        title={pt ? 'Desvincular máquina?' : 'Unlink machine?'}
+        message={confirmUnlink
           ? (pt
-            ? `O token da máquina "${confirmRevoke.name}" será revogado e ela deixará de enviar métricas.`
-            : `The token for machine "${confirmRevoke.name}" will be revoked and it will stop sending metrics.`)
+            ? `A máquina "${confirmUnlink.name}" será desvinculada desta conta. Ela NÃO será deletada nem para de enviar métricas — apenas perde o vínculo com esta conta.`
+            : `Machine "${confirmUnlink.name}" will be unlinked from this account. It is NOT deleted and keeps sending metrics — it just loses the link to this account.`)
           : ''}
-        confirmLabel={pt ? 'Revogar' : 'Revoke'}
+        confirmLabel={pt ? 'Desvincular' : 'Unlink'}
         cancelLabel={pt ? 'Cancelar' : 'Cancel'}
-        onConfirm={() => { if (confirmRevoke) void revokeMachine(confirmRevoke.id); setConfirmRevoke(null) }}
-        onCancel={() => setConfirmRevoke(null)}
+        onConfirm={() => { if (confirmUnlink) void unlinkMachine(confirmUnlink.id); setConfirmUnlink(null) }}
+        onCancel={() => setConfirmUnlink(null)}
       />
       <ConfirmModal
         open={confirmReset}
