@@ -32,7 +32,7 @@ import {
   canWriteTagSources, canReadTag, redactBuckets, redactTopValue,
   type TagAuthorityContext, type TagVisibilityBucket,
 } from './tags-authority'
-import { loadTeamSessionsFromMongo } from './team-source'
+import { loadTagSessionsFromMongo } from './team-source'
 import type { Principal, AccountDoc } from './iam-types'
 import type { SessionMeta } from '@agentistics/core'
 
@@ -112,9 +112,50 @@ async function buildContext(p: Principal, sessions: SessionMeta[]): Promise<TagC
   }
 }
 
+// ---------------------------------------------------------------------------
+// Session cache — stale-while-revalidate, same shape and TTL as the /api/data cache in data.ts.
+//
+// Every tags route needs the whole unscoped session set (Rule 2: aggregates are computed here,
+// never in the browser), and reading it is a full-collection round trip. Without a cache each
+// request paid it, which is what made a tag list — and worse, saving a tag — take tens of seconds.
+//
+// The set is served from memory and refreshed in the BACKGROUND once older than the TTL, so a
+// newly ingested session shows up within a request or two of the TTL elapsing, but no caller ever
+// waits for the read. Tag numbers are historical aggregates; they do not need to be sub-second
+// fresh. The very first request after a boot is the only one that blocks.
+// ---------------------------------------------------------------------------
+
+const SESSIONS_TTL_MS = 30_000
+
+let _sessions: Promise<SessionMeta[]> | null = null
+let _sessionsAt = 0
+let _refreshing = false
+
+/** Swap in a fresh set when it arrives; on failure keep serving the previous good one. */
+function refreshSessionsInBackground(): void {
+  if (_refreshing) return
+  _refreshing = true
+  void loadTagSessionsFromMongo()
+    .then(fresh => { _sessions = Promise.resolve(fresh); _sessionsAt = Date.now() })
+    .catch(() => { /* keep the previous result */ })
+    .finally(() => { _refreshing = false })
+}
+
 /** All central sessions, unscoped. Aggregates are computed here and only numbers leave. */
 async function loadAllSessions(): Promise<SessionMeta[]> {
-  return loadTeamSessionsFromMongo()
+  if (_sessions) {
+    if (Date.now() - _sessionsAt >= SESSIONS_TTL_MS) refreshSessionsInBackground()
+    return _sessions
+  }
+  // First load — the only path that blocks. Concurrent callers join the same promise; a failed
+  // load is dropped so the next request retries instead of caching the error forever.
+  const pending = loadTagSessionsFromMongo()
+  _sessions = pending
+  pending.then(
+    () => { _sessionsAt = Date.now() },
+    () => { if (_sessions === pending) _sessions = null },
+  )
+  return pending
 }
 
 /** `topProject` is a raw project_path picked from the unscoped set — an identifying string, so it
@@ -210,7 +251,9 @@ export async function handleTags(req: Request): Promise<Response> {
       aggregate: redactAggregate(principal, aggregateSessions(resolveTagSessions(sessions, [src], ctx.lookups)), ctx.authority),
     }))
     return json({
-      tag: withAggregate(principal, tag, sessions, ctx),
+      // `resolved` is exactly what withAggregate would re-derive — reuse it rather than walking
+      // the unscoped set a second time.
+      tag: { ...tag, aggregate: redactAggregate(principal, aggregateSessions(resolved), ctx.authority) },
       breakdown,
       stats: detailStats(principal, resolved, ctx),
     })
@@ -252,7 +295,9 @@ export async function handleTags(req: Request): Promise<Response> {
       sharedWith,
       createdBy: principal.accountId,
     })
-    return json({ tag: withAggregate(principal, doc, sessions, ctx) })
+    // The stored document, with no aggregate: a write must not pay for aggregation. The client
+    // reloads the list right after saving, and that is where the numbers come from.
+    return json({ tag: doc })
   }
 
   if (req.method === 'PATCH') {
