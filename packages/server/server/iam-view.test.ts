@@ -15,6 +15,14 @@ test('canManageMachine: owner any; manager if managing ANY of the machine teams;
   expect(canManageMachine(mgrA, {})).toBe(false)                        // loose, not owned
 })
 
+test('canManageMachine: an owner may manage a LOOSE machine (no teams, no owner accounts)', () => {
+  // Regression: the team check is `teams.some(...)`, which is false for an empty team list, so a
+  // global owner was refused (HTTP 403) on a machine with no team and no owner account — exactly
+  // the state a machine lands in when its owning account is deleted, making it unrecoverable.
+  expect(canManageMachine(owner, {})).toBe(true)
+  expect(canManageMachine(owner, { teamIds: [], accountIds: [] })).toBe(true)
+})
+
 function acc(id: string, over: Partial<AccountDoc> = {}): AccountDoc {
   return { _id: id, name: 'N', email: `${id}@x.co`, emailLower: `${id}@x.co`, passwordHash: '$argon2id$secret', role: 'member', memberships: [], sessionVersion: 0, createdAt: 't', updatedAt: 't', lastLoginAt: null, ...over }
 }

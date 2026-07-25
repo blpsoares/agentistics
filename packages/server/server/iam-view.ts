@@ -78,6 +78,10 @@ export function canManageMachineTeam(p: Principal, teamId: string | undefined): 
  *  teams, OR one of the machine's owner accounts (a user managing a machine they own). A machine may
  *  have several owner accounts AND belong to several teams. */
 export function canManageMachine(p: Principal, machine: { teamId?: string; teamIds?: string[]; accountId?: string; accountIds?: string[] }): boolean {
+  // An owner manages every machine, including a LOOSE one (no teams, no owner accounts). Without
+  // this the team check below (`[].some(...)` → false) locked owners out of exactly the machines
+  // that need re-linking — the ones orphaned when their owning account was deleted.
+  if (p.role === 'owner') return true
   const owners = machine.accountIds && machine.accountIds.length ? machine.accountIds : (machine.accountId ? [machine.accountId] : [])
   if (owners.includes(p.accountId)) return true
   const teams = machine.teamIds && machine.teamIds.length ? machine.teamIds : (machine.teamId ? [machine.teamId] : [])
