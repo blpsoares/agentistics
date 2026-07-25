@@ -12,6 +12,10 @@ interface Membership { teamId: string; role: 'manager' | 'user' }
 interface Account { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: Membership[] }
 interface MachineRow { name: string; teamId: string }
 interface LinkedMachine { id: string; machineName: string; teamId?: string; accountId?: string; accountIds?: string[]; lastSeenAt: string | null }
+// The slice of GET /api/tags this page needs. Tag visibility is an explicit account list
+// (`sharedWith`), so onboarding a new hire means granting the tags here instead of opening every
+// tag one by one. Aggregates are ignored on purpose — this page never renders tag numbers.
+interface TagLite { _id: string; name: string; color?: string; sharedWith: string[]; createdBy: string }
 
 // shared inline styles
 const input: React.CSSProperties = {
@@ -62,6 +66,46 @@ function ReadField({ label, value }: { label: string; value: React.ReactNode }) 
   )
 }
 
+// A tag chip, mirroring the "share with" chips of the Tags page so the two places read the same.
+// The remove control grows to a 44px touch target on mobile; on desktop it stays the compact X.
+function TagChip({ label, color, isMobile, onRemove, removeLabel }: {
+  label: string
+  color?: string
+  isMobile: boolean
+  onRemove?: () => void
+  removeLabel: string
+}) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6,
+      padding: onRemove ? '5px 4px 5px 10px' : '5px 10px',
+      minHeight: isMobile ? 44 : undefined, boxSizing: 'border-box',
+      borderRadius: 999, fontSize: 11.5, background: 'var(--bg-elevated)',
+      border: '1px solid var(--border)', color: 'var(--text-secondary)',
+    }}>
+      <span style={{
+        width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+        background: color || 'var(--anthropic-orange)',
+      }} />
+      {label}
+      {onRemove && (
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label={removeLabel}
+          style={{
+            border: 'none', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0, flexShrink: 0,
+            width: isMobile ? 44 : 20, height: isMobile ? 44 : 20,
+          }}
+        >
+          <X size={12} />
+        </button>
+      )}
+    </span>
+  )
+}
+
 const ROLE_BADGE_COLORS: Record<string, string> = {
   owner: '#a855f7', manager: 'var(--anthropic-orange)', user: '#3b82f6',
 }
@@ -89,6 +133,9 @@ export default function UsersSettings() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [machines, setMachines] = useState<LinkedMachine[]>([])
   const [err, setErr] = useState<string | null>(null)
+  // Tags the viewer can see. Loaded on drawer open (not with the page) — the account drawers are
+  // the only consumers, and a failure here must never break the accounts list.
+  const [tags, setTags] = useState<TagLite[]>([])
 
   const load = useCallback(async () => {
     try {
@@ -102,9 +149,23 @@ export default function UsersSettings() {
   }, [])
   useEffect(() => { void load() }, [load])
 
+  const loadTags = useCallback(async () => {
+    try {
+      const r = await fetch('/api/tags')
+      if (!r.ok) { setTags([]); return }
+      const d = await r.json() as { tags?: TagLite[] }
+      setTags(d.tags ?? [])
+    } catch { setTags([]) }
+  }, [])
+
   // Scoping helpers
   const managedTeamIds = new Set((me?.memberships ?? []).filter(m => m.role === 'manager').map(m => m.teamId))
   const assignableTeams = viewerIsOwner ? teams : teams.filter(t => managedTeamIds.has(t._id))
+
+  // Only tags the viewer may actually write are offered: the server accepts a PATCH from the tag's
+  // creator or an owner, so offering anything else would just produce a 403 on save.
+  const mayGrantTag = (t: TagLite) => viewerIsOwner || t.createdBy === me?.id
+  const grantableTags = tags.filter(mayGrantTag)
 
   // account drawer
   const [accountOpen, setAccountOpen] = useState(false)
@@ -112,6 +173,9 @@ export default function UsersSettings() {
   const [accountType, setAccountType] = useState<'owner' | 'member'>('member')
   const [rows, setRows] = useState<Membership[]>([{ teamId: '', role: 'user' }])
   const [machineRows, setMachineRows] = useState<MachineRow[]>([])
+  // Tags to grant the account being created. Applied AFTER the account exists (it has no id until
+  // then), one PATCH per tag.
+  const [newTagIds, setNewTagIds] = useState<string[]>([])
   const [accountErr, setAccountErr] = useState<string | null>(null)
   const [mustChange, setMustChange] = useState(true)
   const [pwVisible, setPwVisible] = useState(false)
@@ -134,7 +198,11 @@ export default function UsersSettings() {
   const [editErr, setEditErr] = useState<string | null>(null)
   const [tempPassword, setTempPassword] = useState<string | null>(null)
   // Per-section edit toggle inside the (read-first) edit drawer. Only one section edits at a time.
-  const [editingSection, setEditingSection] = useState<null | 'identity' | 'teams' | 'machines'>(null)
+  const [editingSection, setEditingSection] = useState<null | 'identity' | 'teams' | 'machines' | 'tags'>(null)
+  // Tag grants being edited for this account (ids). Saved as a diff against what each tag's
+  // sharedWith currently says, so a partially-applied save can simply be retried.
+  const [eTagIds, setETagIds] = useState<string[]>([])
+  const [savingTags, setSavingTags] = useState(false)
   // Add machine inline form in edit drawer
   const [addMachineName, setAddMachineName] = useState('')
   const [addMachineTeam, setAddMachineTeam] = useState('')
@@ -150,9 +218,10 @@ export default function UsersSettings() {
 
   function openAccountDrawer() {
     setAn(''); setAe(''); setAp(''); setAccountType('member'); setRows([{ teamId: '', role: 'user' }])
-    setMachineRows([]); setAccountErr(null)
+    setMachineRows([]); setNewTagIds([]); setAccountErr(null)
     setMustChange(true); setPwVisible(false); setCreated(null); setCopied(null); setCopyFailed(null)
     setAccountOpen(true)
+    void loadTags()
   }
   async function copy(label: string, text: string) {
     setCopyFailed(null)
@@ -221,13 +290,40 @@ export default function UsersSettings() {
       body: JSON.stringify(body),
     })
     if (!res.ok) { const d = await res.json() as { error?: string }; setAccountErr(d.error || `HTTP ${res.status}`); return }
-    const d = await res.json() as { machineTokens?: { name: string; token: string }[] }
+    const d = await res.json() as { account?: { id: string }; machineTokens?: { name: string; token: string }[] }
     setAccountErr(null) // clear any prior error (e.g. "email already exists") on success
+    // The account exists now, so its id can be added to each selected tag. One PATCH per tag, in
+    // order; the first failure stops the loop and is surfaced, exactly like the machine linking —
+    // the grants already applied stay applied, and the account itself is never rolled back.
+    const newAccountId = d.account?.id
+    if (newAccountId && newTagIds.length > 0) {
+      const grantErr = await grantTagsTo(newAccountId, newTagIds)
+      if (grantErr) setAccountErr(grantErr)
+      await loadTags()
+    }
     setCreated({
       email: ae.trim(), password: ap,
       machineTokens: d.machineTokens,
     })
     void load()
+  }
+
+  /** Add `accountId` to each tag's sharedWith, sequentially. Returns the first error, or null. */
+  async function grantTagsTo(accountId: string, tagIds: string[]): Promise<string | null> {
+    for (const tagId of tagIds) {
+      const t = tags.find(x => x._id === tagId)
+      if (!t) continue
+      if (t.sharedWith.includes(accountId)) continue
+      const res = await fetch('/api/tags', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: tagId, sharedWith: [...t.sharedWith, accountId] }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({})) as { error?: string }
+        return d.error || `HTTP ${res.status}`
+      }
+    }
+    return null
   }
   async function deleteAccount(id: string) {
     await fetch('/api/iam/accounts', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
@@ -240,8 +336,10 @@ export default function UsersSettings() {
     setEditErr(null); setTempPassword(null); setAddMachineName(''); setAddMachineTeam(''); setAddedMachineToken(null); setAddedMachineName(null)
     setRenamingMachineId(null); setRenameMachineValue('')
     setLinkMachineIds([]); setLinking(false)
+    setETagIds([]); setSavingTags(false)
     setEditingSection(null)
     setEditOpen(true)
+    void loadTags()
     // Fetch linked machines
     setLoadingMachines(true)
     try {
@@ -290,6 +388,38 @@ export default function UsersSettings() {
     })
     if (!res.ok) { const d = await res.json() as { error?: string }; setEditErr(d.error || `HTTP ${res.status}`); return }
     setEditErr(null); setEditingSection(null); void load()
+  }
+
+  /** Apply the tag section's edits for the account being edited. Only grantable tags are touched —
+   *  a tag the viewer merely sees (created by someone else) is never PATCHed, since the server
+   *  would refuse it. Each differing tag is one PATCH carrying its FULL sharedWith array. */
+  async function saveTagGrants() {
+    if (!editId || savingTags) return
+    setSavingTags(true)
+    setEditErr(null)
+    let failed = false
+    try {
+      for (const t of grantableTags) {
+        const want = eTagIds.includes(t._id)
+        const has = t.sharedWith.includes(editId)
+        if (want === has) continue
+        const sharedWith = want ? [...t.sharedWith, editId] : t.sharedWith.filter(x => x !== editId)
+        const res = await fetch('/api/tags', {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: t._id, sharedWith }),
+        })
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({})) as { error?: string }
+          setEditErr(d.error || `HTTP ${res.status}`)
+          failed = true
+          break
+        }
+      }
+      await loadTags()
+      if (!failed) setEditingSection(null)
+    } finally {
+      setSavingTags(false)
+    }
   }
 
   async function resetPassword() {
@@ -502,6 +632,11 @@ export default function UsersSettings() {
   // Edit-drawer derived data (read-first sections)
   const editAccount = accounts.find(a => a.id === editId) ?? null
   const canEditEdit = editAccount ? canEditClient(editAccount) : false
+  // Tags this account can already see. Includes tags the viewer cannot grant (created by someone
+  // else) — hiding them would misrepresent the account's access; they just render without an X.
+  const currentTags = editId ? tags.filter(t => t.sharedWith.includes(editId)) : []
+  const currentTagIds = currentTags.map(t => t._id)
+  const sortedIds = (ids: string[]) => JSON.stringify([...ids].sort())
   const sectionLabels = {
     edit: pt ? 'Editar' : 'Edit',
     save: pt ? 'Salvar' : 'Save',
@@ -668,7 +803,7 @@ export default function UsersSettings() {
           (backdrop/X are no-ops) so the machine token/command can't be lost to a stray click. */}
       <Drawer open={accountOpen} onClose={() => { if (!created) setAccountOpen(false) }} title={pt ? 'Nova conta' : 'New account'}
         lang={lang}
-        dirty={!created && (an.trim() !== '' || ae.trim() !== '' || ap.trim() !== '' || machineRows.length > 0 || rows.some(r => r.teamId !== ''))}>
+        dirty={!created && (an.trim() !== '' || ae.trim() !== '' || ap.trim() !== '' || machineRows.length > 0 || newTagIds.length > 0 || rows.some(r => r.teamId !== ''))}>
         {drawerErr(accountErr)}
 
         {!created && (<>
@@ -832,6 +967,54 @@ export default function UsersSettings() {
             )}
           </div>
         </div>
+        {/* TAGS SECTION — tag visibility is an explicit account list, so a new hire inherits
+            nothing. Granting here saves opening every tag one by one after onboarding. The grants
+            are applied right after the account is created, since it has no id before that. */}
+        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 18, marginTop: 6 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 14 }}>
+            Tags
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <p style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5, margin: 0 }}>
+              {pt
+                ? 'Quem recebe uma tag vê os números completos dela. Só aparecem tags que você pode conceder.'
+                : 'Anyone granted a tag sees its full numbers. Only tags you may grant are listed.'}
+            </p>
+            {grantableTags.length === 0 ? (
+              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>
+                {pt ? 'Nenhuma tag disponível para conceder.' : 'No tags available to grant.'}
+              </div>
+            ) : (
+              <Field label={pt ? 'Adicionar tag' : 'Add tag'}>
+                <Select
+                  value=""
+                  onChange={id => { if (id) setNewTagIds(prev => prev.includes(id) ? prev : [...prev, id]) }}
+                  options={grantableTags.filter(t => !newTagIds.includes(t._id)).map(t => ({ value: t._id, label: t.name }))}
+                  placeholder={pt ? 'Buscar tag…' : 'Search a tag…'}
+                  searchPlaceholder={pt ? 'Buscar…' : 'Search…'}
+                  searchable
+                />
+              </Field>
+            )}
+            {newTagIds.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {newTagIds.map(id => {
+                  const t = tags.find(x => x._id === id)
+                  return (
+                    <TagChip
+                      key={id}
+                      label={t?.name ?? id}
+                      color={t?.color}
+                      isMobile={isMobile}
+                      removeLabel={pt ? 'Remover tag' : 'Remove tag'}
+                      onRemove={() => setNewTagIds(prev => prev.filter(x => x !== id))}
+                    />
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </div>
         </>)}
 
         {created ? (
@@ -924,6 +1107,7 @@ export default function UsersSettings() {
             && JSON.stringify(eRows.map(r => ({ t: r.teamId, r: r.role })))
                !== JSON.stringify((editAccount && editAccount.memberships.length ? editAccount.memberships : [{ teamId: '', role: 'user' }]).map(m => ({ t: m.teamId, r: m.role }))))
           || (editingSection === 'machines' && (addMachineName.trim() !== '' || addMachineTeam !== '' || renamingMachineId !== null))
+          || (editingSection === 'tags' && sortedIds(eTagIds) !== sortedIds(currentTagIds))
         }>
         {drawerErr(editErr)}
 
@@ -1035,6 +1219,73 @@ export default function UsersSettings() {
             </div>
           ) : (
             <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>—</span>
+          )}
+        </Section>
+
+        {/* TAGS SECTION (read-first) — grants this account access to a tag's aggregated numbers.
+            Saving PATCHes each changed tag with its full sharedWith array; tags created by someone
+            else are shown but not editable, because the server would refuse the write. */}
+        <Section
+          title="Tags"
+          editing={editingSection === 'tags'}
+          canEdit={canEditEdit && grantableTags.length > 0}
+          onEdit={() => { setEditErr(null); setETagIds(currentTagIds); setEditingSection('tags') }}
+          onCancel={() => { setETagIds(currentTagIds); setEditingSection(null) }}
+          onSave={() => void saveTagGrants()}
+          labels={sectionLabels}
+          editChildren={
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+                {pt
+                  ? 'Quem recebe uma tag vê os números completos dela. Só aparecem tags que você pode conceder.'
+                  : 'Anyone granted a tag sees its full numbers. Only tags you may grant are listed.'}
+              </div>
+              <Field label={pt ? 'Adicionar tag' : 'Add tag'}>
+                <Select
+                  value=""
+                  onChange={id => { if (id) setETagIds(prev => prev.includes(id) ? prev : [...prev, id]) }}
+                  options={grantableTags.filter(t => !eTagIds.includes(t._id)).map(t => ({ value: t._id, label: t.name }))}
+                  placeholder={pt ? 'Buscar tag…' : 'Search a tag…'}
+                  searchPlaceholder={pt ? 'Buscar…' : 'Search…'}
+                  searchable
+                />
+              </Field>
+              {eTagIds.length === 0 ? (
+                <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>
+                  {pt ? 'Nenhuma tag concedida.' : 'No tags granted.'}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {eTagIds.map(id => {
+                    const t = tags.find(x => x._id === id)
+                    const removable = !!t && mayGrantTag(t)
+                    return (
+                      <TagChip
+                        key={id}
+                        label={t?.name ?? id}
+                        color={t?.color}
+                        isMobile={isMobile}
+                        removeLabel={pt ? 'Remover tag' : 'Remove tag'}
+                        onRemove={removable ? () => setETagIds(prev => prev.filter(x => x !== id)) : undefined}
+                      />
+                    )
+                  })}
+                </div>
+              )}
+              {savingTags && (
+                <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>{pt ? 'Salvando…' : 'Saving…'}</div>
+              )}
+            </div>
+          }
+        >
+          {currentTags.length === 0 ? (
+            <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>—</span>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {currentTags.map(t => (
+                <TagChip key={t._id} label={t.name} color={t.color} isMobile={isMobile} removeLabel={pt ? 'Remover tag' : 'Remove tag'} />
+              ))}
+            </div>
           )}
         </Section>
 
