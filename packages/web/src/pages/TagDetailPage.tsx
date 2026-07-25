@@ -1,0 +1,668 @@
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
+import {
+  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+} from 'recharts'
+import { format, parseISO } from 'date-fns'
+import { ArrowLeft, Pencil, Trash2 } from 'lucide-react'
+import { fmt, fmtCost, formatModel, formatProjectName, repoShortName } from '@agentistics/core'
+import type { AppContext } from '../lib/app-context'
+import { HARNESS_LABELS } from '../lib/harness'
+import { ConfirmModal, SectionHeader } from './settings/primitives'
+import { useIsMobile } from '../hooks/useIsMobile'
+
+// GET /api/tags/:id response. Aggregate-only by design (spec rule 2): the server never sends the
+// session rows behind a tag, so every value rendered here is a count or a sum it already computed.
+type TagSourceType = 'repo' | 'project' | 'machine' | 'team' | 'account'
+interface TagSource { type: TagSourceType; value: string }
+interface TagAggregate {
+  sessions: number
+  costUSD: number
+  inputTokens: number
+  outputTokens: number
+  topProject: string | null
+  topModel: string | null
+  topHarness: string | null
+}
+interface Tag {
+  _id: string
+  name: string
+  color?: string
+  sources: TagSource[]
+  sharedWith: string[]
+  createdBy: string
+  aggregate: TagAggregate
+}
+/** A ranked bucket. `label` is only present for machines, whose key stays the opaque memberId. */
+interface Bucket { key: string; sessions: number; costUSD: number; tokens: number; label?: string }
+interface DayPoint { date: string; sessions: number; costUSD: number; tokens: number }
+interface TagStats {
+  projects: Bucket[]
+  models: Bucket[]
+  harnesses: Bucket[]
+  repos: Bucket[]
+  members: Bucket[]
+  daily: DayPoint[]
+  firstSessionDate: string | null
+  lastSessionDate: string | null
+  sessionsWithoutModel: number
+}
+interface TagDetail {
+  tag: Tag
+  breakdown: { source: TagSource; aggregate: TagAggregate }[]
+  stats: TagStats
+}
+
+interface IamTeam { _id: string; name: string }
+interface IamAccount { id: string; name: string; email: string }
+interface IamMachine { id: string; machineName: string }
+
+/** Mirrors OTHER_BUCKET_KEY in packages/server/server/tags-authority.ts: the anonymous bucket that
+ *  absorbs every key the viewer may not see by name, keeping the totals whole. */
+const OTHER_KEY = '__other__'
+const DEFAULT_COLOR = '#f59e0b'
+
+const card: React.CSSProperties = {
+  background: 'var(--bg-card)', border: '1px solid var(--border)',
+  borderRadius: 'var(--radius-lg)', padding: 16, minWidth: 0,
+}
+const iconBtn: React.CSSProperties = {
+  width: 44, height: 44, flexShrink: 0, borderRadius: 8,
+  border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)',
+  cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  fontFamily: 'inherit',
+}
+
+/** The KPI tile used across the app: big number over an uppercase caption. */
+function StatTile({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: 3, padding: '12px 14px', minWidth: 0,
+      background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)',
+    }}>
+      <span style={{
+        fontSize: 18, fontWeight: 700, color: accent ? 'var(--anthropic-orange)' : 'var(--text-primary)',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{value}</span>
+      <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
+    </div>
+  )
+}
+
+type Metric = 'costUSD' | 'sessions' | 'tokens'
+
+export default function TagDetailPage() {
+  const { lang, currency, brlRate, me } = useOutletContext<AppContext>()
+  const { id } = useParams()
+  const navigate = useNavigate()
+  const pt = lang === 'pt'
+  const isMobile = useIsMobile()
+
+  const [detail, setDetail] = useState<TagDetail | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [metric, setMetric] = useState<Metric>('costUSD')
+
+  // IAM lookups turn a source's opaque id into a readable label. Failures are non-fatal — the raw
+  // id is shown instead, which is still unambiguous.
+  const [teams, setTeams] = useState<IamTeam[]>([])
+  const [accounts, setAccounts] = useState<IamAccount[]>([])
+  const [machines, setMachines] = useState<IamMachine[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true); setErr(null); setDetail(null)
+    void (async () => {
+      try {
+        const r = await fetch(`/api/tags/${encodeURIComponent(id ?? '')}`)
+        const d = await r.json() as Partial<TagDetail> & { error?: string }
+        if (cancelled) return
+        if (d.error || !d.tag) setErr(d.error ?? 'not found')
+        else setDetail({ tag: d.tag, breakdown: d.breakdown ?? [], stats: d.stats ?? emptyStats() })
+      } catch (e) {
+        if (!cancelled) setErr(String(e))
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [id])
+
+  useEffect(() => {
+    void (async () => {
+      const [t, a, m] = await Promise.all([
+        fetch('/api/iam/teams').then(r => r.ok ? r.json() as Promise<{ teams?: IamTeam[] }> : { teams: [] }).catch(() => ({ teams: [] })),
+        fetch('/api/iam/accounts').then(r => r.ok ? r.json() as Promise<{ accounts?: IamAccount[] }> : { accounts: [] }).catch(() => ({ accounts: [] })),
+        fetch('/api/iam/machines').then(r => r.ok ? r.json() as Promise<{ machines?: IamMachine[] }> : { machines: [] }).catch(() => ({ machines: [] })),
+      ])
+      setTeams(t.teams ?? []); setAccounts(a.accounts ?? []); setMachines(m.machines ?? [])
+    })()
+  }, [])
+
+  const otherLabel = pt ? 'Outros (fora do seu escopo)' : 'Other (outside your scope)'
+
+  const sourceTypeLabel = useCallback((t: TagSourceType) => ({
+    repo: pt ? 'Repositório' : 'Repository',
+    project: pt ? 'Projeto' : 'Project',
+    machine: pt ? 'Máquina' : 'Machine',
+    team: pt ? 'Time' : 'Team',
+    account: pt ? 'Conta' : 'Account',
+  }[t]), [pt])
+
+  const sourceValueLabel = useCallback((s: TagSource) => {
+    switch (s.type) {
+      case 'team': return teams.find(t => t._id === s.value)?.name ?? s.value
+      case 'account': return accounts.find(a => a.id === s.value)?.name ?? s.value
+      case 'machine': return machines.find(m => m.id === s.value)?.machineName ?? s.value
+      case 'project': return formatProjectName(s.value)
+      default: return s.value
+    }
+  }, [teams, accounts, machines])
+
+  const doDelete = useCallback(async () => {
+    setConfirmDelete(false)
+    await fetch('/api/tags', {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: detail?.tag._id ?? id }),
+    })
+    navigate('/tags')
+  }, [detail, id, navigate])
+
+  const tag = detail?.tag
+  const stats = detail?.stats
+  const color = tag?.color || DEFAULT_COLOR
+  const mayEdit = !!tag && (me?.role === 'owner' || tag.createdBy === me?.id)
+
+  const chartData = useMemo(() => (stats?.daily ?? []).map(d => ({ ...d })), [stats])
+  const hasRedacted = useMemo(() => {
+    if (!stats) return false
+    return [stats.projects, stats.repos, stats.members].some(list => list.some(b => b.key === OTHER_KEY))
+  }, [stats])
+
+  const back = (
+    <button
+      type="button"
+      onClick={() => navigate('/tags')}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5, alignSelf: 'flex-start',
+        minHeight: 44, fontSize: 12, color: 'var(--text-tertiary)', background: 'transparent',
+        border: 'none', cursor: 'pointer', fontFamily: 'inherit', padding: 0,
+      }}
+    >
+      <ArrowLeft size={13} /> Tags
+    </button>
+  )
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {back}
+        <div style={{ ...card, fontSize: 12.5, color: 'var(--text-tertiary)' }}>
+          {pt ? 'Carregando…' : 'Loading…'}
+        </div>
+      </div>
+    )
+  }
+
+  if (err || !tag || !stats) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {back}
+        <div style={{ ...card, borderColor: '#ef444455' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#ef4444', marginBottom: 6 }}>
+            {pt ? 'Tag indisponível' : 'Tag unavailable'}
+          </div>
+          <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            {err ?? (pt ? 'Tag não encontrada.' : 'Tag not found.')}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 8, lineHeight: 1.5 }}>
+            {pt
+              ? 'Ela pode ter sido excluída, ou você deixou de ter acesso a alguma de suas fontes.'
+              : 'It may have been deleted, or you may have lost access to one of its sources.'}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const window_ = stats.firstSessionDate && stats.lastSessionDate
+    ? `${niceDate(stats.firstSessionDate)} → ${niceDate(stats.lastSessionDate)}`
+    : (pt ? 'Sem atividade registrada' : 'No recorded activity')
+
+  const totalTokens = tag.aggregate.inputTokens + tag.aggregate.outputTokens
+  const empty = tag.aggregate.sessions === 0
+
+  const metricLabel: Record<Metric, string> = {
+    costUSD: pt ? 'Custo' : 'Cost',
+    sessions: pt ? 'Sessões' : 'Sessions',
+    tokens: 'Tokens',
+  }
+  const metricValue = (v: number) =>
+    metric === 'costUSD' ? fmtCost(v, currency, brlRate) : metric === 'sessions' ? v.toLocaleString() : fmt(v)
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minWidth: 0 }}>
+      {back}
+
+      {/* ---- header ---- */}
+      <div style={{
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+        gap: 12, flexWrap: 'wrap', minWidth: 0,
+      }}>
+        <div style={{ minWidth: 0, flex: '1 1 220px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+            <span style={{ width: 12, height: 12, borderRadius: '50%', background: color, flexShrink: 0 }} />
+            <h1 style={{
+              fontSize: 21, fontWeight: 700, color: 'var(--text-primary)', margin: 0,
+              minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>{tag.name}</h1>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 5 }}>
+            {window_}
+            {' · '}
+            {tag.sources.length} {tag.sources.length === 1 ? (pt ? 'fonte' : 'source') : (pt ? 'fontes' : 'sources')}
+          </div>
+        </div>
+        {mayEdit && (
+          <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+            {/* Editing lives on the list page (one editor drawer, one source of truth) — the pencil
+                sends the tag back to it with the editor already open. */}
+            <button
+              type="button"
+              aria-label={pt ? 'Editar tag' : 'Edit tag'}
+              title={pt ? 'Editar' : 'Edit'}
+              style={iconBtn}
+              onClick={() => navigate('/tags', { state: { editTagId: tag._id } })}
+            >
+              <Pencil size={15} />
+            </button>
+            <button
+              type="button"
+              aria-label={pt ? 'Excluir tag' : 'Delete tag'}
+              title={pt ? 'Excluir' : 'Delete'}
+              style={{ ...iconBtn, color: '#ef4444' }}
+              onClick={() => setConfirmDelete(true)}
+            >
+              <Trash2 size={15} />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ---- KPIs ---- */}
+      <div>
+        <SectionHeader label={pt ? 'Total (sem duplicidade)' : 'Total (deduplicated)'} />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
+          <StatTile label={pt ? 'Custo' : 'Cost'} value={fmtCost(tag.aggregate.costUSD, currency, brlRate)} accent />
+          <StatTile label={pt ? 'Sessões' : 'Sessions'} value={tag.aggregate.sessions.toLocaleString()} />
+          <StatTile label="Tokens" value={fmt(totalTokens)} />
+          <StatTile label={pt ? 'Tokens entrada' : 'Tokens in'} value={fmt(tag.aggregate.inputTokens)} />
+          <StatTile label={pt ? 'Tokens saída' : 'Tokens out'} value={fmt(tag.aggregate.outputTokens)} />
+        </div>
+        {/* A tag whose sources resolve to nothing is a real, common state (a brand-new grouping, or
+            one whose machines have not pushed yet) — say so instead of showing five zeros. */}
+        {empty && (
+          <div style={{
+            marginTop: 10, border: '1px dashed var(--border)', borderRadius: 12, padding: 20,
+            fontSize: 12.5, color: 'var(--text-tertiary)', textAlign: 'center', lineHeight: 1.5,
+          }}>
+            {pt
+              ? 'Nenhuma sessão corresponde às fontes desta tag ainda.'
+              : 'No sessions match this tag’s sources yet.'}
+          </div>
+        )}
+      </div>
+
+      {/* ---- activity ---- */}
+      {chartData.length > 0 && (
+        <div style={card}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginRight: 'auto' }}>
+              {pt ? 'Atividade' : 'Activity'}
+            </span>
+            {(['costUSD', 'sessions', 'tokens'] as Metric[]).map(m => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMetric(m)}
+                style={{
+                  padding: '0 12px', minHeight: 44, borderRadius: 20, cursor: 'pointer', fontFamily: 'inherit',
+                  border: metric === m ? `1px solid ${color}60` : '1px solid var(--border)',
+                  background: metric === m ? `${color}18` : 'transparent',
+                  color: metric === m ? color : 'var(--text-secondary)',
+                  fontSize: 11.5, fontWeight: 600, transition: 'all 0.15s',
+                }}
+              >
+                {metricLabel[m]}
+              </button>
+            ))}
+          </div>
+          <ResponsiveContainer width="100%" height={isMobile ? 170 : 210}>
+            <AreaChart data={chartData} margin={{ left: -10, right: 4 }}>
+              <defs>
+                <linearGradient id="tag-detail-grad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={color} stopOpacity={0.32} />
+                  <stop offset="100%" stopColor={color} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="var(--border)" strokeDasharray="0" vertical={false} />
+              <XAxis
+                dataKey="date"
+                tick={{ fill: 'var(--text-tertiary)', fontSize: 10 }}
+                axisLine={false}
+                tickLine={false}
+                tickFormatter={v => { try { return format(parseISO(String(v)), 'MMM d') } catch { return String(v) } }}
+                interval="preserveStartEnd"
+              />
+              <YAxis hide />
+              <Tooltip
+                content={<DayTooltip currency={currency} brlRate={brlRate} pt={pt} />}
+                cursor={{ stroke: 'var(--border)' }}
+              />
+              <Area
+                type="monotone"
+                dataKey={metric}
+                stroke={color}
+                strokeWidth={2}
+                fill="url(#tag-detail-grad)"
+                dot={false}
+                activeDot={{ r: 4, fill: color, stroke: 'var(--bg-base)', strokeWidth: 2 }}
+                name={metricLabel[metric]}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6 }}>
+            {pt ? 'Pico: ' : 'Peak: '}
+            {(() => {
+              const peak = chartData.reduce<DayPoint | null>((acc, d) => (!acc || d[metric] > acc[metric] ? d : acc), null)
+              return peak ? `${niceDate(peak.date)} — ${metricValue(peak[metric])}` : '—'
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* ---- ranked breakdowns ---- */}
+      {/* Bare `.ag-grid` is the 2-column utility, collapsing to one column below 420px. */}
+      <div className="ag-grid">
+        <Ranked title={pt ? 'Projetos' : 'Projects'} buckets={stats.projects} color={color} pt={pt}
+          currency={currency} brlRate={brlRate} otherLabel={otherLabel}
+          labelOf={b => formatProjectName(b.key)} />
+        <Ranked title={pt ? 'Repositórios' : 'Repositories'} buckets={stats.repos} color={color} pt={pt}
+          currency={currency} brlRate={brlRate} otherLabel={otherLabel}
+          labelOf={b => repoShortName(b.key) || b.key} />
+        <Ranked title={pt ? 'Modelos' : 'Models'} buckets={stats.models} color={color} pt={pt}
+          currency={currency} brlRate={brlRate} otherLabel={otherLabel}
+          labelOf={b => formatModel(b.key)}
+          footnote={stats.sessionsWithoutModel > 0
+            ? (pt
+              ? `${stats.sessionsWithoutModel} sessão(ões) sem modelo identificado — contam no total, mas não aqui.`
+              : `${stats.sessionsWithoutModel} session(s) carry no model id — they count in the total but not here.`)
+            : undefined} />
+        <Ranked title="Harnesses" buckets={stats.harnesses} color={color} pt={pt}
+          currency={currency} brlRate={brlRate} otherLabel={otherLabel}
+          labelOf={b => HARNESS_LABELS[b.key as keyof typeof HARNESS_LABELS] ?? b.key} />
+        <Ranked title={pt ? 'Máquinas' : 'Machines'} buckets={stats.members} color={color} pt={pt}
+          currency={currency} brlRate={brlRate} otherLabel={otherLabel}
+          labelOf={b => b.label ?? b.key} />
+      </div>
+
+      {/* ---- per source ---- */}
+      <div style={card}>
+        <SectionHeader label={pt ? 'Por fonte' : 'Per source'} />
+        {/* The per-source numbers deliberately sum to MORE than the tag total when sources overlap —
+            a session counted by two sources is counted once in the total. That gap is the dedupe
+            working, so say so instead of letting it read as a bug. */}
+        <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginBottom: 12, lineHeight: 1.5 }}>
+          {pt
+            ? 'O total da tag é sem duplicidade; os números por fonte não são. Fontes que se sobrepõem contam a mesma sessão mais de uma vez, então somar as linhas abaixo pode passar do total — isso é esperado.'
+            : 'The tag total is deduplicated; the per-source figures are not. Overlapping sources count the same session more than once, so summing the rows below may exceed the total — that is expected.'}
+        </div>
+        {detail.breakdown.length === 0 ? (
+          <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>
+            {pt ? 'Nenhuma fonte configurada.' : 'No sources configured.'}
+          </div>
+        ) : (
+          // Wide row: scrolls inside its own container so the page itself never scrolls sideways.
+          <div style={{ overflowX: 'auto', margin: '0 -4px', padding: '0 4px' }}>
+            <div style={{ minWidth: 460 }}>
+              <div style={{
+                display: 'grid', gridTemplateColumns: '90px minmax(120px, 1fr) 90px 80px 90px',
+                gap: 10, padding: '0 0 8px', fontSize: 9.5, fontWeight: 700,
+                color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em',
+                borderBottom: '1px solid var(--border-subtle)',
+              }}>
+                <span>{pt ? 'Tipo' : 'Type'}</span>
+                <span>{pt ? 'Fonte' : 'Source'}</span>
+                <span style={{ textAlign: 'right' }}>{pt ? 'Custo' : 'Cost'}</span>
+                <span style={{ textAlign: 'right' }}>{pt ? 'Sessões' : 'Sessions'}</span>
+                <span style={{ textAlign: 'right' }}>Tokens</span>
+              </div>
+              {detail.breakdown.map((b, i) => (
+                <div key={`${b.source.type}:${b.source.value}:${i}`} style={{
+                  display: 'grid', gridTemplateColumns: '90px minmax(120px, 1fr) 90px 80px 90px',
+                  gap: 10, alignItems: 'center', minHeight: 44, fontSize: 12,
+                  borderBottom: i === detail.breakdown.length - 1 ? 'none' : '1px solid var(--border-subtle)',
+                }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {sourceTypeLabel(b.source.type)}
+                  </span>
+                  <span style={{ color: 'var(--text-primary)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {sourceValueLabel(b.source)}
+                  </span>
+                  <span style={{ textAlign: 'right', color: 'var(--anthropic-orange)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                    {fmtCost(b.aggregate.costUSD, currency, brlRate)}
+                  </span>
+                  <span style={{ textAlign: 'right', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                    {b.aggregate.sessions.toLocaleString()}
+                  </span>
+                  <span style={{ textAlign: 'right', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                    {fmt(b.aggregate.inputTokens + b.aggregate.outputTokens)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ---- access ---- */}
+      <div style={card}>
+        <SectionHeader label={pt ? 'Quem tem acesso' : 'Who has access'} />
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          <AccessChip text={pt ? 'Owners' : 'Owners'} muted />
+          <AccessChip text={`${accounts.find(a => a.id === tag.createdBy)?.name ?? tag.createdBy} · ${pt ? 'criador' : 'creator'}`} />
+          {tag.sharedWith.map(accId => (
+            <AccessChip key={accId} text={accounts.find(a => a.id === accId)?.name ?? accId} />
+          ))}
+        </div>
+        {tag.sharedWith.length === 0 && (
+          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 10, lineHeight: 1.5 }}>
+            {pt
+              ? 'Ainda não compartilhada: só o criador e os owners veem esta tag.'
+              : 'Not shared yet: only the creator and the owners can see this tag.'}
+          </div>
+        )}
+        <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 10, lineHeight: 1.5 }}>
+          {pt
+            ? 'Quem recebe a tag vê os números completos dela — compartilhar uma tag é compartilhar dados.'
+            : 'Anyone granted the tag sees its full numbers — sharing a tag is sharing data.'}
+        </div>
+        {/* Rule 2: the keys of buckets the viewer cannot see are collapsed server-side, never sent. */}
+        {hasRedacted && (
+          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 8, lineHeight: 1.5 }}>
+            {pt
+              ? `“${otherLabel}” agrupa itens fora do seu escopo: os números entram no total, mas os nomes não são exibidos.`
+              : `“${otherLabel}” groups items outside your scope: their numbers count towards the total, but their names are not shown.`}
+          </div>
+        )}
+        {me && me.role !== 'owner' && (
+          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 8, lineHeight: 1.5 }}>
+            {pt
+              ? 'Filtrar o dashboard por esta tag mostra apenas as sessões que você já pode ver — os totais aqui podem ser maiores.'
+              : 'Filtering the dashboard by this tag shows only sessions you can already see — the totals here may be higher.'}
+          </div>
+        )}
+      </div>
+
+      <ConfirmModal
+        open={confirmDelete}
+        title={pt ? 'Excluir tag?' : 'Delete tag?'}
+        message={pt
+          ? `A tag "${tag.name}" será removida. As sessões não são afetadas.`
+          : `The tag "${tag.name}" will be removed. Sessions are not affected.`}
+        confirmLabel={pt ? 'Excluir' : 'Delete'}
+        cancelLabel={pt ? 'Cancelar' : 'Cancel'}
+        onConfirm={() => void doDelete()}
+        onCancel={() => setConfirmDelete(false)}
+      />
+    </div>
+  )
+}
+
+function emptyStats(): TagStats {
+  return {
+    projects: [], models: [], harnesses: [], repos: [], members: [], daily: [],
+    firstSessionDate: null, lastSessionDate: null, sessionsWithoutModel: 0,
+  }
+}
+
+/** `2026-07-25` → a short, locale-neutral label. Falls back to the raw key on a bad date. */
+function niceDate(iso: string): string {
+  try { return format(parseISO(iso), 'MMM d, yyyy') } catch { return iso }
+}
+
+function AccessChip({ text, muted }: { text: string; muted?: boolean }) {
+  return (
+    <span style={{
+      display: 'inline-block', maxWidth: '100%', padding: '5px 10px', borderRadius: 999, fontSize: 11.5,
+      background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+      color: muted ? 'var(--text-tertiary)' : 'var(--text-secondary)',
+      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    }}>{text}</span>
+  )
+}
+
+/** One ranked distribution: name, share-of-total bar, then sessions / cost / tokens.
+ *  The share is computed on cost, falling back to sessions when nothing in the list cost anything
+ *  (Gemini/Copilot sessions carry no token data, so a cost-only bar would render flat at zero). */
+function Ranked({ title, buckets, color, pt, currency, brlRate, otherLabel, labelOf, footnote }: {
+  title: string
+  buckets: Bucket[]
+  color: string
+  pt: boolean
+  currency: 'USD' | 'BRL'
+  brlRate: number
+  otherLabel: string
+  labelOf: (b: Bucket) => string
+  footnote?: string
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const totalCost = buckets.reduce((a, b) => a + b.costUSD, 0)
+  const totalSessions = buckets.reduce((a, b) => a + b.sessions, 0)
+  const share = (b: Bucket) => totalCost > 0
+    ? b.costUSD / totalCost
+    : (totalSessions > 0 ? b.sessions / totalSessions : 0)
+
+  const LIMIT = 6
+  const shown = expanded ? buckets : buckets.slice(0, LIMIT)
+
+  return (
+    <div style={card}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 12 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</span>
+        <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginLeft: 'auto' }}>{buckets.length}</span>
+      </div>
+      {buckets.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>
+          {pt ? 'Sem dados.' : 'No data.'}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {shown.map(b => {
+            const isOther = b.key === OTHER_KEY
+            return (
+              <div key={b.key} style={{ minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+                  <span style={{
+                    fontSize: 12.5, fontWeight: 600, minWidth: 0, flex: 1,
+                    color: isOther ? 'var(--text-tertiary)' : 'var(--text-primary)',
+                    fontStyle: isOther ? 'italic' : 'normal',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>{isOther ? otherLabel : labelOf(b)}</span>
+                  <span style={{
+                    fontSize: 12, fontWeight: 700, color: 'var(--anthropic-orange)',
+                    fontVariantNumeric: 'tabular-nums', flexShrink: 0,
+                  }}>{fmtCost(b.costUSD, currency, brlRate)}</span>
+                </div>
+                <div style={{ height: 4, borderRadius: 2, background: 'var(--bg-elevated)', margin: '5px 0 4px', overflow: 'hidden' }}>
+                  <div style={{
+                    width: `${Math.max(2, Math.round(share(b) * 100))}%`, height: '100%',
+                    background: isOther ? 'var(--text-tertiary)' : color, borderRadius: 2,
+                  }} />
+                </div>
+                <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
+                  {b.sessions.toLocaleString()} {pt ? 'sessões' : 'sessions'}
+                  {' · '}{fmt(b.tokens)} tokens
+                  {' · '}{Math.round(share(b) * 100)}%
+                </div>
+              </div>
+            )
+          })}
+          {buckets.length > LIMIT && (
+            <button
+              type="button"
+              onClick={() => setExpanded(v => !v)}
+              style={{
+                minHeight: 44, border: '1px solid var(--border)', borderRadius: 7, background: 'transparent',
+                color: 'var(--text-secondary)', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >
+              {expanded
+                ? (pt ? 'Mostrar menos' : 'Show less')
+                : (pt ? `Mostrar todos (${buckets.length})` : `Show all (${buckets.length})`)}
+            </button>
+          )}
+        </div>
+      )}
+      {footnote && (
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 10, lineHeight: 1.5 }}>{footnote}</div>
+      )}
+    </div>
+  )
+}
+
+/** Recharts tooltip for the daily series — all three metrics at once, same chrome as ActivityChart. */
+function DayTooltip({ active, payload, label, currency, brlRate, pt }: {
+  active?: boolean
+  payload?: { payload?: DayPoint }[]
+  label?: string | number
+  currency: 'USD' | 'BRL'
+  brlRate: number
+  pt: boolean
+}) {
+  const point = active ? payload?.[0]?.payload : undefined
+  if (!point) return null
+  return (
+    <div style={{
+      background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 10,
+      padding: '10px 14px', fontSize: 12, boxShadow: 'var(--shadow-elevated)',
+    }}>
+      <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 6 }}>
+        {niceDate(String(label ?? point.date))}
+      </div>
+      <Row label={pt ? 'Custo' : 'Cost'} value={fmtCost(point.costUSD, currency, brlRate)} />
+      <Row label={pt ? 'Sessões' : 'Sessions'} value={point.sessions.toLocaleString()} />
+      <Row label="Tokens" value={fmt(point.tokens)} />
+    </div>
+  )
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: 'flex', gap: 10, justifyContent: 'space-between', color: 'var(--text-secondary)', marginTop: 2 }}>
+      <span>{label}</span>
+      <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{value}</span>
+    </div>
+  )
+}

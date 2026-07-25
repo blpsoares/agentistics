@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
-import { Plus, Trash2, Pencil, X } from 'lucide-react'
+import { useLocation, useNavigate, useOutletContext } from 'react-router-dom'
+import { Plus, Trash2, X } from 'lucide-react'
 import { fmt, fmtCost, formatProjectName } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { HARNESS_LABELS } from '../lib/harness'
 import { Drawer } from './settings/Drawer'
-import { Section, Select, Checkbox, ConfirmModal, SectionHeader, TabSelect } from './settings/primitives'
+import { Section, Select, TabSelect } from './settings/primitives'
 import { useIsMobile } from '../hooks/useIsMobile'
 
 // /api/tags response shapes. Aggregate-only by design (spec rule 2): the server never sends the
@@ -30,11 +30,6 @@ interface Tag {
   createdBy: string
   aggregate: TagAggregate
 }
-interface TagDetail {
-  tag: Tag
-  breakdown: { source: TagSource; aggregate: TagAggregate }[]
-}
-
 // IAM lookups used to turn a source's opaque id into a readable label and to populate the pickers.
 interface IamTeam { _id: string; name: string }
 interface IamAccount { id: string; name: string; email: string }
@@ -95,12 +90,6 @@ const primaryBtn: React.CSSProperties = {
   background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
   fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
 }
-const ghostBtn: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-  padding: '0 12px', minHeight: 44, borderRadius: 7,
-  border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)',
-  fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-}
 const trashBtn: React.CSSProperties = {
   border: 'none', background: 'transparent', color: '#ef4444', cursor: 'pointer',
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -116,23 +105,12 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-/** One number + caption, used for the detail headline. */
-function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div style={{ minWidth: 0 }}>
-      <div style={{
-        fontSize: 18, fontWeight: 700, wordBreak: 'break-word',
-        color: accent ? 'var(--anthropic-orange)' : 'var(--text-primary)',
-      }}>{value}</div>
-      <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
-    </div>
-  )
-}
-
 export default function TagsPage() {
   const { lang, currency, brlRate, data, me } = useOutletContext<AppContext>()
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
+  const navigate = useNavigate()
+  const location = useLocation()
 
   const [tags, setTags] = useState<Tag[]>([])
   const [err, setErr] = useState<string | null>(null)
@@ -209,20 +187,10 @@ export default function TagsPage() {
     }
   }, [repoOptions, projectOptions, machines, teams, accounts])
 
-  // detail drawer
-  const [detail, setDetail] = useState<TagDetail | null>(null)
-  const [detailOpen, setDetailOpen] = useState(false)
-  const [detailErr, setDetailErr] = useState<string | null>(null)
-
-  const openDetail = useCallback(async (id: string) => {
-    setDetail(null); setDetailErr(null); setDetailOpen(true)
-    try {
-      const r = await fetch(`/api/tags/${encodeURIComponent(id)}`)
-      const d = await r.json() as { tag?: Tag; breakdown?: TagDetail['breakdown']; error?: string }
-      if (d.error || !d.tag) setDetailErr(d.error ?? 'not found')
-      else setDetail({ tag: d.tag, breakdown: d.breakdown ?? [] })
-    } catch (e) { setDetailErr(String(e)) }
-  }, [])
+  /** The read-only detail is a page of its own (/tags/:id) — a card click navigates there. */
+  const openDetail = useCallback((id: string) => {
+    navigate(`/tags/${encodeURIComponent(id)}`)
+  }, [navigate])
 
   // editor drawer (create + edit share one form)
   const [editorOpen, setEditorOpen] = useState(false)
@@ -243,7 +211,6 @@ export default function TagsPage() {
   const [saveErr, setSaveErr] = useState<string | null>(null)
   const [sourcesEditing, setSourcesEditing] = useState(true)
   const [shareEditing, setShareEditing] = useState(true)
-  const [confirmDelete, setConfirmDelete] = useState<Tag | null>(null)
 
   const openCreate = useCallback(() => {
     setEditingId(null); setName(''); setColor(DEFAULT_COLOR); setSources([]); setSharedWith([])
@@ -298,20 +265,17 @@ export default function TagsPage() {
     } catch (e) { setSaveErr(String(e)) } finally { setSaving(false) }
   }
 
-  const doDelete = async (t: Tag) => {
-    setConfirmDelete(null)
-    await fetch('/api/tags', {
-      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: t._id }),
-    })
-    setDetailOpen(false)
-    await loadTags()
-  }
-
   const mayWrite = me?.role === 'owner' || !!me?.memberships.some(m => m.role === 'manager')
-  const mayEdit = (t: Tag) => me?.role === 'owner' || t.createdBy === me?.id
 
-  const totalLabel = pt ? 'Total (sem duplicidade)' : 'Total (deduplicated)'
+  // The detail page's pencil navigates back here carrying the tag to edit. Open the editor once the
+  // list has loaded, then clear the history state so a reload does not reopen it.
+  const editTagId = (location.state as { editTagId?: string } | null)?.editTagId
+  useEffect(() => {
+    if (!editTagId || !loaded) return
+    const t = tags.find(x => x._id === editTagId)
+    if (t) openEdit(t)
+    navigate('/tags', { replace: true, state: null })
+  }, [editTagId, loaded, tags, openEdit, navigate])
 
   return (
     <div>
@@ -436,104 +400,6 @@ export default function TagsPage() {
           ))}
         </div>
       )}
-
-      {/* ---- detail ---- */}
-      <Drawer
-        open={detailOpen}
-        title={detail?.tag.name ?? (pt ? 'Tag' : 'Tag')}
-        onClose={() => setDetailOpen(false)}
-        lang={lang}
-        footer={detail && mayEdit(detail.tag) ? (
-          <>
-            <button type="button" style={ghostBtn} onClick={() => setConfirmDelete(detail.tag)}>
-              <Trash2 size={14} /> {pt ? 'Excluir' : 'Delete'}
-            </button>
-            <button type="button" style={primaryBtn} onClick={() => { setDetailOpen(false); openEdit(detail.tag) }}>
-              <Pencil size={14} /> {pt ? 'Editar' : 'Edit'}
-            </button>
-          </>
-        ) : undefined}
-      >
-        {detailErr && <div style={{ fontSize: 12.5, color: '#ef4444' }}>{detailErr}</div>}
-        {!detail && !detailErr && (
-          <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>{pt ? 'Carregando…' : 'Loading…'}</div>
-        )}
-        {detail && (
-          <>
-            <SectionHeader label={totalLabel} />
-            <div className="ag-grid cols-3" style={{ gap: 14 }}>
-              <Stat label={pt ? 'Custo' : 'Cost'} value={fmtCost(detail.tag.aggregate.costUSD, currency, brlRate)} accent />
-              <Stat label={pt ? 'Sessões' : 'Sessions'} value={detail.tag.aggregate.sessions.toLocaleString()} />
-              <Stat label="Tokens" value={fmt(detail.tag.aggregate.inputTokens + detail.tag.aggregate.outputTokens)} />
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
-              {([
-                [pt ? 'Projeto principal' : 'Top project', detail.tag.aggregate.topProject ? formatProjectName(detail.tag.aggregate.topProject) : null],
-                [pt ? 'Modelo principal' : 'Top model', detail.tag.aggregate.topModel],
-                [pt ? 'Harness principal' : 'Top harness', detail.tag.aggregate.topHarness
-                  ? (HARNESS_LABELS[detail.tag.aggregate.topHarness as keyof typeof HARNESS_LABELS] ?? detail.tag.aggregate.topHarness)
-                  : null],
-              ] as [string, string | null][]).map(([label, value]) => (
-                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12.5 }}>
-                  <span style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}>{label}</span>
-                  <span style={{ color: 'var(--text-primary)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {value ?? '—'}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 16, marginTop: 8 }}>
-              <SectionHeader label={pt ? 'Por fonte' : 'Per source'} />
-              {/* The per-source numbers deliberately sum to MORE than the tag total when sources
-                  overlap — a session counted by two sources is counted once in the total. That gap
-                  is the dedupe working, so say so instead of letting it read as a bug. */}
-              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginBottom: 12, lineHeight: 1.5 }}>
-                {pt
-                  ? 'Fontes podem se sobrepor: somar as linhas abaixo pode dar mais que o total, que conta cada sessão uma única vez.'
-                  : 'Sources can overlap: summing the rows below may exceed the total, which counts each session exactly once.'}
-              </div>
-              {detail.breakdown.length === 0 && (
-                <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>
-                  {pt ? 'Nenhuma fonte configurada.' : 'No sources configured.'}
-                </div>
-              )}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {detail.breakdown.map((b, i) => (
-                  <div key={`${b.source.type}:${b.source.value}:${i}`} style={{
-                    border: '1px solid var(--border-subtle)', borderRadius: 9, padding: '10px 12px',
-                    display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0,
-                  }}>
-                    <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                      {sourceTypeLabel(b.source.type)}
-                    </div>
-                    <div style={{ fontSize: 12.5, color: 'var(--text-primary)', wordBreak: 'break-word' }}>
-                      {sourceValueLabel(b.source)}
-                    </div>
-                    <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
-                      {fmtCost(b.aggregate.costUSD, currency, brlRate)}
-                      {' · '}
-                      {b.aggregate.sessions.toLocaleString()} {pt ? 'sessões' : 'sessions'}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {me && me.role !== 'owner' && (
-              <div style={{
-                marginTop: 8, fontSize: 11.5, color: 'var(--text-tertiary)',
-                lineHeight: 1.5, borderTop: '1px solid var(--border-subtle)', paddingTop: 12,
-              }}>
-                {pt
-                  ? 'O dashboard filtrado mostra apenas as sessões que você já tem permissão para ver — o total da tag pode ser maior.'
-                  : 'The filtered dashboard shows only sessions you already have access to — the tag total may be higher.'}
-              </div>
-            )}
-          </>
-        )}
-      </Drawer>
 
       {/* ---- create / edit ---- */}
       <Drawer
@@ -748,18 +614,6 @@ export default function TagsPage() {
           </div>
         </Section>
       </Drawer>
-
-      <ConfirmModal
-        open={!!confirmDelete}
-        title={pt ? 'Excluir tag?' : 'Delete tag?'}
-        message={pt
-          ? `A tag "${confirmDelete?.name ?? ''}" será removida. As sessões não são afetadas.`
-          : `The tag "${confirmDelete?.name ?? ''}" will be removed. Sessions are not affected.`}
-        confirmLabel={pt ? 'Excluir' : 'Delete'}
-        cancelLabel={pt ? 'Cancelar' : 'Cancel'}
-        onConfirm={() => { if (confirmDelete) void doDelete(confirmDelete) }}
-        onCancel={() => setConfirmDelete(null)}
-      />
     </div>
   )
 }
