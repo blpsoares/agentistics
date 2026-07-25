@@ -94,7 +94,9 @@ export default function SettingsPage() {
   )
 
   return (
-    <div style={{ maxWidth: 1100 }}>
+    // `ag-settings` drives the mobile touch-target rule in index.css — the governance pages style
+    // their buttons with module-level inline objects that a hook cannot reach.
+    <div className="ag-settings" style={{ maxWidth: 1100 }}>
       <h1
         style={{
           fontSize: 22,

@@ -231,6 +231,19 @@ html, body {
   }
 }
 
+/* Touch targets inside the settings pages.
+   The governance pages declare their button styles as module-level inline objects
+   (`primaryBtn`, `ghostBtn`, `trashBtn`), which a `useIsMobile()` hook cannot reach — so drawer
+   actions like "Create account" sat at 31-33px and "Remove team" at 22px. None of those objects
+   declares `min-height`, and inline styles only win for the properties they actually set, so this
+   rule applies cleanly without `!important` and without touching desktop. Buttons that already
+   set a taller inline min-height (RecordCardAction, Section) keep it. */
+@media (max-width: 767px) {
+  .ag-settings button {
+    min-height: 44px;
+  }
+}
+
 /* iOS zoom guard.
    Safari auto-zooms the viewport whenever a focused field's font-size is under 16px, which
    leaves the page scrolled sideways and breaks the sticky header. The app styles its fields
