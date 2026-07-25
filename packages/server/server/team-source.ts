@@ -75,6 +75,9 @@ export async function loadTeamSessionsFromMongo(): Promise<SessionMeta[]> {
  */
 const TAG_SESSION_PROJECTION = {
   session_id: 1,
+  // `user` backs the distinct-member count on the tag detail. Omitting it made that count read 0
+  // while the machine count was right — the silent-undefined failure this comment warns about.
+  user: 1,
   project_path: 1,
   start_time: 1,
   harness: 1,

@@ -43,6 +43,9 @@ interface TagStats {
   repos: Bucket[]
   members: Bucket[]
   daily: DayPoint[]
+  /** Distinct contributors — plain counts, computed server-side before any bucket redaction. */
+  distinctMembers: number
+  distinctMachines: number
   firstSessionDate: string | null
   lastSessionDate: string | null
   sessionsWithoutModel: number
@@ -299,6 +302,10 @@ export default function TagDetailPage() {
           <StatTile label="Tokens" value={fmt(totalTokens)} />
           <StatTile label={pt ? 'Tokens entrada' : 'Tokens in'} value={fmt(tag.aggregate.inputTokens)} />
           <StatTile label={pt ? 'Tokens saída' : 'Tokens out'} value={fmt(tag.aggregate.outputTokens)} />
+          {/* Counts, not names — so they need no redaction and stay honest even when the machine
+              buckets below collapse several unseeable ones into a single "other". */}
+          <StatTile label={pt ? 'Membros' : 'Members'} value={(detail?.stats.distinctMembers ?? 0).toLocaleString()} />
+          <StatTile label={pt ? 'Máquinas' : 'Machines'} value={(detail?.stats.distinctMachines ?? 0).toLocaleString()} />
         </div>
         {/* A tag whose sources resolve to nothing is a real, common state (a brand-new grouping, or
             one whose machines have not pushed yet) — say so instead of showing five zeros. */}
@@ -469,24 +476,48 @@ export default function TagDetailPage() {
       {/* ---- access ---- */}
       <div style={card}>
         <SectionHeader label={pt ? 'Quem tem acesso' : 'Who has access'} />
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          <AccessChip text={pt ? 'Owners' : 'Owners'} muted />
-          <AccessChip text={`${accounts.find(a => a.id === tag.createdBy)?.name ?? tag.createdBy} · ${pt ? 'criador' : 'creator'}`} />
-          {tag.sharedWith.map(accId => (
-            <AccessChip key={accId} text={accounts.find(a => a.id === accId)?.name ?? accId} />
-          ))}
-        </div>
-        {tag.sharedWith.length === 0 && (
-          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 10, lineHeight: 1.5 }}>
-            {pt
-              ? 'Ainda não compartilhada: só o criador e os owners veem esta tag.'
-              : 'Not shared yet: only the creator and the owners can see this tag.'}
-          </div>
-        )}
-        <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 10, lineHeight: 1.5 }}>
-          {pt
-            ? 'Quem recebe a tag vê os números completos dela — compartilhar uma tag é compartilhar dados.'
-            : 'Anyone granted the tag sees its full numbers — sharing a tag is sharing data.'}
+        {/* Three DIFFERENT kinds of access were rendered as one flat row of identical chips, so
+            "Owners" (a standing role), the creator (implicit and revocable) and the explicit
+            grantees looked interchangeable. Each is now its own group stating where the access
+            comes from and what it allows — the same distinction the server enforces. */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <AccessGroup
+            title={pt ? 'Owners' : 'Owners'}
+            permission={pt ? 'ver · editar · excluir' : 'view · edit · delete'}
+            note={pt
+              ? 'Todo owner do central enxerga qualquer tag, por cargo.'
+              : 'Every central owner sees any tag, by role.'}
+          >
+            <AccessChip text={pt ? 'Todos os owners' : 'All owners'} muted />
+          </AccessGroup>
+
+          <AccessGroup
+            title={pt ? 'Criador' : 'Creator'}
+            permission={pt ? 'ver · editar · excluir' : 'view · edit · delete'}
+            note={pt
+              ? 'Mantém o acesso enquanto continuar enxergando todas as fontes da tag.'
+              : 'Keeps access while they can still see every one of the tag’s sources.'}
+          >
+            <AccessChip text={accounts.find(a => a.id === tag.createdBy)?.name ?? tag.createdBy} />
+          </AccessGroup>
+
+          <AccessGroup
+            title={pt ? 'Compartilhada com' : 'Shared with'}
+            permission={pt ? 'somente ver' : 'view only'}
+            note={pt
+              ? 'Vê os números completos da tag, mas não as sessões por trás deles nem pode editá-la.'
+              : 'Sees the tag’s full numbers, but not the sessions behind them, and cannot edit it.'}
+          >
+            {tag.sharedWith.length === 0
+              ? (
+                <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>
+                  {pt ? 'Ainda não compartilhada com ninguém.' : 'Not shared with anyone yet.'}
+                </span>
+              )
+              : tag.sharedWith.map(accId => (
+                <AccessChip key={accId} text={accounts.find(a => a.id === accId)?.name ?? accId} />
+              ))}
+          </AccessGroup>
         </div>
         {/* Rule 2: the keys of buckets the viewer cannot see are collapsed server-side, never sent. */}
         {hasRedacted && (
@@ -523,6 +554,7 @@ export default function TagDetailPage() {
 function emptyStats(): TagStats {
   return {
     projects: [], models: [], harnesses: [], repos: [], members: [], daily: [],
+    distinctMembers: 0, distinctMachines: 0,
     firstSessionDate: null, lastSessionDate: null, sessionsWithoutModel: 0,
   }
 }
@@ -530,6 +562,35 @@ function emptyStats(): TagStats {
 /** `2026-07-25` → a short, locale-neutral label. Falls back to the raw key on a bad date. */
 function niceDate(iso: string): string {
   try { return format(parseISO(iso), 'MMM d, yyyy') } catch { return iso }
+}
+
+/** One category of access: where it comes from, what it allows, and who holds it.
+ *  The permission is stated per group because the three differ — only the shared-with group is
+ *  read-only, and conflating them is what made the flat chip row misleading. */
+function AccessGroup({ title, permission, note, children }: {
+  title: string
+  permission: string
+  note: string
+  children: React.ReactNode
+}) {
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
+        <span style={{
+          fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)',
+          textTransform: 'uppercase', letterSpacing: '0.06em',
+        }}>{title}</span>
+        <span style={{
+          padding: '2px 8px', borderRadius: 999, fontSize: 10,
+          background: 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
+          border: '1px solid color-mix(in srgb, var(--anthropic-orange) 35%, transparent)',
+          color: 'var(--anthropic-orange)', fontWeight: 600, whiteSpace: 'nowrap',
+        }}>{permission}</span>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>{children}</div>
+      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6, lineHeight: 1.5 }}>{note}</div>
+    </div>
+  )
 }
 
 function AccessChip({ text, muted }: { text: string; muted?: boolean }) {

@@ -78,3 +78,21 @@ test('a malformed start_time does not create a bogus day bucket', () => {
   expect(d.daily).toEqual([])
   expect(d.firstSessionDate).toBeNull()
 })
+
+test('counts distinct members and machines, not sessions', () => {
+  const d = aggregateTagDetail([
+    s({ user: 'vini', memberId: 'machA' }),
+    s({ user: 'vini', memberId: 'machA' }),   // same person, same machine
+    s({ user: 'vini', memberId: 'machB' }),   // same person, second machine
+    s({ user: 'bryan', memberId: 'machC' }),
+    s({}),                                     // neither → counted in neither set
+  ])
+  expect(d.distinctMembers).toBe(2)
+  expect(d.distinctMachines).toBe(3)
+})
+
+test('an empty tag reports zero members and machines', () => {
+  const d = aggregateTagDetail([])
+  expect(d.distinctMembers).toBe(0)
+  expect(d.distinctMachines).toBe(0)
+})

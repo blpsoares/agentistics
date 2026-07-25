@@ -36,6 +36,11 @@ export interface TagDetailStats {
    *  resolved by the caller, which knows the machine registry. */
   members: TagBucket[]
   daily: TagDayPoint[]
+  /** How many distinct people and machines contributed. Plain counts, so unlike the bucket KEYS
+   *  they need no redaction — and they must be computed BEFORE redaction, otherwise collapsing
+   *  several unseeable machines into one "other" bucket would undercount them. */
+  distinctMembers: number
+  distinctMachines: number
   firstSessionDate: string | null
   lastSessionDate: string | null
   /** Sessions carrying no model id — they still count in totals but cannot be attributed. */
@@ -84,6 +89,7 @@ export function aggregateTagDetail(sessions: SessionMeta[]): TagDetailStats {
   const repos = new Map<string, TagBucket>()
   const members = new Map<string, TagBucket>()
   const days = new Map<string, TagDayPoint>()
+  const distinctUsers = new Set<string>()
   let sessionsWithoutModel = 0
   let first: string | null = null
   let last: string | null = null
@@ -94,6 +100,7 @@ export function aggregateTagDetail(sessions: SessionMeta[]): TagDetailStats {
     if (s.harness) bump(harnesses, s.harness, s)
     if (s.git_remote) bump(repos, s.git_remote, s)
     if (s.memberId) bump(members, s.memberId, s)
+    if (s.user) distinctUsers.add(s.user)
 
     const day = s.start_time ? dayOf(s.start_time) : null
     if (day) {
@@ -114,6 +121,8 @@ export function aggregateTagDetail(sessions: SessionMeta[]): TagDetailStats {
     repos: ranked(repos),
     members: ranked(members),
     daily: [...days.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    distinctMembers: distinctUsers.size,
+    distinctMachines: members.size,
     firstSessionDate: first,
     lastSessionDate: last,
     sessionsWithoutModel,
