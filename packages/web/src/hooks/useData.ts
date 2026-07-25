@@ -842,11 +842,17 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
     // - non-Claude harness selected → pure per-session count of that harness
     // - Claude harness selected → Claude statsCache history + Claude sessions on gap days
     // - unified (no harness filter) → Claude history+gap PLUS all non-Claude sessions
+    // Narrowed along a dimension `stats-cache.json` cannot represent (it has no project/repo/tag/
+    // model/user granularity). Every all-time number must then come from sessions, otherwise a
+    // filtered view reports the whole global Claude history as if it were the filtered scope.
+    const cacheBlindScope = projectFiltered || repoFiltered || tagFiltered || modelSet !== null
+      || (userFiltered && !hasUserStats)
+
     let allTimeTotalSessions: number
-    if (nonClaudeHarness) {
-      // Pure per-session count: non-Claude-only selection, or team/central data (statsCache
-      // does not represent the members). harnessSessions is already user+harness scoped.
-      allTimeTotalSessions = harnessSessions.length
+    if (nonClaudeHarness || cacheBlindScope) {
+      // Pure per-session count: non-Claude-only selection, a cache-blind filter, or team/central
+      // data (statsCache does not represent the members). harnessSessions is already scoped.
+      allTimeTotalSessions = cacheBlindScope ? filteredSessions.length : harnessSessions.length
     } else {
       const allDailyDates = new Set((effectiveStatsCache.dailyActivity ?? []).map(d => d.date))
       const claudeBase = (effectiveStatsCache.dailyActivity ?? []).reduce((s, d) => s + d.sessionCount, 0)
@@ -952,8 +958,11 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
     // Longest streak ever (respects project/model/harness filter, ignores date range)
     const allTimeActiveDates = (() => {
       const set = new Set<string>()
-      if (projectFiltered || modelSet !== null || nonClaudeHarness) {
-        for (const s of harnessSessions) {
+      // Same rule as allTimeTotalSessions: once the scope is narrowed along something the cache
+      // cannot represent, the active days must be derived from the sessions in scope. Reading
+      // dailyActivity here made longestStreak count days from the whole Claude history.
+      if (cacheBlindScope || nonClaudeHarness) {
+        for (const s of (cacheBlindScope ? filteredSessions : harnessSessions)) {
           if (!s.start_time) continue
           if (projectFiltered && !projectSet.has(s.project_path)) continue
           if (modelSet && (!s.model || !modelSet.has(s.model))) continue

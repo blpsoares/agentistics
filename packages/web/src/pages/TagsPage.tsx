@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Plus, Trash2, Pencil } from 'lucide-react'
+import { Plus, Trash2, Pencil, X } from 'lucide-react'
 import { fmt, fmtCost, formatProjectName } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { HARNESS_LABELS } from '../lib/harness'
 import { Drawer } from './settings/Drawer'
-import { Section, Select, Checkbox, ConfirmModal, SectionHeader } from './settings/primitives'
+import { Section, Select, Checkbox, ConfirmModal, SectionHeader, TabSelect } from './settings/primitives'
 import { useIsMobile } from '../hooks/useIsMobile'
 
 // /api/tags response shapes. Aggregate-only by design (spec rule 2): the server never sends the
@@ -40,11 +40,49 @@ interface IamTeam { _id: string; name: string }
 interface IamAccount { id: string; name: string; email: string }
 interface IamMachine { id: string; machineName: string }
 
-const SWATCHES = [
+const SWATCHES: string[] = [
   '#f59e0b', '#ef4444', '#ec4899', '#a855f7',
   '#3b82f6', '#06b6d4', '#22c55e', '#84cc16',
 ]
-const DEFAULT_COLOR = SWATCHES[0]
+// Explicit, not SWATCHES[0]: noUncheckedIndexedAccess types an index read as `string | undefined`,
+// which would leak `undefined` into every consumer of the selected colour.
+const DEFAULT_COLOR = '#f59e0b'
+
+/** A label/value pair inside a grid card. */
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <span style={{ minWidth: 0 }}>
+      <span style={{ display: 'block', fontSize: 9.5, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
+      <span style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>
+    </span>
+  )
+}
+
+/** A rounded tag-ish chip for the "top X" facts on a grid card. */
+function Pill({ text }: { text: string }) {
+  return (
+    <span style={{
+      display: 'inline-block', maxWidth: '100%', padding: '2px 8px', borderRadius: 999, fontSize: 10.5,
+      background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text-tertiary)',
+      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    }}>{text}</span>
+  )
+}
+
+/** One column of the list layout. The label is always rendered so the row stays readable when it
+ *  reflows to a single column on mobile, where there is no header row to name the values. */
+function Cell({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <span style={{ minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 6 }}>
+      <span style={{ fontSize: 9.5, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', flexShrink: 0 }}>{label}</span>
+      <span style={{
+        fontSize: 12.5, fontWeight: accent ? 700 : 600,
+        color: accent ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+        fontVariantNumeric: 'tabular-nums', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{value}</span>
+    </span>
+  )
+}
 
 const input: React.CSSProperties = {
   padding: '9px 11px', background: 'var(--bg-elevated)', border: '1px solid var(--border)',
@@ -188,10 +226,16 @@ export default function TagsPage() {
 
   // editor drawer (create + edit share one form)
   const [editorOpen, setEditorOpen] = useState(false)
+  // Grid (compact cards) vs list (dense rows with more metrics). Persisted across reloads.
+  const [layout, setLayout] = useState<'grid' | 'list'>(() => {
+    try { return localStorage.getItem('agentistics-tags-layout') === 'list' ? 'list' : 'grid' } catch { return 'grid' }
+  })
   const [editingId, setEditingId] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [color, setColor] = useState(DEFAULT_COLOR)
   const [sources, setSources] = useState<TagSource[]>([])
+  // True when the chosen colour is not one of the presets — drives the custom circle's ring.
+  const isCustomColor = !SWATCHES.some(c => c.toLowerCase() === color.toLowerCase())
   const [sharedWith, setSharedWith] = useState<string[]>([])
   const [draftType, setDraftType] = useState<TagSourceType>('repo')
   const [draftValue, setDraftValue] = useState('')
@@ -227,11 +271,14 @@ export default function TagsPage() {
     )
     : name.trim().length > 0 || sources.length > 0
 
-  const addSource = () => {
-    if (!draftValue) return
-    if (sources.some(s => s.type === draftType && s.value === draftValue)) { setDraftValue(''); return }
-    setSources(prev => [...prev, { type: draftType, value: draftValue }])
+  /** Commit a picked value as a source. Called straight from the value Select's onChange so a
+   *  single click adds it — the old two-step (pick, then press "Add") silently dropped the pick
+   *  when the user pressed Done instead, saving a tag with no sources at all. */
+  const addSource = (value: string) => {
+    if (!value) return
     setDraftValue('')
+    if (sources.some(s => s.type === draftType && s.value === value)) return
+    setSources(prev => [...prev, { type: draftType, value }])
   }
 
   const save = async () => {
@@ -298,46 +345,97 @@ export default function TagsPage() {
         </div>
       )}
 
-      <div className="ag-grid cols-3">
-        {tags.map(t => (
-          <button
-            key={t._id}
-            type="button"
-            onClick={() => void openDetail(t._id)}
-            style={{
-              border: '1px solid var(--border)', borderRadius: 12, background: 'var(--bg-card)',
-              padding: 16, display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0,
-              textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-              <span style={{
-                width: 10, height: 10, borderRadius: '50%',
-                background: t.color || 'var(--anthropic-orange)', flexShrink: 0,
-              }} />
-              <span style={{
-                fontSize: 14, fontWeight: 700, color: 'var(--text-primary)',
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              }}>{t.name}</span>
-            </div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--anthropic-orange)', wordBreak: 'break-word' }}>
-              {fmtCost(t.aggregate.costUSD, currency, brlRate)}
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-              {t.aggregate.sessions.toLocaleString()} {pt ? 'sessões' : 'sessions'}
-              {' · '}
-              {fmt(t.aggregate.inputTokens + t.aggregate.outputTokens)} tok
-            </div>
-            <div style={{
-              fontSize: 11, color: 'var(--text-tertiary)',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>
-              {t.sources.length} {t.sources.length === 1 ? (pt ? 'fonte' : 'source') : (pt ? 'fontes' : 'sources')}
-              {t.aggregate.topProject && <> · {formatProjectName(t.aggregate.topProject)}</>}
-            </div>
-          </button>
-        ))}
-      </div>
+      {/* Grid = compact cards (6 facts). List = a dense row per tag (10 facts) using the horizontal
+          room a card does not have. The choice persists so it survives a reload. */}
+      {tags.length > 0 && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+          <TabSelect
+            value={layout}
+            onChange={v => { setLayout(v); try { localStorage.setItem('agentistics-tags-layout', v) } catch { /* ignore */ } }}
+            options={[
+              { value: 'grid', label: pt ? 'Grade' : 'Grid' },
+              { value: 'list', label: pt ? 'Lista' : 'List' },
+            ]}
+          />
+        </div>
+      )}
+
+      {layout === 'grid' ? (
+        <div className="ag-grid cols-3">
+          {tags.map(t => (
+            <button
+              key={t._id}
+              type="button"
+              onClick={() => void openDetail(t._id)}
+              style={{
+                border: '1px solid var(--border)', borderRadius: 12, background: 'var(--bg-card)',
+                padding: 16, display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0,
+                textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                <span style={{
+                  width: 10, height: 10, borderRadius: '50%',
+                  background: t.color || 'var(--anthropic-orange)', flexShrink: 0,
+                }} />
+                <span style={{
+                  fontSize: 14, fontWeight: 700, color: 'var(--text-primary)',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>{t.name}</span>
+                <span style={{ marginLeft: 'auto', fontSize: 10.5, color: 'var(--text-tertiary)', flexShrink: 0 }}>
+                  {t.sources.length} {t.sources.length === 1 ? (pt ? 'fonte' : 'source') : (pt ? 'fontes' : 'sources')}
+                </span>
+              </div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--anthropic-orange)', wordBreak: 'break-word' }}>
+                {fmtCost(t.aggregate.costUSD, currency, brlRate)}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 10px' }}>
+                <MiniStat label={pt ? 'Sessões' : 'Sessions'} value={t.aggregate.sessions.toLocaleString()} />
+                <MiniStat label="Tokens" value={fmt(t.aggregate.inputTokens + t.aggregate.outputTokens)} />
+                <MiniStat label={pt ? 'Entrada' : 'Input'} value={fmt(t.aggregate.inputTokens)} />
+                <MiniStat label={pt ? 'Saída' : 'Output'} value={fmt(t.aggregate.outputTokens)} />
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 2 }}>
+                {t.aggregate.topProject && <Pill text={formatProjectName(t.aggregate.topProject)} />}
+                {t.aggregate.topModel && <Pill text={t.aggregate.topModel} />}
+                {t.aggregate.topHarness && <Pill text={HARNESS_LABELS[t.aggregate.topHarness as keyof typeof HARNESS_LABELS] ?? t.aggregate.topHarness} />}
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+          {tags.map((t, i) => (
+            <button
+              key={t._id}
+              type="button"
+              onClick={() => void openDetail(t._id)}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: isMobile ? '1fr' : 'minmax(140px, 1.4fr) repeat(4, minmax(70px, 0.8fr)) minmax(110px, 1.2fr) minmax(90px, 1fr) minmax(70px, 0.7fr) minmax(60px, 0.6fr)',
+                gap: isMobile ? 6 : 12, alignItems: 'center', width: '100%',
+                padding: isMobile ? '12px 14px' : '11px 14px', minHeight: 48,
+                background: 'var(--bg-card)', border: 'none',
+                borderTop: i === 0 ? 'none' : '1px solid var(--border-subtle)',
+                textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                <span style={{ width: 10, height: 10, borderRadius: '50%', background: t.color || 'var(--anthropic-orange)', flexShrink: 0 }} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</span>
+              </span>
+              <Cell label={pt ? 'Custo' : 'Cost'} value={fmtCost(t.aggregate.costUSD, currency, brlRate)} accent />
+              <Cell label={pt ? 'Sessões' : 'Sessions'} value={t.aggregate.sessions.toLocaleString()} />
+              <Cell label={pt ? 'Entrada' : 'Input'} value={fmt(t.aggregate.inputTokens)} />
+              <Cell label={pt ? 'Saída' : 'Output'} value={fmt(t.aggregate.outputTokens)} />
+              <Cell label={pt ? 'Projeto' : 'Project'} value={t.aggregate.topProject ? formatProjectName(t.aggregate.topProject) : '—'} />
+              <Cell label={pt ? 'Modelo' : 'Model'} value={t.aggregate.topModel ?? '—'} />
+              <Cell label="Harness" value={t.aggregate.topHarness ? (HARNESS_LABELS[t.aggregate.topHarness as keyof typeof HARNESS_LABELS] ?? t.aggregate.topHarness) : '—'} />
+              <Cell label={pt ? 'Fontes' : 'Sources'} value={String(t.sources.length)} />
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* ---- detail ---- */}
       <Drawer
@@ -461,24 +559,73 @@ export default function TagsPage() {
           />
         </Field>
 
+        {/* Colour picker: bare circles with a selection RING rather than boxed squares — the boxes
+            competed with the swatch for attention and read as disabled buttons. Each circle keeps a
+            44px hit area while drawing at 26px, so touch targets survive without visual bulk. The
+            ring is drawn with two stacked box-shadows (a gap in the card background, then the
+            colour), the same treatment the rest of the app uses for focus affordances. */}
         <Field label={pt ? 'Cor' : 'Colour'}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-            {SWATCHES.map(c => (
-              <button
-                key={c}
-                type="button"
-                aria-label={c}
-                onClick={() => setColor(c)}
-                style={{
-                  width: 44, height: 44, padding: 0, borderRadius: 9, cursor: 'pointer',
-                  background: 'transparent', fontFamily: 'inherit',
-                  border: `1px solid ${color === c ? c : 'var(--border)'}`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}
-              >
-                <span style={{ width: 20, height: 20, borderRadius: '50%', background: c, display: 'block' }} />
-              </button>
-            ))}
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2 }}>
+            {SWATCHES.map(c => {
+              const selected = color.toLowerCase() === c.toLowerCase()
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  aria-label={c}
+                  aria-pressed={selected}
+                  onClick={() => setColor(c)}
+                  style={{
+                    width: 44, height: 44, padding: 0, border: 'none', background: 'transparent',
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  <span style={{
+                    width: 26, height: 26, borderRadius: '50%', background: c, display: 'block',
+                    boxShadow: selected ? `0 0 0 3px var(--bg-card), 0 0 0 5px ${c}` : 'none',
+                    transition: 'box-shadow 0.15s, transform 0.15s',
+                    transform: selected ? 'scale(1)' : 'scale(0.92)',
+                  }} />
+                </button>
+              )
+            })}
+
+            <span style={{ width: 1, height: 22, background: 'var(--border)', margin: '0 6px', flexShrink: 0 }} />
+
+            {/* Custom colour. The native input is the only control giving a full gamut without
+                shipping a picker; it is kept invisible over a styled circle so the row stays
+                consistent instead of showing the OS swatch chrome. */}
+            <label
+              title={pt ? 'Cor personalizada' : 'Custom colour'}
+              style={{
+                width: 44, height: 44, cursor: 'pointer', position: 'relative',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}
+            >
+              <span style={{
+                width: 26, height: 26, borderRadius: '50%', display: 'block',
+                background: 'conic-gradient(#ef4444, #f59e0b, #84cc16, #22c55e, #06b6d4, #3b82f6, #a855f7, #ec4899, #ef4444)',
+                boxShadow: isCustomColor ? `0 0 0 3px var(--bg-card), 0 0 0 5px ${color}` : 'none',
+                transition: 'box-shadow 0.15s, transform 0.15s',
+                transform: isCustomColor ? 'scale(1)' : 'scale(0.92)',
+              }} />
+              <input
+                type="color"
+                value={color}
+                onChange={e => setColor(e.target.value)}
+                style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }}
+              />
+            </label>
+
+            {/* Live readout so the chosen value is legible and copyable, mono like the rest of the
+                app's identifier chips. */}
+            <span style={{
+              marginLeft: 4, padding: '3px 9px', borderRadius: 999, flexShrink: 0,
+              background: `color-mix(in srgb, ${color} 14%, transparent)`,
+              border: `1px solid color-mix(in srgb, ${color} 45%, transparent)`,
+              color, fontSize: 11, fontWeight: 600,
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', textTransform: 'uppercase',
+            }}>{color}</span>
           </div>
         </Field>
 
@@ -507,20 +654,12 @@ export default function TagsPage() {
               <Field label={pt ? 'Valor' : 'Value'}>
                 <Select
                   value={draftValue}
-                  onChange={setDraftValue}
-                  options={optionsForType(draftType)}
-                  placeholder={pt ? 'Selecione…' : 'Select…'}
+                  onChange={addSource}
+                  options={optionsForType(draftType).filter(o => !sources.some(s => s.type === draftType && s.value === o.value))}
+                  placeholder={pt ? 'Selecione para adicionar…' : 'Select to add…'}
                   searchPlaceholder={pt ? 'Buscar…' : 'Search…'}
                 />
               </Field>
-              <button
-                type="button"
-                style={{ ...ghostBtn, opacity: draftValue ? 1 : 0.5 }}
-                disabled={!draftValue}
-                onClick={addSource}
-              >
-                <Plus size={14} /> {pt ? 'Adicionar' : 'Add'}
-              </button>
               <SourceList
                 sources={sources}
                 typeLabel={sourceTypeLabel}
@@ -558,15 +697,47 @@ export default function TagsPage() {
                   {pt ? 'Nenhuma conta disponível.' : 'No accounts available.'}
                 </div>
               )}
-              {accounts.filter(a => a.id !== me?.id).map(a => (
-                <div key={a.id} style={{ display: 'flex', alignItems: 'center', minHeight: 44 }}>
-                  <Checkbox
-                    checked={sharedWith.includes(a.id)}
-                    onChange={c => setSharedWith(prev => c ? [...prev, a.id] : prev.filter(x => x !== a.id))}
-                    label={`${a.name} (${a.email})`}
+              {/* Type-to-filter picker rather than a checkbox list: on a central with many accounts
+                  the list is unscannable, and picking adds immediately (same one-click rule as
+                  sources). Granted accounts show as removable chips below. */}
+              {accounts.length > 0 && (
+                <Field label={pt ? 'Adicionar conta' : 'Add account'}>
+                  <Select
+                    value=""
+                    onChange={id => { if (id) setSharedWith(prev => prev.includes(id) ? prev : [...prev, id]) }}
+                    options={accounts
+                      .filter(a => a.id !== me?.id && !sharedWith.includes(a.id))
+                      .map(a => ({ value: a.id, label: `${a.name} (${a.email})` }))}
+                    placeholder={pt ? 'Buscar conta…' : 'Search an account…'}
+                    searchPlaceholder={pt ? 'Buscar…' : 'Search…'}
+                    searchable
                   />
+                </Field>
+              )}
+              {sharedWith.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {sharedWith.map(id => {
+                    const a = accounts.find(x => x.id === id)
+                    return (
+                      <span key={id} style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 8px 5px 10px',
+                        borderRadius: 999, fontSize: 11.5, background: 'var(--bg-elevated)',
+                        border: '1px solid var(--border)', color: 'var(--text-secondary)',
+                      }}>
+                        {a ? a.name : id}
+                        <button
+                          type="button"
+                          onClick={() => setSharedWith(prev => prev.filter(x => x !== id))}
+                          aria-label={pt ? 'Remover' : 'Remove'}
+                          style={{ border: 'none', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'inline-flex', padding: 2 }}
+                        >
+                          <X size={12} />
+                        </button>
+                      </span>
+                    )
+                  })}
                 </div>
-              ))}
+              )}
             </div>
           }
         >
