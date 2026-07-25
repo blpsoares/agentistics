@@ -431,7 +431,17 @@ export async function handleMachines(req: Request): Promise<Response> {
         if (!acct) return json({ error: 'account not found' }, 404)
         if (!accountVisibleTo(principal, acct)) return json({ error: 'forbidden' }, 403)
       }
-      await setMachineOwners(ownerId, accountIds)
+      // The machine's display identity follows its (first) owner account, so a re-assigned machine
+      // stops showing the previous — possibly deleted — account's name.
+      const nextUser = accountIds[0] ? (await getAccount(accountIds[0]))?.name : undefined
+      await setMachineOwners(ownerId, accountIds, nextUser)
+      // Tell the machine over the reverse WebSocket so a solo/member instance refreshes the
+      // "Connected as" panel instead of showing the old account until its next handshake.
+      try {
+        const actor = (await getAccount(principal.accountId))?.name ?? 'an admin'
+        const { notifyMember } = await import('./team-agent')
+        notifyMember(machine.user, { type: 'reassigned', account: nextUser ?? null, actor })
+      } catch { /* best-effort — the identity still reflects via whoami */ }
       return json({ ok: true })
     }
     // Rename a machine (scoped): { renameId, name }. Updates the token label; the new name

@@ -127,6 +127,7 @@ export default function UsersSettings() {
   const [en, setEn] = useState('')
   const [eRows, setERows] = useState<Membership[]>([{ teamId: '', role: 'user' }])
   const [linkedMachines, setLinkedMachines] = useState<LinkedMachine[]>([])
+  const [linkMachineId, setLinkMachineId] = useState('')
   const [loadingMachines, setLoadingMachines] = useState(false)
   const [editErr, setEditErr] = useState<string | null>(null)
   const [tempPassword, setTempPassword] = useState<string | null>(null)
@@ -319,6 +320,23 @@ export default function UsersSettings() {
     setLinkedMachines((mData.machines ?? []).filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).includes(editId)))
   }
 
+  /** Link an EXISTING machine to the account being edited. Only machines with no owner account are
+   *  offered — a machine already owned by someone else must be re-assigned from the Machines page,
+   *  so this can never silently steal another account's machine. */
+  async function linkExistingMachine() {
+    if (!editId || !linkMachineId) return
+    const res = await fetch('/api/iam/machines', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ownerId: linkMachineId, accountIds: [editId] }),
+    })
+    if (!res.ok) { const d = await res.json().catch(() => ({})) as { error?: string }; setEditErr(d.error || `HTTP ${res.status}`); return }
+    setLinkMachineId('')
+    const mRes = await fetch('/api/iam/machines')
+    const mData = await mRes.json() as { machines: LinkedMachine[] }
+    setMachines(mData.machines ?? [])
+    setLinkedMachines((mData.machines ?? []).filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).includes(editId)))
+  }
+
   async function revokeMachine(id: string) {
     const res = await fetch('/api/iam/machines', {
       method: 'DELETE', headers: { 'Content-Type': 'application/json' },
@@ -435,6 +453,10 @@ export default function UsersSettings() {
   const userCount = accounts.filter(a => a.role === 'member' && !a.memberships.some(m => m.role === 'manager')).length
 
   // Helper to count machines per account
+  // Machines with no owner account at all — the only ones an account drawer may claim. A machine
+  // owned by someone else is re-assigned from the Machines page, never silently taken here.
+  const unlinkedMachines = machines.filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).length === 0)
+
   const machineCountFor = (accountId: string) => machines.filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).includes(accountId)).length
 
   // Edit-drawer derived data (read-first sections)
@@ -1093,26 +1115,45 @@ export default function UsersSettings() {
                   <button type="button" style={ghostBtn} onClick={() => setAddedMachineToken(null)}>{pt ? 'Fechar' : 'Close'}</button>
                 </div>
               ) : (
-                <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-                  <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
-                    <input style={input} value={addMachineName} onChange={e => setAddMachineName(e.target.value)} placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'} />
-                  </Field>
-                  {!editIsOwner && (
-                    <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
-                      <Select
-                        value={addMachineTeam}
-                        onChange={v => setAddMachineTeam(v)}
-                        options={[
-                          { value: '', label: pt ? 'Deixar vazio' : 'Leave empty' },
-                          ...assignableTeams.map(t => ({ value: t._id, label: t.name })),
-                        ]}
-                        placeholder={pt ? 'Deixar vazio' : 'Leave empty'}
-                      />
-                    </Field>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  {/* Link an existing machine. Only ownerless machines are listed — one already
+                      owned by another account is re-assigned from the Machines page instead. */}
+                  {unlinkedMachines.length > 0 && (
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+                      <Field label={pt ? 'Vincular máquina existente' : 'Link an existing machine'}>
+                        <Select
+                          value={linkMachineId}
+                          onChange={v => setLinkMachineId(v)}
+                          options={unlinkedMachines.map(m => ({ value: m.id, label: m.machineName }))}
+                          placeholder={pt ? 'Selecione uma máquina sem conta…' : 'Pick a machine with no account…'}
+                        />
+                      </Field>
+                      <button type="button" style={primaryBtn} disabled={!linkMachineId} onClick={() => void linkExistingMachine()}>
+                        {pt ? 'Vincular' : 'Link'}
+                      </button>
+                    </div>
                   )}
-                  <button type="button" style={primaryBtn} onClick={() => void addMachine()}>
-                    <Plus size={13} /> {pt ? 'Adicionar' : 'Add'}
-                  </button>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+                    <Field label={pt ? 'Nome da máquina' : 'Machine name'}>
+                      <input style={input} value={addMachineName} onChange={e => setAddMachineName(e.target.value)} placeholder={pt ? 'ex.: laptop-trabalho' : 'e.g. work-laptop'} />
+                    </Field>
+                    {!editIsOwner && (
+                      <Field label={pt ? 'Time (opcional)' : 'Team (optional)'}>
+                        <Select
+                          value={addMachineTeam}
+                          onChange={v => setAddMachineTeam(v)}
+                          options={[
+                            { value: '', label: pt ? 'Deixar vazio' : 'Leave empty' },
+                            ...assignableTeams.map(t => ({ value: t._id, label: t.name })),
+                          ]}
+                          placeholder={pt ? 'Deixar vazio' : 'Leave empty'}
+                        />
+                      </Field>
+                    )}
+                    <button type="button" style={primaryBtn} onClick={() => void addMachine()}>
+                      <Plus size={13} /> {pt ? 'Adicionar' : 'Add'}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

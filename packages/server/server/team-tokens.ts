@@ -394,7 +394,10 @@ export async function detachAccountFromAllMachines(accountId: string): Promise<v
     const remaining = (d.accountIds ?? []).filter(a => a !== accountId)
     await col.updateOne({ _id: d._id }, remaining.length
       ? { $set: { accountId: remaining[0] } }
-      : { $unset: { accountId: '' } })
+      // Last owner gone: fall back to the machine's own label, mirroring how mint derives `user`
+      // for an ownerless machine. Otherwise the list shows "no account" beside the dead account's
+      // name. Safe — history is keyed by the token hash, not by this display string.
+      : { $unset: { accountId: '' }, $set: { user: d.label ?? d.user } })
   }
 }
 
@@ -431,10 +434,19 @@ export async function setMachineLabel(id: string, label: string): Promise<boolea
 /** Replace a machine's set of owner accounts. accountIds[0] becomes the primary (accountId), kept
  *  for whoami/back-compat. Passing an empty list clears ownership. The `user` (push identity) is
  *  left untouched — ownership is about visibility/management, not the machine's display name. */
-export async function setMachineOwners(id: string, accountIds: string[]): Promise<boolean> {
+/** Set a machine's owner accounts. `user` is the machine's display identity and must follow the
+ *  owning account (mint derives it the same way), otherwise a re-assigned machine keeps showing the
+ *  previous — possibly deleted — account's name. Pass `user` as the first owner's name, or omit it
+ *  to fall back to the machine's own label when ownership is cleared. History is keyed by the token
+ *  hash (memberId), not by this string, so changing it never splits past sessions. */
+export async function setMachineOwners(id: string, accountIds: string[], user?: string): Promise<boolean> {
   const col = await getTokensCollection()
   const unique = [...new Set(accountIds.filter(Boolean))]
-  const res = await col.updateOne({ _id: id }, { $set: { accountIds: unique, accountId: unique[0] } })
+  const doc = await col.findOne({ _id: id })
+  const nextUser = user ?? doc?.label ?? doc?.user
+  const res = await col.updateOne({ _id: id }, {
+    $set: { accountIds: unique, accountId: unique[0], ...(nextUser ? { user: nextUser } : {}) },
+  })
   return res.matchedCount > 0
 }
 
