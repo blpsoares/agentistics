@@ -1010,8 +1010,9 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                           onChange={v => updateOwnerInMachineRow(machineIdx, ownerIdx, v)}
                           options={[
                             { value: '', label: pt ? 'Selecione a conta…' : 'Select account…' },
-                            // Owner accounts are already hidden from visibility — no need to filter again.
-                            ...accounts.filter(a => a.role !== 'owner').map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
+                            // Any account can own a machine — including owner accounts (an owner owns
+                            // their own machines). Matches the edit-machine owners picker below.
+                            ...accounts.map(a => ({ value: a.id, label: `${a.name} — ${a.email}` })),
                           ]}
                           placeholder={pt ? 'Selecione a conta…' : 'Select account…'}
                         />
