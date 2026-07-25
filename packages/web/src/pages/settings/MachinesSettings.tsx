@@ -1168,7 +1168,17 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
       {/* Edit machine drawer — read-first with a per-section Edit toggle. */}
       <Drawer open={editMachineOpen} onClose={() => setEditMachineOpen(false)} title={pt ? 'Editar máquina' : 'Edit machine'}
         lang={pt ? 'pt' : 'en'}
-        dirty={editingSection !== null}>
+        dirty={
+          (editingSection === 'details' && !!editingMachine && (
+            editName.trim() !== editingMachine.machineName
+            || JSON.stringify([...machineTeamIds(editingMachine)].sort())
+               !== JSON.stringify([...new Set(editTeamIds.filter(id => id.trim()))].sort())
+          ))
+          || (editingSection === 'owners' && !!editingMachine && (
+            JSON.stringify([...(editingMachine.accountIds ?? (editingMachine.accountId ? [editingMachine.accountId] : []))].sort())
+            !== JSON.stringify([...new Set(editOwnerRows.filter(id => id.trim()))].sort())
+          ))
+        }>
         {drawerErrPanel(editErr)}
 
         {/* DETAILS SECTION (name + team) — read-first */}

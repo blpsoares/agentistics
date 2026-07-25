@@ -518,7 +518,10 @@ export default function TeamsSettings() {
       {/* Manage team drawer */}
       <Drawer open={manageOpen} onClose={() => setManageOpen(false)} title={manageTeam?.name ?? ''}
         lang={lang}
-        dirty={editingSection !== null}>
+        dirty={
+          (editingSection === 'members' && addAccountId !== '')
+          || (editingSection === 'machines' && addMachineId !== '')
+        }>
         {drawerErr(manageErr)}
 
         {/* MEMBERS SECTION (read-first; add/remove behind the section's Edit toggle) */}

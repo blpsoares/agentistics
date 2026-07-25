@@ -878,7 +878,13 @@ export default function UsersSettings() {
           so it can't be lost to a stray click (Close/Save are explicit). */}
       <Drawer open={editOpen} onClose={() => { if (!tempPassword && !addedMachineToken) setEditOpen(false) }} title={pt ? 'Editar conta' : 'Edit account'}
         lang={lang}
-        dirty={editingSection !== null}>
+        dirty={
+          (editingSection === 'identity' && en.trim() !== (editAccount?.name ?? '').trim())
+          || (editingSection === 'teams'
+            && JSON.stringify(eRows.map(r => ({ t: r.teamId, r: r.role })))
+               !== JSON.stringify((editAccount && editAccount.memberships.length ? editAccount.memberships : [{ teamId: '', role: 'user' }]).map(m => ({ t: m.teamId, r: m.role }))))
+          || (editingSection === 'machines' && (addMachineName.trim() !== '' || addMachineTeam !== '' || renamingMachineId !== null))
+        }>
         {drawerErr(editErr)}
 
         {/* IDENTITY SECTION (read-first) */}
