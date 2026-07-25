@@ -127,7 +127,9 @@ export default function UsersSettings() {
   const [en, setEn] = useState('')
   const [eRows, setERows] = useState<Membership[]>([{ teamId: '', role: 'user' }])
   const [linkedMachines, setLinkedMachines] = useState<LinkedMachine[]>([])
-  const [linkMachineId, setLinkMachineId] = useState('')
+  // Bulk link: ids of the ownerless machines ticked in the drawer's link list.
+  const [linkMachineIds, setLinkMachineIds] = useState<string[]>([])
+  const [linking, setLinking] = useState(false)
   const [loadingMachines, setLoadingMachines] = useState(false)
   const [editErr, setEditErr] = useState<string | null>(null)
   const [tempPassword, setTempPassword] = useState<string | null>(null)
@@ -237,6 +239,7 @@ export default function UsersSettings() {
     setERows(a.memberships.length ? a.memberships.map(m => ({ ...m })) : [{ teamId: '', role: 'user' }])
     setEditErr(null); setTempPassword(null); setAddMachineName(''); setAddMachineTeam(''); setAddedMachineToken(null); setAddedMachineName(null)
     setRenamingMachineId(null); setRenameMachineValue('')
+    setLinkMachineIds([]); setLinking(false)
     setEditingSection(null)
     setEditOpen(true)
     // Fetch linked machines
@@ -320,21 +323,44 @@ export default function UsersSettings() {
     setLinkedMachines((mData.machines ?? []).filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).includes(editId)))
   }
 
-  /** Link an EXISTING machine to the account being edited. Only machines with no owner account are
-   *  offered — a machine already owned by someone else must be re-assigned from the Machines page,
-   *  so this can never silently steal another account's machine. */
-  async function linkExistingMachine() {
-    if (!editId || !linkMachineId) return
-    const res = await fetch('/api/iam/machines', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ownerId: linkMachineId, accountIds: [editId] }),
-    })
-    if (!res.ok) { const d = await res.json().catch(() => ({})) as { error?: string }; setEditErr(d.error || `HTTP ${res.status}`); return }
-    setLinkMachineId('')
-    const mRes = await fetch('/api/iam/machines')
-    const mData = await mRes.json() as { machines: LinkedMachine[] }
-    setMachines(mData.machines ?? [])
-    setLinkedMachines((mData.machines ?? []).filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).includes(editId)))
+  /** Link one or more EXISTING machines to the account being edited. Only machines with no owner
+   *  account are offered — a machine already owned by someone else must be re-assigned from the
+   *  Machines page, so this can never silently steal another account's machine.
+   *  Each selected machine is a separate POST; the first failure stops the loop and is surfaced,
+   *  and the already-linked ones stay linked (the refetch below reflects exactly that). */
+  async function linkExistingMachines() {
+    if (!editId || linkMachineIds.length === 0 || linking) return
+    setLinking(true)
+    setEditErr(null)
+    let failed = false
+    try {
+      for (const id of linkMachineIds) {
+        const res = await fetch('/api/iam/machines', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ownerId: id, accountIds: [editId] }),
+        })
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({})) as { error?: string }
+          setEditErr(d.error || `HTTP ${res.status}`)
+          failed = true
+          break
+        }
+      }
+      const mRes = await fetch('/api/iam/machines')
+      const mData = await mRes.json() as { machines: LinkedMachine[] }
+      setMachines(mData.machines ?? [])
+      // Keep ticked only what is still ownerless (i.e. did not get linked) — on success that is none.
+      const stillFree = new Set((mData.machines ?? [])
+        .filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).length === 0)
+        .map(m => m.id))
+      setLinkMachineIds(ids => failed ? ids.filter(id => stillFree.has(id)) : [])
+      setLinkedMachines((mData.machines ?? []).filter(m => (m.accountIds ?? (m.accountId ? [m.accountId] : [])).includes(editId)))
+    } finally {
+      setLinking(false)
+    }
+  }
+  function toggleLinkMachine(id: string) {
+    setLinkMachineIds(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id])
   }
 
   // Unlink a machine from THIS account only — the machine is NOT deleted, it just loses this
@@ -1148,17 +1174,45 @@ export default function UsersSettings() {
                   {/* Link an existing machine. Only ownerless machines are listed — one already
                       owned by another account is re-assigned from the Machines page instead. */}
                   {unlinkedMachines.length > 0 && (
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-                      <Field label={pt ? 'Vincular máquina existente' : 'Link an existing machine'}>
-                        <Select
-                          value={linkMachineId}
-                          onChange={v => setLinkMachineId(v)}
-                          options={unlinkedMachines.map(m => ({ value: m.id, label: m.machineName }))}
-                          placeholder={pt ? 'Selecione uma máquina sem conta…' : 'Pick a machine with no account…'}
-                        />
-                      </Field>
-                      <button type="button" style={primaryBtn} disabled={!linkMachineId} onClick={() => void linkExistingMachine()}>
-                        {pt ? 'Vincular' : 'Link'}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        {pt ? 'Vincular máquinas existentes' : 'Link existing machines'}
+                      </span>
+                      <div style={{
+                        display: 'flex', flexDirection: 'column',
+                        border: '1px solid var(--border)', borderRadius: 7,
+                        background: 'var(--bg-elevated)', maxHeight: 220, overflowY: 'auto',
+                      }}>
+                        <div style={{
+                          display: 'flex', alignItems: 'center', minHeight: isMobile ? 44 : 34,
+                          padding: '0 11px', borderBottom: '1px solid var(--border-subtle)',
+                        }}>
+                          <Checkbox
+                            checked={linkMachineIds.length === unlinkedMachines.length}
+                            onChange={checked => setLinkMachineIds(checked ? unlinkedMachines.map(m => m.id) : [])}
+                            label={pt ? 'Selecionar todas' : 'Select all'}
+                          />
+                        </div>
+                        {unlinkedMachines.map(m => (
+                          <div key={m.id} style={{
+                            display: 'flex', alignItems: 'center', minHeight: isMobile ? 44 : 32,
+                            padding: '0 11px',
+                          }}>
+                            <Checkbox
+                              checked={linkMachineIds.includes(m.id)}
+                              onChange={() => toggleLinkMachine(m.id)}
+                              label={m.machineName}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        style={{ ...primaryBtn, alignSelf: 'flex-start', opacity: linkMachineIds.length === 0 || linking ? 0.5 : 1 }}
+                        disabled={linkMachineIds.length === 0 || linking}
+                        onClick={() => void linkExistingMachines()}
+                      >
+                        {pt ? `Vincular ${linkMachineIds.length}` : `Link ${linkMachineIds.length}`}
                       </button>
                     </div>
                   )}
