@@ -732,6 +732,10 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
     const tagFiltered = tagMatches !== null
     const users = filters.users ?? []
     const userFiltered = users.length > 0
+    // Central-only dimensions (C3). statsCache has no team/machine granularity either, so they
+    // narrow the scope exactly as project/repo/tag do.
+    const teamsFiltered = (filters.teams ?? []).length > 0
+    const machinesFiltered = (filters.machines ?? []).length > 0
     const modelSet = filters.models && filters.models.length > 0 ? new Set(filters.models) : null
 
     // Presence scope — team/central: restrict to online/offline members
@@ -846,6 +850,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
     // model/user granularity). Every all-time number must then come from sessions, otherwise a
     // filtered view reports the whole global Claude history as if it were the filtered scope.
     const cacheBlindScope = projectFiltered || repoFiltered || tagFiltered || modelSet !== null
+      || teamsFiltered || machinesFiltered
       || (userFiltered && !hasUserStats)
 
     let allTimeTotalSessions: number
@@ -873,7 +878,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
     // Use filteredSessions when project/model/non-claude-harness filter is active
     // (statsCache has no per-project/model/harness granularity)
     const harnessesFiltered = (filters.harnesses?.length ?? 0) > 0
-    const sessionFiltered = projectFiltered || repoFiltered || tagFiltered || modelSet !== null || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)
+    const sessionFiltered = cacheBlindScope || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)
 
     const totalMessages = sessionFiltered
       ? filteredSessions.reduce((s, sess) => s + (sess.user_message_count ?? 0) + (sess.assistant_message_count ?? 0), 0)

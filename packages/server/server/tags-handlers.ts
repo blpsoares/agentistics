@@ -29,7 +29,7 @@ import { resolveTagSessions, type TagSource, type TagSourceType, type TagLookups
 import { aggregateSessions, type TagAggregate } from './tags-aggregate'
 import { aggregateTagDetail, type TagDetailStats } from './tags-detail'
 import {
-  canWriteTagSources, canReadTag, redactBuckets, redactTopValue,
+  canWriteTagSources, canReadTag, redactBuckets, redactTopValue, redactSources,
   type TagAuthorityContext, type TagVisibilityBucket,
 } from './tags-authority'
 import { loadTagSessionsFromMongo } from './team-source'
@@ -165,8 +165,14 @@ function redactAggregate(p: Principal, agg: TagAggregate, ctx: TagAuthorityConte
 }
 
 function withAggregate(p: Principal, tag: TagDoc, sessions: SessionMeta[], ctx: TagContext): TagDoc & { aggregate: TagAggregate } {
+  // Resolve against the STORED sources (the real values) but ship the REDACTED list — otherwise the
+  // response hands back the same identifying strings the bucket redaction just collapsed.
   const resolved = resolveTagSessions(sessions, tag.sources, ctx.lookups)
-  return { ...tag, aggregate: redactAggregate(p, aggregateSessions(resolved), ctx.authority) }
+  return {
+    ...tag,
+    sources: redactSources(p, tag.sources, ctx.authority),
+    aggregate: redactAggregate(p, aggregateSessions(resolved), ctx.authority),
+  }
 }
 
 /** The deep breakdown, redacted key-by-key and with machine hashes given a readable name. */
@@ -218,6 +224,13 @@ function parseColor(raw: unknown): { ok: true; value: string | undefined } | { o
 function checkSharedWith(p: Principal, ids: string[], accounts: AccountDoc[]): Response | null {
   const byId = new Map(accounts.map(a => [a._id, a]))
   for (const id of ids) {
+    // Granting to YOURSELF would convert the deliberately-expiring creator access into a permanent
+    // one: canReadTag short-circuits on sharedWith before it re-checks the sources, so a manager
+    // could self-grant, lose the team, and keep reading it forever. An owner is exempt — they read
+    // everything regardless, so a self-grant changes nothing for them.
+    if (id === p.accountId && p.role !== 'owner') {
+      return json({ error: 'cannot grant a tag to yourself' }, 400)
+    }
     const account = byId.get(id)
     if (!account) return json({ error: 'unknown account in sharedWith' }, 400)
     if (!accountVisibleTo(p, account)) return json({ error: 'forbidden' }, 403)
@@ -246,8 +259,9 @@ export async function handleTags(req: Request): Promise<Response> {
     const ctx = await buildContext(principal, sessions)
     if (!canReadTag(principal, tag, ctx.authority)) return json({ error: 'tag not found' }, 404)
     const resolved = resolveTagSessions(sessions, tag.sources, ctx.lookups)
+    // Same rule as withAggregate: resolve on the real source, report the redacted one.
     const breakdown = tag.sources.map(src => ({
-      source: src,
+      source: redactSources(principal, [src], ctx.authority)[0]!,
       aggregate: redactAggregate(principal, aggregateSessions(resolveTagSessions(sessions, [src], ctx.lookups)), ctx.authority),
     }))
     return json({

@@ -84,10 +84,10 @@ function historyStatsCache(): StatsCache {
 }
 
 const SESSIONS: SessionMeta[] = [
-  mkSession({ session_id: 'c1', harness: 'claude', model: 'claude-opus-5',    git_remote: REPO_A, project_path: '/home/u/alpha', start_time: '2026-07-01T10:00:00.000Z' }),
-  mkSession({ session_id: 'c2', harness: 'claude', model: 'claude-sonnet-4-6', git_remote: REPO_B, project_path: '/home/u/beta',  start_time: '2026-07-02T10:00:00.000Z' }),
-  mkSession({ session_id: 'x1', harness: 'codex',  model: 'gpt-5.4-mini',      git_remote: REPO_A, project_path: '/home/u/alpha', start_time: '2026-07-03T10:00:00.000Z' }),
-  mkSession({ session_id: 'p1', harness: 'copilot', model: 'gpt-5-mini',       git_remote: REPO_B, project_path: '/home/u/beta',  start_time: '2026-07-04T10:00:00.000Z' }),
+  mkSession({ session_id: 'c1', harness: 'claude', model: 'claude-opus-5',    git_remote: REPO_A, project_path: '/home/u/alpha', start_time: '2026-07-01T10:00:00.000Z', memberId: 'machine-1', user: 'vini', teamIds: ['team-1'] }),
+  mkSession({ session_id: 'c2', harness: 'claude', model: 'claude-sonnet-4-6', git_remote: REPO_B, project_path: '/home/u/beta',  start_time: '2026-07-02T10:00:00.000Z', memberId: 'machine-2', user: 'vini', teamIds: ['team-2'] }),
+  mkSession({ session_id: 'x1', harness: 'codex',  model: 'gpt-5.4-mini',      git_remote: REPO_A, project_path: '/home/u/alpha', start_time: '2026-07-03T10:00:00.000Z', memberId: 'machine-1', user: 'vini', teamIds: ['team-1'] }),
+  mkSession({ session_id: 'p1', harness: 'copilot', model: 'gpt-5-mini',       git_remote: REPO_B, project_path: '/home/u/beta',  start_time: '2026-07-04T10:00:00.000Z', memberId: 'machine-2', user: 'vini', teamIds: ['team-2'] }),
 ]
 
 const DATA: AppData = {
@@ -165,6 +165,30 @@ describe('scope invariant: statsCache must not leak into a narrowed scope', () =
   test('LEAK — tag filter: longestStreak counts days from the global Claude history', () => {
     const d = derive(mkFilters({ tags: ['t1'] }), [TAG_ALPHA])
     expect(d.longestStreak).toBeLessThanOrEqual(2)
+  })
+
+  test('LEAK — machine filter: totalSessions counts the global Claude history', () => {
+    // machine-1 owns 2 fixture sessions. `sessionFiltered` (useData.ts:870) does not list
+    // `machines`, so the KPIs keep reading the Claude-wide aggregate.
+    const d = derive(mkFilters({ machines: ['machine-1'] }))
+    expect(d.totalSessions).toBeLessThanOrEqual(2)
+  })
+
+  test('LEAK — machine filter: totalCostUSD counts the global Claude history', () => {
+    const one = derive(mkFilters({ machines: ['machine-1'] })).totalCostUSD
+    const all = derive(mkFilters()).totalCostUSD
+    // Scoping to one of two machines must not return the unfiltered cost.
+    expect(one).toBeLessThan(all)
+  })
+
+  test('LEAK — machine filter: totalToolCalls counts the global Claude history', () => {
+    const d = derive(mkFilters({ machines: ['machine-1'] }))
+    expect(d.totalToolCalls).toBeLessThanOrEqual(4) // 2 sessions x 2 Read calls
+  })
+
+  test('LEAK — team filter: totalSessions counts the global Claude history', () => {
+    const d = derive(mkFilters({ teams: ['team-1'] }))
+    expect(d.totalSessions).toBeLessThanOrEqual(2)
   })
 
   test('non-Claude harness filter keeps allTimeTotalSessions off statsCache', () => {

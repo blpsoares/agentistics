@@ -84,6 +84,27 @@ export function canReadTag(p: Principal, tag: TagReadSubject, ctx: TagAuthorityC
  *  project path / remote / machine id, so it can never collide with a real key. */
 export const OTHER_BUCKET_KEY = '__other__'
 
+/** Stand-in for a source value the viewer may not see. Keeps the source COUNT and its TYPE (both
+ *  harmless) while withholding the identifying string. */
+export const HIDDEN_SOURCE_VALUE = '__hidden__'
+
+/**
+ * Redact a tag's own source list.
+ *
+ * Without this the bucket redaction is decorative: a response that collapses `/srv/acme/core` into
+ * `__other__` inside `stats.projects` would hand the very same path back in `tag.sources`, because
+ * the handler spreads the stored document. A grantee is promised the tag's NUMBERS, never the
+ * identifying strings behind sources they cannot see.
+ *
+ * Replacing rather than dropping keeps the source count honest. It is also safe for the client-side
+ * `tags` filter: a source the viewer cannot see is, by construction, one that matches none of the
+ * sessions in their already-scoped `/api/data`, so hiding its value cannot change their filtered view.
+ */
+export function redactSources(p: Principal, sources: readonly TagSource[], ctx: TagAuthorityContext): TagSource[] {
+  if (p.role === 'owner') return sources.map(s => ({ ...s }))
+  return sources.map(s => (canSeeSource(p, s, ctx) ? { ...s } : { type: s.type, value: HIDDEN_SOURCE_VALUE }))
+}
+
 /** The shape redaction operates on — structurally the same as tags-detail's TagBucket, restated
  *  here so this module keeps depending on nothing. */
 export interface TagVisibilityBucket {

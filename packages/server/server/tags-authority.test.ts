@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test'
 import {
-  canSeeSource, canWriteTagSources, canReadTag, redactBuckets, redactTopValue,
-  OTHER_BUCKET_KEY, type TagAuthorityContext, type TagVisibilityBucket,
+  canSeeSource, canWriteTagSources, canReadTag, redactBuckets, redactTopValue, redactSources,
+  OTHER_BUCKET_KEY, HIDDEN_SOURCE_VALUE, type TagAuthorityContext, type TagVisibilityBucket,
 } from './tags-authority'
 import type { Principal } from './iam-types'
 import type { TagSource } from './tags-resolve'
@@ -159,4 +159,31 @@ test('topProject is returned only when the viewer can see that project', () => {
   expect(redactTopValue(mgrA, '/srv/acme-bank/core', ctx.visibleProjects)).toBeNull()
   expect(redactTopValue(owner, '/srv/acme-bank/core', ctx.visibleProjects)).toBe('/srv/acme-bank/core')
   expect(redactTopValue(mgrA, null, ctx.visibleProjects)).toBeNull()
+})
+
+test('a tag ships a REDACTED source list — the doc itself must not leak what the buckets hide', () => {
+  // The regression this guards: the handler spreads the stored TagDoc into the response, so a
+  // grantee received `/srv/acme-bank/core` in `tag.sources` while the SAME response collapsed that
+  // exact path into "other" inside stats.projects. Bucket redaction was decorative.
+  const sources: TagSource[] = [
+    { type: 'project', value: '/home/me/app' },          // visible to mgrA
+    { type: 'project', value: '/srv/acme-bank/core' },   // NOT visible
+    { type: 'repo', value: 'github.com/org/secret' },    // NOT visible
+    { type: 'team', value: 'A' },                        // visible
+  ]
+  const out = redactSources(mgrA, sources, ctx)
+  expect(out).toHaveLength(sources.length)                       // count stays honest
+  expect(out.map(s => s.type)).toEqual(['project', 'project', 'repo', 'team'])
+  expect(out[0]!.value).toBe('/home/me/app')
+  expect(out[1]!.value).toBe(HIDDEN_SOURCE_VALUE)
+  expect(out[2]!.value).toBe(HIDDEN_SOURCE_VALUE)
+  expect(out[3]!.value).toBe('A')
+  // Nothing identifying survives anywhere in the payload.
+  expect(JSON.stringify(out)).not.toContain('acme-bank')
+  expect(JSON.stringify(out)).not.toContain('org/secret')
+})
+
+test('an owner sees every source value unredacted', () => {
+  const sources: TagSource[] = [{ type: 'project', value: '/srv/acme-bank/core' }]
+  expect(redactSources(owner, sources, ctx)[0]!.value).toBe('/srv/acme-bank/core')
 })
