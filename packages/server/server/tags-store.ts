@@ -77,9 +77,16 @@ export async function deleteTag(id: string): Promise<boolean> {
   return res.deletedCount > 0
 }
 
-/** Tags a principal may READ: owners see all; everyone else sees what they created or were granted. */
-export async function visibleTagsFor(accountId: string, isOwner: boolean): Promise<TagDoc[]> {
+/**
+ * Tags a principal may READ, decided by a caller-supplied predicate.
+ *
+ * The rule used to live here as `createdBy === me || sharedWith.includes(me)`, which is a stored
+ * fact and therefore never expires: a manager removed from a team kept full aggregates over it
+ * through a tag they had created. The live decision needs the principal's current source
+ * visibility, which is Mongo-free and belongs in tags-authority — so this function only walks the
+ * collection and defers to `canReadTag`.
+ */
+export async function visibleTagsFor(canRead: (tag: TagDoc) => boolean): Promise<TagDoc[]> {
   const all = await listAllTags()
-  if (isOwner) return all
-  return all.filter(t => t.createdBy === accountId || t.sharedWith.includes(accountId))
+  return all.filter(canRead)
 }

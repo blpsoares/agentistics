@@ -1,9 +1,17 @@
 /**
- * tags-authority.ts — PURE enforcement of Rule 1: a principal may create or edit a tag only if it
- * can already see EVERY one of its sources.
+ * tags-authority.ts — PURE enforcement of the two tag rules.
  *
- * Without this a manager could compose a tag over another team's machines and grant it to
+ * Rule 1 — a principal may create or edit a tag only if it can already see EVERY one of its
+ * sources. Without this a manager could compose a tag over another team's machines and grant it to
  * themselves — privilege escalation in two steps, since a grantee sees a tag's FULL numbers.
+ *
+ * Rule 2 — a tag response is aggregate-only. Rule 2 is about NUMBERS, but a breakdown also carries
+ * KEYS (project paths, git remotes, machine ids), and those are identifying strings — a project
+ * path routinely encodes a client name. So the numbers stay whole while any key the viewer cannot
+ * see is collapsed into a single anonymous "other" bucket (redactBuckets / redactTopValue).
+ *
+ * Read access is re-derived on every request rather than trusted from the stored document
+ * (canReadTag) — a creator who has since lost sight of the tag's sources must lose the tag too.
  *
  * The caller builds the visibility context from the DB; this module only decides.
  */
@@ -43,4 +51,84 @@ export function canSeeSource(p: Principal, src: TagSource, ctx: TagAuthorityCont
 
 export function canWriteTagSources(p: Principal, sources: TagSource[], ctx: TagAuthorityContext): boolean {
   return sources.every(src => canSeeSource(p, src, ctx))
+}
+
+/** What a read check needs from a tag — a structural subset of TagDoc, so tags-authority stays
+ *  free of any Mongo type. */
+export interface TagReadSubject {
+  createdBy: string
+  sharedWith: string[]
+  sources: TagSource[]
+}
+
+/**
+ * May this principal READ this tag's aggregates?
+ *
+ * Owners always may. For everyone else the two grounds are deliberately different in kind:
+ *
+ *  - `sharedWith` is an explicit, human act of sharing. It survives team changes on purpose —
+ *    revoking it is also an explicit act.
+ *  - Being the CREATOR is not a grant, it is a side effect of having had the authority to compose
+ *    the tag. That authority is source-derived (Rule 1), so it has to be re-checked: a manager
+ *    moved off a team otherwise keeps full aggregates over that team forever, through a tag they
+ *    created while they still could.
+ */
+export function canReadTag(p: Principal, tag: TagReadSubject, ctx: TagAuthorityContext): boolean {
+  if (p.role === 'owner') return true
+  if (tag.sharedWith.includes(p.accountId)) return true
+  if (tag.createdBy !== p.accountId) return false
+  return canWriteTagSources(p, tag.sources, ctx)
+}
+
+/** The key of the bucket that absorbs everything the viewer may not see by name. Not a valid
+ *  project path / remote / machine id, so it can never collide with a real key. */
+export const OTHER_BUCKET_KEY = '__other__'
+
+/** The shape redaction operates on — structurally the same as tags-detail's TagBucket, restated
+ *  here so this module keeps depending on nothing. */
+export interface TagVisibilityBucket {
+  key: string
+  sessions: number
+  costUSD: number
+  tokens: number
+}
+
+/**
+ * Collapse every bucket whose key the viewer cannot see into one anonymous "other" bucket.
+ *
+ * Refusing the whole breakdown would be the wrong trade: a grantee is promised the tag's full
+ * numbers. Merging instead preserves sessions/cost/tokens exactly — the totals still add up — while
+ * disclosing no identifying string. Owners see every key.
+ *
+ * Ranking (cost desc, then sessions desc) is re-applied so "other" lands where its size puts it.
+ */
+export function redactBuckets(
+  p: Principal,
+  buckets: readonly TagVisibilityBucket[],
+  visible: ReadonlySet<string>,
+): TagVisibilityBucket[] {
+  if (p.role === 'owner') return buckets.map(b => ({ ...b }))
+  const kept: TagVisibilityBucket[] = []
+  let other: TagVisibilityBucket | null = null
+  for (const b of buckets) {
+    if (visible.has(b.key)) { kept.push({ ...b }); continue }
+    if (!other) other = { key: OTHER_BUCKET_KEY, sessions: 0, costUSD: 0, tokens: 0 }
+    other.sessions += b.sessions
+    other.costUSD += b.costUSD
+    other.tokens += b.tokens
+  }
+  if (other) kept.push(other)
+  return kept.sort((a, b) => b.costUSD - a.costUSD || b.sessions - a.sessions)
+}
+
+/** Same rule for a single headline string (`topProject`): show it only when the viewer could have
+ *  seen that project anyway, otherwise null. A count is not identifying; a path is. */
+export function redactTopValue(
+  p: Principal,
+  value: string | null | undefined,
+  visible: ReadonlySet<string>,
+): string | null {
+  if (!value) return null
+  if (p.role === 'owner') return value
+  return visible.has(value) ? value : null
 }

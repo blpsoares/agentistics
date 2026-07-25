@@ -10,18 +10,30 @@
  * Aggregation runs against the UNSCOPED session set on purpose: /api/data is team-scoped, so a
  * browser-side computation could not produce a grantee's full numbers without being sent rows it
  * must not see.
+ *
+ * Rule 2 covers the KEYS as well as the numbers. `visibleRepos` / `visibleProjects` are inferred
+ * from sessions the caller can see, but resolution then matches that value across the unscoped set
+ * — so a single own session on a shared remote yields org-wide totals for it. That is intended for
+ * the numbers and unacceptable for the names, since a project path routinely encodes a client. So
+ * every breakdown leaving here runs through redactBuckets/redactTopValue: unseeable keys merge into
+ * one anonymous "other" bucket that keeps the totals whole.
  */
 import { getPrincipal } from './auth'
 import { can } from './iam-caps'
-import { listMachines } from './team-tokens'
+import { accountVisibleTo } from './iam-view'
+import { listMachines, type MachineInfo } from './team-tokens'
 import { listAccounts } from './accounts'
 import { listTeams } from './teams'
 import { visibleTagsFor, getTag, createTag, updateTag, deleteTag, type TagDoc } from './tags-store'
 import { resolveTagSessions, type TagSource, type TagSourceType, type TagLookups } from './tags-resolve'
 import { aggregateSessions, type TagAggregate } from './tags-aggregate'
-import { canWriteTagSources, type TagAuthorityContext } from './tags-authority'
+import { aggregateTagDetail, type TagDetailStats } from './tags-detail'
+import {
+  canWriteTagSources, canReadTag, redactBuckets, redactTopValue,
+  type TagAuthorityContext, type TagVisibilityBucket,
+} from './tags-authority'
 import { loadTeamSessionsFromMongo } from './team-source'
-import type { Principal } from './iam-types'
+import type { Principal, AccountDoc } from './iam-types'
 import type { SessionMeta } from '@agentistics/core'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
@@ -31,10 +43,27 @@ function json(body: unknown, status = 200): Response {
 
 const SOURCE_TYPES = new Set<TagSourceType>(['repo', 'project', 'machine', 'team', 'account'])
 
+/** A machine bucket carries its display name alongside the opaque memberId the key stays. */
+type LabelledBucket = TagVisibilityBucket & { label?: string }
+
+/** The detail payload: tags-detail's stats with the identifying buckets redacted, plus labels. */
+type TagDetailPayload = Omit<TagDetailStats, 'projects' | 'repos' | 'members'> & {
+  projects: TagVisibilityBucket[]
+  repos: TagVisibilityBucket[]
+  members: LabelledBucket[]
+}
+
+interface TagContext {
+  lookups: TagLookups
+  authority: TagAuthorityContext
+  machines: MachineInfo[]
+  accounts: AccountDoc[]
+}
+
 /** Build the account→machines map the resolver needs, plus the visibility context Rule 1 uses.
  *  `sessions` is the unscoped set; repo/project visibility is derived from the subset the caller
  *  can already see, so a manager may tag their own repos and folders but not someone else's. */
-async function buildContext(p: Principal, sessions: SessionMeta[]): Promise<{ lookups: TagLookups; authority: TagAuthorityContext }> {
+async function buildContext(p: Principal, sessions: SessionMeta[]): Promise<TagContext> {
   const [machines, accounts, teams] = await Promise.all([listMachines(), listAccounts(), listTeams()])
 
   const machinesByAccount: Record<string, string[]> = {}
@@ -70,6 +99,8 @@ async function buildContext(p: Principal, sessions: SessionMeta[]): Promise<{ lo
 
   return {
     lookups: { machinesByAccount },
+    machines,
+    accounts,
     authority: {
       visibleTeamIds: new Set(teams.filter(t => myTeamIds.has(t._id)).map(t => t._id)),
       visibleMachineIds,
@@ -86,8 +117,32 @@ async function loadAllSessions(): Promise<SessionMeta[]> {
   return loadTeamSessionsFromMongo()
 }
 
-function withAggregate(tag: TagDoc, sessions: SessionMeta[], lookups: TagLookups): TagDoc & { aggregate: TagAggregate } {
-  return { ...tag, aggregate: aggregateSessions(resolveTagSessions(sessions, tag.sources, lookups)) }
+/** `topProject` is a raw project_path picked from the unscoped set — an identifying string, so it
+ *  obeys the same rule as the buckets. topModel/topHarness are closed vocabularies and stay. */
+function redactAggregate(p: Principal, agg: TagAggregate, ctx: TagAuthorityContext): TagAggregate {
+  return { ...agg, topProject: redactTopValue(p, agg.topProject, ctx.visibleProjects) }
+}
+
+function withAggregate(p: Principal, tag: TagDoc, sessions: SessionMeta[], ctx: TagContext): TagDoc & { aggregate: TagAggregate } {
+  const resolved = resolveTagSessions(sessions, tag.sources, ctx.lookups)
+  return { ...tag, aggregate: redactAggregate(p, aggregateSessions(resolved), ctx.authority) }
+}
+
+/** The deep breakdown, redacted key-by-key and with machine hashes given a readable name. */
+function detailStats(p: Principal, sessions: SessionMeta[], ctx: TagContext): TagDetailPayload {
+  const raw = aggregateTagDetail(sessions)
+  const names = new Map(ctx.machines.map(m => [m.id, m.machineName]))
+  return {
+    ...raw,
+    projects: redactBuckets(p, raw.projects, ctx.authority.visibleProjects),
+    repos: redactBuckets(p, raw.repos, ctx.authority.visibleRepos),
+    // The key stays the memberId so the client can key React rows on a stable id; `label` is what
+    // it renders. A collapsed "other" bucket has no machine and therefore no label.
+    members: redactBuckets(p, raw.members, ctx.authority.visibleMachineIds).map(b => {
+      const label = names.get(b.key)
+      return label ? { ...b, label } : { ...b }
+    }),
+  }
 }
 
 function parseSources(raw: unknown): TagSource[] {
@@ -104,6 +159,31 @@ function parseStringList(raw: unknown): string[] {
   return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : []
 }
 
+const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/
+
+/** The client injects `color` straight into an inline CSS background. An unvalidated string there
+ *  is an outbound-request primitive — `url(https://attacker/x)` would beacon every viewer of the
+ *  tag. Accept a literal hex colour and nothing else. `undefined` means "not provided". */
+function parseColor(raw: unknown): { ok: true; value: string | undefined } | { ok: false } {
+  if (raw === undefined || raw === null) return { ok: true, value: undefined }
+  if (typeof raw !== 'string') return { ok: false }
+  const v = raw.trim()
+  if (!v) return { ok: true, value: undefined }
+  return HEX_COLOR.test(v) ? { ok: true, value: v } : { ok: false }
+}
+
+/** Every grantee must be a real account the caller can already see — otherwise `sharedWith` is a
+ *  blind account-id oracle, and a manager could grant a tag to someone outside their scope. */
+function checkSharedWith(p: Principal, ids: string[], accounts: AccountDoc[]): Response | null {
+  const byId = new Map(accounts.map(a => [a._id, a]))
+  for (const id of ids) {
+    const account = byId.get(id)
+    if (!account) return json({ error: 'unknown account in sharedWith' }, 400)
+    if (!accountVisibleTo(p, account)) return json({ error: 'forbidden' }, 403)
+  }
+  return null
+}
+
 export async function handleTags(req: Request): Promise<Response> {
   const principal = await getPrincipal(req)
   if (!principal) return json({ error: 'unauthorized' }, 401)
@@ -114,66 +194,98 @@ export async function handleTags(req: Request): Promise<Response> {
     ? decodeURIComponent(url.pathname.slice('/api/tags/'.length))
     : ''
 
-  // GET /api/tags/:id — one tag with its aggregate AND a per-source breakdown. Still
-  // aggregate-only (Rule 2): each source reports its own totals, never its sessions.
+  // GET /api/tags/:id — one tag with its aggregate, a per-source breakdown AND the deep stats
+  // (projects / models / harnesses / repos / members, daily series, activity window). Still
+  // aggregate-only (Rule 2): counts and sums, with unseeable keys collapsed into "other".
   if (req.method === 'GET' && idFromPath) {
     const tag = await getTag(idFromPath)
     // 404 rather than 403 for a non-viewer: a stranger must not learn the tag exists.
     if (!tag) return json({ error: 'tag not found' }, 404)
-    const mayRead = isOwner || tag.createdBy === principal.accountId || tag.sharedWith.includes(principal.accountId)
-    if (!mayRead) return json({ error: 'tag not found' }, 404)
     const sessions = await loadAllSessions()
-    const { lookups } = await buildContext(principal, sessions)
+    const ctx = await buildContext(principal, sessions)
+    if (!canReadTag(principal, tag, ctx.authority)) return json({ error: 'tag not found' }, 404)
+    const resolved = resolveTagSessions(sessions, tag.sources, ctx.lookups)
     const breakdown = tag.sources.map(src => ({
       source: src,
-      aggregate: aggregateSessions(resolveTagSessions(sessions, [src], lookups)),
+      aggregate: redactAggregate(principal, aggregateSessions(resolveTagSessions(sessions, [src], ctx.lookups)), ctx.authority),
     }))
-    return json({ tag: withAggregate(tag, sessions, lookups), breakdown })
+    return json({
+      tag: withAggregate(principal, tag, sessions, ctx),
+      breakdown,
+      stats: detailStats(principal, resolved, ctx),
+    })
   }
 
   if (req.method === 'GET') {
-    const tags = await visibleTagsFor(principal.accountId, isOwner)
     const sessions = await loadAllSessions()
-    const { lookups } = await buildContext(principal, sessions)
-    return json({ tags: tags.map(t => withAggregate(t, sessions, lookups)) })
+    const ctx = await buildContext(principal, sessions)
+    const tags = await visibleTagsFor(t => canReadTag(principal, t, ctx.authority))
+    return json({ tags: tags.map(t => withAggregate(principal, t, sessions, ctx)) })
   }
 
   const body = await req.json().catch(() => null) as Record<string, unknown> | null
   if (!body) return json({ error: 'invalid body' }, 400)
 
+  if (req.method !== 'POST' && req.method !== 'PATCH' && req.method !== 'DELETE') {
+    return json({ error: 'method not allowed' }, 405)
+  }
+  // Every write needs the capability, not just POST — otherwise a demoted manager keeps editing
+  // and deleting the tags they made while they still had it.
+  if (!can(principal, 'tags:write')) return json({ error: 'forbidden' }, 403)
+
   if (req.method === 'POST') {
-    if (!can(principal, 'tags:write')) return json({ error: 'forbidden' }, 403)
     const name = typeof body.name === 'string' ? body.name.trim() : ''
     if (!name) return json({ error: 'name is required' }, 400)
+    const color = parseColor(body.color)
+    if (!color.ok) return json({ error: 'color must be a hex colour (#rgb or #rrggbb)' }, 400)
     const sources = parseSources(body.sources)
+    const sharedWith = parseStringList(body.sharedWith)
     const sessions = await loadAllSessions()
-    const { authority, lookups } = await buildContext(principal, sessions)
-    if (!canWriteTagSources(principal, sources, authority)) return json({ error: 'forbidden' }, 403)
+    const ctx = await buildContext(principal, sessions)
+    if (!canWriteTagSources(principal, sources, ctx.authority)) return json({ error: 'forbidden' }, 403)
+    const bad = checkSharedWith(principal, sharedWith, ctx.accounts)
+    if (bad) return bad
     const doc = await createTag({
       name,
-      color: typeof body.color === 'string' ? body.color : undefined,
+      color: color.value,
       sources,
-      sharedWith: parseStringList(body.sharedWith),
+      sharedWith,
       createdBy: principal.accountId,
     })
-    return json({ tag: withAggregate(doc, sessions, lookups) })
+    return json({ tag: withAggregate(principal, doc, sessions, ctx) })
   }
 
   if (req.method === 'PATCH') {
     const id = typeof body.id === 'string' ? body.id : ''
     if (!id) return json({ error: 'id is required' }, 400)
     const existing = await getTag(id)
+    // 404 for "not yours" as well as "not there": a 403 would confirm the id exists, turning an
+    // authed stranger's guesses into a tag-id enumeration oracle.
     if (!existing) return json({ error: 'tag not found' }, 404)
-    if (!isOwner && existing.createdBy !== principal.accountId) return json({ error: 'forbidden' }, 403)
-    const { authority } = await buildContext(principal, await loadAllSessions())
-    // Re-validate on edit: the source list may be changing to something out of scope.
+    if (!isOwner && existing.createdBy !== principal.accountId) return json({ error: 'tag not found' }, 404)
+    // POST rejects an empty name; so must PATCH, or a tag can be blanked after the fact.
+    let name: string | undefined
+    if (body.name !== undefined) {
+      if (typeof body.name !== 'string' || !body.name.trim()) return json({ error: 'name is required' }, 400)
+      name = body.name.trim()
+    }
+    const color = parseColor(body.color)
+    if (!color.ok) return json({ error: 'color must be a hex colour (#rgb or #rrggbb)' }, 400)
+    const ctx = await buildContext(principal, await loadAllSessions())
+    // Re-validate on edit: the source list may be changing to something out of scope — and an
+    // unchanged list may have drifted out of scope since it was written.
     const nextSources = body.sources !== undefined ? parseSources(body.sources) : existing.sources
-    if (!canWriteTagSources(principal, nextSources, authority)) return json({ error: 'forbidden' }, 403)
+    if (!canWriteTagSources(principal, nextSources, ctx.authority)) return json({ error: 'forbidden' }, 403)
+    const sharedWith = body.sharedWith !== undefined ? parseStringList(body.sharedWith) : undefined
+    if (sharedWith) {
+      const bad = checkSharedWith(principal, sharedWith, ctx.accounts)
+      if (bad) return bad
+    }
     await updateTag(id, {
-      name: typeof body.name === 'string' ? body.name.trim() : undefined,
-      color: typeof body.color === 'string' ? body.color : undefined,
+      name,
+      color: color.value,
       sources: body.sources !== undefined ? nextSources : undefined,
-      sharedWith: body.sharedWith !== undefined ? parseStringList(body.sharedWith) : undefined,
+      sharedWith,
     })
     return json({ ok: true })
   }
@@ -183,7 +295,7 @@ export async function handleTags(req: Request): Promise<Response> {
     if (!id) return json({ error: 'id is required' }, 400)
     const existing = await getTag(id)
     if (!existing) return json({ error: 'tag not found' }, 404)
-    if (!isOwner && existing.createdBy !== principal.accountId) return json({ error: 'forbidden' }, 403)
+    if (!isOwner && existing.createdBy !== principal.accountId) return json({ error: 'tag not found' }, 404)
     await deleteTag(id)
     return json({ ok: true })
   }
