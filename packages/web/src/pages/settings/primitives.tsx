@@ -1,5 +1,5 @@
 import React from 'react'
-import { Pencil, Check, AlertTriangle, Info } from 'lucide-react'
+import { Pencil, Check, AlertTriangle, Info, ChevronDown } from 'lucide-react'
 import { useIsMobile } from '../../hooks/useIsMobile'
 
 // ScopeNote
@@ -593,6 +593,164 @@ export function Select({ value, onChange, options, placeholder, disabled, search
               </div>
             )
           })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * MultiPicker — a Select-shaped trigger that opens a search + checkbox panel.
+ *
+ * Replaces the pair "single-value Select + a separate bulk button": one control lets the user
+ * search, tick one, or tick several, and decide which they wanted only after seeing the list.
+ * Values are committed on the confirm button, so a mis-tick costs nothing until then.
+ *
+ * The panel flips above the trigger when there is no room below (same measurement as Select) and
+ * uses 44px rows and a 16px search input on mobile, so it stays usable on a phone.
+ */
+export function MultiPicker({
+  options, onCommit, placeholder, searchPlaceholder, confirmLabel, selectAllLabel, emptyLabel, disabled,
+}: {
+  options: { value: string; label: string }[]
+  /** Called with everything ticked when the user confirms. Never called with an empty list. */
+  onCommit: (values: string[]) => void
+  placeholder: string
+  searchPlaceholder: string
+  /** Receives the tick count, e.g. n => `Add ${n}`. */
+  confirmLabel: (n: number) => string
+  selectAllLabel: string
+  emptyLabel: string
+  disabled?: boolean
+}) {
+  const isMobile = useIsMobile()
+  const [open, setOpen] = React.useState(false)
+  const [picked, setPicked] = React.useState<string[]>([])
+  const [query, setQuery] = React.useState('')
+  const [dropUp, setDropUp] = React.useState(false)
+  const wrapperRef = React.useRef<HTMLDivElement>(null)
+  const searchRef = React.useRef<HTMLInputElement>(null)
+  const PANEL_MAX_H = 340
+
+  const filtered = React.useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return q ? options.filter(o => `${o.label} ${o.value}`.toLowerCase().includes(q)) : options
+  }, [options, query])
+
+  const close = React.useCallback(() => { setOpen(false); setPicked([]); setQuery('') }, [])
+
+  React.useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) close()
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+  }, [open, close])
+
+  const openPanel = () => {
+    if (disabled) return
+    const rect = wrapperRef.current?.getBoundingClientRect()
+    if (rect) {
+      const below = window.innerHeight - rect.bottom
+      setDropUp(below < PANEL_MAX_H && rect.top > below)
+    }
+    setOpen(true)
+    setTimeout(() => searchRef.current?.focus(), 0)
+  }
+
+  const commit = () => {
+    if (picked.length === 0) return
+    onCommit(picked)
+    close()
+  }
+
+  const allShownPicked = filtered.length > 0 && filtered.every(o => picked.includes(o.value))
+
+  return (
+    <div ref={wrapperRef} style={{ position: 'relative', width: '100%' }}>
+      <button
+        type="button"
+        onClick={() => (open ? close() : openPanel())}
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        style={{
+          width: '100%', padding: '8px 11px', minHeight: 44, boxSizing: 'border-box',
+          background: 'var(--bg-elevated)',
+          border: `1px solid ${open ? 'var(--anthropic-orange)' : 'var(--border)'}`,
+          borderRadius: 8, fontSize: 13, color: 'var(--text-tertiary)', fontFamily: 'inherit',
+          textAlign: 'left', cursor: disabled ? 'not-allowed' : 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+          opacity: disabled ? 0.5 : 1,
+        }}
+      >
+        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{placeholder}</span>
+        <ChevronDown size={13} style={{ flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          style={{
+            position: 'absolute', left: 0, right: 0, zIndex: 50,
+            ...(dropUp ? { bottom: 'calc(100% + 4px)' } : { top: 'calc(100% + 4px)' }),
+            background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
+            boxShadow: '0 8px 28px rgba(0,0,0,0.35)', padding: 6,
+            display: 'flex', flexDirection: 'column', gap: 6, maxHeight: PANEL_MAX_H,
+          }}
+        >
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder={searchPlaceholder}
+            style={{
+              width: '100%', boxSizing: 'border-box', padding: isMobile ? '10px 9px' : '7px 9px',
+              background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 6,
+              fontSize: isMobile ? 16 : 13, color: 'var(--text-primary)', outline: 'none', fontFamily: 'inherit',
+            }}
+          />
+          {filtered.length > 1 && (
+            <div style={{ display: 'flex', alignItems: 'center', minHeight: isMobile ? 44 : 30, paddingLeft: 2 }}>
+              <Checkbox
+                checked={allShownPicked}
+                onChange={c => setPicked(c ? filtered.map(o => o.value) : [])}
+                label={selectAllLabel}
+              />
+            </div>
+          )}
+          <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            {filtered.length === 0 && (
+              <span style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '8px 4px' }}>{emptyLabel}</span>
+            )}
+            {filtered.map(o => (
+              <div key={o.value} style={{ display: 'flex', alignItems: 'center', minHeight: isMobile ? 44 : 32, paddingLeft: 2 }}>
+                <Checkbox
+                  checked={picked.includes(o.value)}
+                  onChange={c => setPicked(prev => c ? [...prev, o.value] : prev.filter(v => v !== o.value))}
+                  label={o.label}
+                />
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={commit}
+            disabled={picked.length === 0}
+            style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              padding: '0 14px', minHeight: 44, borderRadius: 7,
+              border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)',
+              color: 'var(--anthropic-orange)', fontSize: 12.5, fontWeight: 600,
+              cursor: picked.length === 0 ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+              opacity: picked.length === 0 ? 0.5 : 1,
+            }}
+          >
+            {confirmLabel(picked.length)}
+          </button>
         </div>
       )}
     </div>

@@ -189,7 +189,19 @@ function detailStats(p: Principal, sessions: SessionMeta[], ctx: TagContext): Ta
       const label = names.get(b.key)
       return label ? { ...b, label } : { ...b }
     }),
+    // People are keyed by the session's `user`, which is a display name — identifying, so it obeys
+    // the same rule as the other keys. "Visible" = the person drives a machine this caller can see.
+    users: redactBuckets(p, raw.users, visibleUserNames(ctx)),
   }
+}
+
+/** Display names of the people behind the machines this caller can see. */
+function visibleUserNames(ctx: TagContext): Set<string> {
+  const out = new Set<string>()
+  for (const m of ctx.machines) {
+    if (ctx.authority.visibleMachineIds.has(m.id) && m.user) out.add(m.user)
+  }
+  return out
 }
 
 function parseSources(raw: unknown): TagSource[] {

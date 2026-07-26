@@ -96,3 +96,15 @@ test('an empty tag reports zero members and machines', () => {
   expect(d.distinctMembers).toBe(0)
   expect(d.distinctMachines).toBe(0)
 })
+
+test('users rank people, not machines — one person on two machines is a single row', () => {
+  const d = aggregateTagDetail([
+    s({ user: 'vini', memberId: 'machA' }),
+    s({ user: 'vini', memberId: 'machB' }),
+    s({ user: 'bryan', memberId: 'machC' }),
+  ])
+  expect(d.users.map(u => u.key).sort()).toEqual(['bryan', 'vini'])
+  expect(d.users.find(u => u.key === 'vini')!.sessions).toBe(2)
+  // The machine ranking still has three rows — the two views answer different questions.
+  expect(d.members).toHaveLength(3)
+})

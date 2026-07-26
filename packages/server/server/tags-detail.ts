@@ -35,6 +35,9 @@ export interface TagDetailStats {
   /** Contributing machines, keyed by the session's memberId (token hash). Display names are
    *  resolved by the caller, which knows the machine registry. */
   members: TagBucket[]
+  /** Contributing PEOPLE, keyed by the session's `user`. A person may drive several machines, so
+   *  this is not the same ranking as `members` — it answers "who worked on this", not "from where". */
+  users: TagBucket[]
   daily: TagDayPoint[]
   /** How many distinct people and machines contributed. Plain counts, so unlike the bucket KEYS
    *  they need no redaction — and they must be computed BEFORE redaction, otherwise collapsing
@@ -88,6 +91,7 @@ export function aggregateTagDetail(sessions: SessionMeta[]): TagDetailStats {
   const harnesses = new Map<string, TagBucket>()
   const repos = new Map<string, TagBucket>()
   const members = new Map<string, TagBucket>()
+  const users = new Map<string, TagBucket>()
   const days = new Map<string, TagDayPoint>()
   const distinctUsers = new Set<string>()
   let sessionsWithoutModel = 0
@@ -100,7 +104,7 @@ export function aggregateTagDetail(sessions: SessionMeta[]): TagDetailStats {
     if (s.harness) bump(harnesses, s.harness, s)
     if (s.git_remote) bump(repos, s.git_remote, s)
     if (s.memberId) bump(members, s.memberId, s)
-    if (s.user) distinctUsers.add(s.user)
+    if (s.user) { distinctUsers.add(s.user); bump(users, s.user, s) }
 
     const day = s.start_time ? dayOf(s.start_time) : null
     if (day) {
@@ -120,6 +124,7 @@ export function aggregateTagDetail(sessions: SessionMeta[]): TagDetailStats {
     harnesses: ranked(harnesses),
     repos: ranked(repos),
     members: ranked(members),
+    users: ranked(users),
     daily: [...days.values()].sort((a, b) => a.date.localeCompare(b.date)),
     distinctMembers: distinctUsers.size,
     distinctMachines: members.size,

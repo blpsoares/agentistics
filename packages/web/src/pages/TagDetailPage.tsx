@@ -42,6 +42,8 @@ interface TagStats {
   harnesses: Bucket[]
   repos: Bucket[]
   members: Bucket[]
+  /** People (session.user). A person can drive several machines, so this ranks differently. */
+  users: Bucket[]
   daily: DayPoint[]
   /** Distinct contributors — plain counts, computed server-side before any bucket redaction. */
   distinctMembers: number
@@ -295,7 +297,9 @@ export default function TagDetailPage() {
 
       {/* ---- KPIs ---- */}
       <div>
-        <SectionHeader label={pt ? 'Total (sem duplicidade)' : 'Total (deduplicated)'} />
+        {/* Just "Total" — a total is deduplicated by definition. The per-source note below is where
+            the overlap is explained, which is the only place it can surprise anyone. */}
+        <SectionHeader label={pt ? 'Total' : 'Total'} />
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
           <StatTile label={pt ? 'Custo' : 'Cost'} value={fmtCost(tag.aggregate.costUSD, currency, brlRate)} accent />
           <StatTile label={pt ? 'Sessões' : 'Sessions'} value={tag.aggregate.sessions.toLocaleString()} />
@@ -409,6 +413,11 @@ export default function TagDetailPage() {
         <Ranked title="Harnesses" buckets={stats.harnesses} color={color} pt={pt}
           currency={currency} brlRate={brlRate} otherLabel={otherLabel}
           labelOf={b => HARNESS_LABELS[b.key as keyof typeof HARNESS_LABELS] ?? b.key} />
+        {/* People first, then the machines they used: "who worked on this" is the question a
+            reader asks before "from where". A person on two machines is one row here and two below. */}
+        <Ranked title={pt ? 'Membros' : 'Members'} buckets={stats.users} color={color} pt={pt}
+          currency={currency} brlRate={brlRate} otherLabel={otherLabel}
+          labelOf={b => b.key} />
         <Ranked title={pt ? 'Máquinas' : 'Machines'} buckets={stats.members} color={color} pt={pt}
           currency={currency} brlRate={brlRate} otherLabel={otherLabel}
           labelOf={b => b.label ?? b.key} />
@@ -553,7 +562,7 @@ export default function TagDetailPage() {
 
 function emptyStats(): TagStats {
   return {
-    projects: [], models: [], harnesses: [], repos: [], members: [], daily: [],
+    projects: [], models: [], harnesses: [], repos: [], members: [], users: [], daily: [],
     distinctMembers: 0, distinctMachines: 0,
     firstSessionDate: null, lastSessionDate: null, sessionsWithoutModel: 0,
   }

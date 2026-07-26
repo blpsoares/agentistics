@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useOutletContext } from 'react-router-dom'
-import { Plus, Trash2, X, ListChecks } from 'lucide-react'
+import { Plus, Trash2, X } from 'lucide-react'
 import { fmt, fmtCost, formatProjectName } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { HARNESS_LABELS } from '../lib/harness'
 import { Drawer } from './settings/Drawer'
-import { Section, Select, TabSelect, Checkbox } from './settings/primitives'
+import { Section, Select, TabSelect, MultiPicker } from './settings/primitives'
 import { useIsMobile } from '../hooks/useIsMobile'
 
 // /api/tags response shapes. Aggregate-only by design (spec rule 2): the server never sends the
@@ -207,11 +207,6 @@ export default function TagsPage() {
   const [sharedWith, setSharedWith] = useState<string[]>([])
   const [draftType, setDraftType] = useState<TagSourceType>('repo')
   const [draftValue, setDraftValue] = useState('')
-  // Bulk picking: a checkbox list beside the single-value Select, so several repos/folders go in
-  // with one confirmation instead of reopening the dropdown once per source.
-  const [bulkOpen, setBulkOpen] = useState(false)
-  const [bulkPicked, setBulkPicked] = useState<string[]>([])
-  const [bulkQuery, setBulkQuery] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveErr, setSaveErr] = useState<string | null>(null)
   const [sourcesEditing, setSourcesEditing] = useState(true)
@@ -259,21 +254,14 @@ export default function TagsPage() {
     () => optionsForType(draftType).filter(o => !sources.some(s => s.type === draftType && s.value === o.value)),
     [optionsForType, draftType, sources],
   )
-  const bulkFiltered = useMemo(() => {
-    const q = bulkQuery.trim().toLowerCase()
-    return q ? availableOptions.filter(o => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q)) : availableOptions
-  }, [availableOptions, bulkQuery])
-
-  /** Commit every checked value at once, then close the bulk panel. */
-  const addPickedSources = () => {
-    if (bulkPicked.length === 0) return
+  /** Commit every checked value at once. */
+  const addPickedSources = (values: string[]) => {
     setSources(prev => [
       ...prev,
-      ...bulkPicked
+      ...values
         .filter(v => !prev.some(s => s.type === draftType && s.value === v))
         .map(v => ({ type: draftType, value: v })),
     ])
-    setBulkPicked([]); setBulkQuery(''); setBulkOpen(false)
   }
 
   const save = async () => {
@@ -388,9 +376,11 @@ export default function TagsPage() {
                 <MiniStat label={pt ? 'Saída' : 'Output'} value={fmt(t.aggregate.outputTokens)} />
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 2 }}>
-                {t.aggregate.topProject && <Pill text={formatProjectName(t.aggregate.topProject)} />}
-                {t.aggregate.topModel && <Pill text={t.aggregate.topModel} />}
-                {t.aggregate.topHarness && <Pill text={HARNESS_LABELS[t.aggregate.topHarness as keyof typeof HARNESS_LABELS] ?? t.aggregate.topHarness} />}
+                {/* Label the "top" pills. A bare path read as noise on the card — on a central it
+                    is one machine's local folder, which says nothing about the tag by itself. */}
+                {t.aggregate.topProject && <Pill text={`${pt ? 'Projeto' : 'Project'}: ${formatProjectName(t.aggregate.topProject)}`} />}
+                {t.aggregate.topModel && <Pill text={`${pt ? 'Modelo' : 'Model'}: ${t.aggregate.topModel}`} />}
+                {t.aggregate.topHarness && <Pill text={`Harness: ${HARNESS_LABELS[t.aggregate.topHarness as keyof typeof HARNESS_LABELS] ?? t.aggregate.topHarness}`} />}
               </div>
             </button>
           ))}
@@ -545,85 +535,22 @@ export default function TagsPage() {
                     .map(t => ({ value: t, label: sourceTypeLabel(t) }))}
                 />
               </Field>
-              {/* One-at-a-time picking (fast for a single source) sits beside a bulk mode, because
-                  tagging a client usually means adding a handful of repos or folders at once and
-                  reopening the same dropdown N times is the slow part. */}
+              {/* One control for both cases: opening it gives search plus checkboxes, so the user
+                  decides after seeing the list whether they wanted one item or several. The old
+                  pairing of a single-value Select with a separate "several" button forced that
+                  decision before the list was even visible. */}
               <Field label={pt ? 'Valor' : 'Value'}>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
-                  <span style={{ flex: 1, minWidth: 0 }}>
-                    <Select
-                      value={draftValue}
-                      onChange={addSource}
-                      options={availableOptions}
-                      placeholder={pt ? 'Selecione para adicionar…' : 'Select to add…'}
-                      searchPlaceholder={pt ? 'Buscar…' : 'Search…'}
-                      disabled={bulkOpen || availableOptions.length === 0}
-                    />
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => { setBulkOpen(o => !o); setBulkPicked([]); setBulkQuery('') }}
-                    aria-pressed={bulkOpen}
-                    title={pt ? 'Selecionar vários' : 'Select several'}
-                    style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 6, padding: '0 12px', minHeight: 44,
-                      borderRadius: 7, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
-                      border: `1px solid ${bulkOpen ? 'var(--anthropic-orange)' : 'var(--border)'}`,
-                      background: bulkOpen ? 'var(--anthropic-orange-dim)' : 'transparent',
-                      color: bulkOpen ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                      whiteSpace: 'nowrap', flexShrink: 0,
-                    }}
-                  >
-                    <ListChecks size={14} /> {pt ? 'Vários' : 'Several'}
-                  </button>
-                </div>
+                <MultiPicker
+                  options={availableOptions}
+                  onCommit={addPickedSources}
+                  placeholder={pt ? 'Buscar e selecionar…' : 'Search and select…'}
+                  searchPlaceholder={pt ? 'Buscar…' : 'Search…'}
+                  confirmLabel={n => (pt ? `Adicionar ${n}` : `Add ${n}`)}
+                  selectAllLabel={pt ? 'Selecionar tudo' : 'Select all'}
+                  emptyLabel={pt ? 'Nada disponível.' : 'Nothing available.'}
+                  disabled={availableOptions.length === 0}
+                />
               </Field>
-
-              {bulkOpen && (
-                <div style={{
-                  border: '1px solid var(--border)', borderRadius: 9, padding: 10,
-                  display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-elevated)',
-                }}>
-                  <input
-                    value={bulkQuery}
-                    onChange={e => setBulkQuery(e.target.value)}
-                    placeholder={pt ? 'Buscar…' : 'Search…'}
-                    style={input}
-                  />
-                  <div style={{ display: 'flex', alignItems: 'center', minHeight: 44 }}>
-                    <Checkbox
-                      checked={bulkFiltered.length > 0 && bulkFiltered.every(o => bulkPicked.includes(o.value))}
-                      onChange={c => setBulkPicked(c ? bulkFiltered.map(o => o.value) : [])}
-                      label={pt ? 'Selecionar tudo' : 'Select all'}
-                    />
-                  </div>
-                  <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-                    {bulkFiltered.length === 0 && (
-                      <span style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '8px 2px' }}>
-                        {pt ? 'Nada disponível.' : 'Nothing available.'}
-                      </span>
-                    )}
-                    {bulkFiltered.map(o => (
-                      <div key={o.value} style={{ display: 'flex', alignItems: 'center', minHeight: 44 }}>
-                        <Checkbox
-                          checked={bulkPicked.includes(o.value)}
-                          onChange={c => setBulkPicked(prev => c ? [...prev, o.value] : prev.filter(v => v !== o.value))}
-                          label={o.label}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    style={{ ...primaryBtn, opacity: bulkPicked.length ? 1 : 0.5 }}
-                    disabled={bulkPicked.length === 0}
-                    onClick={addPickedSources}
-                  >
-                    <Plus size={14} />
-                    {pt ? `Adicionar ${bulkPicked.length}` : `Add ${bulkPicked.length}`}
-                  </button>
-                </div>
-              )}
               <SourceList
                 sources={sources}
                 typeLabel={sourceTypeLabel}
@@ -666,15 +593,16 @@ export default function TagsPage() {
                   sources). Granted accounts show as removable chips below. */}
               {accounts.length > 0 && (
                 <Field label={pt ? 'Adicionar conta' : 'Add account'}>
-                  <Select
-                    value=""
-                    onChange={id => { if (id) setSharedWith(prev => prev.includes(id) ? prev : [...prev, id]) }}
+                  <MultiPicker
                     options={accounts
                       .filter(a => a.id !== me?.id && !sharedWith.includes(a.id))
                       .map(a => ({ value: a.id, label: `${a.name} (${a.email})` }))}
-                    placeholder={pt ? 'Buscar conta…' : 'Search an account…'}
+                    onCommit={ids => setSharedWith(prev => [...prev, ...ids.filter(id => !prev.includes(id))])}
+                    placeholder={pt ? 'Buscar e selecionar…' : 'Search and select…'}
                     searchPlaceholder={pt ? 'Buscar…' : 'Search…'}
-                    searchable
+                    confirmLabel={n => (pt ? `Adicionar ${n}` : `Add ${n}`)}
+                    selectAllLabel={pt ? 'Selecionar tudo' : 'Select all'}
+                    emptyLabel={pt ? 'Nenhuma conta disponível.' : 'No accounts available.'}
                   />
                 </Field>
               )}
