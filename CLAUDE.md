@@ -382,6 +382,23 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
 
 ## Important rules
 
+- **EVERY new screen and EVERY layout fix MUST also deliver its mobile version — no exceptions.**
+  A change is not done when it looks right at 1440px. Before calling any UI work complete:
+  - Build the mobile branch *in the same change*, not as a follow-up. A "we'll do mobile later" pass
+    is how the whole governance area shipped desktop-only and needed the C4 rescue.
+  - Follow the existing conventions rather than inventing new ones — `useIsMobile()` (768px),
+    `MobileBottomNav` + the "More" sheet, full-screen drawers/modals, the `.ag-grid cols-N` utility,
+    tables collapsing into `RecordCard` lists, `MultiPicker`/`Select` popovers that flip up.
+  - **Touch targets ≥ 44px on mobile** — and 44px is the *mobile* number: applying it on desktop
+    too turns a segmented control into a row of buttons.
+  - **Any `<input>` visible on mobile computes to ≥ 16px** or iOS Safari zooms the viewport and
+    breaks the sticky header. `index.css` has a global guard; do not override it with an inline
+    `font-size` on the field.
+  - **Verify at 390px, do not assume**: `document.documentElement.scrollWidth <= window.innerWidth`
+    must hold on every page. Wide tables and code blocks scroll inside their own container, never
+    the page body.
+  - New pages need their nav entry in **both** the desktop `SideNav` `items` array **and** the
+    `MobileBottomNav` `navTiles` array in `App.tsx` — adding only the first hides the page on a phone.
 - **Tags are aggregate-only and explicitly shared** — a tag's visibility is the explicit `sharedWith` account list (plus its creator and every owner) and is **never** derived from teams; **anyone signed in may create a tag** — the role difference is REACH, not permission: writing requires that the principal can already see **every** one of its sources (`canWriteTagSources`, re-checked on edit), so an owner reaches anything, a manager what their teams reach, and a plain user only what their own account owns, otherwise a tag becomes a privilege-escalation path; and tag responses return **only counts and sums** — never session rows, transcripts or agent metrics — with keys the viewer cannot see collapsed into an "other" bucket. Tag math runs server-side against the unscoped session set, per-session (never from `stats-cache.json`).
 - **`stats-cache.json` is Claude-only** — never aggregate non-Claude harness metrics from it; use per-session sums for all other harnesses (see "Multi-harness tracking" above)
 - **Harness adapters are modules, not packages** — all adapters live under `packages/server/server/adapters/`; never create a separate package per harness
