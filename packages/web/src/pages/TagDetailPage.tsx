@@ -96,6 +96,13 @@ function StatTile({ label, value, accent }: { label: string; value: string; acce
 
 type Metric = 'costUSD' | 'sessions' | 'tokens'
 
+/** Overlay needs three distinguishable series, so it cannot use the tag's single colour. */
+const OVERLAY_COLORS: Record<Metric, string> = {
+  costUSD: '#f59e0b',
+  sessions: '#3b82f6',
+  tokens: '#22c55e',
+}
+
 export default function TagDetailPage() {
   const { lang, currency, brlRate, me } = useOutletContext<AppContext>()
   const { id } = useParams()
@@ -117,6 +124,7 @@ export default function TagDetailPage() {
       .catch(() => { /* keep the safe default */ })
   }, [])
   const [metric, setMetric] = useState<Metric>('costUSD')
+  const [overlay, setOverlay] = useState(false)
 
   // IAM lookups turn a source's opaque id into a readable label. Failures are non-fatal — the raw
   // id is shown instead, which is still unambiguous.
@@ -188,7 +196,24 @@ export default function TagDetailPage() {
   const color = tag?.color || DEFAULT_COLOR
   const mayEdit = !!tag && (me?.role === 'owner' || tag.createdBy === me?.id)
 
-  const chartData = useMemo(() => (stats?.daily ?? []).map(d => ({ ...d })), [stats])
+  // Overlay mode draws all three series at once. They live on wildly different scales (cost in
+  // hundreds, sessions in tens, tokens in millions), so each is normalised to 0-100% of its own
+  // peak — the shapes become comparable and the tooltip still reports the REAL values. Same
+  // approach as the dashboard's ActivityChart, so the two read alike.
+  const chartData = useMemo(() => {
+    const daily = stats?.daily ?? []
+    const peak = {
+      costUSD: Math.max(...daily.map(d => d.costUSD), 1),
+      sessions: Math.max(...daily.map(d => d.sessions), 1),
+      tokens: Math.max(...daily.map(d => d.tokens), 1),
+    }
+    return daily.map(d => ({
+      ...d,
+      costUSD_norm: (d.costUSD / peak.costUSD) * 100,
+      sessions_norm: (d.sessions / peak.sessions) * 100,
+      tokens_norm: (d.tokens / peak.tokens) * 100,
+    }))
+  }, [stats])
   const hasRedacted = useMemo(() => {
     if (!stats) return false
     return [stats.projects, stats.repos, stats.members].some(list => list.some(b => b.key === OTHER_KEY))
@@ -345,6 +370,7 @@ export default function TagDetailPage() {
               <button
                 key={m}
                 type="button"
+                disabled={overlay}
                 onClick={() => setMetric(m)}
                 style={{
                   // 44px is the MOBILE touch target; applying it on desktop too gave these a
@@ -362,6 +388,26 @@ export default function TagDetailPage() {
                 {metricLabel[m]}
               </button>
             ))}
+            {/* Overlay draws all three at once, normalised so their shapes can be compared. It is a
+                separate toggle rather than a fourth pill because it is a different KIND of choice:
+                the pills pick which series, this picks how many. */}
+            <button
+              type="button"
+              onClick={() => setOverlay(o => !o)}
+              aria-pressed={overlay}
+              title={pt ? 'Sobrepor as três séries (escala normalizada)' : 'Overlay all three series (normalised scale)'}
+              style={{
+                padding: isMobile ? '0 12px' : '0 10px',
+                minHeight: isMobile ? 44 : 28,
+                borderRadius: 7, cursor: 'pointer', fontFamily: 'inherit',
+                border: overlay ? `1px solid ${color}60` : '1px solid var(--border)',
+                background: overlay ? `${color}18` : 'transparent',
+                color: overlay ? color : 'var(--text-secondary)',
+                fontSize: 12, fontWeight: 600, transition: 'all 0.15s',
+              }}
+            >
+              {pt ? 'Sobrepor' : 'Overlay'}
+            </button>
           </div>
           {/* The tooltip is absolutely positioned by recharts and was clipped by the card's
               rounded overflow near the edges — `visible` lets it overlap the card as intended. */}
@@ -388,16 +434,35 @@ export default function TagDetailPage() {
                 content={<DayTooltip currency={currency} brlRate={brlRate} pt={pt} />}
                 cursor={{ stroke: 'var(--border)' }}
               />
-              <Area
-                type="monotone"
-                dataKey={metric}
-                stroke={color}
-                strokeWidth={2}
-                fill="url(#tag-detail-grad)"
-                dot={false}
-                activeDot={{ r: 4, fill: color, stroke: 'var(--bg-base)', strokeWidth: 2 }}
-                name={metricLabel[metric]}
-              />
+              {overlay ? (
+                // One area per metric, on the normalised keys. Distinct colours because the tag's
+                // own colour cannot distinguish three series; fills are faint so the lines read.
+                (['costUSD', 'sessions', 'tokens'] as Metric[]).map(m => (
+                  <Area
+                    key={m}
+                    type="monotone"
+                    dataKey={`${m}_norm`}
+                    stroke={OVERLAY_COLORS[m]}
+                    strokeWidth={2}
+                    fill={OVERLAY_COLORS[m]}
+                    fillOpacity={0.08}
+                    dot={false}
+                    activeDot={{ r: 3, fill: OVERLAY_COLORS[m], stroke: 'var(--bg-base)', strokeWidth: 2 }}
+                    name={metricLabel[m]}
+                  />
+                ))
+              ) : (
+                <Area
+                  type="monotone"
+                  dataKey={metric}
+                  stroke={color}
+                  strokeWidth={2}
+                  fill="url(#tag-detail-grad)"
+                  dot={false}
+                  activeDot={{ r: 4, fill: color, stroke: 'var(--bg-base)', strokeWidth: 2 }}
+                  name={metricLabel[metric]}
+                />
+              )}
             </AreaChart>
           </ResponsiveContainer>
           </div>
