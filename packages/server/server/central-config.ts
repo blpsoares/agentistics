@@ -23,6 +23,10 @@ export interface CentralConfig {
   /** Public base URL of this central (no trailing slash). When set, minted machine tokens embed
    *  it so a machine can auto-fill the endpoint from the pasted token. Empty = not configured. */
   publicUrl?: string
+  /** Require the operator to TYPE the item's name before a destructive delete goes through.
+   *  Defaults ON: the cost of the extra keystrokes is trivial next to deleting the wrong tag,
+   *  account or machine. Only an owner may turn it off (`central:config`). */
+  requireDeleteConfirmText: boolean
 }
 
 interface CentralConfigDoc extends Partial<CentralConfig> {
@@ -34,6 +38,8 @@ interface CentralConfigDoc extends Partial<CentralConfig> {
 }
 
 const DEFAULT_INCLUDE_OFFLINE = true
+// Safety default: a destructive action asks the operator to type the name. Opt OUT, never opt in.
+const DEFAULT_REQUIRE_DELETE_TEXT = true
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -48,16 +54,27 @@ export async function getCentralConfig(): Promise<CentralConfig> {
     const db = await getMongoDb()
     const col = db.collection<CentralConfigDoc>(COLLECTION)
     const doc = await col.findOne({ _id: DOC_ID })
-    if (!doc) return { pushIntervalSec: PUSH_INTERVAL.DEFAULT_SEC, includeOfflineData: DEFAULT_INCLUDE_OFFLINE }
+    if (!doc) {
+      return {
+        pushIntervalSec: PUSH_INTERVAL.DEFAULT_SEC,
+        includeOfflineData: DEFAULT_INCLUDE_OFFLINE,
+        requireDeleteConfirmText: DEFAULT_REQUIRE_DELETE_TEXT,
+      }
+    }
     // Read with the express floor so an express value (<15s) survives the round-trip.
     return {
       pushIntervalSec: clampPushInterval(doc.pushIntervalSec ?? PUSH_INTERVAL.DEFAULT_SEC, PUSH_INTERVAL.EXPRESS_MIN_SEC),
       includeOfflineData: doc.includeOfflineData ?? DEFAULT_INCLUDE_OFFLINE,
+      requireDeleteConfirmText: doc.requireDeleteConfirmText ?? DEFAULT_REQUIRE_DELETE_TEXT,
       ...(doc.publicUrl ? { publicUrl: doc.publicUrl } : {}),
     }
   } catch {
     // DB unreachable — return safe defaults
-    return { pushIntervalSec: PUSH_INTERVAL.DEFAULT_SEC, includeOfflineData: DEFAULT_INCLUDE_OFFLINE }
+    return {
+      pushIntervalSec: PUSH_INTERVAL.DEFAULT_SEC,
+      includeOfflineData: DEFAULT_INCLUDE_OFFLINE,
+      requireDeleteConfirmText: DEFAULT_REQUIRE_DELETE_TEXT,
+    }
   }
 }
 
@@ -135,4 +152,12 @@ export async function setPushInterval(sec: number): Promise<number> {
     // DB unreachable — return the clamped value without persisting
     return clamped
   }
+}
+
+/** Owner-only (`central:config`). Persist whether destructive deletes need the typed name. */
+export async function setRequireDeleteConfirmText(value: boolean): Promise<boolean> {
+  const db = await getMongoDb()
+  const col = db.collection<CentralConfigDoc>(COLLECTION)
+  await col.updateOne({ _id: DOC_ID }, { $set: { requireDeleteConfirmText: value } }, { upsert: true })
+  return value
 }

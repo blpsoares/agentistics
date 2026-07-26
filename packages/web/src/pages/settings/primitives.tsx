@@ -23,7 +23,7 @@ export function ScopeNote({ children }: { children: React.ReactNode }) {
 // ConfirmModal
 // Centered confirmation dialog for destructive actions (delete/revoke/remove). Renders nothing
 // when `open` is false. Backdrop click + Escape = cancel. The confirm button is red (danger).
-export function ConfirmModal({ open, title, message, confirmLabel, cancelLabel, onConfirm, onCancel }: {
+export function ConfirmModal({ open, title, message, confirmLabel, cancelLabel, onConfirm, onCancel, requireText, requireTextHint }: {
   open: boolean
   title: string
   message: string
@@ -31,8 +31,17 @@ export function ConfirmModal({ open, title, message, confirmLabel, cancelLabel, 
   cancelLabel: string
   onConfirm: () => void
   onCancel: () => void
+  /** When set, the operator must type this EXACTLY before confirm enables — the guard against
+   *  deleting the wrong thing on muscle memory. Omit it for a plain yes/no confirmation. */
+  requireText?: string
+  /** Prompt shown above the input, e.g. `Type "Client X" to confirm`. */
+  requireTextHint?: string
 }) {
   const isMobile = useIsMobile()
+  const [typed, setTyped] = React.useState('')
+  // Reset between openings, otherwise the previous answer would pre-arm the next delete.
+  React.useEffect(() => { if (open) setTyped('') }, [open])
+  const armed = requireText === undefined || typed === requireText
   React.useEffect(() => {
     if (!open) return
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel() }
@@ -57,6 +66,26 @@ export function ConfirmModal({ open, title, message, confirmLabel, cancelLabel, 
           <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</span>
         </div>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.55, margin: 0 }}>{message}</p>
+        {requireText !== undefined && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {requireTextHint && (
+              <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{requireTextHint}</span>
+            )}
+            <input
+              value={typed}
+              onChange={e => setTyped(e.target.value)}
+              autoFocus
+              spellCheck={false}
+              autoComplete="off"
+              style={{
+                width: '100%', boxSizing: 'border-box', padding: isMobile ? '10px 11px' : '8px 11px',
+                background: 'var(--bg-elevated)', border: `1px solid ${armed ? '#ef4444' : 'var(--border)'}`,
+                borderRadius: 7, fontSize: isMobile ? 16 : 13, color: 'var(--text-primary)',
+                outline: 'none', fontFamily: 'inherit',
+              }}
+            />
+          </div>
+        )}
         <div style={{
           display: 'flex', gap: 8, marginTop: 2, justifyContent: 'flex-end',
           flexDirection: isMobile ? 'column-reverse' : 'row',
@@ -68,12 +97,13 @@ export function ConfirmModal({ open, title, message, confirmLabel, cancelLabel, 
             borderRadius: 7, border: '1px solid var(--border)', background: 'transparent',
             color: 'var(--text-secondary)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
           }}>{cancelLabel}</button>
-          <button type="button" onClick={onConfirm} style={{
+          <button type="button" onClick={() => { if (armed) onConfirm() }} disabled={!armed} style={{
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
             padding: isMobile ? '0 14px' : '8px 14px', minHeight: isMobile ? 44 : undefined,
             width: isMobile ? '100%' : undefined,
             borderRadius: 7, border: '1px solid #ef4444', background: '#ef4444',
-            color: '#fff', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+            color: '#fff', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit',
+            cursor: armed ? 'pointer' : 'not-allowed', opacity: armed ? 1 : 0.45,
           }}>{confirmLabel}</button>
         </div>
       </div>

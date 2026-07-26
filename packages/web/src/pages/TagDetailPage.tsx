@@ -107,6 +107,15 @@ export default function TagDetailPage() {
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  // Central policy: type the name before a destructive delete. Defaults ON, and stays ON if the
+  // config read fails — a safety guard must fail closed, never open.
+  const [requireDeleteText, setRequireDeleteText] = useState(true)
+  useEffect(() => {
+    void fetch('/api/team/config')
+      .then(r => r.ok ? r.json() as Promise<{ requireDeleteConfirmText?: boolean }> : null)
+      .then(c => { if (c && typeof c.requireDeleteConfirmText === 'boolean') setRequireDeleteText(c.requireDeleteConfirmText) })
+      .catch(() => { /* keep the safe default */ })
+  }, [])
   const [metric, setMetric] = useState<Metric>('costUSD')
 
   // IAM lookups turn a source's opaque id into a readable label. Failures are non-fatal — the raw
@@ -553,6 +562,11 @@ export default function TagDetailPage() {
           : `The tag "${tag.name}" will be removed. Sessions are not affected.`}
         confirmLabel={pt ? 'Excluir' : 'Delete'}
         cancelLabel={pt ? 'Cancelar' : 'Cancel'}
+        // Typing the name is the central's default; an owner can turn it off in Settings.
+        requireText={requireDeleteText ? tag.name : undefined}
+        requireTextHint={requireDeleteText
+          ? (pt ? `Digite "${tag.name}" para confirmar` : `Type "${tag.name}" to confirm`)
+          : undefined}
         onConfirm={() => void doDelete()}
         onCancel={() => setConfirmDelete(false)}
       />
