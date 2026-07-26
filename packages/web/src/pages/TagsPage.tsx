@@ -106,7 +106,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 export default function TagsPage() {
-  const { lang, currency, brlRate, data, me } = useOutletContext<AppContext>()
+  const { lang, currency, brlRate, data, me, isCentral } = useOutletContext<AppContext>()
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
   const navigate = useNavigate()
@@ -376,9 +376,11 @@ export default function TagsPage() {
                 <MiniStat label={pt ? 'Saída' : 'Output'} value={fmt(t.aggregate.outputTokens)} />
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 2 }}>
-                {/* Label the "top" pills. A bare path read as noise on the card — on a central it
-                    is one machine's local folder, which says nothing about the tag by itself. */}
-                {t.aggregate.topProject && <Pill text={`${pt ? 'Projeto' : 'Project'}: ${formatProjectName(t.aggregate.topProject)}`} />}
+                {/* The project pill is a filesystem path. On a MACHINE that is meaningful — you
+                    recognise your own folder. On a CENTRAL it is some other machine's local path,
+                    which identifies nothing about the tag, so it is omitted there. Same rule the
+                    repositories view already follows. */}
+                {!isCentral && t.aggregate.topProject && <Pill text={`${pt ? 'Projeto' : 'Project'}: ${formatProjectName(t.aggregate.topProject)}`} />}
                 {t.aggregate.topModel && <Pill text={`${pt ? 'Modelo' : 'Model'}: ${t.aggregate.topModel}`} />}
                 {t.aggregate.topHarness && <Pill text={`Harness: ${HARNESS_LABELS[t.aggregate.topHarness as keyof typeof HARNESS_LABELS] ?? t.aggregate.topHarness}`} />}
               </div>
@@ -410,7 +412,7 @@ export default function TagsPage() {
               <Cell label={pt ? 'Sessões' : 'Sessions'} value={t.aggregate.sessions.toLocaleString()} />
               <Cell label={pt ? 'Entrada' : 'Input'} value={fmt(t.aggregate.inputTokens)} />
               <Cell label={pt ? 'Saída' : 'Output'} value={fmt(t.aggregate.outputTokens)} />
-              <Cell label={pt ? 'Projeto' : 'Project'} value={t.aggregate.topProject ? formatProjectName(t.aggregate.topProject) : '—'} />
+              {!isCentral && <Cell label={pt ? 'Projeto' : 'Project'} value={t.aggregate.topProject ? formatProjectName(t.aggregate.topProject) : '—'} />}
               <Cell label={pt ? 'Modelo' : 'Model'} value={t.aggregate.topModel ?? '—'} />
               <Cell label="Harness" value={t.aggregate.topHarness ? (HARNESS_LABELS[t.aggregate.topHarness as keyof typeof HARNESS_LABELS] ?? t.aggregate.topHarness) : '—'} />
               <Cell label={pt ? 'Fontes' : 'Sources'} value={String(t.sources.length)} />

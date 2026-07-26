@@ -584,17 +584,16 @@ function AccessGroup({ title, permission, note, children }: {
 }) {
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
+      {/* Fine print: the category name and its permission are context for the chips below, not
+          headings competing with them. Muted and small so the eye lands on WHO first. */}
+      <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: 6, marginBottom: 5 }}>
         <span style={{
-          fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)',
-          textTransform: 'uppercase', letterSpacing: '0.06em',
+          fontSize: 9.5, fontWeight: 600, color: 'var(--text-tertiary)',
+          textTransform: 'uppercase', letterSpacing: '0.06em', opacity: 0.75,
         }}>{title}</span>
         <span style={{
-          padding: '2px 8px', borderRadius: 999, fontSize: 10,
-          background: 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
-          border: '1px solid color-mix(in srgb, var(--anthropic-orange) 35%, transparent)',
-          color: 'var(--anthropic-orange)', fontWeight: 600, whiteSpace: 'nowrap',
-        }}>{permission}</span>
+          fontSize: 9.5, color: 'var(--text-tertiary)', opacity: 0.65, whiteSpace: 'nowrap',
+        }}>· {permission}</span>
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>{children}</div>
       <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6, lineHeight: 1.5 }}>{note}</div>
