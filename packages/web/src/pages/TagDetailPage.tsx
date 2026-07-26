@@ -498,7 +498,7 @@ export default function TagDetailPage() {
             "Owners" (a standing role), the creator (implicit and revocable) and the explicit
             grantees looked interchangeable. Each is now its own group stating where the access
             comes from and what it allows — the same distinction the server enforces. */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div className="ag-grid cols-3">
           <AccessGroup
             title={pt ? 'Owners' : 'Owners'}
             permission={pt ? 'ver · editar · excluir' : 'view · edit · delete'}
@@ -597,20 +597,24 @@ function AccessGroup({ title, permission, note, children }: {
   children: React.ReactNode
 }) {
   return (
-    <div>
-      {/* Fine print: the category name and its permission are context for the chips below, not
-          headings competing with them. Muted and small so the eye lands on WHO first. */}
-      <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: 6, marginBottom: 5 }}>
+    // A column in the access grid. The explanation is a `title` tooltip rather than a paragraph:
+    // three sentences stacked vertically turned a three-fact panel into a full screen of text.
+    <div title={note} style={{
+      minWidth: 0, padding: '10px 12px', borderRadius: 9,
+      border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+      display: 'flex', flexDirection: 'column', gap: 7,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
         <span style={{
-          fontSize: 9.5, fontWeight: 600, color: 'var(--text-tertiary)',
-          textTransform: 'uppercase', letterSpacing: '0.06em', opacity: 0.75,
+          fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)',
+          textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap',
         }}>{title}</span>
         <span style={{
-          fontSize: 9.5, color: 'var(--text-tertiary)', opacity: 0.65, whiteSpace: 'nowrap',
-        }}>· {permission}</span>
+          fontSize: 9.5, color: 'var(--text-tertiary)', whiteSpace: 'nowrap',
+          overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>{permission}</span>
       </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>{children}</div>
-      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6, lineHeight: 1.5 }}>{note}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>{children}</div>
     </div>
   )
 }

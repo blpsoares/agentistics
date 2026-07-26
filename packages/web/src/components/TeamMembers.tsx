@@ -119,10 +119,6 @@ export function TeamMembers({ lang, presence }: Props) {
   // Central policy: include offline members' data (loaded from /api/team/config)
   const [includeOffline, setIncludeOffline] = useState<boolean | null>(null)
   const [savingOffline, setSavingOffline] = useState(false)
-  // Central safety policy: type the name to confirm a destructive delete. null until the config
-  // is read, so the row stays hidden rather than flashing a wrong state.
-  const [requireDeleteText, setRequireDeleteText] = useState<boolean | null>(null)
-  const [savingDeleteText, setSavingDeleteText] = useState(false)
 
   // Mint form state
   const [mintUser, setMintUser] = useState('')
@@ -186,35 +182,12 @@ export function TeamMembers({ lang, presence }: Props) {
       try {
         const res = await fetch('/api/team/config')
         if (!res.ok) return
-        const cfg = (await res.json()) as { includeOfflineData?: boolean; requireDeleteConfirmText?: boolean }
-        if (!cancelled) {
-          setIncludeOffline(cfg.includeOfflineData ?? true)
-          setRequireDeleteText(cfg.requireDeleteConfirmText ?? true)
-        }
+        const cfg = (await res.json()) as { includeOfflineData?: boolean }
+        if (!cancelled) setIncludeOffline(cfg.includeOfflineData ?? true)
       } catch { /* leave null → toggle hidden until known */ }
     })()
     return () => { cancelled = true }
   }, [])
-
-  /** Owner-only on the server; a non-owner's PUT comes back 403 and the switch reverts. */
-  async function toggleRequireDeleteText(next: boolean) {
-    setSavingDeleteText(true)
-    setRequireDeleteText(next) // optimistic
-    try {
-      const res = await fetch('/api/team/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ requireDeleteConfirmText: next }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const cfg = (await res.json()) as { requireDeleteConfirmText?: boolean }
-      setRequireDeleteText(cfg.requireDeleteConfirmText ?? next)
-    } catch {
-      setRequireDeleteText(!next) // revert on failure (403 for a non-owner)
-    } finally {
-      setSavingDeleteText(false)
-    }
-  }
 
   async function toggleIncludeOffline(next: boolean) {
     setSavingOffline(true)
@@ -444,45 +417,6 @@ export function TeamMembers({ lang, presence }: Props) {
         </div>
       )}
 
-      {/* Owner-only. A non-owner sees the switch but the server refuses the write (403) and the
-          optimistic flip reverts — the state is central policy, not a personal preference. */}
-      {requireDeleteText !== null && (
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-          padding: '10px 12px', borderRadius: 8, marginBottom: 16,
-          border: '1px solid var(--border)', background: 'var(--bg-elevated)',
-        }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
-              {lang === 'pt' ? 'Confirmar exclusões digitando o nome' : 'Confirm deletions by typing the name'}
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 3, lineHeight: 1.45 }}>
-              {lang === 'pt'
-                ? 'Ao excluir uma tag, conta ou máquina, exige digitar o nome exato. Só owners alteram esta opção.'
-                : 'Deleting a tag, account or machine requires typing its exact name. Only owners can change this.'}
-            </div>
-          </div>
-          <button
-            role="switch"
-            aria-checked={requireDeleteText}
-            disabled={savingDeleteText}
-            onClick={() => { void toggleRequireDeleteText(!requireDeleteText) }}
-            style={{
-              position: 'relative', flexShrink: 0,
-              width: 40, height: 22, borderRadius: 11, border: 'none',
-              background: requireDeleteText ? 'var(--anthropic-orange, #cd5d38)' : 'var(--border)',
-              cursor: savingDeleteText ? 'default' : 'pointer',
-              transition: 'background 0.15s', opacity: savingDeleteText ? 0.6 : 1,
-            }}
-          >
-            <span style={{
-              position: 'absolute', top: 2, left: requireDeleteText ? 20 : 2,
-              width: 18, height: 18, borderRadius: '50%', background: '#fff',
-              transition: 'left 0.15s',
-            }} />
-          </button>
-        </div>
-      )}
 
       {/* Load error */}
       {loadErr && (

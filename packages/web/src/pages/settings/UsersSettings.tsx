@@ -127,6 +127,34 @@ export default function UsersSettings() {
   const { lang, me } = useOutletContext<AppContext>()
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
+  // Central-wide safety policy. It lives HERE (Users, a governance page that only exists on a
+  // central) because the connection page it first went to is hidden on a central — the one place
+  // the policy applies. null until read, so the row never flashes a wrong state.
+  const [requireDeleteText, setRequireDeleteText] = useState<boolean | null>(null)
+  const [savingDeleteText, setSavingDeleteText] = useState(false)
+  useEffect(() => {
+    void fetch('/api/team/config')
+      .then(r => r.ok ? r.json() as Promise<{ requireDeleteConfirmText?: boolean }> : null)
+      .then(c => { if (c) setRequireDeleteText(c.requireDeleteConfirmText ?? true) })
+      .catch(() => { /* leave null → row hidden */ })
+  }, [])
+  async function toggleRequireDeleteText(next: boolean) {
+    setSavingDeleteText(true)
+    setRequireDeleteText(next) // optimistic
+    try {
+      const res = await fetch('/api/team/config', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requireDeleteConfirmText: next }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const c = await res.json() as { requireDeleteConfirmText?: boolean }
+      setRequireDeleteText(c.requireDeleteConfirmText ?? next)
+    } catch {
+      setRequireDeleteText(!next) // revert (the server 403s a non-owner)
+    } finally {
+      setSavingDeleteText(false)
+    }
+  }
   const viewerIsOwner = me?.role === 'owner'
 
   const [teams, setTeams] = useState<Team[]>([])
@@ -676,6 +704,44 @@ export default function UsersSettings() {
           </span>
         ))}
       </div>
+
+      {/* Central-wide delete policy. Owner-only: weakening a safety net affects everyone on this
+          central, unlike a personal preference. */}
+      {viewerIsOwner && requireDeleteText !== null && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+          padding: '10px 12px', borderRadius: 8, marginBottom: 18,
+          border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+        }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
+              {pt ? 'Confirmar exclusões digitando o nome' : 'Confirm deletions by typing the name'}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 3, lineHeight: 1.45 }}>
+              {pt
+                ? 'Exige digitar o nome exato antes de excluir. Vale para toda a central.'
+                : 'Requires typing the exact name before deleting. Applies to the whole central.'}
+            </div>
+          </div>
+          <button
+            role="switch"
+            aria-checked={requireDeleteText}
+            disabled={savingDeleteText}
+            onClick={() => { void toggleRequireDeleteText(!requireDeleteText) }}
+            style={{
+              position: 'relative', flexShrink: 0, width: 40, height: 22, borderRadius: 11, border: 'none',
+              background: requireDeleteText ? 'var(--anthropic-orange)' : 'var(--border)',
+              cursor: savingDeleteText ? 'default' : 'pointer',
+              transition: 'background 0.15s', opacity: savingDeleteText ? 0.6 : 1,
+            }}
+          >
+            <span style={{
+              position: 'absolute', top: 2, left: requireDeleteText ? 20 : 2,
+              width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left 0.15s',
+            }} />
+          </button>
+        </div>
+      )}
 
       {err && <div style={{ fontSize: 12, color: '#ef4444', marginBottom: 12 }}>{err}</div>}
 
