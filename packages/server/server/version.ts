@@ -8,6 +8,7 @@ const CACHE_TTL_MS = 60 * 60 * 1000 // 1 hour
 interface VersionCache {
   latest: string
   hasUpdate: boolean
+  critical: boolean
   fetchedAt: number
 }
 
@@ -38,6 +39,59 @@ export interface VersionInfo {
   current: string
   latest: string
   hasUpdate: boolean
+  /** True when at least one release newer than `current` is flagged critical
+   *  (see isCriticalRelease). Critical updates are installed without consent. */
+  critical: boolean
+}
+
+/** The shape we read from the GitHub releases API (only the fields we use). */
+export interface ReleaseLike {
+  tag_name: string
+  body?: string | null
+  draft?: boolean
+  prerelease?: boolean
+}
+
+/**
+ * A release is CRITICAL when its body contains a `[critical]` marker on a line of
+ * its own (case-insensitive, surrounding whitespace allowed).
+ *
+ * The marker deliberately lives in the release BODY, never in the tag: the tag must
+ * stay pure semver or the highest-semver selection above would stop recognizing it.
+ * Requiring the marker to own its line keeps prose such as "fixes a critical bug"
+ * or "[critical] only when X" from triggering an unattended upgrade.
+ */
+export function isCriticalRelease(body: string | null | undefined): boolean {
+  if (!body) return false
+  return body.split(/\r?\n/).some(line => /^[ \t]*\[critical\][ \t]*$/i.test(line))
+}
+
+/**
+ * Pure resolution of a GitHub release list against the installed version.
+ *
+ * Drafts and prereleases are ignored, as are non-semver tags (the repo also publishes a
+ * rolling "latest" release). `critical` looks at EVERY release newer than the installed
+ * one — not just the newest — so a critical fix released before a later optional one is
+ * still installed automatically.
+ */
+export function resolveLatestRelease(
+  releases: ReleaseLike[],
+  current: string,
+): { latest: string; hasUpdate: boolean; critical: boolean } {
+  const published = releases
+    .filter(r => !r.draft && !r.prerelease)
+    .map(r => ({ version: toSemver(r.tag_name), body: r.body ?? null }))
+    .filter((r): r is { version: string; body: string | null } => r.version !== null)
+
+  const latest = published
+    .map(r => r.version)
+    .sort((a, b) => compareVersions(b, a))[0]
+    ?? current
+  const hasUpdate = compareVersions(latest, current) > 0
+  const critical = hasUpdate && published.some(
+    r => compareVersions(r.version, current) > 0 && isCriticalRelease(r.body),
+  )
+  return { latest, hasUpdate, critical }
 }
 
 /**
@@ -47,7 +101,12 @@ export interface VersionInfo {
 export async function getVersionInfo(): Promise<VersionInfo> {
   const now = Date.now()
   if (_cache && now - _cache.fetchedAt < CACHE_TTL_MS) {
-    return { current: CURRENT_VERSION, latest: _cache.latest, hasUpdate: _cache.hasUpdate }
+    return {
+      current: CURRENT_VERSION,
+      latest: _cache.latest,
+      hasUpdate: _cache.hasUpdate,
+      critical: _cache.critical,
+    }
   }
 
   try {
@@ -66,19 +125,13 @@ export async function getVersionInfo(): Promise<VersionInfo> {
       },
     )
     if (!resp.ok) throw new Error(`GitHub API ${resp.status}`)
-    const releases = await resp.json() as Array<{ tag_name: string; draft?: boolean; prerelease?: boolean }>
-    const latest = releases
-      .filter(r => !r.draft && !r.prerelease)
-      .map(r => toSemver(r.tag_name))
-      .filter((v): v is string => v !== null)
-      .sort((a, b) => compareVersions(b, a))[0]
-      ?? CURRENT_VERSION
-    const hasUpdate = compareVersions(latest, CURRENT_VERSION) > 0
-    _cache = { latest, hasUpdate, fetchedAt: now }
-    return { current: CURRENT_VERSION, latest, hasUpdate }
+    const releases = await resp.json() as ReleaseLike[]
+    const { latest, hasUpdate, critical } = resolveLatestRelease(releases, CURRENT_VERSION)
+    _cache = { latest, hasUpdate, critical, fetchedAt: now }
+    return { current: CURRENT_VERSION, latest, hasUpdate, critical }
   } catch {
     // Network unavailable or rate-limited — silently skip
-    return { current: CURRENT_VERSION, latest: CURRENT_VERSION, hasUpdate: false }
+    return { current: CURRENT_VERSION, latest: CURRENT_VERSION, hasUpdate: false, critical: false }
   }
 }
 

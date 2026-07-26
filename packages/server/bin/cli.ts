@@ -58,7 +58,8 @@ Commands:
   member        Configure this machine as a team member
   upgrade       Upgrade agentop to the latest version
   autostart     Start a mode with the system (systemd user service on Linux)
-  check-update  Print a notice if a newer version is available (else silent)
+  check-update  Print a notice if a newer version is available (else silent);
+                a release marked [critical] installs itself in the background
 
 Options:
   --help, -h       Show this help message
@@ -116,6 +117,16 @@ CI (GitHub Actions):
     AGENTISTICS_OIDC_AUDIENCE / AGENTISTICS_TEAM_ORG when flags are omitted.
     Never fails the job on a push error.
 
+Updates:
+  agentop upgrade
+    Download the latest binary and restart whatever services are running.
+  agentop check-update
+    Silent when up to date. An OPTIONAL update just prints a banner. A CRITICAL update
+    (its GitHub release notes contain a "[critical]" line) is installed automatically in
+    a detached background process — the terminal returns immediately and progress is
+    logged to ~/.agentistics/auto-upgrade.log. Set AGENTISTICS_AUTO_UPGRADE=0 to disable
+    unattended installs and always be asked instead.
+
 Autostart:
   agentop autostart <mode> <enable|disable|status>
     mode ∈ { server, central, watch }
@@ -169,6 +180,37 @@ function printUpdateBanner(info: { current: string; latest: string }): void {
     `  ${_B}Run ${_AM}agentop upgrade${_R}${_B} to update automatically.${_R}\n` +
     `${sep}\n\n`,
   )
+}
+
+/**
+ * Prints the "critical update is installing itself" notice. Unlike the optional banner
+ * this is informational only — there is nothing for the user to run.
+ */
+function printCriticalUpdateBanner(
+  info: { current: string; latest: string },
+  s: { updateCriticalTitle: string; updateCriticalInstalling: (v: string) => string; updateCriticalLog: (p: string) => string },
+  logPath: string,
+): void {
+  process.stdout.write(
+    `\n  ${_AM}${_B}⚡ ${s.updateCriticalTitle}${_R}\n` +
+    `  ${_D}v${info.current} → ${_R}${_GR}${_B}v${info.latest}${_R}\n` +
+    `  ${s.updateCriticalInstalling(info.latest)}\n` +
+    `  ${_D}${s.updateCriticalLog(logPath)}${_R}\n\n`,
+  )
+}
+
+/** CLI language: `--lang en|pt`, else preferences.lang, else English. Never throws. */
+async function resolveCliLang(): Promise<'en' | 'pt'> {
+  const i = process.argv.indexOf('--lang')
+  const flag = process.argv[i + 1]
+  if (i >= 0 && (flag === 'pt' || flag === 'en')) return flag
+  try {
+    const { readPreferences } = await import('../server/preferences.ts')
+    const prefs = await readPreferences()
+    return prefs.lang === 'pt' ? 'pt' : 'en'
+  } catch {
+    return 'en'
+  }
 }
 
 async function checkVersionAndWarn(): Promise<void> {
@@ -299,11 +341,30 @@ if (command === 'upgrade' || command === 'update') {
 // Lightweight boot/terminal update check — prints the banner only when a newer
 // version exists, otherwise stays completely silent. This is what the ~/.bashrc
 // hook installed by `agentop autostart ... enable` runs on every terminal open.
+// A CRITICAL release (its GitHub release body carries a `[critical]` line) is installed
+// without asking: we spawn a detached `agentop upgrade` (which already restarts the running
+// services) and return the terminal immediately, printing only a short notice. Optional
+// updates keep the old behavior — inform, let the user decide. Set AGENTISTICS_AUTO_UPGRADE=0
+// to opt out of unattended installs and always get the plain banner instead.
 if (command === 'check-update') {
   try {
     const { getVersionInfo } = await import('../server/version.ts')
     const info = await getVersionInfo()
-    if (info.hasUpdate) printUpdateBanner(info)
+    if (!info.hasUpdate) process.exit(0) // up to date → completely silent
+    const autoAllowed = process.env.AGENTISTICS_AUTO_UPGRADE !== '0'
+    if (info.critical && autoAllowed) {
+      const { startBackgroundUpgrade, AUTO_UPGRADE_LOG } = await import('../server/upgrade.ts')
+      const { cliStrings } = await import('../server/cli-i18n.ts')
+      const s = cliStrings(await resolveCliLang())
+      const started = await startBackgroundUpgrade(info.latest)
+      if (started === 'started') printCriticalUpdateBanner(info, s, AUTO_UPGRADE_LOG)
+      else if (started === 'in-progress') process.stdout.write(`\n  ${_D}${s.updateCriticalRunning}${_R}\n\n`)
+      // 'failed' (couldn't spawn) or 'not-installed' (running from a source checkout,
+      // where self-replacing the binary is unsafe) → fall back to asking the user.
+      else printUpdateBanner(info)
+    } else {
+      printUpdateBanner(info)
+    }
   } catch {
     // Network unavailable — stay silent
   }

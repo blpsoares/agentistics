@@ -86,6 +86,12 @@ export interface CliStrings {
   noComposeFrom: (dir: string) => string
   runFromRepo: string
   buildingMachine: string
+
+  // critical (unattended) update — printed by `agentop check-update`
+  updateCriticalTitle: string
+  updateCriticalInstalling: (version: string) => string
+  updateCriticalLog: (path: string) => string
+  updateCriticalRunning: string
 }
 
 const EN: CliStrings = {
@@ -165,6 +171,11 @@ const EN: CliStrings = {
   noComposeFrom: (dir) => `couldn't find docker-compose.machine.yml in ${dir}.`,
   runFromRepo: 'Run agentop start from the agentistics repo to use Docker.',
   buildingMachine: 'building & starting the machine container…',
+
+  updateCriticalTitle: 'Critical update — installing automatically',
+  updateCriticalInstalling: (v) => `v${v} is being installed in the background; your terminal is free.`,
+  updateCriticalLog: (p) => `Progress: ${p}`,
+  updateCriticalRunning: 'A critical update is already being installed in the background.',
 }
 
 const PT: CliStrings = {
@@ -244,6 +255,11 @@ const PT: CliStrings = {
   noComposeFrom: (dir) => `não achei docker-compose.machine.yml em ${dir}.`,
   runFromRepo: 'Rode agentop start de dentro do repo agentistics para usar Docker.',
   buildingMachine: 'buildando & subindo o container da máquina…',
+
+  updateCriticalTitle: 'Atualização crítica — instalando automaticamente',
+  updateCriticalInstalling: (v) => `a v${v} está sendo instalada em segundo plano; seu terminal está livre.`,
+  updateCriticalLog: (p) => `Acompanhe em: ${p}`,
+  updateCriticalRunning: 'Uma atualização crítica já está sendo instalada em segundo plano.',
 }
 
 const TABLE: Record<CliLang, CliStrings> = { en: EN, pt: PT }
