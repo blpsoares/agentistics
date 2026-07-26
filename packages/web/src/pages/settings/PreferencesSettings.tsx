@@ -54,13 +54,38 @@ export default function PreferencesSettings() {
   const isOwnerOnCentral = ctx.isCentral && ctx.me?.role === 'owner'
   const [requireDeleteText, setRequireDeleteText] = useState<boolean | null>(null)
   const [savingDeleteText, setSavingDeleteText] = useState(false)
+  const [includeDeleted, setIncludeDeleted] = useState<boolean | null>(null)
+  const [savingIncludeDeleted, setSavingIncludeDeleted] = useState(false)
   useEffect(() => {
     if (!isOwnerOnCentral) return
     void fetch('/api/team/config')
-      .then(r => r.ok ? r.json() as Promise<{ requireDeleteConfirmText?: boolean }> : null)
-      .then(c => { if (c) setRequireDeleteText(c.requireDeleteConfirmText ?? true) })
+      .then(r => r.ok ? r.json() as Promise<{ requireDeleteConfirmText?: boolean; includeDeletedMembers?: boolean }> : null)
+      .then(c => {
+        if (!c) return
+        setRequireDeleteText(c.requireDeleteConfirmText ?? true)
+        setIncludeDeleted(c.includeDeletedMembers ?? false)
+      })
       .catch(() => { /* leave null → row hidden */ })
   }, [isOwnerOnCentral])
+  async function toggleIncludeDeleted() {
+    const next = !includeDeleted
+    setSavingIncludeDeleted(true)
+    setIncludeDeleted(next)
+    try {
+      const res = await fetch('/api/team/config', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ includeDeletedMembers: next }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const c = await res.json() as { includeDeletedMembers?: boolean }
+      setIncludeDeleted(c.includeDeletedMembers ?? next)
+    } catch {
+      setIncludeDeleted(!next)
+    } finally {
+      setSavingIncludeDeleted(false)
+    }
+  }
+
   async function toggleRequireDeleteText() {
     const next = !requireDeleteText
     setSavingDeleteText(true)
@@ -141,6 +166,18 @@ export default function PreferencesSettings() {
                 <Toggle on={requireDeleteText} onToggle={() => { void toggleRequireDeleteText() }} />
               </span>
             </PrefRow>
+            {includeDeleted !== null && (
+              <PrefRow
+                label={pt ? 'Incluir métricas de contas e máquinas excluídas' : 'Include metrics from deleted accounts and machines'}
+                sub={pt
+                  ? 'Mantém o histórico de quem foi removido, para rastreio completo. Desligado, uma exclusão para de contar.'
+                  : 'Keeps the history of anyone removed, for full traceability. Off, a deletion stops counting.'}
+              >
+                <span style={{ opacity: savingIncludeDeleted ? 0.6 : 1 }}>
+                  <Toggle on={includeDeleted} onToggle={() => { void toggleIncludeDeleted() }} />
+                </span>
+              </PrefRow>
+            )}
           </div>
           <Divider />
         </>

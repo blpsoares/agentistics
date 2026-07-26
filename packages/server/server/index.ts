@@ -1305,9 +1305,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
 
     if (url.pathname === '/api/team/config' && req.method === 'PUT') {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
-      let body: { pushIntervalSec?: unknown; includeOfflineData?: unknown; publicUrl?: unknown; requireDeleteConfirmText?: unknown }
+      let body: { pushIntervalSec?: unknown; includeOfflineData?: unknown; publicUrl?: unknown; requireDeleteConfirmText?: unknown; includeDeletedMembers?: unknown }
       try {
-        body = await req.json() as { pushIntervalSec?: unknown; includeOfflineData?: unknown; publicUrl?: unknown; requireDeleteConfirmText?: unknown }
+        body = await req.json() as { pushIntervalSec?: unknown; includeOfflineData?: unknown; publicUrl?: unknown; requireDeleteConfirmText?: unknown; includeDeletedMembers?: unknown }
       } catch {
         return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
           status: 400,
@@ -1334,6 +1334,24 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       }
       // Turning the typed-delete guard OFF weakens a safety net for everyone on this central, so
       // it is owner-only — unlike the other fields, which any admin session may set.
+      // Same owner-only rule: this changes what EVERY viewer of this central sees.
+      if (body.includeDeletedMembers !== undefined) {
+        if (typeof body.includeDeletedMembers !== 'boolean') {
+          return new Response(JSON.stringify({ error: 'includeDeletedMembers must be a boolean' }), {
+            status: 400,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        const { getPrincipal } = await import('./auth')
+        const { can } = await import('./iam-caps')
+        const principal = await getPrincipal(req)
+        if (!principal || !can(principal, 'central:config')) {
+          return new Response(JSON.stringify({ error: 'forbidden' }), {
+            status: 403,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+      }
       if (body.requireDeleteConfirmText !== undefined) {
         if (typeof body.requireDeleteConfirmText !== 'boolean') {
           return new Response(JSON.stringify({ error: 'requireDeleteConfirmText must be a boolean' }), {
@@ -1351,14 +1369,16 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           })
         }
       }
-      const { setPushInterval, setIncludeOfflineData, setPublicUrl, setRequireDeleteConfirmText, getCentralConfig } = await import('./central-config')
+      const { setPushInterval, setIncludeOfflineData, setPublicUrl, setRequireDeleteConfirmText, setIncludeDeletedMembers, getCentralConfig } = await import('./central-config')
       if (typeof body.pushIntervalSec === 'number') await setPushInterval(body.pushIntervalSec)
       if (typeof body.includeOfflineData === 'boolean') await setIncludeOfflineData(body.includeOfflineData)
       if (typeof body.publicUrl === 'string') await setPublicUrl(body.publicUrl)
       if (typeof body.requireDeleteConfirmText === 'boolean') await setRequireDeleteConfirmText(body.requireDeleteConfirmText)
+      if (typeof body.includeDeletedMembers === 'boolean') await setIncludeDeletedMembers(body.includeDeletedMembers)
       const config = await getCentralConfig()
       // A policy change (offline-data default) affects every viewer → nudge them to refetch.
-      if (typeof body.includeOfflineData === 'boolean') triggerSseNotification()
+      // Both policies change what everyone sees → nudge open dashboards to refetch.
+      if (typeof body.includeOfflineData === 'boolean' || typeof body.includeDeletedMembers === 'boolean') triggerSseNotification()
       return new Response(JSON.stringify(config), {
         status: 200,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },

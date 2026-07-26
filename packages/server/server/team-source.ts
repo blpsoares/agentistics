@@ -8,6 +8,23 @@ import { sessionKey } from './session-merge'
 import { fromTeamDoc } from './team-store'
 import { loadAllTeamWorkflows } from './team-workflows'
 import { getMemberNameMap, getMemberTeamsMap, getLiveTokenIds } from './team-tokens'
+import { getCentralConfig } from './central-config'
+
+/**
+ * The set of member ids whose sessions still count, or `null` for "keep everything".
+ *
+ * By default a revoked/deleted machine stops contributing — deleting something should make it stop
+ * counting. With `includeDeletedMembers` on, the history is kept instead, so past totals do not
+ * shrink when someone is offboarded. A failed lookup returns null (passthrough) rather than hiding
+ * every session on a transient error.
+ */
+async function liveMemberFilter(): Promise<Set<string> | null> {
+  try {
+    const cfg = await getCentralConfig()
+    if (cfg.includeDeletedMembers) return null
+  } catch { /* config unreachable → fall through to the default filter */ }
+  return getLiveTokenIds().catch(() => null)
+}
 
 /**
  * Phase-1 "folder union" transport. Reads consolidated SessionMeta JSONs from
@@ -47,11 +64,10 @@ export async function loadTeamSessionsFromMongo(): Promise<SessionMeta[]> {
     col.find({}).toArray(),
     getMemberNameMap().catch(() => ({} as Record<string, string>)),
     getMemberTeamsMap().catch(() => ({} as Record<string, string[]>)),
-    getLiveTokenIds().catch(() => null),
+    liveMemberFilter(),
   ])
-  // Drop orphaned sessions whose member token was revoked/deleted — otherwise a removed
-  // machine keeps contributing metrics. Only filter when the live-token set loaded cleanly
-  // (null = lookup failed → passthrough rather than hide everything on a transient error).
+  // null = keep everything (either the central opted into showing deleted members' history, or the
+  // lookup failed and we would rather show too much than blank the dashboard).
   const live = liveIds
   return docs
     .filter(doc => !live || live.has(doc.memberId))
@@ -101,23 +117,28 @@ const TAG_SESSION_PROJECTION = {
  * `getLiveTokenIds` (null = lookup failed → passthrough, same as above) and team ids are resolved
  * at read time from the tokens collection.
  *
- * The display *name* resolution is deliberately skipped — no tag response renders `session.user`
- * (machine labels come from the machine registry in tags-handlers), so it would be a wasted query.
- * The returned objects are therefore PARTIAL SessionMeta: fields outside the projection are
+ * The display name IS resolved here: the member ranking on the tag detail groups by `session.user`,
+ * so reading the doc's cached name would split a renamed or re-owned machine into two people.
+ * The returned objects are otherwise PARTIAL SessionMeta: fields outside the projection are
  * `undefined`. Do not feed them to anything but the tag pipeline.
  */
 export async function loadTagSessionsFromMongo(): Promise<SessionMeta[]> {
   const col = await getTeamCollection()
-  const [docs, teamMap, liveIds] = await Promise.all([
+  const [docs, nameMap, teamMap, liveIds] = await Promise.all([
     col.find({}, { projection: TAG_SESSION_PROJECTION }).toArray(),
+    // The name MUST be resolved from the live tokens, not read from the doc's cache. A session doc
+    // keeps whatever display name was current at ingest, so a renamed (or re-owned) machine kept
+    // reporting its old owner — which split ONE person into two rows in the member ranking and
+    // inflated the distinct-member count.
+    getMemberNameMap().catch(() => ({} as Record<string, string>)),
     getMemberTeamsMap().catch(() => ({} as Record<string, string[]>)),
-    getLiveTokenIds().catch(() => null),
+    liveMemberFilter(),
   ])
   const live = liveIds
   const rows = docs
     .filter(doc => !live || live.has(doc.memberId))
     .map(doc => {
-      const meta = fromTeamDoc(doc)
+      const meta = fromTeamDoc({ ...doc, user: nameMap[doc.memberId] ?? doc.user })
       const teamIds = teamMap[doc.memberId] ?? [] // loose (no team) → visible only to an owner
       meta.teamIds = teamIds
       meta.teamId = teamIds[0]

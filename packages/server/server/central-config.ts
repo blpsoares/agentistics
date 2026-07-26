@@ -23,6 +23,11 @@ export interface CentralConfig {
   /** Public base URL of this central (no trailing slash). When set, minted machine tokens embed
    *  it so a machine can auto-fill the endpoint from the pasted token. Empty = not configured. */
   publicUrl?: string
+  /** Keep showing metrics from machines/accounts whose token was revoked or deleted.
+   *  Defaults OFF: the expected reading of "I deleted this machine" is that it stops counting.
+   *  Turn it ON for full historical traceability — the work happened, and dropping it silently
+   *  makes past totals shrink whenever someone is offboarded. */
+  includeDeletedMembers: boolean
   /** Require the operator to TYPE the item's name before a destructive delete goes through.
    *  Defaults ON: the cost of the extra keystrokes is trivial next to deleting the wrong tag,
    *  account or machine. Only an owner may turn it off (`central:config`). */
@@ -40,6 +45,8 @@ interface CentralConfigDoc extends Partial<CentralConfig> {
 const DEFAULT_INCLUDE_OFFLINE = true
 // Safety default: a destructive action asks the operator to type the name. Opt OUT, never opt in.
 const DEFAULT_REQUIRE_DELETE_TEXT = true
+// Off by default: deleting something should make it stop counting unless you ask otherwise.
+const DEFAULT_INCLUDE_DELETED = false
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -59,6 +66,7 @@ export async function getCentralConfig(): Promise<CentralConfig> {
         pushIntervalSec: PUSH_INTERVAL.DEFAULT_SEC,
         includeOfflineData: DEFAULT_INCLUDE_OFFLINE,
         requireDeleteConfirmText: DEFAULT_REQUIRE_DELETE_TEXT,
+        includeDeletedMembers: DEFAULT_INCLUDE_DELETED,
       }
     }
     // Read with the express floor so an express value (<15s) survives the round-trip.
@@ -66,6 +74,7 @@ export async function getCentralConfig(): Promise<CentralConfig> {
       pushIntervalSec: clampPushInterval(doc.pushIntervalSec ?? PUSH_INTERVAL.DEFAULT_SEC, PUSH_INTERVAL.EXPRESS_MIN_SEC),
       includeOfflineData: doc.includeOfflineData ?? DEFAULT_INCLUDE_OFFLINE,
       requireDeleteConfirmText: doc.requireDeleteConfirmText ?? DEFAULT_REQUIRE_DELETE_TEXT,
+      includeDeletedMembers: doc.includeDeletedMembers ?? DEFAULT_INCLUDE_DELETED,
       ...(doc.publicUrl ? { publicUrl: doc.publicUrl } : {}),
     }
   } catch {
@@ -74,6 +83,7 @@ export async function getCentralConfig(): Promise<CentralConfig> {
       pushIntervalSec: PUSH_INTERVAL.DEFAULT_SEC,
       includeOfflineData: DEFAULT_INCLUDE_OFFLINE,
       requireDeleteConfirmText: DEFAULT_REQUIRE_DELETE_TEXT,
+      includeDeletedMembers: DEFAULT_INCLUDE_DELETED,
     }
   }
 }
@@ -159,5 +169,13 @@ export async function setRequireDeleteConfirmText(value: boolean): Promise<boole
   const db = await getMongoDb()
   const col = db.collection<CentralConfigDoc>(COLLECTION)
   await col.updateOne({ _id: DOC_ID }, { $set: { requireDeleteConfirmText: value } }, { upsert: true })
+  return value
+}
+
+/** Owner-only (`central:config`). Persist whether revoked members' history keeps counting. */
+export async function setIncludeDeletedMembers(value: boolean): Promise<boolean> {
+  const db = await getMongoDb()
+  const col = db.collection<CentralConfigDoc>(COLLECTION)
+  await col.updateOne({ _id: DOC_ID }, { $set: { includeDeletedMembers: value } }, { upsert: true })
   return value
 }
