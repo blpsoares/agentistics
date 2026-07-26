@@ -1,18 +1,124 @@
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { version as CURRENT_VERSION } from '../../../package.json'
+import { AGENTISTICS_DATA_DIR } from './config.ts'
 
 export { CURRENT_VERSION }
 
 const GITHUB_REPO = 'blpsoares/agentistics'
-const CACHE_TTL_MS = 60 * 60 * 1000 // 1 hour
+const CACHE_TTL_MS = 60 * 60 * 1000 // 1 hour (in-process)
 
-interface VersionCache {
+// ---------------------------------------------------------------------------
+// On-disk version cache
+//
+// `agentop check-update` runs from a shell rc hook on EVERY terminal that opens, and each
+// run is a brand new process — so the in-process cache below never helps it: every shell
+// paid a live GitHub call (up to the 6s timeout) before the prompt appeared. The verdict is
+// therefore persisted to disk and shared by every process on the machine, and the shell hook
+// answers from that file only (the refresh happens in a detached process — see bin/cli.ts).
+//
+// The verdict (`hasUpdate`/`critical`) is relative to the INSTALLED version, so the entry
+// records which version it was computed for: after an upgrade the entry no longer applies
+// and is ignored rather than claiming a phantom update.
+// ---------------------------------------------------------------------------
+
+/** Shared across processes: ~/.agentistics/version-cache.json */
+export const VERSION_CACHE_FILE = join(AGENTISTICS_DATA_DIR, 'version-cache.json')
+/** How long a successful check stays authoritative before a refresh is due. */
+export const VERSION_CACHE_TTL_MS = 3 * 60 * 60 * 1000 // 3 hours
+/** Minimum spacing between refresh ATTEMPTS — stops 20 shells opening at once (or an
+ *  offline machine) from firing 20 GitHub calls. */
+export const VERSION_RETRY_MS = 15 * 60 * 1000 // 15 minutes
+
+export interface VersionCacheEntry {
+  /** The installed version this verdict was computed against. */
+  current: string
   latest: string
   hasUpdate: boolean
   critical: boolean
+  /** Last SUCCESSFUL fetch (0 = never succeeded). */
   fetchedAt: number
+  /** Last attempt, successful or not — drives the retry spacing. */
+  attemptedAt?: number
 }
 
-let _cache: VersionCache | null = null
+let _cache: VersionCacheEntry | null = null
+
+/** Pure: parse the on-disk cache. Returns null for junk/truncated/foreign content. */
+export function parseVersionCache(raw: string): VersionCacheEntry | null {
+  try {
+    const o = JSON.parse(raw) as Partial<VersionCacheEntry>
+    if (!o || typeof o.current !== 'string' || typeof o.latest !== 'string') return null
+    if (typeof o.fetchedAt !== 'number' || !Number.isFinite(o.fetchedAt)) return null
+    return {
+      current: o.current,
+      latest: o.latest,
+      hasUpdate: o.hasUpdate === true,
+      critical: o.critical === true,
+      fetchedAt: o.fetchedAt,
+      attemptedAt: typeof o.attemptedAt === 'number' && Number.isFinite(o.attemptedAt)
+        ? o.attemptedAt
+        : undefined,
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Pure: is the entry a still-authoritative answer for `current`? */
+export function isVersionCacheFresh(
+  entry: VersionCacheEntry | null,
+  now: number,
+  current: string,
+  ttlMs: number = VERSION_CACHE_TTL_MS,
+): boolean {
+  if (!entry || entry.current !== current || entry.fetchedAt <= 0) return false
+  return now - entry.fetchedAt < ttlMs
+}
+
+/**
+ * Pure: the last verdict we can still stand behind, or null when there is none.
+ * Deliberately age-tolerant — a stale-but-real answer is what the shell hook prints while
+ * a background refresh runs; a verdict for a DIFFERENT installed version is never reused.
+ */
+export function cachedVersionInfo(entry: VersionCacheEntry | null, current: string): VersionInfo | null {
+  if (!entry || entry.current !== current || entry.fetchedAt <= 0) return null
+  return { current, latest: entry.latest, hasUpdate: entry.hasUpdate, critical: entry.critical }
+}
+
+/**
+ * Pure: should a refresh run now? Never more often than VERSION_RETRY_MS (attempt spacing,
+ * which also throttles a machine that is offline), and only once the entry is past its TTL.
+ */
+export function shouldRefreshVersionCache(
+  entry: VersionCacheEntry | null,
+  now: number,
+  current: string,
+  ttlMs: number = VERSION_CACHE_TTL_MS,
+  retryMs: number = VERSION_RETRY_MS,
+): boolean {
+  if (!entry || entry.current !== current) return true
+  const attempted = entry.attemptedAt ?? entry.fetchedAt
+  if (now - attempted < retryMs) return false
+  return now - entry.fetchedAt >= ttlMs
+}
+
+/** Reads the shared cache file. Never throws. */
+export function readVersionCache(): VersionCacheEntry | null {
+  try {
+    return parseVersionCache(readFileSync(VERSION_CACHE_FILE, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+/** Writes the shared cache file. Best-effort — a read-only HOME must not break the check. */
+function writeVersionCache(entry: VersionCacheEntry): void {
+  try {
+    mkdirSync(AGENTISTICS_DATA_DIR, { recursive: true })
+    writeFileSync(VERSION_CACHE_FILE, JSON.stringify(entry))
+  } catch { /* best-effort */ }
+}
 
 /** Strict semver pattern (major.minor.patch). Non-matching tags (e.g. the
  *  rolling "latest" release tag) are ignored when resolving the newest version. */
@@ -52,28 +158,64 @@ export interface ReleaseLike {
   prerelease?: boolean
 }
 
+/** Opening/closing fence of a markdown code block (``` or ~~~, up to 3 spaces of indent). */
+const FENCE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/
+/**
+ * The marker owning its line. At most 3 leading spaces: 4+ spaces is an INDENTED code
+ * block in markdown, i.e. documentation of the marker rather than the marker itself.
+ */
+const MARKER_RE = /^ {0,3}\[critical\][ \t]*$/i
+
 /**
  * A release is CRITICAL when its body contains a `[critical]` marker on a line of
- * its own (case-insensitive, surrounding whitespace allowed).
+ * its own (case-insensitive, surrounding whitespace allowed) OUTSIDE any code block.
  *
  * The marker deliberately lives in the release BODY, never in the tag: the tag must
  * stay pure semver or the highest-semver selection above would stop recognizing it.
  * Requiring the marker to own its line keeps prose such as "fixes a critical bug"
  * or "[critical] only when X" from triggering an unattended upgrade.
+ *
+ * Fenced (``` / ~~~) and indented regions are skipped: release notes that DOCUMENT the
+ * mechanism ("mark a release critical with:\n```\n[critical]\n```") would otherwise flag
+ * themselves and force an unattended install onto every machine that opens a terminal.
+ * Closing a fence requires the same character, at least the opening length, and nothing
+ * but whitespace after it — so a fence never silently "ends" on a content line.
  */
 export function isCriticalRelease(body: string | null | undefined): boolean {
   if (!body) return false
-  return body.split(/\r?\n/).some(line => /^[ \t]*\[critical\][ \t]*$/i.test(line))
+  let openChar = ''
+  let openLen = 0
+  for (const line of body.split(/\r?\n/)) {
+    const fence = line.match(FENCE_RE)
+    if (fence) {
+      const ticks = fence[1]!
+      const rest = fence[2] ?? ''
+      if (!openChar) {
+        openChar = ticks[0]!
+        openLen = ticks.length
+        continue
+      }
+      if (ticks[0] === openChar && ticks.length >= openLen && rest.trim() === '') {
+        openChar = ''
+        openLen = 0
+      }
+      continue // still inside the block (a non-matching fence line is just content)
+    }
+    if (openChar) continue // inside a fenced block — markers there are documentation
+    if (MARKER_RE.test(line)) return true
+  }
+  return false
 }
 
 /**
  * Whether a critical release may install itself with no consent.
  *
- * OPT-IN by design. Replacing the running binary unattended is only safe once the install path is
- * atomic, verified, rollback-capable and gated on platform/arch — none of which it is yet (the
- * download URL is hardcoded to the Linux x86_64 asset, the temp file is a shared path, no backup
- * is kept and restart failures are swallowed). A wrong default here does not inconvenience one
- * user, it bricks every install that opens a terminal.
+ * STILL OPT-IN. The install path itself is now hardened — platform/arch gated, unique temp file,
+ * lock held across the whole install, download verified (size + executable magic + the new
+ * binary's own `--version`), previous binary backed up and restored on failure, restart failures
+ * surfaced, and a persisted backoff so a permanently-failing update stops re-downloading. Flipping
+ * the default to opt-out is a separate, reviewed change: a wrong default here does not inconvenience
+ * one user, it reaches every install that opens a terminal.
  */
 export function autoInstallAllowed(env: Record<string, string | undefined> = process.env): boolean {
   return env.AGENTISTICS_AUTO_UPGRADE === '1'
@@ -109,16 +251,28 @@ export function resolveLatestRelease(
 
 /**
  * Fetches the latest GitHub release and compares with the current version.
- * Results are cached for 1 hour. On network failure, returns hasUpdate: false.
+ *
+ * Answers from the in-process cache (1h), then the shared on-disk cache (VERSION_CACHE_TTL_MS),
+ * and only then hits the network. On network failure the last known verdict is returned when we
+ * have one (better than pretending there is no update), otherwise "no update".
+ *
+ * `force: true` skips both caches — used by the detached refresh that keeps the disk cache warm.
  */
-export async function getVersionInfo(): Promise<VersionInfo> {
+export async function getVersionInfo(opts: { force?: boolean } = {}): Promise<VersionInfo> {
   const now = Date.now()
-  if (_cache && now - _cache.fetchedAt < CACHE_TTL_MS) {
-    return {
-      current: CURRENT_VERSION,
-      latest: _cache.latest,
-      hasUpdate: _cache.hasUpdate,
-      critical: _cache.critical,
+  if (!opts.force) {
+    if (_cache && _cache.current === CURRENT_VERSION && now - _cache.fetchedAt < CACHE_TTL_MS) {
+      return {
+        current: CURRENT_VERSION,
+        latest: _cache.latest,
+        hasUpdate: _cache.hasUpdate,
+        critical: _cache.critical,
+      }
+    }
+    const disk = readVersionCache()
+    if (isVersionCacheFresh(disk, now, CURRENT_VERSION)) {
+      _cache = disk
+      return cachedVersionInfo(disk, CURRENT_VERSION)!
     }
   }
 
@@ -140,11 +294,24 @@ export async function getVersionInfo(): Promise<VersionInfo> {
     if (!resp.ok) throw new Error(`GitHub API ${resp.status}`)
     const releases = await resp.json() as ReleaseLike[]
     const { latest, hasUpdate, critical } = resolveLatestRelease(releases, CURRENT_VERSION)
-    _cache = { latest, hasUpdate, critical, fetchedAt: now }
+    _cache = { current: CURRENT_VERSION, latest, hasUpdate, critical, fetchedAt: now, attemptedAt: now }
+    writeVersionCache(_cache)
     return { current: CURRENT_VERSION, latest, hasUpdate, critical }
   } catch {
-    // Network unavailable or rate-limited — silently skip
-    return { current: CURRENT_VERSION, latest: CURRENT_VERSION, hasUpdate: false, critical: false }
+    // Network unavailable or rate-limited. Stamp the attempt so the next shells don't retry
+    // immediately (VERSION_RETRY_MS), and fall back to the last verdict we actually got.
+    const prev = readVersionCache()
+    const kept = prev && prev.current === CURRENT_VERSION ? prev : null
+    writeVersionCache({
+      current: CURRENT_VERSION,
+      latest: kept?.latest ?? CURRENT_VERSION,
+      hasUpdate: kept?.hasUpdate ?? false,
+      critical: kept?.critical ?? false,
+      fetchedAt: kept?.fetchedAt ?? 0,
+      attemptedAt: now,
+    })
+    return cachedVersionInfo(kept, CURRENT_VERSION)
+      ?? { current: CURRENT_VERSION, latest: CURRENT_VERSION, hasUpdate: false, critical: false }
   }
 }
 

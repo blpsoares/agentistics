@@ -119,13 +119,18 @@ CI (GitHub Actions):
 
 Updates:
   agentop upgrade
-    Download the latest binary and restart whatever services are running.
+    Download the latest binary and restart whatever services are running. Only installs a
+    release published for this platform/arch, verifies the download (size, executable magic
+    and the new binary's own --version) before swapping it in, keeps the previous binary at
+    <binary>.bak and restores it if anything fails. Exits non-zero when the install was
+    refused/rolled back or a service could not be restarted onto the new version.
   agentop check-update
-    Silent when up to date. An OPTIONAL update prints a banner; a CRITICAL update (its
-    GitHub release notes contain a "[critical]" line) prints a louder one telling you to
-    run \`agentop upgrade\`. Unattended install is OPT-IN: set AGENTISTICS_AUTO_UPGRADE=1
-    to let a critical release install itself in a detached background process, logged to
-    ~/.agentistics/auto-upgrade.log.
+    Silent when up to date. Answers from ~/.agentistics/version-cache.json and refreshes it
+    in a detached process, so it never delays a shell prompt. An OPTIONAL update prints a
+    banner; a CRITICAL update (its GitHub release notes contain a "[critical]" line outside
+    code fences) prints a louder one telling you to run \`agentop upgrade\`. Unattended install
+    is OPT-IN: set AGENTISTICS_AUTO_UPGRADE=1 to let a critical release install itself in a
+    detached background process, logged to ~/.agentistics/auto-upgrade.log.
 
 Autostart:
   agentop autostart <mode> <enable|disable|status>
@@ -213,7 +218,17 @@ async function resolveCliLang(): Promise<'en' | 'pt'> {
   }
 }
 
+/**
+ * Set by the upgrade's verification probe (and honoured everywhere a command would
+ * otherwise reach for GitHub): `agentop --version` must answer instantly and offline when
+ * the installer runs the freshly downloaded binary to make it identify itself.
+ */
+function updateChecksDisabled(): boolean {
+  return process.env.AGENTISTICS_NO_UPDATE_CHECK === '1'
+}
+
 async function checkVersionAndWarn(): Promise<void> {
+  if (updateChecksDisabled()) return
   try {
     const { getVersionInfo } = await import('../server/version.ts')
     const info = await getVersionInfo()
@@ -221,6 +236,26 @@ async function checkVersionAndWarn(): Promise<void> {
     printUpdateBanner(info)
   } catch {
     // Network unavailable — silently skip
+  }
+}
+
+/**
+ * Refreshes the shared on-disk version cache in a DETACHED process and returns immediately.
+ * This is what keeps the shell rc hook off the network: `agentop check-update` answers from
+ * the cache file, and a slow or failing GitHub call can never delay a prompt.
+ */
+async function spawnVersionCacheRefresh(): Promise<void> {
+  try {
+    const { spawn } = await import('node:child_process')
+    const script = process.argv[1]
+    const fromSource = !!script && (script.endsWith('.ts') || script.endsWith('.js'))
+    const argv = fromSource
+      ? [script, 'check-update', '--refresh']
+      : ['check-update', '--refresh']
+    const child = spawn(process.execPath, argv, { detached: true, stdio: 'ignore' })
+    child.unref()
+  } catch {
+    // Can't spawn — the next shell simply tries again.
   }
 }
 
@@ -322,6 +357,9 @@ if (command === 'ci-push') {
 if (command === '--version' || command === '-v') {
   const { CURRENT_VERSION, getVersionInfo } = await import('../server/version.ts')
   process.stdout.write(`agentop v${CURRENT_VERSION}\n`)
+  // The upgrade's verification probe runs exactly this command on the downloaded binary and
+  // must not wait on GitHub (nor recurse into an update check mid-install).
+  if (updateChecksDisabled()) process.exit(0)
   const info = await getVersionInfo()
   if (info.hasUpdate) {
     process.stdout.write(
@@ -334,28 +372,50 @@ if (command === '--version' || command === '-v') {
 
 if (command === 'upgrade' || command === 'update') {
   const { runUpgrade } = await import('../server/upgrade.ts')
-  await runUpgrade()
-  process.exit(0)
+  // Exit code reflects reality: non-zero when the install was refused/rolled back, or when a
+  // running service could not be restarted onto the new version.
+  process.exit(await runUpgrade(await resolveCliLang()))
 }
 
-// Lightweight boot/terminal update check — prints the banner only when a newer
-// version exists, otherwise stays completely silent. This is what the ~/.bashrc
-// hook installed by `agentop autostart ... enable` runs on every terminal open.
-// A CRITICAL release (its GitHub release body carries a `[critical]` line) is installed
-// Optional updates inform and let the user decide. A CRITICAL release does the same by default
-// but with a louder banner; with AGENTISTICS_AUTO_UPGRADE=1 it instead spawns a detached
-// `agentop upgrade` (which already restarts the running services) and returns the terminal
-// immediately. Unattended install stays opt-in until the install path is atomic, verified,
-// rollback-capable and arch-gated.
+// Lightweight boot/terminal update check — prints the banner only when a newer version exists,
+// otherwise stays completely silent. This is what the ~/.bashrc hook installed by
+// `agentop autostart ... enable` runs on EVERY terminal open, so it must be instant:
+//
+//   • the verdict is read from the shared on-disk cache (~/.agentistics/version-cache.json),
+//     never from a live GitHub call — a slow or dead network cannot delay a prompt;
+//   • when that cache is due for a refresh, a DETACHED `agentop check-update --refresh`
+//     updates it in the background and this process exits immediately.
+//
+// Optional updates inform and let the user decide. A CRITICAL release (its GitHub release body
+// carries a `[critical]` line, outside code fences) does the same by default but with a louder
+// banner; with AGENTISTICS_AUTO_UPGRADE=1 it instead spawns a detached `agentop upgrade` (which
+// verifies, backs up, installs and restarts the running services) and returns the terminal
+// immediately. Unattended install stays opt-in until the hardened path has been reviewed.
 if (command === 'check-update') {
   try {
-    const { getVersionInfo } = await import('../server/version.ts')
-    const info = await getVersionInfo()
-    if (!info.hasUpdate) process.exit(0) // up to date → completely silent
-    // Unattended install is OPT-IN, not opt-out. Replacing the running binary without consent is
-    // only safe once the install path is atomic, verified, rollback-capable and arch-gated — none
-    // of which it is yet (no platform/arch check, a shared temp path, no backup, restart failures
-    // swallowed). Until then a critical release gets a loud banner and the user runs the upgrade.
+    const {
+      CURRENT_VERSION, getVersionInfo, readVersionCache, cachedVersionInfo, shouldRefreshVersionCache,
+    } = await import('../server/version.ts')
+
+    // Hidden: the detached refresh. Does the blocking network call, writes the shared cache,
+    // prints nothing. Never spawned recursively (this branch never spawns).
+    if (args.includes('--refresh')) {
+      await getVersionInfo({ force: true })
+      process.exit(0)
+    }
+
+    const entry = readVersionCache()
+    if (shouldRefreshVersionCache(entry, Date.now(), CURRENT_VERSION)) await spawnVersionCacheRefresh()
+
+    const info = cachedVersionInfo(entry, CURRENT_VERSION)
+    // No usable answer yet (first run, or a fresh install whose version the cache predates) →
+    // stay silent; the refresh just spawned will have one for the next shell.
+    if (!info || !info.hasUpdate) process.exit(0)
+
+    // Unattended install is OPT-IN, not opt-out. The install path is now hardened (arch gate,
+    // unique temp file, lock across the whole install, verified download, backup + rollback,
+    // surfaced restart failures, failure backoff) but flipping the default is a separate,
+    // reviewed change. Until then a critical release gets a loud banner and the user runs it.
     const { autoInstallAllowed } = await import('../server/version.ts')
     const autoAllowed = autoInstallAllowed()
     if (info.critical && autoAllowed) {
@@ -365,6 +425,17 @@ if (command === 'check-update') {
       const started = await startBackgroundUpgrade(info.latest)
       if (started === 'started') printCriticalUpdateBanner(info, s, AUTO_UPGRADE_LOG)
       else if (started === 'in-progress') process.stdout.write(`\n  ${_D}${s.updateCriticalRunning}${_R}\n\n`)
+      // No release asset for this platform/arch — never download a binary that cannot run here.
+      else if (started === 'unsupported') {
+        process.stdout.write(
+          `\n  ${_AM}${_B}⚡ ${s.updateCriticalManualTitle}${_R}\n` +
+          `  ${_D}v${info.current} → ${_R}${_GR}${_B}v${info.latest}${_R}\n` +
+          `  ${s.updateCriticalUnsupported(`${process.platform}/${process.arch}`)}\n\n`,
+        )
+      }
+      // The same version already failed recently → say so once, quietly, instead of
+      // re-downloading ~140 MB on every shell that opens.
+      else if (started === 'backoff') process.stdout.write(`\n  ${_D}${s.updateCriticalRetryLater}${_R}\n\n`)
       // 'failed' (couldn't spawn) or 'not-installed' (running from a source checkout,
       // where self-replacing the binary is unsafe) → fall back to asking the user.
       else printUpdateBanner(info)

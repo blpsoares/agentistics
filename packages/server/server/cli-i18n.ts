@@ -94,6 +94,22 @@ export interface CliStrings {
   updateCriticalRunning: string
   updateCriticalManualTitle: string
   updateCriticalManualHow: (cmd: string) => string
+  updateCriticalUnsupported: (target: string) => string
+  updateCriticalRetryLater: string
+
+  // `agentop upgrade` — install safety (verification, rollback, restart failures)
+  upgradeVerifying: string
+  upgradeFromSource: (execPath: string) => string
+  upgradeInProgress: (pid: number) => string
+  upgradeLockUnavailable: string
+  upgradeUnsupported: (target: string) => string
+  upgradeManualHow: (url: string) => string
+  upgradeVerifyFailed: (reason: string) => string
+  upgradeRolledBack: (backup: string) => string
+  upgradeUntouched: string
+  upgradeBackupKept: (backup: string) => string
+  upgradeRestartFailed: (version: string) => string
+  upgradeRestartHint: string
 }
 
 const EN: CliStrings = {
@@ -180,6 +196,21 @@ const EN: CliStrings = {
   updateCriticalRunning: 'A critical update is already being installed in the background.',
   updateCriticalManualTitle: 'Critical update available',
   updateCriticalManualHow: (cmd) => `Install it with ${cmd} — automatic install is opt-in (AGENTISTICS_AUTO_UPGRADE=1).`,
+  updateCriticalUnsupported: (target) => `Automatic install is not available for ${target} — install it by hand.`,
+  updateCriticalRetryLater: 'A critical update failed to install earlier; it will be retried later.',
+
+  upgradeVerifying: '  Verifying the downloaded binary…',
+  upgradeFromSource: (execPath) => `Refusing to upgrade: this is a source checkout, so upgrading would overwrite ${execPath}. Build/install the binary instead (bun run build:binary).`,
+  upgradeInProgress: (pid) => `An upgrade is already running (pid ${pid}) — nothing to do.`,
+  upgradeLockUnavailable: 'Could not write the upgrade lock; continuing without it.',
+  upgradeUnsupported: (target) => `No agentop release is published for ${target}, so it cannot upgrade itself.`,
+  upgradeManualHow: (url) => `Download the right binary for your platform and replace it by hand: ${url}`,
+  upgradeVerifyFailed: (reason) => `Upgrade aborted: ${reason}.`,
+  upgradeRolledBack: (backup) => `The previous binary was restored from ${backup}.`,
+  upgradeUntouched: 'The installed binary was left untouched.',
+  upgradeBackupKept: (backup) => `Previous binary kept at ${backup}.`,
+  upgradeRestartFailed: (version) => `v${version} is installed, but some services were NOT restarted onto it:`,
+  upgradeRestartHint: 'Restart them by hand (e.g. `agentop restart --all`) — they still run the old version.',
 }
 
 const PT: CliStrings = {
@@ -266,6 +297,21 @@ const PT: CliStrings = {
   updateCriticalRunning: 'Uma atualização crítica já está sendo instalada em segundo plano.',
   updateCriticalManualTitle: 'Atualização crítica disponível',
   updateCriticalManualHow: (cmd) => `Instale com ${cmd} — a instalação automática é opt-in (AGENTISTICS_AUTO_UPGRADE=1).`,
+  updateCriticalUnsupported: (target) => `A instalação automática não está disponível para ${target} — instale manualmente.`,
+  updateCriticalRetryLater: 'Uma atualização crítica falhou antes; ela será tentada de novo mais tarde.',
+
+  upgradeVerifying: '  Verificando o binário baixado…',
+  upgradeFromSource: (execPath) => `Upgrade recusado: isto é um checkout do código, então atualizar sobrescreveria ${execPath}. Gere/instale o binário (bun run build:binary).`,
+  upgradeInProgress: (pid) => `Já existe uma atualização rodando (pid ${pid}) — nada a fazer.`,
+  upgradeLockUnavailable: 'Não consegui escrever o lock de upgrade; seguindo sem ele.',
+  upgradeUnsupported: (target) => `Não existe release do agentop para ${target}, então ele não pode se atualizar sozinho.`,
+  upgradeManualHow: (url) => `Baixe o binário da sua plataforma e troque na mão: ${url}`,
+  upgradeVerifyFailed: (reason) => `Upgrade abortado: ${reason}.`,
+  upgradeRolledBack: (backup) => `O binário anterior foi restaurado de ${backup}.`,
+  upgradeUntouched: 'O binário instalado não foi tocado.',
+  upgradeBackupKept: (backup) => `Binário anterior mantido em ${backup}.`,
+  upgradeRestartFailed: (version) => `a v${version} foi instalada, mas alguns serviços NÃO foram reiniciados nela:`,
+  upgradeRestartHint: 'Reinicie na mão (ex.: `agentop restart --all`) — eles ainda rodam a versão antiga.',
 }
 
 const TABLE: Record<CliLang, CliStrings> = { en: EN, pt: PT }

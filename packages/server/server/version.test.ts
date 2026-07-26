@@ -1,5 +1,16 @@
 import { test, expect } from 'bun:test'
-import { compareVersions, isCriticalRelease, autoInstallAllowed, resolveLatestRelease } from './version'
+import {
+  compareVersions,
+  isCriticalRelease,
+  autoInstallAllowed,
+  resolveLatestRelease,
+  parseVersionCache,
+  isVersionCacheFresh,
+  cachedVersionInfo,
+  shouldRefreshVersionCache,
+  VERSION_CACHE_TTL_MS,
+  VERSION_RETRY_MS,
+} from './version'
 // The unattended-upgrade lock lives in upgrade.ts, but its pure helpers are part of the
 // same "smart auto-update" surface, so they are covered here alongside the version logic.
 import { isInstalledBinary, isUpgradeLockActive, parseUpgradeLock, UPGRADE_LOCK_TTL_MS } from './upgrade'
@@ -48,6 +59,22 @@ test('isCriticalRelease ignores prose and inline mentions', () => {
   expect(isCriticalRelease(undefined)).toBe(false)
 })
 
+test('isCriticalRelease ignores markers inside code fences', () => {
+  // Release notes that DOCUMENT the mechanism must not flag themselves — that single false
+  // positive would force an unattended install onto every machine that opens a terminal.
+  expect(isCriticalRelease('To force an install, add:\n\n```\n[critical]\n```\n')).toBe(false)
+  expect(isCriticalRelease('```markdown\n[critical]\n```')).toBe(false)   // fence with an info string
+  expect(isCriticalRelease('~~~\n[critical]\n~~~')).toBe(false)           // tilde fence
+  expect(isCriticalRelease('````\n```\n[critical]\n```\n````')).toBe(false) // nested/longer fence
+  expect(isCriticalRelease('    [critical]')).toBe(false)                // 4-space indented code block
+  // An unterminated fence swallows the rest of the body rather than re-opening it.
+  expect(isCriticalRelease('```\n[critical]')).toBe(false)
+  // ...but a marker OUTSIDE the fence still counts, before or after it.
+  expect(isCriticalRelease('[critical]\n\n```\nsome code\n```')).toBe(true)
+  expect(isCriticalRelease('```\nsome code\n```\n\n[critical]')).toBe(true)
+  expect(isCriticalRelease('```js\nconst x = 1\n```\n[critical]\nfixes data loss')).toBe(true)
+})
+
 // --- resolveLatestRelease ---------------------------------------------------
 
 test('resolveLatestRelease picks the newest published semver and flags criticality', () => {
@@ -74,6 +101,59 @@ test('resolveLatestRelease ignores drafts and prereleases', () => {
   expect(resolveLatestRelease(releases, '1.5.0')).toEqual({ latest: '1.6.0', hasUpdate: true, critical: false })
   // No usable release at all → fall back to current, no false update.
   expect(resolveLatestRelease([], '1.5.0')).toEqual({ latest: '1.5.0', hasUpdate: false, critical: false })
+})
+
+// --- shared on-disk version cache -------------------------------------------
+// The shell rc hook runs `agentop check-update` in a NEW process on every terminal, so the
+// in-process cache never helped it. These helpers decide what that process may answer from
+// disk and when a (detached) refresh is due.
+
+const entry = (over: Partial<ReturnType<typeof parseVersionCache>> = {}) => ({
+  current: '1.7.0', latest: '1.8.0', hasUpdate: true, critical: false, fetchedAt: 1_700_000_000_000,
+  ...(over as object),
+}) as NonNullable<ReturnType<typeof parseVersionCache>>
+
+test('parseVersionCache accepts a valid entry and rejects junk', () => {
+  expect(parseVersionCache('{"current":"1.7.0","latest":"1.8.0","hasUpdate":true,"critical":true,"fetchedAt":5}'))
+    .toEqual({ current: '1.7.0', latest: '1.8.0', hasUpdate: true, critical: true, fetchedAt: 5, attemptedAt: undefined })
+  expect(parseVersionCache('nope')).toBeNull()
+  expect(parseVersionCache('{"latest":"1.8.0","fetchedAt":5}')).toBeNull()      // no `current`
+  expect(parseVersionCache('{"current":"1.7.0","latest":"1.8.0"}')).toBeNull()  // no timestamp
+})
+
+test('a cached verdict is only reused for the version it was computed against', () => {
+  const now = entry().fetchedAt + 1000
+  expect(isVersionCacheFresh(entry(), now, '1.7.0')).toBe(true)
+  // After the upgrade landed, the old "1.8.0 is available" verdict is meaningless.
+  expect(isVersionCacheFresh(entry(), now, '1.8.0')).toBe(false)
+  expect(cachedVersionInfo(entry(), '1.8.0')).toBeNull()
+  expect(cachedVersionInfo(entry(), '1.7.0'))
+    .toEqual({ current: '1.7.0', latest: '1.8.0', hasUpdate: true, critical: false })
+  // A failure-only entry (attempt stamped, never a successful fetch) is not an answer.
+  expect(cachedVersionInfo(entry({ fetchedAt: 0, attemptedAt: now }), '1.7.0')).toBeNull()
+  expect(isVersionCacheFresh(null, now, '1.7.0')).toBe(false)
+})
+
+test('a stale entry is past its TTL but still printable', () => {
+  const stale = entry()
+  const now = stale.fetchedAt + VERSION_CACHE_TTL_MS + 1
+  expect(isVersionCacheFresh(stale, now, '1.7.0')).toBe(false)  // getVersionInfo would refetch
+  // ...yet the shell hook still shows the last real answer instead of going silent or blocking.
+  expect(cachedVersionInfo(stale, '1.7.0')?.latest).toBe('1.8.0')
+})
+
+test('refreshes are due only past the TTL and never more often than the retry window', () => {
+  const base = entry()
+  const t = base.fetchedAt
+  expect(shouldRefreshVersionCache(base, t + 1000, '1.7.0')).toBe(false)                       // fresh
+  expect(shouldRefreshVersionCache(base, t + VERSION_CACHE_TTL_MS, '1.7.0')).toBe(true)        // due
+  expect(shouldRefreshVersionCache(null, t, '1.7.0')).toBe(true)                               // nothing cached
+  expect(shouldRefreshVersionCache(base, t + 1000, '1.8.0')).toBe(true)                        // version changed
+  // 20 shells opening at once (or an offline machine) must not fire 20 GitHub calls: the last
+  // ATTEMPT — successful or not — throttles the next one.
+  const failed = entry({ fetchedAt: 0, attemptedAt: t })
+  expect(shouldRefreshVersionCache(failed, t + VERSION_RETRY_MS - 1, '1.7.0')).toBe(false)
+  expect(shouldRefreshVersionCache(failed, t + VERSION_RETRY_MS, '1.7.0')).toBe(true)
 })
 
 // --- unattended-upgrade lock ------------------------------------------------
