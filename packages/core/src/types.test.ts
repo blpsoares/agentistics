@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcCost, getModelPrice, formatModel, getModelColor, formatProjectName, setHomeDir, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName } from './types'
+import { calcCost, getModelPrice, formatModel, getModelColor, formatProjectName, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName } from './types'
 import type { ModelUsage, StatsCache } from './types'
 
 describe('mergeStatsCaches', () => {
@@ -191,22 +191,25 @@ describe('getModelColor', () => {
 
 describe('formatProjectName', () => {
   test('retorna "Unknown" para string vazia', () => {
-    setHomeDir('')
     expect(formatProjectName('')).toBe('Unknown')
   })
 
-  test('substitui homeDir por ~/', () => {
-    setHomeDir('/home/user')
-    expect(formatProjectName('/home/user/projetos/app')).toBe('~/projetos/app')
+  // The home directory is NEVER abbreviated: on a central the same `~/app` would be three
+  // different people's folders, and `~` would resolve against the central's own home rather than
+  // the machine the session came from. The username is part of the path's identity.
+  test('keeps the full path even inside the home directory', () => {
+    expect(formatProjectName('/home/user/projetos/app')).toBe('/home/user/projetos/app')
   })
 
-  test('homeDir exato retorna "~ (home)"', () => {
-    setHomeDir('/home/user')
-    expect(formatProjectName('/home/user')).toBe('~ (home)')
+  test('the home directory itself is shown in full', () => {
+    expect(formatProjectName('/home/user')).toBe('/home/user')
+  })
+
+  test('windows separators are normalized without abbreviating', () => {
+    expect(formatProjectName('C:\\Users\\bryan\\app')).toBe('C:/Users/bryan/app')
   })
 
   test('caminho fora do home retorna caminho completo', () => {
-    setHomeDir('/home/user')
     expect(formatProjectName('/opt/apps/servidor')).toBe('/opt/apps/servidor')
   })
 })

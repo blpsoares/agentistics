@@ -18,7 +18,7 @@ import { useIsMobile } from './hooks/useIsMobile'
 import type { TagDef } from './lib/tagMatch'
 import type { Filters, HarnessId, HealthIssue } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { formatProjectName, setHomeDir, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers } from '@agentistics/core'
+import { formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers } from '@agentistics/core'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
 import { ActivityHeatmap } from './components/ActivityHeatmap'
@@ -1460,10 +1460,6 @@ export default function AppLayout() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
-
-  useEffect(() => {
-    if (data?.homeDir) setHomeDir(data.homeDir)
-  }, [data?.homeDir])
 
   useEffect(() => {
     let rafId: number | null = null

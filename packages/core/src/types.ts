@@ -448,20 +448,17 @@ export function formatModel(modelId: string): string {
   return map[modelId] ?? modelId
 }
 
-let _homeDir = ''
-
-export function setHomeDir(dir: string) {
-  _homeDir = dir
-}
-
+/**
+ * Display form of a project path: the FULL path, always.
+ *
+ * It used to collapse the home directory to `~`, which reads fine on a single machine and is
+ * actively misleading anywhere else: on a central the same `~/app` can be three different people's
+ * folders, and `~` is resolved against the CENTRAL's home, not the machine the session came from.
+ * The username is part of what identifies a path, so it is never hidden.
+ */
 export function formatProjectName(projectPath: string): string {
   if (!projectPath) return 'Unknown'
-  const normalized = projectPath.replace(/\\/g, '/')
-  if (_homeDir) {
-    if (normalized === _homeDir) return '~ (home)'
-    if (normalized.startsWith(_homeDir + '/')) return '~/' + normalized.slice(_homeDir.length + 1)
-  }
-  return normalized
+  return projectPath.replace(/\\/g, '/')
 }
 
 export function getModelColor(modelId: string): string {
