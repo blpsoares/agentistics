@@ -281,7 +281,11 @@ export default function TagsPage() {
     } catch (e) { setSaveErr(String(e)) } finally { setSaving(false) }
   }
 
-  const mayWrite = me?.role === 'owner' || !!me?.memberships.some(m => m.role === 'manager')
+  // Anyone signed in may create a tag; what differs is the REACH, enforced server-side by
+  // canWriteTagSources — owner: anything, manager: what their teams reach, user: what their own
+  // account owns. Hiding the button from a plain user would block "tag my own machines" while
+  // adding no protection, since the source check already refuses everything else.
+  const mayWrite = !!me
 
   // The detail page's pencil navigates back here carrying the tag to edit. Open the editor once the
   // list has loaded, then clear the history state so a reload does not reopen it.

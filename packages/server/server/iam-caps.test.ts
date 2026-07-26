@@ -46,11 +46,17 @@ test('helpers', () => {
   expect(isMemberOf(userA, undefined)).toBe(false)
 })
 
-test('tags:write is source-derived, not team-derived: any manager may create tags at all', () => {
-  // The real gate is canWriteTagSources (tags-authority.ts) — every source must be visible.
-  // This capability only answers "may this principal create tags at all", so it must not
-  // demand a teamId the tag model does not have.
-  expect(can(mgrA, 'tags:write')).toBe(true)
+test('tags:write is open to every authenticated principal — the SOURCES are the real gate', () => {
+  // owner: anything. manager: what their teams reach. user: what their own account owns.
+  // All three differences live in canWriteTagSources (tags-authority.ts), which requires the
+  // principal to already see EVERY source. Refusing a plain user here would have blocked the
+  // legitimate "tag my own machines" case without adding any protection.
+  const owner: Principal = { accountId: 'o1', role: 'owner', memberships: [] }
+  const mgr: Principal = { accountId: 'm1', role: 'member', memberships: [{ teamId: 'A', role: 'manager' }] }
+  const user: Principal = { accountId: 'u1', role: 'member', memberships: [{ teamId: 'A', role: 'user' }] }
+  const loose: Principal = { accountId: 'u2', role: 'member', memberships: [] }
   expect(can(owner, 'tags:write')).toBe(true)
-  expect(can(userA, 'tags:write')).toBe(false)
+  expect(can(mgr, 'tags:write')).toBe(true)
+  expect(can(user, 'tags:write')).toBe(true)
+  expect(can(loose, 'tags:write')).toBe(true)
 })

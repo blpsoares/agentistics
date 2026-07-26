@@ -213,6 +213,10 @@ export default function MembersPage() {
                     background: 'var(--bg-card)', border: '1px solid var(--border)',
                     borderRadius: 8, fontSize: 12,
                   }}
+                  // recharts defaults the label and item text to near-black, which is invisible on
+                  // this dark card — contentStyle only covers the container, never the text inside.
+                  labelStyle={{ color: 'var(--text-primary)', fontWeight: 600, marginBottom: 2 }}
+                  itemStyle={{ color: 'var(--text-secondary)' }}
                   formatter={(v) => {
                     const n = typeof v === 'number' ? v : Number(v ?? 0)
                     return [

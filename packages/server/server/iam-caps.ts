@@ -39,9 +39,13 @@ export function can(p: Principal, action: IamAction, ctx: IamContext = {}): bool
     case 'members:write':
       return isManagerOf(p, ctx.teamId)
     case 'tags:write':
-      // Tag authority is source-derived, not team-derived: this only answers "may create tags at
-      // all". Whether the specific sources are allowed is decided by canWriteTagSources().
-      return p.memberships.some(m => m.role === 'manager')
+      // Tag authority is SOURCE-derived, never role-derived: this only answers "may create tags at
+      // all", and the answer is yes for anyone signed in. What differs by role is the REACH, and
+      // that is decided by canWriteTagSources() — an owner may use any source, a manager only what
+      // their teams reach, and a plain user only what their own account owns. Refusing a user here
+      // would have blocked the legitimate "tag my own machines" case while adding no protection,
+      // since the source check already stops them touching anything else.
+      return true
     case 'team:view':
       return isMemberOf(p, ctx.teamId)
     case 'accounts:manage':

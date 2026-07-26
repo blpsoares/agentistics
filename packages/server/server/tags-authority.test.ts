@@ -187,3 +187,30 @@ test('an owner sees every source value unredacted', () => {
   const sources: TagSource[] = [{ type: 'project', value: '/srv/acme-bank/core' }]
   expect(redactSources(owner, sources, ctx)[0]!.value).toBe('/srv/acme-bank/core')
 })
+
+test('a plain user may tag ONLY what their own account owns', () => {
+  // The three roles differ here, not in the capability: owner = anything, manager = what their
+  // teams reach, user = what their account owns. `visibleMachineIds` is built in the handler as
+  // "machine is in one of my teams OR my account owns it", so a user with no manager membership
+  // still reaches their own machines — and nothing else.
+  const plainUser: Principal = { accountId: 'u1', role: 'member', memberships: [{ teamId: 'A', role: 'user' }] }
+  const ownCtx: TagAuthorityContext = {
+    visibleTeamIds: new Set<string>(),        // a user manages no team
+    visibleMachineIds: new Set(['myMachine']), // ...but owns this one
+    visibleAccountIds: new Set(['u1']),        // and can always see themselves
+    visibleRepos: new Set(['github.com/me/app']),
+    visibleProjects: new Set(['/home/me/app']),
+    machinesByAccount: { u1: ['myMachine'] },
+  }
+  // Their own machine, repo, folder and account: allowed.
+  expect(canWriteTagSources(plainUser, [
+    { type: 'machine', value: 'myMachine' },
+    { type: 'repo', value: 'github.com/me/app' },
+    { type: 'project', value: '/home/me/app' },
+    { type: 'account', value: 'u1' },
+  ], ownCtx)).toBe(true)
+  // Anything else: refused, including the team they merely belong to.
+  expect(canWriteTagSources(plainUser, [{ type: 'machine', value: 'someoneElse' }], ownCtx)).toBe(false)
+  expect(canWriteTagSources(plainUser, [{ type: 'team', value: 'A' }], ownCtx)).toBe(false)
+  expect(canWriteTagSources(plainUser, [{ type: 'repo', value: 'github.com/org/secret' }], ownCtx)).toBe(false)
+})
