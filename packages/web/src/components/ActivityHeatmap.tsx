@@ -94,9 +94,11 @@ export function ActivityHeatmap({ data, weeks = 26 }: Props) {
     // to the left edge and left a band of dead space under them. A max width keeps the cells at a
     // sane size and the margin centres the grid instead of pinning it left.
     <div ref={containerRef} style={{
-      position: 'relative', width: '100%', maxWidth: 760, margin: '0 auto',
-      // Fill the card and sit in the middle: the heatmap is shorter than the chart it shares a row
-      // with, so without this it hugged the top and left a band of empty card beneath it.
+      // Full width — the SVG keeps its own aspect ratio, so capping the width only made the grid
+      // smaller without buying anything, and it shrank the expanded modal too.
+      position: 'relative', width: '100%',
+      // Centred vertically: the heatmap is shorter than the chart it shares a stretched row with,
+      // so without this it hugged the top and left a band of empty card beneath it.
       height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center',
     }}>
       <style>{`
