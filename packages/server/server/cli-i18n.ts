@@ -92,6 +92,8 @@ export interface CliStrings {
   updateCriticalInstalling: (version: string) => string
   updateCriticalLog: (path: string) => string
   updateCriticalRunning: string
+  updateCriticalManualTitle: string
+  updateCriticalManualHow: (cmd: string) => string
 }
 
 const EN: CliStrings = {
@@ -176,6 +178,8 @@ const EN: CliStrings = {
   updateCriticalInstalling: (v) => `v${v} is being installed in the background; your terminal is free.`,
   updateCriticalLog: (p) => `Progress: ${p}`,
   updateCriticalRunning: 'A critical update is already being installed in the background.',
+  updateCriticalManualTitle: 'Critical update available',
+  updateCriticalManualHow: (cmd) => `Install it with ${cmd} — automatic install is opt-in (AGENTISTICS_AUTO_UPGRADE=1).`,
 }
 
 const PT: CliStrings = {
@@ -260,6 +264,8 @@ const PT: CliStrings = {
   updateCriticalInstalling: (v) => `a v${v} está sendo instalada em segundo plano; seu terminal está livre.`,
   updateCriticalLog: (p) => `Acompanhe em: ${p}`,
   updateCriticalRunning: 'Uma atualização crítica já está sendo instalada em segundo plano.',
+  updateCriticalManualTitle: 'Atualização crítica disponível',
+  updateCriticalManualHow: (cmd) => `Instale com ${cmd} — a instalação automática é opt-in (AGENTISTICS_AUTO_UPGRADE=1).`,
 }
 
 const TABLE: Record<CliLang, CliStrings> = { en: EN, pt: PT }

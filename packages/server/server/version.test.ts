@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { compareVersions, isCriticalRelease, resolveLatestRelease } from './version'
+import { compareVersions, isCriticalRelease, autoInstallAllowed, resolveLatestRelease } from './version'
 // The unattended-upgrade lock lives in upgrade.ts, but its pure helpers are part of the
 // same "smart auto-update" surface, so they are covered here alongside the version logic.
 import { isInstalledBinary, isUpgradeLockActive, parseUpgradeLock, UPGRADE_LOCK_TTL_MS } from './upgrade'
@@ -105,4 +105,16 @@ test('a lock is active only while its process lives and it is younger than the T
   expect(isUpgradeLockActive(lock, 2_000, dead)).toBe(false)               // crashed upgrade
   expect(isUpgradeLockActive(lock, 1_000 + UPGRADE_LOCK_TTL_MS, alive)).toBe(false) // abandoned
   expect(isUpgradeLockActive(null, 2_000, alive)).toBe(false)              // no lock at all
+})
+
+test('unattended install is opt-in: only an explicit AGENTISTICS_AUTO_UPGRADE=1 enables it', () => {
+  // Guards the DEFAULT, not the mechanism. Flipping this back to opt-out re-arms an unverified,
+  // non-atomic, arch-blind binary replacement on every shell that opens.
+  expect(autoInstallAllowed({})).toBe(false)
+  expect(autoInstallAllowed({ AGENTISTICS_AUTO_UPGRADE: undefined })).toBe(false)
+  expect(autoInstallAllowed({ AGENTISTICS_AUTO_UPGRADE: '' })).toBe(false)
+  expect(autoInstallAllowed({ AGENTISTICS_AUTO_UPGRADE: '0' })).toBe(false)
+  expect(autoInstallAllowed({ AGENTISTICS_AUTO_UPGRADE: 'true' })).toBe(false)
+  expect(autoInstallAllowed({ AGENTISTICS_AUTO_UPGRADE: 'yes' })).toBe(false)
+  expect(autoInstallAllowed({ AGENTISTICS_AUTO_UPGRADE: '1' })).toBe(true)
 })

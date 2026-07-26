@@ -59,7 +59,7 @@ Commands:
   upgrade       Upgrade agentop to the latest version
   autostart     Start a mode with the system (systemd user service on Linux)
   check-update  Print a notice if a newer version is available (else silent);
-                a release marked [critical] installs itself in the background
+                a release marked [critical] says so louder (auto-install is opt-in)
 
 Options:
   --help, -h       Show this help message
@@ -121,11 +121,11 @@ Updates:
   agentop upgrade
     Download the latest binary and restart whatever services are running.
   agentop check-update
-    Silent when up to date. An OPTIONAL update just prints a banner. A CRITICAL update
-    (its GitHub release notes contain a "[critical]" line) is installed automatically in
-    a detached background process — the terminal returns immediately and progress is
-    logged to ~/.agentistics/auto-upgrade.log. Set AGENTISTICS_AUTO_UPGRADE=0 to disable
-    unattended installs and always be asked instead.
+    Silent when up to date. An OPTIONAL update prints a banner; a CRITICAL update (its
+    GitHub release notes contain a "[critical]" line) prints a louder one telling you to
+    run \`agentop upgrade\`. Unattended install is OPT-IN: set AGENTISTICS_AUTO_UPGRADE=1
+    to let a critical release install itself in a detached background process, logged to
+    ~/.agentistics/auto-upgrade.log.
 
 Autostart:
   agentop autostart <mode> <enable|disable|status>
@@ -342,16 +342,22 @@ if (command === 'upgrade' || command === 'update') {
 // version exists, otherwise stays completely silent. This is what the ~/.bashrc
 // hook installed by `agentop autostart ... enable` runs on every terminal open.
 // A CRITICAL release (its GitHub release body carries a `[critical]` line) is installed
-// without asking: we spawn a detached `agentop upgrade` (which already restarts the running
-// services) and return the terminal immediately, printing only a short notice. Optional
-// updates keep the old behavior — inform, let the user decide. Set AGENTISTICS_AUTO_UPGRADE=0
-// to opt out of unattended installs and always get the plain banner instead.
+// Optional updates inform and let the user decide. A CRITICAL release does the same by default
+// but with a louder banner; with AGENTISTICS_AUTO_UPGRADE=1 it instead spawns a detached
+// `agentop upgrade` (which already restarts the running services) and returns the terminal
+// immediately. Unattended install stays opt-in until the install path is atomic, verified,
+// rollback-capable and arch-gated.
 if (command === 'check-update') {
   try {
     const { getVersionInfo } = await import('../server/version.ts')
     const info = await getVersionInfo()
     if (!info.hasUpdate) process.exit(0) // up to date → completely silent
-    const autoAllowed = process.env.AGENTISTICS_AUTO_UPGRADE !== '0'
+    // Unattended install is OPT-IN, not opt-out. Replacing the running binary without consent is
+    // only safe once the install path is atomic, verified, rollback-capable and arch-gated — none
+    // of which it is yet (no platform/arch check, a shared temp path, no backup, restart failures
+    // swallowed). Until then a critical release gets a loud banner and the user runs the upgrade.
+    const { autoInstallAllowed } = await import('../server/version.ts')
+    const autoAllowed = autoInstallAllowed()
     if (info.critical && autoAllowed) {
       const { startBackgroundUpgrade, AUTO_UPGRADE_LOG } = await import('../server/upgrade.ts')
       const { cliStrings } = await import('../server/cli-i18n.ts')
@@ -362,6 +368,16 @@ if (command === 'check-update') {
       // 'failed' (couldn't spawn) or 'not-installed' (running from a source checkout,
       // where self-replacing the binary is unsafe) → fall back to asking the user.
       else printUpdateBanner(info)
+    } else if (info.critical) {
+      // Critical but not auto-installing: say so plainly instead of using the ordinary banner,
+      // otherwise an urgent release looks like any other optional one.
+      const { cliStrings } = await import('../server/cli-i18n.ts')
+      const s = cliStrings(await resolveCliLang())
+      process.stdout.write(
+        `\n  ${_AM}${_B}⚡ ${s.updateCriticalManualTitle}${_R}\n` +
+        `  ${_D}v${info.current} → ${_R}${_GR}${_B}v${info.latest}${_R}\n` +
+        `  ${s.updateCriticalManualHow('agentop upgrade')}\n\n`,
+      )
     } else {
       printUpdateBanner(info)
     }

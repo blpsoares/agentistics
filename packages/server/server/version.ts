@@ -67,6 +67,19 @@ export function isCriticalRelease(body: string | null | undefined): boolean {
 }
 
 /**
+ * Whether a critical release may install itself with no consent.
+ *
+ * OPT-IN by design. Replacing the running binary unattended is only safe once the install path is
+ * atomic, verified, rollback-capable and gated on platform/arch — none of which it is yet (the
+ * download URL is hardcoded to the Linux x86_64 asset, the temp file is a shared path, no backup
+ * is kept and restart failures are swallowed). A wrong default here does not inconvenience one
+ * user, it bricks every install that opens a terminal.
+ */
+export function autoInstallAllowed(env: Record<string, string | undefined> = process.env): boolean {
+  return env.AGENTISTICS_AUTO_UPGRADE === '1'
+}
+
+/**
  * Pure resolution of a GitHub release list against the installed version.
  *
  * Drafts and prereleases are ignored, as are non-semver tags (the repo also publishes a
