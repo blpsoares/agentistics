@@ -1,4 +1,7 @@
 import React, { useMemo, useState } from 'react'
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell as BarCell,
+} from 'recharts'
 import { useOutletContext } from 'react-router-dom'
 import { Users, Search, Monitor, User as UserIcon, GitBranch, FolderOpen, Cpu, Terminal } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
@@ -82,6 +85,21 @@ export default function MembersPage() {
     // Same as above: the 'name' sort reads `titleOf`, whose inputs are machineName/groupBy/pt.
   }, [filtered, sortKey, sortDir, machineName, groupBy, pt])
 
+  // Comparative chart: the top rows by the chosen metric, always ranked by THAT metric (independent
+  // of the list's sort, which the reader may have set to something else like name or last activity).
+  const [chartMetric, setChartMetric] = useState<'costUSD' | 'sessions' | 'totalTokens'>('costUSD')
+  const chartData = useMemo(() => {
+    return [...filtered]
+      .sort((a, b) => b[chartMetric] - a[chartMetric])
+      .slice(0, 12) // beyond a dozen bars the labels stop being readable
+      .map(r => ({
+        name: titleOf(r),
+        value: r[chartMetric],
+        color: r.topHarness ? (HARNESS_COLORS[r.topHarness.key] ?? 'var(--anthropic-orange)') : 'var(--anthropic-orange)',
+      }))
+      .reverse() // recharts draws a vertical layout bottom-up; reversing puts the biggest on top
+  }, [filtered, chartMetric, machineName, groupBy, pt])
+
   const sortOptions: { key: MemberSortKey; label: string }[] = [
     { key: 'cost', label: pt ? 'Custo' : 'Cost' },
     { key: 'sessions', label: pt ? 'Sessões' : 'Sessions' },
@@ -132,6 +150,90 @@ export default function MembersPage() {
         <Kpi label="Tokens" value={fmt(totalTokens)} />
         <Kpi label={pt ? 'Custo' : 'Cost'} value={fmtCost(totalCost, currency, brlRate)} accent />
       </div>
+
+      {/* Comparative charts. The cards below rank one row at a time; a chart is what makes the
+          SPREAD visible — who is an outlier and by how much. The metric is switchable because
+          "most expensive" and "most active" are different questions and often different people. */}
+      {sorted.length > 1 && (
+        <div style={{
+          background: 'var(--bg-card)', border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-lg)', padding: 16, marginBottom: 16, minWidth: 0,
+        }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: 10, flexWrap: 'wrap', marginBottom: 12,
+          }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+              {pt ? 'Comparativo' : 'Comparison'}
+            </span>
+            <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 7, overflow: 'hidden' }}>
+              {(['costUSD', 'sessions', 'totalTokens'] as const).map((m, i) => {
+                const active = chartMetric === m
+                const label = m === 'costUSD' ? (pt ? 'Custo' : 'Cost')
+                  : m === 'sessions' ? (pt ? 'Sessões' : 'Sessions') : 'Tokens'
+                return (
+                  <button
+                    key={m}
+                    onClick={() => setChartMetric(m)}
+                    style={{
+                      padding: '0 12px', minHeight: 36, fontSize: 12,
+                      fontWeight: active ? 700 : 500, fontFamily: 'inherit',
+                      background: active ? 'var(--anthropic-orange-dim)' : 'transparent',
+                      color: active ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+                      border: 'none', borderLeft: i === 0 ? 'none' : '1px solid var(--border)',
+                      cursor: active ? 'default' : 'pointer',
+                    }}
+                  >{label}</button>
+                )
+              })}
+            </div>
+          </div>
+          {/* Horizontal bars: names are long and read far better along the Y axis than rotated
+              under a vertical chart. Height grows with the row count so labels never collide. */}
+          <div style={{ width: '100%', height: Math.max(140, Math.min(chartData.length, 12) * 34 + 30) }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} layout="vertical" margin={{ top: 0, right: 16, bottom: 0, left: 0 }}>
+                <CartesianGrid horizontal={false} stroke="var(--border-subtle)" />
+                <XAxis
+                  type="number"
+                  tick={{ fontSize: 10, fill: 'var(--text-tertiary)' }}
+                  tickFormatter={(v: number) => (chartMetric === 'costUSD' ? fmtCost(v, currency, brlRate) : fmt(v))}
+                  stroke="var(--border)"
+                />
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  width={isMobile ? 92 : 150}
+                  tick={{ fontSize: 11, fill: 'var(--text-secondary)' }}
+                  stroke="var(--border)"
+                />
+                <Tooltip
+                  cursor={{ fill: 'var(--bg-elevated)' }}
+                  contentStyle={{
+                    background: 'var(--bg-card)', border: '1px solid var(--border)',
+                    borderRadius: 8, fontSize: 12,
+                  }}
+                  formatter={(v) => {
+                    const n = typeof v === 'number' ? v : Number(v ?? 0)
+                    return [
+                      chartMetric === 'costUSD' ? fmtCost(n, currency, brlRate) : fmt(n),
+                      chartMetric === 'costUSD' ? (pt ? 'Custo' : 'Cost')
+                        : chartMetric === 'sessions' ? (pt ? 'Sessões' : 'Sessions') : 'Tokens',
+                    ] as [string, string]
+                  }}
+                />
+                <Bar dataKey="value" radius={[0, 4, 4, 0]}>
+                  {/* Coloured by the row's dominant harness, so the chart also shows WHICH tool
+                      each person leans on without a second chart. */}
+                  {chartData.map(d => (
+                    <BarCell key={d.name} fill={d.color} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       <Section
         flashId="members"

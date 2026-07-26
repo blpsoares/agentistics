@@ -347,17 +347,25 @@ export default function TagDetailPage() {
                 type="button"
                 onClick={() => setMetric(m)}
                 style={{
-                  padding: '0 12px', minHeight: 44, borderRadius: 20, cursor: 'pointer', fontFamily: 'inherit',
+                  // 44px is the MOBILE touch target; applying it on desktop too gave these a
+                  // button-sized footprint for a segmented control. Desktop follows the project's
+                  // control density (see TabSelect in settings/primitives).
+                  padding: isMobile ? '0 12px' : '0 10px',
+                  minHeight: isMobile ? 44 : 28,
+                  borderRadius: 7, cursor: 'pointer', fontFamily: 'inherit',
                   border: metric === m ? `1px solid ${color}60` : '1px solid var(--border)',
                   background: metric === m ? `${color}18` : 'transparent',
                   color: metric === m ? color : 'var(--text-secondary)',
-                  fontSize: 11.5, fontWeight: 600, transition: 'all 0.15s',
+                  fontSize: 12, fontWeight: 600, transition: 'all 0.15s',
                 }}
               >
                 {metricLabel[m]}
               </button>
             ))}
           </div>
+          {/* The tooltip is absolutely positioned by recharts and was clipped by the card's
+              rounded overflow near the edges — `visible` lets it overlap the card as intended. */}
+          <div style={{ overflow: 'visible' }}>
           <ResponsiveContainer width="100%" height={isMobile ? 170 : 210}>
             <AreaChart data={chartData} margin={{ left: -10, right: 4 }}>
               <defs>
@@ -392,6 +400,7 @@ export default function TagDetailPage() {
               />
             </AreaChart>
           </ResponsiveContainer>
+          </div>
           <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6 }}>
             {pt ? 'Pico: ' : 'Peak: '}
             {(() => {
