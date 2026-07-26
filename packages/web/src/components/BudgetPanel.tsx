@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react'
 import { Target, TrendingUp, AlertTriangle, CheckCircle2, Pencil, Check, X } from 'lucide-react'
 import { parseISO } from 'date-fns'
 import type { StatsCache, Lang, HarnessId } from '@agentistics/core'
-import { getModelPrice } from '@agentistics/core'
+import { getModelPrice, fmtCost } from '@agentistics/core'
 import { NAtag } from './NAtag'
 
 interface Props {
@@ -21,16 +21,6 @@ interface Props {
   harness?: HarnessId
 }
 
-function fmtCost(usd: number, currency: 'USD' | 'BRL', rate: number): string {
-  if (currency === 'BRL') {
-    const brl = usd * rate
-    if (Math.abs(brl) < 0.005) return 'R$0,00'
-    const [intPart, decPart] = brl.toFixed(2).split('.')
-    return `R$${(intPart ?? '0').replace(/\B(?=(\d{3})+$)/g, '.')},${decPart}`
-  }
-  if (Math.abs(usd) < 0.01) return 'USD 0.00'
-  return `USD ${usd.toFixed(2)}`
-}
 
 /** Current-month spend using global modelUsage proportions, same method as useDerivedStats. */
 function computeMonthCost(statsCache: StatsCache, monthStart: Date, now: Date): number {

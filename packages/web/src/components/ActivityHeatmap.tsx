@@ -93,7 +93,12 @@ export function ActivityHeatmap({ data, weeks = 26 }: Props) {
     // Centred and capped: the SVG scales to the container, so on a wide card the cells stretched
     // to the left edge and left a band of dead space under them. A max width keeps the cells at a
     // sane size and the margin centres the grid instead of pinning it left.
-    <div ref={containerRef} style={{ position: 'relative', width: '100%', maxWidth: 760, margin: '0 auto' }}>
+    <div ref={containerRef} style={{
+      position: 'relative', width: '100%', maxWidth: 760, margin: '0 auto',
+      // Fill the card and sit in the middle: the heatmap is shorter than the chart it shares a row
+      // with, so without this it hugged the top and left a band of empty card beneath it.
+      height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center',
+    }}>
       <style>{`
         @keyframes heatmap-fade-in {
           from { opacity: 0; transform: scale(0.6); }

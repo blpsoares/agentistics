@@ -18,7 +18,7 @@ import { useIsMobile } from './hooks/useIsMobile'
 import type { TagDef } from './lib/tagMatch'
 import type { Filters, HarnessId, HealthIssue } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers } from '@agentistics/core'
+import { formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost } from '@agentistics/core'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
 import { ActivityHeatmap } from './components/ActivityHeatmap'
@@ -594,16 +594,6 @@ function fmtFull(n: number): string {
   return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
 }
 
-function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string {
-  if (currency === 'BRL') {
-    const brl = usd * rate
-    if (brl < 0.05) return '<R$0,05'
-    const [intPart, decPart] = brl.toFixed(2).split('.')
-    return `R$${(intPart ?? '0').replace(/\B(?=(\d{3})+$)/g, '.')},${decPart}`
-  }
-  if (usd < 0.01) return '<USD 0.01'
-  return `USD ${usd.toFixed(2)}`
-}
 
 function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string {
   if (currency === 'BRL') {

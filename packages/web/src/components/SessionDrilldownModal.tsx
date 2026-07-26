@@ -5,7 +5,7 @@ import {
   CheckCircle, XCircle, Globe, Server, ExternalLink, Workflow as WorkflowIcon,
 } from 'lucide-react'
 import type { SessionMeta, Lang, WorkflowRun } from '@agentistics/core'
-import { formatProjectName, formatModel, calcCost, getModelColor, sessionLabel } from '@agentistics/core'
+import { formatProjectName, formatModel, calcCost, getModelColor, sessionLabel, fmtCost } from '@agentistics/core'
 import { blendedCostPerToken } from '../hooks/useData'
 import { buildWorkflowSteps } from '../lib/workflowSteps'
 import { fmtFull } from '@agentistics/core'
@@ -66,16 +66,6 @@ function fmt(n: number, full = false): string {
   return String(n)
 }
 
-function fmtCost(usd: number, currency: 'USD' | 'BRL', rate: number): string {
-  if (currency === 'BRL') {
-    const brl = usd * rate
-    if (brl < 0.005) return '<R$0,01'
-    return `R$${brl.toFixed(2).replace('.', ',')}`
-  }
-  if (usd < 0.001) return '<USD 0.001'
-  if (usd < 0.01) return `USD ${usd.toFixed(3)}`
-  return `USD ${usd.toFixed(2)}`
-}
 
 function fmtDuration(minutes: number): string {
   if (minutes < 1) return '<1m'

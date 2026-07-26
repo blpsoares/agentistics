@@ -1,6 +1,6 @@
 import React from 'react'
 import type { ModelUsage } from '@agentistics/core'
-import { formatModel, calcCost, getModelColor } from '@agentistics/core'
+import { formatModel, calcCost, getModelColor, fmtCost } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
 
 interface Props {
@@ -19,16 +19,6 @@ function fmt(n: number): string {
   return String(n)
 }
 
-function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string {
-  if (currency === 'BRL') {
-    const brl = usd * rate
-    if (brl < 0.05) return '<R$0,05'
-    const [intPart, decPart] = brl.toFixed(2).split('.')
-    return `R$${(intPart ?? '0').replace(/\B(?=(\d{3})+$)/g, '.')},${decPart}`
-  }
-  if (usd < 0.01) return '<USD 0.01'
-  return `USD ${usd.toFixed(2)}`
-}
 
 const COL: React.CSSProperties = { fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }
 const GRID = 'minmax(120px,1fr) 56px 64px 64px 64px 88px'

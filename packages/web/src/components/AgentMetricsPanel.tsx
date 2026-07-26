@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { CheckCircle, XCircle, ChevronDown, ChevronUp, Bot } from 'lucide-react'
+import { fmtCost } from '@agentistics/core'
 import type { AgentInvocation, HarnessId } from '@agentistics/core'
 import type { Lang } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -26,16 +27,6 @@ function fmtTokens(n: number): string {
   return String(n)
 }
 
-function fmtCost(usd: number, currency: 'USD' | 'BRL', rate: number): string {
-  if (currency === 'BRL') {
-    const brl = usd * rate
-    if (brl < 0.005) return '<R$0,01'
-    return `R$${brl.toFixed(2).replace('.', ',')}`
-  }
-  if (usd < 0.001) return '<USD 0.001'
-  if (usd < 0.01) return `USD ${usd.toFixed(3)}`
-  return `USD ${usd.toFixed(2)}`
-}
 
 function fmtDuration(ms: number): string {
   if (ms === 0) return '—'
