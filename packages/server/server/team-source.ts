@@ -4,6 +4,7 @@ import { tagUser } from '@agentistics/core'
 import { safeReadDir, safeReadJson } from './utils'
 import { TEAM_DIR } from './config'
 import { getTeamCollection } from './mongo'
+import { sessionKey } from './session-merge'
 import { fromTeamDoc } from './team-store'
 import { loadAllTeamWorkflows } from './team-workflows'
 import { getMemberNameMap, getMemberTeamsMap, getLiveTokenIds } from './team-tokens'
@@ -113,7 +114,7 @@ export async function loadTagSessionsFromMongo(): Promise<SessionMeta[]> {
     getLiveTokenIds().catch(() => null),
   ])
   const live = liveIds
-  return docs
+  const rows = docs
     .filter(doc => !live || live.has(doc.memberId))
     .map(doc => {
       const meta = fromTeamDoc(doc)
@@ -123,6 +124,18 @@ export async function loadTagSessionsFromMongo(): Promise<SessionMeta[]> {
       meta.memberId = doc.memberId
       return meta
     })
+
+  // Collapse rows that describe the SAME session. `/api/data` already does this (session-merge.ts);
+  // without the same step here the two endpoints disagree — a tag whose sources cover a machine
+  // with duplicate docs would report double its tokens, cost and sessions, and emit two `members`
+  // buckets, while the dashboard reported the session once. Keep the first occurrence so the
+  // surviving row keeps a memberId/teamIds pair that scoping and the member buckets rely on.
+  const byKey = new Map<string, SessionMeta>()
+  for (const s of rows) {
+    const key = sessionKey(s)
+    if (!byKey.has(key)) byKey.set(key, s)
+  }
+  return [...byKey.values()]
 }
 
 /**

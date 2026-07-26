@@ -692,7 +692,19 @@ export async function runUpgrade(lang: CliLang = 'en'): Promise<number> {
   }
 
   const currentBin = process.execPath
-  const bytes = new Uint8Array(await resp.arrayBuffer())
+  // Reading the body must be guarded too, not just the fetch: the transfer is ~140 MB, so the
+  // 120s timeout firing mid-stream (or a reset connection) is the MOST likely failure of the whole
+  // command. Outside the guard it rejected out of runUpgrade, skipping recordUpgradeFailure — so
+  // the backoff never learned about the one failure it exists to throttle, and the user got a raw
+  // stack trace instead of a message.
+  let bytes: Uint8Array
+  try {
+    bytes = new Uint8Array(await resp.arrayBuffer())
+  } catch (err: any) {
+    console.error(`Download failed: ${err?.message ?? String(err)}`)
+    recordUpgradeFailure(info.latest, `download interrupted: ${err?.message ?? String(err)}`)
+    return 1
+  }
   const installed = await installDownloadedBinary(bytes, currentBin, info.latest, s)
 
   if (!installed.ok) {
