@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from 'react'
+import React, { useRef, useState, useCallback, useEffect } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { GripVertical, RotateCcw, Save, Volume2, VolumeX, Zap, Bot } from 'lucide-react'
 import type { Lang, Theme } from '@agentistics/core'
@@ -48,6 +48,37 @@ function seedDraft(ctx: AppContext): PrefsDraft {
 
 export default function PreferencesSettings() {
   const ctx = useOutletContext<AppContext>()
+  // Central-wide delete policy. Owner-only AND central-only: it is not a personal preference —
+  // turning it off removes a safety net for everyone on this central. null until read, so the row
+  // never flashes a wrong state.
+  const isOwnerOnCentral = ctx.isCentral && ctx.me?.role === 'owner'
+  const [requireDeleteText, setRequireDeleteText] = useState<boolean | null>(null)
+  const [savingDeleteText, setSavingDeleteText] = useState(false)
+  useEffect(() => {
+    if (!isOwnerOnCentral) return
+    void fetch('/api/team/config')
+      .then(r => r.ok ? r.json() as Promise<{ requireDeleteConfirmText?: boolean }> : null)
+      .then(c => { if (c) setRequireDeleteText(c.requireDeleteConfirmText ?? true) })
+      .catch(() => { /* leave null → row hidden */ })
+  }, [isOwnerOnCentral])
+  async function toggleRequireDeleteText() {
+    const next = !requireDeleteText
+    setSavingDeleteText(true)
+    setRequireDeleteText(next) // optimistic
+    try {
+      const res = await fetch('/api/team/config', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requireDeleteConfirmText: next }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const c = await res.json() as { requireDeleteConfirmText?: boolean }
+      setRequireDeleteText(c.requireDeleteConfirmText ?? next)
+    } catch {
+      setRequireDeleteText(!next) // revert (the server 403s anyone but an owner)
+    } finally {
+      setSavingDeleteText(false)
+    }
+  }
   const [draft, setDraft] = useState<PrefsDraft>(() => seedDraft(ctx))
   const pt = draft.lang === 'pt'
 
@@ -94,6 +125,27 @@ export default function PreferencesSettings() {
 
   return (
     <>
+      {/* Central policy — owner only. Sits in Preferences because that is where a person looks for
+          a switch, but it is central-wide state, not a per-user setting. */}
+      {isOwnerOnCentral && requireDeleteText !== null && (
+        <>
+          <SectionHeader label={pt ? 'Segurança' : 'Safety'} />
+          <div style={{ marginBottom: 16 }}>
+            <PrefRow
+              label={pt ? 'Confirmar exclusões digitando o nome' : 'Confirm deletions by typing the name'}
+              sub={pt
+                ? 'Exige digitar o nome exato antes de excluir. Vale para toda a central.'
+                : 'Requires typing the exact name before deleting. Applies to the whole central.'}
+            >
+              <span style={{ opacity: savingDeleteText ? 0.6 : 1 }}>
+                <Toggle on={requireDeleteText} onToggle={() => { void toggleRequireDeleteText() }} />
+              </span>
+            </PrefRow>
+          </div>
+          <Divider />
+        </>
+      )}
+
       {/*  Display  */}
       <SectionHeader label={pt ? 'Exibição' : 'Display'} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
