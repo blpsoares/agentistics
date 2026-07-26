@@ -5,6 +5,7 @@ import { mergeStatsCaches } from '@agentistics/core'
 import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL, CENTRAL_USER } from './config'
 import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
+import { mergeLocalAndIngestedSessions, sessionKey } from './session-merge'
 import { writeWorkflowRuns, loadWorkflowRuns } from './workflow-store'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
 import { UUID_RE, decodeProjectDir, getProjectGitStats, getGitRemote } from './git'
@@ -685,7 +686,7 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
         sessionMap.set(s.session_id, s)
       }
     }
-    const sessions = Array.from(sessionMap.values())
+    let sessions = Array.from(sessionMap.values())
 
     // Persist current per-session metrics so they survive Claude's cleanup, then
     // (consolidate mode) revive sessions that already vanished from disk. Gap-fill
@@ -809,9 +810,18 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
         const { loadTeamSessions } = await import('./team-source')
         teamSessions = await loadTeamSessions().catch(() => [] as SessionMeta[])
       }
-      for (const s of teamSessions) {
-        sessions.push(s)
-        harnessSet.add(s.harness)
+      // A central very often runs on a machine that is ALSO a member of itself, so the same
+      // physical session arrives twice: once from the live `~/.claude` read above, once from
+      // Mongo. Both copies share the `session_id`, so appending blindly double-counted that
+      // machine everywhere sessions are summed. `mergeLocalAndIngestedSessions` collapses the
+      // pair to one row (local data + ingested identity — see session-merge.ts) and tells us
+      // which ingested rows were genuinely new, so only THOSE still need a project entry;
+      // rows that merged into a local session were already surfaced when that session was
+      // scanned, and re-adding them duplicated the project's `sessions[]` list too.
+      const mergedTeam = mergeLocalAndIngestedSessions(sessions, teamSessions)
+      sessions = mergedTeam.sessions
+      for (const s of teamSessions) harnessSet.add(s.harness)
+      for (const s of mergedTeam.ingestOnly) {
         const existing = projects.find(p => p.path === s.project_path && p.path)
         if (existing) {
           existing.sessions.push({ sessionId: s.session_id, created: s.start_time })
@@ -902,12 +912,15 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
 
     sessions.sort((a, b) => b.start_time.localeCompare(a.start_time))
 
-    // Final safety net: dedup by (harness, session_id). A no-op today (each session
-    // is pushed once), but guarantees no double-count if non-Claude sessions ever get
-    // revived from the consolidate store in addition to the live adapter merge.
+    // Final safety net: dedup by (harness, session_id) — `sessionKey`.
+    // This key used to include `user`, which silently disabled it on a central that is also a
+    // member of itself: the local read of a session has no `user`, the ingested copy of the SAME
+    // session carries the member's display name, so the two keys differed and BOTH rows survived.
+    // `session_id` is a UUID — the same id on two rows is always the same session, never two
+    // people's work — so `user` must not be part of the identity.
     const seenHarnessKeys = new Set<string>()
     const dedupedSessions = sessions.filter(s => {
-      const key = `${s.user ?? ''}:${s.harness ?? 'claude'}:${s.session_id}`
+      const key = sessionKey(s)
       if (seenHarnessKeys.has(key)) return false
       seenHarnessKeys.add(key)
       return true
