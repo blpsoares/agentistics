@@ -383,7 +383,8 @@ export function Checkbox({ checked, onChange, label }: { checked: boolean; onCha
 export function Select({ value, onChange, options, placeholder, disabled, searchable, searchPlaceholder }: {
   value: string
   onChange: (v: string) => void
-  options: { value: string; label: string }[]
+  /** `disabled` greys an option out and blocks selection; `hint` says why, inline. */
+  options: { value: string; label: string; disabled?: boolean; hint?: string }[]
   placeholder?: string
   disabled?: boolean
   /** Show a type-to-filter box in the popover. Defaults on when there are many options. */
@@ -473,7 +474,7 @@ export function Select({ value, onChange, options, placeholder, disabled, search
         if (e.key === ' ' && showSearch) return
         e.preventDefault()
         const opt = filtered[activeIndex]
-        if (opt) handleSelect(opt.value)
+        if (opt && !opt.disabled) handleSelect(opt.value)
         break
       }
       case 'Escape': e.preventDefault(); setOpen(false); break
@@ -590,7 +591,9 @@ export function Select({ value, onChange, options, placeholder, disabled, search
                 key={opt.value}
                 role="option"
                 aria-selected={isSelected}
-                onClick={() => handleSelect(opt.value)}
+                aria-disabled={opt.disabled}
+                title={opt.hint}
+                onClick={() => { if (!opt.disabled) handleSelect(opt.value) }}
                 onMouseEnter={() => setActiveIndex(idx)}
                 style={{
                   padding: isMobile ? '11px 12px' : '8px 10px',
@@ -598,7 +601,8 @@ export function Select({ value, onChange, options, placeholder, disabled, search
                   boxSizing: 'border-box',
                   borderRadius: 6,
                   fontSize: 13,
-                  cursor: 'pointer',
+                  cursor: opt.disabled ? 'not-allowed' : 'pointer',
+                  opacity: opt.disabled ? 0.45 : 1,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
@@ -609,6 +613,9 @@ export function Select({ value, onChange, options, placeholder, disabled, search
                 }}
               >
                 <span style={{ flex: 1 }}>{opt.label}</span>
+                {opt.hint && (
+                  <span style={{ fontSize: 11, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>{opt.hint}</span>
+                )}
                 {isSelected && (
                   <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                     <path
@@ -642,7 +649,7 @@ export function Select({ value, onChange, options, placeholder, disabled, search
 export function MultiPicker({
   options, onCommit, placeholder, searchPlaceholder, confirmLabel, selectAllLabel, emptyLabel, disabled,
 }: {
-  options: { value: string; label: string }[]
+  options: { value: string; label: string; disabled?: boolean; hint?: string }[]
   /** Called with everything ticked when the user confirms. Never called with an empty list. */
   onCommit: (values: string[]) => void
   placeholder: string
@@ -697,7 +704,10 @@ export function MultiPicker({
     close()
   }
 
-  const allShownPicked = filtered.length > 0 && filtered.every(o => picked.includes(o.value))
+  // Disabled rows can never be ticked, so "select all" is about the selectable ones only —
+  // otherwise the box never reads as checked and the toggle looks broken.
+  const selectable = filtered.filter(o => !o.disabled)
+  const allShownPicked = selectable.length > 0 && selectable.every(o => picked.includes(o.value))
 
   return (
     <div ref={wrapperRef} style={{ position: 'relative', width: '100%' }}>
@@ -747,7 +757,7 @@ export function MultiPicker({
             <div style={{ display: 'flex', alignItems: 'center', minHeight: isMobile ? 44 : 30, paddingLeft: 2 }}>
               <Checkbox
                 checked={allShownPicked}
-                onChange={c => setPicked(c ? filtered.map(o => o.value) : [])}
+                onChange={c => setPicked(c ? filtered.filter(o => !o.disabled).map(o => o.value) : [])}
                 label={selectAllLabel}
               />
             </div>
@@ -757,12 +767,18 @@ export function MultiPicker({
               <span style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '8px 4px' }}>{emptyLabel}</span>
             )}
             {filtered.map(o => (
-              <div key={o.value} style={{ display: 'flex', alignItems: 'center', minHeight: isMobile ? 44 : 32, paddingLeft: 2 }}>
+              <div key={o.value}
+                title={o.hint}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6, minHeight: isMobile ? 44 : 32, paddingLeft: 2,
+                  opacity: o.disabled ? 0.45 : 1, pointerEvents: o.disabled ? 'none' : undefined,
+                }}>
                 <Checkbox
-                  checked={picked.includes(o.value)}
-                  onChange={c => setPicked(prev => c ? [...prev, o.value] : prev.filter(v => v !== o.value))}
+                  checked={!o.disabled && picked.includes(o.value)}
+                  onChange={c => { if (o.disabled) return; setPicked(prev => c ? [...prev, o.value] : prev.filter(v => v !== o.value)) }}
                   label={o.label}
                 />
+                {o.hint && <span style={{ fontSize: 11, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>{o.hint}</span>}
               </div>
             ))}
           </div>

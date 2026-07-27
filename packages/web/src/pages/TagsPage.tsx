@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useOutletContext } from 'react-router-dom'
 import { Plus, Trash2, X } from 'lucide-react'
-import { fmt, fmtCost, formatProjectName } from '@agentistics/core'
+import { fmt, fmtCost, formatProjectName, canonicalProjectPath } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { HARNESS_LABELS } from '../lib/harness'
 import { Drawer } from './settings/Drawer'
@@ -186,10 +186,22 @@ export default function TagsPage() {
     for (const s of data.sessions) if (s.git_remote) set.add(s.git_remote)
     return [...set].sort().map(v => ({ value: v, label: v }))
   }, [data.sessions])
+  // Worktrees are checkouts of a project, not projects: offering them split one codebase into a
+  // handful of near-identical rows. They fold into their owner, which is also what resolution does.
   const projectOptions = useMemo(() => {
     const set = new Set<string>()
-    for (const s of data.sessions) if (s.project_path) set.add(s.project_path)
+    for (const s of data.sessions) if (s.project_path) set.add(canonicalProjectPath(s.project_path))
     return [...set].sort().map(v => ({ value: v, label: formatProjectName(v) }))
+  }, [data.sessions])
+
+  /** Which repo each project belongs to, so the picker can say a path is already covered by one. */
+  const repoByProject = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const s of data.sessions) {
+      if (!s.project_path || !s.git_remote) continue
+      map.set(canonicalProjectPath(s.project_path), s.git_remote)
+    }
+    return map
   }, [data.sessions])
 
   const teamName = useCallback((id: string) => teams.find(t => t._id === id)?.name ?? id, [teams])
@@ -285,27 +297,59 @@ export default function TagsPage() {
   /** Commit a picked value as a source. Called straight from the value Select's onChange so a
    *  single click adds it — the old two-step (pick, then press "Add") silently dropped the pick
    *  when the user pressed Done instead, saving a tag with no sources at all. */
+  /** Adding a repo supersedes any project already picked from inside it. Blocking the project
+   *  picker only covers picking them in one order; picking the project first and the repo second
+   *  produced exactly the double-counted breakdown this is meant to prevent. */
+  const dropCoveredProjects = useCallback((list: TagSource[]): TagSource[] => {
+    const repos = new Set(list.filter(s => s.type === 'repo').map(s => s.value))
+    if (repos.size === 0) return list
+    return list.filter(s => {
+      if (s.type !== 'project') return true
+      const remote = repoByProject.get(canonicalProjectPath(s.value))
+      return !remote || !repos.has(remote)
+    })
+  }, [repoByProject])
+
   const addSource = (value: string) => {
     if (!value) return
     setDraftValue('')
     if (sources.some(s => s.type === draftType && s.value === value)) return
-    setSources(prev => [...prev, { type: draftType, value }])
+    setSources(prev => dropCoveredProjects([...prev, { type: draftType, value }]))
   }
 
+  /** Repos already picked as sources — a project inside one of them is redundant. */
+  const pickedRepos = useMemo(
+    () => new Set(sources.filter(s => s.type === 'repo').map(s => s.value)),
+    [sources],
+  )
+
   /** Options of the current type that are not already sources — shared by both pickers so neither
-   *  can offer a duplicate. */
+   *  can offer a duplicate. A project whose repo is already a source stays visible but disabled:
+   *  adding both counted the same sessions twice in the per-source breakdown, and hiding it
+   *  silently would read as "that project does not exist". */
   const availableOptions = useMemo(
-    () => optionsForType(draftType).filter(o => !sources.some(s => s.type === draftType && s.value === o.value)),
-    [optionsForType, draftType, sources],
+    () => optionsForType(draftType)
+      .filter(o => !sources.some(s => s.type === draftType && s.value === o.value))
+      .map(o => {
+        if (draftType !== 'project') return o
+        const remote = repoByProject.get(o.value)
+        if (!remote || !pickedRepos.has(remote)) return o
+        return {
+          ...o,
+          disabled: true,
+          hint: pt ? `já coberto por ${remote}` : `already covered by ${remote}`,
+        }
+      }),
+    [optionsForType, draftType, sources, repoByProject, pickedRepos, pt],
   )
   /** Commit every checked value at once. */
   const addPickedSources = (values: string[]) => {
-    setSources(prev => [
+    setSources(prev => dropCoveredProjects([
       ...prev,
       ...values
         .filter(v => !prev.some(s => s.type === draftType && s.value === v))
         .map(v => ({ type: draftType, value: v })),
-    ])
+    ]))
   }
 
   const save = async () => {

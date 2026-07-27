@@ -11,6 +11,7 @@
  * No Mongo, no auth, no I/O — unit-tested with plain objects.
  */
 import type { SessionMeta } from '@agentistics/core'
+import { canonicalProjectPath } from '@agentistics/core'
 
 export type TagSourceType = 'repo' | 'project' | 'machine' | 'team' | 'account'
 
@@ -37,7 +38,9 @@ function teamsOf(s: SessionMeta): string[] {
 function matchesSource(s: SessionMeta, src: TagSource, lookups: TagLookups): boolean {
   switch (src.type) {
     case 'repo': return !!s.git_remote && s.git_remote === src.value
-    case 'project': return s.project_path === src.value
+    // Compared canonically so a worktree counts as the project it belongs to, and so a tag written
+    // against a worktree path still resolves after the picker stopped offering them.
+    case 'project': return canonicalProjectPath(s.project_path) === canonicalProjectPath(src.value)
     case 'machine': return !!s.memberId && s.memberId === src.value
     case 'team': return teamsOf(s).includes(src.value)
     case 'account': {

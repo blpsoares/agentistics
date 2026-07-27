@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcCost, getModelPrice, sessionModelUsage, sessionCostUSD, MODEL_PRICING, formatModel, getModelColor, formatProjectName, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName } from './types'
+import { calcCost, getModelPrice, sessionModelUsage, sessionCostUSD, MODEL_PRICING, formatModel, getModelColor, formatProjectName, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName, canonicalProjectPath } from './types'
 import type { ModelUsage, StatsCache } from './types'
 
 describe('mergeStatsCaches', () => {
@@ -461,4 +461,21 @@ describe('sessionModelUsage / sessionCostUSD', () => {
     expect(sessionCostUSD({ ...base })).toBeNull()
     expect(sessionCostUSD({ ...base }, 'gemini-3.6-flash')).not.toBeNull()
   })
+})
+
+// --- worktrees are not projects -----------------------------------------------------------------
+
+test('canonicalProjectPath folds a worktree back into its project', () => {
+  const proj = '/home/u/projects/pulsar'
+  expect(canonicalProjectPath(`${proj}/.claude/worktrees/bridge-cse_01HDS3hvd6yDjaWPxedhPrUc`)).toBe(proj)
+  // The decoded-path variant that loses the leading dot and doubles the slash.
+  expect(canonicalProjectPath('/home/u/prontuario//claude/worktrees/filtro/metricas')).toBe('/home/u/prontuario')
+})
+
+test('canonicalProjectPath leaves a real project path alone', () => {
+  expect(canonicalProjectPath('/home/u/projects/pulsar')).toBe('/home/u/projects/pulsar')
+  expect(canonicalProjectPath('')).toBe('')
+  // A directory merely NAMED worktrees is not a worktree root.
+  expect(canonicalProjectPath('/home/u/worktrees/thing')).toBe('/home/u/worktrees/thing')
+  expect(canonicalProjectPath('/home/u/.claude')).toBe('/home/u/.claude')
 })

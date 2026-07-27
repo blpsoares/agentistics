@@ -284,6 +284,22 @@ export interface MemberPresence {
   latencyMs: number | null
 }
 
+/**
+ * A git worktree is not a project of its own — it is a checkout of one. Claude Code puts them under
+ * `<project>/.claude/worktrees/<name>`, so every worktree showed up in the project list as if it
+ * were a separate codebase, splitting one project's metrics across a handful of near-identical
+ * paths and offering each of them as a taggable source.
+ *
+ * Returns the owning project's path, or the input unchanged when it is not a worktree. The
+ * double-slash variant appears because the project directory name is decoded heuristically and a
+ * leading dot can be lost along the way (`/proj//claude/worktrees/x`).
+ */
+export function canonicalProjectPath(path: string): string {
+  if (!path) return path
+  const m = /^(.*?)\/{1,2}\.?claude\/worktrees\//.exec(path)
+  return m && m[1] ? m[1] : path
+}
+
 /** An assistant process running right now with no session on disk to attribute it to. Not every
  *  assistant persists a conversation the moment it launches — agy writes nothing until a turn
  *  completes — so a freshly-opened one would otherwise be missing from "open now" entirely. */

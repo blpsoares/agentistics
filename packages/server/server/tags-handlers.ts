@@ -265,10 +265,13 @@ function redactAggregate(p: Principal, agg: TagAggregate, ctx: TagAuthorityConte
 function withAggregate(p: Principal, tag: TagDoc, sessions: SessionMeta[], ctx: TagContext): TagDoc & { aggregate: TagAggregate } {
   // Resolve against the STORED sources (the real values) but ship the REDACTED list — otherwise the
   // response hands back the same identifying strings the bucket redaction just collapsed.
-  const resolved = resolveTagSessions(sessions, tag.sources, ctx.lookups)
+  const resolved = resolveTagSessions(sessions, tag.sources, ctx.lookups, tag.filters ?? [])
   return {
     ...tag,
     sources: redactSources(p, tag.sources, ctx.authority),
+    // Filters carry the same kind of identifying strings as sources (a machine id, a project path),
+    // so they obey the same rule. Resolution above already used the STORED values.
+    ...(tag.filters?.length ? { filters: redactSources(p, tag.filters, ctx.authority) } : {}),
     aggregate: redactAggregate(p, aggregateSessions(resolved), ctx.authority),
   }
 }
@@ -382,16 +385,22 @@ export async function handleTags(req: Request): Promise<Response> {
     const sessions = await loadAllSessions()
     const ctx = await buildContext(principal, sessions)
     if (!canReadTag(principal, tag, ctx.authority)) return json({ error: 'tag not found' }, 404)
-    const resolved = resolveTagSessions(sessions, tag.sources, ctx.lookups)
+    const resolved = resolveTagSessions(sessions, tag.sources, ctx.lookups, tag.filters ?? [])
     // Same rule as withAggregate: resolve on the real source, report the redacted one.
     const breakdown = tag.sources.map(src => ({
       source: redactSources(principal, [src], ctx.authority)[0]!,
-      aggregate: redactAggregate(principal, aggregateSessions(resolveTagSessions(sessions, [src], ctx.lookups)), ctx.authority),
+      aggregate: redactAggregate(principal, aggregateSessions(
+        resolveTagSessions(sessions, [src], ctx.lookups, tag.filters ?? [])), ctx.authority),
     }))
     return json({
       // `resolved` is exactly what withAggregate would re-derive — reuse it rather than walking
       // the unscoped set a second time.
-      tag: { ...tag, aggregate: redactAggregate(principal, aggregateSessions(resolved), ctx.authority) },
+      tag: {
+        ...tag,
+        sources: redactSources(principal, tag.sources, ctx.authority),
+        ...(tag.filters?.length ? { filters: redactSources(principal, tag.filters, ctx.authority) } : {}),
+        aggregate: redactAggregate(principal, aggregateSessions(resolved), ctx.authority),
+      },
       breakdown,
       stats: detailStats(principal, resolved, ctx),
     })
@@ -420,20 +429,26 @@ export async function handleTags(req: Request): Promise<Response> {
     const color = parseColor(body.color)
     if (!color.ok) return json({ error: 'color must be a hex colour (#rgb or #rrggbb)' }, 400)
     const sources = parseSources(body.sources)
-    const badType = checkSourceTypes(sources)
+    const filters = parseSources(body.filters)
+    const badType = checkSourceTypes(sources) ?? checkSourceTypes(filters)
     if (badType) return badType
     // Sharing needs accounts to share WITH; a non-central instance has none, so the field is
     // ignored rather than validated (the UI does not offer it either).
     const sharedWith = TEAM_CENTRAL ? parseStringList(body.sharedWith) : []
     const sessions = await loadAllSessions()
     const ctx = await buildContext(principal, sessions)
-    if (!canWriteTagSources(principal, sources, ctx.authority)) return json({ error: 'forbidden' }, 403)
+    // Filters obey Rule 1 too. They only ever narrow, but a filter the caller cannot see would let
+    // them probe for it: add it, watch the total move, and learn that the machine or project exists.
+    if (!canWriteTagSources(principal, [...sources, ...filters], ctx.authority)) {
+      return json({ error: 'forbidden' }, 403)
+    }
     const bad = TEAM_CENTRAL ? checkSharedWith(principal, sharedWith, ctx.accounts) : null
     if (bad) return bad
     const doc = await createTag({
       name,
       color: color.value,
       sources,
+      filters,
       sharedWith,
       createdBy: principal.accountId,
     })
@@ -462,9 +477,12 @@ export async function handleTags(req: Request): Promise<Response> {
     // Re-validate on edit: the source list may be changing to something out of scope — and an
     // unchanged list may have drifted out of scope since it was written.
     const nextSources = body.sources !== undefined ? parseSources(body.sources) : existing.sources
-    const badType = checkSourceTypes(nextSources)
+    const nextFilters = body.filters !== undefined ? parseSources(body.filters) : (existing.filters ?? [])
+    const badType = checkSourceTypes(nextSources) ?? checkSourceTypes(nextFilters)
     if (badType) return badType
-    if (!canWriteTagSources(principal, nextSources, ctx.authority)) return json({ error: 'forbidden' }, 403)
+    if (!canWriteTagSources(principal, [...nextSources, ...nextFilters], ctx.authority)) {
+      return json({ error: 'forbidden' }, 403)
+    }
     const sharedWith = TEAM_CENTRAL && body.sharedWith !== undefined ? parseStringList(body.sharedWith) : undefined
     if (sharedWith) {
       const bad = checkSharedWith(principal, sharedWith, ctx.accounts)
@@ -474,6 +492,7 @@ export async function handleTags(req: Request): Promise<Response> {
       name,
       color: color.value,
       sources: body.sources !== undefined ? nextSources : undefined,
+      filters: body.filters !== undefined ? nextFilters : undefined,
       sharedWith,
     })
     return json({ ok: true })
