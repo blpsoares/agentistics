@@ -859,14 +859,15 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     if (url.pathname === '/api/live-sessions' && req.method === 'GET') {
       try {
         const data = await buildApiResponse()
-        const { getLiveSessionIds } = await import('./live-sessions')
-        const liveSessionIds = await getLiveSessionIds(data.sessions).catch(() => [])
-        return new Response(JSON.stringify({ liveSessionIds }), {
+        const { getLiveSnapshot } = await import('./live-sessions')
+        const snapshot = await getLiveSnapshot(data.sessions)
+          .catch(() => ({ liveSessionIds: [], liveProcesses: [] }))
+        return new Response(JSON.stringify(snapshot), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch {
-        return new Response(JSON.stringify({ liveSessionIds: [] }), {
+        return new Response(JSON.stringify({ liveSessionIds: [], liveProcesses: [] }), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -903,9 +904,10 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
         }
         // Live open-session detection — computed per request (not part of the cached build)
         // so it reflects `claude` processes in real time.
-        const { getLiveSessionIds } = await import('./live-sessions')
-        const liveSessionIds = await getLiveSessionIds(data.sessions).catch(() => [])
-        return new Response(JSON.stringify({ ...data, liveSessionIds, ...extra }), {
+        const { getLiveSnapshot } = await import('./live-sessions')
+        const { liveSessionIds, liveProcesses } = await getLiveSnapshot(data.sessions)
+          .catch(() => ({ liveSessionIds: [] as string[], liveProcesses: [] }))
+        return new Response(JSON.stringify({ ...data, liveSessionIds, liveProcesses, ...extra }), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })

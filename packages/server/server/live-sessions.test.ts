@@ -1,6 +1,7 @@
 import { test, expect } from 'bun:test'
 import {
-  resolveOpenSessionIds, sessionIdFromArgv, LIVE_ACTIVITY_WINDOW_MIN,
+  resolveOpenSessionIds, resolveLiveSnapshot, sessionIdFromArgv,
+  LIVE_ACTIVITY_WINDOW_MIN, LIVE_STARTUP_GRACE_MIN,
 } from './live-sessions'
 import type { HarnessId, SessionMeta } from '@agentistics/core'
 
@@ -179,3 +180,48 @@ test('a process never marks another harness session open', () => {
 })
 
 type HarnessProcessish = { harness: HarnessId; cwd: string; sessionId?: string; startedMs?: number }
+
+// --- running assistants with nothing on disk yet -------------------------------------------------
+
+test('a just-launched assistant with no conversation on disk is still reported', () => {
+  // agy persists nothing until its first turn completes, so an open one had no session to match and
+  // was missing from "open now" entirely.
+  const snap = resolveLiveSnapshot(
+    [{ harness: 'antigravity', cwd: '/proj/a', startedMs: NOW - 60_000 }], [], NOW)
+  expect(snap.liveSessionIds).toEqual([])
+  expect(snap.liveProcesses).toEqual([{ harness: 'antigravity', cwd: '/proj/a', startedMs: NOW - 60_000 }])
+})
+
+test('a restored-but-unused panel does not come back as an unmatched process', () => {
+  // The session was rejected above with better evidence than "a process exists"; re-surfacing the
+  // process here would put it straight back on screen.
+  const sessions = [s('restored', '/proj/a', minsAgo(60 * 46))]
+  const procs = [{ harness: 'claude' as HarnessId, cwd: '/proj/a', sessionId: 'restored', startedMs: NOW - 60_000 }]
+  const snap = resolveLiveSnapshot(procs, sessions, NOW)
+  expect(snap.liveSessionIds).toEqual([])
+  expect(snap.liveProcesses).toEqual([])
+})
+
+test('a process whose session IS open is not also listed as starting', () => {
+  const sessions = [s('open', '/proj/a', minsAgo(1))]
+  const procs = [{ harness: 'claude' as HarnessId, cwd: '/proj/a', sessionId: 'open', startedMs: NOW - 60_000 }]
+  const snap = resolveLiveSnapshot(procs, sessions, NOW)
+  expect(snap.liveSessionIds).toEqual(['open'])
+  expect(snap.liveProcesses).toEqual([])
+})
+
+test('an anonymous process covered by an open session of its own project is not double-counted', () => {
+  const sessions = [s('open', '/proj/a', minsAgo(1))]
+  const procs = [{ harness: 'claude' as HarnessId, cwd: '/proj/a', startedMs: NOW - 60_000 }]
+  const snap = resolveLiveSnapshot(procs, sessions, NOW)
+  expect(snap.liveSessionIds).toEqual(['open'])
+  expect(snap.liveProcesses).toEqual([])
+  // A SECOND anonymous process in the same project is not covered by that one session.
+  const two = resolveLiveSnapshot([...procs, { harness: 'claude' as HarnessId, cwd: '/proj/a', startedMs: NOW - 60_000 }], sessions, NOW)
+  expect(two.liveProcesses.length).toBe(1)
+})
+
+test('an old process with nothing on disk is idle, not starting up', () => {
+  const old = [{ harness: 'antigravity' as HarnessId, cwd: '/proj/a', startedMs: NOW - (LIVE_STARTUP_GRACE_MIN + 1) * 60_000 }]
+  expect(resolveLiveSnapshot(old, [], NOW).liveProcesses).toEqual([])
+})

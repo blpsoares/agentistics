@@ -284,6 +284,19 @@ export interface MemberPresence {
   latencyMs: number | null
 }
 
+/** An assistant process running right now with no session on disk to attribute it to. Not every
+ *  assistant persists a conversation the moment it launches — agy writes nothing until a turn
+ *  completes — so a freshly-opened one would otherwise be missing from "open now" entirely. */
+export interface LiveProcess {
+  harness: HarnessId
+  /** Working directory the assistant was launched in. */
+  cwd: string
+  /** Process start time (epoch ms). */
+  startedMs?: number
+  /** Set when the process named a session id we have no record of. */
+  sessionId?: string
+}
+
 export interface AppData {
   statsCache: StatsCache
   sessions: SessionMeta[]
@@ -304,6 +317,9 @@ export interface AppData {
   /** session_ids open in a live `claude` process right now (computed per-request, not cached).
    *  Empty/absent when live detection is unavailable (e.g. non-Linux host). */
   liveSessionIds?: string[]
+  /** Assistants running right now that have no persisted session yet (e.g. an agy that has not
+   *  completed its first turn). Carries no metrics — there is nothing measured yet. */
+  liveProcesses?: LiveProcess[]
 }
 
 /** An empty statsCache with all zero/neutral fields. Pure. */

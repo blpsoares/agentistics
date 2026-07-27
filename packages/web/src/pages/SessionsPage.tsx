@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Clock, Radio, Copy, Check } from 'lucide-react'
-import type { SessionMeta } from '@agentistics/core'
+import type { LiveProcess, SessionMeta } from '@agentistics/core'
 import { sessionLabel } from '@agentistics/core'
+import { HARNESS_COLORS, HARNESS_LABELS } from '../lib/harness'
 import type { AppContext } from '../lib/app-context'
 import { Section } from '../components/Section'
 import { RecentSessions } from '../components/RecentSessions'
@@ -19,6 +20,7 @@ export default function SessionsPage() {
   // Real-time open-session detection. The full /api/data only refetches on file events, but
   // opening/closing a `claude` tab fires none — so poll the lightweight endpoint directly.
   const [liveIdList, setLiveIdList] = useState<string[]>(data.liveSessionIds ?? [])
+  const [liveProcs, setLiveProcs] = useState<LiveProcess[]>(data.liveProcesses ?? [])
   useEffect(() => {
     if (isCentral) return
     let alive = true
@@ -26,8 +28,12 @@ export default function SessionsPage() {
       try {
         const res = await fetch('/api/live-sessions')
         if (!res.ok) return
-        const json = await res.json() as { liveSessionIds?: string[] }
-        if (alive && Array.isArray(json.liveSessionIds)) setLiveIdList(json.liveSessionIds)
+        const json = await res.json() as { liveSessionIds?: string[]; liveProcesses?: LiveProcess[] }
+        if (!alive) return
+        if (Array.isArray(json.liveSessionIds)) setLiveIdList(json.liveSessionIds)
+        // Always assign: an emptied list means the assistant finished starting up (or exited), and
+        // keeping the previous one would leave a ghost "starting" row on screen forever.
+        setLiveProcs(Array.isArray(json.liveProcesses) ? json.liveProcesses : [])
       } catch { /* transient — keep last known */ }
     }
     poll()
@@ -41,6 +47,7 @@ export default function SessionsPage() {
     [derived.filteredSessions],
   )
   const live = useMemo(() => sorted.filter(s => liveIds.has(s.session_id)), [sorted, liveIds])
+  const liveCount = live.length + liveProcs.length
 
   return (
     <>
@@ -49,11 +56,12 @@ export default function SessionsPage() {
       {/* "Open now" is real-time process detection on the local machine, so it only applies
           to this machine's own sessions — hidden on a central (member processes aren't visible). */}
       {!isCentral && (
-        <Section flashId="live-sessions" title={<><Radio size={14} /> {pt ? 'Abertas agora' : 'Open now'} {live.length > 0 && <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>({live.length})</span>}</>}>
-          {live.length === 0
+        <Section flashId="live-sessions" title={<><Radio size={14} /> {pt ? 'Abertas agora' : 'Open now'} {liveCount > 0 && <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>({liveCount})</span>}</>}>
+          {liveCount === 0
             ? <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>{pt ? 'Nenhuma sessão aberta agora.' : 'No sessions open right now.'}</div>
             : <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {live.map(s => <LiveCard key={s.session_id} s={s} pt={pt} onOpen={() => setSelectedSession(s)} />)}
+                {liveProcs.map((p, i) => <StartingCard key={`${p.harness}-${p.cwd}-${i}`} p={p} pt={pt} />)}
               </div>}
         </Section>
       )}
@@ -107,6 +115,31 @@ function LiveCard({ s, pt, onOpen }: { s: SessionMeta; pt: boolean; onOpen: () =
             </button>
           </div>
         : <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6, fontStyle: 'italic' }}>{pt ? 'Retomar não disponível para este harness.' : 'Resume not available for this harness.'}</div>}
+    </div>
+  )
+}
+
+/** A running assistant with nothing on disk yet. It gets a card of its own rather than being hidden:
+ *  agy writes no conversation until its first turn completes, so an open one is genuinely live but
+ *  has no session to link to. Deliberately shows no metrics — none exist yet. */
+function StartingCard({ p, pt }: { p: LiveProcess; pt: boolean }) {
+  const label = HARNESS_LABELS[p.harness] ?? p.harness
+  const colour = HARNESS_COLORS[p.harness] ?? 'var(--text-tertiary)'
+  return (
+    <div style={{ border: '1px dashed var(--border)', borderRadius: 10, padding: 12, background: 'var(--bg-card)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: colour, flexShrink: 0, opacity: 0.7 }} />
+        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{label}</span>
+        <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginLeft: 'auto' }}>
+          {pt ? 'sem conversa ainda' : 'no conversation yet'}
+        </span>
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.cwd}</div>
+      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6, fontStyle: 'italic' }}>
+        {pt
+          ? 'Rodando agora. Aparece com métricas assim que o primeiro turno for gravado.'
+          : 'Running now. It appears with metrics once its first turn is written.'}
+      </div>
     </div>
   )
 }
