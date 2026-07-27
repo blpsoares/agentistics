@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Clock, Radio, Copy, Check } from 'lucide-react'
-import type { LiveProcess, SessionMeta } from '@agentistics/core'
+import type { HarnessId, LiveProcess, SessionMeta } from '@agentistics/core'
 import { sessionLabel } from '@agentistics/core'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../lib/harness'
 import type { AppContext } from '../lib/app-context'
@@ -102,7 +102,8 @@ function LiveCard({ s, pt, onOpen }: { s: SessionMeta; pt: boolean; onOpen: () =
       <div onClick={onOpen} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 6px rgba(34,197,94,0.6)', flexShrink: 0 }} />
         <span style={{ fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sessionLabel(s)}</span>
-        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-tertiary)' }}>{pt ? `há ${mins} min` : `${mins} min ago`}</span>
+        <HarnessBadge harness={s.harness} />
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>{pt ? `há ${mins} min` : `${mins} min ago`}</span>
       </div>
       <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>{s.project_path}</div>
       {cmd
@@ -116,6 +117,20 @@ function LiveCard({ s, pt, onOpen }: { s: SessionMeta; pt: boolean; onOpen: () =
           </div>
         : <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6, fontStyle: 'italic' }}>{pt ? 'Retomar não disponível para este harness.' : 'Resume not available for this harness.'}</div>}
     </div>
+  )
+}
+
+/** Which assistant a card belongs to. Without it two live sessions from different harnesses that
+ *  happen to share a first prompt and a working directory are indistinguishable — they read as one
+ *  duplicated row. */
+function HarnessBadge({ harness }: { harness: HarnessId }) {
+  const colour = HARNESS_COLORS[harness] ?? 'var(--text-tertiary)'
+  return (
+    <span style={{
+      flexShrink: 0, fontSize: 10, fontWeight: 600, letterSpacing: 0.3, padding: '2px 6px',
+      borderRadius: 999, color: colour, border: `1px solid ${colour}`, background: 'transparent',
+      textTransform: 'uppercase', whiteSpace: 'nowrap',
+    }}>{HARNESS_LABELS[harness] ?? harness}</span>
   )
 }
 

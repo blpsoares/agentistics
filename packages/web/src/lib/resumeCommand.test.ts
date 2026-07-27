@@ -10,13 +10,27 @@ test('claude yields cd + claude --resume', () => {
   expect(resumeCommand(s('claude'))).toBe("cd '/home/u/proj' && claude --resume abc-123")
 })
 
-test('non-claude harnesses yield null', () => {
-  expect(resumeCommand(s('codex'))).toBeNull()
+test('every harness with a verified resume syntax gets a command', () => {
+  // Each of these is taken from the tool's own --help, not guessed.
+  expect(resumeCommand(s('antigravity'))).toBe("cd '/home/u/proj' && agy --conversation abc-123")
+  expect(resumeCommand(s('codex'))).toBe("cd '/home/u/proj' && codex resume abc-123")
+})
+
+test('harnesses that cannot reopen a session by id yield null', () => {
+  // Gemini's --resume takes "latest" or a list index, never a session id, and --session-id starts a
+  // NEW session with that id. Copilot has no verified syntax. A wrong-but-plausible command would
+  // be worse than admitting it is unavailable.
   expect(resumeCommand(s('gemini'))).toBeNull()
   expect(resumeCommand(s('copilot'))).toBeNull()
 })
 
-test('claude without project_path still resumes without cd', () => {
+test('a session with no id yields null rather than a broken command', () => {
+  expect(resumeCommand({ session_id: '', project_path: '/p', harness: 'claude' } as SessionMeta)).toBeNull()
+})
+
+test('without project_path the command runs in place, with no cd', () => {
   const noPath = { session_id: 'x', project_path: '', harness: 'claude' } as SessionMeta
   expect(resumeCommand(noPath)).toBe('claude --resume x')
+  const agy = { session_id: 'y', project_path: '', harness: 'antigravity' } as SessionMeta
+  expect(resumeCommand(agy)).toBe('agy --conversation y')
 })
