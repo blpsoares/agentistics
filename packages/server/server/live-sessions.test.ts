@@ -1,8 +1,13 @@
 import { test, expect } from 'bun:test'
-import { resolveOpenSessionIds, sessionIdFromArgv } from './live-sessions'
-import type { SessionMeta } from '@agentistics/core'
+import {
+  resolveOpenSessionIds, sessionIdFromArgv, LIVE_ACTIVITY_WINDOW_MIN,
+} from './live-sessions'
+import type { HarnessId, SessionMeta } from '@agentistics/core'
 
-function s(id: string, project: string, lastTs: string): SessionMeta {
+const NOW = Date.parse('2026-07-27T19:30:00Z')
+const minsAgo = (m: number): string => new Date(NOW - m * 60_000).toISOString()
+
+function s(id: string, project: string, lastTs: string, harness: HarnessId = 'claude'): SessionMeta {
   return {
     session_id: id, project_path: project, start_time: lastTs, end_time: lastTs,
     duration_minutes: 0, user_message_count: 0, assistant_message_count: 0,
@@ -11,42 +16,36 @@ function s(id: string, project: string, lastTs: string): SessionMeta {
     first_prompt: '', user_interruptions: 0, user_response_times: [], tool_errors: 0,
     tool_error_categories: {}, uses_task_agent: false, uses_mcp: false,
     uses_web_search: false, uses_web_fetch: false, lines_added: 0, lines_removed: 0,
-    files_modified: 0, message_hours: [], user_message_timestamps: [], harness: 'claude',
+    files_modified: 0, message_hours: [], user_message_timestamps: [], harness,
   } as SessionMeta
 }
 
-test('one process → the most-recently-active session in that project is open', () => {
+// --- project fallback --------------------------------------------------------------------------
+
+test('one process → the most-recently-active fresh session in that project is open', () => {
   const sessions = [
-    s('old', '/proj/a', '2026-07-01T10:00:00Z'),
-    s('new', '/proj/a', '2026-07-08T10:00:00Z'),
-    s('other', '/proj/b', '2026-07-08T11:00:00Z'),
+    s('old', '/proj/a', minsAgo(3)),
+    s('newer', '/proj/a', minsAgo(1)),
+    s('other', '/proj/b', minsAgo(1)),
   ]
-  const open = resolveOpenSessionIds(['/proj/a'], sessions)
-  expect([...open]).toEqual(['new'])
+  const open = resolveOpenSessionIds([{ harness: 'claude', cwd: '/proj/a', startedMs: 0 }], sessions, NOW)
+  expect([...open]).toEqual(['newer'])
 })
 
 test('two processes in the same project → the two most-recent sessions are open', () => {
-  const sessions = [
-    s('s1', '/proj/a', '2026-07-01T00:00:00Z'),
-    s('s2', '/proj/a', '2026-07-05T00:00:00Z'),
-    s('s3', '/proj/a', '2026-07-08T00:00:00Z'),
+  const sessions = [s('s1', '/proj/a', minsAgo(9)), s('s2', '/proj/a', minsAgo(5)), s('s3', '/proj/a', minsAgo(1))]
+  const procs = [
+    { harness: 'claude' as HarnessId, cwd: '/proj/a', startedMs: 0 },
+    { harness: 'claude' as HarnessId, cwd: '/proj/a', startedMs: 0 },
   ]
-  const open = resolveOpenSessionIds(['/proj/a', '/proj/a'], sessions)
-  expect(open.has('s3')).toBe(true)
-  expect(open.has('s2')).toBe(true)
-  expect(open.has('s1')).toBe(false)
-})
-
-test('processes across different projects each open their own project session', () => {
-  const sessions = [s('a', '/proj/a', '2026-07-08T00:00:00Z'), s('b', '/proj/b', '2026-07-08T00:00:00Z')]
-  const open = resolveOpenSessionIds(['/proj/a', '/proj/b'], sessions)
-  expect(open).toEqual(new Set(['a', 'b']))
+  const open = resolveOpenSessionIds(procs, sessions, NOW)
+  expect(open).toEqual(new Set(['s3', 's2']))
 })
 
 test('no processes → nothing open; process with no matching project → nothing', () => {
-  const sessions = [s('a', '/proj/a', '2026-07-08T00:00:00Z')]
-  expect(resolveOpenSessionIds([], sessions).size).toBe(0)
-  expect(resolveOpenSessionIds(['/proj/zzz'], sessions).size).toBe(0)
+  const sessions = [s('a', '/proj/a', minsAgo(1))]
+  expect(resolveOpenSessionIds([], sessions, NOW).size).toBe(0)
+  expect(resolveOpenSessionIds(['/proj/zzz'], sessions, NOW).size).toBe(0)
 })
 
 // --- identity from argv ------------------------------------------------------------------------
@@ -54,8 +53,8 @@ test('no processes → nothing open; process with no matching project → nothin
 const UUID_A = '1f9f48c3-6e75-4009-addd-fba4c3a53877'
 const UUID_B = 'c3deac99-b178-4004-910d-81725ee42b20'
 
-test('sessionIdFromArgv reads the id the IDE extension passes', () => {
-  // Real argv shape, trimmed: the extension always uses the --flag=value form.
+test('sessionIdFromArgv reads the id each harness passes', () => {
+  // Real argv shape, trimmed: the IDE extension always uses the --flag=value form.
   expect(sessionIdFromArgv([
     '/home/u/.vscode-server/extensions/anthropic.claude-code/resources/native-binary/claude',
     '--output-format', 'stream-json', `--resume=${UUID_A}`, '--permission-mode', 'auto',
@@ -63,59 +62,120 @@ test('sessionIdFromArgv reads the id the IDE extension passes', () => {
   expect(sessionIdFromArgv(['claude', '--resume', UUID_B])).toBe(UUID_B)
   expect(sessionIdFromArgv(['claude', '--session-id', UUID_B])).toBe(UUID_B)
   expect(sessionIdFromArgv(['claude', '-r', UUID_B])).toBe(UUID_B)
+  expect(sessionIdFromArgv(['agy', '--conversation', UUID_A])).toBe(UUID_A)
 })
 
 test('sessionIdFromArgv returns nothing when there is no id to read', () => {
   expect(sessionIdFromArgv(['claude'])).toBeUndefined()
+  expect(sessionIdFromArgv(['agy'])).toBeUndefined()
   // `--resume` with no value opens the interactive picker; the next arg is a flag, not an id.
   expect(sessionIdFromArgv(['claude', '--resume', '--verbose'])).toBeUndefined()
   expect(sessionIdFromArgv(['claude', '--resume=not-a-uuid'])).toBeUndefined()
+  // `--continue` names no conversation, so it can never attribute one.
+  expect(sessionIdFromArgv(['agy', '--continue'])).toBeUndefined()
   expect(sessionIdFromArgv([])).toBeUndefined()
 })
 
-test('a resumed id wins over recency — the regression this file exists for', () => {
-  // Measured on a real machine: three extension processes in one project, resuming an OLD session
-  // and a recent one. Ranking by recency reported `stale` (last touched the day before) as open.
-  const now = Date.parse('2026-07-27T19:30:00Z')
+test('a resumed id wins over recency', () => {
+  // Ranking by recency used to report `decoy` (the freshest) instead of the session actually resumed.
   const sessions = [
-    s('recent', '/proj/a', '2026-07-27T19:22:00Z'),
-    s('stale', '/proj/a', '2026-07-26T18:18:00Z'),
-    s('old-but-open', '/proj/a', '2026-07-25T21:01:00Z'),
+    s('decoy', '/proj/a', minsAgo(1)),
+    s('resumed', '/proj/a', minsAgo(4)),
   ]
-  const open = resolveOpenSessionIds([
-    { cwd: '/proj/a', sessionId: 'recent', startedMs: now },
-    { cwd: '/proj/a', sessionId: 'old-but-open', startedMs: now },
-  ], sessions)
-  expect(open).toEqual(new Set(['recent', 'old-but-open']))
-  expect(open.has('stale')).toBe(false)
-})
-
-test('an anonymous process cannot claim a session that went quiet before it started', () => {
-  const sessions = [s('yesterday', '/proj/a', '2026-07-26T18:00:00Z')]
-  const started = Date.parse('2026-07-27T09:33:00Z')
-  expect(resolveOpenSessionIds([{ cwd: '/proj/a', startedMs: started }], sessions).size).toBe(0)
-  // ...but it does claim one that has been active since it launched.
-  const live = [s('today', '/proj/a', '2026-07-27T10:00:00Z')]
-  expect(resolveOpenSessionIds([{ cwd: '/proj/a', startedMs: started }], live))
-    .toEqual(new Set(['today']))
-})
-
-test('an anonymous process never steals a session already claimed by an exact id', () => {
-  const started = Date.parse('2026-07-27T09:00:00Z')
-  const sessions = [
-    s('resumed', '/proj/a', '2026-07-27T19:00:00Z'),
-    s('fresh', '/proj/a', '2026-07-27T18:00:00Z'),
-  ]
-  const open = resolveOpenSessionIds([
-    { cwd: '/proj/a', sessionId: 'resumed', startedMs: started },
-    { cwd: '/proj/a', startedMs: started },
-  ], sessions)
-  expect(open).toEqual(new Set(['resumed', 'fresh']))
+  const open = resolveOpenSessionIds(
+    [{ harness: 'claude', cwd: '/proj/a', sessionId: 'resumed', startedMs: NOW - 10 * 60_000 }],
+    sessions, NOW)
+  expect(open).toEqual(new Set(['resumed']))
 })
 
 test('a resumed id we have no session for is dropped, not guessed at', () => {
-  const sessions = [s('a', '/proj/a', '2026-07-27T19:00:00Z')]
+  const sessions = [s('a', '/proj/a', minsAgo(1))]
   const open = resolveOpenSessionIds(
-    [{ cwd: '/proj/a', sessionId: 'deleted-transcript', startedMs: 0 }], sessions)
+    [{ harness: 'claude', cwd: '/proj/a', sessionId: 'deleted-transcript', startedMs: 0 }], sessions, NOW)
   expect(open.size).toBe(0)
 })
+
+test('an anonymous process never steals a session already claimed by an exact id', () => {
+  const sessions = [s('resumed', '/proj/a', minsAgo(1)), s('fresh', '/proj/a', minsAgo(2))]
+  const open = resolveOpenSessionIds([
+    { harness: 'claude', cwd: '/proj/a', sessionId: 'resumed', startedMs: 0 },
+    { harness: 'claude', cwd: '/proj/a', startedMs: 0 },
+  ], sessions, NOW)
+  expect(open).toEqual(new Set(['resumed', 'fresh']))
+})
+
+test('an anonymous process cannot claim a session that went quiet before it started', () => {
+  const started = NOW - 5 * 60_000
+  const stale = [s('before', '/proj/a', minsAgo(9))] // inside the window, but older than the process
+  expect(resolveOpenSessionIds([{ harness: 'claude', cwd: '/proj/a', startedMs: started }], stale, NOW).size).toBe(0)
+  const after = [s('after', '/proj/a', minsAgo(2))]
+  expect(resolveOpenSessionIds([{ harness: 'claude', cwd: '/proj/a', startedMs: started }], after, NOW))
+    .toEqual(new Set(['after']))
+})
+
+// --- the freshness gate ------------------------------------------------------------------------
+
+test('a restored-but-unused panel is not an open session — the regression this file exists for', () => {
+  // Measured on a real machine: the editor restored a panel and launched
+  // `claude --resume=<id>` at 09:33 for a conversation last touched two days earlier. The process
+  // was alive and named the session outright, and it was still reported "open now".
+  const started = NOW - 7 * 60 * 60_000
+  const procs = [{ harness: 'claude' as HarnessId, cwd: '/proj/a', sessionId: 'restored', startedMs: started }]
+  const untouched = [s('restored', '/proj/a', minsAgo(60 * 46))]
+  expect(resolveOpenSessionIds(procs, untouched, NOW).size).toBe(0)
+  // Same process, but the session HAS been used since it launched → genuinely open.
+  const used = [s('restored', '/proj/a', minsAgo(19))]
+  expect(resolveOpenSessionIds(procs, used, NOW)).toEqual(new Set(['restored']))
+})
+
+test('an open session you simply have not typed into for a while stays open', () => {
+  // The failure mode of a plain "active in the last N minutes" window: 19 minutes of reading is
+  // not a closed session. Only activity older than the process (above) or the far-out backstop
+  // (below) removes it.
+  const started = NOW - 7 * 60 * 60_000
+  const procs = [{ harness: 'claude' as HarnessId, cwd: '/proj/a', sessionId: 'idle', startedMs: started }]
+  expect(resolveOpenSessionIds(procs, [s('idle', '/proj/a', minsAgo(19))], NOW))
+    .toEqual(new Set(['idle']))
+  expect(resolveOpenSessionIds(procs, [s('idle', '/proj/a', minsAgo(120))], NOW))
+    .toEqual(new Set(['idle']))
+})
+
+test('the backstop window is inclusive and cuts off just past it', () => {
+  const procs = [{ harness: 'claude' as HarnessId, cwd: '/proj/a', startedMs: 0 }]
+  const atEdge = [s('edge', '/proj/a', minsAgo(LIVE_ACTIVITY_WINDOW_MIN))]
+  expect(resolveOpenSessionIds(procs, atEdge, NOW)).toEqual(new Set(['edge']))
+  const pastEdge = [s('past', '/proj/a', minsAgo(LIVE_ACTIVITY_WINDOW_MIN + 1))]
+  expect(resolveOpenSessionIds(procs, pastEdge, NOW).size).toBe(0)
+})
+
+// --- multi-harness -----------------------------------------------------------------------------
+
+test('every harness is detected, each only by its own processes', () => {
+  const sessions = [
+    s('c', '/proj', minsAgo(1), 'claude'),
+    s('a', '/proj', minsAgo(1), 'antigravity'),
+    s('x', '/proj', minsAgo(1), 'codex'),
+    s('g', '/proj', minsAgo(1), 'gemini'),
+    s('p', '/proj', minsAgo(1), 'copilot'),
+  ]
+  const procs: HarnessProcessish[] = [
+    { harness: 'claude', cwd: '/proj', startedMs: 0 },
+    { harness: 'antigravity', cwd: '/proj', startedMs: 0 },
+    { harness: 'codex', cwd: '/proj', startedMs: 0 },
+    { harness: 'gemini', cwd: '/proj', startedMs: 0 },
+    { harness: 'copilot', cwd: '/proj', startedMs: 0 },
+  ]
+  expect(resolveOpenSessionIds(procs, sessions, NOW)).toEqual(new Set(['c', 'a', 'x', 'g', 'p']))
+})
+
+test('a process never marks another harness session open', () => {
+  // agy and the Gemini CLI share ~/.gemini, so crossing them here would be an easy mistake.
+  const sessions = [s('agy-session', '/proj', minsAgo(1), 'antigravity')]
+  const procs = [{ harness: 'gemini' as HarnessId, cwd: '/proj', startedMs: 0 }]
+  expect(resolveOpenSessionIds(procs, sessions, NOW).size).toBe(0)
+  // An exact id from the wrong harness is refused too.
+  const wrongId = [{ harness: 'gemini' as HarnessId, cwd: '/proj', sessionId: 'agy-session', startedMs: 0 }]
+  expect(resolveOpenSessionIds(wrongId, sessions, NOW).size).toBe(0)
+})
+
+type HarnessProcessish = { harness: HarnessId; cwd: string; sessionId?: string; startedMs?: number }
