@@ -42,10 +42,10 @@ export interface TagStore {
   listAllTags(): Promise<TagDoc[]>
   getTag(id: string): Promise<TagDoc | null>
   createTag(input: {
-    name: string; color?: string; sources: TagSource[]; sharedWith: string[]; createdBy: string
+    name: string; color?: string; sources: TagSource[]; filters?: TagSource[]; sharedWith: string[]; createdBy: string
   }): Promise<TagDoc>
   updateTag(id: string, patch: {
-    name?: string; color?: string; sources?: TagSource[]; sharedWith?: string[]
+    name?: string; color?: string; sources?: TagSource[]; filters?: TagSource[]; sharedWith?: string[]
   }): Promise<boolean>
   deleteTag(id: string): Promise<boolean>
   visibleTagsFor(canRead: (tag: TagDoc) => boolean): Promise<TagDoc[]>
@@ -53,24 +53,31 @@ export interface TagStore {
 
 /** Keep only the fields a TagDoc is made of, and only when they have the right shape. A hand-edited
  *  file is expected here, so anything unrecognisable is dropped rather than trusted. */
+/** Keep only well-formed {type,value} entries. Shared by `sources` and `filters` so a hand-edited
+ *  file cannot smuggle a malformed filter past the one and trip the other. */
+function sanitizeSources(raw: unknown): TagSource[] {
+  if (!Array.isArray(raw)) return []
+  return raw.filter((s): s is TagSource =>
+    !!s && typeof s === 'object'
+    && typeof (s as { type?: unknown }).type === 'string'
+    && typeof (s as { value?: unknown }).value === 'string')
+    .map(s => ({ type: s.type, value: s.value }))
+}
+
 function sanitize(raw: unknown): TagDoc | null {
   if (!raw || typeof raw !== 'object') return null
   const d = raw as Record<string, unknown>
   if (typeof d._id !== 'string' || !d._id) return null
   if (typeof d.name !== 'string' || !d.name) return null
-  const sources = Array.isArray(d.sources)
-    ? d.sources.filter((s): s is TagSource =>
-      !!s && typeof s === 'object'
-      && typeof (s as { type?: unknown }).type === 'string'
-      && typeof (s as { value?: unknown }).value === 'string')
-      .map(s => ({ type: s.type, value: s.value }))
-    : []
+  const sources = sanitizeSources(d.sources)
+  const filters = sanitizeSources(d.filters)
   const now = new Date().toISOString()
   return {
     _id: d._id,
     name: d.name,
     ...(typeof d.color === 'string' && d.color ? { color: d.color } : {}),
     sources,
+    ...(filters.length ? { filters } : {}),
     sharedWith: Array.isArray(d.sharedWith) ? d.sharedWith.filter((x): x is string => typeof x === 'string') : [],
     createdBy: typeof d.createdBy === 'string' ? d.createdBy : 'local',
     createdAt: typeof d.createdAt === 'string' ? d.createdAt : now,
@@ -172,6 +179,7 @@ export function createLocalTagStore(file: string): TagStore {
         name: input.name,
         ...(input.color ? { color: input.color } : {}),
         sources: input.sources,
+        ...(input.filters && input.filters.length ? { filters: input.filters } : {}),
         sharedWith: [...new Set(input.sharedWith.filter(Boolean))],
         createdBy: input.createdBy,
         createdAt: now,
@@ -189,6 +197,7 @@ export function createLocalTagStore(file: string): TagStore {
           ...(patch.name !== undefined ? { name: patch.name } : {}),
           ...(patch.color !== undefined ? { color: patch.color } : {}),
           ...(patch.sources !== undefined ? { sources: patch.sources } : {}),
+          ...(patch.filters !== undefined ? { filters: patch.filters } : {}),
           ...(patch.sharedWith !== undefined ? { sharedWith: [...new Set(patch.sharedWith.filter(Boolean))] } : {}),
           updatedAt: new Date().toISOString(),
         }

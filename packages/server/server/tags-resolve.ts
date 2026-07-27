@@ -33,23 +33,59 @@ function teamsOf(s: SessionMeta): string[] {
   return s.teamId ? [s.teamId] : []
 }
 
-export function sessionMatchesTag(s: SessionMeta, sources: TagSource[], lookups: TagLookups): boolean {
-  return sources.some(src => {
-    switch (src.type) {
-      case 'repo': return !!s.git_remote && s.git_remote === src.value
-      case 'project': return s.project_path === src.value
-      case 'machine': return !!s.memberId && s.memberId === src.value
-      case 'team': return teamsOf(s).includes(src.value)
-      case 'account': {
-        const machines = lookups.machinesByAccount[src.value]
-        return !!machines && !!s.memberId && machines.includes(s.memberId)
-      }
-      default: return false
+/** Does a session match one source? The building block for both the union and the filters. */
+function matchesSource(s: SessionMeta, src: TagSource, lookups: TagLookups): boolean {
+  switch (src.type) {
+    case 'repo': return !!s.git_remote && s.git_remote === src.value
+    case 'project': return s.project_path === src.value
+    case 'machine': return !!s.memberId && s.memberId === src.value
+    case 'team': return teamsOf(s).includes(src.value)
+    case 'account': {
+      const machines = lookups.machinesByAccount[src.value]
+      return !!machines && !!s.memberId && machines.includes(s.memberId)
     }
-  })
+    default: return false
+  }
 }
 
-export function resolveTagSessions(sessions: SessionMeta[], sources: TagSource[], lookups: TagLookups): SessionMeta[] {
+/**
+ * Filters narrow the union without widening it: grouped by type, OR within a type and AND across
+ * types. "repo X, restricted to accounts {A,B} and projects {C,D}" is the union of X intersected
+ * with (A or B) and with (C or D) — which is what "only these people, only in these folders" means.
+ *
+ * Grouping by type is what makes that read naturally. Flat AND over every filter would be
+ * unsatisfiable the moment two values of the same type are listed, since one session cannot sit in
+ * two projects at once. A type nobody filtered on places no constraint at all.
+ */
+export function sessionPassesFilters(s: SessionMeta, filters: TagSource[], lookups: TagLookups): boolean {
+  if (filters.length === 0) return true
+  const byType = new Map<TagSourceType, TagSource[]>()
+  for (const f of filters) {
+    const list = byType.get(f.type)
+    if (list) list.push(f)
+    else byType.set(f.type, [f])
+  }
+  for (const group of byType.values()) {
+    if (!group.some(f => matchesSource(s, f, lookups))) return false
+  }
+  return true
+}
+
+export function sessionMatchesTag(
+  s: SessionMeta,
+  sources: TagSource[],
+  lookups: TagLookups,
+  filters: TagSource[] = [],
+): boolean {
+  return sources.some(src => matchesSource(s, src, lookups)) && sessionPassesFilters(s, filters, lookups)
+}
+
+export function resolveTagSessions(
+  sessions: SessionMeta[],
+  sources: TagSource[],
+  lookups: TagLookups,
+  filters: TagSource[] = [],
+): SessionMeta[] {
   if (sources.length === 0) return []
-  return sessions.filter(s => sessionMatchesTag(s, sources, lookups))
+  return sessions.filter(s => sessionMatchesTag(s, sources, lookups, filters))
 }

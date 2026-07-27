@@ -145,3 +145,48 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
     mcp_tool_names: mcpToolNamesSet.size > 0 ? Array.from(mcpToolNamesSet) : undefined,
   }
 }
+
+/** The flat `key: value` block Copilot writes next to each session's events. Not YAML in general —
+ *  every value here is a scalar on one line — so a hand-rolled reader avoids a dependency and
+ *  cannot be tripped by nested structures it would not know what to do with anyway. */
+export interface CopilotWorkspace {
+  cwd?: string
+  /** `owner/name` as GitHub reports it. */
+  repository?: string
+  /** `github` for github.com; anything else is an enterprise host we cannot name from here. */
+  hostType?: string
+  branch?: string
+  /** Session name. Copilot auto-generates one (`user_named: false`) unless the user renamed it. */
+  name?: string
+}
+
+export function parseCopilotWorkspace(text: string): CopilotWorkspace {
+  const out: CopilotWorkspace = {}
+  for (const line of text.split('\n')) {
+    const sep = line.indexOf(':')
+    if (sep <= 0 || line.startsWith(' ') || line.startsWith('#')) continue
+    const key = line.slice(0, sep).trim()
+    let value = line.slice(sep + 1).trim()
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1)
+    }
+    if (!value) continue
+    switch (key) {
+      case 'cwd': out.cwd = value; break
+      case 'repository': out.repository = value; break
+      case 'host_type': out.hostType = value; break
+      case 'branch': out.branch = value; break
+      case 'name': out.name = value; break
+      default: break
+    }
+  }
+  return out
+}
+
+/** `repository` + `host_type` → the same protocol-less key every other harness is grouped by.
+ *  Only github.com can be named with confidence; an enterprise host is not recorded here, and
+ *  guessing one would file the sessions under a repo that does not exist. */
+export function copilotGitRemote(ws: CopilotWorkspace): string | undefined {
+  if (!ws.repository || ws.hostType !== 'github') return undefined
+  return `github.com/${ws.repository}`
+}

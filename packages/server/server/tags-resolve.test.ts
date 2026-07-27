@@ -59,3 +59,59 @@ test('sources are an OR union and a session matching two sources is returned ONC
 test('a tag with no sources resolves to no sessions', () => {
   expect(resolveTagSessions([s({ git_remote: 'r' })], [], noLookups)).toEqual([])
 })
+
+// --- filters: narrow the union, never widen it --------------------------------------------------
+
+const NO_LOOKUPS = { machinesByAccount: {} }
+
+function sess(over: Partial<SessionMeta>): SessionMeta {
+  return { session_id: 'x', project_path: '', harness: 'claude', ...over } as SessionMeta
+}
+
+test('filters of one type are an OR', () => {
+  const sessions = [
+    sess({ session_id: 'a', git_remote: 'host/o/r', project_path: '/c' }),
+    sess({ session_id: 'b', git_remote: 'host/o/r', project_path: '/d' }),
+    sess({ session_id: 'e', git_remote: 'host/o/r', project_path: '/other' }),
+  ]
+  const out = resolveTagSessions(sessions, [{ type: 'repo', value: 'host/o/r' }], NO_LOOKUPS,
+    [{ type: 'project', value: '/c' }, { type: 'project', value: '/d' }])
+  expect(out.map(s => s.session_id)).toEqual(['a', 'b'])
+})
+
+test('filters of different types are an AND', () => {
+  // "only machine m1, and only in /c" — a session must satisfy both to survive.
+  const sessions = [
+    sess({ session_id: 'both', git_remote: 'host/o/r', project_path: '/c', memberId: 'm1' }),
+    sess({ session_id: 'wrong-path', git_remote: 'host/o/r', project_path: '/z', memberId: 'm1' }),
+    sess({ session_id: 'wrong-machine', git_remote: 'host/o/r', project_path: '/c', memberId: 'm2' }),
+  ]
+  const out = resolveTagSessions(sessions, [{ type: 'repo', value: 'host/o/r' }], NO_LOOKUPS,
+    [{ type: 'machine', value: 'm1' }, { type: 'project', value: '/c' }])
+  expect(out.map(s => s.session_id)).toEqual(['both'])
+})
+
+test('a filter can only remove sessions, never add one outside the union', () => {
+  const sessions = [
+    sess({ session_id: 'in', git_remote: 'host/o/r', project_path: '/c' }),
+    sess({ session_id: 'out', git_remote: 'host/o/other', project_path: '/c' }),
+  ]
+  // /c also names a session of a repo that is NOT a source; it must stay out.
+  const out = resolveTagSessions(sessions, [{ type: 'repo', value: 'host/o/r' }], NO_LOOKUPS,
+    [{ type: 'project', value: '/c' }])
+  expect(out.map(s => s.session_id)).toEqual(['in'])
+})
+
+test('no filters means no constraint', () => {
+  const sessions = [sess({ session_id: 'a', git_remote: 'host/o/r' })]
+  expect(resolveTagSessions(sessions, [{ type: 'repo', value: 'host/o/r' }], NO_LOOKUPS, []).length).toBe(1)
+  expect(resolveTagSessions(sessions, [{ type: 'repo', value: 'host/o/r' }], NO_LOOKUPS).length).toBe(1)
+})
+
+test('an untouched type places no constraint even when other types are filtered', () => {
+  const sessions = [sess({ session_id: 'a', git_remote: 'host/o/r', project_path: '/c', memberId: 'm9' })]
+  // Filtering only on project must not require a machine filter to match too.
+  const out = resolveTagSessions(sessions, [{ type: 'repo', value: 'host/o/r' }], NO_LOOKUPS,
+    [{ type: 'project', value: '/c' }])
+  expect(out.length).toBe(1)
+})

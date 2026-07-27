@@ -2,7 +2,7 @@
  * tags-store.ts — Mongo persistence for tags (B5).
  *
  * Collection: `tags`
- *   { _id, name, color?, sources[], sharedWith[], createdBy, createdAt, updatedAt }
+ *   { _id, name, color?, sources[], filters[], sharedWith[], createdBy, createdAt, updatedAt }
  *
  * Visibility is an explicit account list — never derived from teams. The creator and every owner
  * always see a tag; everyone else must be in `sharedWith`.
@@ -17,6 +17,8 @@ export interface TagDoc {
   name: string
   color?: string
   sources: TagSource[]
+  /** Optional narrowing of the union: OR within a type, AND across types. Never widens. */
+  filters?: TagSource[]
   /** accountIds granted read access. The creator and owners are implicit and not stored here. */
   sharedWith: string[]
   createdBy: string
@@ -40,7 +42,7 @@ export async function getTag(id: string): Promise<TagDoc | null> {
 }
 
 export async function createTag(input: {
-  name: string; color?: string; sources: TagSource[]; sharedWith: string[]; createdBy: string
+  name: string; color?: string; sources: TagSource[]; filters?: TagSource[]; sharedWith: string[]; createdBy: string
 }): Promise<TagDoc> {
   const now = new Date().toISOString()
   const doc: TagDoc = {
@@ -48,6 +50,7 @@ export async function createTag(input: {
     name: input.name,
     ...(input.color ? { color: input.color } : {}),
     sources: input.sources,
+    ...(input.filters && input.filters.length ? { filters: input.filters } : {}),
     sharedWith: [...new Set(input.sharedWith.filter(Boolean))],
     createdBy: input.createdBy,
     createdAt: now,
@@ -59,13 +62,14 @@ export async function createTag(input: {
 }
 
 export async function updateTag(id: string, patch: {
-  name?: string; color?: string; sources?: TagSource[]; sharedWith?: string[]
+  name?: string; color?: string; sources?: TagSource[]; filters?: TagSource[]; sharedWith?: string[]
 }): Promise<boolean> {
   const col = await getTagsCollection()
   const $set: Partial<TagDoc> = { updatedAt: new Date().toISOString() }
   if (patch.name !== undefined) $set.name = patch.name
   if (patch.color !== undefined) $set.color = patch.color
   if (patch.sources !== undefined) $set.sources = patch.sources
+  if (patch.filters !== undefined) $set.filters = patch.filters
   if (patch.sharedWith !== undefined) $set.sharedWith = [...new Set(patch.sharedWith.filter(Boolean))]
   const res = await col.updateOne({ _id: id }, { $set })
   return res.matchedCount > 0

@@ -14,14 +14,14 @@ test('every harness with a verified resume syntax gets a command', () => {
   // Each of these is taken from the tool's own --help, not guessed.
   expect(resumeCommand(s('antigravity'))).toBe("cd '/home/u/proj' && agy --conversation abc-123")
   expect(resumeCommand(s('codex'))).toBe("cd '/home/u/proj' && codex resume abc-123")
+  expect(resumeCommand(s('copilot'))).toBe("cd '/home/u/proj' && copilot --resume abc-123")
 })
 
-test('harnesses that cannot reopen a session by id yield null', () => {
+test('a harness that cannot reopen a session by id yields null', () => {
   // Gemini's --resume takes "latest" or a list index, never a session id, and --session-id starts a
-  // NEW session with that id. Copilot has no verified syntax. A wrong-but-plausible command would
-  // be worse than admitting it is unavailable.
+  // NEW session with that id. A wrong-but-plausible command would be worse than admitting it is
+  // unavailable.
   expect(resumeCommand(s('gemini'))).toBeNull()
-  expect(resumeCommand(s('copilot'))).toBeNull()
 })
 
 test('a session with no id yields null rather than a broken command', () => {
