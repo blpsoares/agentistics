@@ -20,7 +20,8 @@
  * Multi-harness metrics (backward compatible):
  *   The existing claude_stats.* metrics are preserved unchanged for backward
  *   compatibility with existing dashboards. In addition, new agentistics.harness.*
- *   metrics are exported with a `harness` attribute (claude|codex|gemini|copilot),
+ *   metrics are exported with a `harness` attribute
+ *   (claude|codex|gemini|copilot|antigravity),
  *   aggregated from the per-session consolidated store (~/.agentistics/sessions/).
  */
 

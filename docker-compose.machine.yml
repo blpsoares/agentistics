@@ -20,6 +20,8 @@ services:
       CODEX_DIR: /host-codex
       GEMINI_DIR: /host-gemini
       COPILOT_DIR: /host-copilot
+      # Antigravity (agy) lives inside the Gemini home, so /host-gemini already covers it;
+      # ANTIGRAVITY_DIR defaults to <GEMINI_DIR>/antigravity-cli. Override only to relocate it.
       # This is a machine, not a central — override the image's central-mode default.
       AGENTISTICS_TEAM_CENTRAL: ""
       # PORT (api + mcp) 47291; the server also binds 47292 for the web dashboard.

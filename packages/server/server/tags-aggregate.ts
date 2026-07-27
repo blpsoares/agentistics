@@ -6,7 +6,7 @@
  *
  * No Mongo, no auth, no I/O.
  */
-import { calcCost, type SessionMeta } from '@agentistics/core'
+import { calcCost, sessionCostUSD, type SessionMeta } from '@agentistics/core'
 
 export interface TagAggregate {
   sessions: number
@@ -42,15 +42,16 @@ export function aggregateSessions(sessions: SessionMeta[]): TagAggregate {
     const output = s.output_tokens ?? 0
     inputTokens += input
     outputTokens += output
-    // No model on the session → calcCost falls back to the default price, same as everywhere else.
-    costUSD += calcCost({
+    // Priced per model (multi-model sessions carry a `model_usage` breakdown).
+    // No model at all → calcCost falls back to the default price, same as everywhere else.
+    costUSD += sessionCostUSD(s) ?? calcCost({
       inputTokens: input,
       outputTokens: output,
       cacheReadInputTokens: s.cache_read_input_tokens ?? 0,
       cacheCreationInputTokens: s.cache_creation_input_tokens ?? 0,
       webSearchRequests: 0,
       costUSD: 0,
-    }, s.model ?? '')
+    }, '')
   }
   return {
     sessions: sessions.length,

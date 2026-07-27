@@ -124,3 +124,17 @@ export const GEMINI_DIR = process.env.GEMINI_DIR ?? (_selfContributingCentral ? 
 // AGENTISTICS_HARNESS_COPILOT=0.
 // ---------------------------------------------------------------------------
 export const COPILOT_DIR = process.env.COPILOT_DIR ?? (_selfContributingCentral ? '/host-copilot' : join(HOME_DIR, '.copilot'))
+
+// ---------------------------------------------------------------------------
+// Antigravity CLI (agy) harness. It lives INSIDE the Gemini home
+// (~/.gemini/antigravity-cli) but is a distinct harness — the Gemini adapter only
+// reads ~/.gemini/tmp, so the two never overlap.
+// Override with ANTIGRAVITY_DIR; disable with AGENTISTICS_HARNESS_ANTIGRAVITY=0.
+// ---------------------------------------------------------------------------
+export const ANTIGRAVITY_DIR = process.env.ANTIGRAVITY_DIR ?? join(GEMINI_DIR, 'antigravity-cli')
+export const ANTIGRAVITY_BRAIN_DIR = join(ANTIGRAVITY_DIR, 'brain')
+export const ANTIGRAVITY_HISTORY_FILE = join(ANTIGRAVITY_DIR, 'history.jsonl')
+/** One SQLite DB per conversation; its `gen_metadata` table holds the token/model protobufs. */
+export const ANTIGRAVITY_CONVERSATIONS_DIR = join(ANTIGRAVITY_DIR, 'conversations')
+/** Optional enrichment (title / parent link). Frequently exists but with zero rows. */
+export const ANTIGRAVITY_SUMMARIES_DB = join(ANTIGRAVITY_DIR, 'conversation_summaries.db')

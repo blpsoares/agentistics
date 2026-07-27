@@ -1566,7 +1566,7 @@ export default function AppLayout() {
   // models are offered; in the unified view all harnesses are shown as sections.
   const modelGroups = useMemo<{ harness: HarnessId; models: string[] }[]>(() => {
     if (!data) return []
-    const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
+    const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity']
     const byH: Partial<Record<HarnessId, Set<string>>> = {}
     const add = (h: HarnessId, m?: string) => { if (!m) return; (byH[h] ??= new Set<string>()).add(m) }
     for (const id of Object.keys(data.statsCache.modelUsage ?? {})) add('claude', id)
@@ -1643,18 +1643,34 @@ export default function AppLayout() {
     Promise.all([
       fetch('/api/iam/teams').then(r => r.ok ? r.json() : { teams: [] }),
       fetch('/api/iam/machines').then(r => r.ok ? r.json() : { machines: [] }),
-      // Tags back the `tags` filter dimension. Without this the dimension stays hidden and any
-      // stored filters.tags selection is inert.
-      fetch('/api/tags').then(r => r.ok ? r.json() : { tags: [] }),
-    ]).then(([teamsResp, machinesResp, tagsResp]) => {
+    ]).then(([teamsResp, machinesResp]) => {
       setTeamsList((teamsResp.teams ?? []).map((t: { _id: string; name: string }) => ({ id: t._id, name: t.name })))
       setMachinesList((machinesResp.machines ?? []).map((m: { id: string; machineName: string; user: string; teamId?: string; teamIds?: string[] }) => ({ id: m.id, name: m.machineName, user: m.user, teamId: m.teamId, teamIds: m.teamIds })))
-      setTagsList(tagsResp.tags ?? [])
     }).catch(() => {
       setTeamsList([])
       setMachinesList([])
-      setTagsList([])
     })
+  }, [teamSession?.central])
+
+  // Tags back the `tags` filter dimension; without them the dimension stays hidden and any stored
+  // filters.tags selection is inert. They exist in EVERY mode (a solo machine keeps them in
+  // ~/.agentistics/tags.json), so this load is not tied to the central fetch above.
+  //
+  // The response is only parsed once it IS json: the route used to answer a plain-text 404 off a
+  // central, and `r.json()` on that threw a SyntaxError out of this effect.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const r = await fetch('/api/tags')
+        if (!r.ok || !(r.headers.get('content-type') ?? '').includes('application/json')) throw new Error('no tags')
+        const body = await r.json() as { tags?: TagDef[] }
+        if (!cancelled) setTagsList(body.tags ?? [])
+      } catch {
+        if (!cancelled) setTagsList([])
+      }
+    })()
+    return () => { cancelled = true }
   }, [teamSession?.central])
 
   // Header summary counts (desktop only)

@@ -10,7 +10,7 @@ export default function DataSourcesSettings() {
   const ctx = useOutletContext<AppContext>()
   const pt = ctx.lang === 'pt'
   const harnesses = ctx.data.harnesses
-  const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
+  const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity']
   const present = order.filter(h => harnesses.includes(h))
   const [selected, setSelected] = useState<HarnessId>(present[0] ?? 'claude')
 

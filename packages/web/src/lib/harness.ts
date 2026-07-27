@@ -10,6 +10,7 @@ export const HARNESS_LABELS: Record<HarnessId, string> = {
   codex: 'Codex CLI',
   gemini: 'Gemini CLI',
   copilot: 'Copilot CLI',
+  antigravity: 'Antigravity',
 }
 
 export const HARNESS_COLORS: Record<HarnessId, string> = {
@@ -17,6 +18,9 @@ export const HARNESS_COLORS: Record<HarnessId, string> = {
   codex: '#10a37f',
   gemini: '#4285f4',
   copilot: '#6e7681',
+  // Violet — distinct from Claude's amber, Codex's green, Gemini's blue and Copilot's grey,
+  // and legible on both the light and the dark surface.
+  antigravity: '#8b5cf6',
 }
 
 /** Provider name shown in pricing links. */
@@ -25,6 +29,7 @@ export const HARNESS_PROVIDERS: Record<HarnessId, string> = {
   codex: 'OpenAI',
   gemini: 'Google',
   copilot: 'GitHub Copilot',
+  antigravity: 'Google',
 }
 
 export function capable(harness: HarnessId, metric: keyof HarnessCapabilities): boolean {
@@ -214,5 +219,73 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
       pt: 'Dados de tokens/custo/modelo/linhas-Git são emitidos no evento session.shutdown somente em saída limpa — sessões que travaram exibirão 0 nesses campos.',
     },
     pricingUrl: 'https://docs.github.com/en/copilot/about-github-copilot/plans-for-github-copilot',
+  },
+  antigravity: {
+    blurb: {
+      en: 'Sessions, projects, messages, tool usage AND tokens/model/cost. Tokens and the technical model id are decoded from the gen_metadata protobuf rows inside conversations/<conversation-id>.db; cost is then derived through the standard pricing table, exactly like every other harness.',
+      pt: 'Sessões, projetos, mensagens, uso de ferramentas E tokens/modelo/custo. Os tokens e o id técnico do modelo são decodificados das linhas protobuf gen_metadata dentro de conversations/<conversation-id>.db; o custo é então derivado pela tabela de preços padrão, exatamente como nos demais harnesses.',
+    },
+    format: {
+      en: 'Step-based JSONL transcripts (one step per line: USER_INPUT / PLANNER_RESPONSE / VIEW_FILE / RUN_COMMAND / SEARCH_WEB / ERROR_MESSAGE / INVOKE_SUBAGENT …), a global history.jsonl that maps each conversation to its workspace, and one SQLite DB per conversation whose gen_metadata table holds a protobuf blob per LLM call.',
+      pt: 'Transcrições JSONL baseadas em passos (um passo por linha: USER_INPUT / PLANNER_RESPONSE / VIEW_FILE / RUN_COMMAND / SEARCH_WEB / ERROR_MESSAGE / INVOKE_SUBAGENT …), um history.jsonl global que associa cada conversa ao seu workspace e um banco SQLite por conversa cuja tabela gen_metadata guarda um blob protobuf por chamada ao modelo.',
+    },
+    retention: {
+      en: 'Transcripts and conversation DBs persist per conversation; agentistics consolidates per-session metrics so they survive any future cleanup.',
+      pt: 'As transcrições e os bancos por conversa persistem; o agentistics consolida as métricas por sessão para que sobrevivam a qualquer limpeza futura.',
+    },
+    source: [
+      '~/.gemini/antigravity-cli/brain/<conversation-id>/.system_generated/logs/transcript_full.jsonl',
+      '~/.gemini/antigravity-cli/conversations/<conversation-id>.db (gen_metadata → tokens + model)',
+      '~/.gemini/antigravity-cli/history.jsonl (prompts + workspace hint per conversation)',
+      '~/.gemini/antigravity-cli/conversation_summaries.db (optional: title, parent link)',
+    ],
+    contains: [
+      { en: 'Sessions', pt: 'Sessões' },
+      { en: 'Project (workspace / cwd)', pt: 'Projeto (workspace / cwd)' },
+      { en: 'Messages (user + assistant replies)', pt: 'Mensagens (usuário + respostas do assistente)' },
+      { en: 'Tokens (input, cache read, output — output already includes thinking)', pt: 'Tokens (entrada, leitura de cache, saída — a saída já inclui o thinking)' },
+      { en: 'Model (technical id, e.g. gemini-3.6-flash)', pt: 'Modelo (id técnico, ex.: gemini-3.6-flash)' },
+      { en: 'Cost (USD, derived via the shared pricing table)', pt: 'Custo (USD, derivado pela tabela de preços compartilhada)' },
+      { en: 'Tool usage (view_file, run_command, search_web …)', pt: 'Uso de ferramentas (view_file, run_command, search_web …)' },
+      { en: 'Tool errors (ERROR_MESSAGE steps + non-zero exit codes)', pt: 'Erros de ferramenta (passos ERROR_MESSAGE + códigos de saída diferentes de zero)' },
+      { en: 'Files modified (from the edit payloads) and lines ADDED', pt: 'Arquivos modificados (a partir dos payloads de edição) e linhas ADICIONADAS' },
+      { en: 'Sub-agent (invoke_subagent) spend and work, folded into the parent session', pt: 'Gasto e trabalho dos sub-agentes (invoke_subagent), consolidados na sessão pai' },
+      { en: 'Start / end / duration and activity hours', pt: 'Início / fim / duração e horários de atividade' },
+    ],
+    missing: [
+      {
+        item: { en: 'Cache-write tokens', pt: 'Tokens de escrita de cache' },
+        why: {
+          en: 'gen_metadata records the cache READ count only; there is no separate cache-creation counter, so that field stays 0 and never inflates cost.',
+          pt: 'O gen_metadata registra apenas a LEITURA de cache; não existe contador separado de criação de cache, então esse campo permanece 0 e nunca infla o custo.',
+        },
+      },
+      {
+        item: { en: 'Per-sub-agent breakdown', pt: 'Detalhamento por sub-agente' },
+        why: {
+          en: 'An invoke_subagent child is a whole conversation of its own (own transcript, own DB) instead of an agent invocation recorded on the parent. Its tokens, cost and work ARE counted — folded into the parent session — but there is no per-invocation list to show, so no sub-agent table is rendered.',
+          pt: 'Um filho de invoke_subagent é uma conversa inteira própria (transcrição e banco próprios), em vez de uma invocação de agente registrada no pai. Os tokens, o custo e o trabalho dele SÃO contabilizados — consolidados na sessão pai — mas não há lista por invocação para exibir, então nenhuma tabela de sub-agentes é renderizada.',
+        },
+      },
+      {
+        item: { en: 'Lines removed (git line counts)', pt: 'Linhas removidas (contagem de linhas do Git)' },
+        why: {
+          en: 'Counting removals needs the replaced blob (TargetContent), which agy does not write for its normal edit path — so removals are structurally 0 and cannot be trusted. Rather than show a confident fake 0, the line-count metric is reported as N/A for this harness. Files modified is NOT affected and stays real.',
+          pt: 'Contar remoções exige o trecho substituído (TargetContent), que o agy não grava no caminho normal de edição — então as remoções são estruturalmente 0 e não são confiáveis. Em vez de exibir um 0 falso e confiante, a métrica de contagem de linhas é reportada como N/A neste harness. Arquivos modificados NÃO é afetado e continua real.',
+        },
+      },
+      {
+        item: { en: 'Git commits / pushes / remote', pt: 'Commits / pushes / remoto do Git' },
+        why: {
+          en: 'Antigravity stores no git metadata on disk. Any line counts kept per session are edit deltas computed from the transcript, not `git diff` output.',
+          pt: 'O Antigravity não guarda metadados do git em disco. As contagens de linhas mantidas por sessão são deltas de edição calculados a partir da transcrição, não a saída de `git diff`.',
+        },
+      },
+    ],
+    note: {
+      en: 'Antigravity shares the ~/.gemini home with the Gemini CLI but is a separate harness: it lives in ~/.gemini/antigravity-cli, while the Gemini CLI adapter only reads ~/.gemini/tmp — the two never overlap or double-count. Conversation DBs are opened read-only and a missing, locked or corrupt DB degrades to zero tokens instead of failing. Output tokens already include the thinking tokens, so they are never added on top. Replayed CONVERSATION_HISTORY steps are skipped so a resumed conversation is not counted twice, and slash commands (/model, /usage …) are not treated as prompts. invoke_subagent children are detected from the parent transcript (never from history.jsonl, which rotates) and are FOLDED INTO the parent session: a child stores its own generations in its own conversations/<child>.db, so its tokens, cost, tools, files and errors are added to the parent — exactly like an Agent tool call belongs to the Claude Code session that spawned it — and the child does not appear as a separate session. Every gen_metadata row on disk is counted exactly once. Because a parent and its sub-agents often run different models (an Opus parent dispatching Gemini Flash sub-agents), the merged session keeps a per-model token breakdown and is priced per model; the single model label shown is the parent\'s own dominant model.',
+      pt: 'O Antigravity compartilha a pasta ~/.gemini com o Gemini CLI, mas é um harness separado: fica em ~/.gemini/antigravity-cli, enquanto o adaptador do Gemini CLI lê apenas ~/.gemini/tmp — os dois nunca se sobrepõem nem contam em dobro. Os bancos por conversa são abertos somente leitura e um banco ausente, travado ou corrompido resulta em zero tokens em vez de erro. Os tokens de saída já incluem os de thinking, então nunca são somados de novo. Passos CONVERSATION_HISTORY reproduzidos são ignorados para que uma conversa retomada não seja contada duas vezes, e comandos de barra (/model, /usage …) não são tratados como prompts. Os filhos de invoke_subagent são detectados pela transcrição do pai (nunca pelo history.jsonl, que rotaciona) e são CONSOLIDADOS na sessão pai: um filho guarda as próprias gerações no seu próprio conversations/<filho>.db, então os tokens, o custo, as ferramentas, os arquivos e os erros dele são somados ao pai — exatamente como uma chamada da ferramenta Agent pertence à sessão do Claude Code que a disparou — e o filho não aparece como sessão separada. Cada linha de gen_metadata em disco é contada exatamente uma vez. Como pai e sub-agentes muitas vezes rodam modelos diferentes (um pai Opus despachando sub-agentes Gemini Flash), a sessão consolidada mantém um detalhamento de tokens por modelo e é precificada por modelo; o rótulo único de modelo exibido é o modelo dominante do próprio pai.',
+    },
+    pricingUrl: 'https://ai.google.dev/gemini-api/docs/pricing',
   },
 }

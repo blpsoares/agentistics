@@ -56,7 +56,7 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
       userMessages++
       if (ts) {
         userMessageTimestamps.push(ts)
-        messageHours.push(new Date(ts).getUTCHours())
+        messageHours.push(new Date(ts).getHours())
       }
       // Capture first user prompt
       if (!firstPrompt && typeof data.content === 'string') {

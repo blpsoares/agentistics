@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react'
 import { useOutletContext, useNavigate } from 'react-router-dom'
 import { Zap, ArrowLeft, GitCommit, ExternalLink } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
-import { repoShortName, fmt, fmtCost, calcCost, type SessionMeta } from '@agentistics/core'
+import { repoShortName, fmt, fmtCost, calcCost, sessionCostUSD, type SessionMeta } from '@agentistics/core'
 import { Section } from '../components/Section'
 import { SortControl } from '../components/SortControl'
 
@@ -131,6 +131,9 @@ export default function ActionsPage() {
 }
 
 function sessionCost(s: SessionMeta): number {
+  // Per-model for multi-model sessions (`model_usage`), single-model otherwise.
+  const byModel = sessionCostUSD(s)
+  if (byModel !== null) return byModel
   if (!s.model) {
     // No model → best-effort: treat all tokens as sonnet-blend via calcCost fallback (getModelPrice).
     return calcCost({

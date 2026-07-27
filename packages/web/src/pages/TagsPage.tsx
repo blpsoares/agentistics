@@ -42,6 +42,11 @@ const SWATCHES: string[] = [
 // Explicit, not SWATCHES[0]: noUncheckedIndexedAccess types an index read as `string | undefined`,
 // which would leak `undefined` into every consumer of the selected colour.
 const DEFAULT_COLOR = '#f59e0b'
+/** Mirrors LOCAL_MACHINE_ID in packages/server/server/tags-handlers.ts — the single machine a
+ *  non-central instance knows about, which every local session is attributed to. */
+const LOCAL_MACHINE_ID = 'local'
+/** Source types that only exist where there is IAM. Hidden off a central, and refused there too. */
+const CENTRAL_ONLY_TYPES: TagSourceType[] = ['team', 'account']
 
 /** A label/value pair inside a grid card. */
 function MiniStat({ label, value }: { label: string; value: string }) {
@@ -96,6 +101,31 @@ const trashBtn: React.CSSProperties = {
   width: 44, height: 44, flexShrink: 0,
 }
 
+/**
+ * Read a JSON response, refusing anything that is not JSON.
+ *
+ * The route used to 404 with the PLAIN-TEXT body "Not found" on a non-central instance, and this
+ * page called `r.json()` on it unconditionally — so the page died with
+ * `SyntaxError: Unexpected token 'N'` instead of showing anything. Every tags fetch goes through
+ * here now: status and content-type are checked first, and a non-JSON body becomes a readable
+ * message rather than a thrown parse error.
+ */
+async function readJson<T>(r: Response): Promise<T & { error?: string }> {
+  if (!(r.headers.get('content-type') ?? '').includes('application/json')) {
+    const text = (await r.text().catch(() => '')).slice(0, 200).trim()
+    throw new Error(text || `HTTP ${r.status}`)
+  }
+  const body = await r.json().catch(() => null) as (T & { error?: string }) | null
+  if (!body) throw new Error(`HTTP ${r.status}`)
+  // A JSON error body is RETURNED, not thrown — the caller renders `error` itself.
+  if (!r.ok && !body.error) throw new Error(`HTTP ${r.status}`)
+  return body
+}
+
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -124,14 +154,22 @@ export default function TagsPage() {
   const loadTags = useCallback(async () => {
     try {
       const r = await fetch('/api/tags')
-      const d = await r.json() as { tags?: Tag[]; error?: string }
+      const d = await readJson<{ tags?: Tag[] }>(r)
       if (d.error) { setErr(d.error); setTags([]) } else { setErr(null); setTags(d.tags ?? []) }
-    } catch (e) { setErr(String(e)) } finally { setLoaded(true) }
+    } catch (e) { setErr(errText(e)); setTags([]) } finally { setLoaded(true) }
   }, [])
 
   useEffect(() => { void loadTags() }, [loadTags])
 
+  // IAM only exists on a central. Off one there is a single machine and no teams or accounts at
+  // all, so the endpoints are not called (they are central-only and would answer with a non-JSON
+  // 404) and the machine list is the one synthetic entry the server resolves `machine` sources to.
   useEffect(() => {
+    if (!isCentral) {
+      setTeams([]); setAccounts([])
+      setMachines([{ id: LOCAL_MACHINE_ID, machineName: pt ? 'Esta máquina' : 'This machine' }])
+      return
+    }
     void (async () => {
       const [t, a, m] = await Promise.all([
         fetch('/api/iam/teams').then(r => r.ok ? r.json() as Promise<{ teams?: IamTeam[] }> : { teams: [] }).catch(() => ({ teams: [] })),
@@ -140,7 +178,7 @@ export default function TagsPage() {
       ])
       setTeams(t.teams ?? []); setAccounts(a.accounts ?? []); setMachines(m.machines ?? [])
     })()
-  }, [])
+  }, [isCentral, pt])
 
   // repo / project options come from the data the page already has — no extra endpoint.
   const repoOptions = useMemo(() => {
@@ -175,6 +213,12 @@ export default function TagsPage() {
       default: return s.value
     }
   }, [teamName, accountName, machineName])
+
+  /** Team and account need IAM, which only a central has. */
+  const sourceTypes = useMemo<TagSourceType[]>(() => (
+    (['repo', 'project', 'machine', 'team', 'account'] as TagSourceType[])
+      .filter(t => isCentral || !CENTRAL_ONLY_TYPES.includes(t))
+  ), [isCentral])
 
   const optionsForType = useCallback((t: TagSourceType) => {
     switch (t) {
@@ -274,18 +318,20 @@ export default function TagsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      const d = await res.json().catch(() => ({})) as { error?: string }
-      if (!res.ok) { setSaveErr(d.error ?? `HTTP ${res.status}`); return }
+      const d = await readJson<{ error?: string }>(res)
+      if (!res.ok || d.error) { setSaveErr(d.error ?? `HTTP ${res.status}`); return }
       setEditorOpen(false)
       await loadTags()
-    } catch (e) { setSaveErr(String(e)) } finally { setSaving(false) }
+    } catch (e) { setSaveErr(errText(e)) } finally { setSaving(false) }
   }
 
   // Anyone signed in may create a tag; what differs is the REACH, enforced server-side by
   // canWriteTagSources — owner: anything, manager: what their teams reach, user: what their own
   // account owns. Hiding the button from a plain user would block "tag my own machines" while
   // adding no protection, since the source check already refuses everything else.
-  const mayWrite = !!me
+  // Off a central nobody signs in at all (there is one user), so `me` is absent and writing is
+  // always allowed — the server runs those requests as a single-user owner.
+  const mayWrite = !isCentral || !!me
 
   // The detail page's pencil navigates back here carrying the tag to edit. Open the editor once the
   // list has loaded, then clear the history state so a reload does not reopen it.
@@ -306,9 +352,13 @@ export default function TagsPage() {
         <div style={{ minWidth: 0 }}>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>Tags</h1>
           <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 4 }}>
-            {pt
-              ? 'Agrupamentos salvos de repositórios, projetos, máquinas, times e contas.'
-              : 'Saved groupings of repositories, projects, machines, teams and accounts.'}
+            {isCentral
+              ? (pt
+                ? 'Agrupamentos salvos de repositórios, projetos, máquinas, times e contas.'
+                : 'Saved groupings of repositories, projects, machines, teams and accounts.')
+              : (pt
+                ? 'Agrupamentos salvos de repositórios e projetos desta máquina.'
+                : 'Saved groupings of this machine’s repositories and projects.')}
           </div>
         </div>
         {mayWrite && (
@@ -529,16 +579,19 @@ export default function TagsPage() {
           editChildren={
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
-                {pt
-                  ? 'A tag reúne as sessões de qualquer uma das fontes (união). Time e conta resolvem dinamicamente.'
-                  : 'The tag covers sessions matching any of its sources (union). Team and account resolve dynamically.'}
+                {isCentral
+                  ? (pt
+                    ? 'A tag reúne as sessões de qualquer uma das fontes (união). Time e conta resolvem dinamicamente.'
+                    : 'The tag covers sessions matching any of its sources (union). Team and account resolve dynamically.')
+                  : (pt
+                    ? 'A tag reúne as sessões de qualquer uma das fontes (união).'
+                    : 'The tag covers sessions matching any of its sources (union).')}
               </div>
               <Field label={pt ? 'Tipo' : 'Type'}>
                 <Select
                   value={draftType}
                   onChange={v => { setDraftType(v as TagSourceType); setDraftValue('') }}
-                  options={(['repo', 'project', 'machine', 'team', 'account'] as TagSourceType[])
-                    .map(t => ({ value: t, label: sourceTypeLabel(t) }))}
+                  options={sourceTypes.map(t => ({ value: t, label: sourceTypeLabel(t) }))}
                 />
               </Field>
               {/* One control for both cases: opening it gives search plus checkboxes, so the user
@@ -575,6 +628,10 @@ export default function TagsPage() {
           />
         </Section>
 
+        {/* Sharing is an IAM act — it grants a tag's numbers to another ACCOUNT. Off a central
+            there are no other accounts, so the whole section is hidden (and the server ignores
+            `sharedWith` there) rather than shown as a control that can never do anything. */}
+        {isCentral && (
         <Section
           title={pt ? 'Compartilhar com' : 'Share with'}
           editing={shareEditing}
@@ -645,6 +702,7 @@ export default function TagsPage() {
               : sharedWith.map(accountName).join(', ')}
           </div>
         </Section>
+        )}
       </Drawer>
     </div>
   )

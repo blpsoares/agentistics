@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMeta } from '@agentistics/core'
-import { calcCost, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, filterByTeams, filterByMachines, distinctHarnesses, mergeStatsCaches, repoShortName } from '@agentistics/core'
+import { calcCost, sessionModelUsage, sessionCostUSD, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, filterByTeams, filterByMachines, distinctHarnesses, mergeStatsCaches, repoShortName } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 import { makeTagFilter, type TagDef } from '../lib/tagMatch'
 
@@ -376,30 +376,27 @@ export function summarizeSessions(list: SessionMeta[], hasCost: boolean, hasToke
       }
     }
 
-    // per-model token accumulation — skip sessions with no/empty model (cannot be priced)
-    if (hasTokens && s.model) {
-      const key = s.model
-      const entry = modelMap[key] ?? (modelMap[key] = {
-        inputTokens: 0, outputTokens: 0,
-        cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-        webSearchRequests: 0, costUSD: 0,
-      })
-      entry.inputTokens += s.input_tokens ?? 0
-      entry.outputTokens += s.output_tokens ?? 0
-      entry.cacheReadInputTokens += s.cache_read_input_tokens ?? 0
-      entry.cacheCreationInputTokens += s.cache_creation_input_tokens ?? 0
+    // per-model token accumulation — skip sessions with no/empty model (cannot be priced).
+    // `sessionModelUsage` yields the per-model split for multi-model sessions (an Antigravity
+    // parent with its subagent children folded in) and a single entry for everything else.
+    const perModel = sessionModelUsage(s)
+    if (hasTokens) {
+      for (const [key, u] of perModel) {
+        const entry = modelMap[key] ?? (modelMap[key] = {
+          inputTokens: 0, outputTokens: 0,
+          cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+          webSearchRequests: 0, costUSD: 0,
+        })
+        entry.inputTokens += u.inputTokens
+        entry.outputTokens += u.outputTokens
+        entry.cacheReadInputTokens += u.cacheReadInputTokens
+        entry.cacheCreationInputTokens += u.cacheCreationInputTokens
+      }
     }
 
-    // cost
-    if (s.model && hasCost) {
-      const sessionCost = calcCost({
-        inputTokens: s.input_tokens ?? 0,
-        outputTokens: s.output_tokens ?? 0,
-        cacheReadInputTokens: s.cache_read_input_tokens ?? 0,
-        cacheCreationInputTokens: s.cache_creation_input_tokens ?? 0,
-        webSearchRequests: 0,
-        costUSD: 0,
-      }, s.model)
+    // cost — priced per model, so a session spanning several models stays exact
+    if (hasCost && perModel.length > 0) {
+      const sessionCost = perModel.reduce((sum, [model, u]) => sum + calcCost(u, model), 0)
       costUSD += sessionCost
       if (peakSessionCost === null || sessionCost > peakSessionCost) {
         peakSessionCost = sessionCost
@@ -643,7 +640,7 @@ export function computeFilteredHarnessSummaries(data: AppData, filters: Filters)
 
   // Columns: the explicitly selected harnesses, else the harnesses the selected users used
   // (so picking a member narrows the columns), else every harness in the data.
-  const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
+  const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity']
   const userScoped = filterByUsers(data.sessions, usersSel)
   const scopedHarnesses = distinctHarnesses(userScoped)
   const cols: HarnessId[] = harnessSel.length > 0
@@ -1085,21 +1082,23 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
       }
       // Supplement with non-Claude sessions in range (unified view, date-filtered)
       for (const sess of nonClaudeInRange) {
-        const m = sess.model
-        if (!m) continue
-        if (modelSet && !modelSet.has(m)) continue
-        if (!filteredModelUsage[m]) {
-          filteredModelUsage[m] = {
-            inputTokens: 0, outputTokens: 0,
-            cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            webSearchRequests: 0, costUSD: 0,
+        // Per-model split: a multi-model session (Antigravity parent + folded subagents)
+        // contributes to each of its models, never all of it to one label.
+        for (const [m, u] of sessionModelUsage(sess)) {
+          if (modelSet && !modelSet.has(m)) continue
+          if (!filteredModelUsage[m]) {
+            filteredModelUsage[m] = {
+              inputTokens: 0, outputTokens: 0,
+              cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+              webSearchRequests: 0, costUSD: 0,
+            }
           }
+          const entry = filteredModelUsage[m]!
+          entry.inputTokens              += u.inputTokens
+          entry.outputTokens             += u.outputTokens
+          entry.cacheReadInputTokens     += u.cacheReadInputTokens
+          entry.cacheCreationInputTokens += u.cacheCreationInputTokens
         }
-        const entry = filteredModelUsage[m]!
-        entry.inputTokens              += sess.input_tokens ?? 0
-        entry.outputTokens             += sess.output_tokens ?? 0
-        entry.cacheReadInputTokens     += sess.cache_read_input_tokens ?? 0
-        entry.cacheCreationInputTokens += sess.cache_creation_input_tokens ?? 0
       }
     } else {
       // No date filter, no project filter, no harness filter — use global statsCache (Claude)
@@ -1114,21 +1113,23 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
       }
       // Supplement with non-Claude sessions (unified view, no date filter)
       for (const sess of nonClaudeInRange) {
-        const m = sess.model
-        if (!m) continue
-        if (modelSet && !modelSet.has(m)) continue
-        if (!filteredModelUsage[m]) {
-          filteredModelUsage[m] = {
-            inputTokens: 0, outputTokens: 0,
-            cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            webSearchRequests: 0, costUSD: 0,
+        // Per-model split: a multi-model session (Antigravity parent + folded subagents)
+        // contributes to each of its models, never all of it to one label.
+        for (const [m, u] of sessionModelUsage(sess)) {
+          if (modelSet && !modelSet.has(m)) continue
+          if (!filteredModelUsage[m]) {
+            filteredModelUsage[m] = {
+              inputTokens: 0, outputTokens: 0,
+              cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+              webSearchRequests: 0, costUSD: 0,
+            }
           }
+          const entry = filteredModelUsage[m]!
+          entry.inputTokens              += u.inputTokens
+          entry.outputTokens             += u.outputTokens
+          entry.cacheReadInputTokens     += u.cacheReadInputTokens
+          entry.cacheCreationInputTokens += u.cacheCreationInputTokens
         }
-        const entry = filteredModelUsage[m]!
-        entry.inputTokens              += sess.input_tokens ?? 0
-        entry.outputTokens             += sess.output_tokens ?? 0
-        entry.cacheReadInputTokens     += sess.cache_read_input_tokens ?? 0
-        entry.cacheCreationInputTokens += sess.cache_creation_input_tokens ?? 0
       }
     }
 
@@ -1141,15 +1142,10 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
       const blended = blendedCostPerToken(globalModelUsage)
       const modelSetFallback = modelSet?.size === 1 ? [...modelSet][0]! : undefined
       for (const sess of filteredSessions) {
-        const m = sess.model ?? modelSetFallback
-        if (m) {
-          totalCostUSD += calcCost({
-            inputTokens: sess.input_tokens ?? 0,
-            outputTokens: sess.output_tokens ?? 0,
-            cacheReadInputTokens: sess.cache_read_input_tokens ?? 0,
-            cacheCreationInputTokens: sess.cache_creation_input_tokens ?? 0,
-            webSearchRequests: 0, costUSD: 0,
-          }, m)
+        // Per-model pricing (multi-model sessions carry a `model_usage` breakdown).
+        const cost = sessionCostUSD(sess, modelSetFallback)
+        if (cost !== null) {
+          totalCostUSD += cost
         } else {
           totalCostUSD += ((sess.input_tokens ?? 0) / 1_000_000) * blended.input
                        + ((sess.output_tokens ?? 0) / 1_000_000) * blended.output
@@ -1283,17 +1279,9 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
     // Reactive to every active filter because it derives purely from filteredSessions.
     const blendedRepo = blendedCostPerToken(globalModelUsage)
     const repoModelFallback = modelSet?.size === 1 ? [...modelSet][0]! : undefined
-    const sessionCostUSD = (sess: SessionMeta): number => {
-      const m = sess.model ?? repoModelFallback
-      if (m) {
-        return calcCost({
-          inputTokens: sess.input_tokens ?? 0,
-          outputTokens: sess.output_tokens ?? 0,
-          cacheReadInputTokens: sess.cache_read_input_tokens ?? 0,
-          cacheCreationInputTokens: sess.cache_creation_input_tokens ?? 0,
-          webSearchRequests: 0, costUSD: 0,
-        }, m)
-      }
+    const repoSessionCostUSD = (sess: SessionMeta): number => {
+      const cost = sessionCostUSD(sess, repoModelFallback)
+      if (cost !== null) return cost
       return ((sess.input_tokens ?? 0) / 1_000_000) * blendedRepo.input
            + ((sess.output_tokens ?? 0) / 1_000_000) * blendedRepo.output
     }
@@ -1320,7 +1308,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
       r.sessions++
       r.messages += (s.user_message_count ?? 0)
       r.tools += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
-      r.costUSD += sessionCostUSD(s)
+      r.costUSD += repoSessionCostUSD(s)
       r.inputTokens += s.input_tokens ?? 0
       r.outputTokens += s.output_tokens ?? 0
       r.gitCommits += s.git_commits ?? 0

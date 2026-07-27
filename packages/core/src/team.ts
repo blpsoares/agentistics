@@ -72,9 +72,9 @@ export function distinctUsers(sessions: SessionMeta[]): string[] {
 }
 
 /** Distinct, sorted list of harnesses present in a session list (missing harness = 'claude').
- *  Sorted by the canonical order claude→codex→gemini→copilot. Pure. */
+ *  Sorted by the canonical order claude→codex→gemini→copilot→antigravity. Pure. */
 export function distinctHarnesses(sessions: { harness?: HarnessId }[]): HarnessId[] {
-  const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
+  const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity']
   const set = new Set<HarnessId>()
   for (const s of sessions) set.add(s.harness ?? 'claude')
   return order.filter(h => set.has(h))

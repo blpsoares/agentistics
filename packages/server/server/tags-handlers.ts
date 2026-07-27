@@ -18,13 +18,10 @@
  * every breakdown leaving here runs through redactBuckets/redactTopValue: unseeable keys merge into
  * one anonymous "other" bucket that keeps the totals whole.
  */
-import { getPrincipal } from './auth'
+import { TEAM_CENTRAL } from './config'
 import { can } from './iam-caps'
 import { accountVisibleTo } from './iam-view'
-import { listMachines, type MachineInfo } from './team-tokens'
-import { listAccounts } from './accounts'
-import { listTeams } from './teams'
-import { visibleTagsFor, getTag, createTag, updateTag, deleteTag, type TagDoc } from './tags-store'
+import { localTagStore, type TagStore } from './tags-local-store'
 import { resolveTagSessions, type TagSource, type TagSourceType, type TagLookups } from './tags-resolve'
 import { aggregateSessions, type TagAggregate } from './tags-aggregate'
 import { aggregateTagDetail, type TagDetailStats } from './tags-detail'
@@ -32,9 +29,49 @@ import {
   canWriteTagSources, canReadTag, redactBuckets, redactTopValue, redactSources,
   type TagAuthorityContext, type TagVisibilityBucket,
 } from './tags-authority'
-import { loadTagSessionsFromMongo } from './team-source'
+import type { MachineInfo } from './team-tokens'
+import type { TagDoc } from './tags-store'
 import type { Principal, AccountDoc } from './iam-types'
 import type { SessionMeta } from '@agentistics/core'
+
+// Everything Mongo- or IAM-backed is imported LAZILY, inside the central-only paths. A solo
+// instance serves the same routes from local files and must never load — let alone reach — the
+// Mongo driver or the accounts collection.
+const centralDeps = {
+  principal: async (req: Request) => (await import('./auth')).getPrincipal(req),
+  store: async (): Promise<TagStore> => await import('./tags-store'),
+  sessions: async () => (await import('./team-source')).loadTagSessionsFromMongo(),
+  iam: async () => {
+    const [{ listMachines }, { listAccounts }, { listTeams }] = await Promise.all([
+      import('./team-tokens'), import('./accounts'), import('./teams'),
+    ])
+    return Promise.all([listMachines(), listAccounts(), listTeams()])
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Solo / member mode
+//
+// There is no IAM here: one person, one machine, nothing to hide from. So the handler runs with a
+// synthetic OWNER principal, which short-circuits canSeeSource / canWriteTagSources / canReadTag
+// and makes every redaction a no-op — the correct outcome, since redaction exists to keep one
+// account from reading another's identifying strings and there is only one account.
+//
+// `machine` sources: local sessions usually carry no memberId (that id is minted by a central when
+// a machine is enrolled), so a machine source would match nothing. Rather than let the category
+// silently produce an empty tag, a solo instance exposes exactly ONE machine — this one — under
+// the id below, and every local session is REwritten to belong to it. The stamp is unconditional
+// precisely because some sessions do carry an id: ones revived from ~/.agentistics/sessions after
+// this machine was enrolled and then reverted to solo keep the central-minted value, and honouring
+// it would drop them from `machine:local` — the only machine source solo mode offers. `team` and `account` have
+// no local meaning at all and are rejected outright (400) instead of resolving to nothing.
+// ---------------------------------------------------------------------------
+
+/** The single machine a non-central instance knows about. */
+export const LOCAL_MACHINE_ID = 'local'
+const SOLO_PRINCIPAL: Principal = { accountId: LOCAL_MACHINE_ID, role: 'owner', memberships: [] }
+/** Source types that mean nothing without IAM. Refused with a 400 on a non-central instance. */
+const CENTRAL_ONLY_SOURCE_TYPES = new Set<TagSourceType>(['team', 'account'])
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
 function json(body: unknown, status = 200): Response {
@@ -64,7 +101,8 @@ interface TagContext {
  *  `sessions` is the unscoped set; repo/project visibility is derived from the subset the caller
  *  can already see, so a manager may tag their own repos and folders but not someone else's. */
 async function buildContext(p: Principal, sessions: SessionMeta[]): Promise<TagContext> {
-  const [machines, accounts, teams] = await Promise.all([listMachines(), listAccounts(), listTeams()])
+  if (!TEAM_CENTRAL) return soloContext(sessions)
+  const [machines, accounts, teams] = await centralDeps.iam()
 
   const machinesByAccount: Record<string, string[]> = {}
   for (const m of machines) {
@@ -112,6 +150,40 @@ async function buildContext(p: Principal, sessions: SessionMeta[]): Promise<TagC
   }
 }
 
+/** The solo counterpart of buildContext: no IAM lookups, one synthetic machine, and visibility
+ *  sets covering everything the machine has (the owner short-circuit already grants it, but the
+ *  context stays truthful on its own so nothing depends on that short-circuit). */
+function soloContext(sessions: SessionMeta[]): TagContext {
+  const visibleRepos = new Set<string>()
+  const visibleProjects = new Set<string>()
+  for (const s of sessions) {
+    if (s.git_remote) visibleRepos.add(s.git_remote)
+    if (s.project_path) visibleProjects.add(s.project_path)
+  }
+  const machine: MachineInfo = {
+    id: LOCAL_MACHINE_ID,
+    accountIds: [LOCAL_MACHINE_ID],
+    machineName: 'This machine',
+    user: '',
+    teamIds: [],
+    createdAt: '',
+    lastSeenAt: null,
+  }
+  return {
+    lookups: { machinesByAccount: {} },
+    machines: [machine],
+    accounts: [],
+    authority: {
+      visibleTeamIds: new Set(),
+      visibleMachineIds: new Set([LOCAL_MACHINE_ID]),
+      visibleAccountIds: new Set([LOCAL_MACHINE_ID]),
+      visibleRepos,
+      visibleProjects,
+      machinesByAccount: {},
+    },
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Session cache — stale-while-revalidate, same shape and TTL as the /api/data cache in data.ts.
 //
@@ -131,17 +203,43 @@ let _sessions: Promise<SessionMeta[]> | null = null
 let _sessionsAt = 0
 let _refreshing = false
 
+/** Solo: the machine's own sessions, straight from the /api/data build — which already has its own
+ *  stale-while-revalidate cache, so this adds no second scan of ~/.claude. Sessions are shallow-
+ *  copied with the synthetic `local` memberId so a `machine` source resolves; copying (rather than
+ *  stamping in place) keeps the cached objects /api/data serves untouched.
+ *
+ *  The stamp is UNCONDITIONAL: off a central there is by definition exactly one machine, so every
+ *  session visible here belongs to it. Preserving a memberId that is already set would silently drop
+ *  sessions from `machine:local` — the only machine source the solo UI offers — because tags-resolve
+ *  matches a machine source by exact memberId equality. Sessions revived from ~/.agentistics/sessions
+ *  after this machine was enrolled to a central and then reverted to solo still carry the
+ *  central-minted id, and those are exactly the sessions the tag would under-report. */
+export function stampLocalMachine(sessions: SessionMeta[]): SessionMeta[] {
+  return sessions.map(s => ({ ...s, memberId: LOCAL_MACHINE_ID }))
+}
+
+async function loadLocalSessions(): Promise<SessionMeta[]> {
+  const { buildApiResponse } = await import('./data')
+  const res = await buildApiResponse()
+  return stampLocalMachine(res.sessions)
+}
+
+function loadSessionSet(): Promise<SessionMeta[]> {
+  return TEAM_CENTRAL ? centralDeps.sessions() : loadLocalSessions()
+}
+
 /** Swap in a fresh set when it arrives; on failure keep serving the previous good one. */
 function refreshSessionsInBackground(): void {
   if (_refreshing) return
   _refreshing = true
-  void loadTagSessionsFromMongo()
+  void loadSessionSet()
     .then(fresh => { _sessions = Promise.resolve(fresh); _sessionsAt = Date.now() })
     .catch(() => { /* keep the previous result */ })
     .finally(() => { _refreshing = false })
 }
 
-/** All central sessions, unscoped. Aggregates are computed here and only numbers leave. */
+/** All sessions this instance knows about, unscoped. Aggregates are computed here and only numbers
+ *  leave. On a central that is the whole team collection; otherwise it is the local machine. */
 async function loadAllSessions(): Promise<SessionMeta[]> {
   if (_sessions) {
     if (Date.now() - _sessionsAt >= SESSIONS_TTL_MS) refreshSessionsInBackground()
@@ -149,7 +247,7 @@ async function loadAllSessions(): Promise<SessionMeta[]> {
   }
   // First load — the only path that blocks. Concurrent callers join the same promise; a failed
   // load is dropped so the next request retries instead of caching the error forever.
-  const pending = loadTagSessionsFromMongo()
+  const pending = loadSessionSet()
   _sessions = pending
   pending.then(
     () => { _sessionsAt = Date.now() },
@@ -214,6 +312,16 @@ function parseSources(raw: unknown): TagSource[] {
     .map(x => ({ type: x.type as TagSourceType, value: x.value }))
 }
 
+/** `team` and `account` are IAM concepts. A non-central instance has neither, so accepting one
+ *  would store a source that can only ever resolve to zero sessions — a tag that looks broken.
+ *  Refuse it loudly instead. */
+function checkSourceTypes(sources: TagSource[]): Response | null {
+  if (TEAM_CENTRAL) return null
+  const bad = sources.find(s => CENTRAL_ONLY_SOURCE_TYPES.has(s.type))
+  if (!bad) return null
+  return json({ error: `source type "${bad.type}" is only available on a central instance` }, 400)
+}
+
 function parseStringList(raw: unknown): string[] {
   return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : []
 }
@@ -251,9 +359,13 @@ function checkSharedWith(p: Principal, ids: string[], accounts: AccountDoc[]): R
 }
 
 export async function handleTags(req: Request): Promise<Response> {
-  const principal = await getPrincipal(req)
+  // Central: the cookie-authenticated principal, exactly as before. Solo/member: nobody signs in,
+  // so the synthetic single-user owner stands in — see SOLO_PRINCIPAL above.
+  const principal = TEAM_CENTRAL ? await centralDeps.principal(req) : SOLO_PRINCIPAL
   if (!principal) return json({ error: 'unauthorized' }, 401)
   const isOwner = principal.role === 'owner'
+  const store = TEAM_CENTRAL ? await centralDeps.store() : localTagStore
+  const { getTag, createTag, updateTag, deleteTag, visibleTagsFor } = store
 
   const url = new URL(req.url)
   const idFromPath = url.pathname.startsWith('/api/tags/')
@@ -308,11 +420,15 @@ export async function handleTags(req: Request): Promise<Response> {
     const color = parseColor(body.color)
     if (!color.ok) return json({ error: 'color must be a hex colour (#rgb or #rrggbb)' }, 400)
     const sources = parseSources(body.sources)
-    const sharedWith = parseStringList(body.sharedWith)
+    const badType = checkSourceTypes(sources)
+    if (badType) return badType
+    // Sharing needs accounts to share WITH; a non-central instance has none, so the field is
+    // ignored rather than validated (the UI does not offer it either).
+    const sharedWith = TEAM_CENTRAL ? parseStringList(body.sharedWith) : []
     const sessions = await loadAllSessions()
     const ctx = await buildContext(principal, sessions)
     if (!canWriteTagSources(principal, sources, ctx.authority)) return json({ error: 'forbidden' }, 403)
-    const bad = checkSharedWith(principal, sharedWith, ctx.accounts)
+    const bad = TEAM_CENTRAL ? checkSharedWith(principal, sharedWith, ctx.accounts) : null
     if (bad) return bad
     const doc = await createTag({
       name,
@@ -346,8 +462,10 @@ export async function handleTags(req: Request): Promise<Response> {
     // Re-validate on edit: the source list may be changing to something out of scope — and an
     // unchanged list may have drifted out of scope since it was written.
     const nextSources = body.sources !== undefined ? parseSources(body.sources) : existing.sources
+    const badType = checkSourceTypes(nextSources)
+    if (badType) return badType
     if (!canWriteTagSources(principal, nextSources, ctx.authority)) return json({ error: 'forbidden' }, 403)
-    const sharedWith = body.sharedWith !== undefined ? parseStringList(body.sharedWith) : undefined
+    const sharedWith = TEAM_CENTRAL && body.sharedWith !== undefined ? parseStringList(body.sharedWith) : undefined
     if (sharedWith) {
       const bad = checkSharedWith(principal, sharedWith, ctx.accounts)
       if (bad) return bad

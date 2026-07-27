@@ -66,6 +66,30 @@ interface IamMachine { id: string; machineName: string }
  *  absorbs every key the viewer may not see by name, keeping the totals whole. */
 const OTHER_KEY = '__other__'
 const DEFAULT_COLOR = '#f59e0b'
+/** Mirrors LOCAL_MACHINE_ID in packages/server/server/tags-handlers.ts. */
+const LOCAL_MACHINE_ID = 'local'
+
+/**
+ * Read a JSON response, refusing anything that is not JSON.
+ *
+ * `/api/tags` used to answer with the plain-TEXT body "Not found" off a central, and this page fed
+ * it straight to `r.json()` — a SyntaxError that took the whole page down instead of an error
+ * state. Status and content-type are checked before parsing now.
+ */
+async function readJson<T>(r: Response): Promise<T & { error?: string }> {
+  if (!(r.headers.get('content-type') ?? '').includes('application/json')) {
+    const text = (await r.text().catch(() => '')).slice(0, 200).trim()
+    throw new Error(text || `HTTP ${r.status}`)
+  }
+  const body = await r.json().catch(() => null) as (T & { error?: string }) | null
+  if (!body) throw new Error(`HTTP ${r.status}`)
+  if (!r.ok && !body.error) throw new Error(`HTTP ${r.status}`)
+  return body
+}
+
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
 
 const card: React.CSSProperties = {
   background: 'var(--bg-card)', border: '1px solid var(--border)',
@@ -104,7 +128,7 @@ const OVERLAY_COLORS: Record<Metric, string> = {
 }
 
 export default function TagDetailPage() {
-  const { lang, currency, brlRate, me } = useOutletContext<AppContext>()
+  const { lang, currency, brlRate, me, isCentral } = useOutletContext<AppContext>()
   const { id } = useParams()
   const navigate = useNavigate()
   const pt = lang === 'pt'
@@ -138,12 +162,12 @@ export default function TagDetailPage() {
     void (async () => {
       try {
         const r = await fetch(`/api/tags/${encodeURIComponent(id ?? '')}`)
-        const d = await r.json() as Partial<TagDetail> & { error?: string }
+        const d = await readJson<Partial<TagDetail>>(r)
         if (cancelled) return
         if (d.error || !d.tag) setErr(d.error ?? 'not found')
         else setDetail({ tag: d.tag, breakdown: d.breakdown ?? [], stats: d.stats ?? emptyStats() })
       } catch (e) {
-        if (!cancelled) setErr(String(e))
+        if (!cancelled) setErr(errText(e))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -151,7 +175,13 @@ export default function TagDetailPage() {
     return () => { cancelled = true }
   }, [id])
 
+  // IAM lookups exist only on a central; off one there is one machine and no accounts or teams.
   useEffect(() => {
+    if (!isCentral) {
+      setTeams([]); setAccounts([])
+      setMachines([{ id: LOCAL_MACHINE_ID, machineName: pt ? 'Esta máquina' : 'This machine' }])
+      return
+    }
     void (async () => {
       const [t, a, m] = await Promise.all([
         fetch('/api/iam/teams').then(r => r.ok ? r.json() as Promise<{ teams?: IamTeam[] }> : { teams: [] }).catch(() => ({ teams: [] })),
@@ -160,7 +190,7 @@ export default function TagDetailPage() {
       ])
       setTeams(t.teams ?? []); setAccounts(a.accounts ?? []); setMachines(m.machines ?? [])
     })()
-  }, [])
+  }, [isCentral, pt])
 
   const otherLabel = pt ? 'Outros (fora do seu escopo)' : 'Other (outside your scope)'
 
@@ -184,17 +214,26 @@ export default function TagDetailPage() {
 
   const doDelete = useCallback(async () => {
     setConfirmDelete(false)
-    await fetch('/api/tags', {
-      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: detail?.tag._id ?? id }),
-    })
+    try {
+      const r = await fetch('/api/tags', {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: detail?.tag._id ?? id }),
+      })
+      // Navigating away on a FAILED delete made the tag look gone until the list reloaded it.
+      if (!r.ok) {
+        const d = await readJson<Record<string, never>>(r).catch((e: unknown) => ({ error: errText(e) }))
+        setErr(d.error ?? `HTTP ${r.status}`)
+        return
+      }
+    } catch (e) { setErr(errText(e)); return }
     navigate('/tags')
   }, [detail, id, navigate])
 
   const tag = detail?.tag
   const stats = detail?.stats
   const color = tag?.color || DEFAULT_COLOR
-  const mayEdit = !!tag && (me?.role === 'owner' || tag.createdBy === me?.id)
+  // Off a central nobody signs in — the single local user owns every tag on the machine.
+  const mayEdit = !!tag && (!isCentral || me?.role === 'owner' || tag.createdBy === me?.id)
 
   // Overlay mode draws all three series at once. They live on wildly different scales (cost in
   // hundreds, sessions in tens, tokens in millions), so each is normalised to 0-100% of its own
@@ -565,7 +604,12 @@ export default function TagDetailPage() {
         )}
       </div>
 
-      {/* ---- access ---- */}
+      {/* ---- access ----
+          Every line of this panel names an IAM concept (owners, the creator, grantees) and the
+          redaction that goes with them. Off a central none of it exists — one user, nothing
+          redacted, nothing shared — so the whole panel is hidden rather than shown stating rules
+          that do not apply. */}
+      {isCentral && (
       <div style={card}>
         <SectionHeader label={pt ? 'Quem tem acesso' : 'Who has access'} />
         {/* Three DIFFERENT kinds of access were rendered as one flat row of identical chips, so
@@ -627,6 +671,7 @@ export default function TagDetailPage() {
           </div>
         )}
       </div>
+      )}
 
       <ConfirmModal
         open={confirmDelete}

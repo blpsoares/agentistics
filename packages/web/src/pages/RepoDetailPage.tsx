@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import type { AppContext, } from '../lib/app-context'
 import type { SessionMeta, MemberPresence, HarnessId, WorkflowRun, WorkflowAgent } from '@agentistics/core'
-import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost, sessionLabel } from '@agentistics/core'
+import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost, sessionCostUSD, sessionLabel } from '@agentistics/core'
 import { capable, HARNESS_LABELS, HARNESS_COLORS, DYNAMIC_WORKFLOWS_DOC } from '../lib/harness'
 import { DocLink } from '../components/DocLink'
 import { buildWorkflowSteps, groupRunsBySession } from '../lib/workflowSteps'
@@ -349,11 +349,13 @@ interface MemberAgg {
 
 /** Cost of a single session — calcCost with its model (Sonnet fallback via '' when unknown). */
 function sessCost(s: SessionMeta): number {
+  const byModel = sessionCostUSD(s)
+  if (byModel !== null) return byModel
   return calcCost({
     inputTokens: s.input_tokens ?? 0, outputTokens: s.output_tokens ?? 0,
     cacheReadInputTokens: s.cache_read_input_tokens ?? 0, cacheCreationInputTokens: s.cache_creation_input_tokens ?? 0,
     webSearchRequests: 0, costUSD: 0,
-  }, s.model ?? '')
+  }, '')
 }
 
 function MembersTable({ sessions, presence, lang, currency, brlRate }: {

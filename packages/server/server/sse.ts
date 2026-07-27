@@ -2,7 +2,7 @@ import { join } from 'path'
 import { spawn } from 'child_process'
 import { stat } from 'fs/promises'
 import chokidar from 'chokidar'
-import { SESSION_META_DIR, PROJECTS_DIR, STATS_CACHE_FILE, PORT, CODEX_SESSIONS_DIR, GEMINI_DIR, COPILOT_DIR } from './config'
+import { SESSION_META_DIR, PROJECTS_DIR, STATS_CACHE_FILE, PORT, CODEX_SESSIONS_DIR, GEMINI_DIR, COPILOT_DIR, ANTIGRAVITY_BRAIN_DIR, ANTIGRAVITY_CONVERSATIONS_DIR } from './config'
 import { invalidateCache } from './data'
 import { mirrorFile } from './archive'
 import { getEnabledAdapters } from './adapters/types'
@@ -54,8 +54,11 @@ export function triggerSseNotification() {
   import('./team-uploader').then(m => m.notifyDataChanged()).catch(() => {})
 }
 
+/** Default noise filter for harness roots. */
+const DEFAULT_IGNORED = /(^|[/\\])(\.git|node_modules|plugins|cache|\.tmp|shell_snapshots|skills|memories|log|logs|bin|antigravity|history|ide|pkg)([/\\]|$)/
+
 export async function setupFileWatcher() {
-  const watch = (dir: string) => {
+  const watch = (dir: string, ignored: RegExp = DEFAULT_IGNORED) => {
     const watcher = chokidar.watch(dir, {
       persistent: true,
       ignoreInitial: true,
@@ -64,7 +67,7 @@ export async function setupFileWatcher() {
       // contain huge plugin caches, temp git clones, sqlite logs and snapshots that
       // would saturate the watcher (and throw EINVAL) if traversed.
       depth: 6,
-      ignored: /(^|[/\\])(\.git|node_modules|plugins|cache|\.tmp|shell_snapshots|skills|memories|log|logs|bin|antigravity|history|ide|pkg)([/\\]|$)|\.sqlite/,
+      ignored: (p: string) => ignored.test(p) || /\.sqlite/.test(p),
     })
     watcher.on('all', (event: string, path: string) => {
       // Mirror new/changed source files into the archive before notifying clients,
@@ -89,10 +92,13 @@ export async function setupFileWatcher() {
   // whole data root (adapter.dataRoot). Roots like ~/.codex contain .tmp plugin
   // clones, an 18MB sqlite log, caches, etc.; watching them recursively saturates
   // chokidar and starves the request handler. Claude is already covered above.
+  // Inside brain/<conversation-id>/ only .git / node_modules noise is worth skipping.
+  const ANTIGRAVITY_IGNORED = /(^|[/\\])(\.git|node_modules)([/\\]|$)/
   const HARNESS_SESSION_DIRS: Partial<Record<string, string>> = {
     codex: CODEX_SESSIONS_DIR,
     gemini: join(GEMINI_DIR, 'tmp'),
     copilot: join(COPILOT_DIR, 'session-state'),
+    antigravity: ANTIGRAVITY_BRAIN_DIR,
   }
   try {
     const adapters = await getEnabledAdapters()
@@ -103,7 +109,25 @@ export async function setupFileWatcher() {
       seen.add(dir)
       try {
         await stat(dir)
-        watch(dir)
+        // Antigravity's transcripts live in .system_generated/logs/, which the default
+        // filter's `logs` rule would drop — watch that tree with a narrower filter.
+        watch(dir, adapter.id === 'antigravity' ? ANTIGRAVITY_IGNORED : DEFAULT_IGNORED)
+        if (adapter.id === 'antigravity') {
+          // Antigravity's tokens / model / cost live ONLY in conversations/<id>.db, in a
+          // different tree from the transcripts. Without this, a turn that only updates
+          // gen_metadata (no new transcript step) never refreshes the dashboard.
+          // The `-wal`/`-shm` sidecars agy itself writes are ignored: they change constantly and
+          // carry no data we read (we open the DBs immutable).
+          try {
+            await stat(ANTIGRAVITY_CONVERSATIONS_DIR)
+            if (!seen.has(ANTIGRAVITY_CONVERSATIONS_DIR)) {
+              seen.add(ANTIGRAVITY_CONVERSATIONS_DIR)
+              watch(ANTIGRAVITY_CONVERSATIONS_DIR, /(-wal|-shm|-journal)$/)
+            }
+          } catch {
+            console.log(`[watcher] Skipping ${ANTIGRAVITY_CONVERSATIONS_DIR} (not found)`)
+          }
+        }
       } catch {
         // Directory doesn't exist yet — skip; data.ts re-scans on every request.
         console.log(`[watcher] Skipping ${dir} (not found)`)

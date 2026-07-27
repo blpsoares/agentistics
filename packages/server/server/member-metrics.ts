@@ -10,7 +10,7 @@
 // bundle must never import from `packages/server/*` (Vite would try to bundle Bun/Node APIs).
 // Keep the two files in sync; this one is the canonical copy and the one under test.
 
-import { calcCost, type HarnessId, type SessionMeta } from '@agentistics/core'
+import { calcCost, sessionCostUSD as sessionCostByModel, type HarnessId, type SessionMeta } from '@agentistics/core'
 
 /** How rows are grouped: one row per person (`user`) or one row per machine (`memberId`). */
 export type MemberGroupBy = 'user' | 'machine'
@@ -60,6 +60,10 @@ export interface MemberMetrics {
 /** Cost of a single session. Always via `calcCost` — never an inline pricing formula.
  *  Sessions with no `model` fall through to `getModelPrice`'s default blend. */
 export function sessionCostUSD(s: SessionMeta): number {
+  // Per-model when the session spans several models (an Antigravity parent with its subagent
+  // children folded in carries a `model_usage` breakdown); single-model otherwise.
+  const byModel = sessionCostByModel(s)
+  if (byModel !== null) return byModel
   return calcCost(
     {
       inputTokens: s.input_tokens ?? 0,
@@ -69,7 +73,7 @@ export function sessionCostUSD(s: SessionMeta): number {
       webSearchRequests: 0,
       costUSD: 0,
     },
-    s.model ?? '',
+    '',
   )
 }
 

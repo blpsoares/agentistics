@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcCost, getModelPrice, formatModel, getModelColor, formatProjectName, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName } from './types'
+import { calcCost, getModelPrice, sessionModelUsage, sessionCostUSD, MODEL_PRICING, formatModel, getModelColor, formatProjectName, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName } from './types'
 import type { ModelUsage, StatsCache } from './types'
 
 describe('mergeStatsCaches', () => {
@@ -262,8 +262,36 @@ test('gemini-2.5-flash resolves to correct price', () => {
 
 // HARNESS_CAPABILITIES
 
-test('HARNESS_CAPABILITIES declares all four harnesses', () => {
-  expect(Object.keys(HARNESS_CAPABILITIES).sort()).toEqual(['claude', 'codex', 'copilot', 'gemini'])
+test('HARNESS_CAPABILITIES declares every harness', () => {
+  expect(Object.keys(HARNESS_CAPABILITIES).sort()).toEqual(['antigravity', 'claude', 'codex', 'copilot', 'gemini'])
+})
+
+test('antigravity reports tokens/cost/model (decoded from the gen_metadata protobuf)', () => {
+  expect(HARNESS_CAPABILITIES.antigravity.tokens).toBe(true)
+  expect(HARNESS_CAPABILITIES.antigravity.cost).toBe(true)
+  expect(HARNESS_CAPABILITIES.antigravity.model).toBe(true)
+  expect(HARNESS_CAPABILITIES.antigravity.tools).toBe(true)
+  // Subagents are their own conversations, not agent invocations on the parent.
+  expect(HARNESS_CAPABILITIES.antigravity.agents).toBe(false)
+  // D6: line counts are NOT trustworthy — removals need TargetContent, which agy does not write
+  // on its normal edit path, so lines_removed is structurally 0. N/A beats a confident fake 0.
+  expect(HARNESS_CAPABILITIES.antigravity.gitLines).toBe(false)
+})
+
+test('antigravity model ids resolve to real Gemini pricing, never the Sonnet fallback', () => {
+  const fallback = getModelPrice('totally-unknown-model')
+  for (const id of ['gemini-3.6-flash', 'gemini-3.6-flash-tiered']) {
+    const price = getModelPrice(id)
+    expect(price.input).toBe(1.5)
+    expect(price.output).toBe(7.5)
+    expect(price.cacheRead).toBe(0.15)
+    expect(price).not.toEqual(fallback)
+  }
+  // agy can also drive Claude models; the existing prefix match must still win.
+  expect(getModelPrice('claude-opus-4-6-thinking').output).toBe(25)
+  // The more specific flash-lite key must not be shadowed by `gemini-3.5-flash`.
+  expect(getModelPrice('gemini-3.5-flash-lite').output).toBe(2.5)
+  expect(getModelPrice('gemini-3.5-flash').output).toBe(9)
 })
 
 test('claude is fully capable; gemini and copilot have tokens/cost/model', () => {
@@ -292,6 +320,7 @@ test('dynamicWorkflows capability is Claude-only', () => {
   expect(HARNESS_CAPABILITIES.codex.dynamicWorkflows).toBe(false)
   expect(HARNESS_CAPABILITIES.gemini.dynamicWorkflows).toBe(false)
   expect(HARNESS_CAPABILITIES.copilot.dynamicWorkflows).toBe(false)
+  expect(HARNESS_CAPABILITIES.antigravity.dynamicWorkflows).toBe(false)
 })
 
 describe('normalizeGitRemote', () => {
@@ -344,5 +373,92 @@ describe('repoShortName', () => {
     expect(repoShortName('github.com/org/repo')).toBe('org/repo')
     expect(repoShortName('gitlab.example.com/group/subgroup/repo')).toBe('group/subgroup/repo')
     expect(repoShortName('')).toBe('')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// D8 — prefix matching must not resolve a TRUNCATED id to a `-lite` price
+// ---------------------------------------------------------------------------
+
+describe('getModelPrice prefix resolution', () => {
+  const FALLBACK = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }
+
+  test('every id the Antigravity harness actually reports resolves to its REAL price', () => {
+    // Suffixed ids must hit their base model, never the Sonnet fallback.
+    expect(getModelPrice('gemini-3.6-flash')).toEqual(MODEL_PRICING['gemini-3.6-flash']!)
+    expect(getModelPrice('gemini-3.6-flash-tiered')).toEqual(MODEL_PRICING['gemini-3.6-flash']!)
+    expect(getModelPrice('claude-opus-4-6-thinking')).toEqual(MODEL_PRICING['claude-opus-4-6']!)
+    for (const id of ['gemini-3.6-flash', 'gemini-3.6-flash-tiered', 'claude-opus-4-6-thinking']) {
+      expect(getModelPrice(id)).not.toEqual(FALLBACK)
+    }
+  })
+
+  test('the LONGEST matching key wins, regardless of key order in the table', () => {
+    expect(getModelPrice('gemini-3.5-flash-lite')).toEqual(MODEL_PRICING['gemini-3.5-flash-lite']!)
+    expect(getModelPrice('gemini-3.5-flash-lite-preview')).toEqual(MODEL_PRICING['gemini-3.5-flash-lite']!)
+    expect(getModelPrice('gemini-3.5-flash')).toEqual(MODEL_PRICING['gemini-3.5-flash']!)
+  })
+
+  test('a truncated family id never resolves to a cheaper -lite price', () => {
+    // The bug: `key.startsWith(modelId)` used to return whichever key came first, so
+    // 'gemini-3.5' silently got Flash-Lite pricing.
+    expect(getModelPrice('gemini-3.5')).toEqual(MODEL_PRICING['gemini-3.5-flash']!)
+    expect(getModelPrice('gemini-3.5')).not.toEqual(MODEL_PRICING['gemini-3.5-flash-lite']!)
+    expect(getModelPrice('gemini-3.1')).toEqual(MODEL_PRICING['gemini-3.1-pro']!)
+  })
+
+  test('a version-less id still resolves to its dated key', () => {
+    expect(getModelPrice('claude-haiku-4-5')).toEqual(MODEL_PRICING['claude-haiku-4-5-20251001']!)
+  })
+
+  test('a partial word is not a match — it falls back', () => {
+    expect(getModelPrice('gemini-3.5-fl')).toEqual(FALLBACK)
+    expect(getModelPrice('')).toEqual(FALLBACK)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Multi-model sessions (Antigravity parent + folded sub-agent children)
+// ---------------------------------------------------------------------------
+
+describe('sessionModelUsage / sessionCostUSD', () => {
+  const base = {
+    input_tokens: 100, output_tokens: 10,
+    cache_read_input_tokens: 50, cache_creation_input_tokens: 0,
+  }
+
+  test('a single-model session yields one entry priced by `model`', () => {
+    const entries = sessionModelUsage({ ...base, model: 'gemini-3.6-flash' })
+    expect(entries).toHaveLength(1)
+    expect(entries[0]![0]).toBe('gemini-3.6-flash')
+    expect(entries[0]![1].inputTokens).toBe(100)
+    expect(sessionCostUSD({ ...base, model: 'gemini-3.6-flash' })).toBeCloseTo(
+      calcCost({ inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 50, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 }, 'gemini-3.6-flash'),
+      12,
+    )
+  })
+
+  test('a multi-model session is priced per model, not at its single label rate', () => {
+    const s = {
+      ...base,
+      model: 'claude-opus-4-6-thinking',
+      model_usage: {
+        'claude-opus-4-6-thinking': { inputTokens: 60, outputTokens: 6, cacheReadInputTokens: 30, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 },
+        'gemini-3.6-flash-tiered': { inputTokens: 40, outputTokens: 4, cacheReadInputTokens: 20, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 },
+      },
+    }
+    const cost = sessionCostUSD(s)!
+    const atOpusOnly = calcCost({ inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 50, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 }, 'claude-opus-4-6-thinking')
+    expect(cost).toBeLessThan(atOpusOnly)
+    expect(cost).toBeCloseTo(
+      calcCost(s.model_usage['claude-opus-4-6-thinking']!, 'claude-opus-4-6-thinking')
+      + calcCost(s.model_usage['gemini-3.6-flash-tiered']!, 'gemini-3.6-flash-tiered'),
+      12,
+    )
+  })
+
+  test('no model at all → null, so the caller can use its blended fallback', () => {
+    expect(sessionCostUSD({ ...base })).toBeNull()
+    expect(sessionCostUSD({ ...base }, 'gemini-3.6-flash')).not.toBeNull()
   })
 })

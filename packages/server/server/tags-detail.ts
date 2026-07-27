@@ -11,7 +11,7 @@
  *
  * No Mongo, no auth, no I/O.
  */
-import { calcCost, type SessionMeta } from '@agentistics/core'
+import { calcCost, sessionCostUSD, type SessionMeta } from '@agentistics/core'
 
 export interface TagBucket {
   key: string
@@ -51,6 +51,9 @@ export interface TagDetailStats {
 }
 
 function sessionCost(s: SessionMeta): number {
+  // Per-model when the session spans several models; otherwise its single `model`.
+  const byModel = sessionCostUSD(s)
+  if (byModel !== null) return byModel
   return calcCost({
     inputTokens: s.input_tokens ?? 0,
     outputTokens: s.output_tokens ?? 0,
@@ -58,7 +61,7 @@ function sessionCost(s: SessionMeta): number {
     cacheCreationInputTokens: s.cache_creation_input_tokens ?? 0,
     webSearchRequests: 0,
     costUSD: 0,
-  }, s.model ?? '')
+  }, '')
 }
 
 function sessionTokens(s: SessionMeta): number {

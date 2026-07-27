@@ -331,7 +331,7 @@ docker compose -f docker-compose.machine.yml down
 ```
 
 It reuses the same image as the central (minus Mongo and central mode), mounts the host's harness
-dirs (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.copilot`) **read-only**, mounts `~/.agentistics`
+dirs (`~/.claude`, `~/.codex`, `~/.gemini` — which also contains Antigravity's `antigravity-cli/` — and `~/.copilot`) **read-only**, mounts `~/.agentistics`
 read-write (so it inherits the endpoint/token and persists the archive/sync state), and uses host
 networking so it reaches the central and opens the reverse channel.
 

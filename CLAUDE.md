@@ -82,7 +82,10 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── adapters/gemini.ts   → Gemini CLI reader (~/.gemini/tmp/<project>/chats/*.jsonl + projects.json)
   ├── adapters/gemini-parse.ts → pure parser; only counts chats with genuine content (a real user message or model response), dropping bootstrap-only stub files; session_id is unique per chat file
   ├── adapters/copilot.ts  → Copilot CLI reader (~/.copilot/session-state/<id>/events.jsonl + workspace.yaml)
-  └── adapters/copilot-parse.ts → pure parser (session.start context, user.message, assistant turns, MCP, activity hours)
+  ├── adapters/copilot-parse.ts → pure parser (session.start context, user.message, assistant turns, MCP, activity hours)
+  ├── adapters/antigravity.ts → Antigravity CLI (agy) reader (brain/<conv>/.system_generated/logs/transcript_full.jsonl + the global history.jsonl + READ-ONLY bun:sqlite reads of conversations/<conv>.db `gen_metadata` and the optional conversation_summaries.db)
+  ├── adapters/antigravity-parse.ts → pure parser; skips replayed CONVERSATION_HISTORY steps and dedupes by step_index (no double counting), never treats a slash command as the first prompt, counts ERROR_MESSAGE steps, derives files/lines from the edit payloads, and drops a conversation only when it is a proven invoke_subagent child
+  └── adapters/antigravity-protobuf.ts → **pure**, dependency-free protobuf wire reader for the gen_metadata blobs (tokens + model id); never throws — malformed input yields null
 
 packages/web/src/ (React + Vite, port 47292 in dev)
   ├── lib/
@@ -138,13 +141,13 @@ Agentistics tracks sessions from multiple AI coding assistants (harnesses), not 
 
 ### Harness model
 
-- `SessionMeta.harness: HarnessId` tags every session with its origin (`'claude' | 'codex' | 'gemini' | 'copilot'`). Missing/legacy sessions default to `'claude'`.
+- `SessionMeta.harness: HarnessId` tags every session with its origin (`'claude' | 'codex' | 'gemini' | 'copilot' | 'antigravity'`). Missing/legacy sessions default to `'claude'`.
 - `AppData.harnesses: HarnessId[]` lists which harnesses have data present, used by the frontend to decide whether to show the harness selector in the nav (shown only when >1 harness is active). Selecting "All" yields the unified view.
 - Each harness is implemented as a `HarnessAdapter` module under `server/adapters/` — never a separate package. `getEnabledAdapters()` lazily resolves and memoizes available adapters; individual adapters can be disabled via `AGENTISTICS_HARNESS_<ID>=0`.
 
 ### N/A vs real 0 — `HARNESS_CAPABILITIES`
 
-`HARNESS_CAPABILITIES` in `@agentistics/core` (`packages/core/src/types.ts`) is the single source of truth for which metrics each harness can produce. When a capability flag is `false`, the frontend renders "N/A" via the `NAtag` component + `capable(harness, metric)` helper (re-exported from `lib/harness.ts`), rather than showing a misleading 0. Current limitations: Codex, Gemini, and Copilot do not produce agent metrics or git line counts (those capabilities are `false` for non-Claude harnesses). `dynamicWorkflows` (runs of the multi-agent orchestration Workflow tool) is `true` only for `claude` — it gates the repo-detail "Dynamic Workflows" tab.
+`HARNESS_CAPABILITIES` in `@agentistics/core` (`packages/core/src/types.ts`) is the single source of truth for which metrics each harness can produce. When a capability flag is `false`, the frontend renders "N/A" via the `NAtag` component + `capable(harness, metric)` helper (re-exported from `lib/harness.ts`), rather than showing a misleading 0. Current limitations: Codex and Gemini do not produce agent metrics or git line counts. **Antigravity produces `tokens`/`cost`/`model`** (decoded from the `gen_metadata` protobuf in `~/.gemini/antigravity-cli/conversations/<id>.db`, cost via the standard pricing table) and `gitLines` (edit deltas computed from the transcript's edit payloads, not `git diff`); it has `agents: false` because an `invoke_subagent` child is its own conversation, not an agent invocation on the parent. `dynamicWorkflows` (runs of the multi-agent orchestration Workflow tool) is `true` only for `claude` — it gates the repo-detail "Dynamic Workflows" tab.
 
 ### Aggregation — stats-cache.json is Claude-only
 
@@ -153,6 +156,57 @@ Agentistics tracks sessions from multiple AI coding assistants (harnesses), not 
 ### Codex envelope format
 
 Codex JSONL files wrap events in `event_msg` / `response_item` envelopes; the semantic event type lives at `payload.type`. Token usage is at `payload.info.total_token_usage` (cumulative — last seen wins). Codex `input_tokens` includes the cached portion, so the parser stores non-cached input (`totalInput - cached`) in `input_tokens` and the cached portion in `cache_read_input_tokens` separately.
+
+### Antigravity (agy) — shares ~/.gemini, but is a separate harness
+
+Antigravity lives at `~/.gemini/antigravity-cli` (inside the Gemini CLI home) while the Gemini
+adapter reads only `~/.gemini/tmp` — the two never overlap or double-count. Per-conversation
+transcripts are step-based JSONL at
+`brain/<conversation-id>/.system_generated/logs/transcript_full.jsonl` (`transcript.jsonl` is the
+truncated fallback); the project path (`workspace`) and the raw prompts live in a single GLOBAL
+`history.jsonl`. Parser rules: `CONVERSATION_HISTORY` steps are replays and are skipped, steps are
+deduped by `step_index`, `type: 'slash_command'` / `/foo` prompts never become `first_prompt`, and
+a conversation with no genuine user turn is dropped (same principle as the Gemini stub filter).
+
+**Tokens / model / cost are REAL for agy.** They come from `conversations/<conversation-id>.db`
+(SQLite), table `gen_metadata`, column `data` — a protobuf blob per LLM call, decoded by the pure,
+dependency-free `adapters/antigravity-protobuf.ts`. Verified wire layout:
+`1.4.1` input, `1.4.2` cache read, `1.4.3` output, `1.4.5` context-size gauge, `1.4.9` thinking,
+`1.4.10` completion, `1.19` technical model id, `1.21` display name. Rules:
+- **`1.4.3` already includes `1.4.9`** — never add thinking on top of output.
+- **`1.4.5` is a gauge, never a sum** — it is the context size at that call.
+- agy records **no cache-write** counter, so `cache_creation_input_tokens` stays 0.
+- `model` is the dominant `1.19` across the conversation's rows (e.g. `gemini-3.6-flash`; agy can
+  also drive Claude models, e.g. `claude-opus-4-6-thinking`). **Cost is `calcCost()` only** —
+  `MODEL_PRICING` must resolve the id or the Sonnet fallback would report wrong money.
+- The DB is opened **read-only** via `bun:sqlite` in the (impure) adapter; `antigravity-parse.ts`
+  stays pure and receives the decoded totals. Missing / locked / corrupt DB → zero tokens, never a
+  throw.
+
+**Subagent children are detected intrinsically, never from `history.jsonl`.** `history.jsonl` is a
+CLI prompt history that rotates and can be cleared, so it is only a hint (first prompt + workspace)
+— it must never be the reason a conversation with a real transcript is dropped. A conversation is
+excluded only when it appears in `buildAntigravityChildSet()`, built from (a) the parent's own
+`INVOKE_SUBAGENT` step, whose content lists each child's `conversationId`, and (b)
+`conversation_summaries.db` rows with `parent_conversation_id` / `nesting_depth > 0` when that table
+has rows (it is frequently empty). Children are never rolled up into the parent — each has its own
+DB and would double-count.
+
+**Errors and edits.** Every agy step carries `status: "DONE"` even when it failed, so the dedicated
+`type: "ERROR_MESSAGE"` step (with `error` / `error_code`) is the primary error signal; the
+ERROR_MESSAGE / non-zero `exit_code` / `status ERROR|FAILED` checks are **mutually exclusive** so one
+failed step can never increment `tool_errors` twice. `files_modified` is the count of DISTINCT
+`TargetFile` paths from the write tools (`write_to_file`, `replace_file_content`,
+`multi_replace_file_content`, …) plus the `file://` path named by a `CODE_ACTION` step, and
+`lines_added` / `lines_removed` are newline counts of `CodeContent` / `ReplacementContent` vs
+`TargetContent` (hence `gitLines: true` — these are edit deltas, not `git diff`; agy stores no git
+metadata).
+
+**No chat driver.** `chat-drivers/` spawns a CLI in non-interactive *streaming* mode and needs a
+machine-readable event stream (`-o stream-json`), a session id and MCP registration. `agy` offers
+`--print` but no structured output format, no session-id emission and no documented MCP config, so a
+driver cannot be written that is trivially correct — reading `transcript_full.jsonl` after the fact
+is a different (and racy) contract. Deliberately not added.
 
 ### Gemini caveat — bootstrap stubs vs. real sessions
 

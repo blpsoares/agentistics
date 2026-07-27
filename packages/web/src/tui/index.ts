@@ -315,6 +315,7 @@ const HARNESS_LABELS: Record<HarnessId, string> = {
   codex:   'Codex CLI',
   gemini:  'Gemini CLI',
   copilot: 'Copilot CLI',
+  antigravity: 'Antigravity',
 }
 
 /** Compute per-harness totals from per-session data.

@@ -54,12 +54,12 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
       }
       if (lineTs) {
         userMessageTimestamps.push(lineTs)
-        messageHours.push(new Date(lineTs).getUTCHours())
+        messageHours.push(new Date(lineTs).getHours())
       }
     } else if (type === 'agent_message') {
       assistantMessages++
       if (lineTs) {
-        messageHours.push(new Date(lineTs).getUTCHours())
+        messageHours.push(new Date(lineTs).getHours())
       }
     }
 

@@ -40,7 +40,7 @@ export interface StatsCache {
   totalSpeculationTimeSavedMs: number
 }
 
-export type HarnessId = 'claude' | 'codex' | 'gemini' | 'copilot'
+export type HarnessId = 'claude' | 'codex' | 'gemini' | 'copilot' | 'antigravity'
 
 export interface HarnessCapabilities {
   tokens: boolean
@@ -61,6 +61,17 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   codex:   { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false },
   gemini:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false },
   copilot: { tokens: true,  cost: true,  model: true,  tools: false, agents: false, gitLines: true,  dynamicWorkflows: false },
+  // Antigravity (agy): tokens + model come from the `gen_metadata` protobuf blobs in
+  // ~/.gemini/antigravity-cli/conversations/<id>.db (decoded by adapters/antigravity-protobuf.ts)
+  // and cost is derived from them via calcCost().
+  // `gitLines` is FALSE on purpose. agy has no git integration, and the transcript only lets us
+  // count ADDED lines (write_to_file's CodeContent / a replace's ReplacementContent). Removals
+  // need the replaced blob (`TargetContent`), which agy does not write for its normal edit path —
+  // measured on real data, lines_removed is structurally 0. Reporting a confident 0 removals is
+  // exactly the misleading-zero this flag exists to prevent, so the UI shows N/A instead. The
+  // per-session lines_added / lines_removed fields are still populated (and files_modified, which
+  // this flag does NOT gate, stays real).
+  antigravity: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false },
 }
 
 export interface SessionMeta {
@@ -101,6 +112,14 @@ export interface SessionMeta {
   message_hours: number[]
   user_message_timestamps: string[]
   model?: string
+  /** Per-model token breakdown for sessions whose generations span MORE THAN ONE model, e.g. an
+   *  Antigravity parent conversation with its `invoke_subagent` children folded in (the parent can
+   *  run Opus while its subagents run Gemini Flash). When present it is the authoritative cost
+   *  basis — its per-model sums always add up to `input_tokens` / `output_tokens` /
+   *  `cache_read_input_tokens` / `cache_creation_input_tokens`, and `model` stays the session's own
+   *  dominant model (a single label for a multi-model session is a display convenience only).
+   *  Absent for single-model sessions: then `model` alone prices the session. */
+  model_usage?: Record<string, ModelUsage>
   harness: HarnessId
   /** Owning user in team mode. Undefined for local/Solo sessions. */
   user?: string
@@ -390,10 +409,18 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; cach
   'claude-sonnet-4-20250514':   { input: 3,    output: 15,   cacheRead: 0.30, cacheWrite: 3.75  },
   'claude-haiku-3-5-20241022':  { input: 0.80, output: 4,    cacheRead: 0.08, cacheWrite: 1.00  },
   'claude-3-haiku-20240307':    { input: 0.25, output: 1.25, cacheRead: 0.03, cacheWrite: 0.30  },
-  // Google (Gemini CLI) — verified from ai.google.dev/gemini-api/docs/pricing, 2026-06-22.
+  // Google (Gemini CLI, Antigravity CLI) — verified from ai.google.dev/gemini-api/docs/pricing
+  // (3.6/lite rows re-checked 2026-07-27; the rest 2026-06-22).
   // Gemini has no separate cache-write charge; cacheWrite is set to the input rate
   // and is unused in practice.
+  // Key order is irrelevant: getModelPrice matches exactly first, then takes the LONGEST key that
+  // is a prefix of the id (so `gemini-3.5-flash-lite-x` beats `gemini-3.5-flash` no matter where
+  // the rows sit). Antigravity reports suffixed ids like `gemini-3.6-flash-tiered`, which the
+  // prefix match resolves correctly.
+  'gemini-3.6-flash':       { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 1.5  },
+  'gemini-3.5-flash-lite':  { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0.3  },
   'gemini-3.5-flash':       { input: 1.5, output: 9,   cacheRead: 0.15, cacheWrite: 1.5  },
+  'gemini-3.1-flash-lite':  { input: 0.25, output: 1.5, cacheRead: 0.025, cacheWrite: 0.25 },
   'gemini-3.1-pro':         { input: 2,   output: 12,  cacheRead: 0.20, cacheWrite: 2    },
   'gemini-3-flash-preview': { input: 0.5, output: 3,   cacheRead: 0.05, cacheWrite: 0.5  },
   'gemini-3-flash':         { input: 0.5, output: 3,   cacheRead: 0.05, cacheWrite: 0.5  },
@@ -408,12 +435,86 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; cach
   'gpt-5':          { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 1.25 },
 }
 
+/**
+ * Price for a model id. Resolution order — deliberate, and independent of key order:
+ *  1. exact match;
+ *  2. the LONGEST pricing key the id starts with — a provider suffix on a known model
+ *     (`gemini-3.6-flash-tiered`, `claude-opus-4-6-thinking`) resolves to that model, and the most
+ *     specific key always wins (`gemini-3.5-flash-lite-preview` → Lite, not plain Flash);
+ *  3. the reverse case — a TRUNCATED id that is a prefix of a key (`claude-haiku-4-5` →
+ *     `claude-haiku-4-5-20251001`). The match must land on a `-` boundary, and among the
+ *     candidates the SHORTEST key wins, so a truncated family id can never be resolved to a
+ *     cheaper `-lite`/variant price than the plain model it names (`gemini-3.5` →
+ *     `gemini-3.5-flash`, never `gemini-3.5-flash-lite`);
+ *  4. otherwise the Sonnet-class fallback.
+ */
 export function getModelPrice(modelId: string) {
   if (MODEL_PRICING[modelId]) return MODEL_PRICING[modelId]
-  for (const [key, price] of Object.entries(MODEL_PRICING)) {
-    if (modelId.startsWith(key) || key.startsWith(modelId)) return price
+  const id = String(modelId ?? '')
+  let forwardKey = ''
+  let reverseKey = ''
+  for (const key of Object.keys(MODEL_PRICING)) {
+    if (id.startsWith(key)) {
+      // Most specific (longest) prefix wins.
+      if (key.length > forwardKey.length) forwardKey = key
+    } else if (id && key.startsWith(id) && key[id.length] === '-') {
+      // Truncated id: least specific (shortest) candidate wins — never a `-lite`/variant price.
+      if (!reverseKey || key.length < reverseKey.length) reverseKey = key
+    }
   }
+  const hit = forwardKey || reverseKey
+  if (hit) return MODEL_PRICING[hit]!
   return { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }
+}
+
+/** Empty per-model usage accumulator. */
+export function emptyModelUsage(): ModelUsage {
+  return {
+    inputTokens: 0, outputTokens: 0,
+    cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+    webSearchRequests: 0, costUSD: 0,
+  }
+}
+
+/**
+ * Per-model token usage of ONE session, as `[modelId, usage]` pairs.
+ *
+ * Multi-model sessions (an Antigravity parent with its folded subagent children) carry the
+ * authoritative breakdown in `model_usage`; everything else is a single entry keyed by `model`
+ * (or `fallbackModel` when the session has none). Returns `[]` when the session cannot be priced
+ * at all — the caller then falls back to a blended rate.
+ */
+export function sessionModelUsage(
+  s: Pick<SessionMeta, 'model' | 'model_usage' | 'input_tokens' | 'output_tokens'
+    | 'cache_read_input_tokens' | 'cache_creation_input_tokens'>,
+  fallbackModel?: string,
+): [string, ModelUsage][] {
+  const breakdown = s.model_usage
+  if (breakdown && typeof breakdown === 'object') {
+    const entries = Object.entries(breakdown).filter(([m, u]) => m && u)
+    if (entries.length > 0) return entries as [string, ModelUsage][]
+  }
+  const model = s.model || fallbackModel || ''
+  if (!model) return []
+  return [[model, {
+    inputTokens: s.input_tokens ?? 0,
+    outputTokens: s.output_tokens ?? 0,
+    cacheReadInputTokens: s.cache_read_input_tokens ?? 0,
+    cacheCreationInputTokens: s.cache_creation_input_tokens ?? 0,
+    webSearchRequests: 0,
+    costUSD: 0,
+  }]]
+}
+
+/** Cost of ONE session, priced per model (see {@link sessionModelUsage}).
+ *  Returns null when the session has no model at all — the caller decides the blended fallback. */
+export function sessionCostUSD(
+  s: Parameters<typeof sessionModelUsage>[0],
+  fallbackModel?: string,
+): number | null {
+  const entries = sessionModelUsage(s, fallbackModel)
+  if (entries.length === 0) return null
+  return entries.reduce((sum, [model, u]) => sum + calcCost(u, model), 0)
 }
 
 export function calcCost(usage: ModelUsage, modelId: string): number {
@@ -439,7 +540,10 @@ export function formatModel(modelId: string): string {
     'gpt-5.4-mini': 'GPT-5.4 mini',
     'gpt-5': 'GPT-5',
     'gpt-5-mini': 'GPT-5 mini',
+    'gemini-3.6-flash': 'Gemini 3.6 Flash',
+    'gemini-3.5-flash-lite': 'Gemini 3.5 Flash-Lite',
     'gemini-3.5-flash': 'Gemini 3.5 Flash',
+    'gemini-3.1-flash-lite': 'Gemini 3.1 Flash-Lite',
     'gemini-3.1-pro': 'Gemini 3.1 Pro',
     'gemini-3-flash-preview': 'Gemini 3 Flash',
     'gemini-3-flash': 'Gemini 3 Flash',

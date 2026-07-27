@@ -78,7 +78,9 @@ test('parses a copilot events.jsonl without shutdown into a SessionMeta', () => 
   expect(s!.duration_minutes).toBeGreaterThan(0)
   // user.message at 00:06:00Z → hour=0, timestamp captured
   expect(s!.user_message_timestamps).toEqual(['2026-02-23T00:06:00.000Z'])
-  expect(s!.message_hours).toEqual([0])
+  // Hours are bucketed on the LOCAL clock (same convention as the Claude pipeline), so derive the
+  // expectation from the host zone instead of pinning a UTC hour.
+  expect(s!.message_hours).toEqual([new Date('2026-02-23T00:06:00.000Z').getHours()])
 })
 
 test('extracts tokens, model, and code changes from session.shutdown', () => {
@@ -105,7 +107,10 @@ test('extracts tokens, model, and code changes from session.shutdown', () => {
     '2026-02-23T00:06:00.000Z',
     '2026-02-23T01:00:00.000Z',
   ])
-  expect(s!.message_hours).toEqual([0, 1])
+  expect(s!.message_hours).toEqual([
+    new Date('2026-02-23T00:06:00.000Z').getHours(),
+    new Date('2026-02-23T01:00:00.000Z').getHours(),
+  ])
 })
 
 test('returns null on empty content', () => {

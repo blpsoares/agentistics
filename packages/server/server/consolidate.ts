@@ -48,7 +48,7 @@ export async function loadConsolidated(): Promise<Map<string, SessionMeta>> {
   const map = new Map<string, SessionMeta>()
   const limit = createLimiter(40)
   // Per-harness subdirs + legacy flat files (treated as claude)
-  const harnesses: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
+  const harnesses: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity']
   const roots = [
     ...harnesses.map(h => ({ dir: join(CONSOLIDATED_DIR, h), legacy: false })),
     { dir: CONSOLIDATED_DIR, legacy: true },

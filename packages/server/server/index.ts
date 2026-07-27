@@ -1168,9 +1168,13 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     // Tags (B5) — saved groupings of repos/projects/machines/teams/accounts. The handler owns the
     // authority rules: writes require every source to be visible to the caller, and every response
     // is aggregate-only (never the sessions behind a tag).
+    //
+    // Served in EVERY mode, not just on a central. On a solo/member machine the handler swaps the
+    // Mongo store for ~/.agentistics/tags.json and the team session set for the local one; the
+    // central's cookie gate above is untouched. This used to 404 with a plain-TEXT body, which the
+    // frontend then fed to JSON.parse — the Tags page died on a SyntaxError instead of working.
     if ((url.pathname === '/api/tags' || url.pathname.startsWith('/api/tags/'))
         && ['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method)) {
-      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleTags } = await import('./tags-handlers')
       const res = await handleTags(req)
       const headers = new Headers(res.headers)

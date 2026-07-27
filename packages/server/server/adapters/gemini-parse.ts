@@ -108,7 +108,7 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
         assistantMessages++
 
         if (timestamp) {
-          const h = new Date(timestamp).getUTCHours()
+          const h = new Date(timestamp).getHours()
           if (!isNaN(h)) messageHours.push(h)
         }
       } else if (msgType === 'user') {
@@ -125,7 +125,7 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
 
           if (timestamp) {
             userMessageTimestamps.push(timestamp)
-            const h = new Date(timestamp).getUTCHours()
+            const h = new Date(timestamp).getHours()
             if (!isNaN(h)) messageHours.push(h)
           }
         }
@@ -274,7 +274,7 @@ function buildJsonlSessionMeta(data: JsonlParsedData): SessionMeta | null {
     }
 
     if (counted && msg.timestamp) {
-      const h = new Date(msg.timestamp).getUTCHours()
+      const h = new Date(msg.timestamp).getHours()
       if (!isNaN(h)) messageHours.push(h)
     }
   }
