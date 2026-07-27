@@ -1,4 +1,4 @@
-import { readdir, readlink, readFile, stat } from 'fs/promises'
+import { readdir, readlink, readFile } from 'fs/promises'
 import type { HarnessId, SessionMeta } from '@agentistics/core'
 
 /** Backstop for a process that is alive, was used, and then abandoned for a very long time without
@@ -40,6 +40,73 @@ const PROCESS_HARNESS: Record<string, HarnessId> = {
   codex: 'codex',
   gemini: 'gemini',
   copilot: 'copilot',
+}
+
+/** `comm` is not always the tool's name: `gh copilot` runs its binary with the thread name
+ *  `MainThread`, so matching on comm alone missed Copilot entirely. The executable's own basename
+ *  is the reliable identity, with comm kept as the cheap first guess. */
+export function harnessOf(comm: string, exePath: string | undefined): HarnessId | undefined {
+  const byComm = PROCESS_HARNESS[comm]
+  if (byComm) return byComm
+  if (!exePath) return undefined
+  const base = exePath.slice(exePath.lastIndexOf('/') + 1)
+  return PROCESS_HARNESS[base]
+}
+
+/** Where each harness keeps a session file open while it is running. An fd pointing into that path
+ *  names the live session outright — the strongest identity available, since it comes from the
+ *  kernel rather than from argv or a guess. Copilot holds `session-state/<id>/session.db` open. */
+const FD_SESSION_PATTERNS: Partial<Record<HarnessId, RegExp>> = {
+  copilot: /\/\.copilot\/session-state\/([0-9a-f-]{36})\//i,
+  codex: /\/rollout-[^/]*?-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i,
+}
+
+/** Boot time in epoch seconds, read once — it cannot change while the process runs. */
+let _btime: number | null = null
+async function bootTimeSec(): Promise<number> {
+  if (_btime !== null) return _btime
+  const stat = await readFile('/proc/stat', 'utf-8').catch(() => '')
+  const line = stat.split('\n').find(l => l.startsWith('btime '))
+  _btime = line ? Number(line.slice(6).trim()) : 0
+  return _btime
+}
+
+/**
+ * Real process start time, in epoch ms.
+ *
+ * NOT the mtime of /proc/<pid>: that timestamp moves while the process runs (it tracked ~3 minutes
+ * forward across two samples of one live process here), which silently broke every rule comparing
+ * a session's activity against when its process launched. Field 22 of /proc/<pid>/stat is the
+ * kernel's own start time in clock ticks since boot and never moves.
+ */
+async function processStartMs(pid: string, btimeSec: number, hz: number): Promise<number | undefined> {
+  const raw = await readFile(`/proc/${pid}/stat`, 'utf-8').catch(() => '')
+  // comm sits in parentheses and may itself contain spaces/parens, so split after the LAST ')'.
+  const close = raw.lastIndexOf(')')
+  if (close < 0) return undefined
+  const fields = raw.slice(close + 2).split(' ')
+  const ticks = Number(fields[19]) // field 22 overall = index 19 of the post-comm fields
+  if (!Number.isFinite(ticks) || !btimeSec) return undefined
+  return (btimeSec + ticks / hz) * 1000
+}
+
+/** Pure: pick the session id out of a process's open file paths. */
+export function sessionIdFromFdPaths(paths: string[], harness: HarnessId): string | undefined {
+  const pattern = FD_SESSION_PATTERNS[harness]
+  if (!pattern) return undefined
+  for (const target of paths) {
+    const m = pattern.exec(target)
+    if (m && m[1]) return m[1]
+  }
+  return undefined
+}
+
+/** Session id from an open file descriptor, when the harness keeps its session file open. */
+async function sessionIdFromFds(pid: string, harness: HarnessId): Promise<string | undefined> {
+  if (!FD_SESSION_PATTERNS[harness]) return undefined
+  const fds = await readdir(`/proc/${pid}/fd`).catch(() => [] as string[])
+  const paths = await Promise.all(fds.map(fd => readlink(`/proc/${pid}/fd/${fd}`).catch(() => '')))
+  return sessionIdFromFdPaths(paths.filter(Boolean), harness)
 }
 
 /** A running harness process. `sessionId` is set only when the process states which session it is
@@ -87,19 +154,24 @@ export async function harnessProcesses(): Promise<HarnessProcess[]> {
   if (process.platform !== 'linux') return []
   let pids: string[]
   try { pids = await readdir('/proc') } catch { return [] }
+  const btimeSec = await bootTimeSec()
+  const hz = 100 // USER_HZ is 100 on every Linux this runs on; only used to scale start ticks.
   const procs: HarnessProcess[] = []
   await Promise.all(pids.filter(p => /^\d+$/.test(p)).map(async pid => {
     try {
       const comm = (await readFile(`/proc/${pid}/comm`, 'utf-8')).trim()
-      const harness = PROCESS_HARNESS[comm]
+      const exePath = await readlink(`/proc/${pid}/exe`).catch(() => undefined)
+      const harness = harnessOf(comm, exePath)
       if (!harness) return
       const cwd = await readlink(`/proc/${pid}/cwd`)
       if (!cwd) return
       // argv is NUL-separated; a trailing NUL yields an empty last element.
       const argv = (await readFile(`/proc/${pid}/cmdline`, 'utf-8').catch(() => ''))
         .split('\0').filter(Boolean)
-      const startedMs = await stat(`/proc/${pid}`).then(st => st.mtimeMs).catch(() => undefined)
-      procs.push({ harness, cwd, sessionId: sessionIdFromArgv(argv), startedMs })
+      const startedMs = await processStartMs(pid, btimeSec, hz)
+      // An open session file beats argv: it is what the process is writing to right now.
+      const sessionId = (await sessionIdFromFds(pid, harness)) ?? sessionIdFromArgv(argv)
+      procs.push({ harness, cwd, sessionId, startedMs })
     } catch { /* process exited or not ours — ignore */ }
   }))
   return procs

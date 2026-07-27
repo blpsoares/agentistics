@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test'
 import {
-  resolveOpenSessionIds, resolveLiveSnapshot, sessionIdFromArgv,
+  resolveOpenSessionIds, resolveLiveSnapshot, sessionIdFromArgv, harnessOf, sessionIdFromFdPaths,
   LIVE_ACTIVITY_WINDOW_MIN, LIVE_STARTUP_GRACE_MIN,
 } from './live-sessions'
 import type { HarnessId, SessionMeta } from '@agentistics/core'
@@ -224,4 +224,35 @@ test('an anonymous process covered by an open session of its own project is not 
 test('an old process with nothing on disk is idle, not starting up', () => {
   const old = [{ harness: 'antigravity' as HarnessId, cwd: '/proj/a', startedMs: NOW - (LIVE_STARTUP_GRACE_MIN + 1) * 60_000 }]
   expect(resolveLiveSnapshot(old, [], NOW).liveProcesses).toEqual([])
+})
+
+// --- identifying the process itself --------------------------------------------------------------
+
+test('a harness is recognised by its executable when comm is not its name', () => {
+  // `gh copilot` runs its binary with the thread name MainThread, so comm-only matching missed
+  // Copilot entirely and it never appeared as live.
+  expect(harnessOf('MainThread', '/home/u/.local/share/gh/copilot/copilot')).toBe('copilot')
+  expect(harnessOf('claude', undefined)).toBe('claude')
+  expect(harnessOf('agy', '/home/u/.local/bin/agy')).toBe('antigravity')
+  // A real codex binary lives behind a long vendor path; the basename is what identifies it.
+  expect(harnessOf('codex', '/home/u/.bun/install/global/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex')).toBe('codex')
+  expect(harnessOf('bash', '/usr/bin/bash')).toBeUndefined()
+  expect(harnessOf('node', undefined)).toBeUndefined()
+})
+
+test('an open session file names the session outright', () => {
+  // The strongest identity available: it comes from the kernel, not from argv or a guess.
+  expect(sessionIdFromFdPaths([
+    '/home/u/.copilot/logs/process-123.log',
+    '/home/u/.copilot/session-state/1aa6533d-8f2b-4d8c-8d20-c70f63415e0d/session.db',
+  ], 'copilot')).toBe('1aa6533d-8f2b-4d8c-8d20-c70f63415e0d')
+
+  expect(sessionIdFromFdPaths([
+    '/home/u/.codex/state_5.sqlite',
+    '/home/u/.codex/sessions/2026/07/27/rollout-2026-07-27T19-02-04-019fa599-71b2-7012-acfb-cb5f6387f6b6.jsonl',
+  ], 'codex')).toBe('019fa599-71b2-7012-acfb-cb5f6387f6b6')
+
+  // Nothing to match, and harnesses that keep no session file open.
+  expect(sessionIdFromFdPaths(['/home/u/.copilot/session-store.db'], 'copilot')).toBeUndefined()
+  expect(sessionIdFromFdPaths(['/anything'], 'claude')).toBeUndefined()
 })
