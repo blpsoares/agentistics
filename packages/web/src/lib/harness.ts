@@ -11,6 +11,7 @@ export const HARNESS_LABELS: Record<HarnessId, string> = {
   gemini: 'Gemini CLI',
   copilot: 'Copilot CLI',
   antigravity: 'Antigravity',
+  kimi: 'Kimi Code',
 }
 
 export const HARNESS_COLORS: Record<HarnessId, string> = {
@@ -21,6 +22,8 @@ export const HARNESS_COLORS: Record<HarnessId, string> = {
   // Violet — distinct from Claude's amber, Codex's green, Gemini's blue and Copilot's grey,
   // and legible on both the light and the dark surface.
   antigravity: '#8b5cf6',
+  // Rose — the last hue left that stays legible on both surfaces without colliding with the others.
+  kimi: '#e11d48',
 }
 
 /** Provider name shown in pricing links. */
@@ -30,6 +33,7 @@ export const HARNESS_PROVIDERS: Record<HarnessId, string> = {
   gemini: 'Google',
   copilot: 'GitHub Copilot',
   antigravity: 'Google',
+  kimi: 'Moonshot AI',
 }
 
 export function capable(harness: HarnessId, metric: keyof HarnessCapabilities): boolean {
@@ -219,6 +223,61 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
       pt: 'Dados de tokens/custo/modelo/linhas-Git são emitidos no evento session.shutdown somente em saída limpa — sessões que travaram exibirão 0 nesses campos.',
     },
     pricingUrl: 'https://docs.github.com/en/copilot/about-github-copilot/plans-for-github-copilot',
+  },
+  kimi: {
+    blurb: {
+      en: 'Sessions, projects, messages, tool usage, tokens and model. Cost shows N/A: Kimi routes to several providers and its own model prices are not in the shared pricing table, so a figure here would be a guess rather than a calculation.',
+      pt: 'Sessões, projetos, mensagens, uso de ferramentas, tokens e modelo. O custo aparece como N/A: o Kimi roteia para vários provedores e os preços dos modelos dele não estão na tabela de preços compartilhada, então um valor aqui seria chute e não cálculo.',
+    },
+    format: {
+      en: 'One directory per session holding a state.json (title, workDir, timestamps, agent tree) and one wire.jsonl per agent. The wire is flat JSONL: usage.record carries the token counts, and context.append_loop_event wraps the loop events (step.begin / step.end / tool.call / tool.result).',
+      pt: 'Um diretório por sessão com um state.json (título, workDir, timestamps, árvore de agentes) e um wire.jsonl por agente. O wire é JSONL plano: usage.record carrega a contagem de tokens e context.append_loop_event envolve os eventos do loop (step.begin / step.end / tool.call / tool.result).',
+    },
+    retention: {
+      en: 'No automatic cleanup: sessions persist under ~/.kimi-code/sessions indefinitely.',
+      pt: 'Sem limpeza automática: as sessões persistem em ~/.kimi-code/sessions indefinidamente.',
+    },
+    source: [
+      '~/.kimi-code/sessions/<workspace>/session_<id>/state.json',
+      '~/.kimi-code/sessions/<workspace>/session_<id>/agents/<agent>/wire.jsonl',
+      '~/.kimi-code/session_index.jsonl (workDir per session)',
+    ],
+    contains: [
+      { en: 'Sessions', pt: 'Sessões' },
+      { en: 'Project (workDir)', pt: 'Projeto (workDir)' },
+      { en: 'Title (state.json)', pt: 'Título (state.json)' },
+      { en: 'Messages (user prompts + assistant steps)', pt: 'Mensagens (prompts do usuário + passos do assistente)' },
+      { en: 'Tokens (input, output, cache read, cache creation)', pt: 'Tokens (entrada, saída, leitura e criação de cache)' },
+      { en: 'Model (provider prefix stripped, e.g. gemini-3.5-flash-lite)', pt: 'Modelo (sem o prefixo do provedor, ex.: gemini-3.5-flash-lite)' },
+      { en: 'Tool usage (Read, Write, Edit, Bash, Agent …) and MCP calls (mcp__ prefix)', pt: 'Uso de ferramentas (Read, Write, Edit, Bash, Agent …) e chamadas MCP (prefixo mcp__)' },
+      { en: 'Sub-agent work, folded into the session that spawned it', pt: 'Trabalho de sub-agentes, consolidado na sessão que os criou' },
+      { en: 'Start / end / duration and activity hours', pt: 'Início / fim / duração e horários de atividade' },
+    ],
+    missing: [
+      {
+        item: { en: 'Cost in USD', pt: 'Custo em USD' },
+        why: {
+          en: 'Kimi routes to several providers and its own model prices are not in the shared pricing table; a figure here would be a guess.',
+          pt: 'O Kimi roteia para vários provedores e os preços dos modelos dele não estão na tabela compartilhada; um valor aqui seria chute.',
+        },
+      },
+      {
+        item: { en: 'Git remote / branch', pt: 'Remote / branch do git' },
+        why: { en: 'Not recorded in the session metadata.', pt: 'Não são gravados nos metadados da sessão.' },
+      },
+      {
+        item: { en: 'Lines added / removed', pt: 'Linhas adicionadas / removidas' },
+        why: {
+          en: 'Edit stores the old and new strings but no diff counter, so a count would have to be recomputed rather than read.',
+          pt: 'O Edit guarda as strings antiga e nova, mas nenhum contador de diff, então a contagem teria de ser recalculada em vez de lida.',
+        },
+      },
+    ],
+    note: {
+      en: 'Each step.end event repeats the usage numbers of its matching usage.record, byte for byte. Only usage.record is counted — summing both would double every figure.',
+      pt: 'Cada evento step.end repete os números de uso do usage.record correspondente, byte a byte. Só o usage.record é contado — somar os dois dobraria todos os valores.',
+    },
+    pricingUrl: 'https://platform.moonshot.ai/docs/pricing',
   },
   antigravity: {
     blurb: {

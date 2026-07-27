@@ -6,7 +6,7 @@ import { geminiAdapter } from './gemini'
 import { copilotAdapter } from './copilot'
 import { antigravityAdapter } from './antigravity'
 
-const KNOWN_HARNESS_IDS = new Set(['claude', 'codex', 'gemini', 'copilot', 'antigravity'])
+const KNOWN_HARNESS_IDS = new Set(['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi'])
 
 test('registry returns only known harness ids, always includes claude', async () => {
   const adapters = await getEnabledAdapters()

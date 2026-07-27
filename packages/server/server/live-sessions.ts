@@ -40,6 +40,7 @@ const PROCESS_HARNESS: Record<string, HarnessId> = {
   codex: 'codex',
   gemini: 'gemini',
   copilot: 'copilot',
+  kimi: 'kimi',
 }
 
 /** `comm` is not always the tool's name: `gh copilot` runs its binary with the thread name
@@ -124,7 +125,10 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** Flags that carry a session/conversation id, across every harness we read. `--continue` is
  *  deliberately absent: it names no id, so it tells us nothing we can attribute. */
-const ID_FLAGS = new Set(['--resume', '--session-id', '-r', '--conversation', '--conversation-id'])
+const ID_FLAGS = new Set([
+  '--resume', '--session-id', '-r', '--conversation', '--conversation-id',
+  '--session', '-S', // Kimi Code: `kimi -S <id>` resumes that session
+])
 
 /** Pull the session id out of a harness argv, in both `--flag=value` and `--flag value` form.
  *  Returns undefined for a fresh session (no id on the command line yet), for a bare `--resume`

@@ -263,7 +263,15 @@ test('gemini-2.5-flash resolves to correct price', () => {
 // HARNESS_CAPABILITIES
 
 test('HARNESS_CAPABILITIES declares every harness', () => {
-  expect(Object.keys(HARNESS_CAPABILITIES).sort()).toEqual(['antigravity', 'claude', 'codex', 'copilot', 'gemini'])
+  expect(Object.keys(HARNESS_CAPABILITIES).sort()).toEqual(['antigravity', 'claude', 'codex', 'copilot', 'gemini', 'kimi'])
+})
+
+test('kimi reports tokens and model but not cost', () => {
+  // Tokens come from usage.record; cost stays N/A because Kimi routes to several providers and its
+  // own model prices are not in MODEL_PRICING — pricing one would fall back to a wrong default.
+  expect(HARNESS_CAPABILITIES.kimi.tokens).toBe(true)
+  expect(HARNESS_CAPABILITIES.kimi.model).toBe(true)
+  expect(HARNESS_CAPABILITIES.kimi.cost).toBe(false)
 })
 
 test('antigravity reports tokens/cost/model (decoded from the gen_metadata protobuf)', () => {

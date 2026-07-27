@@ -131,6 +131,9 @@ export const COPILOT_DIR = process.env.COPILOT_DIR ?? (_selfContributingCentral 
 // reads ~/.gemini/tmp, so the two never overlap.
 // Override with ANTIGRAVITY_DIR; disable with AGENTISTICS_HARNESS_ANTIGRAVITY=0.
 // ---------------------------------------------------------------------------
+// Kimi Code CLI harness. Override with KIMI_DIR; disable with AGENTISTICS_HARNESS_KIMI=0.
+export const KIMI_DIR = process.env.KIMI_DIR ?? join(HOME_DIR, '.kimi-code')
+
 export const ANTIGRAVITY_DIR = process.env.ANTIGRAVITY_DIR ?? join(GEMINI_DIR, 'antigravity-cli')
 export const ANTIGRAVITY_BRAIN_DIR = join(ANTIGRAVITY_DIR, 'brain')
 export const ANTIGRAVITY_HISTORY_FILE = join(ANTIGRAVITY_DIR, 'history.jsonl')

@@ -40,7 +40,7 @@ export interface StatsCache {
   totalSpeculationTimeSavedMs: number
 }
 
-export type HarnessId = 'claude' | 'codex' | 'gemini' | 'copilot' | 'antigravity'
+export type HarnessId = 'claude' | 'codex' | 'gemini' | 'copilot' | 'antigravity' | 'kimi'
 
 export interface HarnessCapabilities {
   tokens: boolean
@@ -72,6 +72,12 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   // per-session lines_added / lines_removed fields are still populated (and files_modified, which
   // this flag does NOT gate, stays real).
   antigravity: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false },
+  // Kimi Code CLI. Tokens and model are real (usage.record events in each agent's wire.jsonl).
+  // `cost` is FALSE: Kimi routes to several providers and its own model prices are not in
+  // MODEL_PRICING, so pricing a session would silently fall back to the Sonnet default and report
+  // confidently wrong money. Flip it once verified prices are added. `gitLines` is false because
+  // Kimi records Edit/Write arguments but no diff counters.
+  kimi: { tokens: true, cost: false, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false },
 }
 
 export interface SessionMeta {

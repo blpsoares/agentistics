@@ -83,6 +83,8 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── adapters/gemini-parse.ts → pure parser; only counts chats with genuine content (a real user message or model response), dropping bootstrap-only stub files; session_id is unique per chat file
   ├── adapters/copilot.ts  → Copilot CLI reader (~/.copilot/session-state/<id>/events.jsonl + workspace.yaml)
   ├── adapters/copilot-parse.ts → pure parser (session.start context, user.message, assistant turns, MCP, activity hours)
+  ├── adapters/kimi.ts     → Kimi Code CLI reader (~/.kimi-code/sessions/<ws>/session_<id>/ + session_index.jsonl)
+  ├── adapters/kimi-parse.ts → pure parser; counts tokens from `usage.record` ONLY (the nested `step.end` events repeat the same usage byte-for-byte), strips the provider prefix from the model alias, folds every agent of a session into it
   ├── adapters/antigravity.ts → Antigravity CLI (agy) reader (brain/<conv>/.system_generated/logs/transcript_full.jsonl + the global history.jsonl + READ-ONLY bun:sqlite reads of conversations/<conv>.db `gen_metadata` and the optional conversation_summaries.db)
   ├── adapters/antigravity-parse.ts → pure parser; skips replayed CONVERSATION_HISTORY steps and dedupes by step_index (no double counting), never treats a slash command as the first prompt, counts ERROR_MESSAGE steps, derives files/lines from the edit payloads, and drops a conversation only when it is a proven invoke_subagent child
   └── adapters/antigravity-protobuf.ts → **pure**, dependency-free protobuf wire reader for the gen_metadata blobs (tokens + model id); never throws — malformed input yields null
@@ -141,7 +143,7 @@ Agentistics tracks sessions from multiple AI coding assistants (harnesses), not 
 
 ### Harness model
 
-- `SessionMeta.harness: HarnessId` tags every session with its origin (`'claude' | 'codex' | 'gemini' | 'copilot' | 'antigravity'`). Missing/legacy sessions default to `'claude'`.
+- `SessionMeta.harness: HarnessId` tags every session with its origin (`'claude' | 'codex' | 'gemini' | 'copilot' | 'antigravity' | 'kimi'`). Missing/legacy sessions default to `'claude'`.
 - `AppData.harnesses: HarnessId[]` lists which harnesses have data present, used by the frontend to decide whether to show the harness selector in the nav (shown only when >1 harness is active). Selecting "All" yields the unified view.
 - Each harness is implemented as a `HarnessAdapter` module under `server/adapters/` — never a separate package. `getEnabledAdapters()` lazily resolves and memoizes available adapters; individual adapters can be disabled via `AGENTISTICS_HARNESS_<ID>=0`.
 
@@ -207,6 +209,23 @@ machine-readable event stream (`-o stream-json`), a session id and MCP registrat
 `--print` but no structured output format, no session-id emission and no documented MCP config, so a
 driver cannot be written that is trivially correct — reading `transcript_full.jsonl` after the fact
 is a different (and racy) contract. Deliberately not added.
+
+### Kimi Code (agy's neighbour in spirit, not on disk)
+
+Kimi Code CLI lives at `~/.kimi-code`. Each session is a directory
+`sessions/<workspaceId>/session_<uuid>/` holding `state.json` (title, `workDir`, `createdAt`,
+`updatedAt`, the agent tree) and one `agents/<agentId>/wire.jsonl` event stream per agent — every
+agent of a session folds into that one session, so sub-agent work is never dropped.
+
+**Double-counting trap:** token counts appear TWICE in the wire — once as a top-level
+`usage.record` and again inside the nested `context.append_loop_event → step.end`, byte-for-byte
+identical (verified pairwise on real data). Only `usage.record` is counted. Records are per-turn
+increments, not a running total (unlike Codex, where the last one wins).
+
+`cost` is `false` for kimi: it routes to several providers and its own model prices are not in
+`MODEL_PRICING`, so pricing a session would silently fall back to the Sonnet default and report
+confidently wrong money. The model alias carries a provider prefix (`google/gemini-3.5-flash-lite`)
+which is stripped so the pricing table can key on it if that changes.
 
 ### Gemini caveat — bootstrap stubs vs. real sessions
 

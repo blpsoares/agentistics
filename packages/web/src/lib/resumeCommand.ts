@@ -5,6 +5,7 @@ import type { HarnessId, SessionMeta } from '@agentistics/core'
  *   agy     → `agy --conversation <id>`      ("Resume a previous conversation by ID")
  *   codex   → `codex resume <SESSION_ID>`    (positional; UUIDs take precedence)
  *   copilot → `copilot --resume <id>`        ("optionally specify existing session ID")
+ *   kimi    → `kimi -S <id>`                 ("Resume a session. With ID: resume that session")
  *
  * Gemini is deliberately absent: its `--resume` takes "latest" or a list index, not a session id
  * (`--session-id` starts a NEW session with that id), so there is no command that reopens a
@@ -15,6 +16,7 @@ const RESUME_BY_HARNESS: Partial<Record<HarnessId, (id: string) => string>> = {
   antigravity: id => `agy --conversation ${id}`,
   codex: id => `codex resume ${id}`,
   copilot: id => `copilot --resume ${id}`,
+  kimi: id => `kimi -S ${id}`,
 }
 
 /** Copy-ready shell command to resume a session, or null when the harness has no way to do it. */
