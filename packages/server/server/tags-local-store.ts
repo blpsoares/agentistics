@@ -8,7 +8,10 @@
  *   ~/.agentistics/tags.json   → { version: 1, tags: TagDoc[] }
  *
  * Same document shape as the Mongo store, so tags-handlers can swap one for the other and the pure
- * modules (resolve/aggregate/detail/authority) never learn which one is behind them.
+ * modules (resolve/aggregate/detail/authority) never learn which one is behind them. That includes
+ * the timestamps: a TagDoc carries real `Date`s IN MEMORY from either store. Here they cross a JSON
+ * file, where a date can only be an ISO string — `JSON.stringify` writes one automatically and
+ * `sanitize()` revives it on the way back in, so the Date-typed contract never becomes a lie.
  *
  * Durability rules this file follows:
  *  - writes go to `<file>.tmp` and are then renamed over the target, so a crash mid-write leaves
@@ -28,6 +31,7 @@ import { rename, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { AGENTISTICS_DATA_DIR } from './config'
 import type { TagDoc } from './tags-store'
+import { toBsonDate } from './mongo-dates'
 import type { TagSource } from './tags-resolve'
 
 export const LOCAL_TAGS_FILE = join(AGENTISTICS_DATA_DIR, 'tags.json')
@@ -71,7 +75,7 @@ function sanitize(raw: unknown): TagDoc | null {
   if (typeof d.name !== 'string' || !d.name) return null
   const sources = sanitizeSources(d.sources)
   const filters = sanitizeSources(d.filters)
-  const now = new Date().toISOString()
+  const now = new Date()
   return {
     _id: d._id,
     name: d.name,
@@ -80,8 +84,10 @@ function sanitize(raw: unknown): TagDoc | null {
     ...(filters.length ? { filters } : {}),
     sharedWith: Array.isArray(d.sharedWith) ? d.sharedWith.filter((x): x is string => typeof x === 'string') : [],
     createdBy: typeof d.createdBy === 'string' ? d.createdBy : 'local',
-    createdAt: typeof d.createdAt === 'string' ? d.createdAt : now,
-    updatedAt: typeof d.updatedAt === 'string' ? d.updatedAt : now,
+    // Revive the ISO strings the file holds back into Dates. An absent or unparseable value
+    // falls back to `now` rather than propagating a bogus timestamp.
+    createdAt: toBsonDate(d.createdAt as string | undefined) ?? now,
+    updatedAt: toBsonDate(d.updatedAt as string | undefined) ?? now,
   }
 }
 
@@ -173,7 +179,7 @@ export function createLocalTagStore(file: string): TagStore {
       return (await readAll()).find(t => t._id === id) ?? null
     },
     async createTag(input) {
-      const now = new Date().toISOString()
+      const now = new Date()
       const doc: TagDoc = {
         _id: randomBytes(12).toString('hex'),
         name: input.name,
@@ -199,7 +205,7 @@ export function createLocalTagStore(file: string): TagStore {
           ...(patch.sources !== undefined ? { sources: patch.sources } : {}),
           ...(patch.filters !== undefined ? { filters: patch.filters } : {}),
           ...(patch.sharedWith !== undefined ? { sharedWith: [...new Set(patch.sharedWith.filter(Boolean))] } : {}),
-          updatedAt: new Date().toISOString(),
+          updatedAt: new Date(),
         }
         const copy = [...tags]
         copy[i] = next

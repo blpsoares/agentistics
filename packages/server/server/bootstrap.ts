@@ -13,8 +13,9 @@ const DOC_ID = 'bootstrap'
 export interface BootstrapDoc {
   _id: string
   tokenHash?: string
-  createdAt: string
-  consumedAt?: string
+  /** BSON Dates — see mongo-dates.ts. `consumedAt` present at all means the token is spent. */
+  createdAt: Date
+  consumedAt?: Date
 }
 
 export interface OwnerInput {
@@ -62,12 +63,12 @@ async function bootstrapCollection() {
 }
 
 /** Generate a fresh token, store its hash (clearing any prior consumed state), return plaintext once. */
-export async function generateBootstrapToken(nowIso: string): Promise<string> {
+export async function generateBootstrapToken(now: Date): Promise<string> {
   const token = randomBytes(24).toString('hex')
   const col = await bootstrapCollection()
   await col.updateOne(
     { _id: DOC_ID },
-    { $set: { tokenHash: hashBootstrapToken(token), createdAt: nowIso }, $unset: { consumedAt: '' } },
+    { $set: { tokenHash: hashBootstrapToken(token), createdAt: now }, $unset: { consumedAt: '' } },
     { upsert: true },
   )
   return token
@@ -91,7 +92,7 @@ export async function verifyBootstrapToken(token: string): Promise<boolean> {
 }
 
 /** Mark the token consumed (one-time) and drop the hash. */
-export async function consumeBootstrapToken(nowIso: string): Promise<void> {
+export async function consumeBootstrapToken(now: Date): Promise<void> {
   const col = await bootstrapCollection()
-  await col.updateOne({ _id: DOC_ID }, { $set: { consumedAt: nowIso }, $unset: { tokenHash: '' } })
+  await col.updateOne({ _id: DOC_ID }, { $set: { consumedAt: now }, $unset: { tokenHash: '' } })
 }

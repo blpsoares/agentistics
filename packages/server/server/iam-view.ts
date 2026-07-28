@@ -3,6 +3,7 @@
  * passwordHash) + account/team visibility & management capability checks.
  */
 import type { AccountDoc, Principal, Membership, Role } from './iam-types'
+import { fromBsonDate, fromBsonDateOrNull } from './mongo-dates'
 
 export interface PublicAccount {
   id: string
@@ -15,7 +16,8 @@ export interface PublicAccount {
   mustChangePassword: boolean
 }
 
-/** Client-safe view of an account — drops passwordHash/emailLower/sessionVersion. */
+/** Client-safe view of an account — drops passwordHash/emailLower/sessionVersion, and renders
+ *  the stored BSON dates as ISO strings (the wire shape the frontend parses). */
 export function publicAccount(a: AccountDoc): PublicAccount {
   return {
     id: a._id,
@@ -23,8 +25,8 @@ export function publicAccount(a: AccountDoc): PublicAccount {
     email: a.email,
     role: a.role,
     memberships: a.memberships,
-    createdAt: a.createdAt,
-    lastLoginAt: a.lastLoginAt ?? null,
+    createdAt: fromBsonDate(a.createdAt),
+    lastLoginAt: fromBsonDateOrNull(a.lastLoginAt),
     mustChangePassword: a.mustChangePassword ?? false,
   }
 }

@@ -58,6 +58,7 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
   ├── cli-i18n.ts          → EN/PT strings for the launcher (CLI is English by default; language follows --lang / preferences.lang / the in-launcher toggle)
   ├── team-tokens.ts       → mint / rotate / revoke / validate tokens (stored as sha256 hashes only)
+  ├── mongo-dates.ts       → **the date boundary**: BSON `Date` in Mongo, ISO string on the wire. Pure toBsonDate/fromBsonDate(+OrNull)/toBsonDates/fromBsonDates + `DATE_FIELDS` (every stored timestamp, by collection) + `migrateStringDatesToBson()` (idempotent, runs at boot; also `scripts/migrate-mongo-dates.ts`)
   ├── team-store.ts / team-stats.ts → Mongo team-session doc shape + per-member statsCache store
   ├── team-ingest.ts       → POST /api/team/ingest → upsert + triggerSseNotification (real-time central)
   ├── team-source.ts / team-admin.ts → central-side team read for buildApiResponse + members-panel admin routes
@@ -540,6 +541,24 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
   - New pages need their nav entry in **both** the desktop `SideNav` `items` array **and** the
     `MobileBottomNav` `navTiles` array in `App.tsx` — adding only the first hides the page on a phone.
 - **Tags are aggregate-only and explicitly shared** — a tag's visibility is the explicit `sharedWith` account list (plus its creator and every owner) and is **never** derived from teams; **anyone signed in may create a tag** — the role difference is REACH, not permission: writing requires that the principal can already see **every** one of its sources (`canWriteTagSources`, re-checked on edit), so an owner reaches anything, a manager what their teams reach, and a plain user only what their own account owns, otherwise a tag becomes a privilege-escalation path; and tag responses return **only counts and sums** — never session rows, transcripts or agent metrics — with keys the viewer cannot see collapsed into an "other" bucket. Tag math runs server-side against the unscoped session set, per-session (never from `stats-cache.json`).
+- **A date is NEVER stored as a string in Mongo.** Every persisted timestamp is a BSON `Date`;
+  the WIRE shape stays an ISO string (JSON has no date type and the frontend does `parseISO`), so
+  the conversion lives at the persistence boundary and nowhere else — `mongo-dates.ts`. Rules:
+  - Doc types (`TeamSessionDoc`, `TokenDoc`, `AccountDoc`, `TeamDoc`, `TagDoc`, `RepoDoc`,
+    `BootstrapDoc`, `TeamWorkflowDoc`, memberStats) declare `Date`; the API types they map to
+    (`MemberInfo`, `MachineInfo`, `RepoInfo`, `PublicAccount`, `SessionMeta`, `WorkflowRun`)
+    declare `string`. Write with `new Date()`, never `new Date().toISOString()`.
+  - **Reads must tolerate both shapes** — always go through `fromBsonDate`. A doc written by an
+    older central in a mixed-version fleet still holds a string, and rendering it as
+    "Invalid Date" is a regression the type checker cannot catch.
+  - **`''` is not a date.** An adapter that could not read a start time reports `''`; it is stored
+    as `null` and reads back as `''`. Storing `''` as a pseudo-date is the bug this replaced.
+  - **Add every new timestamp field to `DATE_FIELDS`** and bump `DATE_MIGRATION_VERSION`, or it
+    stays a string in the database forever while the writing code looks perfectly correct.
+  - Date-shaped map KEYS (`statsCache.dailyTokens`'s `YYYY-MM-DD`) stay strings — a BSON key must
+    be one. So do the local JSON stores (`tags-local-store.ts`, `preferences.ts`,
+    `~/.agentistics/sessions/*.json`), where ISO strings are the correct representation; the local
+    tag store revives them into `Date`s on read so the shared `TagDoc` contract holds in memory.
 - **`stats-cache.json` is Claude-only** — never aggregate non-Claude harness metrics from it; use per-session sums for all other harnesses (see "Multi-harness tracking" above)
 - **Harness adapters are modules, not packages** — all adapters live under `packages/server/server/adapters/`; never create a separate package per harness
 - **`stats-cache.json`** has no project-level granularity — project filters are computed by summing individual sessions

@@ -7,7 +7,7 @@
  * so a repo's CI usage lands under the right repository regardless of what the runner reports.
  *
  * Collection: `repos`
- *   { _id: <normalized remote>, remote, name, tokenId, createdAt }
+ *   { _id: <normalized remote>, remote, name, tokenId, createdAt: Date }
  * The plaintext token is returned once at registration time and never persisted (only its hash,
  * in the `tokens` collection, keyed by `tokenId`).
  */
@@ -15,6 +15,7 @@
 import type { Collection } from 'mongodb'
 import { normalizeGitRemote } from '@agentistics/core'
 import { getMongoDb } from './mongo'
+import { fromBsonDate } from './mongo-dates'
 import { mintToken, revokeToken } from './team-tokens'
 import { ciMemberId } from './team-oidc'
 import { DEFAULT_TEAM_ID } from './teams'
@@ -23,7 +24,7 @@ export interface RepoDoc {
   _id: string        // the normalized remote (host/org/repo) — also the dedup key
   remote: string     // same as _id, explicit for reads
   tokenId: string    // sha256 hash of the CI token (memberId of pushed sessions)
-  createdAt: string
+  createdAt: Date
   teamId?: string
 }
 
@@ -31,6 +32,7 @@ export interface RepoDoc {
  *  the remote (`repoShortName`) client-side — there is no separately-stored name. */
 export interface RepoInfo {
   remote: string
+  /** ISO string — this is the API shape rendered by the frontend, not the stored one. */
   createdAt: string
 }
 
@@ -71,7 +73,7 @@ export async function registerRepo(
 
   await col.replaceOne(
     { _id: remote },
-    { remote, tokenId, teamId: DEFAULT_TEAM_ID, createdAt: new Date().toISOString() },
+    { remote, tokenId, teamId: DEFAULT_TEAM_ID, createdAt: new Date() },
     { upsert: true },
   )
   return { ok: true, token, remote }
@@ -91,7 +93,7 @@ export async function isRepoRegistered(remote: string): Promise<boolean> {
 export async function listRepos(): Promise<RepoInfo[]> {
   const col = await getReposCollection()
   const docs = await col.find({}).sort({ createdAt: 1 }).toArray()
-  return docs.map(d => ({ remote: d.remote, createdAt: d.createdAt }))
+  return docs.map(d => ({ remote: d.remote, createdAt: fromBsonDate(d.createdAt) }))
 }
 
 /**

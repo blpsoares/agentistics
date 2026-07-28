@@ -12,14 +12,19 @@
  */
 import type { WorkflowRun } from '@agentistics/core'
 import { getWorkflowsCollection } from './mongo'
+import { toBsonDate, fromBsonDate, type StoredDate } from './mongo-dates'
 
-export type TeamWorkflowDoc = WorkflowRun & {
+/** As stored: `startedAt` is a BSON Date (null when the run's start is unknown), not an ISO
+ *  string. See mongo-dates.ts for why, and toTeamWorkflowDoc/fromTeamWorkflowDoc for the
+ *  conversion — they are the only places that cross the boundary. */
+export type TeamWorkflowDoc = Omit<WorkflowRun, 'startedAt'> & {
   _id: string
   org: string
   /** Stable token identity key (SHA-256 hash of the bearer token, or `legacy:<user>`). */
   memberId: string
   /** Cached display name as of the last ingest; overridden at read time by getMemberNameMap(). */
   user: string
+  startedAt: Date | null
 }
 
 /** Stable, collision-safe Mongo _id keyed by memberId (token hash), mirroring teamDocId(). */
@@ -29,20 +34,24 @@ export function teamWorkflowDocId(org: string, memberId: string, runId: string):
 
 /** Map a WorkflowRun + identity to a Mongo doc. Pure — does not mutate the input. */
 export function toTeamWorkflowDoc(run: WorkflowRun, org: string, memberId: string, user: string): TeamWorkflowDoc {
+  const { startedAt, ...rest } = run
   return {
-    ...run,
+    ...rest,
     user,      // always string — overrides the optional user field on WorkflowRun
     org,
     memberId,
     _id: teamWorkflowDocId(org, memberId, run.runId),
+    startedAt: toBsonDate(startedAt),
   }
 }
 
-/** Map a Mongo doc back to a plain WorkflowRun (drops _id/org/memberId, keeps user). Pure. */
-export function fromTeamWorkflowDoc(doc: TeamWorkflowDoc): WorkflowRun {
-  const { _id, org, memberId, ...rest } = doc
+/** Map a Mongo doc back to a plain WorkflowRun (drops _id/org/memberId, keeps user). Pure.
+ *  `startedAt` returns to its ISO wire shape ('' when unknown); a legacy string date in an
+ *  unmigrated doc reads identically. */
+export function fromTeamWorkflowDoc(doc: Omit<TeamWorkflowDoc, 'startedAt'> & { startedAt?: StoredDate }): WorkflowRun {
+  const { _id, org, memberId, startedAt, ...rest } = doc
   void _id; void org; void memberId
-  return rest
+  return { ...rest, startedAt: fromBsonDate(startedAt) }
 }
 
 /**

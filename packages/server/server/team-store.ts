@@ -1,5 +1,6 @@
 import type { SessionMeta, StatsCache, WorkflowRun } from '@agentistics/core'
 import { tagUser } from '@agentistics/core'
+import { toBsonDate, fromBsonDate, toBsonDates, fromBsonDates, type StoredDate } from './mongo-dates'
 
 /**
  * A team session as stored in Mongo: the SessionMeta plus identity fields and a stable _id.
@@ -8,18 +9,27 @@ import { tagUser } from '@agentistics/core'
  * Keying by `memberId` (not `user`) makes the document stable across member renames:
  * changing the display name never creates a duplicate session in the collection.
  *
+ * TIMESTAMPS: `SessionMeta` carries ISO strings because that is the WIRE shape (JSON has no
+ * date type and the frontend parses strings). In Mongo they are BSON `Date`s — the three fields
+ * below are deliberately re-typed, and `toTeamDoc`/`fromTeamDoc` are the only places that
+ * convert. `start_time` is nullable here on purpose: an adapter that could not read a start time
+ * reports `''`, and `''` is not a date — storing it as one is the bug this replaced.
+ *
  * MIGRATION NOTE: The `_id` scheme changed from `org:user:harness:sessionId` (name-based)
  * to `org:memberId:harness:sessionId` (token-hash-based). Operators must clear stale data
  * once after upgrading: `db.sessions.deleteMany({})`. Legacy sessions are re-ingested on the
  * next uploader push.
  */
-export type TeamSessionDoc = SessionMeta & {
+export type TeamSessionDoc = Omit<SessionMeta, 'start_time' | 'end_time' | 'user_message_timestamps'> & {
   _id: string
   org: string
   /** Stable token identity key (SHA-256 hash of the bearer token, or `legacy:<user>`). */
   memberId: string
   /** Cached display name as of the last ingest; overridden at read time by getMemberNameMap(). */
   user: string
+  start_time: Date | null
+  end_time?: Date | null
+  user_message_timestamps: Date[]
 }
 
 export interface IngestBody {
@@ -50,20 +60,46 @@ export function teamDocId(org: string, memberId: string, harness: string, sessio
  */
 export function toTeamDoc(session: SessionMeta, org: string, memberId: string, user: string): TeamSessionDoc {
   const tagged = tagUser(session, user)
+  const { start_time, end_time, user_message_timestamps, ...rest } = tagged
   return {
-    ...tagged,
+    ...rest,
     user,      // always string — overrides the optional user field from tagUser
     org,
     memberId,
     _id: teamDocId(org, memberId, tagged.harness ?? 'claude', tagged.session_id),
+    // ISO strings in → BSON Dates out. `end_time` stays ABSENT when the session has none,
+    // rather than being written as an explicit null on every document.
+    start_time: toBsonDate(start_time),
+    ...(end_time !== undefined ? { end_time: toBsonDate(end_time) } : {}),
+    user_message_timestamps: toBsonDates(user_message_timestamps),
   }
 }
 
-/** Map a Mongo doc back to a plain SessionMeta (drops _id/org/memberId, keeps user). Pure. */
-export function fromTeamDoc(doc: TeamSessionDoc): SessionMeta {
-  const { _id, org, memberId, ...rest } = doc
+/**
+ * Map a Mongo doc back to a plain SessionMeta (drops _id/org/memberId, keeps user). Pure.
+ *
+ * Timestamps come back as ISO strings — the wire shape every consumer expects. Legacy documents
+ * that still hold strings (written before the date migration, or by an older central in a
+ * mixed-version fleet) read identically: `fromBsonDate` accepts both.
+ *
+ * The input is typed loosely on the date fields because this also serves PROJECTED reads
+ * (`loadTagSessionsFromMongo`), where a field may simply be absent.
+ */
+export function fromTeamDoc(
+  doc: Omit<TeamSessionDoc, 'start_time' | 'end_time' | 'user_message_timestamps'> & {
+    start_time?: StoredDate
+    end_time?: StoredDate
+    user_message_timestamps?: readonly StoredDate[]
+  },
+): SessionMeta {
+  const { _id, org, memberId, start_time, end_time, user_message_timestamps, ...rest } = doc
   void _id; void org; void memberId
-  return rest
+  return {
+    ...rest,
+    start_time: fromBsonDate(start_time),
+    ...(end_time !== undefined && end_time !== null ? { end_time: fromBsonDate(end_time) } : {}),
+    user_message_timestamps: fromBsonDates(user_message_timestamps),
+  }
 }
 
 /**

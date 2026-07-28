@@ -9,9 +9,12 @@
  *   { _id: <sha256(token) hex>,  // the hash IS the lookup key
  *     user: string,
  *     label: string,
- *     createdAt: string,         // ISO 8601
- *     lastSeenAt: string | null  // updated on every valid ingest request
+ *     createdAt: Date,           // BSON Date — see mongo-dates.ts
+ *     lastSeenAt: Date | null    // updated on every valid ingest request
  *   }
+ *
+ * The `MemberInfo` / `MachineInfo` records returned to callers keep ISO STRINGS: they are API
+ * shapes rendered by the frontend, and the conversion happens here at the read.
  *
  * Pure helper: hashToken (unit-tested in team-tokens.test.ts, no Mongo needed).
  */
@@ -19,6 +22,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { Collection } from 'mongodb'
 import { getMongoDb } from './mongo'
+import { fromBsonDate, fromBsonDateOrNull } from './mongo-dates'
 import { teamDocId, type TeamSessionDoc } from './team-store'
 
 // ---------------------------------------------------------------------------
@@ -29,8 +33,8 @@ export interface TokenDoc {
   _id: string
   user: string
   label: string
-  createdAt: string
-  lastSeenAt: string | null
+  createdAt: Date
+  lastSeenAt: Date | null
   /** Normalized git remote (`host/org/repo`) this token is bound to, for repo/CI tokens.
    *  When set, ingest stamps every pushed session's `git_remote` with this value authoritatively. */
   repo?: string
@@ -119,7 +123,7 @@ export async function mintToken(user: string, label: string, opts?: { repo?: str
     _id: id,
     user,
     label,
-    createdAt: new Date().toISOString(),
+    createdAt: new Date(),
     lastSeenAt: null,
     // No forced Default team — a token with no team is "loose" (visible only to an owner until
     // assigned). teamIds mirrors teamId when set.
@@ -207,8 +211,8 @@ export async function listMembers(): Promise<MemberInfo[]> {
     id: d._id,
     user: d.user,
     label: d.label,
-    createdAt: d.createdAt,
-    lastSeenAt: d.lastSeenAt,
+    createdAt: fromBsonDate(d.createdAt),
+    lastSeenAt: fromBsonDateOrNull(d.lastSeenAt),
   }))
 }
 
@@ -239,7 +243,7 @@ export async function validateIngestToken(
   const doc = await col.findOne({ _id: id })
   if (!doc) return { ok: false }
   // Update last-seen — fire and forget (non-critical, must not block the caller).
-  void col.updateOne({ _id: id }, { $set: { lastSeenAt: new Date().toISOString() } }).catch(() => {})
+  void col.updateOne({ _id: id }, { $set: { lastSeenAt: new Date() } }).catch(() => {})
   return { ok: true, user: doc.user, memberId: id, repo: doc.repo, ci: doc.ci, label: doc.label, teamId: doc.teamId, accountId: doc.accountId }
 }
 
@@ -319,7 +323,7 @@ export async function mintMachine(input: { machineName: string; user: string; ac
     _id: id,
     user: input.user,
     label: input.machineName,
-    createdAt: new Date().toISOString(),
+    createdAt: new Date(),
     lastSeenAt: null,
     ...(unique.length > 0 ? { accountId: unique[0], accountIds: unique } : {}),
     ...(teams.length > 0 ? { teamId: teams[0], teamIds: teams } : {}),
@@ -347,8 +351,8 @@ export async function listMachines(): Promise<MachineInfo[]> {
       user: d.user,
       teamId: teamIds[0],
       teamIds,
-      createdAt: d.createdAt,
-      lastSeenAt: d.lastSeenAt,
+      createdAt: fromBsonDate(d.createdAt),
+      lastSeenAt: fromBsonDateOrNull(d.lastSeenAt),
     }
   })
 }
