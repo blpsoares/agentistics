@@ -93,3 +93,79 @@ test('makeTagFilter keeps sessions matching ANY source of ANY selected tag', () 
   ]
   expect(sessions.filter(keep).map(x => x.session_id)).toEqual(['1', '2'])
 })
+
+// --- the tag's period, and agreement with the server copy --------------------------------------
+
+import { sessionInTagWindow, type TagWindow } from './tagMatch'
+import { sessionInWindow, sessionMatchesTag } from '../../../server/server/tags-resolve'
+
+const dated = (day: string, over: Partial<SessionMeta> = {}) =>
+  s({ start_time: `${day}T12:00:00.000Z`, ...over })
+
+function windowed(id: string, sources: TagSource[], window?: TagWindow): TagDef {
+  return { _id: id, name: id, sources, ...(window ? { window } : {}) }
+}
+
+test('sessionInTagWindow: inclusive both ends, each side optional, undated belongs nowhere', () => {
+  const w: TagWindow = { start: '2026-07-04', end: '2026-07-18' }
+  expect(sessionInTagWindow(dated('2026-07-03'), w)).toBe(false)
+  expect(sessionInTagWindow(dated('2026-07-04'), w)).toBe(true)
+  expect(sessionInTagWindow(dated('2026-07-18'), w)).toBe(true)
+  expect(sessionInTagWindow(dated('2026-07-19'), w)).toBe(false)
+  expect(sessionInTagWindow(dated('2026-07-19'), { start: '2026-07-04' })).toBe(true)
+  expect(sessionInTagWindow(dated('2026-07-03'), { end: '2026-07-18' })).toBe(true)
+  expect(sessionInTagWindow(dated('2026-07-10'))).toBe(true)
+  expect(sessionInTagWindow(s({}), w)).toBe(false)
+})
+
+test('makeTagFilter applies EACH tag its own period, not one flattened union', () => {
+  // Two tags over the same repo, different months. A session in July belongs to the July tag only,
+  // and flattening the sources first would have let the August tag admit it.
+  const july = windowed('july', [{ type: 'repo', value: 'r1' }], { start: '2026-07-01', end: '2026-07-31' })
+  const august = windowed('aug', [{ type: 'repo', value: 'r1' }], { start: '2026-08-01', end: '2026-08-31' })
+
+  const inJuly = dated('2026-07-10', { git_remote: 'r1' })
+  const inAugust = dated('2026-08-10', { git_remote: 'r1' })
+  const inSeptember = dated('2026-09-10', { git_remote: 'r1' })
+
+  const onlyJuly = makeTagFilter(['july'], [july, august], noLookups)!
+  expect(onlyJuly(inJuly)).toBe(true)
+  expect(onlyJuly(inAugust)).toBe(false)
+
+  // Selecting both is a union of the two periods — and still excludes what neither covers.
+  const both = makeTagFilter(['july', 'aug'], [july, august], noLookups)!
+  expect(both(inJuly)).toBe(true)
+  expect(both(inAugust)).toBe(true)
+  expect(both(inSeptember)).toBe(false)
+})
+
+test('makeTagFilter: a tag with no period still covers everything from its sources', () => {
+  const allTime = windowed('all', [{ type: 'repo', value: 'r1' }])
+  const keep = makeTagFilter(['all'], [allTime], noLookups)!
+  expect(keep(dated('2020-01-01', { git_remote: 'r1' }))).toBe(true)
+  expect(keep(s({ git_remote: 'r1' }))).toBe(true)          // undated: no period to fail
+  expect(keep(dated('2026-07-10', { git_remote: 'other' }))).toBe(false)
+})
+
+test('the browser mirror and the server resolver agree, session for session', () => {
+  // The two copies are hand-kept in sync (the web bundle cannot import from packages/server at
+  // runtime). This is the test that fails when only one of them is updated.
+  const w: TagWindow = { start: '2026-07-04', end: '2026-07-18' }
+  const sources: TagSource[] = [{ type: 'repo', value: 'r1' }, { type: 'machine', value: 'm1' }]
+  const tagDef = windowed('t', sources, w)
+  const filter = makeTagFilter(['t'], [tagDef], noLookups)!
+
+  const corpus: SessionMeta[] = [
+    dated('2026-07-03', { git_remote: 'r1' }),
+    dated('2026-07-04', { git_remote: 'r1' }),
+    dated('2026-07-18', { memberId: 'm1' }),
+    dated('2026-07-19', { memberId: 'm1' }),
+    dated('2026-07-10', { git_remote: 'other' }),
+    s({ git_remote: 'r1' }),
+    s({ git_remote: 'r1', start_time: 'garbage' }),
+  ]
+  for (const session of corpus) {
+    expect(filter(session)).toBe(sessionMatchesTag(session, sources, noLookups, [], w))
+    expect(sessionInTagWindow(session, w)).toBe(sessionInWindow(session, w))
+  }
+})

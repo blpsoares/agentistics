@@ -28,7 +28,7 @@ import { rename, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { AGENTISTICS_DATA_DIR } from './config'
 import type { TagDoc } from './tags-store'
-import type { TagSource } from './tags-resolve'
+import type { TagSource, TagWindow } from './tags-resolve'
 
 export const LOCAL_TAGS_FILE = join(AGENTISTICS_DATA_DIR, 'tags.json')
 
@@ -42,10 +42,13 @@ export interface TagStore {
   listAllTags(): Promise<TagDoc[]>
   getTag(id: string): Promise<TagDoc | null>
   createTag(input: {
-    name: string; color?: string; sources: TagSource[]; filters?: TagSource[]; sharedWith: string[]; createdBy: string
+    name: string; color?: string; sources: TagSource[]; filters?: TagSource[]; window?: TagWindow
+    sharedWith: string[]; createdBy: string
   }): Promise<TagDoc>
   updateTag(id: string, patch: {
-    name?: string; color?: string; sources?: TagSource[]; filters?: TagSource[]; sharedWith?: string[]
+    name?: string; color?: string; sources?: TagSource[]; filters?: TagSource[]
+    /** `null` clears the period; `undefined` leaves it alone. */
+    window?: TagWindow | null; sharedWith?: string[]
   }): Promise<boolean>
   deleteTag(id: string): Promise<boolean>
   visibleTagsFor(canRead: (tag: TagDoc) => boolean): Promise<TagDoc[]>
@@ -64,6 +67,20 @@ function sanitizeSources(raw: unknown): TagSource[] {
     .map(s => ({ type: s.type, value: s.value }))
 }
 
+/** A hand-edited file can hold anything; keep the period only when BOTH ends are well-formed and
+ *  ordered, and drop it entirely otherwise. A half-parsed window would silently shift a tag's
+ *  numbers, which is worse than the tag reverting to all-time. */
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
+function sanitizeWindow(raw: unknown): TagWindow | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const w = raw as Record<string, unknown>
+  const start = typeof w.start === 'string' && DAY_RE.test(w.start) ? w.start : undefined
+  const end = typeof w.end === 'string' && DAY_RE.test(w.end) ? w.end : undefined
+  if (!start && !end) return undefined
+  if (start && end && start > end) return undefined
+  return { ...(start ? { start } : {}), ...(end ? { end } : {}) }
+}
+
 function sanitize(raw: unknown): TagDoc | null {
   if (!raw || typeof raw !== 'object') return null
   const d = raw as Record<string, unknown>
@@ -71,6 +88,7 @@ function sanitize(raw: unknown): TagDoc | null {
   if (typeof d.name !== 'string' || !d.name) return null
   const sources = sanitizeSources(d.sources)
   const filters = sanitizeSources(d.filters)
+  const window = sanitizeWindow(d.window)
   const now = new Date().toISOString()
   return {
     _id: d._id,
@@ -78,6 +96,7 @@ function sanitize(raw: unknown): TagDoc | null {
     ...(typeof d.color === 'string' && d.color ? { color: d.color } : {}),
     sources,
     ...(filters.length ? { filters } : {}),
+    ...(window ? { window } : {}),
     sharedWith: Array.isArray(d.sharedWith) ? d.sharedWith.filter((x): x is string => typeof x === 'string') : [],
     createdBy: typeof d.createdBy === 'string' ? d.createdBy : 'local',
     createdAt: typeof d.createdAt === 'string' ? d.createdAt : now,
@@ -180,6 +199,7 @@ export function createLocalTagStore(file: string): TagStore {
         ...(input.color ? { color: input.color } : {}),
         sources: input.sources,
         ...(input.filters && input.filters.length ? { filters: input.filters } : {}),
+        ...(input.window ? { window: input.window } : {}),
         sharedWith: [...new Set(input.sharedWith.filter(Boolean))],
         createdBy: input.createdBy,
         createdAt: now,
@@ -192,12 +212,18 @@ export function createLocalTagStore(file: string): TagStore {
         const i = tags.findIndex(t => t._id === id)
         if (i < 0) return { tags, result: false, changed: false }
         const prev = tags[i]!
+        // `window: undefined` in a spread still CREATES the key (value undefined), which survives
+        // JSON.stringify as an absent key but not an in-memory `'window' in doc` check. Strip it
+        // explicitly when clearing so the cleared doc is indistinguishable from one never set.
+        const base = { ...prev }
+        if (patch.window === null) delete base.window
         const next: TagDoc = {
-          ...prev,
+          ...base,
           ...(patch.name !== undefined ? { name: patch.name } : {}),
           ...(patch.color !== undefined ? { color: patch.color } : {}),
           ...(patch.sources !== undefined ? { sources: patch.sources } : {}),
           ...(patch.filters !== undefined ? { filters: patch.filters } : {}),
+          ...(patch.window ? { window: patch.window } : {}),
           ...(patch.sharedWith !== undefined ? { sharedWith: [...new Set(patch.sharedWith.filter(Boolean))] } : {}),
           updatedAt: new Date().toISOString(),
         }

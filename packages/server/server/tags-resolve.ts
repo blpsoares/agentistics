@@ -28,6 +28,48 @@ export interface TagLookups {
   machinesByAccount: Record<string, string[]>
 }
 
+/**
+ * An optional period the tag is pinned to — `yyyy-MM-dd`, both ends INCLUSIVE, each side
+ * independently optional (`start` alone = "from then on", `end` alone = "up to then").
+ *
+ * This is what turns a tag from "these sources" into "these sources, during that experiment":
+ * "I ran harness X through the API on this project from the 4th to the 18th — how much did that
+ * cost?". Without it the same question needs the global date filter, which is transient and is not
+ * carried by the tag, so the number changes the moment someone else opens the page.
+ */
+export interface TagWindow {
+  start?: string
+  end?: string
+}
+
+/**
+ * Day a session is filed under.
+ *
+ * Deliberately the SAME rule as `dayOf` in tags-detail.ts (the leading 10 characters of the
+ * timestamp), because the window is read against that module's daily series and activity window.
+ * A local-clock day would be more correct in isolation and WRONG here: at UTC-3 a session started
+ * at 23:00 would fall inside the window while being plotted on the next day's bar of the tag's own
+ * chart. The two rules must be one rule; when tags-detail changes, this changes with it.
+ */
+export function tagSessionDay(s: SessionMeta): string | null {
+  const raw = s.start_time
+  if (!raw) return null
+  const d = raw.slice(0, 10)
+  return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null
+}
+
+/** Is a session inside the tag's period? No window (or neither end set) accepts everything. */
+export function sessionInWindow(s: SessionMeta, window?: TagWindow): boolean {
+  if (!window || (!window.start && !window.end)) return true
+  const day = tagSessionDay(s)
+  // A session with no usable date cannot be shown to belong to the period. Admitting it would put
+  // undated rows in EVERY window, which is the one outcome a frozen cost must not have.
+  if (!day) return false
+  if (window.start && day < window.start) return false
+  if (window.end && day > window.end) return false
+  return true
+}
+
 /** All teams a session belongs to (multi-team machines), falling back to the legacy single id. */
 function teamsOf(s: SessionMeta): string[] {
   if (s.teamIds && s.teamIds.length) return s.teamIds
@@ -74,13 +116,22 @@ export function sessionPassesFilters(s: SessionMeta, filters: TagSource[], looku
   return true
 }
 
+/**
+ * The full rule, in one place so no caller can apply half of it: (ANY source) AND (all filter
+ * groups) AND (inside the period). The window is an AND on top of the union for the same reason
+ * the filters are — it narrows, never widens, so it can never turn a tag into a way of reaching
+ * something its sources did not already cover.
+ */
 export function sessionMatchesTag(
   s: SessionMeta,
   sources: TagSource[],
   lookups: TagLookups,
   filters: TagSource[] = [],
+  window?: TagWindow,
 ): boolean {
-  return sources.some(src => matchesSource(s, src, lookups)) && sessionPassesFilters(s, filters, lookups)
+  return sources.some(src => matchesSource(s, src, lookups))
+    && sessionPassesFilters(s, filters, lookups)
+    && sessionInWindow(s, window)
 }
 
 export function resolveTagSessions(
@@ -88,7 +139,8 @@ export function resolveTagSessions(
   sources: TagSource[],
   lookups: TagLookups,
   filters: TagSource[] = [],
+  window?: TagWindow,
 ): SessionMeta[] {
   if (sources.length === 0) return []
-  return sessions.filter(s => sessionMatchesTag(s, sources, lookups, filters))
+  return sessions.filter(s => sessionMatchesTag(s, sources, lookups, filters, window))
 }

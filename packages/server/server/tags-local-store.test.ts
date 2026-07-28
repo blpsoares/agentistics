@@ -187,3 +187,56 @@ test('visibleTagsFor applies the caller predicate', async () => {
   const visible = await store.visibleTagsFor(t => t.createdBy === 'local')
   expect(visible.map(t => t.name)).toEqual(['mine'])
 })
+
+// --- the tag's period -------------------------------------------------------------------------
+
+test('the period round-trips, is patchable, and is CLEARED rather than emptied', async () => {
+  const file = tmpFile()
+  const store = createLocalTagStore(file)
+  const doc = await store.createTag({
+    name: 'Experiment', sources: [{ type: 'repo', value: 'github.com/org/repo' }],
+    window: { start: '2026-07-04', end: '2026-07-18' },
+    sharedWith: [], createdBy: 'local',
+  })
+  expect(doc.window).toEqual({ start: '2026-07-04', end: '2026-07-18' })
+  expect((await createLocalTagStore(file).getTag(doc._id))?.window)
+    .toEqual({ start: '2026-07-04', end: '2026-07-18' })
+
+  // Narrowing one end only.
+  expect(await store.updateTag(doc._id, { window: { start: '2026-07-06' } })).toBe(true)
+  expect((await createLocalTagStore(file).getTag(doc._id))?.window).toEqual({ start: '2026-07-06' })
+
+  // `undefined` must LEAVE IT ALONE — otherwise editing a tag's name silently drops its period.
+  expect(await store.updateTag(doc._id, { name: 'Renamed' })).toBe(true)
+  const kept = await createLocalTagStore(file).getTag(doc._id)
+  expect(kept?.name).toBe('Renamed')
+  expect(kept?.window).toEqual({ start: '2026-07-06' })
+
+  // `null` removes the key entirely: a leftover `{}` would read as "has a period" downstream.
+  expect(await store.updateTag(doc._id, { window: null })).toBe(true)
+  const cleared = await createLocalTagStore(file).getTag(doc._id)
+  expect(cleared?.window).toBeUndefined()
+  expect(JSON.parse(await readFile(file, 'utf8')).tags[0]).not.toHaveProperty('window')
+})
+
+test('a hand-edited period survives only when it is well-formed and ordered', async () => {
+  const file = tmpFile()
+  await mkdir(join(file, '..'), { recursive: true })
+  const doc = (window: unknown) => ({
+    _id: 'a'.repeat(24), name: 'T', sources: [], sharedWith: [], createdBy: 'local',
+    createdAt: '2026-07-01T00:00:00.000Z', updatedAt: '2026-07-01T00:00:00.000Z', window,
+  })
+  const read = async (window: unknown) => {
+    await writeFile(file, JSON.stringify({ version: 1, tags: [doc(window)] }))
+    return (await createLocalTagStore(file).listAllTags())[0]?.window
+  }
+  expect(await read({ start: '2026-07-04', end: '2026-07-18' })).toEqual({ start: '2026-07-04', end: '2026-07-18' })
+  expect(await read({ start: '2026-07-04' })).toEqual({ start: '2026-07-04' })
+  // Anything malformed drops the whole period: a half-read window would shift the tag's numbers,
+  // which is worse than the tag falling back to all-time.
+  expect(await read({ start: 'yesterday' })).toBeUndefined()
+  expect(await read({ start: '2026-07-18', end: '2026-07-04' })).toBeUndefined()
+  expect(await read({})).toBeUndefined()
+  expect(await read('2026-07-04')).toBeUndefined()
+  expect(await read(null)).toBeUndefined()
+})
