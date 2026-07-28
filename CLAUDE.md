@@ -633,6 +633,30 @@ absence was a real finding.
 - **`getProjectGitStats`** (`packages/server/server/git.ts`): first tries the project path as a single git repo; if that fails (not a git repo), falls back to scanning one level of subdirectories and aggregating stats across all git repos found there (handles workspace folders like `~/zuke`).
 - **FILES KPI** (`packages/web/src/hooks/useData.ts`): always uses session-level `files_modified` count first (Edit/Write/MultiEdit calls); falls back to project-level `git_stats.files_modified` only if sessions show 0. This is different from commits/lines which prefer project-level git stats when a project filter is active.
 
+## Concurrent work — one worktree per session, never the shared checkout
+
+Several agents/sessions routinely run against this repo at the same time. A checkout can only be
+on ONE branch and every session sees the same files, so sharing the main checkout is not "slightly
+risky", it silently corrupts work. All four of these happened in a single afternoon:
+
+- **A commit landed on the wrong branch.** Another session ran `git checkout` mid-session; the next
+  commit went onto ITS branch, on top of an unrelated stack.
+- **`git add -A` swept another session's in-progress files** into an unrelated commit. Always stage
+  explicit paths, and read `git status` before every commit — the diff is not only yours.
+- **`bun test` measured a tree someone else was mutating.** The count moved 656 → 842 mid-run: a red
+  test may not be yours, and a green one may prove nothing about your change.
+- **Two agents edited the same file minutes apart.** A "the tree is clean, nobody is working" check
+  is a snapshot, not a lock — it was clean because the other agent was between reads and writes.
+
+So: **work in `.claude/worktrees/<name>/` on your own branch** (the `EnterWorktree` tool, or
+`git worktree add`). A fresh worktree needs `bun install` plus
+`bun run packages/server/scripts/ensure-type-stub.ts` — without the stub `tsc` fails on the
+gitignored `embedded-dist.generated.ts`. Base it on `origin/dev`, not `origin/main`.
+
+**Never rebase or reset a branch another session is committing to** — leave a stray commit where it
+is and land your own copy on the target branch. A cherry-picked duplicate resolves itself on merge
+(same patch, no conflict); a rebase under a live session destroys work.
+
 ## Development
 
 ```bash
