@@ -21,6 +21,9 @@ import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
 import { handleLogout, handleSession, getPrincipal } from './auth'
 import { routeCapability, capabilityDenied } from './capability-guard'
+import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
+import { resolveClientIp } from './client-ip'
+import { TRUST_PROXY } from './config'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -241,6 +244,31 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     // ---------------------------------------------------------------------------
     if (INGEST_ONLY && !(url.pathname === '/api/team/ingest' && req.method === 'POST')) {
       return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+    }
+
+    // The caller's real IP, resolved once per request. Forwarded headers are only believed
+    // when AGENTISTICS_TRUST_PROXY=1 (see client-ip.ts) — otherwise the socket address wins.
+    const clientIp = resolveClientIp({
+      socketAddress: server.requestIP(req)?.address ?? null,
+      headers: req.headers,
+      trustProxy: TRUST_PROXY,
+    })
+
+    // ---------------------------------------------------------------------------
+    // Rate limiting. Auth endpoints get the strict rule, token-bearing endpoints their own,
+    // and everything else under /api a generous ceiling so a single client cannot scrape the
+    // whole dataset in a loop. `unknown` IPs share one bucket on purpose — fail closed.
+    // ---------------------------------------------------------------------------
+    if (url.pathname.startsWith('/api/')) {
+      const rule = rateRuleFor(url.pathname)
+      const key = rule === RULES.api ? `ip:${clientIp}:api` : `ip:${clientIp}:${url.pathname}`
+      const verdict = limiter.check(key, rule)
+      if (!verdict.allowed) {
+        const res = tooManyRequests(verdict.retryAfterSec)
+        const headers = new Headers(res.headers)
+        for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+        return new Response(res.body, { status: res.status, headers })
+      }
     }
 
     // ---------------------------------------------------------------------------
@@ -1006,7 +1034,11 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     if (url.pathname === '/api/iam/login' && req.method === 'POST') {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleIamLogin } = await import('./iam-handlers')
-      const res = await handleIamLogin(req)
+      // A successful login clears this IP's login bucket, so someone who mistyped twice
+      // before getting it right is not left one attempt away from a block.
+      const res = await handleIamLogin(req, {
+        onSuccess: () => limiter.reset(`ip:${clientIp}:${url.pathname}`),
+      })
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })

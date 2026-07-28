@@ -16,6 +16,8 @@ import { backfillRepoTeamIds } from './team-repos'
 import { makePrincipalSessionCookieHeader, getPrincipal } from './auth'
 import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships } from './iam-view'
 import type { AccountDoc, Membership, Role } from './iam-types'
+import { normalizeEmail } from './iam-types'
+import { limiter, RULES, tooManyRequests } from './rate-limit'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
 
@@ -83,7 +85,10 @@ export async function handleBootstrap(req: Request): Promise<Response> {
  * POST /api/iam/login  Body: { email, password }
  * Generic 401 on unknown email OR wrong password (no user enumeration).
  */
-export async function handleIamLogin(req: Request): Promise<Response> {
+export async function handleIamLogin(
+  req: Request,
+  hooks: { onSuccess?: () => void } = {},
+): Promise<Response> {
   let body: unknown
   try {
     body = await req.json()
@@ -93,9 +98,23 @@ export async function handleIamLogin(req: Request): Promise<Response> {
   const b = body as Record<string, unknown>
   const email = typeof b.email === 'string' ? b.email : ''
   const password = typeof b.password === 'string' ? b.password : ''
+
+  // Per-account soft backoff, on top of the per-IP limit applied in index.ts: an attacker
+  // guessing one mailbox is slowed even when they rotate source addresses. Checked BEFORE the
+  // argon2 verify so a locked account costs no CPU (that verify is the expensive part, and an
+  // unauthenticated caller must never be able to spend it freely).
+  const acctKey = `acct:${normalizeEmail(email)}`
+  const acctVerdict = limiter.check(acctKey, RULES.login)
+  if (!acctVerdict.allowed) return tooManyRequests(acctVerdict.retryAfterSec)
+
   const account = await findAccountByEmail(email)
   const ok = account ? await verifyPassword(password, account.passwordHash) : false
-  if (!account || !ok) return json({ ok: false, error: 'invalid credentials' }, 401)
+  if (!account || !ok) {
+    limiter.fail(acctKey, RULES.login)
+    return json({ ok: false, error: 'invalid credentials' }, 401)
+  }
+  limiter.reset(acctKey)
+  hooks.onSuccess?.()
   await updateAccount(account._id, { lastLoginAt: new Date().toISOString() })
   const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion)
   return new Response(JSON.stringify({ ok: true, mustChangePassword: account.mustChangePassword ?? false }), { status: 200, headers: { ...JSON_CT, 'Set-Cookie': cookie } })

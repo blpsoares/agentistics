@@ -90,6 +90,10 @@ export const CENTRAL_USER = process.env.AGENTISTICS_CENTRAL_USER || undefined
 // ---------------------------------------------------------------------------
 export const EXPOSURE = process.env.AGENTISTICS_EXPOSURE
 export const ALLOW_LOCAL_SHELL = process.env.AGENTISTICS_ALLOW_LOCAL_SHELL === '1'
+// Trust CF-Connecting-IP / X-Forwarded-For for rate limiting and audit logging. Enable ONLY when
+// the app is reachable exclusively through a proxy that rewrites them (cloudflared on the same
+// host + BIND_IP=127.0.0.1) — otherwise a client can pick its own rate-limit bucket.
+export const TRUST_PROXY = process.env.AGENTISTICS_TRUST_PROXY === '1'
 
 // ---------------------------------------------------------------------------
 // Phase 3 — auth gate. When AGENTISTICS_TEAM_PASSWORD is set, the central
