@@ -1,5 +1,6 @@
 import { MODEL_PRICING } from '@agentistics/core'
 import type { PriceEntry, RatesCache } from '@agentistics/core'
+import { fetchCommunityPricing, mergePricingLayers, type PriceOrigin } from './pricing-community'
 
 // Use MODEL_PRICING from src/lib/types.ts as the canonical fallback
 const FALLBACK_PRICING: Record<string, PriceEntry> = MODEL_PRICING
@@ -95,6 +96,8 @@ export async function fetchBrlRate(): Promise<number> {
   return 5.70 // fallback
 }
 
+/** Anthropic's own page, for Claude models only. Returns just what it parsed — the layering below
+ *  decides how it combines with the other sources. */
 export async function fetchAnthropicPricing(): Promise<{ pricing: Record<string, PriceEntry>; source: 'live' | 'fallback' }> {
   try {
     const res = await fetch('https://platform.claude.com/docs/en/about-claude/pricing', {
@@ -106,7 +109,10 @@ export async function fetchAnthropicPricing(): Promise<{ pricing: Record<string,
     const parsed = parseAnthropicPricing(html)
     if (parsed) {
       console.log('[rates] Anthropic pricing fetched live:', Object.keys(parsed).join(', '))
-      return { pricing: { ...FALLBACK_PRICING, ...parsed }, source: 'live' }
+      // ONLY what the page actually stated. Merging the built-in table in here used to relabel
+      // every fallback row as "official", which is precisely the false confidence this whole
+      // provenance chain exists to prevent.
+      return { pricing: parsed, source: 'live' }
     }
     console.warn('[rates] Anthropic pricing parse returned no results, using fallback')
   } catch (err) {
@@ -118,16 +124,57 @@ export async function fetchAnthropicPricing(): Promise<{ pricing: Record<string,
 let ratesCache: RatesCache | null = null
 const RATES_TTL_MS = 30 * 60 * 1000 // 30 minutes
 
+/** Per-model provenance for the merged table, so the UI can show where each number came from
+ *  instead of implying every row is equally fresh. Kept alongside the cache, not inside
+ *  RatesCache, so the existing /api/rates shape is untouched. */
+let originsCache: Record<string, PriceOrigin> = {}
+let communityFetchedAt = 0
+let communityOk = false
+
+export function getPricingOrigins(): {
+  origins: Record<string, PriceOrigin>
+  communityFetchedAt: number
+  communityOk: boolean
+} {
+  return { origins: originsCache, communityFetchedAt, communityOk }
+}
+
 export async function getRates(): Promise<RatesCache> {
   const now = Date.now()
   if (ratesCache && now - ratesCache.fetchedAt < RATES_TTL_MS) return ratesCache
 
-  const [brlRate, { pricing, source: pricingSource }] = await Promise.all([
+  const [brlRate, anthropic, community] = await Promise.all([
     fetchBrlRate(),
     fetchAnthropicPricing(),
+    fetchCommunityPricing(),
   ])
 
+  // Trust order, lowest first. The built-in table is the floor and is always present, so a source
+  // that fails or returns junk costs us freshness, never the ability to price anything.
+  const merged = mergePricingLayers({
+    builtin: FALLBACK_PRICING,
+    community,
+    official: anthropic.source === 'live' ? anthropic.pricing : null,
+  })
+
+  const pricing: Record<string, PriceEntry> = {}
+  const origins: Record<string, PriceOrigin> = {}
+  for (const [id, { price, origin }] of Object.entries(merged)) {
+    pricing[id] = price
+    origins[id] = origin
+  }
+  originsCache = origins
+  communityOk = community !== null
+  if (community) communityFetchedAt = now
+
+  const pricingSource: 'live' | 'fallback' =
+    anthropic.source === 'live' || community ? 'live' : 'fallback'
+
   ratesCache = { fetchedAt: now, brlRate, pricing, pricingSource }
-  console.log(`[rates] BRL=${brlRate.toFixed(2)} pricing=${pricingSource}`)
+  const counts = Object.values(origins).reduce<Record<string, number>>((a, o) => {
+    a[o] = (a[o] ?? 0) + 1; return a
+  }, {})
+  console.log(`[rates] BRL=${brlRate.toFixed(2)} models=${Object.keys(pricing).length} `
+    + `official=${counts.official ?? 0} community=${counts.community ?? 0} builtin=${counts.builtin ?? 0}`)
   return ratesCache
 }

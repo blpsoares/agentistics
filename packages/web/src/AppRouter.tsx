@@ -4,6 +4,7 @@ import AppLayout from './App'
 
 const HomePage = lazy(() => import('./pages/HomePage'))
 const CostsPage = lazy(() => import('./pages/CostsPage'))
+const PricingPage = lazy(() => import('./pages/PricingPage'))
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage'))
 const RepositoriesPage = lazy(() => import('./pages/RepositoriesPage'))
 const RepoDetailPage = lazy(() => import('./pages/RepoDetailPage'))
@@ -50,6 +51,7 @@ export default function AppRouter() {
         <Route element={<AppLayout />}>
           <Route index element={<Suspense fallback={<PageFallback />}><HomePage /></Suspense>} />
           <Route path="costs" element={<Suspense fallback={<PageFallback />}><CostsPage /></Suspense>} />
+          <Route path="pricing" element={<Suspense fallback={<PageFallback />}><PricingPage /></Suspense>} />
           <Route path="sessions" element={<Suspense fallback={<PageFallback />}><SessionsPage /></Suspense>} />
           <Route path="workflows" element={<Suspense fallback={<PageFallback />}><WorkflowsPage /></Suspense>} />
           <Route path="projects" element={<Suspense fallback={<PageFallback />}><ProjectsPage /></Suspense>} />

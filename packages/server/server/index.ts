@@ -307,6 +307,27 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       }
     }
 
+    // The pricing table itself, with per-model provenance. Separate from /api/rates (which the
+    // dashboard polls for the BRL rate) so a table this size is only paid for when it is opened.
+    if (url.pathname === '/api/pricing' && req.method === 'GET') {
+      const { getRates, getPricingOrigins } = await import('./rates')
+      const rates = await getRates()
+      const { origins, communityFetchedAt, communityOk } = getPricingOrigins()
+      const models = Object.entries(rates.pricing)
+        .map(([id, price]) => ({ id, ...price, origin: origins[id] ?? 'builtin' }))
+        .sort((a, b) => a.id.localeCompare(b.id))
+      return new Response(JSON.stringify({
+        models,
+        fetchedAt: rates.fetchedAt,
+        communityFetchedAt,
+        communityOk,
+        sources: {
+          official: { label: 'Anthropic', url: 'https://platform.claude.com/docs/en/about-claude/pricing' },
+          community: { label: 'LiteLLM', url: 'https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json' },
+        },
+      }), { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+    }
+
     if (url.pathname === '/api/rates' && req.method === 'GET') {
       try {
         const rates = await getRates()
