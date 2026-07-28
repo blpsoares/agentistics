@@ -9,6 +9,7 @@ import {
   Calendar,
 } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
+import { sessionTime } from '../lib/sessionTime'
 import { formatProjectName, t } from '@agentistics/core'
 import { fmt, fmtFull, fmtDuration, fmtCost } from '@agentistics/core'
 import type { Lang } from '@agentistics/core'
@@ -91,13 +92,28 @@ export default function HomePage() {
       />
     } else if (id === 'longest-session') {
       card = (
-        <StatCard label={lang === 'pt' ? 'Sessão mais longa' : 'Longest session'} value={d.longestSession?.duration_minutes ? fmtDuration(d.longestSession.duration_minutes * 60_000) : '—'}
+        <StatCard label={lang === 'pt' ? 'Sessão mais longa' : 'Longest session'}
+          value={(() => {
+            // Headline is the ACTIVE time; the wall clock moves to the sub-line. Ranking is by
+            // active time too (useDerivedStats), so the two always describe the same session.
+            const t = sessionTime(d.longestSession, lang)
+            return d.longestSession ? (t.active ?? t.elapsed) : '—'
+          })()}
+          valueTitle={d.longestSession ? sessionTime(d.longestSession, lang).tooltip : undefined}
           sub={d.longestSession ? (() => {
+            const t = sessionTime(d.longestSession, lang)
             const msgs = (d.longestSession!.user_message_count ?? 0) + (d.longestSession!.assistant_message_count ?? 0)
-            const msgStr = `${msgs} ${lang === 'pt' ? 'mensagens' : 'messages'}`
-            if (filters.projects.length === 0 && d.longestSession!.project_path)
-              return `${msgStr} · ${formatProjectName(d.longestSession!.project_path)}`
-            return msgStr
+            // Both figures NAMED and EXPLAINED on the card itself. The headline used to sit next
+            // to "105h decorrido" with no word of its own, so neither number could be identified.
+            const lines = [
+              `${t.activeLabel} — ${t.activeExplain}`,
+              `${t.elapsed} ${t.elapsedLabel} — ${t.elapsedExplain}`,
+              `${msgs} ${lang === 'pt' ? 'mensagens' : 'messages'}`
+                + (filters.projects.length === 0 && d.longestSession!.project_path
+                  ? ` · ${formatProjectName(d.longestSession!.project_path)}`
+                  : ''),
+            ]
+            return lines.join('\n')
           })() : ''}
           icon={<Clock size={15} />} accent="var(--accent-purple)" info={infoItems[4]} onInfoClick={() => setInfoModalIndex(4)} />
       )

@@ -31,13 +31,16 @@ interface StatCardProps {
     note?: string
   }
   onInfoClick?: () => void
+  /** Native tooltip on the value itself — used where the headline number needs a qualifier that
+   *  does not fit the sub-line (e.g. how a session's active time was measured). */
+  valueTitle?: string
   action?: React.ReactNode
   fullPrecision?: boolean
   onTogglePrecision?: () => void
   lang?: string
 }
 
-export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-orange)', info, onInfoClick, action, fullPrecision, onTogglePrecision, lang }: StatCardProps) {
+export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-orange)', info, onInfoClick, valueTitle, action, fullPrecision, onTogglePrecision, lang }: StatCardProps) {
   const isMobile = useIsMobile()
   return (
     <div style={{
@@ -119,15 +122,21 @@ export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-or
       </div>
 
       <div>
-        <div style={{
-          fontSize: valueFontSize(value),
-          fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.15,
-          wordBreak: 'break-all',
-        }}>
+        <div
+          title={valueTitle}
+          style={{
+            fontSize: valueFontSize(value),
+            fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.15,
+            wordBreak: 'break-all',
+            cursor: valueTitle ? 'help' : undefined,
+          }}
+        >
           {value}
         </div>
         {sub && (
-          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 4 }}>
+          // `pre-line` so a sub can be several short labelled lines instead of one run-on
+          // sentence — a card that reports two different quantities has to name both.
+          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 4, whiteSpace: 'pre-line' }}>
             {sub}
           </div>
         )}

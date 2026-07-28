@@ -1,7 +1,8 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos } from './useData'
+import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession } from './useData'
 import { mergeStatsCaches } from '@agentistics/core'
 import type { RepoSortKey, RepoStat } from './useData'
+import type { SessionMeta } from '@agentistics/core'
 import { format, subDays } from 'date-fns'
 
 // calcStreak
@@ -1051,5 +1052,55 @@ describe('machine filter reads the same deep history as the member filter', () =
     const partial = { ...data, machineStatsCaches: { alienware } } as import('@agentistics/core').AppData
     const out = computeFilteredHarnessSummaries(partial, filters({ machines: ['alienware', 'dell'] }))
     expect(out.summaries.claude!.sessions).toBe(0)  // no session docs → old behaviour, unchanged
+  })
+})
+
+// ---------------------------------------------------------------------------
+// pickLongestSession — the "958h" regression
+// ---------------------------------------------------------------------------
+
+function sess(id: string, wallMin: number, activeMin?: number): SessionMeta {
+  return {
+    session_id: id, project_path: '/p', start_time: '2026-01-01T00:00:00Z',
+    duration_minutes: wallMin, active_minutes: activeMin,
+    user_message_count: 1, assistant_message_count: 1,
+    tool_counts: {}, tool_output_tokens: {}, agent_file_reads: {}, languages: [],
+    git_commits: 0, git_pushes: 0, input_tokens: 0, output_tokens: 0,
+    first_prompt: '', user_interruptions: 0, user_response_times: [],
+    tool_errors: 0, tool_error_categories: {}, uses_task_agent: false,
+    uses_mcp: false, uses_web_search: false, uses_web_fetch: false,
+    lines_added: 0, lines_removed: 0, files_modified: 0,
+    message_hours: [], user_message_timestamps: [], harness: 'claude',
+  }
+}
+
+describe('pickLongestSession', () => {
+  test('a deleted-transcript session does not win on its wall clock', () => {
+    // The real case: 958h of wall clock, transcript already cleaned up, so no active time.
+    // It must lose to a shorter session that actually has measured work.
+    const deleted = sess('deleted', 958 * 60, undefined)
+    const real = sess('real', 106 * 60, 88 * 60)
+    const { session, unmeasured } = pickLongestSession([deleted, real])
+    expect(session?.session_id).toBe('real')
+    expect(unmeasured).toBe(1)
+  })
+
+  test('ranks by active time, not by wall clock', () => {
+    const openLong = sess('open-long', 500 * 60, 2 * 60)
+    const workedMore = sess('worked-more', 10 * 60, 9 * 60)
+    expect(pickLongestSession([openLong, workedMore]).session?.session_id).toBe('worked-more')
+  })
+
+  test('falls back to wall clock only when NOTHING has active time', () => {
+    const a = sess('a', 100, undefined)
+    const b = sess('b', 300, undefined)
+    const { session, unmeasured } = pickLongestSession([a, b])
+    expect(session?.session_id).toBe('b')
+    // Not reported as unmeasured: the whole set is on the same (wall-clock) footing.
+    expect(unmeasured).toBe(0)
+  })
+
+  test('empty input yields null, not a crash', () => {
+    expect(pickLongestSession([]).session).toBeNull()
   })
 })
