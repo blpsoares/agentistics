@@ -1,14 +1,18 @@
 import React from 'react'
 import { Box, Text } from 'ink'
 import { COLORS } from '../theme'
+import { LOGO_SEGMENTS, LOGO_WIDTH, rampAt } from './logoArt'
 
 /**
- * The AGENTISTICS wordmark, carried over from the original `agentop start` banner.
+ * The AGENTISTICS logo, in three tiers chosen by terminal width.
  *
- * Rendered per-character with a horizontal amber gradient rather than one flat color — the
- * block glyphs are solid enough that a single hue reads as a slab, while the ramp gives the
- * letters depth. Falls back to plain text on a terminal too narrow to hold the art, so the
- * banner degrades instead of wrapping into noise.
+ * All tiers share ONE palette — the horizontal red-to-yellow ramp from the exported art
+ * (`rampAt`). An earlier version coloured the compact mark amber and ramped it vertically, which
+ * made the two marks look like different products.
+ *
+ * Tiers, widest first: the 113-column art, a compact two-line mark, then plain text. Drawing the
+ * big art into a narrower terminal would wrap every row and turn the logo into confetti, so each
+ * tier is gated on real width rather than assumed.
  */
 
 const ART = [
@@ -18,17 +22,24 @@ const ART = [
 
 export const WORDMARK_WIDTH = Math.max(...ART.map(l => l.length))
 
-/** Light amber → deep amber. Both ends stay legible on light and dark terminals. */
-const FROM = { r: 0xfb, g: 0xbf, b: 0x24 }
-const TO = { r: 0xd9, g: 0x77, b: 0x06 }
+export { LOGO_WIDTH, rampAt }
 
-const hex = (n: number) => n.toString(16).padStart(2, '0')
-
-/** Colour at position `t` (0..1) along the ramp. Pure — exported for tests. */
-export function gradientAt(t: number): string {
-  const clamped = Number.isFinite(t) ? Math.min(1, Math.max(0, t)) : 0
-  const mix = (a: number, b: number) => Math.round(a + (b - a) * clamped)
-  return `#${hex(mix(FROM.r, TO.r))}${hex(mix(FROM.g, TO.g))}${hex(mix(FROM.b, TO.b))}`
+export function Logo({ tagline, width }: { tagline?: string; width: number }) {
+  if (width < LOGO_WIDTH) return <Wordmark tagline={tagline} width={width} />
+  return (
+    <Box flexDirection="column">
+      {LOGO_SEGMENTS.map((row, y) => (
+        <Text key={y}>
+          {row.map((seg, i) =>
+            seg.c
+              ? <Text key={i} color={seg.c}>{seg.t}</Text>
+              : <Text key={i}>{seg.t}</Text>,
+          )}
+        </Text>
+      ))}
+      {tagline ? <Text dimColor>{tagline}</Text> : null}
+    </Box>
+  )
 }
 
 export function Wordmark({ tagline, width }: { tagline?: string; width: number }) {
@@ -46,7 +57,7 @@ export function Wordmark({ tagline, width }: { tagline?: string; width: number }
       {ART.map((line, row) => (
         <Text key={row} bold>
           {[...line].map((ch, i) => (
-            <Text key={i} color={gradientAt(i / Math.max(1, line.length - 1))}>{ch}</Text>
+            <Text key={i} color={rampAt(i / Math.max(1, line.length - 1))}>{ch}</Text>
           ))}
         </Text>
       ))}

@@ -57,24 +57,43 @@ agentop start
 agentop start --lang pt      # force Portuguese for this run
 ```
 
-```
-  ▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀ ▀█▀ █ █▀▀ █▀
-  █▀█ █▄█ ██▄ █░▀█ ░█░ █ ▄█ ░█░ █ █▄▄ ▄█
-  AI coding-assistant analytics · agentop
-  ──────────────────────────────────────
-  config   member — sends metrics to a central at http://host:48080
-  running  ● agentistics    (this machine)   http://localhost:47292
-           ● agentistics central    (docker)
-  ──────────────────────────────────────
+The logo is drawn with a vertical yellow-to-red gradient, and degrades by terminal width: the
+full art above ~113 columns, a compact two-line wordmark below that, and plain text on very
+narrow terminals.
 
-  What would you like to start?
-  ❯ agentistics            this machine
-    agentistics central    team aggregator · :48080
-    Disconnect from the central    back to solo
-    Stop a running service…
-    Switch to Português
-    Quit
 ```
+      ░████                                                ░████                      ░████
+    ░██████                                                ░████                      ░████
+    ░██████      ░██████      ░████░████   ░████░██████████       ░██████  ░██████████       ░██████    ░██████
+    ░██ ░██    ░████████  ░████████░██████ ░████░██████████░████░████ ░████░██████████░████░████ ░████░████ ░████
+  ░████ ░████  ░████      ░████    ░██████ ░████  ░████    ░████░████        ░████    ░████░████      ░████
+  ░██████████  ░████ ░████░██████  ░████████████  ░████    ░████  ░██████    ░████    ░████░████        ░██████
+░████████████  ░████ ░████░████    ░████ ░██████  ░████    ░████      ░████  ░████    ░████░████            ░████
+░████     ░████░██████████░████████░████   ░████  ░████    ░████  ░████████  ░████    ░████░████ ░████  ░████████
+░████     ░████  ░██████  ░████████░████     ░██  ░██        ░██  ░██████    ░██        ░██  ░██████    ░██████
+AI coding-assistant analytics · agentop
+
+╭──────────────────────────────────────────────────────────────────────╮
+│ config      member — sends metrics to a central at http://host:48080 │
+│ running     ● agentistics    (this machine)  http://localhost:47292  │
+│             ● agentistics central    (docker)                        │
+╰──────────────────────────────────────────────────────────────────────╯
+
+What would you like to start?
+
+❯ 1. agentistics  this machine
+  2. agentistics central  team aggregator · :48080
+  3. Disconnect from the central  back to solo
+  4. Restart a running service…  one, or all
+  5. Stop a running service…
+  6. Switch to Português
+  7. Quit
+
+↑↓ · enter
+```
+
+The status panel and the menu are on screen together and stay live, rather than the status being
+printed once and scrolling away above the question.
 
 **Naming:** `agentistics` is the per-machine app; `agentistics central` is the team aggregator.
 Both serve a web dashboard, so neither is labelled "the dashboard".
@@ -182,12 +201,50 @@ agentop server --port 4000  # api on 4000, web on 4001
 
 ## `tui`
 
-Live stats right in the terminal — tokens, cost, sessions, streak — no browser
-needed.
+A live multi-screen dashboard in the terminal — no browser needed. Built with
+[Ink](https://term.ink), it updates the instant the web dashboard does, over the same
+`/api/events` SSE stream.
 
 ```bash
 agentop tui
+agentop tui --lang pt         # force Portuguese for this run
 ```
+
+```
+ agentistics  ·  live coding-assistant analytics                          ● live
+
+ 1 Overview  2 Projects  3 Sessions  4 Costs  5 Harnesses
+
+ USD 8,364.44        13.3B         262           113.4K        2d
+ cost                tokens        sessions      messages      streak
+
+ activity · last 30 days
+ ▅▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁█▅▁▁▁█▃
+
+ Harnesses
+ Claude       ██████████████████████████████ USD 8,363.48  13.3B tok
+ Codex        ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ USD 0.01  27.6K tok
+
+ 1-5/tab switch screen  ·  f filter  ·  ? help  ·  q quit
+```
+
+| Key | Does |
+|-----|------|
+| `1`–`5`, `tab` | Switch screen — Overview, Projects, Sessions, Costs, Harnesses |
+| `f` | Filter by harness |
+| `r` | Force a refresh |
+| `?` | Keyboard help |
+| `q`, `ctrl+c` | Quit |
+
+There is no configuration wizard — it opens straight into Overview and filtering happens in-app.
+If no server is listening it starts one itself and stops it again on exit; a server that was
+already running is left alone.
+
+Metrics match the web dashboard exactly: both price through `calcCost()`, Claude totals come from
+`stats-cache.json` and every other harness from per-session sums. A metric a harness cannot
+produce shows `N/A` rather than a misleading `0`.
+
+Needs an interactive terminal — piping it exits with a message instead of a crash.
 
 ---
 

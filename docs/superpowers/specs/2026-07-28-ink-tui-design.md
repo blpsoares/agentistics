@@ -222,3 +222,10 @@ Recorded after the fact, because each of these was a real defect the design woul
 8. **`calcStreak` moved to core.** It lived in `packages/web/src/hooks/useData.ts`, which the TUI
    cannot import. Moved to `packages/core/src/streak.ts` and re-exported from `useData.ts`, so
    there is still exactly one implementation.
+
+9. **The logo ramp is horizontal, not vertical.** The first exported art was read as one colour
+   per row, which produced a vertical yellow→red gradient — visibly wrong against the real mark.
+   The palette is in fact a function of the COLUMN alone (verified: 113 columns, one colour each,
+   identical on every row), running red `#cd3131` to yellow `#e5e510` as a linear interpolation.
+   Only the glyphs are stored now; colour is derived, so there is one source of truth. Verified by
+   diffing all 579 rendered glyphs against the export — max deviation 1/255.
