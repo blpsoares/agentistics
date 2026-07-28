@@ -182,12 +182,21 @@ clean and is then silently missing from half the product.
 
 ### Pricing — three layered sources, and the built-in table is the floor
 
-Costs come from `MODEL_PRICING` (compiled in), the LiteLLM community dataset, and the vendor's own
-page, merged in that order of trust by `rates.ts` — so a source that fails or returns junk costs
+Costs come from `MODEL_PRICING` (compiled in), the LiteLLM community dataset, and the vendors' own
+pages (Anthropic in `rates.ts`; OpenAI and Google in `pricing-official.ts`), merged in that order of
+trust by `rates.ts` — so a source that fails or returns junk costs
 freshness, never the ability to price anything. Every community row is validated first
 (`pricing-community.ts`): non-positive costs, missing pairs, values implying a unit change, and
 prices more than tenfold from the built-in figure are dropped. That dataset really does publish a
 model at a cost of ZERO, which imported verbatim would make those sessions free.
+
+Scraping a vendor page is **anchored**: OpenAI publishes every model four times (Standard / Batch at
+half price / Flex / Priority at double) and Google repeats a table block per tier, with nothing in
+the markup that reliably marks the standard one. A parsed block is adopted only if a model whose
+rate was verified by hand comes out at the expected figure, so a page redesign yields NOTHING and
+falls back, instead of yielding numbers that look right and are half wrong. Read cells positionally,
+never by counting dollar signs — OpenAI writes "-" for no cache-write charge, and counting amounts
+then reads output out of the wrong column.
 
 Each model carries its origin (`official` / `community` / `builtin`), surfaced per row in
 **Settings → Pricing**, which lists **only models this machine has actually used** — a new one joins

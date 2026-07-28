@@ -1,6 +1,7 @@
 import { MODEL_PRICING } from '@agentistics/core'
 import type { PriceEntry, RatesCache } from '@agentistics/core'
 import { fetchCommunityPricing, mergePricingLayers, type PriceOrigin } from './pricing-community'
+import { fetchOpenAiPricing, fetchGooglePricing } from './pricing-official'
 
 // Use MODEL_PRICING from src/lib/types.ts as the canonical fallback
 const FALLBACK_PRICING: Record<string, PriceEntry> = MODEL_PRICING
@@ -143,18 +144,26 @@ export async function getRates(): Promise<RatesCache> {
   const now = Date.now()
   if (ratesCache && now - ratesCache.fetchedAt < RATES_TTL_MS) return ratesCache
 
-  const [brlRate, anthropic, community] = await Promise.all([
+  const [brlRate, anthropic, community, openai, google] = await Promise.all([
     fetchBrlRate(),
     fetchAnthropicPricing(),
     fetchCommunityPricing(),
+    fetchOpenAiPricing(),
+    fetchGooglePricing(),
   ])
+
+  // Each vendor page is independent: one failing its anchor drops only that vendor to the
+  // community figures, never the others.
+  const official = (anthropic.source === 'live' || openai || google)
+    ? { ...(anthropic.source === 'live' ? anthropic.pricing : {}), ...(openai ?? {}), ...(google ?? {}) }
+    : null
 
   // Trust order, lowest first. The built-in table is the floor and is always present, so a source
   // that fails or returns junk costs us freshness, never the ability to price anything.
   const merged = mergePricingLayers({
     builtin: FALLBACK_PRICING,
     community,
-    official: anthropic.source === 'live' ? anthropic.pricing : null,
+    official,
   })
 
   const pricing: Record<string, PriceEntry> = {}
@@ -168,7 +177,7 @@ export async function getRates(): Promise<RatesCache> {
   if (community) communityFetchedAt = now
 
   const pricingSource: 'live' | 'fallback' =
-    anthropic.source === 'live' || community ? 'live' : 'fallback'
+    official || community ? 'live' : 'fallback'
 
   ratesCache = { fetchedAt: now, brlRate, pricing, pricingSource }
   const counts = Object.values(origins).reduce<Record<string, number>>((a, o) => {
