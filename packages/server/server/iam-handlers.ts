@@ -28,6 +28,8 @@ import type { AccountDoc, Membership, Role } from './iam-types'
 import { normalizeEmail } from './iam-types'
 import { limiter, RULES, tooManyRequests } from './rate-limit'
 import { validatePasswordPolicy } from './password-policy'
+import { writeAudit } from './audit'
+import { readJsonLimited, LIMITS } from './limits'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
 
@@ -55,12 +57,11 @@ export async function handleIamStatus(): Promise<Response> {
 export async function handleBootstrap(req: Request): Promise<Response> {
   if (await hasAnyOwner()) return json({ ok: false, error: 'already set up' }, 409)
 
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    return json({ ok: false, error: 'invalid JSON' }, 400)
+  const parsedBody = await readJsonLimited<unknown>(req, LIMITS.bodyBytes)
+  if (!parsedBody.ok) {
+    return json({ ok: false, error: parsedBody.error }, parsedBody.error === 'too_large' ? 413 : 400)
   }
+  const body: unknown = parsedBody.value
 
   const v = validateOwnerInput(body as Record<string, unknown>)
   if (!v.ok) return json({ ok: false, error: v.error }, 400)
@@ -97,14 +98,14 @@ export async function handleBootstrap(req: Request): Promise<Response> {
  */
 export async function handleIamLogin(
   req: Request,
-  hooks: { onSuccess?: () => void } = {},
+  hooks: { onSuccess?: () => void; ip?: string } = {},
 ): Promise<Response> {
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    return json({ ok: false, error: 'invalid JSON' }, 400)
+  const ip = hooks.ip ?? 'unknown'
+  const parsedBody = await readJsonLimited<unknown>(req, LIMITS.bodyBytes)
+  if (!parsedBody.ok) {
+    return json({ ok: false, error: parsedBody.error }, parsedBody.error === 'too_large' ? 413 : 400)
   }
+  const body: unknown = parsedBody.value
   const b = body as Record<string, unknown>
   const email = typeof b.email === 'string' ? b.email : ''
   const password = typeof b.password === 'string' ? b.password : ''
@@ -121,6 +122,9 @@ export async function handleIamLogin(
   const ok = account ? await verifyPassword(password, account.passwordHash) : false
   if (!account || !ok) {
     limiter.fail(acctKey, RULES.login)
+    // The e-mail is recorded (it is not a secret and an incident review needs it); the password
+    // never is — buildAuditEvent drops it even if a caller passes it.
+    void writeAudit({ action: 'login.failure', ip, targetId: account?._id, meta: { email: normalizeEmail(email) } })
     return json({ ok: false, error: 'invalid credentials' }, 401)
   }
   limiter.reset(acctKey)
@@ -136,10 +140,12 @@ export async function handleIamLogin(
       TEAM_SESSION_SECRET,
       Date.now() + MFA_CHALLENGE_TTL_MS,
     )
+    void writeAudit({ action: 'login.mfa_challenge', ip, actorId: account._id })
     return json({ ok: false, mfaRequired: true, challenge }, 200)
   }
 
   await updateAccount(account._id, { lastLoginAt: new Date().toISOString() })
+  void writeAudit({ action: 'login.success', ip, actorId: account._id })
   const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion)
   return new Response(JSON.stringify({ ok: true, mustChangePassword: account.mustChangePassword ?? false }), { status: 200, headers: { ...JSON_CT, 'Set-Cookie': cookie } })
 }
@@ -150,12 +156,11 @@ export async function handleIamLogin(
  * `code` is either a 6-digit TOTP or one of the account's single-use recovery codes.
  */
 export async function handleIamLoginMfa(req: Request): Promise<Response> {
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    return json({ ok: false, error: 'invalid JSON' }, 400)
+  const parsedBody = await readJsonLimited<unknown>(req, LIMITS.bodyBytes)
+  if (!parsedBody.ok) {
+    return json({ ok: false, error: parsedBody.error }, parsedBody.error === 'too_large' ? 413 : 400)
   }
+  const body: unknown = parsedBody.value
   const b = body as Record<string, unknown>
   const challenge = typeof b.challenge === 'string' ? b.challenge : ''
   const code = typeof b.code === 'string' ? b.code : ''
@@ -184,9 +189,12 @@ export async function handleIamLoginMfa(req: Request): Promise<Response> {
   }
   if (!ok) {
     limiter.fail(mfaKey, RULES.login)
+    void writeAudit({ action: 'login.mfa_failure', ip: 'unknown', actorId: parsed.accountId })
     return json({ ok: false, error: 'invalid code' }, 401)
   }
   limiter.reset(mfaKey)
+  if (usedRecovery) void writeAudit({ action: 'mfa.recovery_used', ip: 'unknown', actorId: parsed.accountId })
+  void writeAudit({ action: 'login.success', ip: 'unknown', actorId: parsed.accountId, meta: { secondFactor: usedRecovery ? 'recovery' : 'totp' } })
 
   await updateAccount(account._id, { lastLoginAt: new Date().toISOString() })
   const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion)
@@ -236,6 +244,7 @@ export async function handleMfa(req: Request, pathname: string): Promise<Respons
     }
     const recoveryCodes = generateRecoveryCodes()
     await enableMfa(account._id, secret, recoveryCodes.map(hashRecoveryCode))
+    void writeAudit({ action: 'mfa.enable', ip: 'unknown', actorId: account._id })
     // Every session that authenticated with the password alone is now under-authenticated.
     await bumpSessionVersion(account._id)
     const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion + 1)
@@ -257,6 +266,7 @@ export async function handleMfa(req: Request, pathname: string): Promise<Respons
       return json({ error: 'invalid code' }, 401)
     }
     await disableMfa(account._id)
+    void writeAudit({ action: 'mfa.disable', ip: 'unknown', actorId: account._id })
     return json({ ok: true })
   }
 
@@ -297,6 +307,7 @@ export async function handleChangePassword(req: Request): Promise<Response> {
   if (!account.mustChangePassword) {
     if (!(await verifyPassword(current, account.passwordHash))) return json({ error: 'current password is incorrect' }, 401)
   }
+  void writeAudit({ action: 'password.change', ip: 'unknown', actorId: account._id })
   const passwordHash = await hashPassword(next)
   await updateAccount(account._id, { passwordHash, mustChangePassword: false })
   await bumpSessionVersion(account._id) // invalidate old sessions

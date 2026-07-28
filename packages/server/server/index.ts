@@ -22,7 +22,7 @@ import { getEnabledAdapters } from './adapters/types'
 import { handleLogout, handleSession, getPrincipal, getPrincipalSession, makePrincipalSessionCookieHeader, SESSION_REFRESH_MS } from './auth'
 import { routeCapability, capabilityDenied } from './capability-guard'
 import { AUTH_PUBLIC, isAdminPath, MFA_EXEMPT } from './index-routes'
-import { CAPS } from './exposure'
+import { CAPS, PROFILE } from './exposure'
 import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
 import { resolveClientIp } from './client-ip'
 import { corsHeadersFor } from './cors'
@@ -30,6 +30,9 @@ import { csrfVerdict } from './csrf'
 import { securityHeaders } from './security-headers'
 import { TRUST_PROXY, ALLOWED_ORIGINS, TEAM_TLS, TEAM_SESSION_SECRET_ENV, setResolvedSessionSecret } from './config'
 import { validateSecret, ensureSessionSecret } from './secret-store'
+import { writeAudit, ensureAuditIndexes, listAudit } from './audit'
+import { safeError } from './errors'
+import { LIMITS } from './limits'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -116,11 +119,22 @@ if (TEAM_CENTRAL) {
     }
     setResolvedSessionSecret(TEAM_SESSION_SECRET_ENV)
   } else {
+    // Bounded: the secret must be settled before any cookie is minted, but an unreachable
+    // database must not keep the server from ever listening. On timeout we keep the
+    // per-process random secret already in config.ts — safe, just not durable.
     try {
-      setResolvedSessionSecret(await ensureSessionSecret())
-      console.log('[server] using the persisted random session secret (set AGENTISTICS_TEAM_SESSION_SECRET to pin your own).')
+      const secret = await Promise.race([
+        ensureSessionSecret(),
+        new Promise<null>(resolve => setTimeout(() => resolve(null), 10_000)),
+      ])
+      if (secret) {
+        setResolvedSessionSecret(secret)
+        console.log('[server] using the persisted random session secret (set AGENTISTICS_TEAM_SESSION_SECRET to pin your own).')
+      } else {
+        console.warn('[server] database unreachable — using a per-process session secret; sessions will not survive a restart.')
+      }
     } catch {
-      console.warn('[server] could not persist a session secret (DB unreachable) — using a per-process one; sessions will not survive a restart.')
+      console.warn('[server] could not persist a session secret — using a per-process one; sessions will not survive a restart.')
     }
   }
 
@@ -130,6 +144,7 @@ if (TEAM_CENTRAL) {
       const { backfillTokenTeamIds, purgeUnknownTeamsFromMachines } = await import('./team-tokens')
       const { backfillRepoTeamIds } = await import('./team-repos')
       await ensureAccountIndexes()
+      await ensureAuditIndexes()
       // No Default team is seeded — machines/accounts are loose until assigned to real teams.
       await backfillTokenTeamIds()
       await backfillRepoTeamIds()
@@ -276,6 +291,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       const key = rule === RULES.api ? `ip:${clientIp}:api` : `ip:${clientIp}:${url.pathname}`
       const verdict = limiter.check(key, rule)
       if (!verdict.allowed) {
+        if (rule === RULES.login) void writeAudit({ action: 'rate.blocked', ip: clientIp, meta: { path: url.pathname } })
         const res = tooManyRequests(verdict.retryAfterSec)
         const headers = new Headers(res.headers)
         for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
@@ -318,6 +334,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       if (needed) {
         const denied = capabilityDenied(needed)
         if (denied) {
+          void writeAudit({ action: 'capability.denied', ip: clientIp, meta: { path: url.pathname, capability: needed } })
           return new Response(denied.body, {
             status: denied.status,
             headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -338,6 +355,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       }
       // Admin routes require the owner.
       if (isAdminPath(url.pathname) && session.principal.role !== 'owner') {
+        void writeAudit({ action: 'authz.denied', ip: clientIp, actorId: session.principal.accountId, meta: { path: url.pathname } })
         return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
       }
       // On an internet-exposed instance an owner must hold a second factor: their account can
@@ -361,6 +379,14 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
 
 
     if (url.pathname === '/api/events' && req.method === 'GET') {
+      // Each SSE client holds a socket and a controller for as long as it stays connected, so an
+      // unbounded count is a free way to exhaust the process (OWASP API4).
+      if (sseClients.size >= LIMITS.sseClients) {
+        return new Response(JSON.stringify({ error: 'too_many_streams' }), {
+          status: 503,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
           sseClients.add(controller)
@@ -400,8 +426,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -442,8 +469,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -465,7 +493,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             })
             send('done', {})
           } catch (err) {
-            send('error', { message: err instanceof Error ? err.message : String(err) })
+            send('error', safeError(err, { verbose: PROFILE === 'local' }).body)
           } finally {
             try { controller.close() } catch { /* already closed */ }
           }
@@ -491,8 +519,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -529,8 +558,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -584,8 +614,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
@@ -723,7 +754,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        return new Response(JSON.stringify({ ok: false, error: String(err) }), {
+        return new Response(JSON.stringify({ ok: false, ...safeError(err, { verbose: PROFILE === 'local' }).body }), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -816,8 +847,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -867,8 +899,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -912,8 +945,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
@@ -932,8 +966,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -950,8 +985,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -967,8 +1003,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -1034,9 +1071,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        console.error('[/api/data error]', message)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error('[/api/data]', safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -1083,6 +1120,17 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       return new Response(res.body, { status: res.status, headers })
     }
 
+    // Owner-only (enforced by isAdminPath in the gate above): the security event log.
+    if (url.pathname === '/api/iam/audit' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const limit = parseInt(url.searchParams.get('limit') ?? '200', 10)
+      const events = await listAudit({ limit: Number.isFinite(limit) ? limit : 200 })
+      return new Response(JSON.stringify({ events }), {
+        status: 200,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (url.pathname === '/api/iam/status' && req.method === 'GET') {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleIamStatus } = await import('./iam-handlers')
@@ -1107,6 +1155,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       // A successful login clears this IP's login bucket, so someone who mistyped twice
       // before getting it right is not left one attempt away from a block.
       const res = await handleIamLogin(req, {
+        ip: clientIp,
         onSuccess: () => limiter.reset(`ip:${clientIp}:${url.pathname}`),
       })
       const headers = new Headers(res.headers)
@@ -1417,8 +1466,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -1636,12 +1686,12 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
 
 try {
 // PORT (47291) is always the api + mcp endpoint.
-Bun.serve<WSData>({ port: PORT, idleTimeout: 60, websocket: _wsHandlers, fetch: handleRequest })
+Bun.serve<WSData>({ port: PORT, idleTimeout: 60, maxRequestBodySize: LIMITS.ingestBodyBytes, websocket: _wsHandlers, fetch: handleRequest })
 // Binary mode also serves the web dashboard on WEB_PORT (47292) — that's the URL you open.
 // Same handler → the SPA's same-origin `/api/*` calls resolve against 47292 and just work,
 // while 47291 stays the dedicated api + mcp port.
 if (SERVE_STATIC) {
-  Bun.serve<WSData>({ port: WEB_PORT, idleTimeout: 60, websocket: _wsHandlers, fetch: handleRequest })
+  Bun.serve<WSData>({ port: WEB_PORT, idleTimeout: 60, maxRequestBodySize: LIMITS.ingestBodyBytes, websocket: _wsHandlers, fetch: handleRequest })
 }
 
 const _ESC = '\x1b'
