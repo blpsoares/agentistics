@@ -19,14 +19,15 @@ import { PROJECTS_DIR } from './config'
 import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
-import { handleLogout, handleSession, getPrincipal } from './auth'
+import { handleLogout, handleSession, getPrincipal, getPrincipalSession, makePrincipalSessionCookieHeader, SESSION_REFRESH_MS } from './auth'
 import { routeCapability, capabilityDenied } from './capability-guard'
 import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
 import { resolveClientIp } from './client-ip'
 import { corsHeadersFor } from './cors'
 import { csrfVerdict } from './csrf'
 import { securityHeaders } from './security-headers'
-import { TRUST_PROXY, ALLOWED_ORIGINS, TEAM_TLS } from './config'
+import { TRUST_PROXY, ALLOWED_ORIGINS, TEAM_TLS, TEAM_SESSION_SECRET_ENV, setResolvedSessionSecret } from './config'
+import { validateSecret, ensureSessionSecret } from './secret-store'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -101,6 +102,26 @@ if (TEAM_CENTRAL) {
 // IAM bootstrap init (central only): ensure indexes + Default team, backfill teamId, and —
 // when no owner exists yet — mint a one-time setup token and print it to the logs.
 if (TEAM_CENTRAL) {
+  // Resolve the session-signing secret before anything can mint a cookie. A bad explicit value
+  // is fatal on purpose: booting with a session key equal to the shared dashboard password is
+  // worse than not booting, because every account becomes forgeable and nobody notices.
+  if (TEAM_SESSION_SECRET_ENV) {
+    const v = validateSecret(TEAM_SESSION_SECRET_ENV, TEAM_PASSWORD)
+    if (!v.ok) {
+      console.error(`[server] refusing to start: AGENTISTICS_TEAM_SESSION_SECRET is invalid (${v.reason}).`)
+      console.error('[server] generate one with: openssl rand -hex 32')
+      process.exit(1)
+    }
+    setResolvedSessionSecret(TEAM_SESSION_SECRET_ENV)
+  } else {
+    try {
+      setResolvedSessionSecret(await ensureSessionSecret())
+      console.log('[server] using the persisted random session secret (set AGENTISTICS_TEAM_SESSION_SECRET to pin your own).')
+    } catch {
+      console.warn('[server] could not persist a session secret (DB unreachable) — using a per-process one; sessions will not survive a restart.')
+    }
+  }
+
   void (async () => {
     try {
       const { ensureAccountIndexes, hasAnyOwner, purgeUnknownTeamsFromAccounts } = await import('./accounts')
@@ -237,8 +258,22 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
   for (const [k, v] of Object.entries(securityHeaders({ tls: TEAM_TLS, dev: !SERVE_STATIC, isApi }))) {
     res.headers.set(k, v)
   }
+  // A sliding-session refresh recorded by the auth gate. Appended (not set) so a route that
+  // issues its own cookie — login, logout — is never overwritten.
+  const refreshed = refreshedCookies.get(req)
+  if (refreshed) {
+    refreshedCookies.delete(req)
+    if (!res.headers.has('Set-Cookie')) res.headers.append('Set-Cookie', refreshed)
+  }
   return res
 }
+
+/**
+ * Per-request channel for a sliding-session cookie refresh: the auth gate decides, the outer
+ * wrapper attaches. Keyed by the Request object (WeakMap) so concurrent requests never share
+ * state and nothing leaks if a handler throws.
+ */
+const refreshedCookies = new WeakMap<Request, string>()
 
 async function handleRequestInner(req: Request, server: Server<WSData>): Promise<Response | undefined> {
     const url = new URL(req.url)
@@ -339,13 +374,18 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // Static assets are always served (the SPA + login UI must load without auth).
     // ---------------------------------------------------------------------------
     if (TEAM_CENTRAL && url.pathname.startsWith('/api/') && !AUTH_PUBLIC.has(url.pathname)) {
-      const principal = await getPrincipal(req)
-      if (!principal) {
+      const session = await getPrincipalSession(req)
+      if (!session) {
         return new Response(JSON.stringify({ error: 'auth required' }), { status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
       }
       // Admin routes require the owner.
-      if (isAdminPath(url.pathname) && principal.role !== 'owner') {
+      if (isAdminPath(url.pathname) && session.principal.role !== 'owner') {
         return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+      }
+      // Sliding session: reissue the cookie periodically so an active user is never logged out
+      // at the idle wall, while an abandoned session still dies IDLE_TIMEOUT_MS after last use.
+      if (Date.now() - session.issuedAtMs > SESSION_REFRESH_MS) {
+        refreshedCookies.set(req, makePrincipalSessionCookieHeader(session.principal.accountId, session.sessionVersion))
       }
     }
 

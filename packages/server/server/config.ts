@@ -1,4 +1,5 @@
 import { join } from 'path'
+import { randomBytes } from 'node:crypto'
 import { loadEnvConfig } from './env-config'
 
 loadEnvConfig()
@@ -105,16 +106,20 @@ export const ALLOWED_ORIGINS = (process.env.AGENTISTICS_ALLOWED_ORIGINS ?? '')
 // ---------------------------------------------------------------------------
 // Phase 3 — auth gate. When AGENTISTICS_TEAM_PASSWORD is set, the central
 // dashboard requires a valid session cookie to access all /api/* routes except
-// the public allowlist. TEAM_SESSION_SECRET defaults to the password itself.
-// TEAM_TLS=1 adds the Secure flag to the session cookie.
+// the public allowlist. TEAM_TLS=1 adds the Secure flag to the session cookie.
 // ---------------------------------------------------------------------------
 export const TEAM_PASSWORD = process.env.AGENTISTICS_TEAM_PASSWORD || undefined
-// SECURITY NOTE: When AGENTISTICS_TEAM_SESSION_SECRET is unset, it falls back to
-// TEAM_PASSWORD. This means a password leak also enables session-cookie forgery,
-// since the HMAC key equals the password. Operators should always set a separate
-// AGENTISTICS_TEAM_SESSION_SECRET (e.g. `openssl rand -hex 32`) to isolate the two
-// secrets, especially when the password is shared with team members.
-export const TEAM_SESSION_SECRET = process.env.AGENTISTICS_TEAM_SESSION_SECRET || TEAM_PASSWORD || ''
+// SECURITY: the session secret NEVER falls back to the password. It used to, which meant a
+// leaked or shared password also let anyone forge a session cookie for any account, since the
+// HMAC key equalled the password. Resolution order (see secret-store.ts + the boot block in
+// index.ts): the env var if set and valid → a random secret persisted in Mongo (central) → a
+// random per-process secret (non-central; sessions simply do not survive a restart).
+export const TEAM_SESSION_SECRET_ENV = process.env.AGENTISTICS_TEAM_SESSION_SECRET || undefined
+export let TEAM_SESSION_SECRET = TEAM_SESSION_SECRET_ENV ?? randomBytes(32).toString('hex')
+/** Called once at boot by index.ts. `export let` gives importers a live binding. */
+export function setResolvedSessionSecret(value: string): void {
+  TEAM_SESSION_SECRET = value
+}
 export const TEAM_TLS = process.env.AGENTISTICS_TEAM_TLS === '1'
 
 // ---------------------------------------------------------------------------

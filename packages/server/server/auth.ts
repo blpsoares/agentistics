@@ -26,9 +26,33 @@ import type { Principal } from './iam-types'
 // Constants
 // ---------------------------------------------------------------------------
 
-const COOKIE_NAME = 'agentistics_session'
-const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+const COOKIE_BASE = 'agentistics_session'
+const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000 // absolute cap
+/** Sliding window: a session unused for this long is dead even inside its absolute lifetime. */
+export const IDLE_TIMEOUT_MS = 12 * 60 * 60 * 1000
+/** Reissue the cookie at most this often, so an active user never hits the idle wall. */
+export const SESSION_REFRESH_MS = 15 * 60 * 1000
 const MAX_AGE_SECONDS = SESSION_DURATION_MS / 1000
+
+/**
+ * `__Host-` requires Secure + Path=/ + no Domain. It stops a sibling subdomain (or a network
+ * attacker over plain HTTP) from overwriting the session cookie — the strongest integrity
+ * guarantee available for a cookie. Only usable when the cookie is Secure, so a plain-HTTP
+ * local instance keeps the bare name.
+ */
+export function cookieName(secure: boolean): string {
+  return secure ? `__Host-${COOKIE_BASE}` : COOKIE_BASE
+}
+
+function secureCookies(): boolean {
+  return TEAM_TLS || CAPS.requireSecureCookies
+}
+
+/** Read the session cookie under either name — flipping TLS on must not log everyone out. */
+function readSessionCookie(req: Request): string | undefined {
+  const cookies = parseCookies(req.headers.get('cookie'))
+  return cookies[cookieName(true)] ?? cookies[cookieName(false)]
+}
 
 // Content-Type only — callers spread CORS_HEADERS from index.ts.
 const JSON_CT = { 'Content-Type': 'application/json' } as const
@@ -80,16 +104,18 @@ export function verifySession(
 export interface PrincipalCookie {
   accountId: string
   sessionVersion: number
+  issuedAtMs: number
 }
 
-/** Sign a principal session. The signed payload is `expiryMs.accountId.sessionVersion`. */
+/** Sign a principal session. The signed payload is `expiryMs.accountId.sessionVersion.issuedAt`. */
 export function signPrincipalSession(
   expiryMs: number,
   accountId: string,
   sessionVersion: number,
   secret: string,
+  issuedAtMs: number,
 ): string {
-  const payload = `${expiryMs}.${accountId}.${sessionVersion}`
+  const payload = `${expiryMs}.${accountId}.${sessionVersion}.${issuedAtMs}`
   const mac = createHmac('sha256', secret).update(payload).digest('hex')
   return `${payload}.${mac}`
 }
@@ -113,13 +139,17 @@ export function verifyPrincipalSession(
   const expected = createHmac('sha256', secret).update(payload).digest('hex')
   if (!constantTimeEqual(mac, expected)) return null
   const parts = payload.split('.')
-  if (parts.length !== 3) return null
+  if (parts.length !== 4) return null
   const expiry = parseInt(parts[0]!, 10)
   const accountId = parts[1]!
   const sessionVersion = parseInt(parts[2]!, 10)
+  const issuedAtMs = parseInt(parts[3]!, 10)
   if (isNaN(expiry) || expiry <= nowMs) return null
-  if (!accountId || isNaN(sessionVersion)) return null
-  return { accountId, sessionVersion }
+  if (!accountId || isNaN(sessionVersion) || isNaN(issuedAtMs)) return null
+  // Idle timeout: a cookie last reissued more than IDLE_TIMEOUT_MS ago is dead even though
+  // its absolute expiry is still days away. Active use refreshes it (see SESSION_REFRESH_MS).
+  if (nowMs - issuedAtMs > IDLE_TIMEOUT_MS) return null
+  return { accountId, sessionVersion, issuedAtMs }
 }
 
 /**
@@ -157,8 +187,12 @@ export function constantTimeEqual(a: string, b: string): boolean {
 // ---------------------------------------------------------------------------
 
 function makeCookieHeader(value: string, maxAge: number): string {
-  const secure = TEAM_TLS ? '; Secure' : ''
-  return `${COOKIE_NAME}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure}`
+  const secure = secureCookies()
+  // SameSite=Strict: the dashboard is never legitimately entered by a cross-site POST, and
+  // Strict is what the OWASP cheat sheet recommends for an internal tool / admin panel.
+  const flags = [`${cookieName(secure)}=${value}`, 'HttpOnly', 'SameSite=Strict', 'Path=/', `Max-Age=${maxAge}`]
+  if (secure) flags.push('Secure')
+  return flags.join('; ')
 }
 
 // ---------------------------------------------------------------------------
@@ -264,9 +298,7 @@ export function handleSession(req: Request): Response {
  */
 export function isAuthed(req: Request): boolean {
   if (!TEAM_PASSWORD) return true
-  const cookieHeader = req.headers.get('cookie')
-  const cookies = parseCookies(cookieHeader)
-  return verifySession(cookies[COOKIE_NAME], TEAM_SESSION_SECRET, Date.now())
+  return verifySession(readSessionCookie(req), TEAM_SESSION_SECRET, Date.now())
 }
 
 /**
@@ -276,9 +308,7 @@ export function isAuthed(req: Request): boolean {
  * when TEAM_PASSWORD is unset (no-password deployments).
  */
 export function hasValidSession(req: Request): boolean {
-  const cookieHeader = req.headers.get('cookie')
-  const cookies = parseCookies(cookieHeader)
-  return verifySession(cookies[COOKIE_NAME], TEAM_SESSION_SECRET, Date.now())
+  return verifySession(readSessionCookie(req), TEAM_SESSION_SECRET, Date.now())
 }
 
 /**
@@ -288,13 +318,28 @@ export function hasValidSession(req: Request): boolean {
  * Role + memberships are read FRESH from the DB so permission changes take effect immediately.
  */
 export async function getPrincipal(req: Request): Promise<Principal | null> {
-  const cookies = parseCookies(req.headers.get('cookie'))
-  const parsed = verifyPrincipalSession(cookies[COOKIE_NAME], TEAM_SESSION_SECRET, Date.now())
+  return (await getPrincipalSession(req))?.principal ?? null
+}
+
+/**
+ * Like getPrincipal, but also reports the cookie's issue time and the account's session
+ * generation — everything the gate needs to decide on a sliding refresh. Kept separate so
+ * `Principal` stays a pure authorization identity (accountId + role + memberships) and every
+ * authz test fixture can keep constructing one without session bookkeeping.
+ */
+export async function getPrincipalSession(
+  req: Request,
+): Promise<{ principal: Principal; issuedAtMs: number; sessionVersion: number } | null> {
+  const parsed = verifyPrincipalSession(readSessionCookie(req), TEAM_SESSION_SECRET, Date.now())
   if (!parsed) return null
   const account = await getAccount(parsed.accountId)
   if (!account) return null
   if (account.sessionVersion !== parsed.sessionVersion) return null
-  return { accountId: account._id, role: account.role, memberships: account.memberships }
+  return {
+    principal: { accountId: account._id, role: account.role, memberships: account.memberships },
+    issuedAtMs: parsed.issuedAtMs,
+    sessionVersion: account.sessionVersion,
+  }
 }
 
 /**
@@ -302,7 +347,7 @@ export async function getPrincipal(req: Request): Promise<Principal | null> {
  * Reuses the module's cookie internals so login/bootstrap flows never re-implement them.
  */
 export function makePrincipalSessionCookieHeader(accountId: string, sessionVersion: number): string {
-  const expiryMs = Date.now() + SESSION_DURATION_MS
-  const value = signPrincipalSession(expiryMs, accountId, sessionVersion, TEAM_SESSION_SECRET)
+  const now = Date.now()
+  const value = signPrincipalSession(now + SESSION_DURATION_MS, accountId, sessionVersion, TEAM_SESSION_SECRET, now)
   return makeCookieHeader(value, MAX_AGE_SECONDS)
 }
