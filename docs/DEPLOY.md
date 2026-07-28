@@ -298,10 +298,12 @@ the deployment runbook and go-live checklist are **[docs/exposure.md](exposure.m
 | **Error hygiene** — clients get a code plus a correlation ref; the real message goes to the log only | `server/errors.ts` |
 | **Container** — uid 10001, read-only root filesystem, `cap_drop: ALL`, `no-new-privileges`, loopback bind, Mongo unpublished. Host harness dirs are mounted only when `AGENTISTICS_CENTRAL_USER` is set | `Dockerfile`, `docker-compose*.yml` |
 
-Before exposing anything, run:
+Before exposing anything, run the preflight **inside the container**, where `central.env` is the
+live environment and the database is reachable:
 
 ```bash
-agentop doctor --exposed
+./central.sh doctor --exposed        # repo checkout
+agentop central doctor --exposed     # standalone binary
 ```
 
 It prints the nine-point checklist and exits non-zero on any failure. A check that could not be
