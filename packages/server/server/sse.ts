@@ -2,7 +2,8 @@ import { join } from 'path'
 import { spawn } from 'child_process'
 import { stat } from 'fs/promises'
 import chokidar from 'chokidar'
-import { SESSION_META_DIR, PROJECTS_DIR, STATS_CACHE_FILE, PORT, CODEX_SESSIONS_DIR, GEMINI_DIR, COPILOT_DIR, ANTIGRAVITY_BRAIN_DIR, ANTIGRAVITY_CONVERSATIONS_DIR } from './config'
+import { SESSION_META_DIR, PROJECTS_DIR, STATS_CACHE_FILE, PORT, TEAM_CENTRAL, CODEX_SESSIONS_DIR, GEMINI_DIR, COPILOT_DIR, ANTIGRAVITY_BRAIN_DIR, ANTIGRAVITY_CONVERSATIONS_DIR } from './config'
+import { centralManifest, centralHtml } from './central-branding'
 import { invalidateCache } from './data'
 import { mirrorFile } from './archive'
 import { getEnabledAdapters } from './adapters/types'
@@ -193,12 +194,25 @@ export function serveStatic(pathname: string): Response | null {
   if (!SERVE_STATIC) return null
   const asset = embeddedDist[pathname]
   if (!asset) return null
-  const body =
+  let body =
     asset.encoding === 'base64'
       ? Buffer.from(asset.content, 'base64')
       : asset.content
-  // Service worker and manifest must not be cached aggressively
-  const isSwOrManifest = pathname === '/sw.js' || pathname === '/manifest.webmanifest' || pathname === '/registerSW.js'
+  // A central serves the same bundle as a machine, so its installed PWA was identical in the
+  // dock — same icon, same name. Re-brand the two files the browser reads for that identity as
+  // they go out; the mode is only known at runtime, so it cannot be baked into the build.
+  if (TEAM_CENTRAL && (pathname === '/manifest.webmanifest' || pathname === '/index.html')) {
+    // Read through WHICHEVER encoding the embedder chose. `.webmanifest` was not on its text-
+    // extension list, so it arrived here base64-encoded and a `typeof body === 'string'` guard
+    // skipped the rewrite in silence — the central installed with the machine's icon anyway.
+    const text = typeof body === 'string' ? body : body.toString('utf-8')
+    body = pathname === '/index.html' ? centralHtml(text) : centralManifest(text)
+  }
+  // Service worker, manifest and the app shell must not be cached aggressively — the shell
+  // carries the hashed asset URLs (and now the central branding), so a year-long cache would
+  // pin a rebuilt app to its old bundle.
+  const isSwOrManifest = pathname === '/sw.js' || pathname === '/manifest.webmanifest'
+    || pathname === '/registerSW.js' || pathname === '/index.html'
   const cacheControl = isSwOrManifest ? 'no-cache, no-store, must-revalidate' : 'public, max-age=31536000'
   const extraHeaders: Record<string, string> = pathname === '/sw.js'
     ? { 'Service-Worker-Allowed': '/' }

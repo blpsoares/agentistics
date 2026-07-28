@@ -564,6 +564,16 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
 - **Per-harness pages live at `/h/:harness`** via the generic `HarnessPage` — never create one page per harness. Harness data-source info is shown via the page's "Data & sources" tab (powered by `HarnessInfoPanel` + `HARNESS_INFO` in `lib/harness.ts`); do not add per-harness info icons or modals elsewhere.
 - **A harness appears in the selector and Compare page** only when `AppData.harnesses` includes it (i.e., it contributes at least one real session). Gemini bootstrap-only stub files do not count.
 - **PWA**: `vite-plugin-pwa` is configured in `packages/web/vite.config.ts` with `devOptions: { enabled: true }`. Icons are in `packages/web/public/icons/`. The Install tab in PreferencesModal handles both web PWA install and desktop app download.
+- **A central installs as its own app** — same bundle, so the identity has to be applied when the
+  files are SERVED, not at build time (`TEAM_CENTRAL` is a runtime mode). `serveStatic` runs
+  `centralManifest()` / `centralHtml()` from `central-branding.ts` (pure, total — bad input is
+  returned untouched) over `/manifest.webmanifest` and `/index.html`, swapping in the **teal**
+  icon set, the name "Agentistics Central" and the teal `theme_color`. Regenerate the teal assets
+  with `packages/web/scripts/gen-central-icons.py` if the artwork changes — hue, not a badge: at
+  32px in a dock a corner badge is invisible. Both files are served `no-store`; **the app shell
+  must never get the year-long immutable cache** the hashed assets get, or a rebuild is pinned to
+  its old bundle. Anything the server rewrites must also be embedded as TEXT — `.webmanifest` was
+  missing from `embed-dist.ts`'s `TEXT_EXTS`, arrived base64 and skipped the rewrite in silence.
 - **Mobile / responsive UI** — the whole dashboard is responsive; gate mobile-only branches on the `useIsMobile()` hook (`packages/web/src/hooks/useIsMobile.ts`, `MOBILE_BREAKPOINT = 768`). Conventions:
   - **Sticky header** holds everything needed for interaction. On mobile the header shows only the logo; the lang/theme/export/settings/health/live/refresh controls are **not** in the top row — they live in the bottom-nav "More" sheet (see below). Desktop keeps the full action row.
   - **`MobileBottomNav`** (in `App.tsx`) is the only mobile chrome: 4 primary tabs (Home/Costs/Projects/Tools) + a **"More" bottom sheet rendered as a 3-column grid of square tiles** (Custom / Export / Compare when >1 harness, plus the moved actions: Live toggle w/ interval badge, Refresh, Settings, Warnings w/ issue count). The More button shows a dot when health warnings exist. The sheet slides in via a `transform` transition. Do not move these actions back into the top header on mobile, and keep the tiles compact (no square `aspect-ratio`).

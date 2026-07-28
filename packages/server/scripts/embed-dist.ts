@@ -46,7 +46,7 @@ function getContentType(filename: string): string {
 
 const TEXT_EXTS = new Set([
   '.html', '.js', '.mjs', '.cjs', '.css', '.json', '.svg',
-  '.txt', '.xml', '.map',
+  '.txt', '.xml', '.map', '.webmanifest',
 ])
 
 function isText(filename: string): boolean {

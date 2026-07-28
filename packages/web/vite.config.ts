@@ -12,7 +12,8 @@ export default defineConfig({
       // Service worker disabled in dev: it cached stale bundles during iteration,
       // making code changes appear not to take effect. Still enabled for prod builds.
       devOptions: { enabled: false, suppressWarnings: true, type: 'module' },
-      includeAssets: ['favicon.ico', 'minimalistLogo.png', 'icons/*.png'],
+      // `icons/*.png` covers the central variants too; the central favicon needs naming.
+      includeAssets: ['favicon.ico', 'favicon-central.ico', 'minimalistLogo.png', 'icons/*.png'],
       manifest: {
         name: 'Agentistics',
         short_name: 'Agentistics',
