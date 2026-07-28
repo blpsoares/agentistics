@@ -12,7 +12,8 @@
 // which sessions are visible — the page feeds it `/api/data`, which the central already scopes
 // per signed-in principal.
 
-import { calcCost, sessionCostUSD as sessionCostByModel, type HarnessId, type SessionMeta } from '@agentistics/core'
+import { calcCost, sessionCostUSD as sessionCostByModel, type HarnessId, type SessionMeta, type StatsCache } from '@agentistics/core'
+import { format, parseISO } from 'date-fns'
 
 /** How rows are grouped: one row per person (`user`) or one row per machine (`memberId`). */
 export type MemberGroupBy = 'user' | 'machine'
@@ -239,4 +240,98 @@ export function aggregateMemberMetrics(
 
   rows.sort((a, b) => (b.sessions - a.sessions) || (b.costUSD - a.costUSD) || a.key.localeCompare(b.key))
   return rows
+}
+
+/**
+ * Replace the session-summed totals with the member's / machine's authoritative statsCache.
+ *
+ * The session documents are only what has not been pruned — Claude Code deletes transcripts past
+ * `cleanupPeriodDays`, while `stats-cache.json` is the running aggregate it never prunes. Measured
+ * on live central data, one person's two machines held $17,981.82 across 783 sessions of history
+ * against $11,163.39 across the 255 session documents that survived: this page reported 62% of the
+ * money and 33% of the sessions, and disagreed with the dashboard for the same person.
+ *
+ * `caches` is keyed to match `row.key` — `userStatsCaches` for `groupBy: 'user'`,
+ * `machineStatsCaches` for `'machine'`. Pass `undefined` when a filter the caches cannot represent
+ * is active (project / repo / tag / model / date / harness): they are all-time Claude-only totals,
+ * so under such a filter the per-session sum is the only source that can answer at all.
+ *
+ * Mirrors `useDerivedStats` so the pages agree: a non-Claude session adds its full cost, tokens and
+ * count (statsCache is Claude-only, so that spend is in NO cache), while a Claude session on a day
+ * the cache has not computed yet adds only its COUNT — its money is already inside `modelUsage`.
+ * A row with no cache is returned untouched; its sessions are all the history there is.
+ *
+ * Only the totals are overlaid. `topProject` / `topModel` / `topHarness` and the activity window
+ * stay session-derived — the cache has no such breakdown, so those keep describing the surviving
+ * sessions rather than the whole history.
+ */
+export function withStatsCacheTotals(
+  rows: MemberMetrics[],
+  sessions: SessionMeta[],
+  groupBy: MemberGroupBy,
+  caches: Record<string, StatsCache> | undefined,
+): MemberMetrics[] {
+  if (!caches) return rows
+
+  const cachedDays = new Map<string, Set<string>>()
+  for (const [key, c] of Object.entries(caches)) {
+    cachedDays.set(key, new Set((c.dailyActivity ?? []).map(d => d.date)))
+  }
+
+  interface Extra {
+    cost: number; input: number; output: number; cacheRead: number; cacheWrite: number
+    nonClaudeSessions: number; gapSessions: number
+  }
+  const extra = new Map<string, Extra>()
+  for (const s of sessions) {
+    const user = (s.user ?? '').trim()
+    const memberId = (s.memberId ?? '').trim()
+    const key = groupBy === 'machine' ? (memberId || user || LOCAL_KEY) : (user || LOCAL_KEY)
+    if (!caches[key]) continue
+    let e = extra.get(key)
+    if (!e) {
+      e = { cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, nonClaudeSessions: 0, gapSessions: 0 }
+      extra.set(key, e)
+    }
+    if ((s.harness ?? 'claude') !== 'claude') {
+      e.cost += sessionCostUSD(s)
+      e.input += s.input_tokens ?? 0
+      e.output += s.output_tokens ?? 0
+      e.cacheRead += s.cache_read_input_tokens ?? 0
+      e.cacheWrite += s.cache_creation_input_tokens ?? 0
+      e.nonClaudeSessions += 1
+    } else if (s.start_time && !cachedDays.get(key)!.has(format(parseISO(s.start_time), 'yyyy-MM-dd'))) {
+      e.gapSessions += 1
+    }
+  }
+
+  return rows.map(row => {
+    const c = caches[row.key]
+    if (!c) return row
+    const e = extra.get(row.key)
+    let cost = 0, input = 0, output = 0, cacheRead = 0, cacheWrite = 0
+    for (const [model, u] of Object.entries(c.modelUsage ?? {})) {
+      cost += calcCost(u, model)
+      input += u.inputTokens ?? 0
+      output += u.outputTokens ?? 0
+      cacheRead += u.cacheReadInputTokens ?? 0
+      cacheWrite += u.cacheCreationInputTokens ?? 0
+    }
+    const cacheSessions = (c.dailyActivity ?? []).reduce((n, d) => n + (d.sessionCount ?? 0), 0)
+    cost += e?.cost ?? 0
+    input += e?.input ?? 0
+    output += e?.output ?? 0
+    cacheRead += e?.cacheRead ?? 0
+    cacheWrite += e?.cacheWrite ?? 0
+    return {
+      ...row,
+      sessions: cacheSessions + (e?.gapSessions ?? 0) + (e?.nonClaudeSessions ?? 0),
+      costUSD: cost,
+      inputTokens: input,
+      outputTokens: output,
+      cacheReadTokens: cacheRead,
+      cacheWriteTokens: cacheWrite,
+      totalTokens: input + output + cacheRead + cacheWrite,
+    }
+  }).sort((a, b) => (b.sessions - a.sessions) || (b.costUSD - a.costUSD) || a.key.localeCompare(b.key))
 }

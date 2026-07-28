@@ -6,7 +6,8 @@ import { useOutletContext } from 'react-router-dom'
 import { Users, Search, Monitor, User as UserIcon, GitBranch, FolderOpen, Cpu, Terminal } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import { fmt, fmtCost, formatModel, repoShortName, type HarnessId } from '@agentistics/core'
-import { aggregateMemberMetrics, LOCAL_KEY, type MemberGroupBy, type MemberMetrics } from '../lib/member-metrics'
+import { aggregateMemberMetrics, withStatsCacheTotals, LOCAL_KEY, type MemberGroupBy, type MemberMetrics } from '../lib/member-metrics'
+import { cacheTotalsUsable } from '../lib/topUsage'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { Section } from '../components/Section'
 import { SortControl } from '../components/SortControl'
@@ -23,7 +24,7 @@ type MemberSortKey = 'cost' | 'sessions' | 'tokens' | 'lastActive' | 'name'
  */
 export default function MembersPage() {
   const ctx = useOutletContext<AppContext>()
-  const { derived, currency, brlRate, lang, machines } = ctx
+  const { derived, currency, brlRate, lang, machines, data, filters } = ctx
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
 
@@ -32,10 +33,20 @@ export default function MembersPage() {
   const [sortKey, setSortKey] = useState<MemberSortKey>('cost')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
-  const rows = useMemo(
-    () => aggregateMemberMetrics(derived.filteredSessions, groupBy),
-    [derived.filteredSessions, groupBy],
-  )
+  // Totals come from the per-member/-machine statsCaches, not from the sessions: the caches are the
+  // history, the session documents only the part Claude Code has not pruned. Summing sessions made
+  // this page report a person at R$58.7k against the dashboard's R$93.6k — and the dashboard was
+  // right. Under a filter the caches cannot represent, `undefined` keeps the per-session sum.
+  const rows = useMemo(() => {
+    const base = aggregateMemberMetrics(derived.filteredSessions, groupBy)
+    const caches = groupBy === 'machine' ? data?.machineStatsCaches : data?.userStatsCaches
+    return withStatsCacheTotals(
+      base,
+      derived.filteredSessions,
+      groupBy,
+      cacheTotalsUsable(filters) ? caches : undefined,
+    )
+  }, [derived.filteredSessions, groupBy, data?.machineStatsCaches, data?.userStatsCaches, filters])
 
   /** memberId → machine display name (the central names machines on the minted token). */
   const machineName = useMemo(() => {
