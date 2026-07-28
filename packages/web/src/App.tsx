@@ -669,6 +669,7 @@ function MobileBottomNav({
     ...(isCentral
       ? [{ key: 'members', label: pt ? 'Membros' : 'Members', icon: Users, onClick: () => { closeSheet(); navigate('/members') }, active: location.pathname.startsWith('/members') } as Tile]
       : []),
+    { key: 'top', label: pt ? 'Top' : 'Top', icon: Trophy, onClick: () => { closeSheet(); navigate('/top') }, active: location.pathname.startsWith('/top') },
     { key: 'tags', label: 'Tags', icon: TagIcon, onClick: () => { closeSheet(); navigate('/tags') }, active: location.pathname.startsWith('/tags') },
     { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { closeSheet(); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
     { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { closeSheet(); navigate('/export') }, active: location.pathname.startsWith('/export') },
@@ -962,6 +963,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
     { to: '/',          labelPt: 'Home',         labelEn: 'Home',         icon: <Home size={17} /> },
     { to: '/sessions', labelPt: 'Sessões', labelEn: 'Sessions', icon: <Clock size={17} /> },
     { to: '/costs',     labelPt: 'Custos',       labelEn: 'Costs',        icon: <DollarSign size={17} /> },
+    { to: '/top',       labelPt: 'Top de uso',   labelEn: 'Top usage',    icon: <Trophy size={17} /> },
     { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={17} /> },
     { to: '/repositories', labelPt: 'Repositórios', labelEn: 'Repositories', icon: <GitBranch size={17} /> },
     // Members/machines only exist on a central — a solo machine has exactly one of each.
