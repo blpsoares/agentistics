@@ -173,12 +173,10 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
           valueSub={sessionTime(longestSession, pt ? 'pt' : 'en').activeLabel}
           detail={(() => {
             const t = sessionTime(longestSession, pt ? 'pt' : 'en')
-            // Both quantities named AND explained on the card. Showing "87h 33m" beside
-            // "105h 45m decorrido" with no word on the first was the actual complaint.
-            return [
-              `${t.activeExplain}`,
-              `${t.elapsed} ${t.elapsedLabel} — ${t.elapsedExplain}`,
-            ]
+            // Both quantities NAMED (valueSub says "active", this says "elapsed"); the
+            // definitions stay in the value tooltip — spelled out here they wrap and blow up
+            // the card's height next to the other highlights.
+            return [`${t.elapsed} ${t.elapsedLabel}`]
           })()}
           comparison={multiplier(sessionRank(longestSession), avgDuration)}
           prompt={truncate(sessionLabel(longestSession), 90)}

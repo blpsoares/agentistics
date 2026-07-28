@@ -103,17 +103,13 @@ export default function HomePage() {
           sub={d.longestSession ? (() => {
             const t = sessionTime(d.longestSession, lang)
             const msgs = (d.longestSession!.user_message_count ?? 0) + (d.longestSession!.assistant_message_count ?? 0)
-            // Both figures NAMED and EXPLAINED on the card itself. The headline used to sit next
-            // to "105h decorrido" with no word of its own, so neither number could be identified.
-            const lines = [
-              `${t.activeLabel} — ${t.activeExplain}`,
-              `${t.elapsed} ${t.elapsedLabel} — ${t.elapsedExplain}`,
-              `${msgs} ${lang === 'pt' ? 'mensagens' : 'messages'}`
-                + (filters.projects.length === 0 && d.longestSession!.project_path
-                  ? ` · ${formatProjectName(d.longestSession!.project_path)}`
-                  : ''),
-            ]
-            return lines.join('\n')
+            // Both figures are NAMED here ("active" / "elapsed") but NOT explained: the full
+            // definition lives in the ⓘ modal and the value tooltip. Spelling it out on the card
+            // pushed this one KPI to three wrapped lines and stretched the whole grid row.
+            return `${t.activeLabel} · ${t.elapsed} ${t.elapsedLabel} · ${msgs} ${lang === 'pt' ? 'mensagens' : 'messages'}`
+              + (filters.projects.length === 0 && d.longestSession!.project_path
+                ? ` · ${formatProjectName(d.longestSession!.project_path)}`
+                : '')
           })() : ''}
           icon={<Clock size={15} />} accent="var(--accent-purple)" info={infoItems[4]} onInfoClick={() => setInfoModalIndex(4)} />
       )
