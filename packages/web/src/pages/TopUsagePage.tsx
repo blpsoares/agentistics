@@ -106,49 +106,77 @@ export default function TopUsagePage() {
         {dimensions.map(dim => {
           const result = rankTop(sessions, dim.id, metric)
           const Icon = dim.icon
+          const totalLabel =
+            metric === 'cost' ? fmtCost(result.total, currency, brlRate)
+            : metric === 'tokens' ? `${fmt(result.total)} tok`
+            : `${fmt(result.total)}`
           return (
-            <Section key={dim.id} title={<><Icon size={14} /> {pt ? dim.pt : dim.en}</>}>
+            <Section
+              key={dim.id}
+              title={<><Icon size={14} /> {pt ? dim.pt : dim.en}</>}
+              action={
+                <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
+                  {result.distinct > 0 && <>{result.distinct} · </>}{totalLabel}
+                </span>
+              }
+            >
               {result.entries.length === 0 ? (
                 <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>
                   {pt ? 'Nada registrado nesta dimensão.' : 'Nothing recorded in this dimension.'}
                 </div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {result.entries.map((e, i) => {
                     const share = shareOf(e, result, metric)
                     const accent = colourFor(dim.id, e.key) ?? MEDALS[i] ?? 'var(--text-tertiary)'
+                    const lead = i === 0
                     return (
-                      <div key={e.key}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                      // The row IS the bar: the fill sits behind the text at the entry's share of
+                      // the dimension. A separate track below each row said the same thing twice and
+                      // doubled the vertical space, which is what made the first version cramped.
+                      <div key={e.key} style={{ position: 'relative', borderRadius: 8, overflow: 'hidden' }}>
+                        <div aria-hidden style={{
+                          position: 'absolute', inset: 0, width: `${Math.max(share * 100, 1.5)}%`,
+                          background: `color-mix(in srgb, ${accent} ${lead ? 20 : 12}%, transparent)`,
+                          borderRadius: 8, transition: 'width 0.25s ease',
+                        }} />
+                        <div style={{
+                          position: 'relative', display: 'flex', alignItems: 'center', gap: 9,
+                          padding: lead ? '9px 10px' : '7px 10px', minWidth: 0,
+                        }}>
+                          {/* Rank reads as a numeral in the medal's colour rather than a filled
+                              disc — three saturated circles per card was the loudest thing on the
+                              page and the least informative. */}
                           <span style={{
-                            flexShrink: 0, width: 20, height: 20, borderRadius: '50%',
-                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                            fontSize: 11, fontWeight: 700, color: '#fff',
-                            background: MEDALS[i] ?? 'var(--text-tertiary)',
+                            flexShrink: 0, width: 14, textAlign: 'center',
+                            fontSize: lead ? 13 : 11.5, fontWeight: 700,
+                            color: MEDALS[i] ?? 'var(--text-tertiary)',
+                            fontVariantNumeric: 'tabular-nums',
                           }}>{i + 1}</span>
                           <span title={e.key} style={{
-                            flex: 1, minWidth: 0, fontSize: 13, color: 'var(--text-primary)',
+                            flex: 1, minWidth: 0,
+                            fontSize: lead ? 13.5 : 12.5,
+                            fontWeight: lead ? 600 : 400,
+                            color: lead ? 'var(--text-primary)' : 'var(--text-secondary)',
                             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                           }}>{labelFor(dim.id, e.key)}</span>
-                          <span style={{ flexShrink: 0, fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>
-                            {valueLabel(e)}
-                          </span>
-                        </div>
-                        {/* The bar is share of the WHOLE dimension, not of first place — otherwise
-                            the leader is always full and the reader learns nothing about spread. */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, paddingLeft: 28 }}>
-                          <div style={{ flex: 1, height: 4, borderRadius: 999, background: 'var(--bg-elevated)', overflow: 'hidden' }}>
-                            <div style={{ width: `${Math.round(share * 100)}%`, height: '100%', background: accent, borderRadius: 999 }} />
-                          </div>
-                          <span style={{ flexShrink: 0, fontSize: 10.5, color: 'var(--text-tertiary)', minWidth: 32, textAlign: 'right' }}>
-                            {(share * 100).toFixed(share < 0.1 ? 1 : 0)}%
-                          </span>
+                          <span style={{
+                            flexShrink: 0, fontSize: 10.5, color: 'var(--text-tertiary)',
+                            fontVariantNumeric: 'tabular-nums', minWidth: 30, textAlign: 'right',
+                          }}>{(share * 100).toFixed(share < 0.095 ? 1 : 0)}%</span>
+                          <span style={{
+                            flexShrink: 0,
+                            fontSize: lead ? 13 : 12.5,
+                            fontWeight: lead ? 700 : 600,
+                            color: 'var(--text-primary)',
+                            fontVariantNumeric: 'tabular-nums',
+                          }}>{valueLabel(e)}</span>
                         </div>
                       </div>
                     )
                   })}
                   {result.distinct > result.entries.length && (
-                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', paddingTop: 2 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-tertiary)', padding: '2px 10px 0' }}>
                       {pt
                         ? `+${result.distinct - result.entries.length} fora do pódio`
                         : `+${result.distinct - result.entries.length} outside the podium`}

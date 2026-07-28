@@ -1138,6 +1138,16 @@ export default function AppLayout() {
   // bottom of a page lands the next page still scrolled down.
   useEffect(() => { window.scrollTo(0, 0) }, [location.pathname])
   const isCustomPage = location.pathname === '/custom'
+
+  /** Which filter dimensions a page can actually react to. Top usage ranks by member, team,
+   *  machine, presence, repo, tag, project and model, so those narrow it meaningfully — harness is
+   *  left out because the page already breaks every dimension down per harness. Every other page
+   *  gets the full set (undefined = no restriction). A filter that visibly changes nothing reads as
+   *  broken, so it is better not to offer it. */
+  const filterDimsForRoute = location.pathname.startsWith('/top')
+    ? (['members', 'teams', 'machines', 'presence', 'repos', 'tags', 'projects', 'models'] as const).slice() as
+      Array<'members' | 'teams' | 'machines' | 'presence' | 'repos' | 'tags' | 'projects' | 'models'>
+    : undefined
   const isMobile = useIsMobile()
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
@@ -2112,6 +2122,7 @@ export default function AppLayout() {
             >
               <div style={{ overflow: (filtersCollapsed || filtersClip) ? 'hidden' : 'visible', minHeight: 0 }}>
                 <FiltersBar
+                  only={filterDimsForRoute}
                   filters={filters}
                   onChange={setFilters}
                   projects={availableProjects}
@@ -2203,6 +2214,7 @@ export default function AppLayout() {
           }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <FiltersBar
+                only={filterDimsForRoute}
                 filters={filters}
                 onChange={setFilters}
                 projects={availableProjects}

@@ -49,6 +49,10 @@ interface Props {
   teams?: { id: string; name: string }[]
   /** Central-only: available machines for filter. Empty when not a central or no machines. */
   machines?: { id: string; name: string; user: string; teamId?: string; teamIds?: string[] }[]
+  /** Restrict which dimensions the "+ Filter" menu offers. Omitted = every dimension the data
+   *  supports. A page whose numbers cannot react to a dimension should not offer it: a filter that
+   *  visibly changes nothing reads as broken. */
+  only?: Array<'members' | 'teams' | 'machines' | 'harnesses' | 'presence' | 'repos' | 'tags' | 'projects' | 'models'>
   /** Tags visible to the viewer (from GET /api/tags) — drives the `tags` dimension. Empty/omitted
    *  hides it. Selecting a tag can only NARROW the (already team-scoped) dashboard. */
   tags?: TagDef[]
@@ -87,7 +91,7 @@ const SEARCH_INPUT: React.CSSProperties = {
   borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
 }
 
-export function FiltersBar({ filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true }: Props) {
+export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
@@ -168,6 +172,10 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
     const next = selectedTags.includes(id) ? selectedTags.filter(x => x !== id) : [...selectedTags, id]
     onChange({ ...filters, tags: next })
   }
+
+  /** May this page offer that dimension? No `only` prop means "every dimension the data supports",
+   *  which is what every page but Top usage wants. */
+  const allows = (dim: NonNullable<typeof only>[number]): boolean => !only || only.includes(dim)
 
   // Number of dimensions currently active — shown as the badge on the "+ Filter" button.
   const activeFilterCount = [
@@ -351,7 +359,8 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
             )}
           </button>
 
-          {/* Dimension menu — lists only the dimensions that actually apply to this data. */}
+          {/* Dimension menu — lists only the dimensions that apply to this data AND, when `only`
+              is given, that the current page can actually react to. */}
           {showAddMenu && !openPicker && (
             <div style={{
               position: 'absolute', top: 'calc(100% + 4px)', left: 0,
@@ -359,7 +368,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
               boxShadow: '0 4px 16px rgba(0,0,0,0.25)', zIndex: 1000,
               minWidth: 190, boxSizing: 'border-box', padding: 6,
             }}>
-              {canFilterMembers && users.length > 0 && (
+              {allows('members') && canFilterMembers && users.length > 0 && (
                 <MenuItem
                   icon={<Users size={13} />}
                   label={lang === 'pt' ? 'Membros' : 'Members'}
@@ -367,7 +376,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                   onClick={() => { setMemberQuery(''); setOpenPicker('members') }}
                 />
               )}
-              {teams && teams.length > 0 && (
+              {allows('teams') && teams && teams.length > 0 && (
                 <MenuItem
                   icon={<Users size={13} />}
                   label={lang === 'pt' ? 'Times' : 'Teams'}
@@ -375,7 +384,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                   onClick={() => { setTeamQuery(''); setOpenPicker('teams') }}
                 />
               )}
-              {machines && machines.length > 0 && (
+              {allows('machines') && machines && machines.length > 0 && (
                 <MenuItem
                   icon={<Cpu size={13} />}
                   label={lang === 'pt' ? 'Máquinas' : 'Machines'}
@@ -383,7 +392,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                   onClick={() => { setMachineQuery(''); setOpenPicker('machines') }}
                 />
               )}
-              {harnesses && harnesses.length > 1 && (
+              {allows('harnesses') && harnesses && harnesses.length > 1 && (
                 <MenuItem
                   icon={<Blocks size={13} />}
                   label={lang === 'pt' ? 'Harnesses' : 'Harnesses'}
@@ -391,7 +400,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                   onClick={() => setOpenPicker('harnesses')}
                 />
               )}
-              {canFilterMembers && presence && Object.keys(presence).length > 0 && (
+              {allows('presence') && canFilterMembers && presence && Object.keys(presence).length > 0 && (
                 <MenuItem
                   icon={<Radio size={13} />}
                   label={lang === 'pt' ? 'Presença' : 'Presence'}
@@ -399,7 +408,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                   onClick={() => setOpenPicker('presence')}
                 />
               )}
-              {showRepoFilter && (
+              {allows('repos') && showRepoFilter && (
                 <MenuItem
                   icon={<GitBranch size={13} />}
                   label={lang === 'pt' ? 'Repositórios' : 'Repositories'}
@@ -407,7 +416,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                   onClick={() => { setRepoQuery(''); setOpenPicker('repos') }}
                 />
               )}
-              {showTagFilter && (
+              {allows('tags') && showTagFilter && (
                 <MenuItem
                   icon={<TagIcon size={13} />}
                   label={lang === 'pt' ? 'Tags' : 'Tags'}
@@ -415,7 +424,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                   onClick={() => { setTagQuery(''); setOpenPicker('tags') }}
                 />
               )}
-              {projects.length > 0 && (
+              {allows('projects') && projects.length > 0 && (
                 <MenuItem
                   icon={<Layers size={13} />}
                   label={lang === 'pt' ? 'Projetos' : 'Projects'}
@@ -423,7 +432,7 @@ export function FiltersBar({ filters, onChange, projects, sessionCountByProject,
                   onClick={() => { setShowAddMenu(false); setShowProjectsModal(true) }}
                 />
               )}
-              {models.length > 0 && (
+              {allows('models') && models.length > 0 && (
                 <MenuItem
                   icon={<Cpu size={13} />}
                   label={lang === 'pt' ? 'Modelos' : 'Models'}
