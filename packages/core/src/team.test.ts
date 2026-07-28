@@ -218,3 +218,146 @@ test('resolveMachineCacheScope: null (never a partial sum) when the caches canno
   const { dellBryan: _drop, ...partial } = CACHES
   expect(resolveMachineCacheScope({ ...base, machineStatsCaches: partial, machines: ['alienware', 'dellBryan'] })).toBeNull()
 })
+
+import {
+  migrateTeamConfig, normalizeTeamConfig, connectionId, legacyConnectionId,
+  readTeamConnections, NO_REPO_KEY, DEFAULT_TEAM,
+} from './team'
+
+test('migrateTeamConfig: a legacy flat member config becomes one connection', () => {
+  const out = migrateTeamConfig({
+    mode: 'member', endpoint: 'https://central.example:48080/', org: 'acme',
+    user: 'lucas', token: 'abc123', pushIntervalSec: 45,
+  })
+  expect(out.connections).toHaveLength(1)
+  expect(out.connections[0]!.endpoint).toBe('https://central.example:48080')
+  expect(out.connections[0]!.org).toBe('acme')
+  expect(out.connections[0]!.user).toBe('lucas')
+  expect(out.connections[0]!.token).toBe('abc123')
+  expect(out.connections[0]!.pushIntervalSec).toBe(45)
+  expect(out.connections[0]!.deniedRepos).toEqual([])
+  expect(out.mode).toBe('member')
+  expect(out.schema).toBe(2)
+})
+
+test('migrateTeamConfig: a solo config with empty strings fabricates NO connection', () => {
+  const out = migrateTeamConfig({ mode: 'solo', endpoint: '', org: 'default', user: '', token: '' })
+  expect(out.connections).toEqual([])
+  expect(out.mode).toBe('solo')
+})
+
+test('migrateTeamConfig: an endpoint with no token still migrates (open/legacy central)', () => {
+  const out = migrateTeamConfig({ mode: 'member', endpoint: 'http://c:48080', org: 'default', user: 'lucas' })
+  expect(out.connections).toHaveLength(1)
+  expect(out.connections[0]!.token).toBe('')
+  expect(out.mode).toBe('member')
+})
+
+test('migrateTeamConfig: an already-migrated config is preserved, ids intact', () => {
+  const first = migrateTeamConfig({ mode: 'member', endpoint: 'http://c:48080', token: 't' })
+  const again = migrateTeamConfig(first)
+  expect(again.connections[0]!.id).toBe(first.connections[0]!.id)
+  expect(again.connections).toHaveLength(1)
+})
+
+test('migrateTeamConfig: junk input yields the default solo config', () => {
+  for (const raw of [undefined, null, 'nope', 42, []]) {
+    expect(migrateTeamConfig(raw).connections).toEqual([])
+    expect(migrateTeamConfig(raw).mode).toBe('solo')
+  }
+})
+
+test('migrateTeamConfig: two calls return distinct array instances (no shared aliasing)', () => {
+  const raw = { mode: 'member', endpoint: 'http://c:48080', token: 't' }
+  const a = migrateTeamConfig(raw)
+  const b = migrateTeamConfig(raw)
+  expect(a.connections).not.toBe(b.connections)
+  a.connections[0]!.deniedRepos.push('github.com/o/r')
+  expect(b.connections[0]!.deniedRepos).toEqual([])
+})
+
+test('migrateTeamConfig: the legacy id is deterministic across 100 calls', () => {
+  const raw = { mode: 'member', endpoint: 'http://c:48080', token: 't' }
+  const ids = new Set(Array.from({ length: 100 }, () => migrateTeamConfig(raw).connections[0]!.id))
+  expect(ids.size).toBe(1)
+  expect([...ids][0]).toMatch(/^c_[a-f0-9]{12}$/)
+})
+
+test('migrateTeamConfig: duplicate normalized endpoints collapse, first wins', () => {
+  const out = migrateTeamConfig({
+    mode: 'member',
+    connections: [
+      { id: 'c_aaaaaaaaaaaa', endpoint: 'http://c:48080', org: 'default', user: 'a', token: 't1', deniedRepos: [] },
+      { id: 'c_bbbbbbbbbbbb', endpoint: 'http://c:48080/', org: 'default', user: 'b', token: 't2', deniedRepos: [] },
+    ],
+  })
+  expect(out.connections).toHaveLength(1)
+  expect(out.connections[0]!.id).toBe('c_aaaaaaaaaaaa')
+})
+
+test('migrateTeamConfig: an entry with no endpoint is dropped and deniedRepos defaults', () => {
+  const out = migrateTeamConfig({
+    mode: 'member',
+    connections: [
+      { id: 'c_aaaaaaaaaaaa', endpoint: '', org: 'default', user: 'a', token: 't' },
+      { endpoint: 'http://c:48080', org: 'default', user: 'b', token: 't2' },
+    ],
+  })
+  expect(out.connections).toHaveLength(1)
+  expect(out.connections[0]!.deniedRepos).toEqual([])
+  expect(out.connections[0]!.id).toMatch(/^c_[a-f0-9]{12}$/)
+})
+
+test('normalizeTeamConfig: mode follows connections.length in both directions', () => {
+  const withOne = normalizeTeamConfig({
+    mode: 'solo', connections: [{ id: 'c_aaaaaaaaaaaa', endpoint: 'http://c:48080', org: 'o', user: 'u', token: 't', deniedRepos: [] }],
+  })
+  expect(withOne.mode).toBe('member')
+  expect(normalizeTeamConfig({ mode: 'member', connections: [] }).mode).toBe('solo')
+})
+
+test('normalizeTeamConfig: the legacy mirror tracks connections[0] and clears when empty', () => {
+  const withOne = normalizeTeamConfig({
+    mode: 'solo',
+    connections: [{ id: 'c_aaaaaaaaaaaa', endpoint: 'http://c:48080', org: 'acme', user: 'lucas', token: 'tok', deniedRepos: [] }],
+  })
+  expect(withOne.endpoint).toBe('http://c:48080')
+  expect(withOne.org).toBe('acme')
+  expect(withOne.user).toBe('lucas')
+  expect(withOne.token).toBe('tok')
+  expect(withOne.schema).toBe(2)
+
+  const emptied = normalizeTeamConfig({ mode: 'member', connections: [] })
+  expect(emptied.endpoint).toBe('')
+  expect(emptied.token).toBe('')
+  expect(emptied.user).toBe('')
+})
+
+test('connectionId: format holds and 10000 calls collide zero times', () => {
+  const ids = new Set(Array.from({ length: 10_000 }, () => connectionId()))
+  expect(ids.size).toBe(10_000)
+  for (const id of [...ids].slice(0, 50)) expect(id).toMatch(/^c_[a-f0-9]{12}$/)
+})
+
+test('legacyConnectionId: same inputs same id, different token different id', () => {
+  expect(legacyConnectionId('http://c:48080', 't')).toBe(legacyConnectionId('http://c:48080', 't'))
+  expect(legacyConnectionId('http://c:48080', 't')).not.toBe(legacyConnectionId('http://c:48080', 'u'))
+  expect(legacyConnectionId('http://c:48080', '')).toMatch(/^c_[a-f0-9]{12}$/)
+})
+
+test('readTeamConnections: never throws on a prefs object missing the array', () => {
+  expect(readTeamConnections(undefined)).toEqual([])
+  expect(readTeamConnections(null)).toEqual([])
+  expect(readTeamConnections({})).toEqual([])
+  expect(readTeamConnections({ team: { mode: 'solo' } as never })).toEqual([])
+})
+
+test('NO_REPO_KEY is the exact sentinel and contains no slash', () => {
+  expect(NO_REPO_KEY).toBe('__no_repo__')
+  expect(NO_REPO_KEY.includes('/')).toBe(false)
+})
+
+test('DEFAULT_TEAM is solo with an empty connections array', () => {
+  expect(DEFAULT_TEAM.mode).toBe('solo')
+  expect(DEFAULT_TEAM.connections).toEqual([])
+})

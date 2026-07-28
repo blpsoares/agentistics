@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Loader2, CheckCircle, XCircle, Users, User, Server, LogOut } from 'lucide-react'
 import { TeamMembers } from './TeamMembers'
-import { PUSH_INTERVAL, type TeamConfig, type MemberPresence, unpackConnectToken } from '@agentistics/core'
+import { PUSH_INTERVAL, type TeamConfig, type MemberPresence, unpackConnectToken, DEFAULT_TEAM } from '@agentistics/core'
 import { pushNotification } from '../lib/notifications'
 import { MemberConnectionStatus } from './MemberConnectionStatus'
 
@@ -480,7 +480,7 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
       })
       // Store the endpoint WITHOUT a trailing slash — otherwise URL builds produce `//api/...`
       // which misses the central's exact-match routes (pushes hit static, WS won't upgrade).
-      const teamWithIdentity: typeof team = { ...team, mode: 'member', user: resolvedUser, org: resolvedOrg, endpoint: team.endpoint.replace(/\/+$/, '') }
+      const teamWithIdentity: typeof team = { ...team, mode: 'member', user: resolvedUser, org: resolvedOrg, endpoint: (team.endpoint ?? '').replace(/\/+$/, '') }
 
       // (b) Persist preferences with the central-resolved identity
       const putRes = await fetch('/api/preferences', {
@@ -524,7 +524,7 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
       }).catch(() => { /* non-fatal */ })
 
       // (b) Reset the local config to solo and persist it (stops pushing).
-      const solo: TeamConfig = { mode: 'solo', endpoint: '', org: 'default', user: '', token: '', pushIntervalSec: team.pushIntervalSec }
+      const solo: TeamConfig = { ...DEFAULT_TEAM, pushIntervalSec: team.pushIntervalSec }
       await fetch('/api/preferences', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -687,7 +687,7 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
           <FieldInput
             label={c('serverUrl', lang)}
             sub={c('serverUrlSub', lang)}
-            value={team.endpoint}
+            value={team.endpoint ?? ''}
             onChange={v => set('endpoint', v)}
             placeholder="https://central.example:47291"
             disabled={!editing}
@@ -696,7 +696,7 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
           <FieldInput
             label={c('token', lang)}
             sub={c('tokenSub', lang)}
-            value={team.token}
+            value={team.token ?? ''}
             onChange={v => set('token', v)}
             type="password"
             placeholder="••••••••"

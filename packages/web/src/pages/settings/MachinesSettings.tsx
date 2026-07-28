@@ -6,6 +6,7 @@ import { TeamSettings, type TeamConfig } from '../../components/TeamSettings'
 import { SectionHeader, Section, Select, Checkbox, ConfirmModal, RecordCard, RecordCardAction } from './primitives'
 import { Drawer } from './Drawer'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { DEFAULT_TEAM } from '@agentistics/core'
 
 // interfaces
 interface MachineInfo {
@@ -88,13 +89,7 @@ function ReadField({ label, value }: { label: string; value: React.ReactNode }) 
 }
 
 // solo/member fallback (unchanged)
-const DEFAULT_TEAM_CONFIG: TeamConfig = {
-  mode: 'solo',
-  endpoint: '',
-  org: 'default',
-  user: '',
-  token: '',
-}
+const DEFAULT_TEAM_CONFIG: TeamConfig = { ...DEFAULT_TEAM }
 
 function SoloMemberMachinesView({ pt }: { pt: boolean }) {
   const [team, setTeam] = useState<TeamConfig>(DEFAULT_TEAM_CONFIG)
