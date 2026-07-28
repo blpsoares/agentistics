@@ -58,8 +58,10 @@ EXPOSE 47291
 # Run unprivileged. The app only ever reads its own code and writes /data, so root buys
 # nothing and costs everything if a process is ever compromised. HOME=/data because the
 # server resolves its writable data dir (~/.agentistics) from it.
-RUN addgroup --system --gid 10001 agentistics \
- && adduser  --system --uid 10001 --ingroup agentistics --home /data agentistics \
+# groupadd/useradd (passwd), not addgroup/adduser: the bun runtime image is
+# debian-slim, which ships passwd but NOT the adduser package.
+RUN groupadd --system --gid 10001 agentistics \
+ && useradd  --system --uid 10001 --gid agentistics --home-dir /data --shell /usr/sbin/nologin agentistics \
  && mkdir -p /data/.agentistics \
  && chown -R agentistics:agentistics /data /app
 USER agentistics
