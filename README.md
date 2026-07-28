@@ -224,11 +224,15 @@ agentop member status   # verify mode / endpoint / last sync
 
 Or just run `agentop setup` and pick a role — the wizard wires up the rest.
 
-> **Security:** tokens are stored only as sha256 hashes, the session secret is
-> kept separate from the dashboard password, Mongo is never published to the host,
-> and `BIND_IP` can restrict the central to a private tailnet (e.g. Tailscale).
+> **Security:** members push computed metrics only — never chat. Accounts use argon2id with
+> optional TOTP two-factor, tokens are stored only as sha256 hashes, the session secret is never
+> derived from the dashboard password, Mongo is never published to the host, and the central
+> binds `127.0.0.1` by default. A central can be published on the internet behind a tunnel:
+> setting `AGENTISTICS_EXPOSURE=public` permanently revokes every route that touches the host
+> (shell, local chat, raw transcripts, MCP admin) and requires a second factor of every owner.
+> Run `agentop doctor --exposed` before going live.
 
-→ **CLI reference:** [docs/cli.md](docs/cli.md) · **Deployment:** [docs/DEPLOY.md](docs/DEPLOY.md)
+→ **CLI reference:** [docs/cli.md](docs/cli.md) · **Deployment:** [docs/DEPLOY.md](docs/DEPLOY.md) · **Exposing a central:** [docs/exposure.md](docs/exposure.md) · **Reporting a vulnerability:** [SECURITY.md](SECURITY.md)
 
 ---
 

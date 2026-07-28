@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useOutletContext } from 'react-router-dom'
-import { Plus, Trash2, X } from 'lucide-react'
+import { Plus, Trash2, X, CalendarRange } from 'lucide-react'
 import { fmt, fmtCost, formatProjectName, canonicalProjectPath } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { HARNESS_LABELS } from '../lib/harness'
 import { Drawer } from './settings/Drawer'
 import { Section, Select, TabSelect, MultiPicker } from './settings/primitives'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { DatePicker } from '../components/DatePicker'
 
 // /api/tags response shapes. Aggregate-only by design (spec rule 2): the server never sends the
 // session rows behind a tag, so everything rendered here is a number the server already computed.
@@ -21,12 +22,15 @@ interface TagAggregate {
   topModel: string | null
   topHarness: string | null
 }
+/** Optional period the tag is pinned to — inclusive `yyyy-MM-dd`, each side independent. */
+interface TagWindow { start?: string; end?: string }
 interface Tag {
   _id: string
   name: string
   color?: string
   sources: TagSource[]
   filters?: TagSource[]
+  window?: TagWindow
   sharedWith: string[]
   createdBy: string
   aggregate: TagAggregate
@@ -68,6 +72,19 @@ function Pill({ text }: { text: string }) {
       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
     }}>{text}</span>
   )
+}
+
+/** Human-readable period, e.g. "04/07/26 → 18/07/26", "desde 04/07/26", "até 18/07/26".
+ *  Returns null when the tag has no period, which is what hides the chip entirely. */
+function windowLabel(w: TagWindow | undefined, pt: boolean): string | null {
+  if (!w || (!w.start && !w.end)) return null
+  const d = (iso: string) => {
+    const [y, m, day] = iso.split('-')
+    return pt ? `${day}/${m}/${y?.slice(2)}` : `${m}/${day}/${y?.slice(2)}`
+  }
+  if (w.start && w.end) return `${d(w.start)} → ${d(w.end)}`
+  if (w.start) return `${pt ? 'desde' : 'from'} ${d(w.start)}`
+  return `${pt ? 'até' : 'until'} ${d(w.end!)}`
 }
 
 /** One column of the list layout. The label is always rendered so the row stays readable when it
@@ -263,6 +280,10 @@ export default function TagsPage() {
   const [filters, setFilters] = useState<TagSource[]>([])
   const [filterType, setFilterType] = useState<TagSourceType>('project')
   const [filtersEditing, setFiltersEditing] = useState(true)
+  /** The period the tag is pinned to. Empty string = that end is open. */
+  const [winStart, setWinStart] = useState('')
+  const [winEnd, setWinEnd] = useState('')
+  const [windowEditing, setWindowEditing] = useState(true)
   // True when the chosen colour is not one of the presets — drives the custom circle's ring.
   const isCustomColor = !SWATCHES.some(c => c.toLowerCase() === color.toLowerCase())
   const [sharedWith, setSharedWith] = useState<string[]>([])
@@ -275,16 +296,18 @@ export default function TagsPage() {
 
   const openCreate = useCallback(() => {
     setEditingId(null); setName(''); setColor(DEFAULT_COLOR); setSources([]); setFilters([]); setSharedWith([])
+    setWinStart(''); setWinEnd('')
     setDraftType('repo'); setDraftValue(''); setSaveErr(null)
-    setSourcesEditing(true); setShareEditing(true)
+    setSourcesEditing(true); setShareEditing(true); setWindowEditing(true)
     setEditorOpen(true)
   }, [])
 
   const openEdit = useCallback((t: Tag) => {
     setEditingId(t._id); setName(t.name); setColor(t.color || DEFAULT_COLOR)
     setSources(t.sources); setFilters(t.filters ?? []); setSharedWith(t.sharedWith)
+    setWinStart(t.window?.start ?? ''); setWinEnd(t.window?.end ?? '')
     setDraftType('repo'); setDraftValue(''); setSaveErr(null)
-    setSourcesEditing(true); setShareEditing(true)
+    setSourcesEditing(true); setShareEditing(true); setWindowEditing(true)
     setEditorOpen(true)
   }, [])
 
@@ -296,9 +319,11 @@ export default function TagsPage() {
       || color !== (original.color || DEFAULT_COLOR)
       || JSON.stringify(sources) !== JSON.stringify(original.sources)
       || JSON.stringify(filters) !== JSON.stringify(original.filters ?? [])
+      || winStart !== (original.window?.start ?? '')
+      || winEnd !== (original.window?.end ?? '')
       || JSON.stringify([...sharedWith].sort()) !== JSON.stringify([...original.sharedWith].sort())
     )
-    : name.trim().length > 0 || sources.length > 0
+    : name.trim().length > 0 || sources.length > 0 || !!winStart || !!winEnd
 
   /** Commit a picked value as a source. Called straight from the value Select's onChange so a
    *  single click adds it — the old two-step (pick, then press "Add") silently dropped the pick
@@ -377,9 +402,20 @@ export default function TagsPage() {
 
   const save = async () => {
     if (!name.trim()) { setSaveErr(pt ? 'Informe um nome.' : 'A name is required.'); return }
+    // Caught here as well as server-side: an inverted period is the one mistake a date pair invites,
+    // and a 400 after pressing Save reads as a bug rather than as a correction.
+    if (winStart && winEnd && winStart > winEnd) {
+      setSaveErr(pt ? 'A data inicial não pode ser depois da final.' : 'The start date cannot be after the end date.')
+      return
+    }
     setSaving(true); setSaveErr(null)
     try {
-      const body = { id: editingId ?? undefined, name: name.trim(), color, sources, filters, sharedWith }
+      // Always SENT, even when empty: `null` is how the server is told the period was removed,
+      // whereas omitting the field means "leave whatever is stored alone".
+      const window = winStart || winEnd
+        ? { ...(winStart ? { start: winStart } : {}), ...(winEnd ? { end: winEnd } : {}) }
+        : null
+      const body = { id: editingId ?? undefined, name: name.trim(), color, sources, filters, window, sharedWith }
       const res = await fetch('/api/tags', {
         method: editingId ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -487,6 +523,19 @@ export default function TagsPage() {
                   {t.sources.length} {t.sources.length === 1 ? (pt ? 'fonte' : 'source') : (pt ? 'fontes' : 'sources')}
                 </span>
               </div>
+              {/* Without this the card is unexplainable: two tags over the same sources, one
+                  pinned to a period, are otherwise identical and show different money. */}
+              {windowLabel(t.window, pt) && (
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4, alignSelf: 'flex-start',
+                  padding: '2px 8px', borderRadius: 999, fontSize: 10.5,
+                  background: 'var(--anthropic-orange-dim)', border: '1px solid rgba(217,119,6,0.35)',
+                  color: 'var(--anthropic-orange)', fontVariantNumeric: 'tabular-nums',
+                }}>
+                  <CalendarRange size={11} />
+                  {windowLabel(t.window, pt)}
+                </span>
+              )}
               <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--anthropic-orange)', wordBreak: 'break-word' }}>
                 {fmtCost(t.aggregate.costUSD, currency, brlRate)}
               </div>
@@ -528,6 +577,17 @@ export default function TagsPage() {
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                 <span style={{ width: 10, height: 10, borderRadius: '50%', background: t.color || 'var(--anthropic-orange)', flexShrink: 0 }} />
                 <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</span>
+                {windowLabel(t.window, pt) && (
+                  <span
+                    title={windowLabel(t.window, pt)!}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', flexShrink: 0,
+                      color: 'var(--anthropic-orange)', opacity: 0.85,
+                    }}
+                  >
+                    <CalendarRange size={12} />
+                  </span>
+                )}
               </span>
               <Cell label={pt ? 'Custo' : 'Cost'} value={fmtCost(t.aggregate.costUSD, currency, brlRate)} accent />
               <Cell label={pt ? 'Sessões' : 'Sessions'} value={t.aggregate.sessions.toLocaleString()} />
@@ -749,6 +809,77 @@ export default function TagsPage() {
           />
         </Section>
         )}
+
+        {/* A period turns the tag from "these sources" into "these sources, during that run" —
+            the shape of question a tag is actually asked ("I tried harness X on this project from
+            the 4th to the 18th; what did it cost?"). Unlike the global date filter it belongs to
+            the tag, so the number is the same for everyone who opens it. */}
+        <Section
+          title={pt ? 'Período' : 'Period'}
+          editing={windowEditing}
+          onEdit={() => setWindowEditing(true)}
+          onCancel={() => setWindowEditing(false)}
+          onSave={() => setWindowEditing(false)}
+          labels={{ edit: pt ? 'Editar' : 'Edit', save: pt ? 'Pronto' : 'Done', cancel: pt ? 'Fechar' : 'Close' }}
+          editChildren={
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+                {pt
+                  ? 'Opcional. Prende a tag a um intervalo — as duas datas entram na conta. Deixe um lado em branco para "a partir de" ou "até". Sem período, a tag cobre todo o histórico.'
+                  : 'Optional. Pins the tag to a range — both dates are included. Leave one side blank for "from" or "until". With no period the tag covers the whole history.'}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 2, minHeight: 44, padding: '0 4px',
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7,
+                }}>
+                  <DatePicker
+                    value={winStart}
+                    onChange={setWinStart}
+                    label={pt ? 'De' : 'From'}
+                    placeholder="DD/MM/YY"
+                    max={winEnd || undefined}
+                    rangeStart={winStart}
+                    rangeEnd={winEnd}
+                    lang={lang}
+                  />
+                  <div style={{ width: 14, height: 1, background: 'var(--border)', flexShrink: 0 }} />
+                  <DatePicker
+                    value={winEnd}
+                    onChange={setWinEnd}
+                    label={pt ? 'Até' : 'To'}
+                    placeholder="DD/MM/YY"
+                    min={winStart || undefined}
+                    rangeStart={winStart}
+                    rangeEnd={winEnd}
+                    lang={lang}
+                    align="right"
+                  />
+                </div>
+                {(winStart || winEnd) && (
+                  <button
+                    type="button"
+                    onClick={() => { setWinStart(''); setWinEnd('') }}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                      minHeight: 44, padding: '0 12px', borderRadius: 7,
+                      border: '1px solid var(--border)', background: 'transparent',
+                      color: 'var(--text-tertiary)', fontSize: 12, fontFamily: 'inherit', cursor: 'pointer',
+                    }}
+                  >
+                    <X size={13} />
+                    {pt ? 'Limpar' : 'Clear'}
+                  </button>
+                )}
+              </div>
+            </div>
+          }
+        >
+          <div style={{ fontSize: 12.5, color: windowLabel({ start: winStart, end: winEnd }, pt) ? 'var(--text-secondary)' : 'var(--text-tertiary)' }}>
+            {windowLabel({ start: winStart, end: winEnd }, pt)
+              ?? (pt ? 'Todo o histórico.' : 'The whole history.')}
+          </div>
+        </Section>
 
         {/* Sharing is an IAM act — it grants a tag's numbers to another ACCOUNT. Off a central
             there are no other accounts, so the whole section is hidden (and the server ignores
