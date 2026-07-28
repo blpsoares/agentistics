@@ -4,15 +4,19 @@
 **Path:** `docs/superpowers/specs/2026-07-28-multi-central-and-repo-sharing-design.md`
 **Status:** design agreed — implementation not started
 **Areas touched:** `packages/core` (team types), `packages/server` (uploader, agent client, preferences, routes, CLI, new `share-rules.ts`), `packages/web` (Settings → Connection, repo surfaces, sidebar pill)
-**Central-side code:** one additive optional field on `GET /api/team/policy` (see §7)
+**Central-side code:** an additive optional field on `GET /api/team/policy` plus one new route, `POST /api/team/forget` (see §7)
 
 ---
 
 ## 1. Summary
 
-A machine can today push its metrics to exactly one central, and it pushes *everything* it has. This design turns the single flat `preferences.team.{endpoint,org,user,token}` into a list of first-class `TeamConnection` objects, each with its own identity, its own push cadence, its own sent-state file, its own WebSocket and its own **denylist of repositories** that must never reach that central. A new pure module `packages/server/server/share-rules.ts` decides, without I/O, which sessions and workflow runs a given connection may receive, and — when a connection declares any restriction — builds a **synthetic Claude `StatsCache`** from only the shared sessions, so the aggregate totals cannot carry the volume or cost of a blocked repo. Rule changes are applied retroactively by calling the existing `POST /api/team/leave` on that central and immediately re-pushing the already-filtered history, journalled on disk so a crash mid-purge self-heals on the next boot.
+A machine can today push its metrics to exactly one central, and it pushes *everything* it has. This design turns the single flat `preferences.team.{endpoint,org,user,token}` into a list of first-class `TeamConnection` objects, each with its own identity, its own push cadence, its own sent-state file, its own WebSocket and its own **denylist of repositories** that must never reach that central. A new pure module `packages/server/server/share-rules.ts` decides, without I/O, which sessions and workflow runs a given connection may receive.
 
-The denylist itself is never transmitted, and the honesty markers that describe it stay strictly local. What this design does **not** claim is that a central cannot tell that a filter exists: a purge followed by a re-ingest, and a statsCache whose totals match the member's own session docs exactly, are both observable. §6.4 states the guarantee precisely — *which* repos are hidden is protected; *that* something was hidden is not — and the UI says so at the moment the user commits.
+**Aggregate totals are split by attribution, not truncated.** Claude's `stats-cache.json` covers history whose transcripts it has since deleted, so a period exists that no repo rule can be applied to — on the reference machine, 2026-02-06 to 2026-06-11, 171 sessions that survive only as daily aggregates. That block travels **verbatim**, exactly as today; every day from the consolidate store's coverage onward is rebuilt from the shared sessions alone. Both halves are exact quantities, so a restricted connection's totals stay reconcilable with the machine's own — the numbers do not shrink, only the attributable part is filtered. §4.4 states what the untouched block can still carry.
+
+Rule changes are applied retroactively by naming the affected sessions to `POST /api/team/forget`, so the central never goes empty and no history is re-pushed; the sequence is journalled on disk and self-heals after a crash.
+
+The denylist itself is never transmitted, and the honesty markers that describe it stay strictly local. What this design does **not** claim is that a central cannot tell that a filter exists: a scoped deletion followed by an unchanged push stream is observable. §6.4 states the guarantee precisely — *which* repos are hidden is protected for anything never shared; *that* something was withdrawn is not — and the UI says so at the moment the user commits.
 
 ---
 
@@ -24,13 +28,13 @@ These seven decisions are fixed. The rest of the document designs *around* them;
 
 **D2 — Per-connection repo restriction, denylist semantics.** Each connection shares everything *except* the repositories marked on **that** connection. The list is editable at any time on an already-active connection. A repository that appears later is **shared by default**. Sessions with no resolvable git remote form one blockable entry ("No repository") in the same list — pre-blocked the moment the connection acquires its first restriction (§4.2), because "unattributable" is not the same fact as "new".
 
-**D3 — Synthetic statsCache when restricted.** When a connection **declares** any restriction, the machine must **not** push the real `~/.claude` statsCache — it is Claude-only, aggregated, has no repo granularity, and would carry the blocked repo's volume and cost. It pushes a synthetic `StatsCache` built only from the sessions shared with that connection. A connection with an empty denylist keeps pushing the real supplemented cache, byte-for-byte as today.
+**D3 — Attribution-split statsCache when restricted.** When a connection **declares** any restriction, the machine must **not** push the real `~/.claude` statsCache unchanged — it is Claude-only, aggregated, has no repo granularity, and its recent days would carry the blocked repo's volume and cost. It pushes a cache split at the **attribution boundary**: days before the consolidate store's coverage are copied from the real cache verbatim (nothing there is attributable to any repo, by anyone, including the machine itself), days from the boundary onward are rebuilt from the shared sessions alone. Totals therefore do not shrink. A connection with an empty denylist keeps pushing the real supplemented cache, byte-for-byte as today. **No approximation is permitted anywhere in the split** — every term is either copied or summed from sessions; nothing is estimated, ratioed or prorated.
 
-**D4 — Retroactive removal via the existing leave route.** The central never receives the denylist. When the shared set shrinks, the machine calls the existing `POST /api/team/leave` (purges all of this member's data on that central) and immediately re-pushes the already-filtered history. Idempotent and self-healing.
+**D4 — Retroactive removal by naming sessions, never by emptying the central.** The central never receives the denylist. When the shared set shrinks, the machine posts the affected `sessionIds` to `POST /api/team/forget`; the central deletes exactly those documents and their workflow runs for that `memberId`, and the machine pushes its rebuilt statsCache in the same cycle. There is no window in which the central holds nothing for that machine. Against a central too old to offer the route, the rules editor refuses up front (§7) rather than falling back to a destructive purge.
 
 **D5 — Connection as a first-class unit.** Every module-level singleton in `team-uploader.ts` (`_lastSuccessAt`, `_authErrStreak`, `_pushErrKind`, `_centralIntervalSec`, `_netErrStreak`, `running`, sent-state file, sync signature) and in `team-agent-client.ts` (`activeWs`, `backoffIdx`) becomes a `Map` keyed by connection id. One timer chain, one sent-state file (`team-sent-<connId>.json`) and one WebSocket per connection. Functional module style is preserved — no classes.
 
-**D6 — New pure module `share-rules.ts`.** `sessionShared`, `filterShared`, `buildSharedStatsCache` — unit-tested, zero I/O. The accumulation logic currently inlined in `supplementStatsCache` (`data.ts` ~510) is extracted and shared.
+**D6 — New pure module `share-rules.ts`.** `sessionShared`, `filterShared`, `attributionBoundary`, `buildSplitStatsCache` — unit-tested, zero I/O. The accumulation logic currently inlined in `supplementStatsCache` (`data.ts` ~510) is extracted and shared.
 
 **D7 — UI and CLI split.** Settings → Connection becomes a list of central cards (status pill, hidden-repo count) plus "Add central", each card expanding in place (accordion) to identity/endpoint/cadence, the repo toggle list, and Disconnect. CLAUDE.md's mobile rules are mandatory (44px targets, 16px inputs, no horizontal page scroll at 390px). The CLI (`agentop member connect/leave/status`, `cli-start.ts`, `cli-setup.ts`) understands multiple centrals; **repo rules are web-only** — no CLI surface.
 
@@ -97,7 +101,7 @@ The id must be **sanitized on use** (`/^c_[a-f0-9]{12}$/`) before interpolation 
 **The uniqueness key of a connection is its normalized `endpoint`, and a token may appear at most once across `connections[]`.** Both rules are enforced by `POST /api/team/connections` and by `member connect`:
 
 - A connect to an endpoint already present **updates that connection in place** — token, org and re-resolved `user` are refreshed; `id`, `deniedRepos` and `label` are preserved. Token rotation is the documented admin action and is exactly when the user re-runs connect; appending a second, unrestricted connection there would silently re-share a blocked repo *and* double-count the machine on the central (a different token means a different `memberId = sha256(token)`, so the same machine exists twice and `userStatsCaches` sums it twice by display name).
-- A connect carrying a token that already belongs to a **different** connection is refused. Two endpoints sharing one token collapse onto one `memberId`: the two connections would alternately `replaceOne` the same `memberStats` document (flipping the machine's reported totals between the real and the synthetic cache on every push), and a purge on one would delete the other's sessions while leaving its sent-state intact, so they would never come back.
+- A connect carrying a token that already belongs to a **different** connection is refused. Two endpoints sharing one token collapse onto one `memberId`: the two connections would alternately `replaceOne` the same `memberStats` document (flipping the machine's reported totals between the unsplit and the split cache on every push), and a removal issued by one would delete the other's sessions while leaving its sent-state intact, so they would never come back.
 
 The id is a purely local handle. The central keys members by `memberId = sha256(token)`; the id is never in any request body sent off-machine.
 
@@ -119,7 +123,7 @@ Rules, in order:
    `connections = [{ id: legacyConnectionId(endpoint, token ?? ''), endpoint: trimSlashes(raw.endpoint), org: raw.org || 'default', user: raw.user ?? '', token: raw.token ?? '', deniedRepos: [], pushIntervalSec: raw.pushIntervalSec }]`, `mode: 'member'`.
 4. Anything else → `{ schema: 2, mode: 'solo', connections: [] }`.
 
-Guard step 3 on **`endpoint` alone**, not on `endpoint && token` and not on `mode === 'member'`. Not on mode, because `cli-setup.ts` and the web solo path both write a solo object that still carries empty-string `endpoint`/`token`, and a fabricated connection from empty strings would make a solo machine start an uploader — hence the empty-string check on `endpoint`. Not on `token`, because token-less members are still a live shape: `pushOnceDetailed` today requires `endpoint && user` and treats `token` as optional, and the central's open/legacy ingest fallback accepts them. Requiring a token would silently drop those members to solo, stop their pushes, print `solo` in `member status`, and let the GC delete their sent-state so a later rejoin re-pushes everything. §7's "refuse to purge without a minted token" then correctly refuses the *retroactive-removal* path for such a connection instead of disconnecting it.
+Guard step 3 on **`endpoint` alone**, not on `endpoint && token` and not on `mode === 'member'`. Not on mode, because `cli-setup.ts` and the web solo path both write a solo object that still carries empty-string `endpoint`/`token`, and a fabricated connection from empty strings would make a solo machine start an uploader — hence the empty-string check on `endpoint`. Not on `token`, because token-less members are still a live shape: `pushOnceDetailed` today requires `endpoint && user` and treats `token` as optional, and the central's open/legacy ingest fallback accepts them. Requiring a token would silently drop those members to solo, stop their pushes, print `solo` in `member status`, and let the GC delete their sent-state so a later rejoin re-pushes everything. §7's "refuse to remove without a minted token" then correctly refuses the *retroactive-removal* path for such a connection instead of disconnecting it.
 
 **Where the pure migration runs:** inside `readPreferencesFrom()` in `packages/server/server/preferences.ts`, applied to the merged object *after* `{...DEFAULT_PREFS, ...p}`. One choke point covers every reader (CLI, uploader, WS client, GET/PUT `/api/preferences`). Migrating only in the uploader would leave `cli-status.ts`, `cli-start.ts` and `bin/cli.ts` reading the un-migrated shape.
 
@@ -147,14 +151,14 @@ TEAM_CONN_DIR        = AGENTISTICS_TEAM_CONN_DIR ?? join(HOME_DIR, '.agentistics
 teamSentFile(connId) = join(TEAM_CONN_DIR, `team-sent-${connId}.json`)
 teamSyncFile(connId) = join(TEAM_CONN_DIR, `team-sync-${connId}.json`)   // { sig }
 teamRulesFile(connId)= join(TEAM_CONN_DIR, `team-rules-${connId}.json`)  // { rulesHash, sharedIds[] }
-teamPurgeFile(connId)= join(TEAM_CONN_DIR, `team-purge-${connId}.json`)
+teamForgetFile(connId)= join(TEAM_CONN_DIR, `team-forget-${connId}.json`)
 ```
 
-`team-rules-*.json` is **deliberately separate from the sent-state and from the sync signature**. The sig path clears the sent-state on a token rotation or a wiped central; if `rulesHash` and the last-pushed shared-id set lived in either of those files, a rotation coinciding with a rules change would erase the evidence of the change, the shrink detector would evaluate against an empty set, the purge would never run, and previously-pushed denied sessions would remain on a central that was never wiped.
+`team-rules-*.json` is **deliberately separate from the sent-state and from the sync signature**. The sig path clears the sent-state on a token rotation or a wiped central; if `rulesHash` and the last-pushed shared-id set lived in either of those files, a rotation coinciding with a rules change would erase the evidence of the change, the shrink detector would evaluate against an empty set, the removal would never run, and previously-pushed denied sessions would remain on a central that was never wiped.
 
 The old single-path env overrides `AGENTISTICS_TEAM_SENT_FILE` / `AGENTISTICS_TEAM_SYNC_FILE` are honoured **only while `connections.length === 1` and only until `migrateTeamStateOnce()` has run**; afterwards they are ignored with a single boot warning naming the new paths, and `POST /api/team/connections` **hard-errors** when a second connection is added while either is set. "`connections[0]`" is an array position and `removeConnection` splices: a revoked first connection would silently hand its pinned sent-state to a different central, which would then treat every session in it as already sent and never deliver them. A boot-time warning cannot cover a runtime reorder.
 
-**Garbage collection.** GC of `team-sent-*` / `team-sync-*` / `team-rules-*` / `team-purge-*` whose id is not in `connections[]` runs **only inside the serialized preferences write that mutated `connections[]`**, against the post-write array — never on a timer. A timer GC races the add route (a tick whose prefs snapshot predates the append deletes the brand-new connection's sent-state, forcing a full re-push, and loops if the add path retries) and races the preferences write itself (`Bun.write` truncates in place; a torn read falls through to `DEFAULT_PREFS`, whose `connections` is `[]`, and the tick would delete *every* connection's state).
+**Garbage collection.** GC of `team-sent-*` / `team-sync-*` / `team-rules-*` / `team-forget-*` whose id is not in `connections[]` runs **only inside the serialized preferences write that mutated `connections[]`**, against the post-write array — never on a timer. A timer GC races the add route (a tick whose prefs snapshot predates the append deletes the brand-new connection's sent-state, forcing a full re-push, and loops if the add path retries) and races the preferences write itself (`Bun.write` truncates in place; a torn read falls through to `DEFAULT_PREFS`, whose `connections` is `[]`, and the tick would delete *every* connection's state).
 
 Re-adding a removed central mints a **new** id, gets empty state, and re-pushes in full — that is the correct self-healing behaviour and the only thing that prevents stale-state resurrection.
 
@@ -214,7 +218,7 @@ export function filterShared<T extends Pick<SessionMeta, 'git_remote' | 'project
   sessions: readonly T[], denied: ReadonlySet<RepoKey>, index?: PathRepoIndex,
 ): T[]
 
-/** Sessions the denylist actively excludes — the ONLY legitimate purge trigger (§5.5). */
+/** Sessions the denylist actively excludes — the ONLY legitimate removal trigger (§5.5). */
 export function deniedSessionIds(
   sessions: readonly SessionMeta[], denied: ReadonlySet<RepoKey>, index?: PathRepoIndex,
 ): Set<string>
@@ -226,15 +230,47 @@ export function filterSharedWorkflows(
   runs: readonly WorkflowRun[], sharedIds: ReadonlySet<string>,
 ): WorkflowRun[]
 
-/** Synthetic Claude StatsCache derived ONLY from the sessions passed in. */
+/** Synthetic Claude StatsCache derived ONLY from the sessions passed in.
+ *  Used for the from-boundary half of the split, and on its own by tests. */
 export function buildSharedStatsCache(
   sessions: readonly SessionMeta[], opts?: { version?: number },
 ): StatsCache
 
-/** Earliest local day covered by a set of sessions — LOCAL disclosure only (§4.4). */
-export function coverageFrom(sessions: readonly SessionMeta[]): string
+/**
+ * First local day (YYYY-MM-DD) from which the consolidate store is the authority on what
+ * happened — the earliest `start_time` day across ALL stored Claude sessions, shared and
+ * denied alike. Days before it cannot be attributed to any repository by anyone, including
+ * this machine. `''` when the store holds no Claude session: nothing is attributable, and
+ * §4.4 then refuses to push a cache at all.
+ */
+export function attributionBoundary(allStored: readonly SessionMeta[]): string
 
-/** Stable fingerprint of a denylist — drives the purge-and-repush trigger. */
+/**
+ * The cache a RESTRICTED connection pushes. Days `< boundary` are copied verbatim from
+ * `real`; days `>= boundary` are rebuilt from `shared`. Date-less fields are recovered by
+ * subtracting the attributable part from the real total and adding back the shared part —
+ * both exact quantities, never an estimate. Returns `null` when the split cannot be made
+ * faithfully (empty boundary, missing real cache), meaning "push no statsCache this cycle".
+ */
+export function buildSplitStatsCache(input: {
+  real: StatsCache
+  allStored: readonly SessionMeta[]
+  shared: readonly SessionMeta[]
+  boundary: string
+}): StatsCache | null
+
+/** How many stored sessions fall before the boundary — the size of the unfilterable block.
+ *  LOCAL disclosure only (§4.4); never sent to a central. */
+export function prehistoryCount(allStored: readonly SessionMeta[], boundary: string): number
+
+/** Does any denied repo have a stored session before the boundary? Drives the SPECIFIC
+ *  variant of the confirm copy (§4.4). Local only. */
+export function deniedTouchesPrehistory(
+  allStored: readonly SessionMeta[], denied: ReadonlySet<RepoKey>, boundary: string,
+  index?: PathRepoIndex,
+): boolean
+
+/** Stable fingerprint of a denylist — drives the removal trigger. */
 export function denialSignature(denied: readonly string[] | null | undefined): string
 export function hasRestrictions(denied: readonly string[] | null | undefined): boolean
 
@@ -270,8 +306,10 @@ export function accumulateClaudeSessions(
 - **`buildSharedStatsCache` ignores every session with `(s.harness ?? 'claude') !== 'claude'`.** `stats-cache.json` is Claude-only by project rule; non-Claude sessions reach the central as sessions and are summed there. This is a **deliberate difference** from today's `supplementStatsCache`, which counts all harnesses in `dailyActivity` (safe there only because it runs before the non-Claude merge). Getting this wrong double-counts every non-Claude session on the central.
 - **`buildPathRepoIndex` is seeded from `ServerProject.gitRemote` as well as from sessions.** Only `copilot.ts` among the non-Claude adapters sets `git_remote`, and `data.ts` runs its persisted `backfillGitRemote` pass against the **Claude-only** session array before the harness merge — so the consolidate store carries every Codex / Gemini / Kimi / agy session with no remote, permanently. A directory used *exclusively* by a non-Claude harness has no session to learn from; the project record does. Everything the index still cannot resolve lands in `NO_REPO_KEY`, which is fail-closed by the rule above.
 
-### 4.3 Synthetic `StatsCache`, field by field
+### 4.3 The from-boundary half — `buildSharedStatsCache`, field by field
 
+This is what `buildSharedStatsCache` produces from a set of sessions. Under D3 it supplies the
+days from the attribution boundary onward; §4.3b combines it with the untouched prehistory.
 Verified against a real `~/.claude/stats-cache.json` (version 4, 255 sessions), not assumed.
 
 | Field | Synthetic value | Rationale |
@@ -292,23 +330,76 @@ Verified against a real `~/.claude/stats-cache.json` (version 4, 255 sessions), 
 
 `buildSharedStatsCache` starts from `emptyStatsCache()` and fills; it never mutates its input. **No field marks the cache as synthetic**, and no new field is added to `StatsCache` — see §4.4.
 
-### 4.4 Coverage disclosure is LOCAL, and indistinguishability is not a goal
+### 4.3b The split — `buildSplitStatsCache`, field by field
 
-The real `statsCache` covers sessions Claude deleted after 30 days. A synthetic cache can only cover what the consolidate store holds. A user with two years of `stats-cache.json` and a three-month store who blocks one repo sees their reported total on that central collapse to three months.
+`boundary = attributionBoundary(allStored)`, clamped monotonically per connection (§5.5). Days
+strictly before it are **prehistory**: the transcripts are gone, so no repo rule can reach them.
+Days from it onward are **attributable** and are rebuilt from `shared` alone.
+
+| Field | Composition | Exactness |
+|---|---|---|
+| `dailyActivity[]` | rows with `date < boundary` copied from `real`; rows `>= boundary` from `buildSharedStatsCache(shared)`. Merged, sorted, one row per date | copy + sum |
+| `dailyModelTokens[]` | same split, same rule | copy + sum |
+| `modelUsage{}` | `real.modelUsage − usageOf(allStored, >= boundary) + usageOf(shared, >= boundary)`, per model per token kind | the cache has no date dimension here, so the prehistory term is recovered by subtracting the attributable total from the real total — a difference of two exactly-known quantities, not a proration |
+| `hourCounts{}` | `real.hourCounts − startHoursOf(allStored, >= boundary) + startHoursOf(shared, >= boundary)` | same |
+| `totalSessions`, `totalMessages` | `Σ` of the result's own `dailyActivity` | preserves the invariant asserted on the real file |
+| `firstSessionDate` | `real.firstSessionDate` verbatim | the prehistory is kept, so the real start date is the truth |
+| `lastComputedDate` | `''` | unchanged rationale — never claim a watermark, never let a consumer's `day <= lastComputed` guard drop gap-fill |
+| `longestSession` | `real.longestSession`, **zeroed** when its `sessionId` resolves in the store to a denied session | it names a session; a denied one must not travel. Nothing in `web/` reads it |
+| `version`, `totalSpeculationTimeSavedMs` | from `real` | |
+
+**Every subtraction clamps at 0 per field**, and a clamp firing is *expected*, not an error: the real
+cache lags behind `lastComputedDate` and the supplemented cache gap-fills it, so the attributable
+term can momentarily exceed the real one. Clamping attributes the difference to the attributable
+half, where it is filtered — the safe direction. A clamp is never a reason to fall back to the real
+cache.
+
+**The split is exact wherever it is asked to be, and its failure mode is more filtering, never
+less.** If the boundary sits later than the store's true coverage, sessions before it ride inside
+the prehistory block unfiltered — so the boundary is monotonic and may only ever move earlier
+(§5.5). If it sits earlier, days with no stored sessions rebuild as empty and the totals would
+*drop* — which is why `attributionBoundary` is derived from the store itself rather than from a
+date the user or the cache supplies.
+
+### 4.4 What the prehistory can still carry, disclosed LOCALLY
+
+The split keeps the totals whole, and that is the point of it — but it does so by shipping a block
+the rules cannot reach. **If a blocked repository was active before the attribution boundary, its
+volume and cost remain inside that block**, and no future rule can remove them: there is no session,
+no `project_path`, no prompt and no model row to delete, only a daily token count with nothing
+attached. What the central gains is unattributed volume for a closed past period; what it cannot
+gain from that block is the existence, name or shape of any repository.
+
+The block is closed and shrinks in relative weight with every day of new, fully attributable
+activity. On the reference machine it is 2026-02-06 → 2026-06-11 (171 sessions); a machine that has
+run the consolidate store since day one has no such block at all, and its restricted cache is exact
+by construction.
+
+The alternative — refusing the prehistory and accepting a truncated window on that central — was
+considered and **rejected**: it makes the same machine report irreconcilable totals to its own
+dashboard and to the central, which is the failure this revision exists to remove. It is recorded in
+§13 rather than shipped as a toggle; one behaviour, stated in the confirm modal, is what makes the
+numbers explainable.
 
 An earlier draft threaded `partial: true` and `coverageFrom` into `IngestBody` so the central could render a badge. **That is rejected.** `partial` is a self-declared "I am withholding data" flag and `coverageFrom` quantifies how much — precisely the facts D4 keeps off the wire, handed over voluntarily as a "mitigation". Nothing is added to `IngestBody`; `StatsCache` gains no fields.
 
 The disclosure instead happens **locally, before the user commits**, where it can still change the decision:
 
-- `coverageFrom(sharedSessions)` and the real cache's `firstSessionDate` (both already in the browser via `AppData`) are rendered **in the confirm modal** as `applyConfirmStats` — "this central's totals for this machine will start {date} instead of {realFirstDate}" — not as a footnote discovered after the fact.
-- `GET /api/team/status` returns `coverageFrom` per connection (local-only route, §5.9), and the card's persistent `statsNote` restates it.
-- The confirm modal also states plainly that on the central this appears as *smaller numbers with no explanation*, because the central has no marker to render.
+- The **attribution boundary** and what precedes it are rendered in the confirm modal as `applyConfirmStats` — "days before {boundary} cannot be attributed to a repository and are sent whole ({n} sessions); everything from {boundary} on is filtered exactly" — before the commit, not as a footnote discovered after it.
+- `GET /api/team/status` returns `boundary` and the prehistory session count per connection (local-only route, §5.9), and the card's persistent `statsNote` restates them.
+- When the blocked repo **has** stored sessions of its own before the boundary, that is a *provable* case of the block carrying its data, and the modal says so specifically instead of generically. When the store proves nothing either way, the modal says that too. Neither statement leaves the machine.
 
-**Indistinguishability is explicitly not a guarantee.** A synthetic cache satisfies `totalSessions === COUNT(sessions where memberId = X)` exactly, while an unrestricted member's cache dwarfs its session docs — that gap is the entire reason `userStatsCaches` exists. One `$count` reveals which members filter, with or without a marker field. §6.4 states what *is* guaranteed.
+**Indistinguishability is explicitly not a guarantee.** A restricted machine's session documents no longer cover its own filtered days, and a scoped `forget` is visible on the central's change stream. One query reveals which members filter, with or without a marker field. §6.4 states what *is* guaranteed.
 
-**The synthetic cache is selected by the DECLARED rule — `hasRestrictions(conn.deniedRepos)` — not by a count comparison.** A `filtered.length < all.length` switch is wrong in both directions. It fails **open**: an empty or short consolidate store makes `0 < 0` false and pushes the real, full-history cache *with the denied repo in it* — which happens on a cold boot before the first `buildApiResponse`, whenever `loadConsolidated()` swallows an error, and permanently if `archiveMode` is switched to `'off'` after rules exist. And it flips **without user action**: blocking a repo you are about to start pushes the real deep cache for weeks, then silently `replaceOne`s the central's history with a three-month synthetic one the moment the first session in that repo lands. `hasRestrictions` makes the transition deterministic, explainable and simultaneous with the confirm dialog that describes it.
+**The split cache is selected by the DECLARED rule — `hasRestrictions(conn.deniedRepos)` — not by a count comparison.** A `filtered.length < all.length` switch is wrong in both directions. It fails **open**: an empty or short consolidate store makes `0 < 0` false and pushes the unsplit cache *with the denied repo's recent days in it* — which happens on a cold boot before the first `buildApiResponse`, whenever `loadConsolidated()` swallows an error, and permanently if `archiveMode` is switched to `'off'` after rules exist. And it flips **without user action**: blocking a repo you have not worked in yet would keep pushing the unsplit cache until the first session in it lands, then switch mid-stream with nothing in the UI having changed. `hasRestrictions` makes the transition deterministic, explainable and simultaneous with the confirm dialog that describes it.
 
-On the restricted path there is **no fallback to the real cache, ever**. `readMemberStatsCache` today falls back to reading `STATS_CACHE_FILE` raw when `buildApiResponse` throws; that branch is unreachable from the restricted path. If the synthetic build fails, or if restrictions exist and the store yields zero sessions while `~/.claude/stats-cache.json` plainly has data, the push omits `statsCache` entirely (the central keeps the last one it stored) and a local error notification fires. A missing cache is recoverable; a leaked one is not.
+On the restricted path there is **no fallback to the unsplit cache, ever**. `readMemberStatsCache` today falls back to reading `STATS_CACHE_FILE` raw when `buildApiResponse` throws; that branch is unreachable from the restricted path. `buildSplitStatsCache` returns `null` — and the push omits `statsCache` entirely, leaving the central with the last one it stored, plus a local error notification — whenever the split cannot be made faithfully:
+
+- `attributionBoundary` is `''` (the store holds no Claude session). Nothing is attributable, so shipping the real cache would ship everything the rules were meant to withhold. This is the `archiveMode: 'off'` case, which the rules editor already refuses up front (§6.3), and the cold-boot case, which resolves itself on the next cycle.
+- the real cache is missing or unreadable, so the prehistory term has no source.
+- the store yields zero sessions while `~/.claude/stats-cache.json` plainly has data — the R25 cold-store signature.
+
+A missing cache is recoverable; a leaked one is not.
 
 ### 4.5 Extracting from `data.ts`
 
@@ -365,12 +456,12 @@ async function getPushContext(): Promise<PushCycleContext>
 
 Per-connection pushes run **sequentially with a small concurrency cap (2)**, never `Promise.all` over N — a hung central must not exhaust sockets or starve the others.
 
-**`running` gains a companion `pendingTrigger`.** Today `notifyDataChanged` nulls the debounce timer *before* calling `triggerPush`, and `triggerPush` is `if (running) return` — so a change event arriving while a cycle runs is **dropped**, not deferred. With a purge-and-resync holding the lock for minutes (§6.1) that is guaranteed to happen, and `data.ts` fires `notifyDataChanged()` immediately after a `git_remote` heal — the event most likely to change *what is shared*. On unlock, a set `pendingTrigger` re-arms immediately, and the sync/rules files are never written for a sequence during which an event was swallowed.
+**`running` gains a companion `pendingTrigger`.** Today `notifyDataChanged` nulls the debounce timer *before* calling `triggerPush`, and `triggerPush` is `if (running) return` — so a change event arriving while a cycle runs is **dropped**, not deferred. With a forget sequence holding the lock across several round-trips (§6.1) that is guaranteed to happen, and `data.ts` fires `notifyDataChanged()` immediately after a `git_remote` heal — the event most likely to change *what is shared*. On unlock, a set `pendingTrigger` re-arms immediately, and the sync/rules files are never written for a sequence during which an event was swallowed.
 
 ### 5.3 Where the denylist bites
 
 1. **`pushOnceDetailed`** — `filterShared(ctx.sessions, denied, ctx.index)` runs **before** `selectDeltas`. Filtering afterwards would let a denied session enter `nextSent`; a later un-block would then never re-push it, because its hash is already recorded as sent.
-2. **The statsCache** — `readRealStatsCache()` (unchanged behaviour) when `hasRestrictions(denied)` is false; `buildSharedStatsCache(sharedSessions, {version})` when it is true, with no fallback (§4.4).
+2. **The statsCache** — `readRealStatsCache()` (unchanged behaviour) when `hasRestrictions(denied)` is false; `buildSplitStatsCache({real, allStored: ctx.sessions, shared, boundary})` when it is true, with no fallback (§4.4). Note the third input: the split needs the **unfiltered** store to compute its subtraction terms, which is why `filterShared` produces `shared` beside `ctx.sessions` rather than replacing it.
 3. **`readMemberWorkflows`** — filtered by `sharedSessionIds`, fail-closed (§4.2).
 4. **The empty-delta keep-alive is suppressed on a restricted connection unless something actually changed.** Today a cycle with zero session deltas still POSTs `{sessions: [], statsCache, workflows}`, and `notifyDataChanged()` fires that cycle on **any** local session write — including inside a denied repo. The central therefore receives a request at ~2s resolution every time the user works on a hidden repo, and `validateIngestToken` stamps `lastSeenAt` on each: session boundaries, working hours and intensity of the hidden work, reconstructable from request timing alone. On a restricted connection: `notifyDataChanged()` does not fan out; an empty-delta push is skipped when the synthetic cache and the filtered workflow set are byte-identical to the last ones pushed; and the remaining periodic push carries ±20% jitter so cadence carries no information about local activity.
 5. **`handleTeamTestConnection`** already posts `{org:'default', user:'', sessions: []}` — nothing to filter, and it is used *pre*-connection, so it keeps its stateless `{endpoint, token}` body and takes no `connId`. Post-connection probing uses `POST /api/team/connections/:id/probe`, which reads the stored token server-side (§5.8).
@@ -389,32 +480,42 @@ It becomes `createHash('sha256').update(JSON.stringify(s)).digest('hex')`, and t
 
 Two independent reconciliations run each cycle, **rules first**:
 
-**(a) Rules / shrink — local facts, evaluated before anything that depends on the central.** `reconcileSyncState` opens with `if (!instanceId) return`, and `fetchCentralPolicy` returns `instanceId: null` for any non-OK response, parse failure, timeout, or a central predating the field — including every `AGENTISTICS_INGEST_ONLY=1` central, which 404s `/api/team/policy` by construction. Putting the rules check behind that guard means a user on an older or flaky central can block a repo, see a green pill, and have the purge never run. Rules and shrink need no central identity and are evaluated unconditionally.
+**(a) Rules / shrink — local facts, evaluated before anything that depends on the central.** `reconcileSyncState` opens with `if (!instanceId) return`, and `fetchCentralPolicy` returns `instanceId: null` for any non-OK response, parse failure, timeout, or a central predating the field — including every `AGENTISTICS_INGEST_ONLY=1` central, which 404s `/api/team/policy` by construction. Putting the rules check behind that guard means a user on an older or flaky central can block a repo, see a green pill, and have the removal never run. Rules and shrink need no central identity and are evaluated unconditionally.
 
-`team-rules-<connId>.json` stores `{ rulesHash, sharedIds[] }`, where `rulesHash = denialSignature(deniedRepos)` (order- and normalization-independent). Each cycle:
+`team-rules-<connId>.json` stores `{ rulesHash, sharedIds[], boundary }`, where `rulesHash = denialSignature(deniedRepos)` (order- and normalization-independent). Each cycle:
 
 ```
 denied      = normalizeDenied(conn.deniedRepos)
 deniedIds   = deniedSessionIds(ctx.sessions, denied, ctx.index)
-staleSent   = sent.hashes keys ∩ deniedIds
-staleRuns   = sent.runIds ∖ sharedRunIds
-purge       = staleSent.size > 0 || staleRuns.length > 0
-            || (prev.rulesHash !== undefined && prev.rulesHash !== rulesHash && shrank)
+forgetIds   = sent.hashes keys ∩ deniedIds
+forgetRuns  = sent.runIds ∖ sharedRunIds
+forget      = forgetIds.size > 0 || forgetRuns.length > 0
+boundary    = min(prev.boundary ?? '9999-99-99', attributionBoundary(ctx.sessions))
 ```
 
-**The trigger is DENIAL, never ABSENCE.** An earlier draft used `stale = sent keys ∉ sharedIds`, which treats "the session is no longer in the store" as "the session became denied". `loadConsolidated()` is built on `safeReadJson`/`safeReadDir`, both of which swallow every error and return empty; `writeConsolidated` writes non-atomically, 20-way concurrent, from `buildApiResponse` in the **same process** as the uploader; `HOME_DIR` falls back to `''`; a container can start before its bind mount is ready. Any one of those makes a cycle read fewer sessions — or zero — and the machine would then `POST /api/team/leave`, wipe its entire history from the central, and (per §6.2) drop `machineStatsCaches[memberId]`, degrading every machine and team filter on that central to per-session sums for the duration. A session that merely vanished from the store is not evidence of a rule change. As a second belt, no purge runs while `ctx.sessions.length === 0`.
+`forgetIds` is not merely the trigger — it **is** the payload of §6.1's request, which is why the
+detector computes the exact set rather than a boolean. A `rulesHash` change with no `forgetIds` is
+a rule that only ever affects future pushes and needs no central call at all.
+
+**`boundary` is persisted and monotonic** — `min(persisted, computed)`. The store can only lose its
+oldest entries (a manual cleanup, a moved `AGENTISTICS_DATA_DIR`, an `archiveMode` switch), and a
+boundary allowed to move *later* would hand days that were previously filtered to the prehistory
+block, unfiltered and unremovable. Moving earlier only ever widens what is filtered, so it is
+always safe. The persisted value is written only after a successful push, alongside the rules hash.
+
+**The trigger is DENIAL, never ABSENCE.** An earlier draft used `stale = sent keys ∉ sharedIds`, which treats "the session is no longer in the store" as "the session became denied". `loadConsolidated()` is built on `safeReadJson`/`safeReadDir`, both of which swallow every error and return empty; `writeConsolidated` writes non-atomically, 20-way concurrent, from `buildApiResponse` in the **same process** as the uploader; `HOME_DIR` falls back to `''`; a container can start before its bind mount is ready. Any one of those makes a cycle read fewer sessions — or zero — and the machine would then ask the central to delete sessions that are perfectly valid, drop them from its own sent-state, and never push them again: silent, permanent, one-directional data loss, invisible on both ends. Defining the payload as `deniedSessionIds` makes that structurally impossible — an empty store yields an empty denied set and therefore an empty request. As a second belt, no forget runs while `ctx.sessions.length === 0`.
 
 The detector is nonetheless **mandatory and runs every cycle, not only on a rules edit**: `git_remote` is not stable. `backfillGitRemote` retro-stamps a remote onto previously remote-less sessions, a repo can be renamed on GitHub (new canonical key), a folder can gain a remote after the fact. Without it, a session that *becomes* denied is simply omitted from the next delta and stays on the central forever.
 
-**A missing `rulesHash` counts as `denialSignature([])`.** The migrated file is seeded with it (§3.3); treating `undefined !== denialSignature([])` as a change would make the entire fleet purge its central on upgrade day, simultaneously.
+**A missing `rulesHash` counts as `denialSignature([])`.** The migrated file is seeded with it (§3.3); treating `undefined !== denialSignature([])` as a change would make the entire fleet run a removal against its central on upgrade day, simultaneously.
 
-**Growth never purges.** Un-blocking a repo, renaming a connection, or a no-op save only clears the sent-state and pushes. A purge on growth is gratuitous data loss that re-enters the crash window for nothing.
+**Growth never deletes.** Un-blocking a repo, renaming a connection, or a no-op save produces an empty `forgetIds` and therefore no central call at all — the newly-shared sessions simply arrive as deltas on the next push, because un-blocking them removes them from `deniedSessionIds` while their sent-state entry was never written (§5.3 filters before `selectDeltas`).
 
-**(b) Sig — depends on the central's identity.** `sig = sha256(connId \0 endpoint \0 token \0 instanceId)`; `connId` is included because two legitimate connections can share an endpoint identity space and without it they would share a signature and thrash each other into a permanent re-push loop. A sig mismatch keeps today's behaviour — clear sent-state, re-push — **except** when `hasRestrictions(denied)` is true, in which case it takes the purge path. A token rotation changes the sig without deleting anything on the central; on a restricted connection, clearing the sent-state alone would leave already-pushed denied sessions there forever.
+**(b) Sig — depends on the central's identity.** `sig = sha256(connId \0 endpoint \0 token \0 instanceId)`; `connId` is included because two legitimate connections can share an endpoint identity space and without it they would share a signature and thrash each other into a permanent re-push loop. A sig mismatch keeps today's behaviour — clear sent-state, re-push. On a restricted connection it must first run §6.1 **against the current sent-state, before clearing it**: a token rotation changes the sig without deleting anything on the central, and the sent-state is the only record of what was pushed, so clearing it first would strand any already-pushed denied session there with no way left to name it. A wiped central makes that same forget a harmless no-op (`deleted: 0`), which is why the order is safe in both cases and does not require distinguishing them.
 
 ### 5.6 Notifications
 
-Every `broadcastNotification` from the uploader and the agent client gains `meta: { connectionId, central }`, where `central = conn.label ?? hostOf(conn.endpoint)` — the host, never the token. `NOTIFICATION_TEXT` in `web/src/lib/notifications.ts` interpolates `{central}` into `member.auth_rejected`, `member.unreachable`, `member.reconnected`, `member.removed`, `machine.renamed`, `machine.reassigned` (EN + PT), and gains two new codes, `member.resync_started` and `member.resync_done` (`meta: { central, count }`), so a running purge-and-resync is visible from any route and after a page change. The store's dedupe key must include `meta.connectionId`, otherwise "central A unreachable" and "central B unreachable" collapse into one toast and A's recovery clears B's badge.
+Every `broadcastNotification` from the uploader and the agent client gains `meta: { connectionId, central }`, where `central = conn.label ?? hostOf(conn.endpoint)` — the host, never the token. `NOTIFICATION_TEXT` in `web/src/lib/notifications.ts` interpolates `{central}` into `member.auth_rejected`, `member.unreachable`, `member.reconnected`, `member.removed`, `machine.renamed`, `machine.reassigned` (EN + PT), and gains two new codes, `member.resync_started` and `member.resync_done` (`meta: { central, count }`), so a running removal is visible from any route and after a page change. The store's dedupe key must include `meta.connectionId`, otherwise "central A unreachable" and "central B unreachable" collapse into one toast and A's recovery clears B's badge.
 
 ### 5.7 Auto-reset-on-revoke — one connection, not the machine
 
@@ -423,7 +524,7 @@ Today `autoResetOnRevoke()` does `writePreferences({ team: { ...DEFAULT_TEAM } }
 1. re-read prefs under the write lock; if `connections` no longer contains `connId`, no-op (preserves today's idempotence guard);
 2. splice that entry out — a **read-modify-write on `connections`**, never a blind write of a stale snapshot;
 3. `normalizeTeamConfig` derives `mode` and rebuilds the legacy mirror; `mode` becomes `'solo'` only when the list empties;
-4. GC this connection's sent / sync / rules / purge files inside the same write;
+4. GC this connection's sent / sync / rules / forget files inside the same write;
 5. clear all Map entries for `connId`, stop its timer, close its socket (`reconcileNow()`);
 6. `broadcastNotification({ code: 'member.removed', meta: { connectionId, central } })`.
 
@@ -461,9 +562,10 @@ Cross-process safety uses an `O_EXCL` lock file in `~/.agentistics` with a stale
   "connections": [{
     "id", "endpoint", "org", "user", "label",
     "lastSuccessAt", "errKind": "auth" | "net" | null, "latencyMs",
-    "deniedCount": 3, "restricted": true, "coverageFrom": "2026-04-11",
-    "canPurge": true, "centralTooOld": false,
-    "resync": { "phase": "purge" | "push", "sent": 400, "total": 2100 } | null,
+    "deniedCount": 3, "restricted": true,
+    "boundary": "2026-06-12", "prehistorySessions": 171,
+    "canForget": true, "centralTooOld": false,
+    "resync": { "phase": "forget" | "push", "done": 40, "total": 120 } | null,
     "pendingRules": false
   }],
   // legacy mirror of connections[0] for a cached older SPA:
@@ -475,7 +577,7 @@ Cross-process safety uses an `O_EXCL` lock file in `~/.agentistics` with a stale
 - The current handler does a **blocking 4s latency probe per request**, polled every 5s. With N connections that would exceed its own poll interval with two offline centrals. **The probe moves into the uploader cycle** (which already fetches `/api/team/policy`) and the route returns cached values — O(1) regardless of N.
 - `errKind` stays per connection; the aggregate pill is `any auth > any net > any resync > ok`.
 - `mode` stays top-level because `App.tsx` sets `isMember` from it.
-- `coverageFrom` is the local honesty marker (§4.4); it exists on this route and nowhere on the wire to a central.
+- `boundary` and `prehistorySessions` are the local honesty markers (§4.4); they exist on this route and nowhere on the wire to a central.
 
 ### 5.10 `team-agent-client.ts` — one socket per connection
 
@@ -495,87 +597,137 @@ Inbound `renamed` / `reassigned` frames must carry `meta.connectionId` / `meta.c
 
 ### 6.1 The sequence
 
-Triggered by (a) a `deniedRepos` edit that **shrinks** the shared set, (b) the cycle-time shrink detector (§5.5), (c) a sig change on a restricted connection, or (d) a stale purge journal found at boot.
+Triggered by (a) a `deniedRepos` edit that **shrinks** the shared set, (b) the cycle-time shrink detector (§5.5), (c) a sig change on a restricted connection, or (d) a stale forget journal found at boot.
 
 ```
-0. capability + identity check:  conn.canPurge  (§7)  AND  GET /api/team/whoami == ok
-1. write teamPurgeFile(connId) = { state: 'purging', rulesHash, startedAt }   ← journal FIRST
-2. saveSentState(connId, { version: 2, hashes: {}, runIds: [] })              ← clear BEFORE the leave
-3. POST <endpoint>/api/team/leave  (Bearer <token>)   → require 200 AND body.ok === true
-4. on success → journal.state = 'pushing'
-5. pushOnceDetailed(conn, ctx) in a loop until one full pass completes, PACED at the
-   connection's normal cadence with jitter — not as a back-to-back burst
-6. delete teamPurgeFile(connId); write teamSyncFile + teamRulesFile(connId)
+0. capability + identity check:  conn.canForget  (§7)  AND  GET /api/team/whoami == ok
+1. forgetIds  = sent.hashes keys ∩ deniedSessionIds(ctx.sessions, denied, ctx.index)   (§5.5)
+   forgetRuns = sent.runIds ∖ sharedRunIds
+2. write teamForgetFile(connId) = { state:'forgetting', ids, runIds, rulesHash, startedAt }
+                                                                       ← journal FIRST
+3. POST <endpoint>/api/team/forget { sessionIds }  in batches of 500, Bearer <token>
+   → require 200 AND body.ok === true;  drop each acked batch from the sent-state
+4. push the rebuilt split statsCache (+ any pending deltas) in the SAME cycle
+5. delete teamForgetFile(connId); write teamSyncFile + teamRulesFile(connId, incl. boundary)
 ```
+
+The central is never emptied and no history is re-pushed. What used to be a full purge plus a
+progressive refill is now one bounded delete of a known set, and the aggregate it invalidates is
+replaced in the same cycle.
 
 Step ordering is load-bearing:
 
-- **whoami before the leave.** `handleTeamLeave`'s minted branch deletes by `memberId`; its legacy/open branch deletes by `{org, user}` and purges `legacy:<user>` stats and workflows — and **both branches return `{ok:true, deleted:N}`**, so the member cannot tell them apart from the response. On a central whose DB was wiped or restored, `validateIngestToken` fails, `hasAnyTokens()` is false, and one machine's rules change deletes **every** machine of the same person, none of which will re-push (their sent-state and sig are untouched). `GET /api/team/whoami` is minted-token-only, so an `ok` response immediately before the leave is the member-side proof that the token branch will be taken. Anything else aborts with `pendingRules: true`.
-- **Assert on the body, not on `res.ok`.** `/api/*` is excluded from the SPA fallback so a central without the route returns a JSON 404 — but a reverse proxy in front of a central can turn that into a 200 HTML page, which the journal would read as a successful purge.
-- **Journal before leave.** If the process dies between the leave and the first ingest, the central is empty and nothing would notice: `reconcileSyncState` only re-pushes when the sig changes, and none of `endpoint`/`token`/`instanceId` did. `startUploader()` checks for a stale journal at boot and forces a full re-push.
-- **Clear sent-state before the leave, not after.** If the purge succeeds and the sent-state is still populated, `selectDeltas` finds zero deltas, `pushOnceDetailed` returns `{count: 0}`, the empty-delta branch still calls `markPushSuccess()`, and the central stays empty **forever behind a green status pill**. Step 2 is idempotent under the journal, so a failed leave retried next cycle does not re-clear a sent-state that has since been rebuilt.
-- **A per-connection push lock is taken for the whole sequence**, with `pendingTrigger` (§5.2) so events arriving during it are deferred rather than dropped. Without the lock, a `notifyDataChanged()`-debounced push already in flight can land *after* the `deleteMany` and re-insert **unfiltered** documents, including denied-repo sessions; the subsequent filtered re-push never overwrites them, so they persist forever. This is the single worst race in the design.
-- **Coalesce and pace.** The UI commits the whole draft once, so toggling five repos is one purge, not five; a second rules change arriving mid-resync queues rather than interleaves. The re-push is paced at the normal cadence rather than as a `BATCH_SIZE = 200` burst — a burst's request count and duration alone give an observer the withheld/retained split.
+- **whoami before the forget.** The route is minted-token-only by construction (§7) and must never
+  acquire a legacy branch, because `handleTeamLeave` already shows the failure mode: its minted
+  branch deletes by `memberId`, its legacy branch by `{org, user}`, and **both return
+  `{ok:true, deleted:N}`**, so a member cannot tell them apart from the response. On a central whose
+  DB was wiped or restored, one machine's rules change would delete every machine of the same
+  person. `GET /api/team/whoami` is minted-token-only, so an `ok` immediately before the call is the
+  member-side proof of which identity the central will act on. Anything else aborts with
+  `pendingRules: true`.
+- **Assert on the body, not on `res.ok`.** `/api/*` is excluded from the SPA fallback so a central
+  without the route returns a JSON 404 — but a reverse proxy in front of a central can turn that
+  into a 200 HTML page, which the journal would read as a successful delete.
+- **Journal before the first batch.** A process dying mid-sequence leaves some ids deleted and some
+  not, and nothing else would notice: `reconcileSyncState` only re-pushes when the sig changes, and
+  none of `endpoint`/`token`/`instanceId` did. `startUploader()` finds the journal at boot and
+  replays the remaining ids — the operation is idempotent, so replaying an already-deleted id is a
+  no-op returning `deleted: 0`.
+- **Advance the sent-state per acked batch, never up front.** An id dropped from the sent-state
+  before the central confirmed its deletion would be re-pushed by the next delta pass and silently
+  restored. Advancing only on the ack makes an interrupted sequence resumable rather than
+  self-defeating.
+- **A per-connection push lock is taken for the whole sequence**, with `pendingTrigger` (§5.2) so
+  events arriving during it are deferred rather than dropped. Without the lock, a
+  `notifyDataChanged()`-debounced push already in flight can land *after* the delete and re-insert
+  the very documents just removed — and since they are no longer in the sent-state, nothing would
+  ever remove them again. This remains the worst race in the design; the scoped delete shortens the
+  window from minutes to one round-trip but does not remove the need for the lock.
+- **Coalesce.** The UI commits the whole draft once, so toggling five repos is one forget, not five;
+  a second rules change arriving mid-sequence queues rather than interleaves. Pacing is no longer a
+  privacy concern — there is no refill burst whose size discloses the withheld/retained split — so
+  the follow-up push uses the normal delta path at the normal cadence.
 
 ### 6.2 What the central sees
 
-- Both the leave route and `team-watch.ts`'s change stream fire `triggerSseNotification()` → `invalidateCache()`. A rebuild landing inside the window returns nothing for that `memberId` and no `memberStats` doc, so `data.ts` drops the machine from both `userStatsCaches` and `machineStatsCaches`.
-- **Second-order effect, worse than the visible zero:** with `machineStatsCaches[memberId]` missing, `resolveMachineCacheScope` returns `null` and every machine/team filter including that machine degrades to per-session sums — a fraction of the truth, exactly the failure CLAUDE.md's team-mode rule warns about. The dip is not confined to the leaving machine's row.
-- The `statsCache` rides **batch 0 only**, so aggregates recover on the first batch and the session list fills progressively. The visible artifact is "totals right, session list still filling" — the least-bad ordering.
-- During the re-push every `bulkWrite` triggers a change event → another `invalidateCache()`; `_revalidating` guards concurrency, so expect one sustained rebuild loop, not N. On a large central that is the real cost of retroactive removal, and pacing (§6.1) spreads it.
-- **Presence is unaffected.** It is WS-authoritative and keyed by display name; leave touches neither the socket registry nor `tokens.lastSeenAt`. The member stays green throughout — which is correct, and is why the member-side status must report `resync`, not "synced", for the duration.
+- **The `memberStats` document is never absent.** It is `replaceOne`d by the follow-up push in the same cycle, so `machineStatsCaches[memberId]` always exists and `resolveMachineCacheScope` never returns `null` on account of a rules change. This is what keeps every *other* machine's machine/team filter honest during the operation — under the previous full-purge design that degradation was the worst collateral effect, and it is now structurally impossible.
+- The visible change is exactly what was asked for: the removed sessions disappear and the machine's totals step down by their contribution. Nothing else moves, and there is no intermediate state in which the machine reads as zero.
+- `POST /api/team/forget` and the follow-up ingest each fire `triggerSseNotification()` → `invalidateCache()`; `_revalidating` guards concurrency, so a rules change costs at most two rebuilds instead of the sustained rebuild loop a full refill produced.
+- **Presence is unaffected.** It is WS-authoritative and keyed by display name; the forget route touches neither the socket registry nor `tokens.lastSeenAt`. The member stays green throughout, which is correct — the operation is short enough that the member-side `resync` state is usually a single cycle.
 
 ### 6.3 Failure and retry
 
 | Failure | Behaviour |
 |---|---|
-| leave returns a network error | rules are persisted, journal stays `purging`, status reports `pendingRules: true`, UI shows `applyQueued`. Retried every cycle with backoff. **The UI must never report success here** — a user who believes a repo is hidden while the central still holds it is the worst outcome in this design |
-| leave returns 401/403, or whoami fails | the token is dead or the central would take the legacy branch → `removeConnection(connId, 'revoked')` on 401/403; abort with `pendingRules` on a whoami mismatch. Never purge broadly |
-| `canPurge === false` (§7) | the rules editor is **disabled** for that connection with `centralTooOld`; existing rules keep filtering *new* pushes, and the card says plainly that already-sent data cannot be removed until the central is upgraded |
-| process dies mid-purge | boot finds the journal, forces sent-state clear + full re-push |
-| re-push partially fails | journal stays `pushing`, cycle retries; deltas are already correct because the sent-state only records what was accepted |
-| `archiveMode === 'off'` | the purge deletes documents the member **cannot regenerate** (Claude already deleted the transcripts and there is no consolidate store). The rules editor is **disabled** with `archiveOffNote`, and — because rules can predate the switch — a connection with existing restrictions and `archiveMode: 'off'` pushes **no statsCache at all** rather than falling back to the real one (§4.4) |
+| forget returns a network error | rules are persisted, journal stays `forgetting`, status reports `pendingRules: true`, UI shows `applyQueued`. Retried every cycle with backoff. **The UI must never report success here** — a user who believes a repo is hidden while the central still holds it is the worst outcome in this design |
+| forget returns 401/403, or whoami fails | the token is dead or the central cannot prove which identity it would act on → `removeConnection(connId, 'revoked')` on 401/403; abort with `pendingRules` on a whoami mismatch. Never widen the delete |
+| `canForget === false` (§7) | the rules editor is **disabled** for that connection with `centralTooOld`; existing rules keep filtering *new* pushes, and the card says plainly that already-sent data cannot be removed until the central is upgraded. No fallback to a full purge — a destructive operation is not an acceptable substitute for a missing precise one |
+| process dies mid-sequence | boot finds the journal and replays the remaining ids; deleting an already-deleted id is a no-op |
+| some batches acked, then a failure | the acked ids are already out of the sent-state and out of the central; the journal retains the rest and the next cycle resumes from there |
+| the follow-up statsCache push fails | the sessions are already gone, so the central under-reports that machine until the next successful push — the safe direction. The journal stays open until a cache push succeeds |
+| `archiveMode === 'off'` | there is no consolidate store, so `attributionBoundary` is `''`, nothing is attributable and no `forgetIds` can be computed. The rules editor is **disabled** with `archiveOffNote`, and — because rules can predate the switch — a connection with existing restrictions and `archiveMode: 'off'` pushes **no statsCache at all** rather than falling back to the unsplit one (§4.4) |
 
 ### 6.4 The guarantee, stated precisely
 
-`deniedRepos` exists in exactly three places: `~/.agentistics/preferences.json`, the in-memory `TeamConnection` on the member, and the browser tab talking to that machine's own origin. It appears in **no** request body sent to a central. `IngestBody` is unchanged — not one field is added. `GET /api/team/status` exposes only `deniedCount` and a local `coverageFrom`, same-origin.
+`deniedRepos` exists in exactly three places: `~/.agentistics/preferences.json`, the in-memory `TeamConnection` on the member, and the browser tab talking to that machine's own origin. It appears in **no** request body sent to a central. `IngestBody` is unchanged — not one field is added. `GET /api/team/status` exposes only `deniedCount`, the boundary and the local prehistory count, same-origin.
 
-**What is guaranteed:** a central never learns *which* repositories are hidden, nor how many, nor their names, sessions, prompts, titles, models or cost — provided the repository was never pushed to it.
+**What is guaranteed:** a central never learns *which* repositories are hidden, nor how many, nor their names, sessions, prompts, titles, models or cost — provided the repository was never pushed to it **and had no activity before the attribution boundary**.
 
 **What is NOT guaranteed, and must be said in the UI:**
 
-1. **A repo that was already pushed is disclosed by its removal.** The central holds those documents with `git_remote`, `project_path`, `first_prompt`, `title`, `model`, tokens and cost. A `deleteMany` followed by a re-ingest from the same `memberId` is machine-detectable — `team-watch.ts` already consumes the change stream — and diffing the pre-delete snapshot against the re-pushed set yields the exact denied repo set, the exact volume withheld and the moment the rule was created. The strong promise applies to *never-shared* repos; the weak one to *already-shared* repos, and `applyConfirmBody` says so in those terms.
-2. **The existence of a filter is observable.** A synthetic cache's `totalSessions` equals the member's session-document count exactly, while an unrestricted member's does not. This is inherent to withholding aggregate history; no marker field is what creates it.
-3. **Colluding centrals can reconstruct each other's denied set.** Two centrals (or one operator with accounts on both) see the same machine, overlapping presence windows and overlapping shared-session sets; a set difference yields the other's rules. Per-connection restrictions are confidential against a *single* central operator, not against collusion. The design reduces the correlation surface where it is free — `user` is already per-connection — and documents the rest.
-4. **CI ingest and OTel are outside the denylist** (§7, §5.3).
+1. **A repo that was already pushed is disclosed by its removal.** The central holds those documents with `git_remote`, `project_path`, `first_prompt`, `title`, `model`, tokens and cost, and the `forget` request names them by id. That is the same information a pre/post-delete diff yielded under the previous full-purge design — deleting data you have already handed over is inherently observable, and the scoped route trades none of that away for its much smaller blast radius. The strong promise applies to *never-shared* repos; the weak one to *already-shared* repos, and `applyConfirmBody` says so in those terms.
+2. **Work done before the attribution boundary rides inside the prehistory block** (§4.4). It arrives as unattributed daily volume — no repo, no project, no session, no prompt — and no later rule can withdraw it, because there is no document to name.
+3. **The existence of a filter is observable.** A restricted machine's session documents stop covering its own filtered days, and a scoped delete is visible on the central's change stream. This is inherent to withholding data; no marker field is what creates it.
+4. **Colluding centrals can reconstruct each other's denied set.** Two centrals (or one operator with accounts on both) see the same machine, overlapping presence windows and overlapping shared-session sets; a set difference yields the other's rules. Per-connection restrictions are confidential against a *single* central operator, not against collusion. The design reduces the correlation surface where it is free — `user` is already per-connection — and documents the rest.
+5. **CI ingest and OTel are outside the denylist** (§7, §5.3).
 
 ---
 
 ## 7. Central-side
 
-**Required changes: one additive, optional field.** Everything the design uses already has the right shape:
+**Required changes: one additive field and one new route.** Everything else the design uses already has the right shape:
 
 | Route / module | Why it suffices |
 |---|---|
-| `POST /api/team/leave` → `handleTeamLeave` | On the minted-token branch it does `sessions.deleteMany({memberId})` + `deleteMemberStats(memberId)` + `deleteMemberWorkflows(memberId)`. Token-authoritative and org-agnostic — exactly the purge primitive D4 needs |
-| `POST /api/team/ingest` | All three writers are deterministic-key `replaceOne` upserts (`teamDocId(org, memberId, harness, sessionId)`, `org:memberId:runId`, `_id: memberId`). No `$inc`, no array append → re-push after purge is idempotent, and real-cache → synthetic-cache → real-cache is a plain overwrite |
-| `GET /api/team/whoami` | minted-token-only → the member-side proof that leave will take the token branch (§6.1) |
-| `tokens` doc | untouched by leave, so the machine keeps pushing and `lastSeenAt` keeps presence honest |
-| `team-agent.ts` WS registry | keyed by display name, never `memberId`; leave neither closes the socket nor flickers presence |
-| `tags-*` | resolve against whatever sessions exist; a denied repo simply contributes nothing. No dangling references, no cleanup |
-| `repos` (CI) | keyed by remote with `memberId = ciMemberId(remote)`; a machine leave can never touch CI data |
+| `POST /api/team/ingest` | All three writers are deterministic-key `replaceOne` upserts (`teamDocId(org, memberId, harness, sessionId)`, `org:memberId:runId`, `_id: memberId`). No `$inc`, no array append → a re-push is idempotent, and unsplit-cache → split-cache → unsplit-cache is a plain overwrite |
+| `GET /api/team/whoami` | minted-token-only → the member-side proof of which identity the central will act on (§6.1) |
+| `POST /api/team/leave` → `handleTeamLeave` | unchanged and still the *full* leave (Disconnect). It is no longer the retroactive-removal primitive |
+| `tokens` doc | untouched by a forget, so the machine keeps pushing and `lastSeenAt` keeps presence honest |
+| `team-agent.ts` WS registry | keyed by display name, never `memberId`; neither route closes the socket nor flickers presence |
+| `tags-*` | resolve against whatever sessions exist; a removed session simply stops contributing. No dangling references, no cleanup |
+| `repos` (CI) | keyed by remote with `memberId = ciMemberId(remote)`; a machine's forget can never touch CI data |
 | `team-source.ts`, `data.ts` read path | pure projections of what happens to be in Mongo |
 
-**The one change: `GET /api/team/policy` returns `capabilities: string[]`** (currently `['leave', 'leave.stats', 'leave.workflows']`). It is public, already fetched every cycle, and additive — an older member ignores it. It exists because the purge primitive was assembled in three releases and the member cannot otherwise tell which one it is talking to: `/api/team/leave` landed in **v1.6.6**, `deleteMemberStats` in the leave path in **v1.6.6**, and `deleteMemberWorkflows` only in **v1.7.3**. Against a published v1.7.0–v1.7.2 central the purge deletes sessions and stats but **leaves the workflow documents**, whose `name`, `phases`, `agents[].label` and `totals` are exactly what §4.2 fails closed over — and `ingestWorkflows` upserts per `runId`, so the filtered re-push never removes them. The UI would say "Rules applied" while the blocked repo's workflow names and cost stayed on the central forever.
+**Change 1 — `POST /api/team/forget`.** Body `{ sessionIds: string[] }`, max 500 per request.
+
+- **Minted token only.** No legacy `{org, user}` branch, no open fallback, no `TEAM_INGEST_TOKEN`
+  path — a route that deletes must never be reachable by an identity the caller cannot prove. A
+  non-minted bearer gets `401`, never a partial success.
+- Deletes `{ memberId, sessionId ∈ ids }` from the team collection and the workflow runs whose
+  `sessionId ∈ ids`, both scoped to the authenticated `memberId`. The `memberStats` document is
+  **not** touched — the member replaces it in the same cycle, which is what keeps
+  `machineStatsCaches` continuous (§6.2).
+- Returns `{ ok: true, deleted, deletedRuns }`. Deleting an unknown or already-deleted id is a
+  no-op, so the whole operation is idempotent and safely replayable from the member's journal.
+- Ids are validated as strings and capped; an oversized or malformed body is `400`, never a partial
+  delete.
+- It fires `triggerSseNotification()` like every other mutation.
+
+**Change 2 — `GET /api/team/policy` returns `capabilities: string[]`** (`['leave', 'leave.stats', 'leave.workflows', 'forget.sessions']`). Public, already fetched every cycle, additive — an older member ignores it. Without it a member cannot tell which vintage of central it is talking to, and the removal primitive was assembled across releases: `/api/team/leave` and `deleteMemberStats` landed in **v1.6.6**, `deleteMemberWorkflows` only in **v1.7.3**, and `forget` arrives with this design. Against a v1.7.0–v1.7.2 central a full purge deletes sessions and stats but **leaves the workflow documents**, whose `name`, `phases`, `agents[].label` and `totals` are exactly what §4.2 fails closed over.
 
 Member behaviour by probe result:
 
-- `capabilities` present and containing `leave.workflows` → `canPurge: true`, full behaviour.
-- `capabilities` absent (central < this release) → probe `POST /api/team/leave`. A JSON 404 (`AGENTISTICS_INGEST_ONLY=1`, or a pre-v1.6.6 central) → `canPurge: false`. A working leave → `canPurge: true` **only if the machine has zero local workflow runs**; otherwise `canPurge: false` with `centralTooOld`, and the rules editor is disabled with an explicit "upgrade this central to 1.7.3 or later to use sharing rules".
+- `capabilities` contains `forget.sessions` → `canForget: true`, full behaviour.
+- Otherwise (field absent, or present without it) → `canForget: false`, `centralTooOld`, and the
+  rules editor is **disabled** with an explicit "upgrade this central to use sharing rules".
 
-`canPurge: false` never turns into a silent partial purge, and never into an endless retry loop: the rules editor refuses up front rather than clearing the sent-state every cycle against a central that will never purge.
+**There is deliberately no fallback to the full-purge path**, even against a central that would
+support it. Emptying a machine's history to withdraw a handful of sessions is a destructive
+operation with the collateral effects catalogued in §6.2, and "the central is old" is not a reason
+to inflict it. `canForget: false` never becomes a silent partial removal and never an endless retry
+loop: the editor refuses up front.
 
-**One member-side refusal, not a feature.** `handleTeamLeave`'s legacy/open branch deletes by `{org, user}` and cannot be distinguished from the token branch by its response — hence the whoami precondition in §6.1. The member fails loudly rather than deleting broadly.
+**One member-side refusal, not a feature.** `handleTeamLeave`'s legacy/open branch deletes by `{org, user}` and cannot be distinguished from the token branch by its response — hence the whoami precondition in §6.1, which applies to `forget` as well even though that route has no legacy branch of its own. The member fails loudly rather than deleting broadly.
 
 **Two product caveats to state in docs and UI copy, not code:**
 
@@ -734,12 +886,12 @@ Rows are grouped by **canonical** key, so `git@github.com:Acme/API.git` and `htt
 Wrapped in the existing `Section` primitive (read-first with a right-aligned Edit; mobile-correct Save/Cancel stacking for free).
 
 - **One polarity, everywhere.** The panel is shared-positive: `sharedRepos` heading, switch on = shared, summary `nShared`, bulk `shareAll` / `blockAll`. The only shared-negative surface is the card pill, and it carries an explicit verb and icon (`{n} hidden` + `EyeOff`) so it cannot be misread as a mode.
-- **Read view:** amber chips for each denied entry, rendered as `repoShortName(remote)` in a `flexWrap: 'wrap'` container, each `maxWidth: '100%'` with ellipsis and the full remote in `title` — full normalized remotes run ~48 chars and would otherwise break the 390px no-horizontal-scroll rule. Plus `nShared` (or `sharingAll`) and, whenever `deniedRepos.length > 0`, the `statsNote` footnote naming the local coverage date.
+- **Read view:** amber chips for each denied entry, rendered as `repoShortName(remote)` in a `flexWrap: 'wrap'` container, each `maxWidth: '100%'` with ellipsis and the full remote in `title` — full normalized remotes run ~48 chars and would otherwise break the 390px no-horizontal-scroll rule. Plus `nShared` (or `sharingAll`) and, whenever `deniedRepos.length > 0`, the `statsNote` footnote naming the attribution boundary and the size of the block that precedes it.
 - **Edit view:** search box (16px on mobile) + two groups, `groupBlocked ({n})` first then `groupShared ({n})`, each sessions-desc internally, a row animating between groups on toggle. Blocked rows scattered through a 14-row sessions-desc list make "what am I hiding from this central?" a full scan; the amber chip summary also stays visible above the list in edit mode so the read view's answer never disappears mid-edit. Each row is a `RowSwitch`: icon, name, host chip, second line `sessionsN · lastActiveT`; a blocked row dims to `opacity: .55` with `line-through` on the name — deny state must be readable without relying on colour. Header has `shareAll` / `blockAll` and the live `nShared` counter. `orphan` rows live in a collapsed `staleGroup` disclosure at the bottom.
 - **A live impact line above Save, repeated in the confirm modal:** `applyImpact` — "Removes {sessions} sessions (~{cost}) from this central." Every input is already in the browser (`ctx.data.sessions` + `blendedCostPerToken`), and it is the only number the user actually cares about.
-- **Explicit Save, never per-toggle.** Each applied rule change is a purge and a full re-push; saving on every toggle would rebuild the central once per tap. Record this rationale in a code comment.
-- **Flow:** Save → `ConfirmModal` showing `applyConfirmBody` (mechanic + already-shared disclosure, §6.4), `applyConfirmStats` (the coverage collapse with both dates) and `applyImpact` → `PATCH /api/team/connections/:id {deniedRepos}`. **One server call.** The UI must never orchestrate purge-then-push itself — a tab closing mid-sequence would leave the central purged and unpopulated.
-- **While it runs:** the Section body becomes a progress strip driven by `status.resync` — `applyingPurge` → `applyingPush {sent}/{total}` → `applyingDone` — with `applyingSafeToLeave` beneath it, and the `member.resync_started` / `member.resync_done` notifications (§5.6) carry the state to any other route. The card header shows a spinner pill. The Section's Edit, the card's Disconnect, `Sync now` and `addCentral` are disabled for the duration; a second apply mid-resync is the one way to genuinely lose data.
+- **Explicit Save, never per-toggle.** Each applied rule change is a delete round-trip plus a cache push against a live central; saving on every toggle would fire one per tap. Record this rationale in a code comment.
+- **Flow:** Save → `ConfirmModal` showing `applyConfirmBody` (mechanic + already-shared disclosure, §6.4), `applyConfirmStats` (the attribution boundary and what rides before it) and `applyImpact` → `PATCH /api/team/connections/:id {deniedRepos}`. **One server call.** The UI must never orchestrate the delete itself — a tab closing mid-sequence would leave the journal open with no client to resume it.
+- **While it runs:** the Section body becomes a progress strip driven by `status.resync` — `applyingForget {done}/{total}` → `applyingPush` → `applyingDone` — with `applyingSafeToLeave` beneath it, and the `member.resync_started` / `member.resync_done` notifications (§5.6) carry the state to any other route. The card header shows a spinner pill. The Section's Edit, the card's Disconnect, `Sync now` and `addCentral` are disabled for the duration; a second apply mid-sequence is the one way to genuinely lose data.
 - **Done** → green `applyOk`, auto-clears after 6s. **Error** → red `applyErr` with the draft **kept in edit mode**, so the user retries without re-toggling 14 switches.
 
 ### 9.5 Per-card states
@@ -751,10 +903,10 @@ Wrapped in the existing `Section` primitive (read-first with a right-aligned Edi
 | no identity | `user === ''` | grey dot, `noIdentity` + `retry` — whoami is re-run automatically each cycle (§5.10); the button forces one |
 | connected | `errKind === null && lastSuccessAt` | green dot, `connected · lastSync 12s · 41ms` |
 | offline | `errKind === 'net'` | amber dot, `reconnecting`, amber card border. Repo panel stays **editable** — rules are local |
-| unauthorized | `errKind === 'auth'` | red dot, `unauthorized` + `authHelp`. Repo panel hidden — there is nothing to purge |
+| unauthorized | `errKind === 'auth'` | red dot, `unauthorized` + `authHelp`. Repo panel hidden — nothing can be removed until the token works again |
 | resyncing | `status.resync != null` | spinner pill, progress strip, sibling write actions disabled |
 | apply-queued | apply attempted while offline (`pendingRules`) | amber `applyQueued` — **not optional**: an offline apply reporting success would leave the user believing a repo is hidden while the central still holds it |
-| central too old | `canPurge === false` | repo panel replaced by `centralTooOld`, Edit disabled |
+| central too old | `canForget === false` | repo panel replaced by `centralTooOld`, Edit disabled |
 | archive off | `prefs.archiveMode === 'off'` | repo panel replaced by `archiveOffNote` (a `<Link to="/settings/sessions">`), Edit disabled |
 | broken endpoint | `hostOf` fell back | `brokenConn` card, Disconnect only |
 | empty list | `connections.length === 0` | dashed panel, `emptyTitle`/`emptyBody` + Add button |
@@ -826,20 +978,21 @@ Entries written as `{one, other}` are pluralized by `plural(key, n)`. `(s)`-styl
 | `staleHint` | Still blocked. If the repository comes back, it stays hidden from this central. | Continuam bloqueados. Se o repositório voltar, ele segue oculto desta central. |
 | `applyImpact` | Removes {sessions} sessions (~{cost}) from this central. | Remove {sessions} sessões (~{cost}) desta central. |
 | `applyConfirmTitle` | Apply sharing rules? | Aplicar regras de compartilhamento? |
-| `applyConfirmBody` | Your data on this central is deleted and re-sent using the new rules. Anything already sent has been seen — whoever runs this central can tell that data was removed, and what it was. | Seus dados nesta central são apagados e reenviados com as novas regras. O que já foi enviado já foi visto — quem opera a central consegue perceber que algo foi removido, e o quê. |
-| `applyConfirmStats` | This central also stops receiving your full Claude history. Its totals for this machine will be computed only from the sessions you share, starting {date} instead of {realFirstDate} — with no explanation shown on that dashboard. | Esta central também deixa de receber seu histórico completo do Claude. Os totais dela para esta máquina passam a ser calculados só com as sessões compartilhadas, a partir de {date} em vez de {realFirstDate} — sem nenhuma explicação no dashboard dela. |
+| `applyConfirmBody` | The sessions you are blocking are deleted from this central right away. Anything already sent has been seen — whoever runs this central can tell that data was removed, and what it was. | As sessões que você está bloqueando são apagadas desta central imediatamente. O que já foi enviado já foi visto — quem opera a central consegue perceber que algo foi removido, e o quê. |
+| `applyConfirmStats` | Your totals stay whole. Days before {boundary} predate your saved session history, so they cannot be attributed to any repository and are sent as a single aggregate ({n} sessions) — if a blocked repository was active back then, that volume stays in it and no rule can remove it. Everything from {boundary} on is filtered exactly. | Seus totais continuam completos. Os dias anteriores a {boundary} são anteriores ao seu histórico de sessões salvo, então não podem ser atribuídos a nenhum repositório e vão como um agregado único ({n} sessões) — se um repositório bloqueado teve atividade naquele período, esse volume fica lá e nenhuma regra o remove. De {boundary} em diante o filtro é exato. |
+| `applyConfirmStatsProven` | One or more repositories you are blocking have sessions before {boundary}. Their volume from that period stays in the aggregate and cannot be removed. | Um ou mais repositórios que você está bloqueando têm sessões anteriores a {boundary}. O volume daquele período fica no agregado e não pode ser removido. |
 | `applyConfirmBtn` | Apply and resend | Aplicar e reenviar |
-| `applyingPurge` | Removing your data from the central… | Removendo seus dados da central… |
-| `applyingPush` | Re-sending {sent} of {total} sessions… | Reenviando {sent} de {total} sessões… |
+| `applyingForget` | Removing {done} of {total} sessions from the central… | Removendo {done} de {total} sessões da central… |
+| `applyingPush` | Updating this central's totals… | Atualizando os totais desta central… |
 | `applyingSafeToLeave` | You can leave this page — this continues in the background. | Você pode sair desta página — isso continua em segundo plano. |
 | `applyingDone` | Done — re-syncing finished | Pronto — ressincronização concluída |
 | `applyOk` | {one: `Rules applied — 1 session re-sent`, other: `Rules applied — {n} sessions re-sent`} | {one: `Regras aplicadas — 1 sessão reenviada`, other: `Regras aplicadas — {n} sessões reenviadas`} |
 | `applyErr` | Could not apply the rules | Não foi possível aplicar as regras |
 | `applyQueued` | Rules saved. The central is unreachable — they will be applied on the next successful sync. | Regras salvas. A central está inacessível — elas serão aplicadas no próximo envio bem-sucedido. |
-| `statsNote` | While any repository is blocked, this central receives totals computed only from the sessions you share — its history for this machine starts on {date}. | Enquanto houver repositório bloqueado, esta central recebe totais calculados apenas com as sessões que você compartilha — o histórico dela para esta máquina começa em {date}. |
+| `statsNote` | Filtered exactly from {boundary} on. Earlier days ({n} sessions) predate your saved session history and are sent as one aggregate that no rule can filter. | Filtrado com exatidão de {boundary} em diante. Os dias anteriores ({n} sessões) são anteriores ao seu histórico de sessões salvo e vão como um agregado único que nenhuma regra filtra. |
 | `ciNote` | This only covers sessions from this machine. If the repository also pushes from GitHub Actions, it stays visible on the central. | Isto cobre apenas as sessões desta máquina. Se o repositório também envia pelo GitHub Actions, ele continua visível na central. |
 | `otelWarn` | OpenTelemetry export is on. It sends unfiltered totals and is not covered by these rules. | A exportação OpenTelemetry está ligada. Ela envia totais sem filtro e não é coberta por estas regras. |
-| `centralTooOld` | This central is too old to remove data on request. Upgrade it to 1.7.3 or later to use sharing rules. | Esta central é antiga demais para remover dados sob demanda. Atualize-a para 1.7.3 ou superior para usar regras de compartilhamento. |
+| `centralTooOld` | This central cannot remove specific sessions on request. Upgrade it to use sharing rules. | Esta central não consegue remover sessões específicas sob demanda. Atualize-a para usar regras de compartilhamento. |
 | `archiveOffNote` | Sharing rules need session archiving. Open Settings → Sessions and choose "Consolidate metrics". | As regras de compartilhamento exigem o arquivamento de sessões. Abra Configurações → Sessões e escolha "Consolidar métricas". |
 | `syncNow` | Sync now | Sincronizar agora |
 | `disconnect` | Disconnect | Desconectar |
@@ -867,9 +1020,9 @@ Entries written as `{one, other}` are pluralized by `plural(key, n)`. `(s)`-styl
 
 **Solo machines.** `migrateTeamConfig` returns `{schema:2, mode:'solo', connections: []}`. No uploader, no socket, no files created. Zero change in behaviour beyond the added `schema` key.
 
-**Existing single-central members.** On the first read after upgrade the flat config becomes `connections[0]` with `deniedRepos: []` and a **deterministic** id (`legacyConnectionId`), so every reader agrees before anything is persisted. `migrateTeamStateOnce()` then persists it, moves `team-sent.json` / `team-sync.json` into `connections/`, converts the hashes losslessly (`sha256(oldValue)`), and seeds `rulesHash: denialSignature([])`. Because the denylist is empty, `pushOnceDetailed` takes the unrestricted path and pushes the real supplemented statsCache exactly as before. The sync signature gains `connId`, so it changes once → **one** sig-mismatch re-push per member on upgrade, idempotent, non-recurring. Nothing purges: a missing `rulesHash` is defined as "no restrictions", and the shrink detector triggers on denial, not absence.
+**Existing single-central members.** On the first read after upgrade the flat config becomes `connections[0]` with `deniedRepos: []` and a **deterministic** id (`legacyConnectionId`), so every reader agrees before anything is persisted. `migrateTeamStateOnce()` then persists it, moves `team-sent.json` / `team-sync.json` into `connections/`, converts the hashes losslessly (`sha256(oldValue)`), and seeds `rulesHash: denialSignature([])`. Because the denylist is empty, `pushOnceDetailed` takes the unrestricted path and pushes the real supplemented statsCache exactly as before. The sync signature gains `connId`, so it changes once → **one** sig-mismatch re-push per member on upgrade, idempotent, non-recurring. Nothing is removed: a missing `rulesHash` is defined as "no restrictions", and the shrink detector triggers on denial, not absence.
 
-**Older centrals.** Nothing on the wire changes at all — `IngestBody` is byte-compatible and `StatsCache` gains no fields. `POST /api/team/leave` and `POST /api/team/ingest` are used exactly as they are today. A new member works against an old central with full functionality **except** retroactive removal, which is capability-probed (§7): pre-1.6.6 and ingest-only centrals cannot purge at all, 1.7.0–1.7.2 cannot purge workflow runs, and in both cases the rules editor refuses up front with `centralTooOld` rather than reporting a success it cannot deliver.
+**Older centrals.** Nothing on the wire changes at all — `IngestBody` is byte-compatible and `StatsCache` gains no fields. `POST /api/team/leave` and `POST /api/team/ingest` are used exactly as they are today. A new member works against an old central with full functionality **except** the sharing rules themselves: any central without `forget.sessions` in its `capabilities` gets `canForget: false` and a disabled rules editor (§7). Multi-central, per-connection identity, per-connection cadence and Disconnect all work against any vintage. The upgrade order is therefore **central first, then machines** — and a machine that upgrades first loses nothing, it simply cannot create rules against that central yet.
 
 **Older members against a new central.** Unaffected — the central has no new expectations, and `capabilities` is additive.
 
@@ -888,50 +1041,55 @@ Ranked. Every mitigation is folded into the design above.
 | # | Risk | Severity | Mitigation (section) |
 |---|---|---|---|
 | R1 | Migration mints a random id inside a **read** path nobody persists → a new identity every cycle: full re-push forever, a new WebSocket every 5s, and the previous cycle's state file deleted each tick | critical | Deterministic `legacyConnectionId(endpoint, token)` on the migration path only, plus a single-flight, marker-guarded `migrateTeamStateOnce()` that persists before anything else reads (§3.2, §3.3) |
-| R2 | Synthetic cache destroys the member's deep history; a user with 2y of `stats-cache.json` and a 3m store loses 80% of their reported usage on a central by blocking one repo, silently | critical | Selected by the **declared** rule so the transition coincides with the confirm dialog; both dates stated in `applyConfirmStats` **before** the commit; `coverageFrom` on the local status route and in the persistent `statsNote` (§4.4, §9.4) |
-| R3 | The real-vs-synthetic switch keyed on `filtered.length < all.length` fails **open** — an empty/short store, `archiveMode: 'off'` after rules exist, or a `loadConsolidated` error pushes the real full-history cache **with the denied repo in it** | critical | Switch on `hasRestrictions(denied)`; no raw-file fallback on the restricted path; omit `statsCache` entirely rather than send the real one (§4.4) |
-| R4 | The shrink detector reading absence as denial purges the central whenever the store momentarily reads short — non-atomic `writeConsolidated`, `safeReadJson` swallowing errors, a container starting before its bind mount | critical | Trigger is `deniedSessionIds`, never absence; no purge while `ctx.sessions.length === 0` (§5.5) |
-| R5 | Purge-then-repush has no journal — a killed process leaves the central permanently empty behind a green pill | critical | `team-purge-<connId>.json` written **before** the leave; sent-state cleared **before** the leave; boot checks for a stale journal; explicit retry loop (§6.1, §6.3) |
+| R2 | Truncating the cache to the store's coverage makes the same machine report irreconcilable totals to itself and to the central — a user with 2y of `stats-cache.json` and a 3m store loses 80% of their reported usage by blocking one repo | critical | **Removed by design:** the cache is split at the attribution boundary, not truncated. Prehistory travels verbatim, the attributable period is filtered exactly, and both terms are copied or summed — never estimated (§4.3b) |
+| R2' | The prehistory block still carries a blocked repo's volume when that repo was active before the boundary, and no rule can ever withdraw it | high | Inherent — there is no document to delete. Bounded, closed and shrinking; stated in `applyConfirmStats` before the commit, and stated *specifically* when the store proves the blocked repo has pre-boundary sessions (§4.4, §6.4) |
+| R3 | The unsplit-vs-split switch keyed on `filtered.length < all.length` fails **open** — an empty/short store, `archiveMode: 'off'` after rules exist, or a `loadConsolidated` error pushes the real full-history cache **with the denied repo in it** | critical | Switch on `hasRestrictions(denied)`; no raw-file fallback on the restricted path; `buildSplitStatsCache` returns `null` and the push omits the cache rather than sending the unsplit one (§4.4) |
+| R4 | The shrink detector reading absence as denial asks the central to delete valid sessions and drops them from the sent-state — silent, permanent, one-directional loss | critical | The payload **is** `deniedSessionIds`, so an empty store yields an empty request; no forget while `ctx.sessions.length === 0` (§5.5) |
+| R5 | A killed process mid-removal leaves the central in a state nothing will reconcile — the sig is unchanged, so no re-push is ever triggered | critical | `team-forget-<connId>.json` written **before** the first batch; sent-state advanced only per ack; boot replays the remaining ids; deleting an already-deleted id is a no-op (§6.1, §6.3) |
+| R5' | The full purge's collateral: while the central holds nothing for that machine, `machineStatsCaches[memberId]` is missing, `resolveMachineCacheScope` returns `null`, and **every other machine's** machine/team filter degrades to per-session sums | critical | **Removed by design:** the scoped `forget` never deletes the `memberStats` document and never empties the machine, so there is no window (§6.2) |
 | R6 | `autoResetOnRevoke` nukes all connections when one central revokes | critical | `removeConnection(connId)` — read-modify-write on `connections`, `mode` derived, other centrals untouched (§5.7) |
 | R7 | `POST /api/team/leave` silently takes the `{org, user}` branch on a wiped/restored central and deletes a **sibling machine's** data, which never re-pushes because its own state is intact — and both branches return `{ok:true}` | critical | `GET /api/team/whoami` (minted-token-only) immediately before every leave; assert on `body.ok`, not `res.ok`; abort with `pendingRules` otherwise (§6.1, §7) |
 | R8 | A legacy `PUT /api/preferences {team}` from a stale tab or an old container replaces the whole block — every connection and every denylist gone | critical | A team payload with no `connections` key is merged as a legacy single-connection edit, `409` when N > 1; dedicated connection routes for everything else (§5.8) |
-| R9 | Purge-then-repush is itself the disclosure for any repo already pushed | high | §6.4 states the guarantee as strong for never-shared repos and weak for already-shared ones; `applyConfirmBody` says it in those words; the Add wizard makes "block before the first push" the default path (§6.4, §9.2) |
+| R9 | Removal is itself the disclosure for any repo already pushed — the `forget` request names the documents, exactly as a pre/post diff did | high | Inherent to withdrawing data already handed over; the scoped route trades none of it away for a far smaller blast radius. §6.4 states the guarantee as strong for never-shared repos and weak for already-shared ones; `applyConfirmBody` says it in those words; the Add wizard makes "block before the first push" the default path (§6.4, §9.2) |
 | R10 | Adding a central pushes the full unfiltered history before the user can restrict anything, converting every safe case into R9's unsafe one | high | Repo rules are step 2 of the add wizard; `POST /api/team/connections` accepts `deniedRepos`; no timer, socket or `push-now` before that body is committed (§5.8, §9.2) |
 | R11 | `partial` / `coverageFrom` on the wire is a self-declared "I am withholding data" flag that quantifies how much | high | Both removed from `IngestBody`; `StatsCache` gains nothing; disclosure is local and pre-commit (§4.4) |
-| R12 | Retroactive removal is silently incomplete against 1.7.0–1.7.2 (workflow runs survive) and impossible before 1.6.6 / on ingest-only centrals, while the UI reports success | high | `capabilities` on `/api/team/policy` + a leave probe; `canPurge:false` disables the rules editor with `centralTooOld` (§7, §6.3) |
+| R12 | Retroactive removal is silently incomplete or impossible against an older central while the UI reports success | high | `capabilities` on `/api/team/policy`; `canForget:false` disables the rules editor with `centralTooOld`, and there is **no** fallback to the destructive full purge (§7, §6.3) |
 | R13 | Token rotation appends a **second, unrestricted** connection: the machine double-counts on the central under two `memberId`s and the blocked repo silently re-shares | high | Uniqueness is the normalized endpoint; a known endpoint updates in place preserving `id`/`deniedRepos`; a token already used elsewhere is refused (§3.2, §5.8, §8) |
-| R14 | Two connections to one central via different endpoint spellings collapse onto one `memberId`: alternating `replaceOne` of `memberStats` and a purge on one deleting the other's sessions | high | Same rule — one token, one connection (§3.2) |
+| R14 | Two connections to one central via different endpoint spellings collapse onto one `memberId`: alternating `replaceOne` of `memberStats` and a removal issued by one deleting the other's sessions | high | Same rule — one token, one connection (§3.2) |
 | R15 | `notifyDataChanged()` turns denied-repo activity into a ~2s-resolution timestamped heartbeat on the central via the empty-delta push | high | Restricted connections never fan out on change; empty-delta pushes suppressed when nothing changed; periodic pushes jittered (§5.3) |
 | R16 | Non-Claude sessions carry no `git_remote` (the persisted backfill runs Claude-only, pre-merge), so blocking a repo does not block Codex/Gemini/Kimi/agy work in it — and `project_path` names the repo | high | `buildPathRepoIndex` seeded from `ServerProject.gitRemote` as well as sessions; everything still unresolved lands in `NO_REPO_KEY`, which is pre-blocked on the first restriction (§4.2) |
 | R17 | Sessions that *become* denied (backfilled remote, repo rename, folder gains a remote) stay on the central forever | high | The denial-based shrink detector runs **every cycle**, before the `instanceId` guard (§5.5) |
-| R18 | The rules check sitting behind `reconcileSyncState`'s `if (!instanceId) return` means an older, flaky or ingest-only central never triggers a purge, behind a green pill | high | Rules and shrink are local facts, evaluated first and unconditionally (§5.5) |
-| R19 | A migrated sync file has no `rulesHash`, so `undefined !== denialSignature([])` purges the entire fleet's centrals on upgrade day, simultaneously | high | Missing `rulesHash` is defined as `denialSignature([])`; the migration seeds it explicitly (§3.3, §5.5) |
+| R18 | The rules check sitting behind `reconcileSyncState`'s `if (!instanceId) return` means an older, flaky or ingest-only central never triggers a removal, behind a green pill | high | Rules and shrink are local facts, evaluated first and unconditionally (§5.5) |
+| R19 | A migrated sync file has no `rulesHash`, so `undefined !== denialSignature([])` runs a removal against the entire fleet's centrals on upgrade day, simultaneously | high | Missing `rulesHash` is defined as `denialSignature([])`; the migration seeds it explicitly (§3.3, §5.5) |
 | R20 | `WorkflowRun` has no repo — names, agent labels and cost of a denied repo keep flowing; and runs pushed in batch 0 of a failed push are in no sent-state, so they never appear stale | high | `filterSharedWorkflows` fail-closed; `runIds` recorded in the sent-state and included in the stale computation (§4.2, §5.4) |
 | R21 | Multi-repo project directories mis-attribute; denied work is shared while the user believes it is not | high | `PathRepoIndex.conflicts`; the whole ambiguous path is excluded and the row renders blocked-and-locked, not annotated (§4.2, §9.3) |
 | R22 | Preference writes are unlocked and non-atomic; a torn read falls through to `DEFAULT_PREFS` and the machine silently reads as **solo** — every connection, denylist, `archiveMode` and layout gone | high | Serialized single-writer chain, tmp+rename, and a reader that refuses to default on a parse error of a non-empty file (§5.8) |
 | R23 | State-file GC on a timer races the add route and the preferences write, deleting a live connection's sent-state | high | GC runs only inside the serialized write that mutated `connections[]`, against the post-write array (§3.4) |
 | R24 | `GET /api/preferences` is unauthenticated with wildcard CORS — any website the user visits can read every central token, and `deniedRepos` would join it | high | Tokens redacted out of the GET entirely (the UI never needs one); origin-echo instead of `*` on preferences/status/connection routes; same-origin mobile use unaffected (§5.8) |
-| R25 | Push-cycle ordering (`loadConsolidated` before `buildApiResponse`) makes a restricted connection's first cycle after boot `replaceOne` the central's totals with **zeros** | high | `buildApiResponse()` first in `PushCycleContext`; refuse to push a synthetic cache of zero sessions while the real cache is non-empty (§5.2, §4.4) |
+| R25 | Push-cycle ordering (`loadConsolidated` before `buildApiResponse`) makes a restricted connection's first cycle after boot `replaceOne` the central's totals with **zeros** | high | `buildApiResponse()` first in `PushCycleContext`; a cold store yields `boundary === ''` and `buildSplitStatsCache` returns `null`, so the cycle omits the cache instead of overwriting with zeros (§5.2, §4.4) |
 | R26 | Keying state by endpoint (or endpoint+token) collides — two accounts on one central share a sync file and thrash into a re-push loop | high | Random `connId` in every Map, every filename, and the sync signature (§3.2, §5.5) |
-| R27 | In-flight unfiltered push lands after the `deleteMany` and resurrects denied sessions permanently | high | Per-connection push lock held across the whole purge sequence (§6.1) |
+| R27 | An in-flight push lands after the delete and re-inserts the very sessions just removed — and since they are gone from the sent-state, nothing removes them again | high | Per-connection push lock held across the whole forget sequence; `pendingTrigger` defers rather than drops (§6.1) |
 | R28 | Case- and host-variant remote keys produce two rows and two rules; blocking the recognized one leaves the other shared | high | `canonicalRepoKey` folds case and `ssh.`/`altssh.` aliases; picker rows group by it (§4.2, §9.3) |
 | R29 | `cli-member.ts`'s `nudgeLocalServer` PUTs the whole `team` block — the exact write §5.8 forbids, on every invocation of the shipped CLI | high | CLI mutations go through the connection routes; the no-server path takes the preferences lock and writes directly (§8) |
 | R30 | Sessions that cannot be attributed are "new repos" under D2 and ship `project_path`, `first_prompt`, `title` and cost | high | Unresolved ≠ new: `withUnresolvedDenied` writes `NO_REPO_KEY` into the list on the first restriction, visible and pre-blocked (§4.2) |
-| R31 | Synthetic cache double-counts non-Claude sessions on the central (a naive extraction keeps `supplementStatsCache`'s all-harness `dailyActivity`) | high | `claudeOnly` on the accumulator, gated in `buildSharedStatsCache`, with a mixed-harness unit test (§4.2, §4.5) |
+| R31 | The rebuilt cache double-counts non-Claude sessions on the central (a naive extraction keeps `supplementStatsCache`'s all-harness `dailyActivity`) | high | `claudeOnly` on the accumulator, gated in `buildSharedStatsCache`, with a mixed-harness unit test (§4.2, §4.5) |
+| R31' | The split's subtraction terms disagree with the real cache (its `lastComputedDate` lag vs the supplemented gap-fill), producing a negative | high | Clamp at 0 per field; the residue lands in the attributable half, where it is filtered — the safe direction. A clamp is never a reason to fall back to the unsplit cache (§4.3b) |
+| R31'' | The attribution boundary moves **later** (store pruned, `AGENTISTICS_DATA_DIR` moved, `archiveMode` switched), handing previously-filtered days to the unfilterable prehistory block | high | `boundary` persisted per connection in `team-rules-<connId>.json` and applied as `min(persisted, computed)` — monotonic, may only ever move earlier (§5.5) |
 | R32 | One WebSocket singleton → whichever connection reconciles first owns the socket, and the member reads as **hard offline** on every other central | medium-high | `Map<connId, WebSocket>` + per-connection reconcile and backoff (§5.10) |
-| R33 | A change event arriving while the purge lock is held is **dropped**, not deferred — including the `backfillGitRemote` heal that most likely changed what is shared | medium-high | `pendingTrigger` per connection; never write the sync/rules files for a sequence during which an event was swallowed (§5.2, §6.1) |
+| R33 | A change event arriving while the push lock is held is **dropped**, not deferred — including the `backfillGitRemote` heal that most likely changed what is shared | medium-high | `pendingTrigger` per connection; never write the sync/rules files for a sequence during which an event was swallowed (§5.2, §6.1) |
 | R34 | `sessionHash` stores a full session copy per connection; O(batches²) I/O × N | medium-high | sha256 digest + versioned sent-state, with a lossless offline v1→v2 conversion so the upgrade costs zero re-pushes (§5.4, §3.3) |
 | R35 | `getUploaderStatus()` singleton feeds three surfaces; `agentop member status` already reports garbage; the sidebar pill would silently show only `connections[0]` | medium-high | Per-connection status; the CLI queries the local server; the pill aggregates worst-status-wins (§5.9, §8, §9.6) |
 | R36 | No shared tick, so `PushCycleContext` cannot be "built once": N× `buildApiResponse` + full store scans per period | medium-high | Time-windowed single-flight memo; `loadConsolidated` memoized against the store's write counter; concurrency cap of 2 (§5.2) |
 | R37 | `AGENTISTICS_TEAM_SENT_FILE` bound to a positional `connections[0]` cross-assigns state after a splice — the surviving central reads a foreign sent-state and silently never delivers those sessions | medium | Honoured only while `connections.length === 1` and only pre-migration; hard error on adding a second connection while set (§3.4) |
 | R38 | `handleLeaveCentral` calls the global `resetSyncState()` — an old SPA's Disconnect gives an unrelated central a spurious re-push while the purged one keeps its sent-state | medium | Maps `{endpoint, token}` → `connId`, resets only that connection, removes the entry itself (§5.8) |
-| R39 | Purge on *un-block* is gratuitous loss and re-enters the R5 window for nothing | medium | Purge only when the shared set shrinks; growth just clears sent-state; the UI commits the whole draft once (§5.5, §9.4) |
-| R40 | `archiveMode: 'off'` makes every rules change permanently truncate the central's history — and rules created *before* the switch would silently start pushing the real cache again | medium | Editor disabled with `archiveOffNote`; existing restrictions push **no** statsCache rather than the real one (§4.4, §6.3) |
+| R39 | A removal fired on *un-block* would be gratuitous | medium | Structurally impossible: the payload is `deniedSessionIds`, which is empty when nothing is newly denied; growth arrives as ordinary deltas (§5.5) |
+| R40 | `archiveMode: 'off'` leaves nothing attributable, and rules created *before* the switch would silently start pushing the unsplit cache again | medium | Editor disabled with `archiveOffNote`; `boundary === ''` makes `buildSplitStatsCache` return `null`, so existing restrictions push **no** statsCache rather than the unsplit one (§4.4, §6.3) |
 | R41 | N latency probes × 4s inside a 5s poll | medium | Probe moves into the uploader cycle; the route returns cached values (§5.9) |
 | R42 | One debounce timer and one interval floor for N cadences; the global `running` guard blocks all pushes | medium | Per-connection timer, floor and running flag; `notifyDataChanged()` fans out (§5.1) |
-| R43 | `resolveMachineCacheScope` now serves *filtered* totals; the same machine reports different numbers to A, to B and to its own dashboard | medium | Intended and internally consistent, disclosed locally pre-commit. Nobody may "fix" it by falling back to session sums — the project rule forbids that (§4.4) |
+| R43 | `resolveMachineCacheScope` now serves *filtered* totals; the same machine reports different numbers to A, to B and to its own dashboard | medium | Reduced to the blocked repos' own contribution — the attribution split keeps the history whole, so the difference is exactly what was withheld and nothing else. Internally consistent and disclosed locally pre-commit; nobody may "fix" it by falling back to session sums, which the project rule forbids (§4.3b, §4.4) |
 | R44 | `first_prompt` and `title` are already on the wire, so a filter miss leaks content, not just volume | medium | Fail-closed everywhere in `share-rules.ts`, explicitly tested for `undefined`/`''`/unknown `git_remote`/conflicting paths (§4.2, §12) |
-| R45 | The post-purge re-push burst leaks the withheld/retained split through request counts and duration alone | medium | Re-push paced at the connection's normal cadence with jitter; resync progress never leaves the local status route (§6.1) |
+| R45 | A refill burst's request count and duration alone disclose the withheld/retained split | medium | **Removed by design:** there is no refill. The removal is one bounded delete plus the normal delta path (§6.1) |
+| R45' | A partial removal — some batches acked, then a failure — leaves the machine believing more was deleted than was | medium | The sent-state advances only per ack and the journal retains the remainder; the UI stays on `applyQueued` until the whole sequence, including the cache push, completes (§6.1, §6.3) |
 | R46 | Colluding centrals set-difference each other's shared sets and recover the denied list exactly | medium | Documented in §6.4 as an explicit non-guarantee; per-connection identity is already the design's shape |
 | R47 | OTel export is an unfiltered side door that no denylist covers | medium | Documented; `otelWarn` shown in Settings when OTel is on and any repo is blocked (§5.3) |
 | R48 | CI ingest bypasses the machine denylist entirely | medium | Documented; `ciNote` in the UI copy (§7, §9.8) |
@@ -955,10 +1113,10 @@ Ranked. Every mitigation is folded into the design above.
 
 | CLAUDE.md invariant | Status under this design |
 |---|---|
-| "The member's deep Claude history exists ONLY aggregated … must NOT silently fall back to summing sessions" | **Held** — the fallback is never silent *to the person choosing it*: both dates are stated in the confirm modal before the commit and restated in the card. It is unexplained *on the central*, which is the inherent consequence of withholding history and is disclosed as such (§4.4, R2) |
+| "The member's deep Claude history exists ONLY aggregated … must NOT silently fall back to summing sessions" | **Held, and no longer traded away.** The attribution split keeps the aggregate-only history intact on every connection — it is copied verbatim, never replaced by a session sum. Only the period the store can actually attribute is rebuilt from sessions, which is precisely where summing sessions is exact rather than a fallback (§4.3b) |
 | "`stats-cache.json` is Claude-only" | **Held** — `buildSharedStatsCache` is Claude-gated (R31) |
 | "Members never push chat" | Held; weakened in practice by the pre-existing `first_prompt`/`title` fields (R44) |
-| "The central is the sole authority on the push interval" | Held, restated **per connection**; no machine-wide max or min. Post-purge pacing and jitter stay within the central's floor |
+| "The central is the sole authority on the push interval" | Held, restated **per connection**; no machine-wide max or min. The removal sequence adds bounded round-trips inside one cycle, never a faster cadence |
 | "Tokens stored only as sha256 hashes, never logged" | Unchanged on the central; member-side plaintext multiplies in `preferences.json`, but tokens no longer leave the machine over HTTP at all (R24) |
 | "EVERY new screen MUST also deliver its mobile version" | Held — §9.7 with an explicit seven-state verification gate |
 | "CI attribution is server-authoritative" | Unchanged; means the denylist does not cover CI (R48) |
@@ -1010,7 +1168,19 @@ Pure functions only, no filesystem mocks, per repo convention.
 33. Sessions with no `start_time` are skipped without throwing.
 34. Output is JSON-round-trippable, structurally a `StatsCache`, and **has no keys outside the `StatsCache` shape** — the guard against a marker field creeping back onto the wire.
 35. **End-to-end:** with `denied = {repoA}`, `buildSharedStatsCache(filterShared(...))` has zero contribution from repoA on **every field**, asserted per field, not just on totals.
-36. `coverageFrom` returns the earliest shared local day, `''` for an empty set.
+36. `prehistoryCount` counts only stored sessions strictly before the boundary, `0` when the boundary is `''`; `deniedTouchesPrehistory` is true only when a **denied** repo has one there, and false when only shared repos do.
+
+**Attribution split** (`buildSplitStatsCache`)
+36a. `attributionBoundary` is the earliest stored Claude day across shared **and** denied sessions; `''` for an empty store; non-Claude sessions do not move it.
+36b. **The headline invariant:** with a denylist that denies nothing, the split output deep-equals the real input cache — the split is a no-op when there is nothing to filter.
+36c. **Totals are preserved:** for a denied repo with no sessions before the boundary, `result.totalSessions === real.totalSessions − |denied sessions|` exactly, and the same identity holds per model in `modelUsage` and per day in `dailyActivity`.
+36d. Days `< boundary` are byte-identical to the real cache's rows, including a day on which a denied session exists in the store but before the boundary (the prehistory is not filtered — the R2' case, asserted rather than assumed).
+36e. Days `>= boundary` contain zero contribution from denied sessions, asserted per field.
+36f. `firstSessionDate` is the real cache's, not the earliest shared session.
+36g. A real cache lagging behind the store (its `modelUsage` smaller than the attributable sum) clamps to 0 and never emits a negative.
+36h. `boundary === ''` → returns `null`; a missing real cache → returns `null`.
+36i. A boundary later than the store's earliest day leaves the intervening days unfiltered — the property that makes monotonicity necessary, pinned so a future change cannot silently relax it.
+36j. Output has no keys outside the `StatsCache` shape (the marker-field guard, again).
 
 **Accumulator extraction**
 37. `{ after: '2026-06-22' }` excludes days `<= '2026-06-22'`; without `after`, nothing is excluded.
@@ -1018,7 +1188,7 @@ Pure functions only, no filesystem mocks, per repo convention.
 
 **Signature**
 39. `denialSignature` is order-, case- and normalization-independent; adding or removing an entry changes it.
-40. `denialSignature([])` is stable and distinct from any non-empty list, so clearing all restrictions triggers exactly one purge-and-resync.
+40. `denialSignature([])` is stable and distinct from any non-empty list, so clearing all restrictions triggers exactly one removal.
 
 ### `packages/core/src/team.test.ts`
 
@@ -1058,13 +1228,15 @@ Pure functions only, no filesystem mocks, per repo convention.
 2. **Two centrals:** connect A and B; kill A's process → B's pill stays green, B's socket stays open, B's cadence unaffected; the notification names A.
 3. **Revoke on B:** A stays connected, B is removed, prefs keep A's denylist, the toast names B.
 4. **Rotate B's token, re-run `member connect`:** the existing connection is updated in place — one connection, one `memberId` on the central, denylist preserved, no duplicate machine row.
-5. **Block a repo on B only:** A's totals are unchanged (real cache); B's shrink and the card shows the coverage date; B's session list has no denied session, no denied workflow run, and no denied `project_path`; B's `memberStats.totalSessions` equals B's session-document count.
-6. **Block at add time:** add C with a repo blocked in the wizard → the central never receives a single document from that repo, and no leave is ever issued.
-7. **Purge crash:** `kill -9` between the leave 200 and the first batch; restart → the journal forces a full re-push and B recovers without user action.
+5. **Block a repo on B only:** A's totals are unchanged (unsplit cache); B's session list loses exactly that repo's sessions, its workflow runs and its `project_path`s; **B's totals drop by exactly that repo's attributable contribution and by nothing else** — compare against the local dashboard filtered to "all but that repo" for the same period, which must match to the token; and B's machine row never disappears from a machine/team filter at any point during the operation.
+6. **Block at add time:** add C with a repo blocked in the wizard → the central never receives a single document from that repo, and no removal is ever issued.
+7. **Removal crash:** `kill -9` between two acked batches; restart → the journal replays the remainder, the already-deleted ids return `deleted: 0`, and B ends in the same state as an uninterrupted run.
+7a. **No window:** during a removal on a central with several machines, poll the central's machine filter for a *different* machine every 200 ms → its totals never change, and `machineStatsCaches` never loses B's entry.
 8. **Wiped central:** `down -v` on B, then a rules change on machine 1 while machine 2 is also connected as the same user → whoami fails, the apply aborts with `applyQueued`, and machine 2's data is untouched.
-9. **Old central:** point a connection at a 1.7.1 central → `centralTooOld`, the rules editor is disabled, and no sent-state clearing loop occurs.
+9. **Old central:** point a connection at a central without `forget.sessions` → `centralTooOld`, the rules editor is disabled, **no full purge is attempted**, and no sent-state clearing loop occurs.
+9a. **Boundary monotonicity:** with rules active, delete the oldest files from the consolidate store → the persisted boundary does not move later and the previously-filtered days stay filtered.
 10. **Offline apply:** stop B, change rules → `applyQueued`; start B → the rules apply on the next cycle and the pill goes green only after the resync completes.
-11. **Un-block:** re-share the repo → **no purge** occurs (assert via the central's logs), the sessions reappear by delta.
+11. **Un-block:** re-share the repo → **no removal** occurs (assert via the central's logs), the sessions reappear by delta.
 12. **Retro reclassification:** run a session in a folder with no remote, push, then `git remote add`, let `backfillGitRemote` stamp it while the repo is denied → the shrink detector fires and the session disappears from the central.
 13. **Store hiccup:** make `loadConsolidated()` return empty for one cycle on a restricted connection → **no** leave is issued and **no** zero statsCache is pushed.
 14. **Heartbeat:** with a repo blocked, work exclusively inside it for 10 minutes and confirm the central's ingest log shows only jittered periodic requests, uncorrelated with local file writes.
@@ -1080,9 +1252,10 @@ Pure functions only, no filesystem mocks, per repo convention.
 - **Allowlist semantics.** D2 fixes denylist. No "share only these repos" mode, no per-repo allow/deny mix.
 - **Per-session, per-project, per-model or per-date sharing rules.** Repo (plus the unattributed bucket) is the only dimension.
 - **A CLI surface for repo rules.** Web-only by D7. No `--deny-repo`, no `agentop member rules`.
-- **Hiding the *fact* that a filter exists.** The only genuinely indistinguishable option is pushing a synthetic cache for every member, restricted or not, which would destroy every member's deep history to protect a fact §6.4 does not promise. Rejected.
-- **`pushGeneration` on the central** (delete-after-write, zero purge window). Better than purge-then-repush, but it requires every central to be upgraded before any member can rely on it, which contradicts D4 and §10. Intended follow-up once the member side is proven.
-- **A surgical `POST /api/team/leave { sessionIds[] }`.** Would make removal cheap and eliminate R39 entirely, and would also remove the pre/post-delete diff of R9 — but it is a central change with the same upgrade dependency. Same follow-up bucket, and the higher-value one.
+- **Hiding the *fact* that a filter exists.** The only genuinely indistinguishable option is rebuilding the cache for every member, restricted or not, which would destroy every member's deep history to protect a fact §6.4 does not promise. Rejected.
+- **Truncating the cache to the store's coverage** (the previous design's synthetic cache). It made a restricted machine report irreconcilable totals to itself and to the central, for no privacy gain the attribution split does not already provide over the attributable period. Replaced, not deferred.
+- **Removing the prehistory block from the aggregate.** Impossible, not deferred: there is no per-repo dimension in `stats-cache.json` and no session left to attribute it with. Any "subtract the blocked repo from the aggregate" scheme is a proration presented as a fact, which is worse than the disclosed block (§4.4).
+- **`pushGeneration` on the central** (write-then-swap generations). With the scoped `forget` there is no window left for it to close. Dropped.
 - **Editing a connection's endpoint or token in place.** Disconnect and re-add, or re-run `member connect` for a rotation. This deletes the fragile `editing`/`userTouched` ref machinery and an entire class of half-configured states. `label` is editable because it is local and carries no state.
 - **Reordering or grouping connections.** The list is sorted by `addedAt`.
 - **Moving the `data.ts` `backfillGitRemote` pass after the harness merge and persisting it.** That is the *proper* fix for non-Claude sessions having no `git_remote`, and would improve the dashboard, tags and the Repositories page as well. This design closes the leak from the push side with `buildPathRepoIndex` (seeded from projects) plus the fail-closed unattributed bucket, which touches nothing outside the push path. The reorder is a separate change with its own blast radius, and it is the first thing to do after this ships.
