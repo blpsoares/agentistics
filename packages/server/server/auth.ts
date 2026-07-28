@@ -152,6 +152,49 @@ export function verifyPrincipalSession(
   return { accountId, sessionVersion, issuedAtMs }
 }
 
+// ---------------------------------------------------------------------------
+// MFA challenge — the short-lived token handed out between "password accepted" and
+// "second factor accepted". It is NOT a session: it grants nothing on its own, and it is
+// domain-separated from session cookies so one can never be replayed as the other.
+// ---------------------------------------------------------------------------
+
+/** How long the user has to type the code before restarting the login. */
+export const MFA_CHALLENGE_TTL_MS = 5 * 60 * 1000
+const MFA_DOMAIN = 'mfa-challenge'
+
+export function signMfaChallenge(
+  accountId: string,
+  sessionVersion: number,
+  secret: string,
+  expiryMs: number,
+): string {
+  const payload = `${expiryMs}.${accountId}.${sessionVersion}`
+  const mac = createHmac('sha256', secret).update(`${MFA_DOMAIN}.${payload}`).digest('hex')
+  return `${payload}.${mac}`
+}
+
+export function verifyMfaChallenge(
+  value: string | undefined,
+  secret: string,
+  nowMs: number,
+): { accountId: string; sessionVersion: number } | null {
+  if (!value) return null
+  const lastDot = value.lastIndexOf('.')
+  if (lastDot === -1) return null
+  const payload = value.slice(0, lastDot)
+  const mac = value.slice(lastDot + 1)
+  const expected = createHmac('sha256', secret).update(`${MFA_DOMAIN}.${payload}`).digest('hex')
+  if (!constantTimeEqual(mac, expected)) return null
+  const parts = payload.split('.')
+  if (parts.length !== 3) return null
+  const expiry = parseInt(parts[0]!, 10)
+  const accountId = parts[1]!
+  const sessionVersion = parseInt(parts[2]!, 10)
+  if (isNaN(expiry) || expiry <= nowMs) return null
+  if (!accountId || isNaN(sessionVersion)) return null
+  return { accountId, sessionVersion }
+}
+
 /**
  * Minimal cookie header parser. Splits on `;` and on the first `=`.
  * Handles cookie values containing `=` (e.g. base64).

@@ -1,5 +1,12 @@
 import { test, expect } from 'bun:test'
-import { signPrincipalSession, verifyPrincipalSession, cookieName, IDLE_TIMEOUT_MS } from './auth'
+import {
+  signPrincipalSession,
+  verifyPrincipalSession,
+  cookieName,
+  IDLE_TIMEOUT_MS,
+  signMfaChallenge,
+  verifyMfaChallenge,
+} from './auth'
 
 const SECRET = 'test-secret'
 const FUTURE = 10_000_000_000_000 // year 2286
@@ -42,4 +49,22 @@ test('rejects a session idle beyond the idle timeout, even inside its absolute e
 test('cookie name carries the __Host- prefix only when Secure', () => {
   expect(cookieName(true)).toBe('__Host-agentistics_session')
   expect(cookieName(false)).toBe('agentistics_session')
+})
+
+test('mfa challenge round-trips, expires, and rejects tampering', () => {
+  const c = signMfaChallenge('acc123', 2, SECRET, NOW + 60_000)
+  expect(verifyMfaChallenge(c, SECRET, NOW)).toEqual({ accountId: 'acc123', sessionVersion: 2 })
+  expect(verifyMfaChallenge(c, SECRET, NOW + 60_001)).toBeNull()
+  expect(verifyMfaChallenge(c.replace('acc123', 'acc999'), SECRET, NOW)).toBeNull()
+  expect(verifyMfaChallenge(c, 'other-secret', NOW)).toBeNull()
+  expect(verifyMfaChallenge(undefined, SECRET, NOW)).toBeNull()
+})
+
+test('a session cookie cannot be replayed as an mfa challenge, or vice versa', () => {
+  // Both are HMACs over a dotted payload with the same secret; only domain separation stops
+  // one from being accepted as the other.
+  const session = signPrincipalSession(FUTURE, 'acc123', 1, SECRET, NOW)
+  expect(verifyMfaChallenge(session, SECRET, NOW)).toBeNull()
+  const challenge = signMfaChallenge('acc123', 1, SECRET, FUTURE)
+  expect(verifyPrincipalSession(challenge, SECRET, NOW)).toBeNull()
 })

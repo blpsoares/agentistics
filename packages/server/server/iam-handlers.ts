@@ -13,7 +13,16 @@ import { backfillTokenTeamIds, listMachines, mintMachineToken, mintMachine, revo
 import { getCentralConfig } from './central-config'
 import { packConnectToken } from '@agentistics/core'
 import { backfillRepoTeamIds } from './team-repos'
-import { makePrincipalSessionCookieHeader, getPrincipal } from './auth'
+import {
+  makePrincipalSessionCookieHeader,
+  getPrincipal,
+  signMfaChallenge,
+  verifyMfaChallenge,
+  MFA_CHALLENGE_TTL_MS,
+} from './auth'
+import { TEAM_SESSION_SECRET } from './config'
+import { generateSecret, otpauthUri, verifyTotp, generateRecoveryCodes, hashRecoveryCode } from './totp'
+import { getMfa, isMfaEnabled, enableMfa, disableMfa, consumeRecoveryCode } from './mfa-store'
 import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships } from './iam-view'
 import type { AccountDoc, Membership, Role } from './iam-types'
 import { normalizeEmail } from './iam-types'
@@ -116,9 +125,142 @@ export async function handleIamLogin(
   }
   limiter.reset(acctKey)
   hooks.onSuccess?.()
+
+  // Second factor, when enrolled: the password alone issues NO cookie. The caller gets a
+  // short-lived, HMAC-signed challenge that grants nothing by itself and must be exchanged
+  // for a session at /api/iam/login/mfa.
+  if (await isMfaEnabled(account._id)) {
+    const challenge = signMfaChallenge(
+      account._id,
+      account.sessionVersion,
+      TEAM_SESSION_SECRET,
+      Date.now() + MFA_CHALLENGE_TTL_MS,
+    )
+    return json({ ok: false, mfaRequired: true, challenge }, 200)
+  }
+
   await updateAccount(account._id, { lastLoginAt: new Date().toISOString() })
   const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion)
   return new Response(JSON.stringify({ ok: true, mustChangePassword: account.mustChangePassword ?? false }), { status: 200, headers: { ...JSON_CT, 'Set-Cookie': cookie } })
+}
+
+/**
+ * POST /api/iam/login/mfa  Body: { challenge, code }
+ * Exchanges a password-stage challenge for a session by proving the second factor.
+ * `code` is either a 6-digit TOTP or one of the account's single-use recovery codes.
+ */
+export async function handleIamLoginMfa(req: Request): Promise<Response> {
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return json({ ok: false, error: 'invalid JSON' }, 400)
+  }
+  const b = body as Record<string, unknown>
+  const challenge = typeof b.challenge === 'string' ? b.challenge : ''
+  const code = typeof b.code === 'string' ? b.code : ''
+
+  const parsed = verifyMfaChallenge(challenge, TEAM_SESSION_SECRET, Date.now())
+  if (!parsed) return json({ ok: false, error: 'challenge expired' }, 401)
+
+  // Rate-limit the second factor on its own key: six digits is a small space, so an
+  // unbounded challenge would reduce 2FA to a brute-forceable formality.
+  const mfaKey = `mfa:${parsed.accountId}`
+  const verdict = limiter.check(mfaKey, RULES.login)
+  if (!verdict.allowed) return tooManyRequests(verdict.retryAfterSec)
+
+  const account = await getAccount(parsed.accountId)
+  if (!account || account.sessionVersion !== parsed.sessionVersion) {
+    return json({ ok: false, error: 'challenge expired' }, 401)
+  }
+  const mfa = await getMfa(parsed.accountId)
+  if (!mfa) return json({ ok: false, error: 'challenge expired' }, 401)
+
+  let usedRecovery = false
+  let ok = verifyTotp(mfa.secret, code, Math.floor(Date.now() / 1000))
+  if (!ok) {
+    ok = await consumeRecoveryCode(parsed.accountId, hashRecoveryCode(code))
+    usedRecovery = ok
+  }
+  if (!ok) {
+    limiter.fail(mfaKey, RULES.login)
+    return json({ ok: false, error: 'invalid code' }, 401)
+  }
+  limiter.reset(mfaKey)
+
+  await updateAccount(account._id, { lastLoginAt: new Date().toISOString() })
+  const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion)
+  return new Response(
+    JSON.stringify({
+      ok: true,
+      mustChangePassword: account.mustChangePassword ?? false,
+      usedRecovery,
+      recoveryCodesLeft: usedRecovery ? Math.max(0, mfa.recoveryHashes.length - 1) : mfa.recoveryHashes.length,
+    }),
+    { status: 200, headers: { ...JSON_CT, 'Set-Cookie': cookie } },
+  )
+}
+
+/**
+ * MFA enrolment, all authenticated and all acting on the CALLER's own account:
+ *   GET    /api/iam/mfa        → { enabled }
+ *   POST   /api/iam/mfa/start  → { secret, otpauthUri }  (generated, not yet active)
+ *   POST   /api/iam/mfa/enable { secret, code } → { recoveryCodes } shown exactly once
+ *   DELETE /api/iam/mfa        { code } → disables
+ */
+export async function handleMfa(req: Request, pathname: string): Promise<Response> {
+  const principal = await getPrincipal(req)
+  if (!principal) return json({ error: 'unauthorized' }, 401)
+  const account = await getAccount(principal.accountId)
+  if (!account) return json({ error: 'unauthorized' }, 401)
+
+  if (pathname === '/api/iam/mfa' && req.method === 'GET') {
+    return json({ enabled: await isMfaEnabled(account._id) })
+  }
+
+  if (pathname === '/api/iam/mfa/start' && req.method === 'POST') {
+    const secret = generateSecret()
+    return json({ secret, otpauthUri: otpauthUri(secret, account.email, 'Agentistics') })
+  }
+
+  if (pathname === '/api/iam/mfa/enable' && req.method === 'POST') {
+    let body: unknown
+    try { body = await req.json() } catch { return json({ error: 'invalid JSON' }, 400) }
+    const b = body as Record<string, unknown>
+    const secret = typeof b.secret === 'string' ? b.secret : ''
+    const code = typeof b.code === 'string' ? b.code : ''
+    // Verifying the code before storing proves the authenticator is really in sync — enrolling
+    // an unverified secret locks the account out of its own second factor.
+    if (!secret || !verifyTotp(secret, code, Math.floor(Date.now() / 1000))) {
+      return json({ error: 'invalid code' }, 400)
+    }
+    const recoveryCodes = generateRecoveryCodes()
+    await enableMfa(account._id, secret, recoveryCodes.map(hashRecoveryCode))
+    // Every session that authenticated with the password alone is now under-authenticated.
+    await bumpSessionVersion(account._id)
+    const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion + 1)
+    return new Response(JSON.stringify({ ok: true, recoveryCodes }), {
+      status: 200,
+      headers: { ...JSON_CT, 'Set-Cookie': cookie },
+    })
+  }
+
+  if (pathname === '/api/iam/mfa' && req.method === 'DELETE') {
+    let body: unknown
+    try { body = await req.json() } catch { body = {} }
+    const code = typeof (body as Record<string, unknown>).code === 'string'
+      ? ((body as Record<string, unknown>).code as string)
+      : ''
+    const mfa = await getMfa(account._id)
+    if (!mfa) return json({ ok: true })
+    if (!verifyTotp(mfa.secret, code, Math.floor(Date.now() / 1000))) {
+      return json({ error: 'invalid code' }, 401)
+    }
+    await disableMfa(account._id)
+    return json({ ok: true })
+  }
+
+  return json({ error: 'not found' }, 404)
 }
 
 /**

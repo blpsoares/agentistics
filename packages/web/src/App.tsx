@@ -11,6 +11,7 @@ import {
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Workflow as WorkflowIcon,
   GitBranch, Users, LogOut, Server, KeyRound, Tag as TagIcon,
+  ShieldCheck,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import type { LoadProgress } from './hooks/useData'
@@ -54,6 +55,7 @@ import { MemberConnectionStatus } from './components/MemberConnectionStatus'
 import { OwnerSetup } from './components/OwnerSetup'
 import { ChangePassword } from './components/ChangePassword'
 import { ChangePasswordSelf } from './components/ChangePasswordSelf'
+import { MfaSetup } from './components/MfaSetup'
 import { type ChatModelId } from './lib/chatModels'
 import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
@@ -646,6 +648,7 @@ function MobileBottomNav({
   // of stacking another floating layer over the sheet.
   const [accountOpen, setAccountOpen] = useState(false)
   const [pwOpen, setPwOpen] = useState(false)
+  const [mfaOpen, setMfaOpen] = useState(false)
   const roleLabel = principal
     ? (principal.role === 'owner' ? 'Owner' : (principal.memberships.some(m => m.role === 'manager') ? 'Manager' : 'User'))
     : ''
@@ -799,6 +802,12 @@ function MobileBottomNav({
               <KeyRound size={16} /> {pt ? 'Trocar senha' : 'Change password'}
             </button>
             <button
+              onClick={() => { setAccountOpen(false); setMoreOpen(false); setMfaOpen(true) }}
+              style={accountActionStyle}
+            >
+              <ShieldCheck size={16} /> {pt ? 'Duas etapas' : 'Two-factor'}
+            </button>
+            <button
               onClick={logout}
               style={{ ...accountActionStyle, color: '#ef4444', borderColor: 'color-mix(in srgb, #ef4444 40%, transparent)' }}
             >
@@ -895,6 +904,7 @@ function MobileBottomNav({
       </nav>
 
       {pwOpen && <ChangePasswordSelf lang={lang} onClose={() => setPwOpen(false)} />}
+      {mfaOpen && <MfaSetup lang={lang} onClose={() => setMfaOpen(false)} />}
     </>
   )
 }
@@ -942,6 +952,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
   // Profile menu (popover anchored to the avatar) + self-service change-password modal.
   const [menuOpen, setMenuOpen] = useState(false)
   const [pwOpen, setPwOpen] = useState(false)
+  const [mfaOpen, setMfaOpen] = useState(false)
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
   const avatarRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -1090,6 +1101,12 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
               onMouseLeave={e => { const t = e.currentTarget as HTMLButtonElement; t.style.background = 'transparent'; t.style.color = 'var(--text-secondary)' }}>
               <KeyRound size={15} /> {pt ? 'Trocar senha' : 'Change password'}
             </button>
+            <button role="menuitem" onClick={() => { setMenuOpen(false); setMfaOpen(true) }}
+              style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 10px', borderRadius: 7, border: 'none', background: 'transparent', color: 'var(--text-secondary)', fontSize: 13, fontWeight: 500, fontFamily: 'inherit', cursor: 'pointer', textAlign: 'left' }}
+              onMouseEnter={e => { const t = e.currentTarget as HTMLButtonElement; t.style.background = 'var(--bg-elevated)'; t.style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { const t = e.currentTarget as HTMLButtonElement; t.style.background = 'transparent'; t.style.color = 'var(--text-secondary)' }}>
+              <ShieldCheck size={15} /> {pt ? 'Duas etapas' : 'Two-factor'}
+            </button>
             <button role="menuitem" onClick={() => { setMenuOpen(false); logout() }}
               style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 10px', borderRadius: 7, border: 'none', background: 'transparent', color: 'var(--text-secondary)', fontSize: 13, fontWeight: 500, fontFamily: 'inherit', cursor: 'pointer', textAlign: 'left' }}
               onMouseEnter={e => { const t = e.currentTarget as HTMLButtonElement; t.style.background = 'var(--bg-elevated)'; t.style.color = 'var(--text-primary)' }}
@@ -1102,6 +1119,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
 
         {/* Self-service change-password modal */}
         {pwOpen && <ChangePasswordSelf lang={lang} onClose={() => setPwOpen(false)} />}
+      {mfaOpen && <MfaSetup lang={lang} onClose={() => setMfaOpen(false)} />}
 
         {/* Thin divider between account and actions */}
         {principal && <div style={{ height: 1, background: 'var(--border)', marginBottom: 10 }} />}

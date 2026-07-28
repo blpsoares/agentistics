@@ -21,6 +21,8 @@ import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
 import { handleLogout, handleSession, getPrincipal, getPrincipalSession, makePrincipalSessionCookieHeader, SESSION_REFRESH_MS } from './auth'
 import { routeCapability, capabilityDenied } from './capability-guard'
+import { AUTH_PUBLIC, isAdminPath, MFA_EXEMPT } from './index-routes'
+import { CAPS } from './exposure'
 import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
 import { resolveClientIp } from './client-ip'
 import { corsHeadersFor } from './cors'
@@ -183,52 +185,8 @@ ensureClaudeChat().catch(err => console.error('[claude-chat] failed to initializ
 // unknown origin, which is the right answer for a same-origin dashboard.
 // ---------------------------------------------------------------------------
 
-// Routes that are always public (no auth gate applied)
-const AUTH_PUBLIC = new Set([
-  '/api/health',
-  '/api/team/login',
-  '/api/team/logout',
-  '/api/team/session',
-  '/api/team/ingest',
-  '/api/team/leave',
-  '/api/team/policy',
-  // WebSocket upgrade for the member→central reverse channel; auth is via
-  // validateIngestToken (Bearer token in the Upgrade request headers).
-  '/api/team/whoami',
-  '/api/team/agent',
-  '/api/iam/status',
-  '/api/iam/bootstrap',
-  '/api/iam/login',
-  '/api/iam/logout',
-  '/api/iam/me',
-  '/api/iam/change-password',
-  '/api/iam/accounts',
-  '/api/iam/teams',
-  '/api/iam/machines',
-])
-
-// Admin routes that require a real session cookie even on a passwordless central
-// NOTE: `/api/tags` is deliberately NOT here — tags are readable by any authed principal and
-// writable by managers (authority is source-derived, see tags-handlers.ts). It is still gated:
-// the auth check below 401s every /api/* path outside AUTH_PUBLIC, `/api/tags/<id>` included.
-const ADMIN_PATHS = new Set([
-  '/api/team/members',
-  '/api/team/tokens',
-  '/api/team/tokens/rotate',
-  '/api/team/repos',
-  '/api/team/config',
-])
-
-/**
- * ADMIN_PATHS is an exact-match Set, so a nested detail route (`/api/team/repos/<id>`) would
- * otherwise escape the owner gate the moment one is added. Treat any path *under* an admin
- * path as admin too.
- */
-function isAdminPath(pathname: string): boolean {
-  if (ADMIN_PATHS.has(pathname)) return true
-  for (const p of ADMIN_PATHS) if (pathname.startsWith(p + '/')) return true
-  return false
-}
+// Route tables (AUTH_PUBLIC / ADMIN_PATHS / MFA_EXEMPT) live in index-routes.ts so the
+// authorization regression suite can assert them without booting the server.
 
 // ---------------------------------------------------------------------------
 // Bun HTTP server
@@ -381,6 +339,18 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       // Admin routes require the owner.
       if (isAdminPath(url.pathname) && session.principal.role !== 'owner') {
         return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+      }
+      // On an internet-exposed instance an owner must hold a second factor: their account can
+      // reach every team's data and every admin route, so a single leaked password would be the
+      // whole instance. Until they enrol, only the enrolment and identity routes answer.
+      if (CAPS.requireMfaForOwner && session.principal.role === 'owner' && !MFA_EXEMPT.has(url.pathname)) {
+        const { isMfaEnabled } = await import('./mfa-store')
+        if (!(await isMfaEnabled(session.principal.accountId).catch(() => true))) {
+          return new Response(JSON.stringify({ error: 'mfa_enrollment_required' }), {
+            status: 403,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
       }
       // Sliding session: reissue the cookie periodically so an active user is never logged out
       // at the idle wall, while an abandoned session still dies IDLE_TIMEOUT_MS after last use.
@@ -1090,6 +1060,24 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
 
     if (url.pathname === '/api/team/session' && req.method === 'GET') {
       const res = handleSession(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/login/mfa' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleIamLoginMfa } = await import('./iam-handlers')
+      const res = await handleIamLoginMfa(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/mfa' || url.pathname.startsWith('/api/iam/mfa/')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleMfa } = await import('./iam-handlers')
+      const res = await handleMfa(req, url.pathname)
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })
