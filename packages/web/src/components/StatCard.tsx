@@ -2,6 +2,7 @@ import React from 'react'
 import { Info } from 'lucide-react'
 import { PrecisionToggle } from './PrecisionToggle'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { valueFontSize } from '../lib/statCardSize'
 
 /**
  * Headline font size for a KPI value, scaled so the number stays readable as it grows.
@@ -11,14 +12,6 @@ import { useIsMobile } from '../hooks/useIsMobile'
  * Portuguese: "USD 16,611.61" (13 chars) crossed a threshold that "R$84.362,05" (11) did not,
  * purely because "USD " is two characters longer than "R$".
  */
-export function valueFontSize(value: string | number): number {
-  const measured = String(value).replace(/^[^\d-]+/, '').trim()
-  if (measured.length > 11) return 15
-  if (measured.length > 8) return 19
-  if (measured.length > 5) return 22
-  return 26
-}
-
 interface StatCardProps {
   label: string
   value: string | number

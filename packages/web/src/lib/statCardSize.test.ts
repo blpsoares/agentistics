@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { valueFontSize } from './StatCard'
+import { valueFontSize } from '../lib/statCardSize'
 
 test('the same amount gets the same size in EN and PT despite a longer currency prefix', () => {
   // The bug: measuring the whole string counted "USD " (4 chars) against "R$" (2), pushing the
