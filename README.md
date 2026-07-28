@@ -2,9 +2,7 @@
   <img src="packages/web/public/logo.png" alt="agentistics" width="180" />
 </p>
 
-<p align="center">
-  <img src="docs/assets/wordmark.svg" alt="agentistics" width="720" />
-</p>
+<h1 align="center">agentistics</h1>
 
 <p align="center">
   <strong>Track · Analyze · Improve</strong><br/>

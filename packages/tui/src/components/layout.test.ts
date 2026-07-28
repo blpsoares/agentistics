@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test'
 import { fitColumns, type Column } from './Primitives'
 import { sparkline } from './Sparkline'
 import { fitKpis } from '../screens/Overview'
-import { rampAt } from './logoArt'
+import { gradientAt } from './Wordmark'
 
 interface Row { a: string }
 
@@ -96,25 +96,24 @@ describe('sparkline', () => {
   })
 })
 
-describe('rampAt', () => {
-  // The ramp is taken from the exported logo art: red on the left, yellow on the right.
-  test('starts at the red end', () => {
-    expect(rampAt(0)).toBe('#cd3131')
+describe('gradientAt', () => {
+  test('starts at the light amber end', () => {
+    expect(gradientAt(0)).toBe('#fbbf24')
   })
 
-  test('ends at the yellow end', () => {
-    expect(rampAt(1)).toBe('#e5e510')
+  test('ends at the deep amber end', () => {
+    expect(gradientAt(1)).toBe('#d97706')
   })
 
   test('produces a valid hex colour at every step', () => {
     for (let i = 0; i <= 10; i++) {
-      expect(rampAt(i / 10)).toMatch(/^#[0-9a-f]{6}$/)
+      expect(gradientAt(i / 10)).toMatch(/^#[0-9a-f]{6}$/)
     }
   })
 
   test('clamps out-of-range and non-finite input instead of emitting broken hex', () => {
-    expect(rampAt(-5)).toBe('#cd3131')
-    expect(rampAt(99)).toBe('#e5e510')
-    expect(rampAt(NaN)).toBe('#cd3131')
+    expect(gradientAt(-5)).toBe('#fbbf24')
+    expect(gradientAt(99)).toBe('#d97706')
+    expect(gradientAt(NaN)).toBe('#fbbf24')
   })
 })

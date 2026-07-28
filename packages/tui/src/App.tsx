@@ -12,7 +12,7 @@ import { Sessions } from './screens/Sessions'
 import { Costs } from './screens/Costs'
 import { Harnesses } from './screens/Harnesses'
 import { HelpOverlay, FilterOverlay } from './overlays/Overlays'
-import { Logo } from './components/Wordmark'
+import { Wordmark } from './components/Wordmark'
 import { sessionHarness } from './selectors'
 
 const MIN_WIDTH = 60
@@ -107,7 +107,7 @@ export function App({ apiBase, lang }: { apiBase: string; lang: TuiLang }) {
     // The wordmark carries the wait, so the first frame is the brand rather than a bare word.
     return (
       <Box flexDirection="column" padding={1}>
-        <Logo tagline={s.tagline} width={columns - 2} />
+        <Wordmark tagline={s.tagline} width={columns - 2} />
         <Box marginTop={1}><Text color={COLORS.accent}>{s.loading}…</Text></Box>
       </Box>
     )

@@ -579,7 +579,7 @@ packages/tui/src/
   theme.ts           palette mirroring the web dark mode + HARNESS_COLOR
   useTerminalSize.ts columns/rows that follow SIGWINCH
   data/              useAppData (fetch + SSE), ensureApi (auto-spawn the server)
-  components/        Primitives (Kpi/Bar/DataTable/fitColumns), Sparkline, Wordmark + logoArt
+  components/        Primitives (Kpi/Bar/DataTable/fitColumns), Sparkline
   screens/           Overview, Projects, Sessions, Costs, Harnesses
   overlays/          help + harness filter
   launcher/          the `agentop start` screen (presentation only)
@@ -607,13 +607,6 @@ packages/tui/src/
   cache and every other harness from per-session sums; `applyHarnessFilter` blanks the cache when
   a non-Claude harness is selected, or Claude's numbers would survive the filter.
 - **Capability-gated metrics render `N/A`** (`HARNESS_CAPABILITIES`), never a confident `0`.
-- **The logo ramp is HORIZONTAL and lives in one place.** `logoArt.ts` stores only the glyphs;
-  a glyph's colour is derived from its COLUMN by `rampAt` (red `#cd3131` left → yellow `#e5e510`
-  right), which matches the exported art to within 1/255. Do not bake colours into the data
-  alongside the function — a previous version did, and the two disagreed by one step wherever
-  Python's and JS's rounding rules differed. `Logo` picks a tier by width (full art ≥113 cols →
-  compact mark → plain text); all tiers share the one ramp. `docs/assets/wordmark.svg` is the
-  same art for the README, using a single `linearGradient` instead of per-glyph fills.
 - **The TUI does not read preferences.** The dependency direction is `server -> tui`: `cli.ts`
   resolves the language via `server/cli-lang.ts` and passes it in.
 

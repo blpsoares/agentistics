@@ -13,7 +13,7 @@
 import React, { useState } from 'react'
 import { Box, Text, render, useApp, useInput } from 'ink'
 import { COLORS } from '../theme'
-import { Logo } from '../components/Wordmark'
+import { Wordmark } from '../components/Wordmark'
 import { currentSize } from '../useTerminalSize'
 
 export interface LauncherChoice {
@@ -64,7 +64,7 @@ export function Launcher({ tagline, title, choices, status, onSelect, width }: L
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1}>
-      <Logo tagline={tagline} width={cols - 2} />
+      <Wordmark tagline={tagline} width={cols - 2} />
 
       <Box
         flexDirection="column"

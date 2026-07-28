@@ -57,43 +57,24 @@ agentop start
 agentop start --lang pt      # force Portuguese for this run
 ```
 
-The logo is drawn with a vertical yellow-to-red gradient, and degrades by terminal width: the
-full art above ~113 columns, a compact two-line wordmark below that, and plain text on very
-narrow terminals.
-
 ```
-      ░████                                                ░████                      ░████
-    ░██████                                                ░████                      ░████
-    ░██████      ░██████      ░████░████   ░████░██████████       ░██████  ░██████████       ░██████    ░██████
-    ░██ ░██    ░████████  ░████████░██████ ░████░██████████░████░████ ░████░██████████░████░████ ░████░████ ░████
-  ░████ ░████  ░████      ░████    ░██████ ░████  ░████    ░████░████        ░████    ░████░████      ░████
-  ░██████████  ░████ ░████░██████  ░████████████  ░████    ░████  ░██████    ░████    ░████░████        ░██████
-░████████████  ░████ ░████░████    ░████ ░██████  ░████    ░████      ░████  ░████    ░████░████            ░████
-░████     ░████░██████████░████████░████   ░████  ░████    ░████  ░████████  ░████    ░████░████ ░████  ░████████
-░████     ░████  ░██████  ░████████░████     ░██  ░██        ░██  ░██████    ░██        ░██  ░██████    ░██████
-AI coding-assistant analytics · agentop
+  ▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀ ▀█▀ █ █▀▀ █▀
+  █▀█ █▄█ ██▄ █░▀█ ░█░ █ ▄█ ░█░ █ █▄▄ ▄█
+  AI coding-assistant analytics · agentop
+  ──────────────────────────────────────
+  config   member — sends metrics to a central at http://host:48080
+  running  ● agentistics    (this machine)   http://localhost:47292
+           ● agentistics central    (docker)
+  ──────────────────────────────────────
 
-╭──────────────────────────────────────────────────────────────────────╮
-│ config      member — sends metrics to a central at http://host:48080 │
-│ running     ● agentistics    (this machine)  http://localhost:47292  │
-│             ● agentistics central    (docker)                        │
-╰──────────────────────────────────────────────────────────────────────╯
-
-What would you like to start?
-
-❯ 1. agentistics  this machine
-  2. agentistics central  team aggregator · :48080
-  3. Disconnect from the central  back to solo
-  4. Restart a running service…  one, or all
-  5. Stop a running service…
-  6. Switch to Português
-  7. Quit
-
-↑↓ · enter
+  What would you like to start?
+  ❯ agentistics            this machine
+    agentistics central    team aggregator · :48080
+    Disconnect from the central    back to solo
+    Stop a running service…
+    Switch to Português
+    Quit
 ```
-
-The status panel and the menu are on screen together and stay live, rather than the status being
-printed once and scrolling away above the question.
 
 **Naming:** `agentistics` is the per-machine app; `agentistics central` is the team aggregator.
 Both serve a web dashboard, so neither is labelled "the dashboard".
