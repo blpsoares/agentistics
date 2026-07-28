@@ -16,11 +16,25 @@
  * eagerly. No React renderer, no new dependency.
  */
 import { describe, test, expect, mock } from 'bun:test'
+import * as React from 'react'
 import { emptyStatsCache } from '@agentistics/core'
 import type { AppData, Filters, SessionMeta, StatsCache } from '@agentistics/core'
 import type { TagDef } from '../lib/tagMatch'
 
+/**
+ * `mock.module` replaces the module for the WHOLE test process and never unwinds, so this stub
+ * is also what every test file that runs after this one sees. A hooks-only stub therefore broke
+ * unrelated suites: `lucide-react` calls `react.createContext` at import time, which was absent,
+ * so StatCard.test.ts and splitInlinedHistory.test.ts failed in a full `bun test` run while
+ * passing in isolation.
+ *
+ * Spreading the real React keeps every other export intact and overrides only the hooks this
+ * file needs to run the memo body eagerly. The real module is captured by the import above,
+ * which is evaluated before this call.
+ */
 mock.module('react', () => ({
+  ...React,
+  default: (React as { default?: unknown }).default ?? React,
   useMemo: <T>(fn: () => T) => fn(),
   useState: <T>(init: T) => [init, () => {}],
   useEffect: () => {},
