@@ -3,6 +3,7 @@ import { mkdir, writeFile, readFile } from 'fs/promises'
 import type { SessionMeta, HarnessId } from '@agentistics/core'
 import { CONSOLIDATED_DIR } from './config'
 import { createLimiter, safeReadDir, safeReadJson } from './utils'
+import { HARNESS_ORDER } from '@agentistics/core'
 
 const writeLimit = createLimiter(20)
 const readyDirs = new Set<string>()
@@ -48,7 +49,7 @@ export async function loadConsolidated(): Promise<Map<string, SessionMeta>> {
   const map = new Map<string, SessionMeta>()
   const limit = createLimiter(40)
   // Per-harness subdirs + legacy flat files (treated as claude)
-  const harnesses: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity']
+  const harnesses: HarnessId[] = HARNESS_ORDER
   const roots = [
     ...harnesses.map(h => ({ dir: join(CONSOLIDATED_DIR, h), legacy: false })),
     { dir: CONSOLIDATED_DIR, legacy: true },

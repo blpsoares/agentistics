@@ -1,4 +1,5 @@
 import type { SessionMeta, HarnessId } from './types'
+import { HARNESS_ORDER } from './types'
 
 // ---------------------------------------------------------------------------
 // TeamConfig — shared member configuration (single source of truth)
@@ -74,7 +75,7 @@ export function distinctUsers(sessions: SessionMeta[]): string[] {
 /** Distinct, sorted list of harnesses present in a session list (missing harness = 'claude').
  *  Sorted by the canonical order claude→codex→gemini→copilot→antigravity. Pure. */
 export function distinctHarnesses(sessions: { harness?: HarnessId }[]): HarnessId[] {
-  const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity']
+  const order: HarnessId[] = HARNESS_ORDER
   const set = new Set<HarnessId>()
   for (const s of sessions) set.add(s.harness ?? 'claude')
   return order.filter(h => set.has(h))

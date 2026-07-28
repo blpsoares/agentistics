@@ -18,7 +18,7 @@ import { useIsMobile } from './hooks/useIsMobile'
 import type { TagDef } from './lib/tagMatch'
 import type { Filters, HarnessId, HealthIssue } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost } from '@agentistics/core'
+import { formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER } from '@agentistics/core'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
 import { ActivityHeatmap } from './components/ActivityHeatmap'
@@ -1566,7 +1566,7 @@ export default function AppLayout() {
   // models are offered; in the unified view all harnesses are shown as sections.
   const modelGroups = useMemo<{ harness: HarnessId; models: string[] }[]>(() => {
     if (!data) return []
-    const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity']
+    const order: HarnessId[] = HARNESS_ORDER
     const byH: Partial<Record<HarnessId, Set<string>>> = {}
     const add = (h: HarnessId, m?: string) => { if (!m) return; (byH[h] ??= new Set<string>()).add(m) }
     for (const id of Object.keys(data.statsCache.modelUsage ?? {})) add('claude', id)

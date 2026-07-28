@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMeta } from '@agentistics/core'
-import { calcCost, sessionModelUsage, sessionCostUSD, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, filterByTeams, filterByMachines, distinctHarnesses, mergeStatsCaches, repoShortName } from '@agentistics/core'
+import { calcCost, sessionModelUsage, sessionCostUSD, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, filterByTeams, filterByMachines, distinctHarnesses, mergeStatsCaches, repoShortName, HARNESS_ORDER } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 import { makeTagFilter, type TagDef } from '../lib/tagMatch'
 
@@ -640,7 +640,7 @@ export function computeFilteredHarnessSummaries(data: AppData, filters: Filters)
 
   // Columns: the explicitly selected harnesses, else the harnesses the selected users used
   // (so picking a member narrows the columns), else every harness in the data.
-  const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity']
+  const order: HarnessId[] = HARNESS_ORDER
   const userScoped = filterByUsers(data.sessions, usersSel)
   const scopedHarnesses = distinctHarnesses(userScoped)
   const cols: HarnessId[] = harnessSel.length > 0

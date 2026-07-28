@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcCost, getModelPrice, sessionModelUsage, sessionCostUSD, MODEL_PRICING, formatModel, getModelColor, formatProjectName, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName, canonicalProjectPath } from './types'
+import { calcCost, getModelPrice, sessionModelUsage, sessionCostUSD, MODEL_PRICING, formatModel, getModelColor, formatProjectName, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName, canonicalProjectPath, HARNESS_ORDER } from './types'
 import type { ModelUsage, StatsCache } from './types'
 
 describe('mergeStatsCaches', () => {
@@ -486,4 +486,12 @@ test('canonicalProjectPath leaves a real project path alone', () => {
   // A directory merely NAMED worktrees is not a worktree root.
   expect(canonicalProjectPath('/home/u/worktrees/thing')).toBe('/home/u/worktrees/thing')
   expect(canonicalProjectPath('/home/u/.claude')).toBe('/home/u/.claude')
+})
+
+test('HARNESS_ORDER lists every harness exactly once', () => {
+  // The regression this guards: five places used to hardcode the list as a plain array, which
+  // TypeScript accepts with a member missing — a new harness silently vanished from the Compare
+  // page, the filter bar and the consolidate store.
+  expect([...HARNESS_ORDER].sort()).toEqual(Object.keys(HARNESS_CAPABILITIES).sort() as typeof HARNESS_ORDER)
+  expect(new Set(HARNESS_ORDER).size).toBe(HARNESS_ORDER.length)
 })

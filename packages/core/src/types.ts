@@ -80,6 +80,19 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   kimi: { tokens: true, cost: false, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false },
 }
 
+/** Display order for harness lists, and the single source of truth for "every harness".
+ *
+ *  Declared as a Record so the compiler REQUIRES an entry per HarnessId. The five places that used
+ *  to hardcode `['claude', 'codex', ...]` were plain arrays, which TypeScript happily accepts with a
+ *  member missing — adding a harness left it silently absent from the Compare page, the filter bar,
+ *  the data-source list and, worse, the consolidate store, so its sessions were never persisted. */
+const HARNESS_SORT: Record<HarnessId, number> = {
+  claude: 0, codex: 1, gemini: 2, copilot: 3, antigravity: 4, kimi: 5,
+}
+
+export const HARNESS_ORDER: HarnessId[] = (Object.keys(HARNESS_SORT) as HarnessId[])
+  .sort((a, b) => HARNESS_SORT[a] - HARNESS_SORT[b])
+
 export interface SessionMeta {
   session_id: string
   project_path: string

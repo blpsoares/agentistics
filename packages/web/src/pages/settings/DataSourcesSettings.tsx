@@ -5,12 +5,13 @@ import type { AppContext } from '../../lib/app-context'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../../lib/harness'
 import { HarnessInfoPanel } from '../../components/HarnessInfoPanel'
 import { SectionHeader } from './primitives'
+import { HARNESS_ORDER } from '@agentistics/core'
 
 export default function DataSourcesSettings() {
   const ctx = useOutletContext<AppContext>()
   const pt = ctx.lang === 'pt'
   const harnesses = ctx.data.harnesses
-  const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity']
+  const order: HarnessId[] = HARNESS_ORDER
   const present = order.filter(h => harnesses.includes(h))
   const [selected, setSelected] = useState<HarnessId>(present[0] ?? 'claude')
 
