@@ -6,6 +6,15 @@ const FALLBACK_PRICING: Record<string, PriceEntry> = MODEL_PRICING
 
 /** Model name (as shown in pricing table) → canonical model ID */
 const PRICING_PAGE_MODEL_MAP: Record<string, string> = {
+  // Newer rows first — the map is what lets the live scrape reach a model at all. Missing entries
+  // are silent: `opus 4.8` and `opus 5` were absent, so the scrape never returned them and both
+  // fell through to the shared fallback (Sonnet's $3/$15) instead of Opus's $5/$25.
+  'fable 5':    'claude-fable-5',
+  'mythos 5':   'claude-mythos-5',
+  'opus 5':     'claude-opus-5',
+  'opus 4.8':   'claude-opus-4-8',
+  'opus 4.7':   'claude-opus-4-7',
+  'sonnet 5':   'claude-sonnet-5',
   'opus 4.6':   'claude-opus-4-6',
   'opus 4.5':   'claude-opus-4-5-20251101',
   'opus 4.1':   'claude-opus-4-1-20250805',

@@ -514,3 +514,20 @@ test('a gpt-5.6 variant is priced as itself, not as legacy gpt-5', () => {
   expect(getModelPrice('gpt-5').output).toBe(10)
   expect(getModelPrice('gpt-5-mini').output).toBe(2)
 })
+
+test('current Anthropic models are priced as themselves, not as the fallback', () => {
+  // Regression: `claude-opus-4-8` and `claude-opus-5` were absent from the table AND from the live
+  // scrape's name map, so 39 of the heaviest sessions on a real machine were priced at Sonnet's
+  // 3/15 instead of Opus's 5/25 — a ~40% understatement, with nothing on screen to hint at it.
+  for (const id of ['claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7']) {
+    expect(getModelPrice(id).input).toBe(5)
+    expect(getModelPrice(id).output).toBe(25)
+  }
+  expect(getModelPrice('claude-fable-5').output).toBe(50)
+  // Sonnet 5 introductory pricing, in effect through 2026-08-31.
+  expect(getModelPrice('claude-sonnet-5').output).toBe(10)
+  // None of them may collide with the fallback rate.
+  const fallback = getModelPrice('a-model-that-does-not-exist')
+  expect(fallback.output).toBe(15)
+  expect(getModelPrice('claude-opus-5').output).not.toBe(fallback.output)
+})

@@ -449,8 +449,15 @@ export type Lang = 'pt' | 'en'
 export type Theme = 'dark' | 'light'
 
 export const MODEL_PRICING: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
-  // Current models
+  // Current models — verified against platform.claude.com/docs/en/about-claude/pricing 2026-07-27.
+  'claude-fable-5':             { input: 10,   output: 50,   cacheRead: 1.00, cacheWrite: 12.50 },
+  'claude-mythos-5':            { input: 10,   output: 50,   cacheRead: 1.00, cacheWrite: 12.50 },
+  'claude-opus-5':              { input: 5,    output: 25,   cacheRead: 0.50, cacheWrite: 6.25  },
+  'claude-opus-4-8':            { input: 5,    output: 25,   cacheRead: 0.50, cacheWrite: 6.25  },
   'claude-opus-4-7':            { input: 5,    output: 25,   cacheRead: 0.50, cacheWrite: 6.25  },
+  // Sonnet 5 is on introductory pricing ($2/$10) through 2026-08-31, then $3/$15. The introductory
+  // rate is what applies today; revisit on that date.
+  'claude-sonnet-5':            { input: 2,    output: 10,   cacheRead: 0.20, cacheWrite: 2.50  },
   'claude-opus-4-6':            { input: 5,    output: 25,   cacheRead: 0.50, cacheWrite: 6.25  },
   'claude-sonnet-4-6':          { input: 3,    output: 15,   cacheRead: 0.30, cacheWrite: 3.75  },
   'claude-haiku-4-5-20251001':  { input: 1,    output: 5,    cacheRead: 0.10, cacheWrite: 1.25  },
