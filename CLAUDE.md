@@ -147,6 +147,54 @@ Agentistics tracks sessions from multiple AI coding assistants (harnesses), not 
 - `AppData.harnesses: HarnessId[]` lists which harnesses have data present, used by the frontend to decide whether to show the harness selector in the nav (shown only when >1 harness is active). Selecting "All" yields the unified view.
 - Each harness is implemented as a `HarnessAdapter` module under `server/adapters/` — never a separate package. `getEnabledAdapters()` lazily resolves and memoizes available adapters; individual adapters can be disabled via `AGENTISTICS_HARNESS_<ID>=0`.
 
+### Adding a harness — the complete checklist
+
+Every point below is load-bearing; skipping one has, historically, produced a harness that compiles
+clean and is then silently missing from half the product.
+
+1. **`HarnessId`** (`packages/core/src/types.ts`) — add the id. This is what makes the compiler find
+   most of the rest for you.
+2. **`HARNESS_CAPABILITIES`** — a `Record<HarnessId, …>`, so the build fails until you declare it.
+   Be honest: a capability set to `true` that the harness cannot actually produce renders a
+   confident `0`, which is worse than `N/A`.
+3. **`HARNESS_SORT`** (same file) — the Record behind `HARNESS_ORDER`. **Never hardcode a harness
+   list anywhere else.** Five places used to, as plain arrays, and TypeScript accepts an array
+   literal with a member missing: a new harness vanished from the Compare page, the filter bar, the
+   data-source list and the consolidate store while the build stayed green.
+4. **Adapter** — `packages/server/server/adapters/<id>.ts` (I/O) plus `<id>-parse.ts` (pure), and
+   register it in `adapters/types.ts`. Add a data-dir constant to `config.ts` following the existing
+   env-override pattern.
+5. **Pricing** — usually nothing to do. Report the **bare model id** (strip any `provider/` prefix,
+   as `kimi-parse.ts` does) and the shared table prices it. Only if the harness introduces a new
+   vendor, add it to `PROVIDERS` (`packages/core/src/providers.ts`, which documents this) and its
+   models to `MODEL_PRICING` with **verified rates and a dated source comment**. Never guess a rate:
+   a wrong price is worse than a missing one, and a missing one is visible — Settings → Pricing
+   lists any model of yours that no source can price.
+6. **Live sessions** (`live-sessions.ts`) — add the process name to `PROCESS_HARNESS`; if the CLI
+   keeps its session file open, add a pattern to `FD_SESSION_PATTERNS` for exact identity; if it
+   resumes by id, add the flag to `ID_FLAGS` and the command to `RESUME_BY_HARNESS`
+   (`web/src/lib/resumeCommand.ts`) — verified from the tool's own `--help`, never guessed.
+7. **Frontend** — `HARNESS_LABELS`, `HARNESS_COLORS`, `HARNESS_PROVIDERS` and a full `HARNESS_INFO`
+   entry (EN + PT) in `web/src/lib/harness.ts`.
+8. **Timestamps** — bucket activity hours on the **local** clock (`getHours()`), like every other
+   adapter. Reading a UTC timestamp as local put the peak-usage chart hours off for four harnesses.
+9. **Docs** — this file, plus any `docs/` page enumerating harnesses.
+
+### Pricing — three layered sources, and the built-in table is the floor
+
+Costs come from `MODEL_PRICING` (compiled in), the LiteLLM community dataset, and the vendor's own
+page, merged in that order of trust by `rates.ts` — so a source that fails or returns junk costs
+freshness, never the ability to price anything. Every community row is validated first
+(`pricing-community.ts`): non-positive costs, missing pairs, values implying a unit change, and
+prices more than tenfold from the built-in figure are dropped. That dataset really does publish a
+model at a cost of ZERO, which imported verbatim would make those sessions free.
+
+Each model carries its origin (`official` / `community` / `builtin`), surfaced per row in
+**Settings → Pricing**, which lists **only models this machine has actually used** — a new one joins
+the list by itself the first time it appears in a session, with no code change. Group headings come
+from `resolveProvider`, because a provider is a billing entity and a harness is not: Codex and
+Copilot both run OpenAI models, Antigravity runs Google's and Anthropic's.
+
 ### N/A vs real 0 — `HARNESS_CAPABILITIES`
 
 `HARNESS_CAPABILITIES` in `@agentistics/core` (`packages/core/src/types.ts`) is the single source of truth for which metrics each harness can produce. When a capability flag is `false`, the frontend renders "N/A" via the `NAtag` component + `capable(harness, metric)` helper (re-exported from `lib/harness.ts`), rather than showing a misleading 0. Current limitations: Codex and Gemini do not produce agent metrics or git line counts. **Antigravity produces `tokens`/`cost`/`model`** (decoded from the `gen_metadata` protobuf in `~/.gemini/antigravity-cli/conversations/<id>.db`, cost via the standard pricing table) and `gitLines` (edit deltas computed from the transcript's edit payloads, not `git diff`); it has `agents: false` because an `invoke_subagent` child is its own conversation, not an agent invocation on the parent. `dynamicWorkflows` (runs of the multi-agent orchestration Workflow tool) is `true` only for `claude` — it gates the repo-detail "Dynamic Workflows" tab.

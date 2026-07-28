@@ -4,7 +4,6 @@ import AppLayout from './App'
 
 const HomePage = lazy(() => import('./pages/HomePage'))
 const CostsPage = lazy(() => import('./pages/CostsPage'))
-const PricingPage = lazy(() => import('./pages/PricingPage'))
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage'))
 const RepositoriesPage = lazy(() => import('./pages/RepositoriesPage'))
 const RepoDetailPage = lazy(() => import('./pages/RepoDetailPage'))
@@ -30,6 +29,7 @@ const UsersSettings = lazy(() => import('./pages/settings/UsersSettings'))
 const TeamsSettings = lazy(() => import('./pages/settings/TeamsSettings'))
 const MachinesSettings = lazy(() => import('./pages/settings/MachinesSettings'))
 const ReposSettingsPage = lazy(() => import('./pages/settings/ReposSettingsPage'))
+const PricingSettings = lazy(() => import('./pages/settings/PricingSettings'))
 
 function PageFallback() {
   return (
@@ -51,7 +51,6 @@ export default function AppRouter() {
         <Route element={<AppLayout />}>
           <Route index element={<Suspense fallback={<PageFallback />}><HomePage /></Suspense>} />
           <Route path="costs" element={<Suspense fallback={<PageFallback />}><CostsPage /></Suspense>} />
-          <Route path="pricing" element={<Suspense fallback={<PageFallback />}><PricingPage /></Suspense>} />
           <Route path="sessions" element={<Suspense fallback={<PageFallback />}><SessionsPage /></Suspense>} />
           <Route path="workflows" element={<Suspense fallback={<PageFallback />}><WorkflowsPage /></Suspense>} />
           <Route path="projects" element={<Suspense fallback={<PageFallback />}><ProjectsPage /></Suspense>} />
@@ -71,6 +70,7 @@ export default function AppRouter() {
             <Route path="sessions" element={<Suspense fallback={<PageFallback />}><SessionsSettings /></Suspense>} />
             <Route path="data-sources" element={<Suspense fallback={<PageFallback />}><DataSourcesSettings /></Suspense>} />
             <Route path="harnesses" element={<Suspense fallback={<PageFallback />}><HarnessesSettings /></Suspense>} />
+            <Route path="pricing" element={<Suspense fallback={<PageFallback />}><PricingSettings /></Suspense>} />
             <Route path="install" element={<Suspense fallback={<PageFallback />}><InstallSettings /></Suspense>} />
             <Route path="connection" element={<Suspense fallback={<PageFallback />}><ConnectionSettings /></Suspense>} />
             <Route path="live" element={<Suspense fallback={<PageFallback />}><LiveSettings /></Suspense>} />
