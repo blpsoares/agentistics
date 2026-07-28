@@ -1,7 +1,10 @@
-import React from 'react'
+import React, { useMemo, useState } from 'react'
 import type { ModelUsage } from '@agentistics/core'
 import { formatModel, calcCost, getModelColor, fmtCost } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { resolveProvider, providerOrder } from '@agentistics/core'
+
+type SortKey = 'cost' | 'tokens' | 'model'
 
 interface Props {
   modelUsage: Record<string, ModelUsage>
@@ -11,6 +14,7 @@ interface Props {
   fallbackInputTokens?: number
   fallbackOutputTokens?: number
   fallbackCostUSD?: number
+  lang?: 'en' | 'pt'
 }
 
 function fmt(n: number): string {
@@ -24,9 +28,40 @@ const COL: React.CSSProperties = { fontSize: 11, color: 'var(--text-tertiary)', 
 const GRID = 'minmax(120px,1fr) 56px 64px 64px 64px 88px'
 const GRID_MOBILE = 'minmax(100px,1fr) 56px 70px 88px'
 
-export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1, fallbackInputTokens, fallbackOutputTokens, fallbackCostUSD }: Props) {
+export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1, fallbackInputTokens, fallbackOutputTokens, fallbackCostUSD, lang = 'en' }: Props) {
   const isMobile = useIsMobile()
-  const entries = Object.entries(modelUsage).filter(([, u]) => u && (u.inputTokens + u.outputTokens) > 0)
+  const pt = lang === 'pt'
+  const [query, setQuery] = useState('')
+  const [sortKey, setSortKey] = useState<SortKey>('cost')
+  const [byProvider, setByProvider] = useState(false)
+
+  const allEntries = Object.entries(modelUsage).filter(([, u]) => u && (u.inputTokens + u.outputTokens) > 0)
+
+  /** Search matches the model id or the company that bills it, so "opus" and "anthropic" both work.
+   *  Sorting is by spend by default — the question this table is opened with. */
+  const entries = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const filtered = q
+      ? allEntries.filter(([id]) => id.toLowerCase().includes(q) || resolveProvider(id).label.toLowerCase().includes(q))
+      : allEntries
+    const tokensOf = (u: ModelUsage) => u.inputTokens + u.outputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens
+    return [...filtered].sort(([aId, a], [bId, b]) =>
+      sortKey === 'model' ? aId.localeCompare(bId)
+      : sortKey === 'tokens' ? tokensOf(b) - tokensOf(a)
+      : calcCost(b, bId) - calcCost(a, aId))
+  }, [allEntries, query, sortKey])
+
+  /** Grouping reorders rather than nesting: the table keeps one column grid, so a provider heading
+   *  is just a row in the same flow. Within a provider the chosen sort still applies. */
+  const ordered = useMemo(() => {
+    if (!byProvider) return entries
+    const rank = new Map(providerOrder().map((p, i) => [p.id, i]))
+    return [...entries].sort(([a], [b]) => {
+      const ra = rank.get(resolveProvider(a).id) ?? 99
+      const rb = rank.get(resolveProvider(b).id) ?? 99
+      return ra - rb || entries.findIndex(([m]) => m === a) - entries.findIndex(([m]) => m === b)
+    })
+  }, [entries, byProvider])
 
   if (entries.length === 0) {
     const hasFallback = fallbackCostUSD !== undefined && (fallbackInputTokens ?? 0) + (fallbackOutputTokens ?? 0) > 0
@@ -91,7 +126,49 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
   const totalCacheRead = entries.reduce((s, [, u]) => s + u.cacheReadInputTokens, 0)
   const totalCacheWrite = entries.reduce((s, [, u]) => s + u.cacheCreationInputTokens, 0)
 
+  const chip = (active: boolean): React.CSSProperties => ({
+    padding: isMobile ? '0 11px' : '4px 10px',
+    minHeight: isMobile ? 44 : undefined,
+    borderRadius: 999, cursor: 'pointer', fontFamily: 'inherit', fontSize: 11.5,
+    border: `1px solid ${active ? 'var(--anthropic-orange)' : 'var(--border)'}`,
+    background: active ? 'var(--anthropic-orange-dim)' : 'var(--bg-card)',
+    color: active ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+    fontWeight: active ? 600 : 400,
+  })
+
   return (
+    <>
+    {/* Controls sit OUTSIDE the table frame so the header row stays the table's own, and the
+        toolbar does not inherit the grid that the columns depend on. */}
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+      <input
+        value={query}
+        onChange={e => setQuery(e.target.value)}
+        placeholder={pt ? 'Buscar modelo ou provedor…' : 'Search model or provider…'}
+        style={{
+          flex: '1 1 180px', minWidth: 0, boxSizing: 'border-box',
+          padding: isMobile ? '11px 10px' : '5px 10px',
+          minHeight: isMobile ? 44 : undefined,
+          background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8,
+          fontSize: isMobile ? 16 : 12, color: 'var(--text-primary)', outline: 'none', fontFamily: 'inherit',
+        }}
+      />
+      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+        {([['cost', pt ? 'Custo' : 'Cost'], ['tokens', 'Tokens'], ['model', pt ? 'Nome' : 'Name']] as Array<[SortKey, string]>)
+          .map(([k, label]) => (
+            <button key={k} onClick={() => setSortKey(k)} style={chip(sortKey === k)}>{label}</button>
+          ))}
+        <button onClick={() => setByProvider(v => !v)} style={chip(byProvider)}>
+          {pt ? 'Por provedor' : 'By provider'}
+        </button>
+      </div>
+    </div>
+
+    {entries.length === 0 ? (
+      <div style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '10px 2px' }}>
+        {pt ? `Nenhum modelo corresponde a "${query.trim()}".` : `No model matches "${query.trim()}".`}
+      </div>
+    ) : (
     <div style={{
       background: 'var(--bg-elevated)',
       borderRadius: 'var(--radius-md)',
@@ -114,15 +191,27 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
       </div>
 
       {/* Rows */}
-      {entries.map(([modelId, usage], i) => {
+      {ordered.map(([modelId, usage], i) => {
+        const provider = resolveProvider(modelId)
+        const newGroup = byProvider && (i === 0 || resolveProvider(ordered[i - 1]![0]).id !== provider.id)
         const costUSD = calcCost(usage, modelId)
         const tokens = usage.inputTokens + usage.outputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens
         const pct = totalTokens > 0 ? tokens / totalTokens : 0
         const color = getModelColor(modelId)
-        const isLast = i === entries.length - 1
+        const isLast = i === ordered.length - 1
 
         return (
-          <div key={modelId} style={{
+          <React.Fragment key={modelId}>
+          {newGroup && (
+            <div style={{
+              padding: '7px 14px', background: 'var(--bg-card)',
+              borderTop: i === 0 ? 'none' : '1px solid var(--border-subtle)',
+              borderBottom: '1px solid var(--border-subtle)',
+              fontSize: 11, fontWeight: 700, letterSpacing: 0.3,
+              color: 'var(--text-secondary)', textTransform: 'uppercase',
+            }}>{provider.label}</div>
+          )}
+          <div style={{
             display: 'grid', gridTemplateColumns: isMobile ? GRID_MOBILE : GRID, gap: 8,
             padding: '10px 14px',
             alignItems: 'center',
@@ -173,6 +262,7 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
               </span>
             </div>
           </div>
+          </React.Fragment>
         )
       })}
 
@@ -215,5 +305,7 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
         </div>
       )}
     </div>
+    )}
+    </>
   )
 }
