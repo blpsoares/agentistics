@@ -4,7 +4,7 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
 import { format, parseISO } from 'date-fns'
-import { ArrowLeft, Pencil, Trash2 } from 'lucide-react'
+import { ArrowLeft, Pencil, Trash2, CalendarRange } from 'lucide-react'
 import { fmt, fmtCost, formatModel, formatProjectName, repoShortName } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { HARNESS_LABELS } from '../lib/harness'
@@ -24,12 +24,15 @@ interface TagAggregate {
   topModel: string | null
   topHarness: string | null
 }
+/** Optional period the tag is pinned to — inclusive `yyyy-MM-dd`, each side independent. */
+interface TagWindow { start?: string; end?: string }
 interface Tag {
   _id: string
   name: string
   color?: string
   sources: TagSource[]
   filters?: TagSource[]
+  window?: TagWindow
   sharedWith: string[]
   createdBy: string
   aggregate: TagAggregate
@@ -305,9 +308,20 @@ export default function TagDetailPage() {
     )
   }
 
-  const window_ = stats.firstSessionDate && stats.lastSessionDate
+  // Two different things, and conflating them would be the confusing part: `activity` is when work
+  // actually happened, `pinned` is the period the tag is fixed to. With a period set the first is
+  // necessarily inside the second — seeing both is how you tell "the run ended early" from "the
+  // period is wrong".
+  const activity = stats.firstSessionDate && stats.lastSessionDate
     ? `${niceDate(stats.firstSessionDate)} → ${niceDate(stats.lastSessionDate)}`
     : (pt ? 'Sem atividade registrada' : 'No recorded activity')
+  const pinned = tag.window && (tag.window.start || tag.window.end)
+    ? (tag.window.start && tag.window.end
+      ? `${niceDate(tag.window.start)} → ${niceDate(tag.window.end)}`
+      : tag.window.start
+        ? `${pt ? 'desde' : 'from'} ${niceDate(tag.window.start)}`
+        : `${pt ? 'até' : 'until'} ${niceDate(tag.window.end!)}`)
+    : null
 
   const totalTokens = tag.aggregate.inputTokens + tag.aggregate.outputTokens
   const empty = tag.aggregate.sessions === 0
@@ -337,8 +351,21 @@ export default function TagDetailPage() {
               minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
             }}>{tag.name}</h1>
           </div>
+          {pinned && (
+            <div style={{ marginTop: 7 }}>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                padding: '3px 9px', borderRadius: 999, fontSize: 11.5, fontWeight: 600,
+                background: 'var(--anthropic-orange-dim)', border: '1px solid rgba(217,119,6,0.35)',
+                color: 'var(--anthropic-orange)', fontVariantNumeric: 'tabular-nums',
+              }}>
+                <CalendarRange size={12} />
+                {pt ? 'Período fixado' : 'Pinned period'}: {pinned}
+              </span>
+            </div>
+          )}
           <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 5 }}>
-            {window_}
+            {pinned ? `${pt ? 'Atividade' : 'Activity'}: ${activity}` : activity}
             {' · '}
             {tag.sources.length} {tag.sources.length === 1 ? (pt ? 'fonte' : 'source') : (pt ? 'fontes' : 'sources')}
             {(tag.filters?.length ?? 0) > 0 && (
