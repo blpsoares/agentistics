@@ -83,6 +83,15 @@ export const TEAM_INGEST_TOKEN = process.env.AGENTISTICS_TEAM_INGEST_TOKEN || un
 export const CENTRAL_USER = process.env.AGENTISTICS_CENTRAL_USER || undefined
 
 // ---------------------------------------------------------------------------
+// Exposure profile (see exposure.ts). AGENTISTICS_EXPOSURE=local|lan|public.
+// Unset → 'lan' on a central, 'local' otherwise. An unknown value fails closed to 'public'.
+// AGENTISTICS_ALLOW_LOCAL_SHELL=1 re-enables /api/exec, /api/chat-tty, the host transcript
+// readers and /api/mcp-action on a 'lan' central. It is IGNORED on 'public'.
+// ---------------------------------------------------------------------------
+export const EXPOSURE = process.env.AGENTISTICS_EXPOSURE
+export const ALLOW_LOCAL_SHELL = process.env.AGENTISTICS_ALLOW_LOCAL_SHELL === '1'
+
+// ---------------------------------------------------------------------------
 // Phase 3 — auth gate. When AGENTISTICS_TEAM_PASSWORD is set, the central
 // dashboard requires a valid session cookie to access all /api/* routes except
 // the public allowlist. TEAM_SESSION_SECRET defaults to the password itself.
