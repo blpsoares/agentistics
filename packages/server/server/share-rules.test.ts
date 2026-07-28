@@ -324,3 +324,166 @@ test('accumulateClaudeSessions without claudeOnly counts every harness — the d
   expect(accumulateClaudeSessions(mixed).totalSessions).toBe(2)
   expect(accumulateClaudeSessions(mixed, { claudeOnly: true }).totalSessions).toBe(1)
 })
+
+// --- attributionBoundary / buildSplitStatsCache / prehistoryCount / deniedTouchesPrehistory ---
+
+import { attributionBoundary, buildSplitStatsCache, prehistoryCount, deniedTouchesPrehistory } from './share-rules'
+
+/** A real-ish cache: prehistory (Feb) + attributable (June), as the reference machine has. */
+function realCache(): StatsCache {
+  return {
+    ...emptyStatsCache(),
+    version: 4,
+    lastComputedDate: '2026-06-22',
+    dailyActivity: [
+      { date: '2026-02-06', messageCount: 100, sessionCount: 10, toolCallCount: 50 },
+      { date: '2026-06-20', messageCount: 9, sessionCount: 2, toolCallCount: 4 },
+    ],
+    dailyModelTokens: [
+      { date: '2026-02-06', tokensByModel: { 'claude-opus-5': 1000 } },
+      { date: '2026-06-20', tokensByModel: { 'claude-opus-5': 510 } },
+    ],
+    modelUsage: {
+      'claude-opus-5': {
+        inputTokens: 1510, outputTokens: 0, cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0,
+      },
+    },
+    totalSessions: 12,
+    totalMessages: 109,
+    firstSessionDate: '2026-02-06T00:53:42.012Z',
+    hourCounts: { '8': 10, '9': 1, '11': 1 },
+  }
+}
+
+/**
+ * The store: only June — 'keep' (public) and 'drop' (secret).
+ * These MUST reproduce the real cache's 2026-06-20 row exactly, or the no-op invariant test
+ * below fails for the wrong reason: 2 sessions, 9 messages, 4 tool calls, 510 tokens,
+ * start hours 9 and 11.
+ */
+function storeSessions(): SessionMeta[] {
+  return [
+    s({ session_id: 'keep', start_time: localAt('2026-06-20', 9), model: 'claude-opus-5', input_tokens: 10, git_remote: 'github.com/o/public', user_message_count: 1, tool_counts: { Read: 2 } }),
+    s({ session_id: 'drop', start_time: localAt('2026-06-20', 11), model: 'claude-opus-5', input_tokens: 500, git_remote: 'github.com/o/secret', user_message_count: 8, tool_counts: { Bash: 2 } }),
+  ]
+}
+
+test('attributionBoundary is the earliest stored Claude day, and empty for an empty store', () => {
+  expect(attributionBoundary(storeSessions())).toBe('2026-06-20')
+  expect(attributionBoundary([])).toBe('')
+  expect(attributionBoundary([s({ session_id: 'x', harness: 'codex', start_time: localAt('2026-01-01', 9) })])).toBe('')
+})
+
+test('THE HEADLINE INVARIANT: denying nothing makes the split a no-op', () => {
+  const all = storeSessions()
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-20' })!
+  // Every field is reproduced EXCEPT lastComputedDate, which the split always blanks so no
+  // consumer's `day <= lastComputed → skip` guard can drop legitimate gap-fill.
+  const { lastComputedDate, ...rest } = out
+  const { lastComputedDate: _ignored, ...expected } = realCache()
+  expect(rest).toEqual(expected)
+  expect(lastComputedDate).toBe('')
+})
+
+test('totals drop by exactly the denied contribution and by nothing else', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-06-20' })!
+  const real = realCache()
+  expect(out.totalSessions).toBe(real.totalSessions - 1)
+  expect(out.totalMessages).toBe(real.totalMessages - 8)
+  expect(out.modelUsage['claude-opus-5']!.inputTokens).toBe(real.modelUsage['claude-opus-5']!.inputTokens - 500)
+})
+
+test('days before the boundary are byte-identical to the real cache', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-06-20' })!
+  expect(out.dailyActivity.find(d => d.date === '2026-02-06')).toEqual({ date: '2026-02-06', messageCount: 100, sessionCount: 10, toolCallCount: 50 })
+  expect(out.dailyModelTokens.find(d => d.date === '2026-02-06')!.tokensByModel).toEqual({ 'claude-opus-5': 1000 })
+})
+
+test('a denied session BEFORE the boundary is not filtered — the prehistory is untouched', () => {
+  const all = [
+    ...storeSessions(),
+    s({ session_id: 'old-secret', start_time: localAt('2026-02-06', 8), model: 'claude-opus-5', input_tokens: 999, git_remote: 'github.com/o/secret', user_message_count: 3 }),
+  ]
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  // Boundary stays at June: the February session predates the store's authority window.
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-06-20' })!
+  expect(out.dailyActivity.find(d => d.date === '2026-02-06')!.sessionCount).toBe(10)
+})
+
+test('days from the boundary contain zero contribution from denied sessions', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-06-20' })!
+  const june = out.dailyActivity.find(d => d.date === '2026-06-20')!
+  expect(june.sessionCount).toBe(1)
+  expect(june.messageCount).toBe(1)
+  expect(out.dailyModelTokens.find(d => d.date === '2026-06-20')!.tokensByModel['claude-opus-5']).toBe(10)
+  expect(out.hourCounts['11']).toBeUndefined()
+  expect(out.hourCounts['9']).toBe(1)
+  expect(out.hourCounts['8']).toBe(10)
+})
+
+test('firstSessionDate comes from the real cache, not the earliest shared session', () => {
+  const all = storeSessions()
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-20' })!
+  expect(out.firstSessionDate).toBe('2026-02-06T00:53:42.012Z')
+})
+
+test('a real cache lagging behind the store clamps at 0 and never goes negative', () => {
+  const lagging: StatsCache = { ...realCache(), modelUsage: { 'claude-opus-5': { inputTokens: 5, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 } }, hourCounts: { '9': 0 } }
+  const all = storeSessions()
+  const out = buildSplitStatsCache({ real: lagging, allStored: all, shared: all, boundary: '2026-06-20' })!
+  for (const u of Object.values(out.modelUsage)) {
+    expect(u.inputTokens).toBeGreaterThanOrEqual(0)
+    expect(u.outputTokens).toBeGreaterThanOrEqual(0)
+  }
+  for (const c of Object.values(out.hourCounts)) expect(c).toBeGreaterThanOrEqual(0)
+})
+
+test('longestSession is zeroed when it names a denied session, kept otherwise', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const named: StatsCache = { ...realCache(), longestSession: { sessionId: 'drop', duration: 999, messageCount: 3, timestamp: 'x' } }
+  const zeroed = buildSplitStatsCache({ real: named, allStored: all, shared, boundary: '2026-06-20' })!
+  expect(zeroed.longestSession).toEqual({ sessionId: '', duration: 0, messageCount: 0, timestamp: '' })
+
+  const kept: StatsCache = { ...realCache(), longestSession: { sessionId: 'keep', duration: 999, messageCount: 3, timestamp: 'x' } }
+  const out = buildSplitStatsCache({ real: kept, allStored: all, shared, boundary: '2026-06-20' })!
+  expect(out.longestSession.sessionId).toBe('keep')
+})
+
+test('an unusable split returns null rather than an unfiltered cache', () => {
+  const all = storeSessions()
+  expect(buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '' })).toBeNull()
+  expect(buildSplitStatsCache({ real: null as unknown as StatsCache, allStored: all, shared: all, boundary: '2026-06-20' })).toBeNull()
+})
+
+test('a boundary later than the store leaves the intervening days UNFILTERED (why monotonicity matters)', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-07-01' })!
+  // June is now prehistory, so the denied session's tokens ride along untouched.
+  expect(out.dailyModelTokens.find(d => d.date === '2026-06-20')!.tokensByModel['claude-opus-5']).toBe(510)
+})
+
+test('the split output carries no key outside the StatsCache shape', () => {
+  const all = storeSessions()
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-20' })!
+  expect(Object.keys(out).sort()).toEqual(Object.keys(emptyStatsCache()).sort())
+})
+
+test('prehistoryCount and deniedTouchesPrehistory are local disclosure helpers', () => {
+  const all = [
+    ...storeSessions(),
+    s({ session_id: 'old-secret', start_time: localAt('2026-02-06', 8), git_remote: 'github.com/o/secret' }),
+  ]
+  expect(prehistoryCount(all, '2026-06-20')).toBe(1)
+  expect(prehistoryCount(all, '')).toBe(0)
+  expect(deniedTouchesPrehistory(all, normalizeDenied(['github.com/o/secret']), '2026-06-20')).toBe(true)
+  expect(deniedTouchesPrehistory(all, normalizeDenied(['github.com/o/public']), '2026-06-20')).toBe(false)
+})

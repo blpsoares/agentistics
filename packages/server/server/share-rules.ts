@@ -324,3 +324,160 @@ export function buildSharedStatsCache(
   out.hourCounts = Object.fromEntries([...acc.hourCounts.entries()].map(([h, c]) => [String(h), c]))
   return out
 }
+
+/**
+ * First local day from which the consolidate store is the authority on what happened — the
+ * earliest start_time day across ALL stored Claude sessions, shared and denied alike. Days
+ * before it cannot be attributed to any repository by anyone, including this machine.
+ *
+ * '' when the store holds no Claude session: nothing is attributable, and buildSplitStatsCache
+ * then refuses rather than shipping an unfiltered cache.
+ */
+export function attributionBoundary(allStored: readonly SessionMeta[]): string {
+  let min = ''
+  for (const s of allStored) {
+    if (!s.start_time) continue
+    if ((s.harness ?? 'claude') !== 'claude') continue
+    const day = s.start_time.slice(0, 10)
+    if (!min || day < min) min = day
+  }
+  return min
+}
+
+/** Stored sessions strictly before the boundary — the size of the block no rule can filter. */
+export function prehistoryCount(allStored: readonly SessionMeta[], boundary: string): number {
+  if (!boundary) return 0
+  let n = 0
+  for (const s of allStored) {
+    if (s.start_time && s.start_time.slice(0, 10) < boundary) n++
+  }
+  return n
+}
+
+/** Does any DENIED repo have a stored session before the boundary? Drives the specific
+ *  variant of the confirm copy. A false answer is not a proof of absence — it only means the
+ *  store holds no such session — which is why the generic copy is always shown too. */
+export function deniedTouchesPrehistory(
+  allStored: readonly SessionMeta[],
+  denied: ReadonlySet<RepoKey>,
+  boundary: string,
+  index?: PathRepoIndex,
+): boolean {
+  if (!boundary || denied.size === 0) return false
+  for (const s of allStored) {
+    if (!s.start_time || s.start_time.slice(0, 10) >= boundary) continue
+    if (!sessionShared(s, denied, index)) return true
+  }
+  return false
+}
+
+function sumUsage(sessions: readonly SessionMeta[], from: string) {
+  const totals = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>()
+  const hours = new Map<number, number>()
+  for (const s of sessions) {
+    if (!s.start_time || s.start_time.slice(0, 10) < from) continue
+    if ((s.harness ?? 'claude') !== 'claude') continue
+    const hour = new Date(s.start_time).getHours()
+    if (Number.isFinite(hour)) hours.set(hour, (hours.get(hour) ?? 0) + 1)
+    const model = s.model
+    if (!model || !model.startsWith('claude-')) continue
+    const t = totals.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    t.input += s.input_tokens ?? 0
+    t.output += s.output_tokens ?? 0
+    t.cacheRead += s.cache_read_input_tokens ?? 0
+    t.cacheWrite += s.cache_creation_input_tokens ?? 0
+    totals.set(model, t)
+  }
+  return { totals, hours }
+}
+
+/**
+ * The cache a RESTRICTED connection pushes.
+ *
+ * Days `< boundary` are copied verbatim from `real` — the prehistory, which no rule can reach
+ * because the transcripts behind it are gone. Days `>= boundary` are rebuilt from `shared`.
+ * Date-less fields (modelUsage, hourCounts) have no day dimension in the cache, so their
+ * prehistory term is recovered as `real − attributable`, a difference of two exactly-known
+ * quantities — never a proration.
+ *
+ * Returns null when the split cannot be made faithfully; the caller must then push NO
+ * statsCache at all. A missing cache is recoverable; a leaked one is not.
+ */
+export function buildSplitStatsCache(input: {
+  real: StatsCache
+  allStored: readonly SessionMeta[]
+  shared: readonly SessionMeta[]
+  boundary: string
+}): StatsCache | null {
+  const { real, allStored, shared, boundary } = input
+  if (!real || !boundary) return null
+
+  const fromShared = buildSharedStatsCache(shared, { version: real.version })
+  const out = emptyStatsCache()
+  out.version = real.version
+  out.lastComputedDate = ''
+  out.totalSpeculationTimeSavedMs = real.totalSpeculationTimeSavedMs
+  out.firstSessionDate = real.firstSessionDate
+
+  // --- date-dimensioned: copy before, rebuild from ---
+  out.dailyActivity = [
+    ...real.dailyActivity.filter(d => d.date < boundary),
+    ...fromShared.dailyActivity.filter(d => d.date >= boundary),
+  ].sort((a, b) => a.date.localeCompare(b.date))
+
+  out.dailyModelTokens = [
+    ...real.dailyModelTokens.filter(d => d.date < boundary),
+    ...fromShared.dailyModelTokens.filter(d => d.date >= boundary),
+  ].sort((a, b) => a.date.localeCompare(b.date))
+
+  // --- totals: derived from the result's own dailyActivity, preserving the real file's
+  //     invariant totalSessions === Σ dailyActivity.sessionCount ---
+  out.totalSessions = out.dailyActivity.reduce((a, d) => a + d.sessionCount, 0)
+  out.totalMessages = out.dailyActivity.reduce((a, d) => a + d.messageCount, 0)
+
+  // --- date-less: real − attributable + shared, clamped at 0 ---
+  const attributable = sumUsage(allStored, boundary)
+  const kept = sumUsage(shared, boundary)
+
+  const models = new Set([
+    ...Object.keys(real.modelUsage),
+    ...attributable.totals.keys(),
+    ...kept.totals.keys(),
+  ])
+  for (const model of models) {
+    const r = real.modelUsage[model]
+    const a = attributable.totals.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    const k = kept.totals.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    const usage = {
+      inputTokens: Math.max(0, (r?.inputTokens ?? 0) - a.input) + k.input,
+      outputTokens: Math.max(0, (r?.outputTokens ?? 0) - a.output) + k.output,
+      cacheReadInputTokens: Math.max(0, (r?.cacheReadInputTokens ?? 0) - a.cacheRead) + k.cacheRead,
+      cacheCreationInputTokens: Math.max(0, (r?.cacheCreationInputTokens ?? 0) - a.cacheWrite) + k.cacheWrite,
+      webSearchRequests: 0,
+      costUSD: 0,
+    }
+    const any = usage.inputTokens || usage.outputTokens || usage.cacheReadInputTokens || usage.cacheCreationInputTokens
+    if (any) out.modelUsage[model] = usage
+  }
+
+  const hourKeys = new Set([
+    ...Object.keys(real.hourCounts),
+    ...[...attributable.hours.keys()].map(String),
+    ...[...kept.hours.keys()].map(String),
+  ])
+  for (const key of hourKeys) {
+    const h = Number(key)
+    const value = Math.max(0, (real.hourCounts[key] ?? 0) - (attributable.hours.get(h) ?? 0)) + (kept.hours.get(h) ?? 0)
+    if (value > 0) out.hourCounts[key] = value
+  }
+
+  // --- longestSession names a session; zero it when that session is one we withhold ---
+  const sharedIds = sharedSessionIds(shared)
+  const storedIds = sharedSessionIds(allStored)
+  const named = real.longestSession?.sessionId ?? ''
+  out.longestSession = (named && storedIds.has(named) && !sharedIds.has(named))
+    ? { sessionId: '', duration: 0, messageCount: 0, timestamp: '' }
+    : { ...real.longestSession }
+
+  return out
+}
