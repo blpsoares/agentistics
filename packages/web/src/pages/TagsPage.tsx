@@ -26,6 +26,7 @@ interface Tag {
   name: string
   color?: string
   sources: TagSource[]
+  filters?: TagSource[]
   sharedWith: string[]
   createdBy: string
   aggregate: TagAggregate
@@ -258,6 +259,10 @@ export default function TagsPage() {
   const [name, setName] = useState('')
   const [color, setColor] = useState(DEFAULT_COLOR)
   const [sources, setSources] = useState<TagSource[]>([])
+  /** Narrowing applied on top of the union: OR within a type, AND across types. */
+  const [filters, setFilters] = useState<TagSource[]>([])
+  const [filterType, setFilterType] = useState<TagSourceType>('project')
+  const [filtersEditing, setFiltersEditing] = useState(true)
   // True when the chosen colour is not one of the presets — drives the custom circle's ring.
   const isCustomColor = !SWATCHES.some(c => c.toLowerCase() === color.toLowerCase())
   const [sharedWith, setSharedWith] = useState<string[]>([])
@@ -269,7 +274,7 @@ export default function TagsPage() {
   const [shareEditing, setShareEditing] = useState(true)
 
   const openCreate = useCallback(() => {
-    setEditingId(null); setName(''); setColor(DEFAULT_COLOR); setSources([]); setSharedWith([])
+    setEditingId(null); setName(''); setColor(DEFAULT_COLOR); setSources([]); setFilters([]); setSharedWith([])
     setDraftType('repo'); setDraftValue(''); setSaveErr(null)
     setSourcesEditing(true); setShareEditing(true)
     setEditorOpen(true)
@@ -277,7 +282,7 @@ export default function TagsPage() {
 
   const openEdit = useCallback((t: Tag) => {
     setEditingId(t._id); setName(t.name); setColor(t.color || DEFAULT_COLOR)
-    setSources(t.sources); setSharedWith(t.sharedWith)
+    setSources(t.sources); setFilters(t.filters ?? []); setSharedWith(t.sharedWith)
     setDraftType('repo'); setDraftValue(''); setSaveErr(null)
     setSourcesEditing(true); setShareEditing(true)
     setEditorOpen(true)
@@ -290,6 +295,7 @@ export default function TagsPage() {
       name.trim() !== original.name
       || color !== (original.color || DEFAULT_COLOR)
       || JSON.stringify(sources) !== JSON.stringify(original.sources)
+      || JSON.stringify(filters) !== JSON.stringify(original.filters ?? [])
       || JSON.stringify([...sharedWith].sort()) !== JSON.stringify([...original.sharedWith].sort())
     )
     : name.trim().length > 0 || sources.length > 0
@@ -343,6 +349,23 @@ export default function TagsPage() {
     [optionsForType, draftType, sources, repoByProject, pickedRepos, pt],
   )
   /** Commit every checked value at once. */
+  /** Values offered for the filter picker: same catalogue as sources, minus what is already a
+   *  filter of that type. A filter can name anything — narrowing to a project OUTSIDE the tag's
+   *  repos simply yields nothing, which is the honest result rather than a hidden option. */
+  const filterOptions = useMemo(
+    () => optionsForType(filterType).filter(o => !filters.some(f => f.type === filterType && f.value === o.value)),
+    [optionsForType, filterType, filters],
+  )
+
+  const addPickedFilters = (values: string[]) => {
+    setFilters(prev => [
+      ...prev,
+      ...values
+        .filter(v => !prev.some(f => f.type === filterType && f.value === v))
+        .map(v => ({ type: filterType, value: v })),
+    ])
+  }
+
   const addPickedSources = (values: string[]) => {
     setSources(prev => dropCoveredProjects([
       ...prev,
@@ -356,7 +379,7 @@ export default function TagsPage() {
     if (!name.trim()) { setSaveErr(pt ? 'Informe um nome.' : 'A name is required.'); return }
     setSaving(true); setSaveErr(null)
     try {
-      const body = { id: editingId ?? undefined, name: name.trim(), color, sources, sharedWith }
+      const body = { id: editingId ?? undefined, name: name.trim(), color, sources, filters, sharedWith }
       const res = await fetch('/api/tags', {
         method: editingId ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -671,6 +694,61 @@ export default function TagsPage() {
             emptyLabel={pt ? 'Nenhuma fonte adicionada.' : 'No sources added.'}
           />
         </Section>
+
+        {/* Narrowing only means something once there is a union to narrow: with no sources the tag
+            covers nothing, and a filter would be a control that cannot change any number. */}
+        {sources.length > 0 && (
+        <Section
+          title={pt ? 'Restringir a' : 'Restrict to'}
+          editing={filtersEditing}
+          onEdit={() => setFiltersEditing(true)}
+          onCancel={() => setFiltersEditing(false)}
+          onSave={() => setFiltersEditing(false)}
+          labels={{ edit: pt ? 'Editar' : 'Edit', save: pt ? 'Pronto' : 'Done', cancel: pt ? 'Fechar' : 'Close' }}
+          editChildren={
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+                {pt
+                  ? 'Opcional. Estreita a tag sem ampliá-la: dentro de um mesmo tipo vale QUALQUER um, e entre tipos vale TODOS. Ex.: contas A e B + projetos C e D = só o que A ou B fizeram, e só em C ou D.'
+                  : 'Optional. Narrows the tag without widening it: within one type ANY value counts, across types ALL must. E.g. accounts A and B + projects C and D = only what A or B did, and only in C or D.'}
+              </div>
+              <Field label={pt ? 'Tipo' : 'Type'}>
+                <Select
+                  value={filterType}
+                  onChange={v => setFilterType(v as TagSourceType)}
+                  options={sourceTypes.map(t => ({ value: t, label: sourceTypeLabel(t) }))}
+                />
+              </Field>
+              <Field label={pt ? 'Valor' : 'Value'}>
+                <MultiPicker
+                  options={filterOptions}
+                  onCommit={addPickedFilters}
+                  placeholder={pt ? 'Buscar e selecionar…' : 'Search and select…'}
+                  searchPlaceholder={pt ? 'Buscar…' : 'Search…'}
+                  confirmLabel={n => (pt ? `Adicionar ${n}` : `Add ${n}`)}
+                  selectAllLabel={pt ? 'Selecionar tudo' : 'Select all'}
+                  emptyLabel={pt ? 'Nada disponível.' : 'Nothing available.'}
+                  disabled={filterOptions.length === 0}
+                />
+              </Field>
+              <SourceList
+                sources={filters}
+                typeLabel={sourceTypeLabel}
+                valueLabel={sourceValueLabel}
+                emptyLabel={pt ? 'Sem restrição — a tag cobre tudo das fontes.' : 'No restriction — the tag covers everything from its sources.'}
+                onRemove={i => setFilters(prev => prev.filter((_, j) => j !== i))}
+              />
+            </div>
+          }
+        >
+          <SourceList
+            sources={filters}
+            typeLabel={sourceTypeLabel}
+            valueLabel={sourceValueLabel}
+            emptyLabel={pt ? 'Sem restrição — a tag cobre tudo das fontes.' : 'No restriction — the tag covers everything from its sources.'}
+          />
+        </Section>
+        )}
 
         {/* Sharing is an IAM act — it grants a tag's numbers to another ACCOUNT. Off a central
             there are no other accounts, so the whole section is hidden (and the server ignores

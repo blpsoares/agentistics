@@ -29,6 +29,7 @@ interface Tag {
   name: string
   color?: string
   sources: TagSource[]
+  filters?: TagSource[]
   sharedWith: string[]
   createdBy: string
   aggregate: TagAggregate
@@ -340,6 +341,9 @@ export default function TagDetailPage() {
             {window_}
             {' · '}
             {tag.sources.length} {tag.sources.length === 1 ? (pt ? 'fonte' : 'source') : (pt ? 'fontes' : 'sources')}
+            {(tag.filters?.length ?? 0) > 0 && (
+              <> · {tag.filters!.length} {pt ? 'restrição' : 'restriction'}{tag.filters!.length === 1 ? '' : (pt ? 'ões' : 's')}</>
+            )}
           </div>
         </div>
         {mayEdit && (
@@ -556,6 +560,34 @@ export default function TagDetailPage() {
             ? 'O total da tag é sem duplicidade; os números por fonte não são. Fontes que se sobrepõem contam a mesma sessão mais de uma vez, então somar as linhas abaixo pode passar do total — isso é esperado.'
             : 'The tag total is deduplicated; the per-source figures are not. Overlapping sources count the same session more than once, so summing the rows below may exceed the total — that is expected.'}
         </div>
+
+        {/* Say the restriction out loud. Without it a reader comparing these numbers against the
+            repo's own page sees smaller figures with nothing to explain the gap. */}
+        {(tag.filters?.length ?? 0) > 0 && (
+          <div style={{
+            display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6,
+            fontSize: 11.5, color: 'var(--text-secondary)', marginBottom: 12,
+            padding: '8px 10px', borderRadius: 8,
+            background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+          }}>
+            <span style={{ color: 'var(--text-tertiary)' }}>
+              {pt ? 'Restrita a:' : 'Restricted to:'}
+            </span>
+            {tag.filters!.map((f, i) => (
+              <span key={`${f.type}-${f.value}-${i}`} style={{
+                padding: '2px 7px', borderRadius: 999, fontSize: 11,
+                background: 'var(--bg-card)', border: '1px solid var(--border)',
+              }}>
+                <span style={{ color: 'var(--text-tertiary)' }}>{f.type}</span>{' '}{f.value}
+              </span>
+            ))}
+            <span style={{ color: 'var(--text-tertiary)', width: '100%', marginTop: 2 }}>
+              {pt
+                ? 'Dentro de um mesmo tipo vale qualquer um; entre tipos, todos.'
+                : 'Within one type any value counts; across types, all must.'}
+            </span>
+          </div>
+        )}
         {detail.breakdown.length === 0 ? (
           <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>
             {pt ? 'Nenhuma fonte configurada.' : 'No sources configured.'}
