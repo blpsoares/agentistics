@@ -43,7 +43,21 @@ const ORIGIN: Record<Origin, { color: string; en: string; pt: string; whyEn: str
   },
 }
 
-const fmt = (v: number): string => (v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(v < 0.01 ? 4 : 3)}`)
+/**
+ * A per-1M-token rate in the chosen currency.
+ *
+ * NOT fmtCost: that floors at "<USD 0.01" because it formats spend, and half these rates are below
+ * that (cache reads run to $0.025). A rate rendered as "<USD 0,01" would hide the difference
+ * between a cheap model and a very cheap one, which is the comparison this table exists for.
+ */
+const fmtRate = (usd: number, currency: 'USD' | 'BRL', rate: number): string => {
+  const v = currency === 'BRL' ? usd * rate : usd
+  const decimals = v >= 1 ? 2 : v >= 0.01 ? 3 : 4
+  const [int, dec] = v.toFixed(decimals).split('.')
+  return currency === 'BRL'
+    ? `R$${(int ?? '0').replace(/\B(?=(\d{3})+$)/g, '.')},${dec}`
+    : `$${(int ?? '0').replace(/\B(?=(\d{3})+$)/g, ',')}.${dec}`
+}
 
 const ago = (ms: number, pt: boolean): string => {
   if (!ms) return pt ? 'nunca' : 'never'
@@ -54,8 +68,9 @@ const ago = (ms: number, pt: boolean): string => {
 }
 
 export default function PricingSettings() {
-  const { data, lang } = useOutletContext<AppContext>()
+  const { data, lang, currency, brlRate } = useOutletContext<AppContext>()
   const pt = lang === 'pt'
+  const money = (usd: number) => fmtRate(usd, currency, brlRate)
   const isMobile = useIsMobile()
   const [resp, setResp] = useState<PricingResponse | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -140,8 +155,41 @@ export default function PricingSettings() {
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.6, marginTop: 4 }}>
           {pt
-            ? 'As tarifas que calculam todo custo do dashboard, em USD por 1M de tokens. Só aparecem os modelos que você já usou — um modelo novo entra na lista sozinho, na primeira vez que for usado.'
-            : 'The rates behind every cost in this dashboard, in USD per 1M tokens. Only models you have actually used are listed — a new one joins the list by itself, the first time it is used.'}
+            ? 'As tarifas que calculam todo custo do dashboard. Só aparecem os modelos que você já usou — um modelo novo entra na lista sozinho, na primeira vez que for usado.'
+            : 'The rates behind every cost in this dashboard. Only models you have actually used are listed — a new one joins the list by itself, the first time it is used.'}
+        </div>
+
+        {/* How the billing actually works. Without this the table is four numbers with no unit, and
+            a reader has no way to turn them into the cost of anything they did. */}
+        <div style={{
+          marginTop: 10, padding: 10, borderRadius: 9,
+          background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+          fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.7,
+        }}>
+          <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>
+            {pt ? 'Como a cobrança funciona' : 'How billing works'}
+          </div>
+          {pt
+            ? <>Cada tarifa abaixo vale por <strong>1.000.000 de tokens</strong>. A cobrança é proporcional:
+              metade dos tokens custa metade do valor. O total de uma sessão é
+              {' '}<code>entrada × tarifa de entrada + cache × tarifa de cache + saída × tarifa de saída</code>,
+              somado por modelo.</>
+            : <>Each rate below is per <strong>1,000,000 tokens</strong>, charged pro rata: half the
+              tokens cost half the amount. A session's total is
+              {' '}<code>input × input rate + cache × cache rate + output × output rate</code>,
+              summed per model.</>}
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            <li>{pt ? <><strong>Entrada</strong> — tokens que você envia (prompt, arquivos, histórico).</> : <><strong>Input</strong> — tokens you send (prompt, files, history).</>}</li>
+            <li>{pt ? <><strong>Cache</strong> — releitura de contexto já enviado, cobrada bem mais barato que entrada.</> : <><strong>Cache</strong> — re-reading context already sent, billed far below the input rate.</>}</li>
+            <li>{pt ? <><strong>Saída</strong> — tokens que o modelo escreve; quase sempre a tarifa mais cara.</> : <><strong>Output</strong> — tokens the model writes; almost always the priciest rate.</>}</li>
+          </ul>
+          {currency === 'BRL' && (
+            <div style={{ marginTop: 6, color: 'var(--text-tertiary)' }}>
+              {pt
+                ? <>Os fabricantes cobram em dólar. Convertido a <strong>USD 1 = R${brlRate.toFixed(4).replace('.', ',')}</strong>, cotação do dia.</>
+                : <>Vendors bill in USD. Converted at <strong>USD 1 = R${brlRate.toFixed(4)}</strong>, today's rate.</>}
+            </div>
+          )}
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 8 }}>
           {pt ? 'atualizado' : 'updated'} {ago(resp.fetchedAt, pt)}
@@ -192,9 +240,9 @@ export default function PricingSettings() {
                 <thead>
                   <tr style={{ textAlign: 'left', color: 'var(--text-tertiary)', background: 'var(--bg-elevated)' }}>
                     <th style={{ padding: '8px 10px', fontWeight: 600 }}>{pt ? 'Modelo' : 'Model'}</th>
-                    <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>{pt ? 'Entrada' : 'Input'}</th>
-                    <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>{pt ? 'Cache' : 'Cache'}</th>
-                    <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>{pt ? 'Saída' : 'Output'}</th>
+                    <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>{pt ? 'Entrada / 1M' : 'Input / 1M'}</th>
+                    <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>{pt ? 'Cache / 1M' : 'Cache / 1M'}</th>
+                    <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>{pt ? 'Saída / 1M' : 'Output / 1M'}</th>
                     <th style={{ padding: '8px 10px', fontWeight: 600 }}>{pt ? 'Fonte' : 'Source'}</th>
                   </tr>
                 </thead>
@@ -212,9 +260,9 @@ export default function PricingSettings() {
                           ))}
                         </div>
                       </td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{row ? fmt(row.input) : '—'}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--text-tertiary)' }}>{row ? fmt(row.cacheRead) : '—'}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{row ? fmt(row.output) : '—'}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{row ? money(row.input) : '—'}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--text-tertiary)' }}>{row ? money(row.cacheRead) : '—'}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{row ? money(row.output) : '—'}</td>
                       <td style={{ padding: '8px 10px' }}>
                         {row
                           ? <span title={pt ? ORIGIN[row.origin].whyPt : ORIGIN[row.origin].whyEn}
