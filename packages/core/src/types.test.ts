@@ -266,12 +266,19 @@ test('HARNESS_CAPABILITIES declares every harness', () => {
   expect(Object.keys(HARNESS_CAPABILITIES).sort()).toEqual(['antigravity', 'claude', 'codex', 'copilot', 'gemini', 'kimi'])
 })
 
-test('kimi reports tokens and model but not cost', () => {
-  // Tokens come from usage.record; cost stays N/A because Kimi routes to several providers and its
-  // own model prices are not in MODEL_PRICING — pricing one would fall back to a wrong default.
+test('kimi reports tokens, model and cost', () => {
   expect(HARNESS_CAPABILITIES.kimi.tokens).toBe(true)
   expect(HARNESS_CAPABILITIES.kimi.model).toBe(true)
-  expect(HARNESS_CAPABILITIES.kimi.cost).toBe(false)
+  expect(HARNESS_CAPABILITIES.kimi.cost).toBe(true)
+})
+
+test('a model Kimi routed to is priced from its own provider, not a default', () => {
+  // Kimi stamps `google/gemini-3.5-flash-lite`; the adapter strips the prefix so this resolves.
+  const price = getModelPrice('gemini-3.5-flash-lite')
+  expect(price.input).toBe(0.3)
+  expect(price.output).toBe(2.5)
+  // Distinct from the shared fallback, which is what a wrong lookup would return.
+  expect(price.output).not.toBe(getModelPrice('totally-unknown-model').output)
 })
 
 test('antigravity reports tokens/cost/model (decoded from the gen_metadata protobuf)', () => {

@@ -73,11 +73,13 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   // this flag does NOT gate, stays real).
   antigravity: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false },
   // Kimi Code CLI. Tokens and model are real (usage.record events in each agent's wire.jsonl).
-  // `cost` is FALSE: Kimi routes to several providers and its own model prices are not in
-  // MODEL_PRICING, so pricing a session would silently fall back to the Sonnet default and report
-  // confidently wrong money. Flip it once verified prices are added. `gitLines` is false because
-  // Kimi records Edit/Write arguments but no diff counters.
-  kimi: { tokens: true, cost: false, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false },
+  // Kimi ROUTES to other providers and stamps the provider's own model on each usage record
+  // (`google/gemini-3.5-flash-lite`), so in practice the model is one MODEL_PRICING already knows
+  // and the cost is a real calculation. Kimi's own `kimi-*` models are not in the table yet: like
+  // any unknown id on any harness they would take the shared fallback price, so add them here when
+  // Moonshot publishes verified rates. `gitLines` is false because Kimi records the Edit/Write
+  // strings but no diff counters.
+  kimi: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false },
 }
 
 /** Display order for harness lists, and the single source of truth for "every harness".

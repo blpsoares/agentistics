@@ -226,8 +226,8 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
   },
   kimi: {
     blurb: {
-      en: 'Sessions, projects, messages, tool usage, tokens and model. Cost shows N/A: Kimi routes to several providers and its own model prices are not in the shared pricing table, so a figure here would be a guess rather than a calculation.',
-      pt: 'Sessões, projetos, mensagens, uso de ferramentas, tokens e modelo. O custo aparece como N/A: o Kimi roteia para vários provedores e os preços dos modelos dele não estão na tabela de preços compartilhada, então um valor aqui seria chute e não cálculo.',
+      en: 'Sessions, projects, messages, tool usage, tokens, model and cost. Kimi routes to other providers and stamps that provider\'s own model on every usage record, so the cost is calculated from the same pricing table every other harness uses.',
+      pt: 'Sessões, projetos, mensagens, uso de ferramentas, tokens, modelo e custo. O Kimi roteia para outros provedores e grava o modelo do próprio provedor em cada registro de uso, então o custo é calculado pela mesma tabela de preços dos demais harnesses.',
     },
     format: {
       en: 'One directory per session holding a state.json (title, workDir, timestamps, agent tree) and one wire.jsonl per agent. The wire is flat JSONL: usage.record carries the token counts, and context.append_loop_event wraps the loop events (step.begin / step.end / tool.call / tool.result).',
@@ -249,16 +249,17 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
       { en: 'Messages (user prompts + assistant steps)', pt: 'Mensagens (prompts do usuário + passos do assistente)' },
       { en: 'Tokens (input, output, cache read, cache creation)', pt: 'Tokens (entrada, saída, leitura e criação de cache)' },
       { en: 'Model (provider prefix stripped, e.g. gemini-3.5-flash-lite)', pt: 'Modelo (sem o prefixo do provedor, ex.: gemini-3.5-flash-lite)' },
+      { en: 'Cost (USD, derived via the shared pricing table)', pt: 'Custo (USD, derivado pela tabela de preços compartilhada)' },
       { en: 'Tool usage (Read, Write, Edit, Bash, Agent …) and MCP calls (mcp__ prefix)', pt: 'Uso de ferramentas (Read, Write, Edit, Bash, Agent …) e chamadas MCP (prefixo mcp__)' },
       { en: 'Sub-agent work, folded into the session that spawned it', pt: 'Trabalho de sub-agentes, consolidado na sessão que os criou' },
       { en: 'Start / end / duration and activity hours', pt: 'Início / fim / duração e horários de atividade' },
     ],
     missing: [
       {
-        item: { en: 'Cost in USD', pt: 'Custo em USD' },
+        item: { en: 'Prices for Kimi\'s own models', pt: 'Preços dos modelos próprios do Kimi' },
         why: {
-          en: 'Kimi routes to several providers and its own model prices are not in the shared pricing table; a figure here would be a guess.',
-          pt: 'O Kimi roteia para vários provedores e os preços dos modelos dele não estão na tabela compartilhada; um valor aqui seria chute.',
+          en: 'Routed provider models (google/…, etc.) price correctly. Kimi-native `kimi-*` ids are not in the pricing table yet, so — like any unknown id on any harness — they would take the shared fallback rate until verified prices are added.',
+          pt: 'Modelos roteados de provedores (google/…, etc.) são precificados corretamente. Os ids nativos `kimi-*` ainda não estão na tabela, então — como qualquer id desconhecido em qualquer harness — usariam a tarifa padrão até que preços verificados sejam adicionados.',
         },
       },
       {

@@ -222,10 +222,11 @@ agent of a session folds into that one session, so sub-agent work is never dropp
 identical (verified pairwise on real data). Only `usage.record` is counted. Records are per-turn
 increments, not a running total (unlike Codex, where the last one wins).
 
-`cost` is `false` for kimi: it routes to several providers and its own model prices are not in
-`MODEL_PRICING`, so pricing a session would silently fall back to the Sonnet default and report
-confidently wrong money. The model alias carries a provider prefix (`google/gemini-3.5-flash-lite`)
-which is stripped so the pricing table can key on it if that changes.
+Kimi ROUTES to other providers and stamps that provider's model on every usage record
+(`google/gemini-3.5-flash-lite`), so `cost` is `true` and is a real calculation through the shared
+pricing table — the adapter strips the provider prefix so the table can key on it. Kimi's own
+`kimi-*` ids are not in `MODEL_PRICING` yet and would take the shared fallback rate like any unknown
+id; add them when verified rates are published.
 
 ### Gemini caveat — bootstrap stubs vs. real sessions
 
