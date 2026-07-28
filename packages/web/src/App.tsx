@@ -1761,150 +1761,161 @@ export default function AppLayout() {
     (filters.harnesses?.length === 1) ? filters.harnesses[0] : undefined
 
   // Info items for all 8 stat cards
+  // Card "i" popovers. These describe REAL behaviour and are audited against useDerivedStats —
+  // a stale explanation is worse than none, because it is read as authoritative.
+  //
+  // The single fact that drives most of them: `stats-cache.json` is CLAUDE-ONLY and has no
+  // project/repo/model granularity. Whenever the active scope cannot be answered from it
+  // (`sessionFiltered` in useDerivedStats: any project/repo/tag/model/date filter, a non-Claude
+  // harness, …) the numbers are recomputed by summing individual sessions instead. So each item
+  // below states BOTH paths rather than pretending there is one.
   const infoItems = useMemo(() => {
-    const projectFiltered = filters.projects.length > 0
+    const scoped = filters.projects.length > 0 || (filters.repos?.length ?? 0) > 0
+      || filters.models.length > 0 || (filters.tags?.length ?? 0) > 0
+      || (filters.harnesses?.length ?? 0) > 0
     const pt = lang === 'pt'
+    // Shared wording for the two-path reality, so the items cannot drift apart.
+    const SESSION_SOURCES = pt
+      ? 'Sessões vêm de: ~/.claude/projects/**/*.jsonl (transcrições), '
+        + '~/.claude/usage-data/session-meta/*.json (quando existe) e '
+        + '~/.agentistics/sessions/<harness>/<id>.json (arquivo local — revive sessões que o Claude já apagou).'
+      : 'Sessions come from: ~/.claude/projects/**/*.jsonl (transcripts), '
+        + '~/.claude/usage-data/session-meta/*.json (when present) and '
+        + '~/.agentistics/sessions/<harness>/<id>.json (local store — revives sessions Claude already deleted).'
+    const CLAUDE_ONLY = pt
+      ? 'stats-cache.json é exclusivo do Claude Code. Métricas de Codex, Gemini, Copilot, Antigravity e Kimi são sempre somadas sessão a sessão.'
+      : 'stats-cache.json is Claude Code only. Codex, Gemini, Copilot, Antigravity and Kimi metrics are always summed session by session.'
+    const twoPaths = (cacheField: string, sessionField: string) => scoped
+      ? `${sessionField}  ${pt ? '(escopo filtrado → soma por sessão)' : '(filtered scope → per-session sum)'}`
+      : `${cacheField}  ${pt ? '(sem filtro de escopo)' : '(no scope filter)'}`
     return [
       {
         label: pt ? 'Total de mensagens' : 'Total messages',
-        source: projectFiltered
-          ? '~/.claude/usage-data/session-meta/*.json → user_message_count + assistant_message_count'
-          : '~/.claude/stats-cache.json → dailyActivity[].messageCount',
+        source: twoPaths(
+          '~/.claude/stats-cache.json → dailyActivity[].messageCount',
+          'user_message_count + assistant_message_count de cada sessão'),
         formula: pt
-          ? 'Σ messageCount de cada dia no período\nMédia = totalMessages ÷ totalSessions'
-          : 'Σ messageCount for each day in the period\nAvg = totalMessages ÷ totalSessions',
+          ? 'Sem filtro de escopo: Σ messageCount dos dias no período\nCom filtro: Σ (user_message_count + assistant_message_count)\nMédia = totalMessages ÷ totalSessions'
+          : 'No scope filter: Σ messageCount for days in the period\nFiltered: Σ (user_message_count + assistant_message_count)\nAvg = totalMessages ÷ totalSessions',
         note: pt
-          ? 'Cada "mensagem" conta uma entrada do usuário ou uma resposta do assistente. Com filtro de projeto ativo, recalculado dos session-meta individuais.'
-          : 'Each "message" counts one user input or one assistant reply. With project filter active, recalculated from individual session-meta files.',
+          ? `Cada "mensagem" é uma entrada do usuário ou uma resposta do assistente. ${CLAUDE_ONLY}`
+          : `Each "message" is one user input or one assistant reply. ${CLAUDE_ONLY}`,
       },
       {
         label: pt ? 'Sessões' : 'Sessions',
-        source: projectFiltered
-          ? '~/.claude/usage-data/session-meta/*.json → filtrado por project_path'
-          : '~/.claude/stats-cache.json → dailyActivity[].sessionCount',
+        source: twoPaths(
+          '~/.claude/stats-cache.json → dailyActivity[].sessionCount',
+          pt ? 'contagem das sessões que passam pelos filtros' : 'count of sessions passing the filters'),
         formula: pt
-          ? 'Σ sessionCount dos dias no período\nMédia = totalMessages ÷ totalSessions'
-          : 'Σ sessionCount for days in the period\nAvg = totalMessages ÷ totalSessions',
+          ? 'Sem filtro de escopo: Σ sessionCount dos dias no período\nCom filtro: número de sessões filtradas'
+          : 'No scope filter: Σ sessionCount for days in the period\nFiltered: number of filtered sessions',
         note: pt
-          ? 'Cada arquivo .jsonl em ~/.claude/projects/<proj>/ = 1 sessão. Uma sessão começa ao abrir o Claude e encerra ao fechar ou após inatividade.'
-          : 'Each .jsonl file in ~/.claude/projects/<proj>/ = 1 session. A session starts when you open Claude and ends when you close it or after inactivity.',
+          ? `Uma sessão = um arquivo de transcrição do assistente. ${SESSION_SOURCES}`
+          : `One session = one assistant transcript file. ${SESSION_SOURCES}`,
       },
       {
         label: pt ? 'Chamadas de ferramentas' : 'Tool calls',
-        source: projectFiltered
-          ? '~/.claude/usage-data/session-meta/*.json → Σ tool_counts values'
-          : '~/.claude/stats-cache.json → dailyActivity[].toolCallCount',
+        source: twoPaths(
+          '~/.claude/stats-cache.json → dailyActivity[].toolCallCount',
+          'Σ values(tool_counts) de cada sessão'),
         formula: pt
           ? 'Σ values(tool_counts) por sessão\nEx: { Bash:16, Read:5, Edit:3 } = 24'
           : 'Σ values(tool_counts) per session\nEx: { Bash:16, Read:5, Edit:3 } = 24',
         note: pt
-          ? 'Inclui todas as ferramentas: Bash, Read, Edit, Write, Grep, Glob, Agent, MCP tools, etc.'
-          : 'Includes all tools: Bash, Read, Edit, Write, Grep, Glob, Agent, MCP tools, etc.',
+          ? 'Inclui todas as ferramentas: Bash, Read, Edit, Write, Grep, Glob, Agent, ferramentas MCP, etc. Harnesses sem registro de ferramentas mostram N/A em vez de 0.'
+          : 'Includes all tools: Bash, Read, Edit, Write, Grep, Glob, Agent, MCP tools, etc. Harnesses that record no tool usage show N/A rather than 0.',
       },
       {
         label: pt ? 'Sequência' : 'Streak',
-        source: '~/.claude/stats-cache.json → dailyActivity[].date',
+        source: twoPaths(
+          '~/.claude/stats-cache.json → dailyActivity[].date',
+          pt ? 'datas das mensagens das sessões filtradas' : 'message dates of the filtered sessions'),
         formula: pt
-          ? 'Conta dias consecutivos até hoje\ncom ≥ 1 mensagem registrada'
-          : 'Count consecutive days up to today\nwith ≥ 1 message recorded',
+          ? 'Conta dias consecutivos para trás a partir de hoje\ncom ≥ 1 dia ativo registrado'
+          : 'Counts consecutive days backwards from today\nwith ≥ 1 active day recorded',
         note: pt
-          ? 'Sempre calculado sobre todos os projetos e datas — não afetado por filtros.'
-          : 'Always calculated across all projects and dates — not affected by any filters.',
+          ? 'Se hoje ainda não teve atividade, a contagem começa em ontem — para não penalizar quem ainda não trabalhou hoje. ATENÇÃO: com filtro de escopo ativo, a sequência é calculada só sobre as sessões filtradas, não sobre todo o histórico.'
+          : 'If today has no activity yet, counting starts from yesterday — so you are not penalised for not having worked yet today. NOTE: with a scope filter active, the streak is computed over the filtered sessions only, not the full history.',
       },
       {
         label: pt ? 'Sessão mais longa' : 'Longest session',
-        source: projectFiltered
-          ? '~/.claude/usage-data/session-meta/*.json → max(duration_minutes) das sessões filtradas'
-          : '~/.claude/usage-data/session-meta/*.json → max(duration_minutes) de todas as sessões',
+        source: pt
+          ? 'Transcrição da sessão → duração de cada turno (Σ) e primeiro/último evento'
+          : "Session transcript → each turn's duration (Σ) and first/last event",
         formula: pt
-          ? 'duration = timestamp(últimaMsg) − timestamp(primeiraMsg)\nConvertido de minutos → h e min'
-          : 'duration = timestamp(lastMsg) − timestamp(firstMsg)\nConverted from minutes → h and min',
+          ? 'ATIVO = Σ duração de cada turno\n  (do seu prompt até o assistente terminar)\n\nDECORRIDO = último evento − primeiro evento\n  da sessão. É EVENTO, não mensagem: o primeiro\n  costuma ser um anexo ou linha de sistema\n  minutos antes da sua 1ª mensagem, e o último\n  uma linha de sistema depois da resposta final.\n\nO ranking do card usa o ATIVO.'
+          : 'ACTIVE = Σ duration of each turn\n  (from your prompt until the assistant finishes)\n\nELAPSED = last event − first event of the\n  session. EVENT, not message: the first is often\n  an attachment or system line minutes before\n  your first message, and the last a system line\n  after the final reply.\n\nThe card ranks by ACTIVE.',
         note: pt
-          ? 'Com filtro de projeto ativo, considera apenas as sessões daquele projeto. Sem filtro, mostra o projeto correspondente.'
-          : 'With project filter active, considers only sessions of that project. Without filter, shows the corresponding project.',
+          ? 'O ativo NÃO conta o intervalo entre um turno acabar e você mandar o próximo — por isso uma sessão reaberta durante semanas deixa de aparecer como centenas de horas. Mas ele AINDA conta um turno que ficou parado esperando você (ex.: aprovação de permissão): separar isso exigiria um limite de ociosidade arbitrário. Sessões cuja transcrição o Claude já apagou não têm tempo ativo e ficam fora do ranking.'
+          : 'Active time does NOT count the gap between a turn ending and your next prompt — which is why a session reopened over weeks no longer reads as hundreds of hours. It DOES still count a turn that sat waiting on you (e.g. a permission prompt): separating that would need an arbitrary idle threshold. Sessions whose transcript Claude already deleted have no active time and are excluded from the ranking.',
       },
       {
         label: pt ? 'Custo estimado' : 'Estimated cost',
-        source: projectFiltered
-          ? '~/.claude/usage-data/session-meta/*.json → input_tokens + output_tokens (taxa ponderada global)'
-          : '~/.claude/stats-cache.json → modelUsage[model].{inputTokens, outputTokens, cacheRead, cacheWrite}',
+        source: twoPaths(
+          '~/.claude/stats-cache.json → modelUsage[model].{inputTokens, outputTokens, cacheRead, cacheWrite}',
+          pt ? 'tokens de cada sessão × preço do modelo dela' : "each session's tokens × its model's price"),
         formula: pt
-          ? 'Σ modelo [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nPreços por 1M tokens (Anthropic público):\n  Opus 4.6   → in $15.00 · out $75.00\n               cR  $1.50 · cW $18.75\n  Sonnet 4.6 → in  $3.00 · out $15.00\n               cR  $0.30 · cW  $3.75\n  Haiku 4.5  → in  $0.80 · out  $4.00\n               cR  $0.08 · cW  $1.00'
-          : 'Σ model [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nPricing per 1M tokens (Anthropic public):\n  Opus 4.6   → in $15.00 · out $75.00\n               cR  $1.50 · cW $18.75\n  Sonnet 4.6 → in  $3.00 · out $15.00\n               cR  $0.30 · cW  $3.75\n  Haiku 4.5  → in  $0.80 · out  $4.00\n               cR  $0.08 · cW  $1.00',
+          ? 'Σ modelo [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nUma sessão sem modelo conhecido usa a taxa média ponderada pelo mix de modelos do período.'
+          : 'Σ model [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nA session with no known model uses the average rate weighted by the period\'s model mix.',
         note: pt
-          ? 'Cache read é ~10× mais barato que input normal. Cache write é ~1.25× mais caro. Com filtro de projeto, usa taxa ponderada global pelo mix de modelos.\nFonte oficial: anthropic.com/pricing#api'
-          : 'Cache read is ~10× cheaper than regular input. Cache write is ~1.25× more expensive. With project filter, uses a global blended rate weighted by model mix.\nOfficial pricing: anthropic.com/pricing#api',
+          ? 'Preços vêm de três fontes, nesta ordem de confiança: páginas oficiais dos fornecedores, a base comunitária LiteLLM e a tabela embutida no app. Como os harnesses usam vários fornecedores (Anthropic, OpenAI, Google), os preços não são só da Anthropic. Veja Configurações → Preços para a tarifa e a origem de cada modelo que esta máquina realmente usou. É estimativa de preço de API — não é sua fatura nem sua assinatura.'
+          : 'Prices come from three sources, in this order of trust: the vendors\' official pages, the LiteLLM community dataset and the table built into the app. Because harnesses use several vendors (Anthropic, OpenAI, Google), prices are not Anthropic-only. See Settings → Pricing for the rate and origin of every model this machine actually used. This is an API-price estimate — not your invoice or your subscription.',
       },
       {
         label: pt ? 'Commits' : 'Commits',
-        source: projectFiltered
-          ? pt
-            ? 'git log (projeto) → todos os commits desde a primeira sessão'
-            : 'git log (project) → all commits since the first session'
-          : pt
-            ? '~/.claude/projects/**/*.jsonl → comandos git commit/push nas chamadas Bash'
-            : '~/.claude/projects/**/*.jsonl → git commit/push commands in Bash tool calls',
-        formula: projectFiltered
-          ? pt
-            ? 'Σ commits do projeto (git log --numstat) para cada projeto filtrado\nΣ git_pushes das sessões (via Bash)'
-            : 'Σ project commits (git log --numstat) for each filtered project\nΣ git_pushes from sessions (via Bash)'
-          : pt
-            ? 'Σ git_commits das sessões no período\nΣ git_pushes das sessões no período'
-            : 'Σ git_commits for sessions in the period\nΣ git_pushes for sessions in the period',
-        note: projectFiltered
-          ? pt
-            ? 'Com filtro de projeto ativo, usa git log --numstat diretamente no repositório — inclui todos os commits, mesmo os feitos fora do Claude. Sem filtro de projeto, conta apenas commits executados pelo Claude via ferramenta Bash.'
-            : 'With project filter active, reads git log --numstat directly from the repository — includes all commits, even those made outside Claude. Without project filter, only counts commits run by Claude via the Bash tool.'
-          : pt
-            ? 'Conta apenas commits e pushes executados pelo Claude via ferramenta Bash. Commits feitos manualmente no terminal não são capturados. Ative o filtro de projeto para ver o histórico completo do repositório.'
-            : 'Counts only commits and pushes executed by Claude via the Bash tool. Commits made manually in the terminal are not captured. Activate the project filter to see the full repository history.',
+        source: scoped
+          ? (pt ? 'git log --numstat no repositório do projeto' : 'git log --numstat in the project repository')
+          : (pt ? 'transcrições → comandos git commit/push nas chamadas Bash' : 'transcripts → git commit/push commands in Bash tool calls'),
+        formula: scoped
+          ? (pt ? 'Σ commits do projeto (git log --numstat)\nΣ git_pushes das sessões (via Bash)' : 'Σ project commits (git log --numstat)\nΣ git_pushes from sessions (via Bash)')
+          : (pt ? 'Σ git_commits das sessões no período\nΣ git_pushes das sessões no período' : 'Σ git_commits for sessions in the period\nΣ git_pushes for sessions in the period'),
+        note: scoped
+          ? (pt
+            ? 'Com projeto filtrado, lê git log --numstat direto do repositório — inclui commits feitos fora do assistente. Requer que o projeto seja um repositório git.'
+            : 'With a project filtered, reads git log --numstat straight from the repository — includes commits made outside the assistant. Requires the project to be a git repository.')
+          : (pt
+            ? 'Sem filtro de projeto, conta só commits e pushes que o assistente executou pela ferramenta Bash — commits feitos por você no terminal não aparecem. Filtre um projeto para ver o histórico completo do repositório.'
+            : 'Without a project filter, counts only commits and pushes the assistant ran through the Bash tool — commits you made in the terminal do not appear. Filter a project to see the repository\'s full history.'),
       },
       {
         label: pt ? 'Arquivos modificados' : 'Files modified',
-        source: projectFiltered
-          ? pt
-            ? 'git log --numstat (projeto) → todos os arquivos alterados desde a primeira sessão'
-            : 'git log --numstat (project) → all files changed since the first session'
-          : pt
-            ? '~/.claude/projects/**/*.jsonl → git log --numstat por sessão'
-            : '~/.claude/projects/**/*.jsonl → git log --numstat per session',
+        source: pt
+          ? 'chamadas Edit/Write/MultiEdit das sessões, e git log --numstat quando o projeto é um repositório git'
+          : 'Edit/Write/MultiEdit calls in the sessions, plus git log --numstat when the project is a git repository',
         formula: pt
-          ? 'Σ files_modified das sessões filtradas\nΣ lines_added  |  Σ lines_removed'
-          : 'Σ files_modified for filtered sessions\nΣ lines_added  |  Σ lines_removed',
-        note: projectFiltered
-          ? pt
-            ? 'Com filtro de projeto ativo, usa git log --numstat diretamente no repositório. Arquivos binários são excluídos (git numstat mostra "-" para binários). Requer que o projeto seja um repositório git.'
-            : 'With project filter active, reads git log --numstat directly from the repository. Binary files are excluded (git numstat shows "-" for binaries). Requires the project to be a git repository.'
-          : pt
-            ? 'Calculado via git log --numstat no intervalo de tempo de cada sessão. Requer que o projeto seja um repositório git e que git esteja instalado.'
-            : 'Calculated via git log --numstat over each session\'s time window. Requires the project to be a git repository and git to be installed.',
+          ? 'ARQUIVOS = máx(arquivos distintos editados pelo assistente,\n  arquivos do git log --numstat)\nLINHAS = Σ lines_added | Σ lines_removed'
+          : 'FILES = max(distinct files the assistant edited,\n  files from git log --numstat)\nLINES = Σ lines_added | Σ lines_removed',
+        note: pt
+          ? 'O máximo entre as duas fontes é usado para capturar também arquivos editados fora de um repositório git. Arquivos binários ficam de fora (git numstat marca "-"). Harnesses que não registram diffs mostram N/A em vez de 0.'
+          : 'The max of the two sources is used so files edited outside a git repository are still counted. Binary files are excluded (git numstat writes "-"). Harnesses that record no diffs show N/A rather than 0.',
       },
       {
         label: pt ? 'Tokens de entrada' : 'Input tokens',
-        source: projectFiltered
-          ? '~/.claude/usage-data/session-meta/*.json → input_tokens'
-          : '~/.claude/stats-cache.json → modelUsage[model].inputTokens',
+        source: twoPaths(
+          '~/.claude/stats-cache.json → modelUsage[model].inputTokens',
+          'input_tokens de cada sessão'),
         formula: pt
-          ? 'Sem filtro de projeto: Σ modelUsage[modelo].inputTokens\nCom filtro de projeto: Σ input_tokens das sessões filtradas'
-          : 'No project filter: Σ modelUsage[model].inputTokens\nWith project filter: Σ input_tokens from filtered sessions',
+          ? 'Sem filtro de escopo: Σ modelUsage[modelo].inputTokens\nCom filtro: Σ input_tokens das sessões filtradas'
+          : 'No scope filter: Σ modelUsage[model].inputTokens\nFiltered: Σ input_tokens of the filtered sessions',
         note: pt
-          ? 'Tokens enviados ao modelo (prompt do usuário + contexto). Não inclui tokens de cache — esses são contados separadamente como cacheReadInputTokens e cacheCreationInputTokens.'
-          : 'Tokens sent to the model (user prompt + context). Does not include cache tokens — those are counted separately as cacheReadInputTokens and cacheCreationInputTokens.',
+          ? `Tokens enviados ao modelo (seu prompt + contexto). NÃO inclui tokens de cache — leitura e escrita de cache são contadas à parte e têm preço próprio. ${CLAUDE_ONLY}`
+          : `Tokens sent to the model (your prompt + context). Does NOT include cache tokens — cache reads and writes are counted separately and priced on their own. ${CLAUDE_ONLY}`,
       },
       {
         label: pt ? 'Tokens de saída' : 'Output tokens',
-        source: projectFiltered
-          ? '~/.claude/usage-data/session-meta/*.json → output_tokens'
-          : '~/.claude/stats-cache.json → modelUsage[model].outputTokens',
+        source: twoPaths(
+          '~/.claude/stats-cache.json → modelUsage[model].outputTokens',
+          'output_tokens de cada sessão'),
         formula: pt
-          ? 'Sem filtro de projeto: Σ modelUsage[modelo].outputTokens\nCom filtro de projeto: Σ output_tokens das sessões filtradas'
-          : 'No project filter: Σ modelUsage[model].outputTokens\nWith project filter: Σ output_tokens from filtered sessions',
+          ? 'Sem filtro de escopo: Σ modelUsage[modelo].outputTokens\nCom filtro: Σ output_tokens das sessões filtradas'
+          : 'No scope filter: Σ modelUsage[model].outputTokens\nFiltered: Σ output_tokens of the filtered sessions',
         note: pt
-          ? 'Tokens gerados pelo modelo nas respostas. Tokens de saída são os mais caros — tipicamente 5× mais caros que tokens de entrada.'
-          : 'Tokens generated by the model in responses. Output tokens are the most expensive — typically 5× more expensive than input tokens.',
+          ? `Tokens gerados pelo modelo nas respostas — a parte mais cara da conta (tipicamente ~5× o preço da entrada). ${CLAUDE_ONLY}`
+          : `Tokens the model generated in its replies — the most expensive part of the bill (typically ~5× the input price). ${CLAUDE_ONLY}`,
       },
     ]
-  }, [filters.projects.length, lang])
+  }, [filters.projects.length, filters.repos?.length, filters.models.length,
+    filters.tags?.length, filters.harnesses?.length, lang])
 
   // Team auth gate takes precedence over the data loading/error states below:
   // on a gated central /api/data returns 401 until the operator logs in, so we
