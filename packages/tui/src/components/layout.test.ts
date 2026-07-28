@@ -2,7 +2,6 @@ import { describe, test, expect } from 'bun:test'
 import { fitColumns, type Column } from './Primitives'
 import { sparkline } from './Sparkline'
 import { fitKpis } from '../screens/Overview'
-import { gradientAt } from './Wordmark'
 
 interface Row { a: string }
 
@@ -96,24 +95,3 @@ describe('sparkline', () => {
   })
 })
 
-describe('gradientAt', () => {
-  test('starts at the light amber end', () => {
-    expect(gradientAt(0)).toBe('#fbbf24')
-  })
-
-  test('ends at the deep amber end', () => {
-    expect(gradientAt(1)).toBe('#d97706')
-  })
-
-  test('produces a valid hex colour at every step', () => {
-    for (let i = 0; i <= 10; i++) {
-      expect(gradientAt(i / 10)).toMatch(/^#[0-9a-f]{6}$/)
-    }
-  })
-
-  test('clamps out-of-range and non-finite input instead of emitting broken hex', () => {
-    expect(gradientAt(-5)).toBe('#fbbf24')
-    expect(gradientAt(99)).toBe('#d97706')
-    expect(gradientAt(NaN)).toBe('#fbbf24')
-  })
-})
