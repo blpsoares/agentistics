@@ -8,6 +8,9 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import type { HarnessId } from '@agentistics/core'
 
 type Origin = 'official' | 'community' | 'builtin'
+/** How the table is carved up. Persisted, because it is a viewing habit rather than a one-off. */
+type GroupBy = 'provider' | 'source' | 'harness' | 'none'
+const GROUP_KEY = 'agentistics-pricing-groupby'
 
 interface PricedRow {
   id: string
@@ -74,6 +77,13 @@ export default function PricingSettings() {
   const isMobile = useIsMobile()
   const [resp, setResp] = useState<PricingResponse | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const [groupBy, setGroupBy] = useState<GroupBy>(() => {
+    try { return (localStorage.getItem(GROUP_KEY) as GroupBy) || 'provider' } catch { return 'provider' }
+  })
+  const setGroup = (g: GroupBy) => {
+    setGroupBy(g)
+    try { localStorage.setItem(GROUP_KEY, g) } catch { /* private mode — the default is fine */ }
+  }
 
   useEffect(() => {
     let alive = true
@@ -121,17 +131,51 @@ export default function PricingSettings() {
     }
   }, [byId])
 
-  const groups = useMemo(() => {
-    const out = new Map<ProviderId, Array<{ model: string; row: PricedRow | null; harnesses: HarnessId[] }>>()
-    for (const [model, hs] of usedBy) {
-      const p = resolveProvider(model).id
-      const list = out.get(p) ?? []
-      list.push({ model, row: rowFor(model), harnesses: [...hs].sort() })
-      out.set(p, list)
-    }
-    for (const list of out.values()) list.sort((a, b) => a.model.localeCompare(b.model))
-    return out
+  /** One entry per model actually used, with everything a row or a heading might need. */
+  const entries = useMemo(() => {
+    const list = [...usedBy].map(([model, hs]) => ({
+      model,
+      row: rowFor(model),
+      harnesses: [...hs].sort(),
+      provider: resolveProvider(model),
+    }))
+    return list.sort((a, b) => a.model.localeCompare(b.model))
   }, [usedBy, rowFor])
+
+  /**
+   * Group into [heading, rows] pairs. Grouping by harness is the one dimension that is NOT a
+   * partition: two harnesses running the same model put it in both groups on purpose, because the
+   * question being asked is "what does Codex cost me", not "how many distinct models exist".
+   */
+  const grouped = useMemo((): Array<{ key: string; label: string; rows: typeof entries }> => {
+    if (groupBy === 'none') {
+      return [{ key: 'all', label: '', rows: entries }]
+    }
+    if (groupBy === 'provider') {
+      return providerOrder()
+        .map(p => ({ key: p.id, label: p.label, rows: entries.filter(e => e.provider.id === p.id) }))
+        .filter(g => g.rows.length > 0)
+    }
+    if (groupBy === 'source') {
+      const order: Array<Origin | 'fallback'> = ['official', 'community', 'builtin', 'fallback']
+      return order
+        .map(o => ({
+          key: o,
+          label: o === 'fallback'
+            ? (pt ? 'Sem tarifa própria' : 'No rate of their own')
+            : (pt ? ORIGIN[o].pt : ORIGIN[o].en),
+          rows: entries.filter(e => (e.row ? e.row.origin : 'fallback') === o),
+        }))
+        .filter(g => g.rows.length > 0)
+    }
+    // harness
+    const seen = new Map<HarnessId, typeof entries>()
+    for (const e of entries) {
+      for (const h of e.harnesses) seen.set(h, [...(seen.get(h) ?? []), e])
+    }
+    return [...seen].map(([h, rows]) => ({ key: h, label: HARNESS_LABELS[h] ?? h, rows }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [entries, groupBy, pt])
 
   const unpriced = useMemo(
     () => [...usedBy.keys()].filter(m => !rowFor(m)).sort(),
@@ -217,40 +261,86 @@ export default function PricingSettings() {
         </div>
       )}
 
-      {providerOrder().map(prov => {
-        const rows = groups.get(prov.id)
-        if (!rows || rows.length === 0) return null
-        return (
-          <div key={prov.id}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-              <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>{prov.label}</span>
-              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                {rows.length} {rows.length === 1 ? (pt ? 'modelo' : 'model') : (pt ? 'modelos' : 'models')}
-              </span>
-              {prov.pricingUrl && (
-                <a href={prov.pricingUrl} target="_blank" rel="noreferrer"
-                  style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                  {pt ? 'tabela oficial' : 'official table'} <ExternalLink size={10} />
-                </a>
-              )}
-            </div>
+      {/* Grouping selector. The same rows, carved differently — provider answers "who bills me",
+          source answers "how much of this is the vendor's own word", harness answers "what does
+          this tool cost me". */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{pt ? 'Agrupar por' : 'Group by'}</span>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {([
+            ['provider', pt ? 'Provedor' : 'Provider'],
+            ['source', pt ? 'Fonte' : 'Source'],
+            ['harness', 'Harness'],
+            ['none', pt ? 'Sem grupo' : 'No group'],
+          ] as Array<[GroupBy, string]>).map(([g, label]) => (
+            <button
+              key={g}
+              onClick={() => setGroup(g)}
+              style={{
+                padding: isMobile ? '0 12px' : '5px 11px',
+                minHeight: isMobile ? 44 : undefined,
+                borderRadius: 999, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12,
+                border: `1px solid ${groupBy === g ? 'var(--anthropic-orange)' : 'var(--border)'}`,
+                background: groupBy === g ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+                color: groupBy === g ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+                fontWeight: groupBy === g ? 600 : 400,
+              }}>{label}</button>
+          ))}
+        </div>
+      </div>
 
-            <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 10 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, minWidth: 460 }}>
-                <thead>
-                  <tr style={{ textAlign: 'left', color: 'var(--text-tertiary)', background: 'var(--bg-elevated)' }}>
-                    <th style={{ padding: '8px 10px', fontWeight: 600 }}>{pt ? 'Modelo' : 'Model'}</th>
-                    <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>{pt ? 'Entrada / 1M' : 'Input / 1M'}</th>
-                    <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>{pt ? 'Cache / 1M' : 'Cache / 1M'}</th>
-                    <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>{pt ? 'Saída / 1M' : 'Output / 1M'}</th>
-                    <th style={{ padding: '8px 10px', fontWeight: 600 }}>{pt ? 'Fonte' : 'Source'}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map(({ model, row, harnesses }) => (
-                    <tr key={model} style={{ borderTop: '1px solid var(--border)' }}>
-                      <td style={{ padding: '8px 10px' }}>
-                        <code style={{ fontSize: 12, color: 'var(--text-primary)' }}>{model}</code>
+      {grouped.map(group => (
+        <div key={group.key}>
+          {group.label && (
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+              {groupBy === 'source' && (
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%', alignSelf: 'center',
+                  background: group.key === 'fallback' ? '#f59e0b' : ORIGIN[group.key as Origin].color,
+                }} />
+              )}
+              {groupBy === 'harness' && (
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%', alignSelf: 'center',
+                  background: HARNESS_COLORS[group.key as HarnessId] ?? 'var(--text-tertiary)',
+                }} />
+              )}
+              <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>{group.label}</span>
+              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                {group.rows.length} {group.rows.length === 1 ? (pt ? 'modelo' : 'model') : (pt ? 'modelos' : 'models')}
+              </span>
+              {groupBy === 'provider' && (() => {
+                const url = providerOrder().find(p => p.id === group.key)?.pricingUrl
+                return url ? (
+                  <a href={url} target="_blank" rel="noreferrer"
+                    style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                    {pt ? 'tabela oficial' : 'official table'} <ExternalLink size={10} />
+                  </a>
+                ) : null
+              })()}
+            </div>
+          )}
+
+          <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 10 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, minWidth: 460 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: 'var(--text-tertiary)', background: 'var(--bg-elevated)' }}>
+                  <th style={{ padding: '8px 10px', fontWeight: 600 }}>{pt ? 'Modelo' : 'Model'}</th>
+                  <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>{pt ? 'Entrada / 1M' : 'Input / 1M'}</th>
+                  <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>{pt ? 'Cache / 1M' : 'Cache / 1M'}</th>
+                  <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>{pt ? 'Saída / 1M' : 'Output / 1M'}</th>
+                  {/* The grouping key leaves the rows — repeating it under its own heading is noise. */}
+                  {groupBy !== 'provider' && <th style={{ padding: '8px 10px', fontWeight: 600 }}>{pt ? 'Provedor' : 'Provider'}</th>}
+                  {groupBy !== 'source' && <th style={{ padding: '8px 10px', fontWeight: 600 }}>{pt ? 'Fonte' : 'Source'}</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {group.rows.map(({ model, row, harnesses, provider }) => (
+                  <tr key={model} style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ padding: '8px 10px' }}>
+                      <code style={{ fontSize: 12, color: 'var(--text-primary)' }}>{model}</code>
+                      {/* Under a harness heading every row shares it, so the badges say nothing. */}
+                      {groupBy !== 'harness' && (
                         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
                           {harnesses.map(h => (
                             <span key={h} style={{
@@ -259,10 +349,15 @@ export default function PricingSettings() {
                             }}>{HARNESS_LABELS[h]}</span>
                           ))}
                         </div>
-                      </td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{row ? money(row.input) : '—'}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--text-tertiary)' }}>{row ? money(row.cacheRead) : '—'}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{row ? money(row.output) : '—'}</td>
+                      )}
+                    </td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{row ? money(row.input) : '—'}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--text-tertiary)' }}>{row ? money(row.cacheRead) : '—'}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{row ? money(row.output) : '—'}</td>
+                    {groupBy !== 'provider' && (
+                      <td style={{ padding: '8px 10px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{provider.label}</td>
+                    )}
+                    {groupBy !== 'source' && (
                       <td style={{ padding: '8px 10px' }}>
                         {row
                           ? <span title={pt ? ORIGIN[row.origin].whyPt : ORIGIN[row.origin].whyEn}
@@ -272,14 +367,14 @@ export default function PricingSettings() {
                             </span>
                           : <span style={{ color: '#f59e0b' }}>{pt ? 'padrão' : 'fallback'}</span>}
                       </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        )
-      })}
+        </div>
+      ))}
 
       <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.6, paddingBottom: isMobile ? 8 : 0 }}>
         {pt
