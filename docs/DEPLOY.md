@@ -256,6 +256,23 @@ tailnet — the default on modern Tailscale.)
 
 ---
 
+## Upgrading an existing central
+
+Three changes in this release affect an instance that is already running. `central.sh up`
+handles the first two for you and warns about the third.
+
+| Change | Effect | What happens |
+|---|---|---|
+| The container now runs as **uid 10001** instead of root | the existing `agentistics_data` volume is owned by root, so the app could not write preferences or the consolidate store | `central.sh up` chowns the volume once, automatically. Doing it by hand: `docker run --rm --user 0 -v team-mode_agentistics_data:/d alpine chown -R 10001:10001 /d` |
+| **`BIND_IP` now defaults to `127.0.0.1`** instead of `0.0.0.0` | a central teammates reached directly over the LAN or a tailnet becomes unreachable | `central.sh up` prints a notice when `BIND_IP` is unset. Add `BIND_IP=0.0.0.0` (LAN, as before) or your Tailscale address to `central.env`. Tunnels and local access are unaffected |
+| The **session cookie format changed** (it now carries a signed issue time for the idle timeout) | every existing session cookie is invalid | Everyone signs in again once, after the upgrade. No action needed |
+
+Nothing else migrates: accounts, machine tokens, teams, tags and all metrics are untouched, and
+existing passwords keep working — the 12-character policy applies when a password is *set*, not
+when it is used.
+
+---
+
 ## Security controls
 
 A central is multi-tenant and can be published on the internet, so it carries controls a solo

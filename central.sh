@@ -48,6 +48,28 @@ uses_local_db() {
 }
 
 # Compose file set: always the base; add the local-Mongo overlay only when using the bundled DB.
+# The container used to run as root, so an existing agentistics_data volume is owned by uid 0.
+# It now runs as uid 10001, which cannot write those files — preferences and the consolidate
+# store would silently stop persisting on upgrade. Fix the ownership once, idempotently, using
+# the app's own image (already built locally, so nothing extra is pulled).
+migrate_volume_ownership() {
+  local owner
+  owner="$(docker run --rm --user 0 -v "${PROJECT}_agentistics_data:/d" \
+            --entrypoint sh "$(compose config --images 2>/dev/null | head -1)" \
+            -c 'stat -c %u /d 2>/dev/null || echo unknown' 2>/dev/null || echo skip)"
+  case "$owner" in
+    10001|skip|unknown|'') return 0 ;;
+  esac
+  echo "  migrating data volume ownership to the unprivileged user (was uid $owner)…"
+  docker run --rm --user 0 -v "${PROJECT}_agentistics_data:/d" \
+    --entrypoint sh "$(compose config --images 2>/dev/null | head -1)" \
+    -c 'chown -R 10001:10001 /d' >/dev/null 2>&1 || {
+      echo "  WARNING: could not chown the data volume. The central may fail to persist" >&2
+      echo "  preferences. Fix manually:" >&2
+      echo "    docker run --rm --user 0 -v ${PROJECT}_agentistics_data:/d alpine chown -R 10001:10001 /d" >&2
+    }
+}
+
 compose_files() {
   local files="-f docker-compose.yml"
   uses_local_db && files="$files -f docker-compose.localdb.yml"
@@ -220,7 +242,21 @@ case "$cmd" in
     # does NOT recreate the container after a rebuild, so new code wouldn't run.
     # --remove-orphans cleans up a previously-bundled local Mongo container when you switch
     # to an external MONGO_URL (its data volume is preserved).
-    compose up -d --build --force-recreate --remove-orphans
+    # The BIND_IP default changed from 0.0.0.0 (every interface) to 127.0.0.1 (this host).
+    # An existing install that reached the central over the LAN or a tailnet without setting
+    # BIND_IP would silently stop being reachable, so say so instead of letting them find out.
+    if [ -f "$ENV_FILE" ] && ! grep -qE '^BIND_IP=' "$ENV_FILE"; then
+      echo
+      echo "  NOTE: BIND_IP now defaults to 127.0.0.1 (this host only) instead of 0.0.0.0."
+      echo "        Local access and tunnels are unaffected. If teammates reached this central"
+      echo "        directly over the LAN or a tailnet, add one line to $ENV_FILE:"
+      echo "          BIND_IP=0.0.0.0        # the whole LAN, as before"
+      echo "          BIND_IP=100.x.y.z      # or just your Tailscale address"
+      echo
+    fi
+    compose build
+    migrate_volume_ownership
+    compose up -d --force-recreate --remove-orphans
     echo
     if uses_local_db; then
       echo "Database: bundled local Mongo (docker-compose.localdb.yml)."
