@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, sortRepos } from './useData'
+import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos } from './useData'
+import { mergeStatsCaches } from '@agentistics/core'
 import type { RepoSortKey, RepoStat } from './useData'
 import { format, subDays } from 'date-fns'
 
@@ -977,4 +978,78 @@ test('sortRepos does not mutate the input array', () => {
   const repos = [repo({ id: 'a', costUSD: 1 }), repo({ id: 'b', costUSD: 2 })]
   sortRepos(repos, 'cost', 'desc')
   expect(repos.map(r => r.id)).toEqual(['a', 'b'])
+})
+// computeFilteredHarnessSummaries — machine/team scope must equal the member scope
+
+describe('machine filter reads the same deep history as the member filter', () => {
+  // Regression: `userStatsCaches` is keyed by display name and SUMS a member's machines, so a
+  // machine (or team) selection could not be served from it and fell back to summing the
+  // individual session docs — which only cover the sessions still stored one-by-one. The same
+  // scope reported a fraction of the member view (835 sessions vs 225 on real data).
+  const day = (date: string, sessionCount: number, messageCount: number) =>
+    ({ date, sessionCount, messageCount, toolCallCount: 0 })
+  const usage = (input: number, output: number) => ({
+    'claude-sonnet-4-5': {
+      inputTokens: input, outputTokens: output,
+      cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0,
+    },
+  })
+  const cacheFor = (dates: [string, number, number][], input: number, output: number): import('@agentistics/core').StatsCache => ({
+    version: 1,
+    lastComputedDate: dates[dates.length - 1]![0],
+    dailyActivity: dates.map(([d, s, m]) => day(d, s, m)),
+    dailyModelTokens: [],
+    modelUsage: usage(input, output),
+    totalSessions: dates.reduce((a, [, s]) => a + s, 0),
+    totalMessages: dates.reduce((a, [, , m]) => a + m, 0),
+    longestSession: { sessionId: 'x', duration: 1, messageCount: 1, timestamp: '2026-06-01T00:00:00Z' },
+    firstSessionDate: dates[0]![0],
+    hourCounts: {},
+    totalSpeculationTimeSavedMs: 0,
+  })
+
+  const alienware = cacheFor([['2026-06-01', 400, 1200], ['2026-06-02', 100, 300]], 8_000_000, 50_000_000)
+  const dell = cacheFor([['2026-06-01', 200, 600], ['2026-06-03', 135, 400]], 8_350_000, 53_000_000)
+
+  const data = {
+    statsCache: cacheFor([['2026-06-01', 1, 1]], 0, 0),
+    sessions: [],   // the deep history exists ONLY aggregated — the session docs are long gone
+    projects: [],
+    allSessions: [],
+    harnesses: ['claude'],
+    userStatsCaches: { 'Bryan Soares': mergeStatsCaches([alienware, dell]) },
+    machineStatsCaches: { alienware, dell },
+    machineOwners: {
+      alienware: { user: 'Bryan Soares', teamIds: ['dev'] },
+      dell: { user: 'Bryan Soares', teamIds: ['dev'] },
+    },
+  } as unknown as import('@agentistics/core').AppData
+
+  const filters = (over: Partial<import('@agentistics/core').Filters>): import('@agentistics/core').Filters =>
+    ({ dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [], ...over })
+
+  const byMember = computeFilteredHarnessSummaries(data, filters({ users: ['Bryan Soares'] }))
+  const byMachines = computeFilteredHarnessSummaries(data, filters({ machines: ['alienware', 'dell'] }))
+  const byTeam = computeFilteredHarnessSummaries(data, filters({ teams: ['dev'] }))
+
+  test('selecting both of a member\'s machines equals selecting the member', () => {
+    expect(byMachines.summaries.claude).toEqual(byMember.summaries.claude)
+    expect(byMachines.summaries.claude!.sessions).toBe(835)
+  })
+
+  test('the team holding only those machines equals the same scope', () => {
+    expect(byTeam.summaries.claude).toEqual(byMember.summaries.claude)
+  })
+
+  test('a single machine reports its own history, not the member\'s total', () => {
+    const one = computeFilteredHarnessSummaries(data, filters({ machines: ['alienware'] }))
+    expect(one.summaries.claude!.sessions).toBe(500)
+    expect(one.summaries.claude!.inputTokens).toBe(8_000_000)
+  })
+
+  test('falls back to the per-session sum when a machine has no cache (never a partial sum)', () => {
+    const partial = { ...data, machineStatsCaches: { alienware } } as import('@agentistics/core').AppData
+    const out = computeFilteredHarnessSummaries(partial, filters({ machines: ['alienware', 'dell'] }))
+    expect(out.summaries.claude!.sessions).toBe(0)  // no session docs → old behaviour, unchanged
+  })
 })

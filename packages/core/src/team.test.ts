@@ -173,3 +173,48 @@ test('filterByMachines: empty = all; matches memberId; drops missing', () => {
   expect(filterByMachines(s, [])).toHaveLength(3)
   expect(filterByMachines(s, ['m2'])).toEqual([{ memberId: 'm2' }])
 })
+
+import { resolveMachineCacheScope } from './team'
+import { emptyStatsCache } from './types'
+
+const cache = () => emptyStatsCache()
+const OWNERS = {
+  alienware: { user: 'Bryan Soares', teamIds: ['dev'] },
+  dellBryan: { user: 'Bryan Soares', teamIds: ['dev'] },
+  thinkpadVini: { user: 'Vinicius Mostaço', teamIds: ['dev', 'ops'] },
+}
+const CACHES = { alienware: cache(), dellBryan: cache(), thinkpadVini: cache() }
+const base = { machineOwners: OWNERS, machineStatsCaches: CACHES, users: [], teams: [], machines: [] }
+
+test('resolveMachineCacheScope: no machine/team selection → null (member path answers it)', () => {
+  expect(resolveMachineCacheScope(base)).toBeNull()
+  expect(resolveMachineCacheScope({ ...base, users: ['Bryan Soares'] })).toBeNull()
+})
+
+test('resolveMachineCacheScope: selecting a member\'s machines resolves to exactly those caches', () => {
+  const scope = resolveMachineCacheScope({ ...base, machines: ['alienware', 'dellBryan'] })
+  expect(scope?.sort()).toEqual(['alienware', 'dellBryan'])
+})
+
+test('resolveMachineCacheScope: a team resolves to its machines; a member narrows it further', () => {
+  expect(resolveMachineCacheScope({ ...base, teams: ['ops'] })).toEqual(['thinkpadVini'])
+  expect(resolveMachineCacheScope({ ...base, teams: ['dev'], users: ['Bryan Soares'] })?.sort())
+    .toEqual(['alienware', 'dellBryan'])
+})
+
+test('resolveMachineCacheScope: presence scope excludes machines of filtered-out members', () => {
+  const scope = resolveMachineCacheScope({
+    ...base, teams: ['dev'], allowedUsers: new Set(['Vinicius Mostaço']),
+  })
+  expect(scope).toEqual(['thinkpadVini'])
+})
+
+test('resolveMachineCacheScope: null (never a partial sum) when the caches cannot serve the scope', () => {
+  // No machine maps at all — a solo instance, or a central that predates them.
+  expect(resolveMachineCacheScope({ ...base, machineOwners: undefined, machines: ['alienware'] })).toBeNull()
+  // A selected machine the tokens table does not know.
+  expect(resolveMachineCacheScope({ ...base, machines: ['alienware', 'ghost'] })).toBeNull()
+  // A machine in scope that has never pushed a statsCache would silently count as zero.
+  const { dellBryan: _drop, ...partial } = CACHES
+  expect(resolveMachineCacheScope({ ...base, machineStatsCaches: partial, machines: ['alienware', 'dellBryan'] })).toBeNull()
+})

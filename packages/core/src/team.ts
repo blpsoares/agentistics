@@ -1,4 +1,4 @@
-import type { SessionMeta, HarnessId } from './types'
+import type { SessionMeta, HarnessId, StatsCache } from './types'
 import { HARNESS_ORDER } from './types'
 
 // ---------------------------------------------------------------------------
@@ -115,6 +115,61 @@ export function filterByMachines<T extends { memberId?: string }>(sessions: T[],
   if (!machines || machines.length === 0) return sessions
   const set = new Set(machines)
   return sessions.filter(s => !!s.memberId && set.has(s.memberId))
+}
+
+export interface MachineScopeInput {
+  machineOwners?: Record<string, { user: string; teamIds: string[] }>
+  machineStatsCaches?: Record<string, StatsCache>
+  /** Selected members (display names), teams and machines — the live filter selection. */
+  users: string[]
+  teams: string[]
+  machines: string[]
+  /** Presence scope, when one is in force. `null` = every member allowed. */
+  allowedUsers?: Set<string> | null
+}
+
+/**
+ * Resolve a machine/team selection to the exact set of `machineStatsCaches` keys whose merge
+ * reproduces that scope's authoritative deep history.
+ *
+ * WHY this exists: `userStatsCaches` is keyed by display name and already SUMS a member's
+ * machines, so a machine or team selection could not be served from it and fell back to summing
+ * the individual session documents — which only cover the sessions still stored one-by-one. The
+ * same scope therefore reported a fraction of what selecting the member reported (a member with
+ * two machines showed 835 sessions by member and 225 by his own two machines).
+ *
+ * Returns `null` when the caches cannot serve the scope faithfully — no machine maps at all, no
+ * machine/team dimension selected, or any machine in scope missing its cache. `null` means
+ * "fall back to the per-session sum", i.e. the previous behaviour, so this can only ever add
+ * precision, never invent it. Pure.
+ */
+export function resolveMachineCacheScope(input: MachineScopeInput): string[] | null {
+  const { machineOwners, machineStatsCaches, users, teams, machines, allowedUsers } = input
+  if (!machineOwners || !machineStatsCaches) return null
+  // Not a machine/team question — the member path (userStatsCaches) already answers it exactly.
+  if (teams.length === 0 && machines.length === 0) return null
+
+  const machineSet = new Set(machines)
+  const teamSet = new Set(teams)
+  const userSet = new Set(users)
+
+  // A machine explicitly selected but unknown to the tokens table means the two views disagree
+  // about what exists; summing the rest would silently drop it.
+  if (machines.some(id => !machineOwners[id])) return null
+
+  const scope = Object.entries(machineOwners)
+    .filter(([id, m]) => {
+      if (machines.length > 0 && !machineSet.has(id)) return false
+      if (teams.length > 0 && !m.teamIds.some(t => teamSet.has(t))) return false
+      if (users.length > 0 && !userSet.has(m.user)) return false
+      if (allowedUsers && !allowedUsers.has(m.user)) return false
+      return true
+    })
+    .map(([id]) => id)
+
+  // A machine in scope with no cache would be counted as zero — under-report rather than admit it.
+  if (scope.some(id => !machineStatsCaches[id])) return null
+  return scope
 }
 
 

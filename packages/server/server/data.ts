@@ -55,6 +55,10 @@ export interface ApiResponse {
   harnesses: HarnessId[]
   /** Team/central only: each member's own statsCache, keyed by resolved display name. */
   userStatsCaches?: Record<string, StatsCache>
+  /** Team/central only: the same caches keyed by machine id (memberId), un-grouped. */
+  machineStatsCaches?: Record<string, StatsCache>
+  /** Team/central only: machine id → owner display name + teams. */
+  machineOwners?: Record<string, { user: string; teamIds: string[] }>
   workflows?: WorkflowRun[]
 }
 
@@ -889,15 +893,22 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     // self-contribution is added under CENTRAL_USER. The frontend merges the selected
     // members' caches so KPIs match each machine exactly.
     let userStatsCaches: Record<string, StatsCache> | undefined
+    // The same caches un-grouped, one per machine. Keeping BOTH shapes is the point: the
+    // display-name grouping above is what the member filter needs, and it is exactly what makes
+    // the machine/team filter impossible to serve from `userStatsCaches` — hence this second map.
+    let machineStatsCaches: Record<string, StatsCache> | undefined
+    let machineOwners: Record<string, { user: string; teamIds: string[] }> | undefined
     if (TEAM_CENTRAL) {
       const { loadAllMemberStats } = await import('./team-stats')
-      const { getMemberNameMap, getLiveTokenIds } = await import('./team-tokens')
-      const [memberStats, nameMap, liveIds] = await Promise.all([
+      const { getMemberNameMap, getLiveTokenIds, listMachines } = await import('./team-tokens')
+      const [memberStats, nameMap, liveIds, machines] = await Promise.all([
         loadAllMemberStats().catch(() => [] as { memberId: string; user: string; statsCache: StatsCache }[]),
         getMemberNameMap().catch(() => ({} as Record<string, string>)),
         getLiveTokenIds().catch(() => null),
+        listMachines().catch(() => [] as { id: string; user: string; teamIds: string[] }[]),
       ])
       userStatsCaches = {}
+      machineStatsCaches = {}
       for (const m of memberStats) {
         // Skip revoked members — their orphaned statsCache must not keep inflating team KPIs.
         if (liveIds && !liveIds.has(m.memberId)) continue
@@ -906,8 +917,16 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
         const key = nameMap[m.memberId] ?? m.user
         const prev = userStatsCaches[key]
         userStatsCaches[key] = prev ? mergeStatsCaches([prev, m.statsCache]) : m.statsCache
+        machineStatsCaches[m.memberId] = m.statsCache
       }
       if (CENTRAL_USER) userStatsCaches[CENTRAL_USER] = statsCache
+      // Owner/teams per machine, resolved from the tokens table — NOT from the sessions, so a
+      // machine whose individual session docs are gone still resolves to its owner and its cache.
+      machineOwners = {}
+      for (const m of machines) {
+        if (liveIds && !liveIds.has(m.id)) continue
+        machineOwners[m.id] = { user: nameMap[m.id] ?? m.user, teamIds: m.teamIds ?? [] }
+      }
     }
 
     sessions.sort((a, b) => b.start_time.localeCompare(a.start_time))
@@ -945,7 +964,7 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     const totalTokens = dedupedSessions.reduce((sum, s) => sum + (s.input_tokens ?? 0) + (s.output_tokens ?? 0), 0)
     onProgress('finalizing', 1, String(totalTokens))
 
-    return { statsCache, projects, allSessions: [] as [], sessions: dedupedSessions, healthIssues, homeDir: HOME_DIR, harnesses: Array.from(harnessSet), userStatsCaches, workflows }
+    return { statsCache, projects, allSessions: [] as [], sessions: dedupedSessions, healthIssues, homeDir: HOME_DIR, harnesses: Array.from(harnessSet), userStatsCaches, machineStatsCaches, machineOwners, workflows }
   }
 
   return Promise.race([

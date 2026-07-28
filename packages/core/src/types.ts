@@ -346,6 +346,15 @@ export interface AppData {
    *  Lets the central reproduce the member's authoritative totals (deep Claude history that
    *  only exists aggregated in statsCache, never as individual sessions). Absent on solo. */
   userStatsCaches?: Record<string, StatsCache>
+  /** Team/central only: the SAME caches un-grouped — one entry per machine, keyed by machine id
+   *  (`memberId`, the token hash). `userStatsCaches` sums a member's machines under one display
+   *  name and so cannot serve a machine/team filter; without this the machine dimension falls back
+   *  to a per-session sum, which only covers the sessions still stored individually and therefore
+   *  reports far less than the same scope selected by member. Absent on solo. */
+  machineStatsCaches?: Record<string, StatsCache>
+  /** Team/central only: machine id → its owner (resolved display name) and teams. Resolves a
+   *  machine/team/member selection to the exact set of `machineStatsCaches` keys to merge. */
+  machineOwners?: Record<string, { user: string; teamIds: string[] }>
   /** Team/central only: live presence per member (resolved display name → status). */
   presence?: Record<string, MemberPresence>
   /** Team/central only: central policy — whether offline members' data is shown by default. */

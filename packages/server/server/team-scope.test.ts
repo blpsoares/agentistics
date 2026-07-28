@@ -95,3 +95,22 @@ test('scopeAppDataToTeams: statsCache is empty when nothing is visible (no leak,
   expect(scoped.sessions).toEqual([])
   expect(scoped.statsCache.totalSessions).toBe(0)
 })
+
+test('scopeAppDataToTeams prunes the machine-keyed caches by machine, not by user', () => {
+  // A member can own machines in several teams. Scoping their caches by `visibleUsers` (as the
+  // display-name-keyed userStatsCaches are) would hand over the cache of a machine whose sessions
+  // the principal cannot see — the machine id is the exact unit of visibility here.
+  const data = {
+    sessions: [{ session_id: 's1', user: 'alice', project_path: '/a', memberId: 'mA', teamIds: ['A'] }],
+    machineStatsCaches: { mA: { x: 1 }, mB: { x: 2 }, mOwned: { x: 3 } },
+    machineOwners: {
+      mA: { user: 'alice', teamIds: ['A'] },
+      mB: { user: 'alice', teamIds: ['B'] },       // same owner, invisible team
+      mOwned: { user: 'carol', teamIds: [] },      // loose machine, owned by the principal
+    },
+  } as unknown as AppData
+
+  const scoped = scopeAppDataToTeams(data, new Set(['A']), new Set(['mOwned']))
+  expect(Object.keys(scoped.machineStatsCaches ?? {}).sort()).toEqual(['mA', 'mOwned'])
+  expect(Object.keys(scoped.machineOwners ?? {}).sort()).toEqual(['mA', 'mOwned'])
+})

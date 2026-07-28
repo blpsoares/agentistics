@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMeta } from '@agentistics/core'
-import { calcCost, sessionModelUsage, sessionCostUSD, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, filterByTeams, filterByMachines, distinctHarnesses, mergeStatsCaches, repoShortName, HARNESS_ORDER } from '@agentistics/core'
+import { calcCost, sessionModelUsage, sessionCostUSD, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, filterByTeams, filterByMachines, resolveMachineCacheScope, distinctHarnesses, mergeStatsCaches, repoShortName, HARNESS_ORDER } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 import { makeTagFilter, type TagDef } from '../lib/tagMatch'
 
@@ -679,24 +679,37 @@ export function computeFilteredHarnessSummaries(data: AppData, filters: Filters)
   // otherwise fall back to the per-session sum.
   const usc = data.userStatsCaches
   const hasUserStats = !!usc && Object.keys(usc).length > 0
+  // Same machine/team resolution as useDerivedStats — the two must agree or the Compare page
+  // contradicts the dashboard for the exact same selection.
+  const machineScope = resolveMachineCacheScope({
+    machineOwners: data.machineOwners,
+    machineStatsCaches: data.machineStatsCaches,
+    users: usersSel, teams: teamsSel, machines: machinesSel,
+  })
+  const machineCacheScoped = machineScope !== null
   const sliceActive =
     projects.length > 0 || modelSet !== null ||
     filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd ||
-    teamsSel.length > 0 || machinesSel.length > 0
-  const claudeStatsCache = hasUserStats
-    ? mergeStatsCaches(
-        (usersSel.length > 0 ? usersSel : Object.keys(usc!))
-          .map(u => usc![u])
-          .filter((c): c is NonNullable<typeof c> => !!c),
-      )
-    : data.statsCache
-  const claudeFromStatsCache = hasUserStats && !sliceActive
+    ((teamsSel.length > 0 || machinesSel.length > 0) && !machineCacheScoped)
+  const claudeStatsCache = machineCacheScoped
+    ? mergeStatsCaches(machineScope.map(id => data.machineStatsCaches![id]!))
+    : hasUserStats
+      ? mergeStatsCaches(
+          (usersSel.length > 0 ? usersSel : Object.keys(usc!))
+            .map(u => usc![u])
+            .filter((c): c is NonNullable<typeof c> => !!c),
+        )
+      : data.statsCache
+  const claudeFromStatsCache = (hasUserStats || machineCacheScoped) && !sliceActive
 
   const sums = {} as Record<HarnessId, HarnessSummary>
   const la = {} as Record<HarnessId, string | null>
   for (const h of cols) {
+    // Gap-fill from the FULLY scoped slice, not just the user-scoped one: `claudeFromStatsCache`
+    // implies no date/project/model slice, so `filtered` differs from `userScoped` only by the
+    // team/machine/harness scoping the cache above was already narrowed to.
     sums[h] = h === 'claude' && claudeFromStatsCache
-      ? claudeSummaryFromStatsCache(claudeStatsCache, userScoped)
+      ? claudeSummaryFromStatsCache(claudeStatsCache, filtered)
       : summarizeHarnessSessions(filtered, h)
     la[h] = lastActiveFor(filtered, h)
   }
@@ -782,13 +795,26 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
     const hasUserStats = !!userStatsCaches && Object.keys(userStatsCaches).length > 0
     const statsCachePool = (users.length > 0 ? users : Object.keys(userStatsCaches ?? {}))
       .filter(u => !presenceAllowedUsers || presenceAllowedUsers.has(u))
-    const effectiveStatsCache = hasUserStats
-      ? mergeStatsCaches(
-          statsCachePool
-            .map(u => userStatsCaches![u])
-            .filter((c): c is NonNullable<typeof c> => !!c),
-        )
-      : data.statsCache
+    // Machine/team selection: `userStatsCaches` groups (and sums) a member's machines under one
+    // display name, so it cannot answer "these two machines". `machineStatsCaches` is the same
+    // history un-grouped — merging the machines in scope gives the machine/team filter the exact
+    // deep history the member filter already gets. `null` = not resolvable → previous behaviour.
+    const machineScope = resolveMachineCacheScope({
+      machineOwners: data.machineOwners,
+      machineStatsCaches: data.machineStatsCaches,
+      users, teams: filters.teams ?? [], machines: filters.machines ?? [],
+      allowedUsers: presenceAllowedUsers,
+    })
+    const machineCacheScoped = machineScope !== null
+    const effectiveStatsCache = machineCacheScoped
+      ? mergeStatsCaches(machineScope.map(id => data.machineStatsCaches![id]!))
+      : hasUserStats
+        ? mergeStatsCaches(
+            statsCachePool
+              .map(u => userStatsCaches![u])
+              .filter((c): c is NonNullable<typeof c> => !!c),
+          )
+        : data.statsCache
 
     // Filter daily activity (date-range only — no project granularity in statsCache)
     const filteredDailyActivity = (effectiveStatsCache.dailyActivity ?? []).filter(d =>
@@ -849,8 +875,12 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
     // Annotated `boolean` on purpose: without it TypeScript treats this const as an aliased
     // condition and narrows `modelSet` to null inside every `else` branch below, breaking the
     // guards there. The annotation keeps the flag a plain boolean.
+    // Team/machine are only cache-blind when the per-machine caches cannot serve the selection
+    // (`machineCacheScoped` false) — otherwise `effectiveStatsCache` above already IS that scope's
+    // deep history, and forcing the per-session sum here is what made the same scope report a
+    // fraction of what the member filter reports.
     const cacheBlindScope: boolean = projectFiltered || repoFiltered || tagFiltered || modelSet !== null
-      || teamsFiltered || machinesFiltered
+      || ((teamsFiltered || machinesFiltered) && !machineCacheScoped)
       || (userFiltered && !hasUserStats)
 
     let allTimeTotalSessions: number

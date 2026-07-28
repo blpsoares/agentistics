@@ -27,6 +27,8 @@ export function scopeAppDataToTeams<T extends {
   projects?: ServerProject[]
   statsCache?: StatsCache
   userStatsCaches?: Record<string, StatsCache>
+  machineStatsCaches?: Record<string, StatsCache>
+  machineOwners?: Record<string, { user: string; teamIds: string[] }>
   presence?: Record<string, unknown>
 }>(data: T, visible: Set<string>, ownedMachineIds: Set<string> = new Set()): T {
   // A session is visible if ANY of its machine's teams is visible to the principal (a machine can
@@ -42,6 +44,16 @@ export function scopeAppDataToTeams<T extends {
   const workflows = (data.workflows ?? []).filter(w => visibleSessionIds.has(w.sessionId))
   const projects = (data.projects ?? []).filter(p => (p.users ?? []).some(u => visibleUsers.has(u)))
   const userStatsCaches = pickKeys(data.userStatsCaches, visibleUsers)
+  // Machine-keyed maps are scoped by the SAME rule as the sessions above (visible team, or owned
+  // machine) rather than by `visibleUsers` — the machine id is the exact unit of visibility here,
+  // so a principal never receives the cache of a machine whose sessions they cannot see.
+  const visibleMachineIds = new Set(
+    Object.entries(data.machineOwners ?? {})
+      .filter(([id, m]) => m.teamIds.some(t => visible.has(t)) || ownedMachineIds.has(id))
+      .map(([id]) => id),
+  )
+  const machineOwners = pickKeys(data.machineOwners, visibleMachineIds)
+  const machineStatsCaches = pickKeys(data.machineStatsCaches, visibleMachineIds)
   // Rebuild statsCache from ONLY the visible members' caches. The top-level statsCache on a central
   // is the central machine's own history — exposing it to a scoped principal would leak every
   // member's totals (Cost/Tokens KPIs fall back to statsCache when no member cache matches). Merging
@@ -55,6 +67,8 @@ export function scopeAppDataToTeams<T extends {
     projects,
     statsCache,
     userStatsCaches,
+    machineStatsCaches,
+    machineOwners,
     presence: pickKeys(data.presence, visibleUsers),
   } as T
 }
