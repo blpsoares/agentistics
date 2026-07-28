@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { ExternalLink, AlertTriangle } from 'lucide-react'
+import type React from 'react'
+import { ExternalLink, AlertTriangle, ArrowUp, ArrowDown } from 'lucide-react'
 import { resolveProvider, providerOrder, type ProviderId } from '@agentistics/core'
 import type { AppContext } from '../../lib/app-context'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
@@ -11,6 +12,10 @@ type Origin = 'official' | 'community' | 'builtin'
 /** How the table is carved up. Persisted, because it is a viewing habit rather than a one-off. */
 type GroupBy = 'provider' | 'source' | 'harness' | 'none'
 const GROUP_KEY = 'agentistics-pricing-groupby'
+/** Sort applies WITHIN each group; the groups keep their own order (providers by their canonical
+ *  order, sources by trust). Sorting across groups would fight the grouping. */
+type SortKey = 'model' | 'input' | 'output' | 'cache' | 'provider'
+type SortDir = 'asc' | 'desc'
 
 interface PricedRow {
   id: string
@@ -62,6 +67,34 @@ const fmtRate = (usd: number, currency: 'USD' | 'BRL', rate: number): string => 
     : `$${(int ?? '0').replace(/\B(?=(\d{3})+$)/g, ',')}.${dec}`
 }
 
+/** A header cell that sorts. The arrow only appears on the active column, so the header row stays
+ *  quiet instead of showing four competing indicators. */
+function SortableTh({ sortKey, sort, onSort, align, children }: {
+  sortKey: SortKey
+  sort: { key: SortKey; dir: SortDir }
+  onSort: (k: SortKey) => void
+  align?: 'right'
+  children: React.ReactNode
+}) {
+  const active = sort.key === sortKey
+  return (
+    <th style={{ padding: 0, fontWeight: 600, textAlign: align ?? 'left' }}>
+      <button
+        onClick={() => onSort(sortKey)}
+        style={{
+          width: '100%', padding: '8px 10px', border: 'none', background: 'transparent',
+          font: 'inherit', fontWeight: 600, cursor: 'pointer',
+          color: active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+          display: 'flex', alignItems: 'center', gap: 4,
+          justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
+        }}>
+        {children}
+        {active && (sort.dir === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />)}
+      </button>
+    </th>
+  )
+}
+
 const ago = (ms: number, pt: boolean): string => {
   if (!ms) return pt ? 'nunca' : 'never'
   const mins = Math.max(0, Math.round((Date.now() - ms) / 60_000))
@@ -80,6 +113,15 @@ export default function PricingSettings() {
   const [groupBy, setGroupBy] = useState<GroupBy>(() => {
     try { return (localStorage.getItem(GROUP_KEY) as GroupBy) || 'provider' } catch { return 'provider' }
   })
+  const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'model', dir: 'asc' })
+  const toggleSort = (key: SortKey) => setSort(prev =>
+    prev.key === key
+      // Second click reverses; a price column starts high-to-low because "what costs most" is the
+      // question people bring to it, while a name starts A-Z.
+      ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: key === 'model' || key === 'provider' ? 'asc' : 'desc' })
+
   const setGroup = (g: GroupBy) => {
     setGroupBy(g)
     try { localStorage.setItem(GROUP_KEY, g) } catch { /* private mode — the default is fine */ }
@@ -133,14 +175,34 @@ export default function PricingSettings() {
 
   /** One entry per model actually used, with everything a row or a heading might need. */
   const entries = useMemo(() => {
-    const list = [...usedBy].map(([model, hs]) => ({
+    const q = query.trim().toLowerCase()
+    let list = [...usedBy].map(([model, hs]) => ({
       model,
       row: rowFor(model),
       harnesses: [...hs].sort(),
       provider: resolveProvider(model),
     }))
-    return list.sort((a, b) => a.model.localeCompare(b.model))
-  }, [usedBy, rowFor])
+    // Search spans the model id, its provider and the harnesses that ran it, so "google", "codex"
+    // and "opus" all find something without the user having to know which field they are in.
+    if (q) {
+      list = list.filter(e =>
+        e.model.toLowerCase().includes(q)
+        || e.provider.label.toLowerCase().includes(q)
+        || e.harnesses.some(h => (HARNESS_LABELS[h] ?? h).toLowerCase().includes(q)))
+    }
+    const num = (e: typeof list[number], k: SortKey): number =>
+      !e.row ? -1 : k === 'input' ? e.row.input : k === 'output' ? e.row.output : e.row.cacheRead
+    list.sort((a, b) => {
+      const dir = sort.dir === 'asc' ? 1 : -1
+      if (sort.key === 'model') return a.model.localeCompare(b.model) * dir
+      if (sort.key === 'provider') {
+        return (a.provider.label.localeCompare(b.provider.label) || a.model.localeCompare(b.model)) * dir
+      }
+      // An unpriced row has no number to compare; keep those together at the end either way.
+      return ((num(a, sort.key) - num(b, sort.key)) * dir) || a.model.localeCompare(b.model)
+    })
+    return list
+  }, [usedBy, rowFor, query, sort])
 
   /**
    * Group into [heading, rows] pairs. Grouping by harness is the one dimension that is NOT a
@@ -265,6 +327,20 @@ export default function PricingSettings() {
           source answers "how much of this is the vendor's own word", harness answers "what does
           this tool cost me". */}
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+        <input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder={pt ? 'Buscar modelo, provedor ou harness…' : 'Search model, provider or harness…'}
+          style={{
+            flex: '1 1 220px', minWidth: 0, boxSizing: 'border-box',
+            padding: isMobile ? '11px 10px' : '6px 10px',
+            minHeight: isMobile ? 44 : undefined,
+            background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8,
+            // 16px on mobile or iOS Safari zooms the viewport and breaks the sticky header.
+            fontSize: isMobile ? 16 : 12.5,
+            color: 'var(--text-primary)', outline: 'none', fontFamily: 'inherit',
+          }}
+        />
         <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{pt ? 'Agrupar por' : 'Group by'}</span>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {([
@@ -288,6 +364,14 @@ export default function PricingSettings() {
           ))}
         </div>
       </div>
+
+      {entries.length === 0 && query.trim() && (
+        <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>
+          {pt
+            ? `Nenhum modelo usado corresponde a "${query.trim()}".`
+            : `No model you have used matches "${query.trim()}".`}
+        </div>
+      )}
 
       {grouped.map(group => (
         <div key={group.key}>
@@ -325,12 +409,12 @@ export default function PricingSettings() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, minWidth: 460 }}>
               <thead>
                 <tr style={{ textAlign: 'left', color: 'var(--text-tertiary)', background: 'var(--bg-elevated)' }}>
-                  <th style={{ padding: '8px 10px', fontWeight: 600 }}>{pt ? 'Modelo' : 'Model'}</th>
-                  <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>{pt ? 'Entrada / 1M' : 'Input / 1M'}</th>
-                  <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>{pt ? 'Cache / 1M' : 'Cache / 1M'}</th>
-                  <th style={{ padding: '8px 10px', fontWeight: 600, textAlign: 'right' }}>{pt ? 'Saída / 1M' : 'Output / 1M'}</th>
+                  <SortableTh sortKey="model" sort={sort} onSort={toggleSort}>{pt ? 'Modelo' : 'Model'}</SortableTh>
+                  <SortableTh sortKey="input" sort={sort} onSort={toggleSort} align="right">{pt ? 'Entrada / 1M' : 'Input / 1M'}</SortableTh>
+                  <SortableTh sortKey="cache" sort={sort} onSort={toggleSort} align="right">{pt ? 'Cache / 1M' : 'Cache / 1M'}</SortableTh>
+                  <SortableTh sortKey="output" sort={sort} onSort={toggleSort} align="right">{pt ? 'Saída / 1M' : 'Output / 1M'}</SortableTh>
                   {/* The grouping key leaves the rows — repeating it under its own heading is noise. */}
-                  {groupBy !== 'provider' && <th style={{ padding: '8px 10px', fontWeight: 600 }}>{pt ? 'Provedor' : 'Provider'}</th>}
+                  {groupBy !== 'provider' && <SortableTh sortKey="provider" sort={sort} onSort={toggleSort}>{pt ? 'Provedor' : 'Provider'}</SortableTh>}
                   {groupBy !== 'source' && <th style={{ padding: '8px 10px', fontWeight: 600 }}>{pt ? 'Fonte' : 'Source'}</th>}
                 </tr>
               </thead>
