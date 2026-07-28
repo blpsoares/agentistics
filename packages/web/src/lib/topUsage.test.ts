@@ -127,6 +127,19 @@ const light = cache({
   dailyActivity: [{ date: '2026-07-01', sessionCount: 12, messageCount: 400, toolCallCount: 0 }],
 })
 
+/** A surviving session document — it decides WHO is on the podium, not how much. */
+const claudeSess = (user: string, day: string): SessionMeta => ({
+  session_id: `${user}-${day}`, harness: 'claude', user,
+  start_time: `${day}T12:00:00`, project_path: '/p',
+} as unknown as SessionMeta)
+
+/** A non-Claude session: its spend exists in no statsCache, so it must be added on top. */
+const codexSess = (user: string, day: string, input: number, output: number): SessionMeta => ({
+  session_id: `${user}-codex-${day}`, harness: 'codex', user, model: 'gpt-5',
+  start_time: `${day}T12:00:00`, project_path: '/p',
+  input_tokens: input, output_tokens: output,
+} as unknown as SessionMeta)
+
 const baseFilters: Filters = { dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [] }
 
 test('cacheTotalsUsable: only a slice the caches cannot represent disqualifies them', () => {
@@ -147,9 +160,10 @@ test('cacheTotalsUsable: only a slice the caches cannot represent disqualifies t
 
 test('rankTopFromCaches ranks on the full history, cache tokens included', () => {
   const caches = { Bryan: heavy, Vini: light }
-  const scope = new Set(['Bryan', 'Vini'])
+  // One surviving session each — the scope comes from the sessions, the money from the caches.
+  const scope = [claudeSess('Bryan', '2026-07-01'), claudeSess('Vini', '2026-07-01')]
 
-  const byCost = rankTopFromCaches(caches, scope, 'cost')
+  const byCost = rankTopFromCaches(caches, scope, s => s.user ?? '', 'cost')
   expect(byCost.entries.map(e => e.key)).toEqual(['Bryan', 'Vini'])
   expect(byCost.distinct).toBe(2)
   // Opus 4.8 at 5/25/0.5/6.25 per 1M — dominated by the 5.18B cache reads ($2,592) and the
@@ -160,17 +174,56 @@ test('rankTopFromCaches ranks on the full history, cache tokens included', () =>
   expect(byCost.total).toBeCloseTo(byCost.entries[0]!.cost + byCost.entries[1]!.cost, 6)
 
   // Sessions come from the deep dailyActivity, which is the point: the surviving session
-  // documents are a fraction of it.
-  expect(rankTopFromCaches(caches, scope, 'sessions').entries[0]!.sessions).toBe(449)
+  // documents are a fraction of it. The one session above is on a day the cache already
+  // covers, so it must NOT be added on top.
+  expect(rankTopFromCaches(caches, scope, s => s.user ?? '', 'sessions').entries[0]!.sessions).toBe(449)
 })
 
 test('rankTopFromCaches honours the filtered scope and never invents a key', () => {
   const caches = { Bryan: heavy, Vini: light }
-  const only = rankTopFromCaches(caches, new Set(['Vini']), 'cost')
+  const only = rankTopFromCaches(caches, [claudeSess('Vini', '2026-07-01')], s => s.user ?? '', 'cost')
   expect(only.entries.map(e => e.key)).toEqual(['Vini'])
   expect(only.distinct).toBe(1)
   // A member filtered out contributes nothing to the total, so shares stay out of 100%.
   expect(only.total).toBeCloseTo(only.entries[0]!.cost, 6)
-  // A key present in scope but with no cache is simply absent rather than shown as zero.
-  expect(rankTopFromCaches(caches, new Set(['Ghost']), 'cost').entries).toEqual([])
+  // A key with no session at all is absent — the caches never widen the scope.
+  expect(rankTopFromCaches(caches, [], s => s.user ?? '', 'cost').entries).toEqual([])
+})
+
+test('rankTopFromCaches adds the non-Claude spend the caches cannot hold', () => {
+  // stats-cache.json is Claude-only. Ana runs Claude AND Codex; reading the caches alone reported
+  // her at the Claude sliver and put her at the bottom of a podium she should top.
+  const caches = { Ana: light }
+  const withCodex = [
+    claudeSess('Ana', '2026-07-01'),
+    codexSess('Ana', '2026-07-01', 20_000_000, 20_000_000),
+  ]
+  const cacheOnly = rankTopFromCaches(caches, [claudeSess('Ana', '2026-07-01')], s => s.user ?? '', 'cost')
+  const both = rankTopFromCaches(caches, withCodex, s => s.user ?? '', 'cost')
+
+  expect(both.entries[0]!.cost).toBeGreaterThan(cacheOnly.entries[0]!.cost)
+  expect(both.entries[0]!.tokens).toBe(cacheOnly.entries[0]!.tokens + 40_000_000)
+  // The Codex session is a session too — and it is on a day the Claude cache "covers", which must
+  // not suppress it: that gap rule applies to Claude sessions only.
+  expect(both.entries[0]!.sessions).toBe(cacheOnly.entries[0]!.sessions + 1)
+})
+
+test('rankTopFromCaches counts a Claude session only on days the cache has not computed', () => {
+  const caches = { Bryan: heavy }   // dailyActivity covers 2026-07-01 with 449 sessions
+  const keyOf = (s: { user?: string }) => s.user ?? ''
+  const covered = rankTopFromCaches(caches, [claudeSess('Bryan', '2026-07-01')], keyOf, 'sessions')
+  const gapDay = rankTopFromCaches(caches, [claudeSess('Bryan', '2026-07-20')], keyOf, 'sessions')
+  expect(covered.entries[0]!.sessions).toBe(449)
+  expect(gapDay.entries[0]!.sessions).toBe(450)
+  // Money is NOT gap-filled: modelUsage already holds it whole, so adding it would double-count.
+  expect(gapDay.entries[0]!.cost).toBeCloseTo(covered.entries[0]!.cost, 6)
+})
+
+test('rankTopFromCaches puts a member with sessions but no cache on the podium', () => {
+  // A member who only ever ran a non-Claude CLI has no statsCache at all; dropping them would
+  // hide real spend behind "no cache" rather than report it.
+  const out = rankTopFromCaches({}, [codexSess('Solo', '2026-07-01', 10_000_000, 5_000_000)], s => s.user ?? '', 'cost')
+  expect(out.entries.map(e => e.key)).toEqual(['Solo'])
+  expect(out.entries[0]!.cost).toBeGreaterThan(0)
+  expect(out.entries[0]!.sessions).toBe(1)
 })

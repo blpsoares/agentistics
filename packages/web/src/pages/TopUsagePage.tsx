@@ -34,13 +34,11 @@ export default function TopUsagePage() {
   // cache to read and stays on the per-session sum.
   const cacheRank = useMemo(() => {
     if (!cacheTotalsUsable(filters)) return null
-    const inScopeUsers = new Set(sessions.map(s => s.user).filter((u): u is string => !!u))
-    const inScopeMachines = new Set(sessions.map(s => s.memberId).filter((m): m is string => !!m))
     return (dim: TopDimension) => {
       if (dim === 'user' && data?.userStatsCaches)
-        return rankTopFromCaches(data.userStatsCaches, inScopeUsers, metric)
+        return rankTopFromCaches(data.userStatsCaches, sessions, s => s.user ?? '', metric)
       if (dim === 'machine' && data?.machineStatsCaches)
-        return rankTopFromCaches(data.machineStatsCaches, inScopeMachines, metric)
+        return rankTopFromCaches(data.machineStatsCaches, sessions, s => s.memberId ?? '', metric)
       return null
     }
   }, [data?.userStatsCaches, data?.machineStatsCaches, filters, sessions, metric])

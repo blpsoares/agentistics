@@ -1,5 +1,6 @@
 import { canonicalProjectPath, sessionCostUSD, sessionModelUsage, calcCost } from '@agentistics/core'
 import type { SessionMeta, StatsCache, Filters } from '@agentistics/core'
+import { format, parseISO } from 'date-fns'
 
 /** What the podium is ranked by. Cost answers "where is the money", tokens "where is the volume",
  *  sessions "where do I actually spend my days" — and they routinely disagree, which is the point
@@ -136,22 +137,52 @@ function entryFromCache(key: string, c: StatsCache): TopEntry {
 }
 
 /**
- * Rank a dimension from per-key statsCaches (person → display name, machine → machine id).
+ * Rank a dimension from per-key statsCaches (person → display name, machine → machine id),
+ * supplemented by the sessions the caches cannot represent.
  *
- * `inScope` is the set of keys the active filters left standing, taken from the already-filtered
- * session set: the sessions are trustworthy about WHO is in scope (they went through every filter,
- * presence and teams included), the caches about HOW MUCH. A key with no surviving session is left
- * out rather than guessed at.
+ * Who is in scope comes from the already-filtered session set — the sessions went through every
+ * filter, presence and teams included — while how much comes from the caches. A key with no
+ * surviving session is left out rather than guessed at.
+ *
+ * The supplement is not optional: `stats-cache.json` is **Claude-only**, so a person's Codex or
+ * Gemini spend appears in NO cache. Reading the caches alone reported a mixed-harness person at
+ * $4.50 instead of $225 and inverted the podium. Mirrors `useDerivedStats` exactly, so the two
+ * pages agree: non-Claude sessions contribute their full cost, tokens and count, while a Claude
+ * session on a day the cache has not computed yet contributes only its COUNT — its money is
+ * already whole inside `modelUsage`, and adding it again would double-count.
  */
 export function rankTopFromCaches(
   caches: Record<string, StatsCache>,
-  inScope: Set<string>,
+  sessions: SessionMeta[],
+  keyOf: (s: SessionMeta) => string,
   metric: TopMetric,
   limit = 3,
 ): TopResult {
-  const all = Object.entries(caches)
-    .filter(([key]) => inScope.has(key))
-    .map(([key, c]) => entryFromCache(key, c))
+  const acc = new Map<string, TopEntry>()
+  const cachedDays = new Map<string, Set<string>>()
+
+  for (const s of sessions) {
+    const key = keyOf(s)
+    if (!key) continue
+    let e = acc.get(key)
+    if (!e) {
+      const c = caches[key]
+      // A key with sessions but no cache still belongs on the podium — its sessions are all the
+      // history there is, which is exactly the case for a member who only runs a non-Claude CLI.
+      e = c ? entryFromCache(key, c) : { key, cost: 0, tokens: 0, sessions: 0 }
+      acc.set(key, e)
+      cachedDays.set(key, new Set((c?.dailyActivity ?? []).map(d => d.date)))
+    }
+    if ((s.harness ?? 'claude') !== 'claude') {
+      e.cost += sessionCostUSD(s) ?? 0
+      e.tokens += tokensOf(s)
+      e.sessions += 1
+    } else if (s.start_time && !cachedDays.get(key)!.has(format(parseISO(s.start_time), 'yyyy-MM-dd'))) {
+      e.sessions += 1
+    }
+  }
+
+  const all = [...acc.values()]
   const value = (e: TopEntry): number => (metric === 'cost' ? e.cost : metric === 'tokens' ? e.tokens : e.sessions)
   all.sort((a, b) =>
     value(b) - value(a)
