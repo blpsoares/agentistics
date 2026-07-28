@@ -214,3 +214,44 @@ test('an unparseable timestamp never poisons first/last activity', () => {
   expect(rows[0]!.firstActivity).toBe('2026-07-05T00:00:00.000Z')
   expect(rows[0]!.lastActivity).toBe('2026-07-05T01:00:00.000Z')
 })
+
+test('a member row breaks down into its machines, ranked by cost', () => {
+  // m2 is the cheap one, m1 the heavy one — the ranking must not follow insertion order.
+  const rows = aggregateMemberMetrics([
+    session({ user: 'ana', memberId: 'm2', input_tokens: 100, output_tokens: 10 }),
+    session({ user: 'ana', memberId: 'm1', input_tokens: 9000, output_tokens: 4000 }),
+    session({ user: 'ana', memberId: 'm1', input_tokens: 9000, output_tokens: 4000 }),
+  ], 'user')
+
+  const row = rows[0]!
+  expect(row.machineCount).toBe(2)
+  expect(row.machines.map(m => m.key)).toEqual(['m1', 'm2'])
+  expect(row.machines[0]!.sessions).toBe(2)
+  expect(row.machines[1]!.sessions).toBe(1)
+  // The parts add up to the whole — the per-machine slice is the same money as the row's.
+  // This holds for a row built purely from sessions. The case where it deliberately does NOT —
+  // totals replaced by the statsCache history — lives in the web copy's test file, because
+  // withStatsCacheTotals only exists there.
+  const summed = row.machines.reduce((a, m) => a + m.costUSD, 0)
+  expect(summed).toBeCloseTo(row.costUSD, 10)
+  expect(row.machines.reduce((a, m) => a + m.sessions, 0)).toBe(row.sessions)
+  expect(row.machines.reduce((a, m) => a + m.totalTokens, 0)).toBe(row.totalTokens)
+  // No cache was involved, so nothing to disclose.
+  expect(row.totalsFromCache).toBeFalsy()
+})
+
+
+test('grouping by machine yields exactly one machine slice per row', () => {
+  const rows = aggregateMemberMetrics([
+    session({ user: 'ana', memberId: 'm1' }),
+    session({ user: 'ana', memberId: 'm2' }),
+  ], 'machine')
+  expect(rows.every(r => r.machines.length === 1)).toBe(true)
+  expect(rows.every(r => r.machines[0]!.key === r.key)).toBe(true)
+})
+
+test('sessions with no machine produce an empty breakdown, never a phantom machine', () => {
+  const rows = aggregateMemberMetrics([session({ user: 'ana', memberId: undefined })], 'user')
+  expect(rows[0]!.machineCount).toBe(0)
+  expect(rows[0]!.machines).toEqual([])
+})

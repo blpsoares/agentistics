@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react'
 import type { SessionMeta } from '@agentistics/core'
+import { sessionTime } from '../lib/sessionTime'
 import { formatProjectName, sessionLabel } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { format, parseISO } from 'date-fns'
@@ -97,13 +98,16 @@ function Chip({
   icon,
   label,
   color = 'var(--text-tertiary)',
+  title,
 }: {
   icon: React.ReactNode
   label: string
   color?: string
+  title?: string
 }) {
   return (
     <div
+      title={title}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -111,6 +115,7 @@ function Chip({
         fontSize: 10,
         color,
         fontWeight: 500,
+        cursor: title ? 'help' : undefined,
       }}
     >
       {icon}
@@ -556,7 +561,10 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds }: Props) {
 
                 {/* Stats row */}
                 <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                  <Chip icon={<Clock size={10} />} label={`${s.duration_minutes}m`} />
+                  {/* Active time leads, wall clock qualifies it — a session reopened over weeks
+                      used to read as "57492m" of work here. */}
+                  <Chip icon={<Clock size={10} />} label={sessionTime(s, lang).combined}
+                    title={sessionTime(s, lang).tooltip} />
                   <Chip
                     icon={null}
                     label={`${msgs} msgs`}

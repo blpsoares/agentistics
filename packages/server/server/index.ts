@@ -7,6 +7,10 @@ import { getRates } from './rates'
 import { getVersionInfo, startVersionRecheck } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
 import { readPreferences, writePreferences, type Preferences } from './preferences'
+import {
+  readStoredNotifications, addStoredNotification, markStoredNotificationsRead,
+  dismissStoredNotification, clearStoredNotifications, localViewer, type NotificationInput,
+} from './notifications-store'
 import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, type ChatMessage, type ChatModelId, type ChatAttachment } from './chat-tty'
 import { getChatDriver, chatHarnessStatus } from './chat-drivers/index'
 import { listMcpServers, removeMcpServer } from './mcp-list'
@@ -34,6 +38,7 @@ import { requiresStepUp, verifyStepUp, STEPUP_HEADER } from './stepup'
 import { writeAudit, ensureAuditIndexes, listAudit } from './audit'
 import { safeError } from './errors'
 import { LIMITS } from './limits'
+import { canSeeMemberNames } from './iam-view'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -259,6 +264,13 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
 
     // Per-request CORS. Every `...CORS_HEADERS` spread below keeps working unchanged.
     const CORS_HEADERS = corsHeadersFor(req.headers.get('origin'), ALLOWED_ORIGINS, !SERVE_STATIC)
+
+    /** JSON response carrying this request's CORS headers. */
+    const json = (body: unknown, status = 200): Response =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
 
     if (req.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS_HEADERS })
@@ -535,6 +547,51 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           'X-Accel-Buffering': 'no',
         },
       })
+    }
+
+    // ---- Notification history -------------------------------------------------------------
+    // Persisted server-side (this machine's, or this central's — never mixed) so the bell shows
+    // the SAME history on the desktop and on a phone, and only empties when the user says so.
+    if (url.pathname === '/api/notifications') {
+      try {
+        // Who is asking. On a central every request carries a principal, and read/dismiss state is
+        // per account; on a solo/member machine there are no accounts at all and `getPrincipal`
+        // is always null — that instance has exactly one user, represented by `localViewer`.
+        const principal = await getPrincipal(req)
+        const viewer = principal
+          ? { id: principal.accountId, canSeeNames: canSeeMemberNames(principal), multiTenant: true }
+          : localViewer
+
+        if (req.method === 'GET') {
+          return json(await readStoredNotifications(viewer))
+        }
+        // POST creates a CLIENT-originated notification (the ones detected in the browser, e.g.
+        // an available update or a failed central connection). Server-originated ones are already
+        // persisted by broadcastNotification, so clients never re-post what arrives over SSE.
+        if (req.method === 'POST') {
+          const body = await req.json() as NotificationInput
+          if (!body?.type || (!body.code && !body.title)) {
+            return json({ error: 'type and either code or title are required' }, 400)
+          }
+          return json(await addStoredNotification({
+            type: body.type, code: body.code, meta: body.meta, title: body.title, message: body.message,
+          }, viewer))
+        }
+        // PATCH marks everything read (opening the bell). Kept separate from DELETE: reading a
+        // notification and removing it are different intents.
+        if (req.method === 'PATCH') {
+          return json(await markStoredNotificationsRead(viewer))
+        }
+        // DELETE ?id=<id> removes one; DELETE with no id clears the history.
+        if (req.method === 'DELETE') {
+          const id = url.searchParams.get('id')
+          return json(id ? await dismissStoredNotification(id, viewer) : await clearStoredNotifications(viewer))
+        }
+        return json({ error: 'method not allowed' }, 405)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return json({ error: message }, 500)
+      }
     }
 
     if (url.pathname === '/api/preferences' && req.method === 'GET') {

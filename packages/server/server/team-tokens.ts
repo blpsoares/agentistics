@@ -20,6 +20,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import type { Collection } from 'mongodb'
 import { getMongoDb } from './mongo'
 import { teamDocId, type TeamSessionDoc } from './team-store'
+import { accountTeamsMap, resolveMachineTeams } from '@agentistics/core'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -44,6 +45,10 @@ export interface TokenDoc {
   accountId?: string
   /** All owning accounts for machine tokens — a machine can be owned/managed by several accounts. */
   accountIds?: string[]
+  /** Teams this machine is held OUT of even though it would otherwise inherit them from an owner
+   *  account (or carry them directly). This is what makes UNCHECKING an inherited team stick:
+   *  without a stored exclusion the machine would re-inherit the team on the very next read. */
+  excludedTeamIds?: string[]
 }
 
 /** Canonical owner-account id list for a token (handles legacy single-accountId docs). */
@@ -76,7 +81,15 @@ export type MachineInfo = {
   machineName: string
   user: string
   teamId?: string           // primary team (teamIds[0]) — kept for compatibility
-  teamIds: string[]         // all teams the machine belongs to
+  teamIds: string[]         // teams attached DIRECTLY to the machine (authority reads this)
+  /** Teams the machine effectively belongs to: own ∪ inherited-from-owner-accounts − excluded.
+   *  This is the set every filter / aggregate / cache scope must use. */
+  effectiveTeamIds: string[]
+  /** The subset of `effectiveTeamIds` that came from an owner account. Already members — the UI
+   *  must not offer them as "add", only as an unchecked-able row. */
+  inheritedTeamIds: string[]
+  /** Teams deliberately unchecked. Stored so the removal survives a reload. */
+  excludedTeamIds: string[]
   createdAt: string
   lastSeenAt: string | null
 }
@@ -281,13 +294,33 @@ export async function getMemberTeamMap(): Promise<Record<string, string>> {
 
 /** memberId (token hash) → ALL teams the machine belongs to (empty when loose — no Default fallback).
  *  Used for read-time multi-team tagging + scoping (a session is visible to any of its teams;
- *  a loose session with no team is visible only to an owner). */
+ *  a loose session with no team is visible only to an owner).
+ *
+ *  EFFECTIVE teams, not just the ones stored on the machine: a machine also belongs to every team
+ *  its OWNER ACCOUNTS belong to, minus anything explicitly excluded (see resolveMachineTeams in
+ *  @agentistics/core). Reading only the machine's own `teamIds` here is what made filtering by a
+ *  team skip the machines that joined through their account — the team reported a fraction of
+ *  itself. Both this map and `listMachines()` go through the same resolver so they cannot drift. */
 export async function getMemberTeamsMap(): Promise<Record<string, string[]>> {
   const col = await getTokensCollection()
-  const docs = await col.find({}, { projection: { _id: 1, teamId: 1, teamIds: 1 } }).toArray()
+  const [docs, accountTeams] = await Promise.all([
+    col.find({}, { projection: { _id: 1, teamId: 1, teamIds: 1, accountId: 1, accountIds: 1, excludedTeamIds: 1 } }).toArray(),
+    accountTeamsForMachines(),
+  ])
   const map: Record<string, string[]> = {}
-  for (const d of docs) map[d._id] = teamIdsOf(d)
+  for (const d of docs) map[d._id] = resolveMachineTeams(d, accountTeams).teams
   return map
+}
+
+/** accountId → teams, read from the accounts collection. A failure degrades to "no inheritance"
+ *  (the pre-existing behavior) rather than blanking every machine's teams. */
+async function accountTeamsForMachines(): Promise<Record<string, string[]>> {
+  try {
+    const { listAccounts } = await import('./accounts')
+    return accountTeamsMap(await listAccounts())
+  } catch {
+    return {}
+  }
 }
 
 /**
@@ -335,18 +368,28 @@ export async function mintMachine(input: { machineName: string; user: string; ac
  */
 export async function listMachines(): Promise<MachineInfo[]> {
   const col = await getTokensCollection()
-  const docs = await col.find({ ci: { $ne: true }, repo: { $exists: false } }).toArray()
+  const [docs, accountTeams] = await Promise.all([
+    col.find({ ci: { $ne: true }, repo: { $exists: false } }).toArray(),
+    accountTeamsForMachines(),
+  ])
   return docs.map(d => {
     const accountIds = ownerIdsOf(d)
     const teamIds = teamIdsOf(d)
+    const resolved = resolveMachineTeams(d, accountTeams)
     return {
       id: d._id,
       accountId: accountIds[0],
       accountIds,
       machineName: d.label || d.user,
       user: d.user,
+      // `teamId` / `teamIds` stay the STORED values: `canManageMachine` reads them, and quietly
+      // swapping in the inherited set would widen every team manager's authority to every machine
+      // of every account in their teams. Scoping/UI use the effective fields below.
       teamId: teamIds[0],
       teamIds,
+      effectiveTeamIds: resolved.teams,
+      inheritedTeamIds: resolved.inherited,
+      excludedTeamIds: resolved.excluded,
       createdAt: d.createdAt,
       lastSeenAt: d.lastSeenAt,
     }
@@ -415,6 +458,24 @@ export async function setMachineTeams(id: string, teamIds: string[]): Promise<bo
   const col = await getTokensCollection()
   const unique = [...new Set(teamIds.filter(Boolean))]
   const res = await col.updateOne({ _id: id }, { $set: { teamIds: unique, teamId: unique[0] } })
+  return res.matchedCount > 0
+}
+
+/**
+ * Set a machine's teams AND its exclusion list in one write — the pair that makes membership
+ * derivable. `setMachineTeams` alone cannot express "not in team T even though the owner is".
+ */
+export async function setMachineTeamsAndExclusions(
+  id: string,
+  teamIds: string[],
+  excludedTeamIds: string[],
+): Promise<boolean> {
+  const col = await getTokensCollection()
+  const unique = [...new Set(teamIds.filter(Boolean))]
+  const excluded = [...new Set(excludedTeamIds.filter(Boolean))]
+  const res = await col.updateOne({ _id: id }, {
+    $set: { teamIds: unique, teamId: unique[0], excludedTeamIds: excluded },
+  })
   return res.matchedCount > 0
 }
 

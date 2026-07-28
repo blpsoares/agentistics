@@ -1,4 +1,5 @@
-import type { SessionMeta } from '@agentistics/core'
+import type { SessionMeta, TurnEvent } from '@agentistics/core'
+import { activeMinutesOf } from '@agentistics/core'
 
 /** Pure: parse a Copilot events.jsonl string into a normalized SessionMeta.
  *  Returns null when the content has no usable lines. */
@@ -30,6 +31,12 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
 
   const userMessageTimestamps: string[] = []
   const messageHours: number[] = []
+  // Per-turn timeline for computeActiveTime() (docs/harness-contract.md). Copilot brackets every
+  // turn itself: `assistant.turn_start` opens one, `assistant.turn_end` closes it, and an `abort` /
+  // `session.shutdown` closes one the CLI never got to end. The bracket span IS the measurement, so
+  // it is expressed as open/close markers and computeActiveTime does the arithmetic — computing the
+  // span here too would be a second source of truth for one number.
+  const turnEvents: TurnEvent[] = []
 
   for (const raw of lines) {
     let e: any
@@ -42,6 +49,12 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
     if (ts) {
       if (!startTime) startTime = ts
       endTime = ts
+    }
+    let turnEvent: TurnEvent | null = null
+    const tsMs = ts ? Date.parse(ts) : NaN
+    if (!Number.isNaN(tsMs)) {
+      turnEvent = { ts: tsMs }
+      turnEvents.push(turnEvent)
     }
 
     if (type === 'session.start') {
@@ -64,8 +77,16 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
       }
     } else if (type === 'assistant.turn_start') {
       assistantTurns++
+      if (turnEvent) turnEvent.userPrompt = true
+    } else if (type === 'assistant.turn_end') {
+      if (turnEvent) turnEvent.turnEnd = true
     } else if (type === 'session.info') {
       if (data.infoType === 'mcp') usesMcp = true
+    } else if (type === 'abort') {
+      // The turn ended here even though no turn_end was written (the user aborted it). Without
+      // this the open turn would run to the last line of the file, which can be hours of idle —
+      // measured on a real session: aborted at 20:13:05, file ends 23:34.
+      if (turnEvent) turnEvent.turnEnd = true
     } else if (type === 'session.error') {
       toolErrors++
     } else if (type === 'mcp.tool_call') {
@@ -74,6 +95,8 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
         mcpToolNamesSet.add(data.toolName)
       }
     } else if (type === 'session.shutdown') {
+      // The CLI exited: any turn still open ended here, not at whatever line closes the file.
+      if (turnEvent) turnEvent.turnEnd = true
       // Extract per-model token metrics — sum across all models present
       const modelMetrics = data.modelMetrics
       if (modelMetrics && typeof modelMetrics === 'object') {
@@ -112,6 +135,7 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
     start_time: startTime || endTime || '',
     end_time: endTime || undefined,
     duration_minutes: durationMinutes,
+    active_minutes: activeMinutesOf(turnEvents),
     user_message_count: userMessages,
     assistant_message_count: assistantTurns,
     tool_counts: {},

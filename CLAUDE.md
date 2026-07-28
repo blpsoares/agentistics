@@ -147,6 +147,13 @@ Agentistics tracks sessions from multiple AI coding assistants (harnesses), not 
 - `AppData.harnesses: HarnessId[]` lists which harnesses have data present, used by the frontend to decide whether to show the harness selector in the nav (shown only when >1 harness is active). Selecting "All" yields the unified view.
 - Each harness is implemented as a `HarnessAdapter` module under `server/adapters/` — never a separate package. `getEnabledAdapters()` lazily resolves and memoizes available adapters; individual adapters can be disabled via `AGENTISTICS_HARNESS_<ID>=0`.
 
+### The harness contract — read `docs/harness-contract.md`
+
+`docs/harness-contract.md` defines what each metric MUST MEAN across every harness (time, cost,
+tokens, capabilities, filters, timestamps, purity). The checklist below is the mechanical half —
+which files to touch. Do both: a harness that compiles and reports a metric computed its own way
+is a bug, not a variation.
+
 ### Adding a harness — the complete checklist
 
 Every point below is load-bearing; skipping one has, historically, produced a harness that compiles
@@ -178,7 +185,12 @@ clean and is then silently missing from half the product.
    entry (EN + PT) in `web/src/lib/harness.ts`.
 8. **Timestamps** — bucket activity hours on the **local** clock (`getHours()`), like every other
    adapter. Reading a UTC timestamp as local put the peak-usage chart hours off for four harnesses.
-9. **Docs** — this file, plus any `docs/` page enumerating harnesses.
+9. **Time** — emit `TurnEvent[]` and call `activeMinutesOf()` (`packages/core/src/activeTime.ts`)
+   for `SessionMeta.active_minutes`; never compute duration in the adapter. Prefer a duration the
+   harness measured itself, reconstruct from timestamps otherwise, and set `activeTime: false` only
+   when the transcript has no usable timing at all. See `docs/harness-contract.md` § 1 — in
+   particular, do NOT add an idle-gap threshold.
+10. **Docs** — this file, `docs/harness-contract.md`, plus any `docs/` page enumerating harnesses.
 
 ### Pricing — three layered sources, and the built-in table is the floor
 

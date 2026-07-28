@@ -92,3 +92,23 @@ test('grouping by user reads the user-keyed caches', () => {
   expect(out[0]!.sessions).toBe(472)
   expect(out[0]!.machineCount).toBe(2)
 })
+
+test('a row whose totals come from the statsCache SAYS SO, because the parts stop adding up', () => {
+  // The row's headline becomes the full machine history while `machines` stays the visible
+  // sessions. That is correct — the caches are the history, the session documents only the part
+  // Claude Code has not pruned — but a card showing parts that fail to close without a word of
+  // explanation teaches the reader to distrust both numbers. The flag is what lets it say so.
+  const sessions = [sess({ memberId: 'alienware' })]
+  const rows = withStatsCacheTotals(
+    aggregateMemberMetrics(sessions, 'machine'), sessions, 'machine', { alienware: deep })
+
+  const row = rows[0]!
+  expect(row.totalsFromCache).toBe(true)
+  // The whole is genuinely larger than the visible parts — exactly what the flag warns of.
+  expect(row.machines.reduce((a, m) => a + m.totalTokens, 0)).toBeLessThan(row.totalTokens)
+})
+
+test('a session-only row does not claim cache totals', () => {
+  // No caches passed → nothing was substituted → nothing to disclose.
+  expect(aggregateMemberMetrics([sess({})], 'machine')[0]!.totalsFromCache).toBeFalsy()
+})

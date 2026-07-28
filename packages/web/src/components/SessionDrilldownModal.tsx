@@ -5,6 +5,7 @@ import {
   CheckCircle, XCircle, Globe, Server, ExternalLink, Workflow as WorkflowIcon,
 } from 'lucide-react'
 import type { SessionMeta, Lang, WorkflowRun } from '@agentistics/core'
+import { sessionTime } from '../lib/sessionTime'
 import { formatProjectName, formatModel, calcCost, getModelColor, sessionLabel, fmtCost } from '@agentistics/core'
 import { blendedCostPerToken } from '../hooks/useData'
 import { buildWorkflowSteps } from '../lib/workflowSteps'
@@ -205,7 +206,10 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
               <span style={{ opacity: 0.4 }}>·</span>
               <span>{session.start_time ? format(parseISO(session.start_time), 'MMM d, yyyy HH:mm') : '—'}</span>
               <span style={{ opacity: 0.4 }}>·</span>
-              <span>{fmtDuration(session.duration_minutes ?? 0)}</span>
+              <span title={sessionTime(session, lang).tooltip}
+                style={{ cursor: 'help' }}>
+                {sessionTime(session, lang).combined}
+              </span>
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
