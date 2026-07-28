@@ -19,6 +19,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { TEAM_CENTRAL, TEAM_PASSWORD, TEAM_SESSION_SECRET, TEAM_TLS, CENTRAL_USER } from './config'
 import { getAccount } from './accounts'
+import { CAPS, PROFILE } from './exposure'
 import type { Principal } from './iam-types'
 
 // ---------------------------------------------------------------------------
@@ -235,10 +236,25 @@ export function handleSession(req: Request): Response {
   const required = Boolean(TEAM_PASSWORD)
   const authed = isAuthed(req)
   const aggregatorOnly = TEAM_CENTRAL && !CENTRAL_USER
-  return new Response(JSON.stringify({ authed, required, central: TEAM_CENTRAL, aggregatorOnly }), {
-    status: 200,
-    headers: JSON_CT,
-  })
+  return new Response(
+    JSON.stringify({
+      authed,
+      required,
+      central: TEAM_CENTRAL,
+      aggregatorOnly,
+      // The exposure profile and the local capabilities it grants. The web app uses these to
+      // hide affordances the server would refuse anyway (see capability-guard.ts) — the flags
+      // are a UI hint, never the enforcement point.
+      profile: PROFILE,
+      capabilities: {
+        localShell: CAPS.localShell,
+        localChat: CAPS.localChat,
+        localTranscripts: CAPS.localTranscripts,
+        mcpAdmin: CAPS.mcpAdmin,
+      },
+    }),
+    { status: 200, headers: JSON_CT },
+  )
 }
 
 /**

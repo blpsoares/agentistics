@@ -67,6 +67,16 @@ interface TeamSessionState {
   /** true when a central has NO local harness data (pure aggregator) — hide local-only UI
    *  (archive consent gate, Nay chat) that only makes sense with a local harness installed. */
   aggregatorOnly?: boolean
+  /** How reachable this instance is (server/exposure.ts). */
+  profile?: 'local' | 'lan' | 'public'
+  /** Local host-power capabilities the server still grants. Undefined on an older server
+   *  (treat as granted); the server is the enforcement point either way. */
+  capabilities?: {
+    localShell?: boolean
+    localChat?: boolean
+    localTranscripts?: boolean
+    mcpAdmin?: boolean
+  }
 }
 
 export interface IamAccount { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: { teamId: string; role: 'manager' | 'user' }[]; mustChangePassword: boolean }
@@ -1643,9 +1653,15 @@ export default function AppLayout() {
 
   const users = useMemo(() => (data ? distinctUsers(data.sessions) : []), [data])
 
+  // Stable signature of who is online right now — drives the machines refetch below.
+  const presenceKey = useMemo(
+    () => Object.entries(data?.presence ?? {}).map(([u, p]) => `${u}:${p.online ? 1 : 0}`).sort().join('|'),
+    [data?.presence],
+  )
+
   // Central-only: fetch teams and machines for filter dimensions
   const [teamsList, setTeamsList] = useState<{ id: string; name: string }[]>([])
-  const [machinesList, setMachinesList] = useState<{ id: string; name: string; user: string; teamId?: string; teamIds?: string[] }[]>([])
+  const [machinesList, setMachinesList] = useState<{ id: string; name: string; user: string; teamId?: string; teamIds?: string[]; online?: boolean }[]>([])
   useEffect(() => {
     if (!teamSession?.central) {
       setTeamsList([])
@@ -1657,12 +1673,15 @@ export default function AppLayout() {
       fetch('/api/iam/machines').then(r => r.ok ? r.json() : { machines: [] }),
     ]).then(([teamsResp, machinesResp]) => {
       setTeamsList((teamsResp.teams ?? []).map((t: { _id: string; name: string }) => ({ id: t._id, name: t.name })))
-      setMachinesList((machinesResp.machines ?? []).map((m: { id: string; machineName: string; user: string; teamId?: string; teamIds?: string[] }) => ({ id: m.id, name: m.machineName, user: m.user, teamId: m.teamId, teamIds: m.teamIds })))
+      setMachinesList((machinesResp.machines ?? []).map((m: { id: string; machineName: string; user: string; teamId?: string; teamIds?: string[]; online?: boolean }) => ({ id: m.id, name: m.machineName, user: m.user, teamId: m.teamId, teamIds: m.teamIds, online: m.online === true })))
     }).catch(() => {
       setTeamsList([])
       setMachinesList([])
     })
-  }, [teamSession?.central])
+    // presenceKey: /api/iam/machines stamps each machine's `online` from computePresence(), so the
+    // list has to be refetched when presence flips — otherwise the online/offline machine counts
+    // would freeze at whatever they were when the central was first loaded.
+  }, [teamSession?.central, presenceKey])
 
   // Tags back the `tags` filter dimension; without them the dimension stays hidden and any stored
   // filters.tags selection is inert. They exist in EVERY mode (a solo machine keeps them in
@@ -1690,6 +1709,10 @@ export default function AppLayout() {
   const onlineCount = data?.presence ? Object.values(data.presence).filter(p => p.online).length : 0
   const offlineCount = data?.presence ? Object.values(data.presence).filter(p => !p.online).length : 0
   const machineCount = machinesList.length
+  // Per-machine presence comes stamped on /api/iam/machines (server-side computePresence), so the
+  // machine chip can split total / online / offline exactly like the members chip does.
+  const machinesOnline = machinesList.filter(m => m.online).length
+  const machinesOffline = machineCount - machinesOnline
   const projectCount = data?.projects?.length ?? 0
   const teamCount = teamsList.length
   const repoCount = useMemo(() => new Set((data?.sessions ?? []).map(s => s.git_remote).filter(Boolean)).size, [data])
@@ -2196,7 +2219,12 @@ export default function AppLayout() {
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{onlineCount}</span>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{offlineCount}</span>
                       </span>
-                      <span style={chip}><Server size={11} /> <span style={val}>{machineCount}</span> {lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}</span>
+                      <span style={chip}>
+                        <Server size={11} />
+                        <span style={val}>{machineCount}</span> {lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{machinesOnline}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{machinesOffline}</span>
+                      </span>
                       <span style={chip}><Users size={11} /> <span style={val}>{teamCount}</span> {lang === 'pt' ? (teamCount === 1 ? 'time' : 'times') : (teamCount === 1 ? 'team' : 'teams')}</span>
                     </>)}
                     <span style={chip}><FolderOpen size={11} /> <span style={val}>{projectCount}</span> {lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}</span>
@@ -2334,6 +2362,8 @@ export default function AppLayout() {
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                         <Server size={11} style={iconSt} />
                         <span style={{ color: 'var(--text-secondary)' }}>{machineCount} {lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title={lang === 'pt' ? 'Máquinas online' : 'Machines online'}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{machinesOnline}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title={lang === 'pt' ? 'Máquinas offline' : 'Machines offline'}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{machinesOffline}</span>
                       </span>
                       {sep}
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
@@ -2537,8 +2567,11 @@ export default function AppLayout() {
       )}
 
       {/* TTY Chat (Nay) — floating button + panel. Hidden on a pure central (aggregator with
-          no local harness): the chat needs a locally-installed harness to be meaningful. */}
-      {!teamSession?.aggregatorOnly && (
+          no local harness): the chat needs a locally-installed harness to be meaningful.
+          Also hidden when the server revoked the localChat capability (an exposed instance
+          answers /api/chat-tty and /api/exec with 403 — see server/capability-guard.ts), so the
+          UI never offers an action that cannot work. */}
+      {!teamSession?.aggregatorOnly && teamSession?.capabilities?.localChat !== false && (
         <TtyChat
           lang={lang}
           chatModel={chatModel}

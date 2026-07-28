@@ -20,6 +20,7 @@ import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
 import { handleLogout, handleSession, getPrincipal } from './auth'
+import { routeCapability, capabilityDenied } from './capability-guard'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -240,6 +241,26 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     // ---------------------------------------------------------------------------
     if (INGEST_ONLY && !(url.pathname === '/api/team/ingest' && req.method === 'POST')) {
       return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+    }
+
+    // ---------------------------------------------------------------------------
+    // Local-capability guard. Routes that execute shell commands, spawn coding-assistant
+    // CLIs, read the host's raw transcripts, or edit ~/.claude.json are unreachable
+    // whenever the exposure profile revokes the capability (see exposure.ts). Checked
+    // BEFORE auth on purpose: an exposed instance never even reveals whether the caller
+    // is authenticated, and no account role can talk its way into a shell.
+    // ---------------------------------------------------------------------------
+    {
+      const needed = routeCapability(url.pathname)
+      if (needed) {
+        const denied = capabilityDenied(needed)
+        if (denied) {
+          return new Response(denied.body, {
+            status: denied.status,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+      }
     }
 
     // ---------------------------------------------------------------------------
