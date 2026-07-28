@@ -114,7 +114,9 @@ async function buildContext(p: Principal, sessions: SessionMeta[]): Promise<TagC
   const myTeamIds = new Set(p.memberships.map(m => m.teamId))
   const visibleMachineIds = new Set(
     machines
-      .filter(m => m.teamIds.some(t => myTeamIds.has(t)) || m.accountIds.includes(p.accountId))
+      // EFFECTIVE teams: a machine reachable through its owner account's team is visible for the
+      // same reason an explicitly-attached one is (see resolveMachineTeams in @agentistics/core).
+      .filter(m => m.effectiveTeamIds.some(t => myTeamIds.has(t)) || m.accountIds.includes(p.accountId))
       .map(m => m.id),
   )
   const visibleAccountIds = new Set(
@@ -166,6 +168,10 @@ function soloContext(sessions: SessionMeta[]): TagContext {
     machineName: 'This machine',
     user: '',
     teamIds: [],
+    // Solo mode has no teams and no accounts, so there is nothing to inherit or exclude.
+    effectiveTeamIds: [],
+    inheritedTeamIds: [],
+    excludedTeamIds: [],
     createdAt: '',
     lastSeenAt: null,
   }

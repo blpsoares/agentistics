@@ -9,7 +9,7 @@ import { hasAnyOwner, countOwners, createAccount, findAccountByEmail, updateAcco
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
 import { listTeams, createTeam, getTeam, deleteTeam } from './teams'
-import { backfillTokenTeamIds, listMachines, mintMachineToken, mintMachine, revokeToken, rotateToken, setMachineTeams, setMachineLabel, setMachineOwners, detachTeamFromAllMachines, detachAccountFromAllMachines } from './team-tokens'
+import { backfillTokenTeamIds, listMachines, mintMachineToken, mintMachine, revokeToken, rotateToken, setMachineTeams, setMachineTeamsAndExclusions, setMachineLabel, setMachineOwners, detachTeamFromAllMachines, detachAccountFromAllMachines } from './team-tokens'
 import { getCentralConfig } from './central-config'
 import { packConnectToken } from '@agentistics/core'
 import { backfillRepoTeamIds } from './team-repos'
@@ -487,17 +487,28 @@ export async function handleMachines(req: Request): Promise<Response> {
       // they manage, then rotate/revoke/re-own it. Owner bypasses.
       if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
       const current = machine.teamIds && machine.teamIds.length ? machine.teamIds : (machine.teamId ? [machine.teamId] : [])
+      const currentExcluded = machine.excludedTeamIds ?? []
+      const inherited = machine.inheritedTeamIds ?? []
       const addTeamId = typeof b.addTeamId === 'string' && b.addTeamId ? b.addTeamId : ''
       const removeTeamId = typeof b.removeTeamId === 'string' && b.removeTeamId ? b.removeTeamId : ''
       let next: string[]
+      let nextExcluded: string[] = currentExcluded
       if (addTeamId) {
         if (!(await getTeam(addTeamId))) return json({ error: 'team not found' }, 404)
         if (!canManageMachineTeam(principal, addTeamId)) return json({ error: 'forbidden' }, 403)
-        next = [...new Set([...current, addTeamId])]
+        // Re-checking a previously unchecked team just clears the exclusion: the machine goes back
+        // to inheriting it from its owner account instead of gaining a redundant direct link.
+        nextExcluded = currentExcluded.filter(t => t !== addTeamId)
+        const inheritsIt = inherited.includes(addTeamId) || currentExcluded.includes(addTeamId)
+        next = inheritsIt ? current : [...new Set([...current, addTeamId])]
       } else if (removeTeamId) {
         // Detach: must manage the team being removed (owner always).
         if (!canManageMachineTeam(principal, removeTeamId)) return json({ error: 'forbidden' }, 403)
+        // Dropping it from `teamIds` is NOT enough when the membership is inherited from an owner
+        // account — it would come straight back on the next read. The stored exclusion is the
+        // record of the removal, and it covers the explicit case too, so one path handles both.
         next = current.filter(t => t !== removeTeamId)
+        nextExcluded = [...new Set([...currentExcluded, removeTeamId])]
       } else {
         // Replace the whole set. A non-owner must manage EVERY team involved (old ∪ new) — no Default
         // exemption — so a replace can't drop or add teams outside their scope.
@@ -510,8 +521,14 @@ export async function handleMachines(req: Request): Promise<Response> {
           const ok = involved.every(t => canManageMachineTeam(principal, t))
           if (!ok) return json({ error: 'forbidden' }, 403)
         }
+        // A full replace states the whole intent, so anything the machine WOULD inherit but was
+        // not listed becomes an exclusion, and anything listed stops being excluded.
+        nextExcluded = [
+          ...currentExcluded.filter(t => !next.includes(t)),
+          ...inherited.filter(t => !next.includes(t)),
+        ]
       }
-      await setMachineTeams(reassignId, next)
+      await setMachineTeamsAndExclusions(reassignId, next, [...new Set(nextExcluded)])
       return json({ ok: true })
     }
     // Mint a new machine: { name, accountIds?: string[], teamId?: string }.

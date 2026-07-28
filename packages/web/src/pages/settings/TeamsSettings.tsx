@@ -9,10 +9,35 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 interface Team { _id: string; name: string }
 interface Membership { teamId: string; role: 'manager' | 'user' }
 interface Account { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: Membership[] }
-interface Machine { id: string; machineName: string; user: string; teamId?: string; teamIds?: string[]; accountId?: string; accountName?: string; accountEmail?: string; lastSeenAt: string | null }
+interface Machine {
+  id: string; machineName: string; user: string; teamId?: string; teamIds?: string[]
+  /** Teams the machine actually belongs to: own ∪ inherited from its owner accounts − excluded. */
+  effectiveTeamIds?: string[]
+  /** The subset of the above that came from an owner account rather than a direct link. */
+  inheritedTeamIds?: string[]
+  accountId?: string; accountIds?: string[]; accountName?: string; accountEmail?: string
+  owners?: { id: string; name: string; email: string }[]
+  lastSeenAt: string | null
+}
 
-// Resolve a machine's full team set (prefer teamIds, fall back to the single teamId).
-const machineTeams = (m: Machine): string[] => m.teamIds ?? (m.teamId ? [m.teamId] : [])
+/** A machine's EFFECTIVE team set. Adding an account to a team brings its machines along, so this
+ *  must be the inherited-aware set — reading only `teamIds` is what let the same machine be added
+ *  to a team it was already in, and left it out of that team's list. Falls back to the stored
+ *  fields for a server that predates the effective ones. */
+const machineTeams = (m: Machine): string[] =>
+  m.effectiveTeamIds ?? m.teamIds ?? (m.teamId ? [m.teamId] : [])
+
+/** True when the machine is in this team only because one of its owner accounts is. */
+const inheritsTeam = (m: Machine, teamId: string): boolean =>
+  (m.inheritedTeamIds ?? []).includes(teamId)
+
+/** Badge marking a machine that joined the team through its owner account. */
+const inheritedTag: React.CSSProperties = {
+  padding: '1px 6px', borderRadius: 999, fontSize: 9.5, fontWeight: 700,
+  letterSpacing: '0.04em', textTransform: 'uppercase',
+  background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+  color: 'var(--text-tertiary)', whiteSpace: 'nowrap',
+}
 
 // shared inline styles
 const input: React.CSSProperties = {
@@ -686,7 +711,18 @@ export default function TeamsSettings() {
                   {teamMachines.map(m => (
                     <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>
+                          {m.machineName}
+                          {manageTeamId && inheritsTeam(m, manageTeamId) && (
+                            // The machine came in with its owner account. Saying so is what makes
+                            // "why is this here and not in the add list?" answerable at a glance.
+                            <span style={inheritedTag} title={pt
+                              ? 'Entrou no time junto com a conta dona. Remover cria uma exceção só para esta máquina.'
+                              : 'Joined with its owner account. Removing creates an exception for this machine only.'}>
+                              {pt ? 'via conta' : 'via account'}
+                            </span>
+                          )}
+                        </span>
                         <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
                           {m.accountName ? `${m.accountName} — ${m.accountEmail}` : m.user} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
                         </span>
@@ -753,7 +789,12 @@ export default function TeamsSettings() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {teamMachines.map(m => (
                 <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7 }}>
-                  <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{m.machineName}</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {m.machineName}
+                    {manageTeamId && inheritsTeam(m, manageTeamId) && (
+                      <span style={inheritedTag}>{pt ? 'via conta' : 'via account'}</span>
+                    )}
+                  </span>
                   <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
                     {m.accountName ? `${m.accountName} — ${m.accountEmail}` : m.user} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
                   </span>
