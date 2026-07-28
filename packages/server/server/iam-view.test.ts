@@ -1,6 +1,6 @@
 // packages/server/server/iam-view.test.ts
 import { test, expect } from 'bun:test'
-import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships } from './iam-view'
+import { canSeeMemberNames, publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships } from './iam-view'
 import type { AccountDoc, Principal } from './iam-types'
 
 const owner: Principal = { accountId: 'o1', role: 'owner', memberships: [] }
@@ -85,4 +85,14 @@ test('canManageMachineTeam: owner any team; manager own team only; user never', 
   expect(canManageMachineTeam(mgrA, 'B')).toBe(false)
   expect(canManageMachineTeam(userA, 'A')).toBe(false)
   expect(canManageMachineTeam(mgrA, undefined)).toBe(false)
+})
+
+test('canSeeMemberNames: owner and any-team manager yes; a plain user never', () => {
+  // Mirrors the frontend's canFilterMembers — the gate on anything revealing who else is here.
+  const userA: Principal = { accountId: 'uu', role: 'member', memberships: [{ teamId: 'A', role: 'user' }] }
+  const loose: Principal = { accountId: 'll', role: 'member', memberships: [] }
+  expect(canSeeMemberNames(owner)).toBe(true)
+  expect(canSeeMemberNames(mgrA)).toBe(true)
+  expect(canSeeMemberNames(userA)).toBe(false)
+  expect(canSeeMemberNames(loose)).toBe(false)
 })

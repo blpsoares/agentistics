@@ -94,7 +94,21 @@ export function resolveNotification(n: AppNotification, lang: 'pt' | 'en'): Loca
   return { title, message }
 }
 
-const MAX_ITEMS = 50
+/**
+ * PERSISTENCE — the server is the source of truth.
+ *
+ * The history lives on the machine (or on the central) at ~/.agentistics/notifications*.json and
+ * is reached over /api/notifications. It is deliberately NOT localStorage: the bell is the user's
+ * inbox, and opening the dashboard from a phone has to show the same notifications the desktop
+ * shows — a per-browser store would always start empty there. Whichever instance serves the page
+ * owns its own history, so a central's bell and a machine's bell never mix.
+ *
+ * The in-memory list below is a CACHE of the server's list, replaced by every response. Ids are
+ * minted by the server, which is what lets a phone dismiss the same row the desktop is showing.
+ * Only `code` + `meta` are ever stored — never the rendered text — so `resolveNotification` keeps
+ * localizing at render time and the language toggle still re-translates old notifications.
+ */
+const API = '/api/notifications'
 
 // External store — a single immutable array reference that changes on every mutation,
 // so useSyncExternalStore re-renders subscribers without extra bookkeeping.
@@ -105,16 +119,46 @@ function emit() {
   for (const l of listeners) l()
 }
 
-let seq = 0
-function nextId(): string {
-  seq += 1
-  return `n${Date.now().toString(36)}-${seq}`
+/** Replace the cache with the server's list. Every endpoint answers with the full list, so one
+ *  code path covers add / read / dismiss / clear and two devices converge on the same state. */
+function apply(next: unknown): void {
+  if (!Array.isArray(next)) return
+  const valid = next.filter((x): x is AppNotification =>
+    !!x && typeof x === 'object'
+    && typeof (x as AppNotification).id === 'string'
+    && typeof (x as AppNotification).ts === 'number'
+    && typeof (x as AppNotification).type === 'string')
+  items = valid.map(x => ({ ...x, read: x.read === true }))
+  emit()
 }
 
-/** Add a notification (newest first). De-dupes an identical still-unread notification
- *  (same code+meta, or same raw title+message) so a repeating error doesn't stack —
- *  it just refreshes the timestamp. Pass a `code` for render-time i18n, or raw
- *  title/message for already-localized copy. */
+async function call(init?: RequestInit, query = ''): Promise<void> {
+  try {
+    const r = await fetch(`${API}${query}`, init)
+    if (!r.ok) return
+    apply(await r.json())
+  } catch {
+    // Server unreachable (offline, restarting). The cache keeps rendering what it has; the next
+    // refresh reconciles. Never throws — a failed bell must not break the page.
+  }
+}
+
+/** Load the history from the server. Called on mount and whenever an SSE notification arrives. */
+export async function refreshNotifications(): Promise<void> {
+  await call()
+}
+
+/**
+ * Add a notification. Client-originated only (an update detected in the browser, a failed central
+ * connection): notifications the SERVER raises are already persisted by broadcastNotification, and
+ * the client just refreshes when the SSE event lands — otherwise every open tab would re-report
+ * the same event.
+ *
+ * De-dupe happens server-side against the whole history, read items included, so the same event
+ * re-reported on every page load updates one row instead of stacking copies.
+ *
+ * Pass a `code` for render-time i18n, or raw title/message for already-localized copy.
+ */
 export function pushNotification(n: {
   type: NotificationType
   code?: string
@@ -122,41 +166,43 @@ export function pushNotification(n: {
   title?: string
   message?: string
 }): void {
-  const now = Date.now()
-  const key = (x: { code?: string; meta?: Record<string, unknown>; title?: string; message?: string }) =>
-    x.code
-      ? `c:${x.code}:${JSON.stringify(x.meta ?? {})}`
-      : `t:${x.title ?? ''}:${x.message ?? ''}`
-  const nKey = key(n)
-  const dupe = items.find(x => !x.read && key(x) === nKey)
-  if (dupe) {
-    items = [{ ...dupe, ts: now }, ...items.filter(x => x.id !== dupe.id)]
-  } else {
-    items = [{ id: nextId(), ts: now, read: false, ...n }, ...items].slice(0, MAX_ITEMS)
-  }
-  emit()
+  void call({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(n),
+  })
 }
 
 export function markAllRead(): void {
   if (!items.some(x => !x.read)) return
+  // Optimistic: the badge clears the instant the panel opens, then the server response confirms.
   items = items.map(x => (x.read ? x : { ...x, read: true }))
   emit()
+  void call({ method: 'PATCH' })
 }
 
+/** Remove ONE notification. */
 export function dismissNotification(id: string): void {
   const next = items.filter(x => x.id !== id)
   if (next.length !== items.length) { items = next; emit() }
+  void call({ method: 'DELETE' }, `?id=${encodeURIComponent(id)}`)
 }
 
+/** Remove every notification. */
 export function clearNotifications(): void {
-  if (items.length === 0) return
-  items = []
-  emit()
+  if (items.length > 0) { items = []; emit() }
+  void call({ method: 'DELETE' })
 }
 
 function subscribe(cb: () => void): () => void {
   listeners.add(cb)
   return () => listeners.delete(cb)
+}
+
+/** Non-reactive snapshot of the cached list (newest first) — for tests and for callers outside
+ *  React. Components must use `useNotifications()` so they re-render on change. */
+export function readNotifications(): AppNotification[] {
+  return items
 }
 
 /** Reactive list of notifications (newest first). */
