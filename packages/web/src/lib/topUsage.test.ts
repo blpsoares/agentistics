@@ -91,3 +91,86 @@ test('shareOf is zero rather than NaN when there is nothing to share', () => {
   const empty = rankTop([], 'harness', 'cost')
   expect(shareOf({ key: 'x', cost: 0, tokens: 0, sessions: 0 }, empty, 'cost')).toBe(0)
 })
+
+// --- cache-backed person / machine podiums ---------------------------------------------------
+
+import { rankTopFromCaches, cacheTotalsUsable } from './topUsage'
+import type { Filters, StatsCache } from '@agentistics/core'
+
+const cache = (over: Partial<StatsCache>): StatsCache => ({
+  version: 1, lastComputedDate: '2026-07-19',
+  dailyActivity: [], dailyModelTokens: [], modelUsage: {},
+  totalSessions: 0, totalMessages: 0, hourCounts: {},
+  ...over,
+} as StatsCache)
+
+// Real proportions from a live machine: cache reads are ~96% of the billed volume, so a podium
+// that ignores them ranks by the sliver that costs almost nothing.
+const heavy = cache({
+  modelUsage: {
+    'claude-opus-4-8': {
+      inputTokens: 5_552_632, outputTokens: 21_940_184,
+      cacheReadInputTokens: 5_184_768_713, cacheCreationInputTokens: 166_252_232,
+      webSearchRequests: 0, costUSD: 0,
+    },
+  },
+  dailyActivity: [{ date: '2026-07-01', sessionCount: 449, messageCount: 89_816, toolCallCount: 0 }],
+})
+const light = cache({
+  modelUsage: {
+    'claude-sonnet-4-6': {
+      inputTokens: 100_000, outputTokens: 200_000,
+      cacheReadInputTokens: 10_000_000, cacheCreationInputTokens: 500_000,
+      webSearchRequests: 0, costUSD: 0,
+    },
+  },
+  dailyActivity: [{ date: '2026-07-01', sessionCount: 12, messageCount: 400, toolCallCount: 0 }],
+})
+
+const baseFilters: Filters = { dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [] }
+
+test('cacheTotalsUsable: only a slice the caches cannot represent disqualifies them', () => {
+  expect(cacheTotalsUsable(baseFilters)).toBe(true)
+  // Selecting WHICH caches to read is fine — the caches are still read whole.
+  expect(cacheTotalsUsable({ ...baseFilters, users: ['Bryan'], machines: ['m1'], teams: ['t'] })).toBe(true)
+  expect(cacheTotalsUsable({ ...baseFilters, presence: 'online' })).toBe(true)
+  // A slice INSIDE a cache is not representable — statsCache has no such granularity.
+  expect(cacheTotalsUsable({ ...baseFilters, dateRange: '30d' })).toBe(false)
+  expect(cacheTotalsUsable({ ...baseFilters, customStart: '2026-01-01' })).toBe(false)
+  expect(cacheTotalsUsable({ ...baseFilters, projects: ['/p'] })).toBe(false)
+  expect(cacheTotalsUsable({ ...baseFilters, repos: ['github.com/o/r'] })).toBe(false)
+  expect(cacheTotalsUsable({ ...baseFilters, tags: ['t1'] })).toBe(false)
+  expect(cacheTotalsUsable({ ...baseFilters, models: ['claude-opus-4-8'] })).toBe(false)
+  // statsCache is Claude-only, so a harness selection cannot be answered from it either.
+  expect(cacheTotalsUsable({ ...baseFilters, harnesses: ['codex'] })).toBe(false)
+})
+
+test('rankTopFromCaches ranks on the full history, cache tokens included', () => {
+  const caches = { Bryan: heavy, Vini: light }
+  const scope = new Set(['Bryan', 'Vini'])
+
+  const byCost = rankTopFromCaches(caches, scope, 'cost')
+  expect(byCost.entries.map(e => e.key)).toEqual(['Bryan', 'Vini'])
+  expect(byCost.distinct).toBe(2)
+  // Opus 4.8 at 5/25/0.5/6.25 per 1M — dominated by the 5.18B cache reads ($2,592) and the
+  // 166M cache writes ($1,039), NOT by input+output ($577).
+  expect(byCost.entries[0]!.cost).toBeCloseTo(4208, -1)
+  expect(byCost.entries[0]!.tokens).toBe(5_552_632 + 21_940_184 + 5_184_768_713 + 166_252_232)
+  // The share denominator is the whole, so the two must add up to the reported total.
+  expect(byCost.total).toBeCloseTo(byCost.entries[0]!.cost + byCost.entries[1]!.cost, 6)
+
+  // Sessions come from the deep dailyActivity, which is the point: the surviving session
+  // documents are a fraction of it.
+  expect(rankTopFromCaches(caches, scope, 'sessions').entries[0]!.sessions).toBe(449)
+})
+
+test('rankTopFromCaches honours the filtered scope and never invents a key', () => {
+  const caches = { Bryan: heavy, Vini: light }
+  const only = rankTopFromCaches(caches, new Set(['Vini']), 'cost')
+  expect(only.entries.map(e => e.key)).toEqual(['Vini'])
+  expect(only.distinct).toBe(1)
+  // A member filtered out contributes nothing to the total, so shares stay out of 100%.
+  expect(only.total).toBeCloseTo(only.entries[0]!.cost, 6)
+  // A key present in scope but with no cache is simply absent rather than shown as zero.
+  expect(rankTopFromCaches(caches, new Set(['Ghost']), 'cost').entries).toEqual([])
+})

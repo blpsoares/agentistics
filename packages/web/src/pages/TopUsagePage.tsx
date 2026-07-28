@@ -6,7 +6,7 @@ import type { AppContext } from '../lib/app-context'
 import { Section } from '../components/Section'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../lib/harness'
 import { useIsMobile } from '../hooks/useIsMobile'
-import { rankTop, shareOf, type TopDimension, type TopMetric, type TopEntry } from '../lib/topUsage'
+import { rankTop, rankTopFromCaches, cacheTotalsUsable, shareOf, type TopDimension, type TopMetric, type TopEntry } from '../lib/topUsage'
 import type { HarnessId } from '@agentistics/core'
 
 const METRICS: Array<{ id: TopMetric; en: string; pt: string }> = [
@@ -20,12 +20,30 @@ const METRICS: Array<{ id: TopMetric; en: string; pt: string }> = [
 const MEDALS = ['#eab308', '#94a3b8', '#b45309']
 
 export default function TopUsagePage() {
-  const { derived, lang, currency, brlRate, isCentral, machines } = useOutletContext<AppContext>()
+  const { data, derived, filters, lang, currency, brlRate, isCentral, machines } = useOutletContext<AppContext>()
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
   const [metric, setMetric] = useState<TopMetric>('cost')
 
   const sessions = derived.filteredSessions
+
+  // Person and machine are ranked from the per-member/-machine statsCaches, not from the sessions:
+  // the caches hold the full history, the session documents only what has not been pruned. Summing
+  // sessions made this page disagree with the dashboard for the same selection (R$58k here against
+  // R$93k on Home) — and the dashboard was the one telling the truth. Every other dimension has no
+  // cache to read and stays on the per-session sum.
+  const cacheRank = useMemo(() => {
+    if (!cacheTotalsUsable(filters)) return null
+    const inScopeUsers = new Set(sessions.map(s => s.user).filter((u): u is string => !!u))
+    const inScopeMachines = new Set(sessions.map(s => s.memberId).filter((m): m is string => !!m))
+    return (dim: TopDimension) => {
+      if (dim === 'user' && data?.userStatsCaches)
+        return rankTopFromCaches(data.userStatsCaches, inScopeUsers, metric)
+      if (dim === 'machine' && data?.machineStatsCaches)
+        return rankTopFromCaches(data.machineStatsCaches, inScopeMachines, metric)
+      return null
+    }
+  }, [data?.userStatsCaches, data?.machineStatsCaches, filters, sessions, metric])
 
   /** Machine and person only exist where there is more than one of each. On a solo machine they
    *  would be a podium of one, which says nothing. */
@@ -104,7 +122,7 @@ export default function TopUsagePage() {
 
       <div className="ag-grid cols-2">
         {dimensions.map(dim => {
-          const result = rankTop(sessions, dim.id, metric)
+          const result = cacheRank?.(dim.id) ?? rankTop(sessions, dim.id, metric)
           const Icon = dim.icon
           const totalLabel =
             metric === 'cost' ? fmtCost(result.total, currency, brlRate)
