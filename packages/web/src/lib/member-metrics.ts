@@ -32,6 +32,14 @@ export interface TopProject extends TopEntry {
   kind: 'repo' | 'folder'
 }
 
+/** One machine's slice of a member row. `key` is the `memberId` (the machine's stable id). */
+export interface MachineUsage {
+  key: string
+  sessions: number
+  costUSD: number
+  totalTokens: number
+}
+
 export interface MemberMetrics {
   /** Stable row identity: the `memberId` (machine grouping) or the `user` (user grouping). */
   key: string
@@ -41,6 +49,17 @@ export interface MemberMetrics {
   memberId: string | null
   /** Distinct machines contributing to this row (always 1 when grouping by machine). */
   machineCount: number
+  /** Per-machine breakdown of this row, ranked by cost desc (the page's primary metric), then
+   *  sessions desc, then key asc. One entry when grouping by machine; the member's whole fleet
+   *  when grouping by user — which is the only place the reader can see WHERE the work happened.
+   *  Sums the same visible sessions as every other field on the row, so the parts always add up
+   *  to the whole; it is NOT the deep statsCache history. */
+  machines: MachineUsage[]
+  /** True when this row's headline totals were replaced by the statsCache history rather than
+   *  summed from the visible sessions. The per-machine `machines` breakdown is ALWAYS the visible
+   *  sessions, so when this is set the parts legitimately add up to less than the whole and the UI
+   *  must say so — silently showing chips that do not close is how a reader stops trusting both. */
+  totalsFromCache?: boolean
   sessions: number
   costUSD: number
   inputTokens: number
@@ -105,7 +124,8 @@ function ms(value: string | undefined): number | null {
 interface Acc {
   key: string
   users: Map<string, number>
-  memberIds: Set<string>
+  /** memberId → that machine's slice of this row. Also the machine count (its size). */
+  memberIds: Map<string, { sessions: number; costUSD: number; totalTokens: number }>
   sessions: number
   costUSD: number
   inputTokens: number
@@ -146,7 +166,7 @@ export function aggregateMemberMetrics(
       a = {
         key,
         users: new Map(),
-        memberIds: new Set(),
+        memberIds: new Map(),
         sessions: 0,
         costUSD: 0,
         inputTokens: 0,
@@ -165,15 +185,26 @@ export function aggregateMemberMetrics(
       acc.set(key, a)
     }
 
+    const cost = sessionCostUSD(s)
     a.sessions++
-    a.costUSD += sessionCostUSD(s)
+    a.costUSD += cost
     a.inputTokens += s.input_tokens ?? 0
     a.outputTokens += s.output_tokens ?? 0
     a.cacheReadTokens += s.cache_read_input_tokens ?? 0
     a.cacheWriteTokens += s.cache_creation_input_tokens ?? 0
 
     if (user) bump(a.users, user)
-    if (memberId) a.memberIds.add(memberId)
+    if (memberId) {
+      // The machine's slice is accumulated from the SAME session totals used above, so the
+      // per-machine numbers always sum back to the row's own numbers.
+      const slice = a.memberIds.get(memberId)
+        ?? { sessions: 0, costUSD: 0, totalTokens: 0 }
+      slice.sessions++
+      slice.costUSD += cost
+      slice.totalTokens += (s.input_tokens ?? 0) + (s.output_tokens ?? 0)
+        + (s.cache_read_input_tokens ?? 0) + (s.cache_creation_input_tokens ?? 0)
+      a.memberIds.set(memberId, slice)
+    }
 
     const startAt = ms(s.start_time)
     if (startAt !== null && (a.firstAt === null || startAt < a.firstAt)) {
@@ -220,8 +251,11 @@ export function aggregateMemberMetrics(
     rows.push({
       key: a.key,
       user: topUser?.key ?? '',
-      memberId: a.memberIds.size === 1 ? [...a.memberIds][0]! : null,
+      memberId: a.memberIds.size === 1 ? [...a.memberIds.keys()][0]! : null,
       machineCount: a.memberIds.size,
+      machines: [...a.memberIds.entries()]
+        .map(([key, v]) => ({ key, sessions: v.sessions, costUSD: v.costUSD, totalTokens: v.totalTokens }))
+        .sort((x, y) => (y.costUSD - x.costUSD) || (y.sessions - x.sessions) || x.key.localeCompare(y.key)),
       sessions: a.sessions,
       costUSD: a.costUSD,
       inputTokens: a.inputTokens,
@@ -332,6 +366,9 @@ export function withStatsCacheTotals(
       cacheReadTokens: cacheRead,
       cacheWriteTokens: cacheWrite,
       totalTokens: input + output + cacheRead + cacheWrite,
+      // Flags that the headline no longer equals the sum of `machines` (which stays session-based),
+      // so the card can disclose it instead of showing parts that quietly fail to close.
+      totalsFromCache: true,
     }
   }).sort((a, b) => (b.sessions - a.sessions) || (b.costUSD - a.costUSD) || a.key.localeCompare(b.key))
 }
