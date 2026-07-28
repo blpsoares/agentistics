@@ -188,3 +188,139 @@ test('denialSignature changes when an entry is added or removed, and [] is stabl
   expect(denialSignature([])).not.toBe(denialSignature(['github.com/o/r']))
   expect(denialSignature(['github.com/o/r'])).not.toBe(denialSignature(['github.com/o/r', 'github.com/o/s']))
 })
+
+// --- accumulateClaudeSessions / buildSharedStatsCache ---
+
+import { emptyStatsCache } from '@agentistics/core'
+import type { StatsCache } from '@agentistics/core'
+import { accumulateClaudeSessions, buildSharedStatsCache } from './share-rules'
+
+/** 2026-06-20T09:30 LOCAL — hour bucketing is local-clock, like every adapter. */
+function localAt(day: string, hour: number): string {
+  return new Date(`${day}T${String(hour).padStart(2, '0')}:30:00`).toISOString()
+}
+
+test('buildSharedStatsCache on an empty set equals emptyStatsCache (bar version)', () => {
+  expect(buildSharedStatsCache([])).toEqual(emptyStatsCache())
+  expect(buildSharedStatsCache([], { version: 4 }).version).toBe(4)
+})
+
+test('non-Claude sessions contribute to NOTHING', () => {
+  const out = buildSharedStatsCache([
+    s({ session_id: 'x', harness: 'codex', start_time: localAt('2026-06-20', 9), user_message_count: 5, input_tokens: 100, model: 'gpt-5.4' }),
+  ])
+  expect(out).toEqual(emptyStatsCache())
+})
+
+test('lastComputedDate stays empty even for a multi-month input', () => {
+  const out = buildSharedStatsCache([
+    s({ session_id: 'a', start_time: localAt('2026-02-01', 9) }),
+    s({ session_id: 'b', start_time: localAt('2026-06-20', 9) }),
+  ])
+  expect(out.lastComputedDate).toBe('')
+})
+
+test('totals match the sum of dailyActivity — the invariant the real file holds', () => {
+  const out = buildSharedStatsCache([
+    s({ session_id: 'a', start_time: localAt('2026-06-20', 9), user_message_count: 3, assistant_message_count: 4 }),
+    s({ session_id: 'b', start_time: localAt('2026-06-21', 14), user_message_count: 1, assistant_message_count: 1 }),
+  ])
+  expect(out.totalSessions).toBe(out.dailyActivity.reduce((a, d) => a + d.sessionCount, 0))
+  expect(out.totalMessages).toBe(out.dailyActivity.reduce((a, d) => a + d.messageCount, 0))
+  expect(out.totalSessions).toBe(2)
+  expect(out.totalMessages).toBe(9)
+})
+
+test('hourCounts buckets SESSION START hours on the local clock, and sums to totalSessions', () => {
+  const out = buildSharedStatsCache([
+    s({ session_id: 'a', start_time: localAt('2026-06-20', 9), message_hours: [1, 1, 1, 1] }),
+    s({ session_id: 'b', start_time: localAt('2026-06-21', 9), message_hours: [2, 2] }),
+    s({ session_id: 'c', start_time: localAt('2026-06-21', 15), message_hours: [3] }),
+  ])
+  expect(out.hourCounts['9']).toBe(2)
+  expect(out.hourCounts['15']).toBe(1)
+  expect(Object.values(out.hourCounts).reduce((a, b) => a + b, 0)).toBe(out.totalSessions)
+})
+
+test('dailyModelTokens sums the four token kinds per claude model per day, and skips foreign ids', () => {
+  const out = buildSharedStatsCache([
+    s({
+      session_id: 'a', start_time: localAt('2026-06-20', 9), model: 'claude-opus-5',
+      input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30, cache_creation_input_tokens: 40,
+    }),
+    s({ session_id: 'b', start_time: localAt('2026-06-20', 9), model: '<synthetic>', input_tokens: 999 }),
+  ])
+  const day = out.dailyModelTokens.find(d => d.date === '2026-06-20')!
+  expect(day.tokensByModel['claude-opus-5']).toBe(100)
+  expect(day.tokensByModel['<synthetic>']).toBeUndefined()
+  // The <synthetic> session still counts as activity.
+  expect(out.totalSessions).toBe(2)
+})
+
+test('modelUsage keeps costUSD and webSearchRequests at 0, like the real file', () => {
+  const out = buildSharedStatsCache([
+    s({ session_id: 'a', start_time: localAt('2026-06-20', 9), model: 'claude-opus-5', input_tokens: 10, uses_web_search: true }),
+  ])
+  expect(out.modelUsage['claude-opus-5']!.inputTokens).toBe(10)
+  expect(out.modelUsage['claude-opus-5']!.costUSD).toBe(0)
+  expect(out.modelUsage['claude-opus-5']!.webSearchRequests).toBe(0)
+})
+
+test('firstSessionDate is the earliest FULL ISO start_time', () => {
+  const early = localAt('2026-02-06', 8)
+  const out = buildSharedStatsCache([
+    s({ session_id: 'a', start_time: localAt('2026-06-20', 9) }),
+    s({ session_id: 'b', start_time: early }),
+  ])
+  expect(out.firstSessionDate).toBe(early)
+  expect(out.firstSessionDate.length).toBeGreaterThan(10)
+  expect(buildSharedStatsCache([]).firstSessionDate).toBe('')
+})
+
+test('longestSession is the zero value even with a long session present', () => {
+  const out = buildSharedStatsCache([s({ session_id: 'a', start_time: localAt('2026-06-20', 9), duration_minutes: 400 })])
+  expect(out.longestSession).toEqual({ sessionId: '', duration: 0, messageCount: 0, timestamp: '' })
+})
+
+test('a session with no start_time is skipped without throwing', () => {
+  expect(() => buildSharedStatsCache([s({ session_id: 'a', start_time: '' })])).not.toThrow()
+  expect(buildSharedStatsCache([s({ session_id: 'a', start_time: '' })]).totalSessions).toBe(0)
+})
+
+test('the output carries NO key outside the StatsCache shape', () => {
+  const out = buildSharedStatsCache([s({ session_id: 'a', start_time: localAt('2026-06-20', 9) })])
+  expect(Object.keys(out).sort()).toEqual(Object.keys(emptyStatsCache()).sort())
+})
+
+test('end to end: a denied repo contributes to no field at all', () => {
+  const all = [
+    s({ session_id: 'keep', start_time: localAt('2026-06-20', 9), model: 'claude-opus-5', input_tokens: 10, git_remote: 'github.com/o/public', user_message_count: 1 }),
+    s({ session_id: 'drop', start_time: localAt('2026-06-20', 11), model: 'claude-opus-5', input_tokens: 500, git_remote: 'github.com/o/secret', user_message_count: 9 }),
+  ]
+  const out = buildSharedStatsCache(filterShared(all, normalizeDenied(['github.com/o/secret'])))
+  expect(out.totalSessions).toBe(1)
+  expect(out.totalMessages).toBe(1)
+  expect(out.modelUsage['claude-opus-5']!.inputTokens).toBe(10)
+  expect(out.dailyModelTokens[0]!.tokensByModel['claude-opus-5']).toBe(10)
+  expect(out.hourCounts['11']).toBeUndefined()
+  expect(JSON.stringify(out)).not.toContain('secret')
+})
+
+test('accumulateClaudeSessions honours `after` exclusively (<=), and includes all without it', () => {
+  const sessions = [
+    s({ session_id: 'a', start_time: localAt('2026-06-20', 9) }),
+    s({ session_id: 'b', start_time: localAt('2026-06-22', 9) }),
+    s({ session_id: 'c', start_time: localAt('2026-06-23', 9) }),
+  ]
+  expect(accumulateClaudeSessions(sessions, { after: '2026-06-22' }).totalSessions).toBe(1)
+  expect(accumulateClaudeSessions(sessions).totalSessions).toBe(3)
+})
+
+test('accumulateClaudeSessions without claudeOnly counts every harness — the data.ts contract', () => {
+  const mixed = [
+    s({ session_id: 'a', start_time: localAt('2026-06-20', 9) }),
+    s({ session_id: 'b', harness: 'codex', start_time: localAt('2026-06-20', 9) }),
+  ]
+  expect(accumulateClaudeSessions(mixed).totalSessions).toBe(2)
+  expect(accumulateClaudeSessions(mixed, { claudeOnly: true }).totalSessions).toBe(1)
+})

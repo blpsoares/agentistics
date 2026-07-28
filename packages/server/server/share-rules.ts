@@ -10,8 +10,8 @@
  */
 
 import { createHash } from 'node:crypto'
-import { NO_REPO_KEY, normalizeGitRemote } from '@agentistics/core'
-import type { SessionMeta, WorkflowRun } from '@agentistics/core'
+import { NO_REPO_KEY, normalizeGitRemote, emptyStatsCache } from '@agentistics/core'
+import type { SessionMeta, WorkflowRun, StatsCache } from '@agentistics/core'
 
 export type RepoKey = string
 
@@ -196,4 +196,131 @@ export function withUnresolvedDenied(denied: readonly string[]): string[] {
 export function denialSignature(denied: readonly string[] | null | undefined): string {
   const keys = [...normalizeDenied(denied)].sort()
   return createHash('sha256').update(keys.join('\n')).digest('hex')
+}
+
+export interface ClaudeAccumulator {
+  dailyActivity: Map<string, { messageCount: number; sessionCount: number; toolCallCount: number }>
+  dailyModel: Map<string, Map<string, number>>
+  modelTotals: Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>
+  /** Session START hour (0-23) → count. NOT message hours — see buildSharedStatsCache. */
+  hourCounts: Map<number, number>
+  totalSessions: number
+  totalMessages: number
+  /** Earliest ISO start_time seen, '' when none. */
+  firstStart: string
+}
+
+/**
+ * The accumulation core, extracted from data.ts's supplementStatsCache so the supplement path
+ * and the connection-scoped build cannot drift apart.
+ *
+ * @param opts.after      skip days `<= after` (the caller's lastComputedDate watermark)
+ * @param opts.claudeOnly drop non-Claude sessions entirely. FALSE for data.ts, which is called
+ *                        before the harness merge and therefore only ever sees Claude sessions;
+ *                        TRUE for buildSharedStatsCache, which is handed the whole store.
+ */
+export function accumulateClaudeSessions(
+  sessions: readonly SessionMeta[],
+  opts?: { after?: string; claudeOnly?: boolean },
+): ClaudeAccumulator {
+  const after = opts?.after ?? ''
+  const claudeOnly = opts?.claudeOnly ?? false
+
+  const acc: ClaudeAccumulator = {
+    dailyActivity: new Map(), dailyModel: new Map(), modelTotals: new Map(),
+    hourCounts: new Map(), totalSessions: 0, totalMessages: 0, firstStart: '',
+  }
+
+  for (const s of sessions) {
+    if (!s.start_time) continue
+    if (claudeOnly && (s.harness ?? 'claude') !== 'claude') continue
+    const day = s.start_time.slice(0, 10)
+    if (after && day <= after) continue
+
+    const messages = (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
+    const da = acc.dailyActivity.get(day) ?? { messageCount: 0, sessionCount: 0, toolCallCount: 0 }
+    da.messageCount += messages
+    da.sessionCount += 1
+    da.toolCallCount += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
+    acc.dailyActivity.set(day, da)
+
+    acc.totalSessions += 1
+    acc.totalMessages += messages
+    if (!acc.firstStart || s.start_time < acc.firstStart) acc.firstStart = s.start_time
+
+    // Local clock, like every adapter. Reading a UTC timestamp as local put the peak-usage
+    // chart hours off for four harnesses once already.
+    const hour = new Date(s.start_time).getHours()
+    if (Number.isFinite(hour)) acc.hourCounts.set(hour, (acc.hourCounts.get(hour) ?? 0) + 1)
+
+    const model = s.model
+    if (!model || !model.startsWith('claude-')) continue
+    const inp = s.input_tokens ?? 0
+    const out = s.output_tokens ?? 0
+    const cr = s.cache_read_input_tokens ?? 0
+    const cw = s.cache_creation_input_tokens ?? 0
+    const total = inp + out + cr + cw
+    if (total === 0) continue
+
+    const byModel = acc.dailyModel.get(day) ?? new Map<string, number>()
+    byModel.set(model, (byModel.get(model) ?? 0) + total)
+    acc.dailyModel.set(day, byModel)
+
+    const mt = acc.modelTotals.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    mt.input += inp; mt.output += out; mt.cacheRead += cr; mt.cacheWrite += cw
+    acc.modelTotals.set(model, mt)
+  }
+
+  return acc
+}
+
+/**
+ * A Claude StatsCache derived ONLY from the sessions passed in. Supplies the from-boundary
+ * half of the attribution split (Task 6) and stands alone in tests.
+ *
+ * Field decisions verified against a real ~/.claude/stats-cache.json, not assumed:
+ * - `lastComputedDate: ''` — the field asserts "Claude has already rolled up every day to
+ *   here". Claiming a watermark this cache cannot back makes any consumer running the
+ *   `day <= lastComputed → skip` guard drop legitimate gap-fill.
+ * - `hourCounts` counts SESSIONS BY START HOUR (Σ hourCounts === totalSessions on the real
+ *   file), not messages.
+ * - `modelUsage[].costUSD` and `.webSearchRequests` stay 0 — the real file stores 0 too, and
+ *   every consumer prices via calcCost(). A real number here would make this cache behave
+ *   DIFFERENTLY from a real one.
+ * - `longestSession` is zeroed: the real field is wall-clock ms including idle, while
+ *   `duration_minutes` is active time. Synthesizing it puts incompatible units into
+ *   mergeStatsCaches's max. Nothing in web/ reads it.
+ */
+export function buildSharedStatsCache(
+  sessions: readonly SessionMeta[],
+  opts?: { version?: number },
+): StatsCache {
+  const acc = accumulateClaudeSessions(sessions, { claudeOnly: true })
+  const out = emptyStatsCache()
+  if (opts?.version !== undefined) out.version = opts.version
+
+  out.dailyActivity = [...acc.dailyActivity.entries()]
+    .map(([date, v]) => ({ date, ...v }))
+    .sort((a, b) => a.date.localeCompare(b.date))
+
+  out.dailyModelTokens = [...acc.dailyModel.entries()]
+    .map(([date, byModel]) => ({ date, tokensByModel: Object.fromEntries(byModel) }))
+    .sort((a, b) => a.date.localeCompare(b.date))
+
+  for (const [model, t] of acc.modelTotals) {
+    out.modelUsage[model] = {
+      inputTokens: t.input,
+      outputTokens: t.output,
+      cacheReadInputTokens: t.cacheRead,
+      cacheCreationInputTokens: t.cacheWrite,
+      webSearchRequests: 0,
+      costUSD: 0,
+    }
+  }
+
+  out.totalSessions = acc.totalSessions
+  out.totalMessages = acc.totalMessages
+  out.firstSessionDate = acc.firstStart
+  out.hourCounts = Object.fromEntries([...acc.hourCounts.entries()].map(([h, c]) => [String(h), c]))
+  return out
 }
