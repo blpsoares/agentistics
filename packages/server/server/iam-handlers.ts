@@ -16,6 +16,7 @@ import { backfillRepoTeamIds } from './team-repos'
 import {
   makePrincipalSessionCookieHeader,
   getPrincipal,
+  getPrincipalSession,
   signMfaChallenge,
   verifyMfaChallenge,
   MFA_CHALLENGE_TTL_MS,
@@ -30,6 +31,7 @@ import { limiter, RULES, tooManyRequests } from './rate-limit'
 import { validatePasswordPolicy } from './password-policy'
 import { writeAudit } from './audit'
 import { readJsonLimited, LIMITS } from './limits'
+import { signStepUp, STEPUP_TTL_MS } from './stepup'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
 
@@ -207,6 +209,56 @@ export async function handleIamLoginMfa(req: Request): Promise<Response> {
     }),
     { status: 200, headers: { ...JSON_CT, 'Set-Cookie': cookie } },
   )
+}
+
+/**
+ * POST /api/iam/stepup  Body: { password?, code? }
+ * Re-authenticates the CURRENT session and returns a short-lived grant for destructive
+ * operations (see stepup.ts). Accepts the account password, or a TOTP code when enrolled —
+ * either proves presence, and an account with a second factor should be able to use it.
+ */
+export async function handleStepUp(req: Request): Promise<Response> {
+  const session = await getPrincipalSession(req)
+  if (!session) return json({ ok: false, error: 'unauthorized' }, 401)
+  const account = await getAccount(session.principal.accountId)
+  if (!account) return json({ ok: false, error: 'unauthorized' }, 401)
+
+  const parsedBody = await readJsonLimited<unknown>(req, LIMITS.bodyBytes)
+  if (!parsedBody.ok) {
+    return json({ ok: false, error: parsedBody.error }, parsedBody.error === 'too_large' ? 413 : 400)
+  }
+  const b = parsedBody.value as Record<string, unknown>
+  const password = typeof b.password === 'string' ? b.password : ''
+  const code = typeof b.code === 'string' ? b.code : ''
+
+  // Same rate-limit treatment as login: this endpoint verifies a credential, so it is a
+  // guessing oracle if left unbounded — and the argon2 verify below is expensive.
+  const key = `stepup:${account._id}`
+  const verdict = limiter.check(key, RULES.login)
+  if (!verdict.allowed) return tooManyRequests(verdict.retryAfterSec)
+
+  let ok = false
+  if (code) {
+    const mfa = await getMfa(account._id)
+    ok = !!mfa && verifyTotp(mfa.secret, code, Math.floor(Date.now() / 1000))
+  } else if (password) {
+    ok = await verifyPassword(password, account.passwordHash)
+  }
+  if (!ok) {
+    limiter.fail(key, RULES.login)
+    void writeAudit({ action: 'stepup.failure', ip: 'unknown', actorId: account._id })
+    return json({ ok: false, error: 'invalid credentials' }, 401)
+  }
+  limiter.reset(key)
+  void writeAudit({ action: 'stepup.granted', ip: 'unknown', actorId: account._id })
+
+  const token = signStepUp(
+    account._id,
+    session.sessionVersion,
+    TEAM_SESSION_SECRET,
+    Date.now() + STEPUP_TTL_MS,
+  )
+  return json({ ok: true, token, expiresInSec: STEPUP_TTL_MS / 1000 })
 }
 
 /**

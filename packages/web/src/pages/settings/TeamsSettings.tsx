@@ -5,6 +5,7 @@ import type { AppContext } from '../../lib/app-context'
 import { SectionHeader, Section, Select, Checkbox, ConfirmModal, RecordCard, RecordCardAction } from './primitives'
 import { Drawer } from './Drawer'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { stepUpFetch } from '../../lib/stepup'
 
 interface Team { _id: string; name: string }
 interface Membership { teamId: string; role: 'manager' | 'user' }
@@ -97,7 +98,7 @@ export default function TeamsSettings() {
   }
   async function createTeam() {
     if (!teamName.trim()) { setTeamErr(pt ? 'Informe o nome do time.' : 'Enter a team name.'); return }
-    const res = await fetch('/api/iam/teams', {
+    const res = await stepUpFetch('/api/iam/teams', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: teamName.trim() }),
     })
@@ -111,7 +112,7 @@ export default function TeamsSettings() {
         if (!account) continue
         const existing = account.memberships.find(m => m.teamId === newId)
         const memberships = existing ? account.memberships : [...account.memberships, { teamId: newId, role: row.role }]
-        const r = await fetch('/api/iam/accounts', {
+        const r = await stepUpFetch('/api/iam/accounts', {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id: row.accountId, memberships }),
         })
@@ -129,7 +130,7 @@ export default function TeamsSettings() {
     setTeamOpen(false); void load()
   }
   async function deleteTeam(id: string) {
-    await fetch('/api/iam/teams', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
+    await stepUpFetch('/api/iam/teams', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
     void load()
   }
 
@@ -159,7 +160,7 @@ export default function TeamsSettings() {
     const account = accounts.find(a => a.id === accountId)
     if (!account) return
     const newMemberships = account.memberships.filter(m => m.teamId !== teamId)
-    const res = await fetch('/api/iam/accounts', {
+    const res = await stepUpFetch('/api/iam/accounts', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: accountId, memberships: newMemberships }),
@@ -178,7 +179,7 @@ export default function TeamsSettings() {
       const newMemberships = existing
         ? account.memberships
         : [...account.memberships, { teamId: manageTeamId, role: pick.role }]
-      const res = await fetch('/api/iam/accounts', {
+      const res = await stepUpFetch('/api/iam/accounts', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: pick.accountId, memberships: newMemberships }),
@@ -196,7 +197,7 @@ export default function TeamsSettings() {
     if (!account) return
     const newMemberships = account.memberships.map(m =>
       m.teamId === manageTeamId ? { ...m, role } : m)
-    const res = await fetch('/api/iam/accounts', {
+    const res = await stepUpFetch('/api/iam/accounts', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: accountId, memberships: newMemberships }),

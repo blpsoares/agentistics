@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'bun:test'
 import { AUTH_PUBLIC, ADMIN_PATHS, isAdminPath, MFA_EXEMPT } from './index-routes'
 import { can } from './iam-caps'
+import { requiresStepUp } from './stepup'
 import { scopeAppDataToTeams } from './team-scope'
 import type { Principal } from './iam-types'
 import type { SessionMeta, StatsCache } from '@agentistics/core'
@@ -164,5 +165,38 @@ describe('data scoping (BOLA)', () => {
     }
     const scoped = scopeAppDataToTeams(data, new Set(['t1']), new Set(['mine']))
     expect(scoped.sessions.map(s => s.session_id)).toEqual(['s3'])
+  })
+})
+
+describe('step-up ("sudo mode") coverage', () => {
+  it('protects every operation that destroys data or mints a credential', () => {
+    for (const [method, path] of [
+      ['DELETE', '/api/iam/accounts/abc'],
+      ['PATCH', '/api/iam/accounts/abc'],
+      ['DELETE', '/api/iam/teams/t1'],
+      ['POST', '/api/team/tokens'],
+      ['POST', '/api/team/tokens/rotate'],
+      ['DELETE', '/api/team/tokens'],
+      ['POST', '/api/team/repos'],
+      ['DELETE', '/api/team/repos/x'],
+    ] as const) {
+      expect(requiresStepUp(method, path)).toBe(true)
+    }
+  })
+
+  it('leaves reads and ordinary traffic alone, so the dashboard is not tiresome', () => {
+    for (const [method, path] of [
+      ['GET', '/api/iam/accounts'],
+      ['GET', '/api/team/tokens'],
+      ['GET', '/api/data'],
+      ['POST', '/api/tags'],
+      ['PUT', '/api/preferences'],
+    ] as const) {
+      expect(requiresStepUp(method, path)).toBe(false)
+    }
+  })
+
+  it('lets an un-enrolled owner reach the step-up endpoint, or they could never re-auth', () => {
+    expect(MFA_EXEMPT.has('/api/iam/stepup')).toBe(true)
   })
 })

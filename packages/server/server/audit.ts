@@ -21,6 +21,7 @@ export type AuditAction =
   | 'repo.register' | 'repo.unregister'
   | 'config.update' | 'bootstrap.consume'
   | 'capability.denied' | 'authz.denied' | 'rate.blocked'
+  | 'stepup.granted' | 'stepup.failure' | 'stepup.missing'
 
 export interface AuditEvent {
   action: AuditAction

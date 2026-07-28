@@ -56,6 +56,7 @@ import { OwnerSetup } from './components/OwnerSetup'
 import { ChangePassword } from './components/ChangePassword'
 import { ChangePasswordSelf } from './components/ChangePasswordSelf'
 import { MfaSetup } from './components/MfaSetup'
+import { StepUpPrompt } from './components/StepUpPrompt'
 import { type ChatModelId } from './lib/chatModels'
 import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
@@ -1120,6 +1121,8 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
         {/* Self-service change-password modal */}
         {pwOpen && <ChangePasswordSelf lang={lang} onClose={() => setPwOpen(false)} />}
       {mfaOpen && <MfaSetup lang={lang} onClose={() => setMfaOpen(false)} />}
+      {/* Mounted once: stepUpFetch opens this on demand when the server demands re-auth. */}
+      <StepUpPrompt lang={lang} />
 
         {/* Thin divider between account and actions */}
         {principal && <div style={{ height: 1, background: 'var(--border)', marginBottom: 10 }} />}

@@ -28,8 +28,9 @@ import { resolveClientIp } from './client-ip'
 import { corsHeadersFor } from './cors'
 import { csrfVerdict } from './csrf'
 import { securityHeaders } from './security-headers'
-import { TRUST_PROXY, ALLOWED_ORIGINS, TEAM_TLS, TEAM_SESSION_SECRET_ENV, setResolvedSessionSecret } from './config'
+import { TRUST_PROXY, ALLOWED_ORIGINS, TEAM_TLS, TEAM_SESSION_SECRET_ENV, TEAM_SESSION_SECRET, setResolvedSessionSecret } from './config'
 import { validateSecret, ensureSessionSecret } from './secret-store'
+import { requiresStepUp, verifyStepUp, STEPUP_HEADER } from './stepup'
 import { writeAudit, ensureAuditIndexes, listAudit } from './audit'
 import { safeError } from './errors'
 import { LIMITS } from './limits'
@@ -365,6 +366,31 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         const { isMfaEnabled } = await import('./mfa-store')
         if (!(await isMfaEnabled(session.principal.accountId).catch(() => true))) {
           return new Response(JSON.stringify({ error: 'mfa_enrollment_required' }), {
+            status: 403,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+      }
+      // Step-up ("sudo mode"): a session cookie proves who you are, not that you are still at
+      // the keyboard. Operations that destroy data or mint a credential additionally require a
+      // fresh grant from POST /api/iam/stepup, presented in X-Stepup. This does not prevent a
+      // cookie being stolen — it bounds what the theft is worth.
+      if (requiresStepUp(req.method, url.pathname)) {
+        const granted = verifyStepUp(
+          req.headers.get(STEPUP_HEADER),
+          session.principal.accountId,
+          session.sessionVersion,
+          TEAM_SESSION_SECRET,
+          Date.now(),
+        )
+        if (!granted) {
+          void writeAudit({
+            action: 'stepup.missing',
+            ip: clientIp,
+            actorId: session.principal.accountId,
+            meta: { path: url.pathname, method: req.method },
+          })
+          return new Response(JSON.stringify({ error: 'stepup_required' }), {
             status: 403,
             headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
           })
@@ -1106,6 +1132,15 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleIamLoginMfa } = await import('./iam-handlers')
       const res = await handleIamLoginMfa(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/stepup' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleStepUp } = await import('./iam-handlers')
+      const res = await handleStepUp(req)
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })

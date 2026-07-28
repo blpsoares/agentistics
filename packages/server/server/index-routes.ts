@@ -62,6 +62,7 @@ export function isAdminPath(pathname: string): boolean {
  */
 export const MFA_EXEMPT = new Set([
   '/api/iam/me',
+  '/api/iam/stepup',
   '/api/iam/logout',
   '/api/iam/mfa',
   '/api/iam/mfa/start',
