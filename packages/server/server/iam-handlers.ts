@@ -18,6 +18,7 @@ import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, te
 import type { AccountDoc, Membership, Role } from './iam-types'
 import { normalizeEmail } from './iam-types'
 import { limiter, RULES, tooManyRequests } from './rate-limit'
+import { validatePasswordPolicy } from './password-policy'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
 
@@ -146,9 +147,10 @@ export async function handleChangePassword(req: Request): Promise<Response> {
   const b = body as Record<string, unknown>
   const current = typeof b.currentPassword === 'string' ? b.currentPassword : ''
   const next = typeof b.newPassword === 'string' ? b.newPassword : ''
-  if (next.length < 8) return json({ error: 'password must be at least 8 characters' }, 400)
   const account = await getAccount(principal.accountId)
   if (!account) return json({ error: 'account not found' }, 404)
+  const policy = validatePasswordPolicy(next, { email: account.email, name: account.name })
+  if (!policy.ok) return json({ error: policy.error }, 400)
   // require currentPassword unless this is a forced first-login change
   if (!account.mustChangePassword) {
     if (!(await verifyPassword(current, account.passwordHash))) return json({ error: 'current password is incorrect' }, 401)
@@ -218,7 +220,8 @@ export async function handleAccounts(req: Request): Promise<Response> {
     const machineReqs = parseMachineRequests(b.machines, b.machine)
     if (!name) return json({ error: 'name is required' }, 400)
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: 'valid email is required' }, 400)
-    if (password.length < 8) return json({ error: 'password must be at least 8 characters' }, 400)
+    const policy = validatePasswordPolicy(password, { email, name })
+    if (!policy.ok) return json({ error: policy.error }, 400)
     // Only an owner may create another owner (global, no team scope). A member account follows the
     // scoped canCreateAccount rule (owner→any; manager→user-role memberships in teams they manage).
     if (role === 'owner') {

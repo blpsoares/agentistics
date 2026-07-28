@@ -61,7 +61,9 @@ export function ChangePasswordSelf({ lang, onClose }: { lang: Lang; onClose: () 
           <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-primary)' }}>{pt ? 'Trocar senha' : 'Change password'}</span>
         </div>
         <p style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5, margin: '0 0 18px' }}>
-          {pt ? 'Informe sua senha atual e escolha uma nova (mínimo 8 caracteres).' : 'Enter your current password and choose a new one (8+ characters).'}
+          {pt
+            ? 'Informe sua senha atual e escolha uma nova: mínimo 12 caracteres, evitando senhas comuns e qualquer coisa que contenha seu nome ou e-mail.'
+            : 'Enter your current password and choose a new one: at least 12 characters, avoiding common passwords and anything containing your name or e-mail.'}
         </p>
         {done ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: 'var(--anthropic-orange)', padding: '10px 0' }}>
