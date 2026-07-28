@@ -156,7 +156,7 @@ export async function parseSessionJsonl(
     return makeEmptySession(sessionId, fallbackPath, '', '', source)
   }
 
-  let cwd = '', startTime = '', lastTime = '', firstPrompt = '', modelId = '', sessionTitle = ''
+  let cwd = '', lastCwd = '', startTime = '', lastTime = '', firstPrompt = '', modelId = '', sessionTitle = ''
   let userMsgs = 0, assistantMsgs = 0, inputTokens = 0, outputTokens = 0
   let cacheReadTokens = 0, cacheCreationTokens = 0
   let gitCommits = 0, gitPushes = 0
@@ -185,7 +185,12 @@ export async function parseSessionJsonl(
     let e: Record<string, unknown>
     try { e = JSON.parse(line) } catch { continue }
 
-    if (!cwd && e.cwd) cwd = e.cwd as string
+    // First cwd = the project the session belongs to; last cwd = where it is now. They differ when
+    // the session moved (a git worktree), and the live-session detector needs the latter.
+    if (e.cwd && typeof e.cwd === 'string') {
+      if (!cwd) cwd = e.cwd
+      lastCwd = e.cwd
+    }
     const ts = e.timestamp as string | undefined
     let turnEvent: TurnEvent | null = null
     if (ts) {
@@ -358,6 +363,7 @@ export async function parseSessionJsonl(
   return {
     session_id: sessionId,
     project_path: projectPath,
+    ...(lastCwd && lastCwd !== projectPath ? { current_cwd: lastCwd } : {}),
     start_time: startTime,
     end_time: lastTime || undefined,
     duration_minutes: durationMinutes,

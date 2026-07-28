@@ -42,11 +42,15 @@ export default function SessionsPage() {
   }, [isCentral])
 
   const liveIds = useMemo(() => new Set(liveIdList), [liveIdList])
-  const sorted = useMemo(
-    () => [...derived.filteredSessions].sort((a, b) => lastActivityMs(b) - lastActivityMs(a)),
-    [derived.filteredSessions],
+  // Deliberately NOT the filtered set: "open now" is a fact about this machine right now, not a
+  // slice of the dashboard. A long-running session that started outside the active date range (or
+  // sits in a project the filter excludes) is still open, and dropping it here reported one open
+  // session while three were on screen.
+  const live = useMemo(
+    () => data.sessions.filter(s => liveIds.has(s.session_id))
+      .sort((a, b) => lastActivityMs(b) - lastActivityMs(a)),
+    [data.sessions, liveIds],
   )
-  const live = useMemo(() => sorted.filter(s => liveIds.has(s.session_id)), [sorted, liveIds])
   const liveCount = live.length + liveProcs.length
 
   return (
