@@ -49,11 +49,14 @@ uses_local_db() {
 
 # Compose file set: always the base; add the local-Mongo overlay only when using the bundled DB.
 compose_files() {
-  if uses_local_db; then
-    printf '%s' "-f docker-compose.yml -f docker-compose.localdb.yml"
-  else
-    printf '%s' "-f docker-compose.yml"
+  local files="-f docker-compose.yml"
+  uses_local_db && files="$files -f docker-compose.localdb.yml"
+  # Only a self-contributing central mounts the host harness dirs. A dedicated central gets no
+  # host filesystem access at all — which is what makes it safe to expose.
+  if [ -f "$ENV_FILE" ] && grep -qE '^AGENTISTICS_CENTRAL_USER=.+' "$ENV_FILE" 2>/dev/null; then
+    files="$files -f docker-compose.selfcontrib.yml"
   fi
+  printf '%s' "$files"
 }
 
 # shellcheck disable=SC2046  # intentional word-splitting of the -f flags
@@ -68,7 +71,7 @@ print_access_url() {
   port="$(grep -E '^APP_PORT=' "$ENV_FILE" | tail -1 | cut -d= -f2-)"
   bind="$(grep -E '^BIND_IP=' "$ENV_FILE" | tail -1 | cut -d= -f2-)"
   port="${port:-48080}"
-  bind="${bind:-0.0.0.0}"
+  bind="${bind:-127.0.0.1}"
   echo
   echo "Dashboard / central endpoint:"
   if [ "$bind" = "0.0.0.0" ] || [ -z "$bind" ]; then

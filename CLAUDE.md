@@ -520,6 +520,35 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
 - **Consent gate**: `ArchiveConsentModal.tsx` blocks first load (links the official doc) — primary Yes(consolidate)/No(off) + an "Advanced" expander revealing full-copy. `App.tsx` early-returns the modal when `archiveChoice === null`; `chooseArchive(mode)` PUTs `archiveMode`. Env `AGENTISTICS_ARCHIVE=0` hard-disables everything; `AGENTISTICS_ARCHIVE_DIR` overrides the archive path.
 - **No false metrics**: dedup by `session_id` (live always wins) + the `supplementStatsCache` guard (`day <= lastComputedDate` skip) mean revived old sessions show in lists/agent-metrics but never inflate aggregate totals. Boot + the PUT `/api/preferences` handler warm a build (persists the store) and `full` also runs `fullSync()`.
 
+## Security rules
+
+A central can be published on the internet (see `docs/exposure.md`). These rules are what keep
+that safe; each one exists because its absence was a real finding.
+
+- **`exposure.ts` is the only place that decides what a profile may do.** `PROFILE` is
+  `local` | `lan` | `public`, and `CAPS` derives from it. Never re-derive a capability from env
+  vars at a call site, and never add an opt-in that re-enables host power on `public`.
+- **Any new route that touches the host** — spawns a process, reads `~/.claude`, writes a
+  dotfile — must be registered in `capability-guard.ts`. A route that is not registered is
+  assumed harmless, so a missed registration is a vulnerability, not an oversight. The guard
+  runs *before* the auth gate on purpose.
+- **Any new `/api` route is authenticated by default.** Adding one to `AUTH_PUBLIC`
+  (`index-routes.ts`) requires updating `authz-gate.test.ts`, which asserts the exact contents
+  of that Set — that test IS the review gate.
+- **Never return internal error text to a client** — use `safeError` (`errors.ts`). The client
+  gets a code plus a correlation ref; the message goes to the log.
+- **Never `await req.json()` on an unauthenticated route** — use `readJsonLimited` (`limits.ts`),
+  which abandons an oversized body mid-stream instead of buffering it first.
+- **Every authentication and admin action writes an audit event** (`audit.ts`). The pure builder
+  redacts secret-shaped fields; never add a field that carries a credential.
+- **The session secret is never derived from the dashboard password**, and cookies are
+  `__Host-` prefixed + `SameSite=Strict` whenever they are Secure.
+- **Rate-limit anything that can be guessed.** `rate-limit.ts` keys hard blocks per IP and soft
+  backoff per account — per-account lockout must stay soft, or it becomes a DoS against a
+  colleague.
+- **`agentop doctor --exposed` must pass before exposing anything.** A check that could not be
+  verified reports `fail`, never a reassuring `pass`.
+
 ## Important rules
 
 - **EVERY new screen and EVERY layout fix MUST also deliver its mobile version — no exceptions.**

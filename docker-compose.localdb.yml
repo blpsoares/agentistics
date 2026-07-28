@@ -25,7 +25,17 @@ services:
       timeout: 10s
       retries: 10
       start_period: 20s
-    # mongo does NOT publish 27017 to the host — only the app service reaches it
+    # mongo does NOT publish 27017 to the host — only the app service on the compose network
+    # reaches it, and the tunnel must never route a database port (see docs/exposure.md).
+    #
+    # SECURITY NOTE — why --auth is not enabled here. Enabling it on a replica set additionally
+    # requires an internal-authentication keyFile, and MONGO_INITDB_ROOT_* only creates the user
+    # on a FRESH data directory: switching it on would lock every existing central out of its
+    # own database. Credentials are therefore an operator decision, not a silent upgrade.
+    # `agentop doctor` reports an unauthenticated bundled Mongo as a warning, not a failure,
+    # precisely because the port is unreachable from outside the compose network. For a
+    # credentialed database, point MONGO_URL at an external cluster (Atlas et al.) — central.sh
+    # then omits this overlay entirely.
     volumes:
       - mongo_data:/data/db
 
