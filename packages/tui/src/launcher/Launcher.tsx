@@ -13,6 +13,8 @@
 import React, { useState } from 'react'
 import { Box, Text, render, useApp, useInput } from 'ink'
 import { COLORS } from '../theme'
+import { Wordmark } from '../components/Wordmark'
+import { currentSize } from '../useTerminalSize'
 
 export interface LauncherChoice {
   name: string
@@ -42,8 +44,9 @@ export interface LauncherProps {
   onSelect: (value: string) => void
 }
 
-export function Launcher({ tagline, title, choices, status, onSelect }: LauncherProps) {
+export function Launcher({ tagline, title, choices, status, onSelect, width }: LauncherProps & { width?: number }) {
   const [index, setIndex] = useState(0)
+  const cols = width ?? currentSize().columns
 
   useInput((input, key) => {
     if (key.upArrow || input === 'k') { setIndex(i => (i - 1 + choices.length) % choices.length); return }
@@ -61,10 +64,7 @@ export function Launcher({ tagline, title, choices, status, onSelect }: Launcher
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1}>
-      <Text>
-        <Text bold color={COLORS.accent}>agentop</Text>
-        <Text dimColor>  ·  {tagline}</Text>
-      </Text>
+      <Wordmark tagline={tagline} width={cols - 2} />
 
       <Box
         flexDirection="column"

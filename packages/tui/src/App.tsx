@@ -12,6 +12,7 @@ import { Sessions } from './screens/Sessions'
 import { Costs } from './screens/Costs'
 import { Harnesses } from './screens/Harnesses'
 import { HelpOverlay, FilterOverlay } from './overlays/Overlays'
+import { Wordmark } from './components/Wordmark'
 import { sessionHarness } from './selectors'
 
 const MIN_WIDTH = 60
@@ -103,9 +104,11 @@ export function App({ apiBase, lang }: { apiBase: string; lang: TuiLang }) {
   }
 
   if (!data) {
+    // The wordmark carries the wait, so the first frame is the brand rather than a bare word.
     return (
-      <Box padding={1}>
-        <Text color={COLORS.accent}>{s.loading}…</Text>
+      <Box flexDirection="column" padding={1}>
+        <Wordmark tagline={s.tagline} width={columns - 2} />
+        <Box marginTop={1}><Text color={COLORS.accent}>{s.loading}…</Text></Box>
       </Box>
     )
   }
@@ -124,7 +127,7 @@ export function App({ apiBase, lang }: { apiBase: string; lang: TuiLang }) {
       {/* header */}
       <Box flexDirection="row" justifyContent="space-between">
         <Text>
-          <Text bold color={COLORS.accent}>agentop</Text>
+          <Text bold color={COLORS.accent}>agentistics</Text>
           <Text dimColor>  ·  {s.tagline}</Text>
         </Text>
         <ConnectionDot state={connection} s={s} />
