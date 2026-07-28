@@ -58,7 +58,7 @@ If you run a central reachable by anyone other than yourself, read
 [docs/exposure.md](docs/exposure.md) and run:
 
 ```bash
-agentop doctor --exposed
+./central.sh doctor --exposed        # or: agentop central doctor --exposed
 ```
 
 It exits non-zero until every control is configured. A check it could not verify is reported as

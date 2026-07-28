@@ -15,6 +15,9 @@
 #   restart   Restart the app container WITHOUT rebuilding
 #   logs      Follow the app container logs (Ctrl-C to stop)
 #   status    Show container + health status
+#   doctor    Run the exposure preflight INSIDE the container, where central.env is
+#             the live environment and the database is reachable. Add --exposed to
+#             check against the strict public bar before opening a tunnel.
 #   down      Stop and remove the containers (KEEPS the data volume)
 #   pull      Rebuild from a fresh base image (git pull first, then this)
 #   help      Show this message
@@ -275,6 +278,13 @@ case "$cmd" in
     ;;
   status)
     docker compose -p "$PROJECT" ps
+    ;;
+
+  doctor)
+    # Run it inside the container on purpose: that is where central.env is the live
+    # environment AND where MongoDB is reachable, so the owner-MFA and token checks
+    # can actually run instead of reporting "could not verify".
+    compose exec -T app bun run packages/server/bin/cli.ts doctor "${@:2}"
     ;;
   down)
     # Note: no `-v` — the Mongo data volume is preserved. Add it manually only

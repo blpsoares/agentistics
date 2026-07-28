@@ -406,7 +406,16 @@ remembering nine environment variables.
 ```bash
 agentop doctor              # check against the current profile
 agentop doctor --exposed    # check against the strict public bar
+
+./central.sh doctor --exposed        # from a repo checkout, INSIDE the container
+agentop central doctor --exposed     # same, from the standalone binary
 ```
+
+**On a Docker central, prefer the `central.sh` / `agentop central` form.** The command
+evaluates the configuration the deployment will actually run with — it reads `central.env` when
+present and prints which file it used — but the owner-MFA and machine-token checks also need
+MongoDB, which is reachable only from inside the compose network. Run on the host, those two
+report as unverified, which counts as a failure by design.
 
 `--exposed` evaluates as if `AGENTISTICS_EXPOSURE=public` were already set, which is how you
 verify readiness **before** flipping it.

@@ -92,7 +92,48 @@ Two notes on the secrets:
 
 Then `chmod 600 central.env` — it holds secrets.
 
-## 4. The tunnel
+## 4. Bringing it up
+
+From a repo checkout:
+
+```sh
+./central.sh up          # builds, migrates the data volume, (re)creates the containers
+./central.sh status      # containers + health
+./central.sh logs        # follow the app log
+```
+
+From the standalone binary, with no checkout (materialises a compose + `central.env` under
+`~/.agentistics/central/` and pulls the published image):
+
+```sh
+agentop central up
+agentop central status
+agentop central logs
+```
+
+The first boot with no owner account prints a **one-time setup token** to the log. Capture it —
+it is shown once:
+
+```sh
+./central.sh logs | grep -A 6 "OWNER SETUP REQUIRED"
+```
+
+Then check the deployment before anything is reachable from outside:
+
+```sh
+./central.sh doctor --exposed
+```
+
+Run it through `central.sh` rather than as bare `agentop doctor`: inside the container
+`central.env` is the live environment **and** MongoDB is reachable, so the owner-MFA and
+machine-token checks actually run. On the host, `agentop doctor --exposed` still reads
+`central.env` (it says which file it used) but cannot reach the database, so those two checks
+report as unverified — which counts as a failure, deliberately.
+
+Nothing above opens a port. The container binds `127.0.0.1`, so at this point the central is
+reachable only from the host itself. The tunnel below is what publishes it.
+
+## 5. The tunnel
 
 ```sh
 cloudflared tunnel login
@@ -118,7 +159,7 @@ sudo cloudflared service install     # run it as a service, not in a shell
 Rotate the tunnel token periodically. If it leaks, delete the tunnel and create a new one — that
 invalidates the old credentials immediately.
 
-## 5. At the edge (Cloudflare)
+## 6. At the edge (Cloudflare)
 
 The in-app limiter is the backstop, not the front line. Configure:
 
@@ -134,7 +175,7 @@ Access login. Either bypass those paths, give them a service token, or (cleanest
 hostname pointed at a separate instance with `AGENTISTICS_INGEST_ONLY=1` sharing the same Mongo:
 that instance serves only the token-gated ingest endpoint and 404s everything else.
 
-## 6. Onboarding a person
+## 7. Onboarding a person
 
 1. On first boot with no owner, the central prints a one-time setup token. Use it once to create
    the owner account.
@@ -150,7 +191,7 @@ Roles: `owner` reaches everything; a team `manager` manages their own teams' mac
 and `user` accounts; a plain `user` sees only the teams they belong to plus machines they own.
 That scoping is enforced server-side in `team-scope.ts` and asserted in `authz-gate.test.ts`.
 
-## 7. Incident response
+## 8. Incident response
 
 | Situation | Action |
 |---|---|
@@ -160,9 +201,10 @@ That scoping is enforced server-side in `team-scope.ts` and asserted in `authz-g
 | Something looks wrong | `GET /api/iam/audit` (owner only) — logins, failures, lockouts, MFA events, password changes, account/team/token changes and every gate denial, kept 180 days. |
 | The tunnel token leaked | Delete the tunnel, create a new one. |
 
-## 8. Go-live checklist
+## 9. Go-live checklist
 
-Run `agentop doctor --exposed`. It must print no `✗`.
+Run `./central.sh doctor --exposed` (or `agentop central doctor --exposed`). It must print
+no `✗`.
 
 Then verify from outside, against the real hostname:
 
