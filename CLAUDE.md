@@ -14,6 +14,7 @@ packages/
   server/   (@agentistics/server) — Bun HTTP server, CLI (agentop), otel-watcher, scripts
   web/      (@agentistics/web)    — React + Vite frontend
   mcp/      (@agentistics/mcp)    — MCP server, publishable to npm standalone
+  tui/      (@agentistics/tui)    — Ink (React) terminal dashboard + the `agentop start` launcher
   desktop/                        — Tauri v2 Windows installer (spawns agentop as sidecar)
 ```
 
@@ -25,7 +26,7 @@ packages/server/bin/cli.ts  (binary entry point — agentop)
   ├── agentop setup        → server/cli-setup.ts (interactive solo/central/member wizard; bare `agentop` on a TTY when unconfigured)
   ├── agentop server       → server/index.ts + server/otel-watcher.ts (always together)
   ├── agentop restart …    → bounce a mode's service (`server`/`watch` → systemd; `central` → central.sh restart; `--all` → cli-start.ts restartAllServices over every running service). `--rebuild` recreates the Docker image/container instead of bouncing (`central` → `up`; machine → `compose up -d --build`); native server ignores it (use `bun bin`/`upgrade`)
-  ├── agentop tui          → ../../web/src/tui/index.ts (standalone)
+  ├── agentop tui          → @agentistics/tui (Ink dashboard; language resolved via cli-lang.ts)
   ├── agentop watch        → server/otel-watcher.ts (daemon only)
   ├── agentop central …    → server/cli-central.ts (wraps central.sh: up/init/down/logs/status/restart/pull)
   ├── agentop member …     → server/cli-member.ts (connect/leave/status; whoami-verified, no browser)
@@ -114,8 +115,6 @@ packages/web/src/ (React + Vite, port 47292 in dev)
   │   ├── ToolsPage.tsx         → tools breakdown page
   │   ├── HarnessPage.tsx       → generic per-harness dashboard at /h/:harness (validates param; sets harness filter; tab bar: "Overview" = dashboard, "Data & sources" = HarnessInfoPanel); replaced the old hardcoded CodexPage
   │   └── ComparePage.tsx       → unified side-by-side comparison at /compare (per-harness colors; N/A for incapable metrics; sessions/messages/tokens/cost + comparatives: usage-by-hour with peak hour, busiest day-of-week, activity-over-time sparkline, peak token day / peak session cost)
-  ├── tui/
-  │   └── index.ts              → terminal TUI (live stats in the terminal, no browser needed)
   └── components/               → UI (charts, cards, heatmap, modals, PDF export)
       ├── HarnessInfoPanel.tsx  → inline panel explaining each harness's data sources / what's captured / what's missing (and why) / caveats; driven by HARNESS_INFO in lib/harness.ts
       ├── PreferencesModal.tsx  → unified Settings modal with tabs: Preferences / Live / Install (Environment tab removed)
@@ -476,7 +475,7 @@ Only active when `SERVE_STATIC=1` (set by `cli.ts` for the `server` subcommand).
 | `PDFExportModal.tsx` | Per-model cost in PDF | `calcCost()` |
 | `PDFExportModal.tsx` | Per-session cost in PDF | `blendedCostPerToken(statsCache.modelUsage)` — sessions have no individual model field |
 | `otel-watcher.ts` | Total cost exported via OTel | `calcCost()` from `@agentistics/core` |
-| `tui/index.ts` | Cost in terminal output | `calcCost()` from `@agentistics/core` |
+| `packages/tui` | Cost in terminal output | `calcCost()` via the pure `selectors.ts` |
 | `server/agent-metrics.ts` | Per-agent-invocation cost | `calcCost()` with per-invocation token breakdown |
 | `server/rates.ts` | — | Does not calculate cost; only fetches/caches the external pricing table (`/api/rates`) |
 
@@ -566,6 +565,50 @@ absence was a real finding.
   in `stepup.ts`; the web side calls `stepUpFetch`, never bare `fetch`. Reads stay on `fetch`.
 - **`agentop doctor --exposed` must pass before exposing anything.** A check that could not be
   verified reports `fail`, never a reassuring `pass`.
+## Terminal UI (`packages/tui`)
+
+`agentop tui` is an [Ink](https://term.ink) (React for CLIs) application; `agentop start` uses the
+same renderer for its launcher. It replaced a single 938-line hand-rolled ANSI file.
+
+```
+packages/tui/src/
+  index.tsx          entry — runTui({ lang, port }); refuses non-TTY stdin with a message
+  App.tsx            screen router, keybindings, overlays, applyHarnessFilter
+  selectors.ts       PURE AppData -> view model (the tested core)
+  i18n.ts            EN/PT terminal strings
+  theme.ts           palette mirroring the web dark mode + HARNESS_COLOR
+  useTerminalSize.ts columns/rows that follow SIGWINCH
+  data/              useAppData (fetch + SSE), ensureApi (auto-spawn the server)
+  components/        Primitives (Kpi/Bar/DataTable/fitColumns), Sparkline
+  screens/           Overview, Projects, Sessions, Costs, Harnesses
+  overlays/          help + harness filter
+  launcher/          the `agentop start` screen (presentation only)
+  stubs/react-devtools-core/   REQUIRED for the binary build — see below
+```
+
+### Rules
+
+- **`stubs/react-devtools-core` is load-bearing — never delete it.** Ink guards its devtools
+  bridge behind `DEV=true` but reaches it through `await import('./devtools.js')`, whose
+  top-level `import ... from 'react-devtools-core'` Bun's bundler resolves **statically**. Without
+  the stub `bun run build:binary` fails outright. `--external` compiles and then dies at binary
+  startup; `--define process.env.DEV='"false"'` does nothing, because resolution precedes
+  dead-code elimination.
+- **Verify TUI work against the COMPILED BINARY**, not just `bun run`. The devtools problem above
+  is invisible under `bun run` and only appears at compile time.
+- **Screens receive a `width` and must fit it.** `DataTable` drops columns from the right via
+  `fitColumns` and `Overview` drops KPIs via `fitKpis`; declare columns most-important-first. A
+  row wider than the terminal wraps and misaligns everything below it. `App` passes
+  `columns - 2` because the shell Box has `paddingX={1}`.
+- **The launcher owns no logic.** `cli-start.ts` still decides the choices and performs the
+  actions; `packages/tui/src/launcher` only renders and returns the chosen value. `cli-ui.ts`
+  stays as the non-TTY fallback — do not delete it.
+- **`stats-cache.json` stays Claude-only here too.** `selectors.ts` reads Claude totals from the
+  cache and every other harness from per-session sums; `applyHarnessFilter` blanks the cache when
+  a non-Claude harness is selected, or Claude's numbers would survive the filter.
+- **Capability-gated metrics render `N/A`** (`HARNESS_CAPABILITIES`), never a confident `0`.
+- **The TUI does not read preferences.** The dependency direction is `server -> tui`: `cli.ts`
+  resolves the language via `server/cli-lang.ts` and passes it in.
 
 ## Important rules
 
@@ -693,7 +736,7 @@ is and land your own copy on the target branch. A cherry-picked duplicate resolv
 ```bash
 bun run dev            # API (47291) + UI (47292) in parallel
 bun run watch          # OpenTelemetry daemon (optional)
-bun run watch:cli      # Terminal TUI
+bun run watch:cli      # Terminal TUI (Ink)
 bun test               # Unit tests for pure functions
 
 # Build the binary

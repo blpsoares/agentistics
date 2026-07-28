@@ -37,6 +37,7 @@
     "packages/server/bin",
     "packages/server/scripts",
     "packages/web/src",
+    "packages/tui/src",
     "packages/mcp"
   ]
 }

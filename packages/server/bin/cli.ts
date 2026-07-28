@@ -606,7 +606,11 @@ if (command === 'server' || command === 'start') {
   ])
 } else if (command === 'tui') {
   checkVersionAndWarn() // fire-and-forget
-  await import('../../web/src/tui/index.ts')
+  const [{ runTui }, { resolveLang }] = await Promise.all([
+    import('@agentistics/tui'),
+    import('../server/cli-lang.ts'),
+  ])
+  process.exit(await runTui({ lang: await resolveLang() }))
 } else if (command === 'watch') {
   checkVersionAndWarn() // fire-and-forget
   await import('../server/otel-watcher.ts')

@@ -28,6 +28,7 @@ import { memberConnect, memberLeave } from './cli-member'
 import { enableAutostart } from './autostart'
 import { select, confirm, input, pause, clearScreen } from './cli-ui'
 import { cliStrings, type CliLang, type CliStrings } from './cli-i18n'
+import { resolveLang } from './cli-lang'
 
 export type StartResult = number | 'foreground'
 
@@ -58,17 +59,7 @@ async function sh(cmd: string[]): Promise<{ code: number; out: string }> {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 // language
-async function resolveLang(): Promise<CliLang> {
-  const i = process.argv.indexOf('--lang')
-  const flag = i >= 0 ? process.argv[i + 1] : undefined
-  if (flag === 'pt' || flag === 'en') return flag
-  try {
-    const prefs = await readPreferences()
-    return prefs.lang === 'pt' ? 'pt' : 'en'
-  } catch {
-    return 'en'
-  }
-}
+// resolveLang lives in cli-lang.ts so `agentop tui` resolves the language identically.
 
 // state + detection
 type Mode = 'solo' | 'central' | 'member'
@@ -375,6 +366,48 @@ export async function restartAllServices(rebuild = false): Promise<number> {
 }
 
 // main loop
+/**
+ * Draws the launcher and returns the chosen action.
+ *
+ * On a TTY this is the Ink launcher, which shows the status panel and the menu together. Without
+ * a TTY (piped stdin, CI, a dumb terminal) Ink cannot enter raw mode, so we fall back to the
+ * dependency-free primitives in cli-ui.ts — same choices, same return value, plainer paint.
+ */
+async function mainMenu(
+  s: CliStrings,
+  mode: Mode,
+  endpoint: string | undefined,
+  svc: Services,
+  choices: { name: string; value: string; hint?: string }[],
+): Promise<string> {
+  if (!process.stdin.isTTY) {
+    printBanner(s)
+    printStatus(s, mode, endpoint, svc)
+    return select({ message: s.menuTitle, choices })
+  }
+
+  const { launcherMenu } = await import('@agentistics/tui/launcher')
+  return launcherMenu({
+    tagline: s.tagline,
+    title: s.menuTitle,
+    choices,
+    status: {
+      configLabel: s.configLabel,
+      configValue:
+        mode === 'member' ? s.configMember(endpoint ?? '(?)')
+        : mode === 'central' ? s.configCentral
+        : s.configSolo,
+      runningLabel: s.runningLabel,
+      nothingRunning: s.nothingRunning,
+      services: [
+        { label: `${s.runAgentistics}  http://localhost:${WEB_PORT}`, on: svc.local },
+        { label: s.runCentral, on: svc.central },
+        { label: s.runMachine, on: svc.machine },
+      ],
+    },
+  })
+}
+
 export async function runStart(): Promise<StartResult> {
   if (!process.stdin.isTTY) return 'foreground'
 
@@ -387,8 +420,6 @@ export async function runStart(): Promise<StartResult> {
     const anyRunning = svc.local || svc.central || svc.machine
 
     clearScreen()
-    printBanner(s)
-    printStatus(s, mode, endpoint, svc)
 
     const choices: { name: string; value: string; hint?: string }[] = [
       { name: s.itemAgentistics, value: 'agentistics', hint: s.itemAgentisticsHint },
@@ -401,7 +432,7 @@ export async function runStart(): Promise<StartResult> {
     choices.push({ name: s.itemLanguage, value: 'language' })
     choices.push({ name: s.quit, value: 'quit' })
 
-    const action = await select({ message: s.menuTitle, choices })
+    const action = await mainMenu(s, mode, endpoint, svc, choices)
 
     let acted = false
     switch (action) {

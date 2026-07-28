@@ -1,4 +1,8 @@
+/** Compact number for dense UI: 1.5K, 2.4M, 13.3B. Scales past M — a heavy Claude history
+ *  reaches billions of tokens, and "13290.8M" is not a number anyone can read at a glance. */
 export function fmt(n: number): string {
+  if (n >= 1_000_000_000_000) return `${(n / 1_000_000_000_000).toFixed(1)}T`
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return String(n)

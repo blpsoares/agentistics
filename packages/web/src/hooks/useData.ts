@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMeta } from '@agentistics/core'
-import { calcCost, sessionModelUsage, sessionCostUSD, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, filterByTeams, filterByMachines, resolveMachineCacheScope, distinctHarnesses, mergeStatsCaches, repoShortName, HARNESS_ORDER } from '@agentistics/core'
+import { calcStreak, calcCost, sessionModelUsage, sessionCostUSD, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, filterByTeams, filterByMachines, resolveMachineCacheScope, distinctHarnesses, mergeStatsCaches, repoShortName, HARNESS_ORDER } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 import { makeTagFilter, type TagDef } from '../lib/tagMatch'
 
@@ -222,19 +222,9 @@ function inRange(date: Date, start: Date, end: Date) {
   return !isBefore(date, start) && !isAfter(date, end)
 }
 
-/**
- * Calcula streak de dias consecutivos de atividade.
- * Se hoje não tiver atividade, conta a partir de ontem (não penaliza quem ainda não trabalhou hoje).
- */
-export function calcStreak(activeDates: Set<string>, today: Date = new Date()): number {
-  let streak = 0
-  for (let i = 0; i <= 365; i++) {
-    const dateStr = format(subDays(today, i), 'yyyy-MM-dd')
-    if (activeDates.has(dateStr)) streak++
-    else if (i > 0) break
-  }
-  return streak
-}
+/** Streak math lives in @agentistics/core so the terminal UI shares this exact implementation.
+ *  Re-exported here to keep every existing `from './useData'` import working. */
+export { calcStreak } from '@agentistics/core'
 
 /**
  * Calcula o maior streak já atingido no histórico completo de datas ativas.

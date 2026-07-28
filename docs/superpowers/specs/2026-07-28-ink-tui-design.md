@@ -1,7 +1,7 @@
 # Ink TUI — design
 
 **Date:** 2026-07-28
-**Status:** approved (design), pending implementation plan
+**Status:** implemented
 **Scope:** rewrite `agentop tui` as a multi-screen Ink application, and rebuild the
 `agentop start` launcher on the same renderer.
 
@@ -181,3 +181,44 @@ pipeline are untouched. No new metric is introduced; this is a presentation rewr
 | Someone deletes the "unused" stub | Explanatory comment in the stub + a note in CLAUDE.md |
 | Narrow terminals break layout | Ink flexbox + a minimum-width guard screen below ~60 cols |
 | SSE unavailable (older server) | Documented 10s polling fallback |
+
+---
+
+## Implementation notes (what the design did not anticipate)
+
+Recorded after the fact, because each of these was a real defect the design would not have caught.
+
+1. **Column fitting had to be generic.** Each screen originally sized its first column with
+   `Math.max(floor, width - constant)`. At 60 columns those floors made the table *wider* than
+   the terminal — the Sessions table rendered 85 columns into 60 and every row wrapped, which
+   destroys the alignment of the entire screen. Replaced with `fitColumns()` in `DataTable`:
+   drop columns from the right, then give the remainder to the identity column. Screens declare
+   columns most-important-first. `Overview` needed the same treatment for its KPI row
+   (`fitKpis`) — its fixed row was 74 columns wide.
+
+2. **The shell's padding is part of the width contract.** `App` has `paddingX={1}`, so screens
+   have `columns - 2` to work with. Passing the raw terminal width made a full-width bar overflow
+   by exactly two columns.
+
+3. **`agentMetrics` is an object, not an array.** `SessionAgentMetrics` is
+   `{ invocations[], totalInvocations, ... }`. The first draft called `.length` on it; the test
+   fixture had used an `as never` cast, which hid the mistake until `tsc` ran.
+
+4. **`ModelUsage` field names.** They are `cacheReadInputTokens` / `cacheCreationInputTokens`,
+   not `cacheReadTokens` / `cacheWriteTokens`. Getting this wrong produced `NaN` totals rather
+   than a type error, because the fixtures were cast.
+
+5. **`HARNESS_CAPABILITIES` gating needed a metric that actually varies.** The Harnesses screen
+   first gated `cost` and `tokens`, but every harness has both set to `true`, making the N/A path
+   dead code. It now shows agent invocations, which only Claude reports — so the N/A is real.
+
+6. **Non-TTY stdin.** Ink throws from inside a React effect when it cannot enter raw mode,
+   surfacing as an unreadable reconciler stack. `runTui` now checks `process.stdin.isTTY` and
+   exits with one sentence, and `cli-start.ts` falls back to `cli-ui.ts`.
+
+7. **`fmt()` stopped at millions.** A heavy Claude history renders as `13290.8M`. Extended to B
+   and T in `@agentistics/core` (shared with the web dashboard) rather than duplicated locally.
+
+8. **`calcStreak` moved to core.** It lived in `packages/web/src/hooks/useData.ts`, which the TUI
+   cannot import. Moved to `packages/core/src/streak.ts` and re-exported from `useData.ts`, so
+   there is still exactly one implementation.

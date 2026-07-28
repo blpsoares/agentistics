@@ -1,0 +1,24 @@
+{
+  "name": "@agentistics/tui",
+  "version": "1.7.3",
+  "private": true,
+  "type": "module",
+  "main": "src/index.tsx",
+  "exports": {
+    ".": "./src/index.tsx",
+    "./launcher": "./src/launcher/Launcher.tsx"
+  },
+  "scripts": {
+    "dev": "bun run src/index.tsx"
+  },
+  "dependencies": {
+    "@agentistics/core": "workspace:*",
+    "es-toolkit": "^1.50.0",
+    "ink": "^7.1.1",
+    "react": "^19.2.5",
+    "react-devtools-core": "file:./stubs/react-devtools-core"
+  },
+  "devDependencies": {
+    "ink-testing-library": "^4.0.0"
+  }
+}
