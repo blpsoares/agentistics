@@ -15,7 +15,7 @@ There is no bounty. Expect an acknowledgement within a few days.
 ## Why this repository is public, and why that is fine
 
 The source is public and the security controls are described in detail in
-[docs/exposure.md](docs/exposure.md). That is deliberate, and it is not in tension with the
+[docs/security.md](docs/security.md) and [docs/exposure.md](docs/exposure.md). That is deliberate, and it is not in tension with the
 security work.
 
 Security here rests on **secrets and configuration, never on the code being unreadable**
@@ -41,6 +41,9 @@ The reverse — a private repository — would not have prevented any of the iss
 fixed. It would only have delayed someone else noticing them.
 
 ## Scope
+
+For how the controls fit together and what each one does *not* do, read
+[docs/security.md](docs/security.md).
 
 **In scope:** the server (`packages/server`), the web app (`packages/web`), the MCP server
 (`packages/mcp`), the shared core (`packages/core`), and the Docker/compose deployment.

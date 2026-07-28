@@ -232,7 +232,7 @@ Or just run `agentop setup` and pick a role — the wizard wires up the rest.
 > (shell, local chat, raw transcripts, MCP admin) and requires a second factor of every owner.
 > Run `agentop doctor --exposed` before going live.
 
-→ **CLI reference:** [docs/cli.md](docs/cli.md) · **Deployment:** [docs/DEPLOY.md](docs/DEPLOY.md) · **Exposing a central:** [docs/exposure.md](docs/exposure.md) · **Reporting a vulnerability:** [SECURITY.md](SECURITY.md)
+→ **CLI reference:** [docs/cli.md](docs/cli.md) · **Deployment:** [docs/DEPLOY.md](docs/DEPLOY.md) · **Security model:** [docs/security.md](docs/security.md) · **Exposing a central:** [docs/exposure.md](docs/exposure.md) · **Reporting a vulnerability:** [SECURITY.md](SECURITY.md)
 
 ---
 

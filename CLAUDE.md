@@ -522,8 +522,10 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
 
 ## Security rules
 
-A central can be published on the internet (see `docs/exposure.md`). These rules are what keep
-that safe; each one exists because its absence was a real finding.
+A central can be published on the internet. The model is documented in **`docs/security.md`**
+(threat model, trust boundaries, request pipeline, limits of each control) and the deployment
+runbook in `docs/exposure.md`. These rules are what keep it safe; each exists because its
+absence was a real finding.
 
 - **`exposure.ts` is the only place that decides what a profile may do.** `PROFILE` is
   `local` | `lan` | `public`, and `CAPS` derives from it. Never re-derive a capability from env
@@ -546,6 +548,9 @@ that safe; each one exists because its absence was a real finding.
 - **Rate-limit anything that can be guessed.** `rate-limit.ts` keys hard blocks per IP and soft
   backoff per account — per-account lockout must stay soft, or it becomes a DoS against a
   colleague.
+- **Destructive operations require step-up.** Anything that deletes an account or team, edits an
+  account (role and memberships live there) or mints/rotates/revokes a credential must be listed
+  in `stepup.ts`; the web side calls `stepUpFetch`, never bare `fetch`. Reads stay on `fetch`.
 - **`agentop doctor --exposed` must pass before exposing anything.** A check that could not be
   verified reports `fail`, never a reassuring `pass`.
 

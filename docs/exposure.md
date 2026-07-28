@@ -6,6 +6,9 @@ password, without handing the internet a shell on the host.
 Read this in order. The last section is a checklist you must be able to tick before opening the
 tunnel; `agentop doctor --exposed` checks most of it for you.
 
+This document is the *how*. For the *why* — threat model, trust boundaries, the request pipeline
+and what each control does not do — see **[security.md](security.md)**.
+
 ---
 
 ## 1. Topology

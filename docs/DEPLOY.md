@@ -259,8 +259,9 @@ tailnet — the default on modern Tailscale.)
 ## Security controls
 
 A central is multi-tenant and can be published on the internet, so it carries controls a solo
-machine does not. Summary; the full write-up and the go-live checklist are in
-**[docs/exposure.md](exposure.md)**.
+machine does not. This is the summary. The **security model** — threat model, trust boundaries,
+the request pipeline and the limits of each control — is **[docs/security.md](security.md)**;
+the deployment runbook and go-live checklist are **[docs/exposure.md](exposure.md)**.
 
 | Control | Where |
 |---|---|
@@ -269,6 +270,7 @@ machine does not. Summary; the full write-up and the go-live checklist are in
 | **Two-factor** — RFC 6238 TOTP with single-use recovery codes (sha256-hashed). The password stage issues no cookie when a factor is enrolled; a `public` profile requires it of every owner | `server/totp.ts`, `server/mfa-store.ts` |
 | **Password policy** — 12-character floor with a 1024 ceiling, common-password blocklist, rejects anything containing the account's own name or e-mail | `server/password-policy.ts` |
 | **Rate limiting** — 5 logins per 15 min per IP with doubling backoff; a separate soft per-account bucket checked *before* the argon2 verify; token and ingest rules of their own | `server/rate-limit.ts` |
+| **Step-up ("sudo mode")** — deleting an account or team, editing an account, and minting/rotating/revoking a machine token each require a fresh five-minute grant obtained with the password or a TOTP code, so a stolen cookie alone cannot destroy data | `server/stepup.ts` |
 | **Session cookie** — `__Host-` prefixed when Secure, `SameSite=Strict`, `HttpOnly`, 12h idle timeout with a 15-minute sliding refresh inside a 7-day absolute cap | `server/auth.ts` |
 | **Session secret** — never derived from the dashboard password; a value equal to it refuses to boot | `server/secret-store.ts` |
 | **Security headers** — CSP (no inline script, `frame-ancestors 'none'`), HSTS under TLS, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, COOP/CORP, `no-store` on `/api` | `server/security-headers.ts` |
