@@ -65,8 +65,9 @@ test('writePreferencesTo merges with legacy values on first write', async () => 
 // silently default over a corrupt primary file (which would present the machine as solo and
 // discard every connection, denylist, archiveMode and layout).
 
-import { mkdtemp, writeFile, readFile } from 'node:fs/promises'
+import { mkdtemp, writeFile, readFile, readdir } from 'node:fs/promises'
 import { tmpdir as osTmpdir } from 'node:os'
+import { dirname } from 'node:path'
 
 async function tmpPaths2() {
   const dir = await mkdtemp(join(osTmpdir(), 'agentistics-prefs-'))
@@ -127,4 +128,57 @@ test('a write leaves no partial file behind — the target is always valid JSON'
   await Promise.all(writes)
   const text = await readFile(primary, 'utf-8')
   expect(() => JSON.parse(text)).not.toThrow()
+  const leftoverTmp = (await readdir(dirname(primary))).filter(f => f.includes('.tmp-'))
+  expect(leftoverTmp).toEqual([])
+})
+
+// Follow-up fix (review): writeFileAtomic's tmp name used to be unique only per PROCESS
+// (`${path}.tmp-${process.pid}`), not per call. readPreferencesFrom's legacy-migration branch
+// called writeFileAtomic directly, outside the write chain writePreferencesTo uses — two
+// concurrent migration writes (or a migration racing writePreferencesTo) could pick the
+// IDENTICAL tmp filename and interleave/corrupt it before either rename() fired. Fixed by (1)
+// mixing a monotonic counter + random suffix into the tmp name so every call gets a distinct
+// path, and (2) routing the migration write through the SAME `enqueueWrite` chain as
+// writePreferencesTo (via a non-writing `readEffective` helper so the chain can't re-enter
+// itself and deadlock).
+
+test('concurrent legacy-migration reads never collide on the tmp filename — no corruption, no leftover tmp file', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  await writeFile(legacy, JSON.stringify({ archiveMode: 'full', theme: 'light' }))
+  const results = await Promise.all(Array.from({ length: 20 }, () => readPreferencesFrom(primary, legacy)))
+  for (const r of results) {
+    expect(r.archiveMode).toBe('full')
+    expect(r.theme).toBe('light')
+  }
+  const text = await readFile(primary, 'utf-8')
+  expect(() => JSON.parse(text)).not.toThrow()
+  const leftoverTmp = (await readdir(dirname(primary))).filter(f => f.includes('.tmp-'))
+  expect(leftoverTmp).toEqual([])
+})
+
+test('a legacy migration racing an explicit write never loses either — both survive', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  await writeFile(legacy, JSON.stringify({ archiveMode: 'full', theme: 'light' }))
+  const [migrated] = await Promise.all([
+    readPreferencesFrom(primary, legacy),
+    writePreferencesTo(primary, legacy, { installDismissed: true }),
+  ])
+  // The migration read itself always sees the legacy content (in-memory result), regardless
+  // of which write wins the race to land on disk first.
+  expect(migrated.archiveMode).toBe('full')
+  expect(migrated.theme).toBe('light')
+  // The FINAL on-disk state must have both the migrated legacy fields and the explicit write —
+  // neither the migration's write nor writePreferencesTo's write may clobber the other's data.
+  const final = await readPreferencesFrom(primary, legacy)
+  expect(final.archiveMode).toBe('full')
+  expect(final.theme).toBe('light')
+  expect(final.installDismissed).toBe(true)
+})
+
+test('a corrupt LEGACY file does not throw — the primary is authoritative and legacy corruption is not fatal', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  await writeFile(legacy, '{not valid json')
+  const prefs = await readPreferencesFrom(primary, legacy)
+  expect(prefs.team?.connections).toEqual([])
+  expect(prefs.customLayout).toEqual([])
 })

@@ -84,12 +84,13 @@ function defaultPrefs(): Preferences {
   return { customLayout: [], team: migrateTeamConfig(undefined) }
 }
 
-/** Read preferences from `primary`, falling back to `legacy` (and migrating it to `primary`
- *  best-effort) when the primary file is absent. Exported for tests; `readPreferences` binds
- *  the real paths. */
-export async function readPreferencesFrom(primary: string, legacy: string): Promise<Preferences> {
+/** Read the effective preferences (primary, else migrated legacy, else defaults) with NO
+ *  side-effecting write. `writePreferencesTo`'s read-merge step uses this (never the
+ *  write-triggering `readPreferencesFrom`) so it can never re-enter `enqueueWrite` from inside
+ *  an already-running chained callback — see the deadlock note on `enqueueWrite`. */
+async function readEffective(primary: string, legacy: string): Promise<{ prefs: Preferences; migratedFromLegacy: boolean }> {
   const p = await readJsonPrefs(primary)
-  if (p) return withMigratedTeam(p)
+  if (p) return { prefs: withMigratedTeam(p), migratedFromLegacy: false }
   let l: Preferences | null = null
   try {
     l = await readJsonPrefs(legacy)
@@ -98,14 +99,31 @@ export async function readPreferencesFrom(primary: string, legacy: string): Prom
     // location is read-only in Docker. Treat it as absent.
     l = null
   }
-  if (l) {
-    const merged = withMigratedTeam(l)
-    // One-time migration so future reads hit the writable primary. The legacy dir may be
-    // read-only (Docker), so a failed migration write is expected and ignored.
-    try { await writeFileAtomic(primary, JSON.stringify(merged, null, 2)) } catch { /* read-only legacy dir */ }
-    return merged
-  }
-  return defaultPrefs()
+  if (l) return { prefs: withMigratedTeam(l), migratedFromLegacy: true }
+  return { prefs: defaultPrefs(), migratedFromLegacy: false }
+}
+
+/** Read preferences from `primary`, falling back to `legacy` (and migrating it to `primary`
+ *  best-effort) when the primary file is absent. Exported for tests; `readPreferences` binds
+ *  the real paths. */
+export async function readPreferencesFrom(primary: string, legacy: string): Promise<Preferences> {
+  const { prefs, migratedFromLegacy } = await readEffective(primary, legacy)
+  if (!migratedFromLegacy) return prefs
+  // One-time migration so future reads hit the writable primary. Routed through the SAME
+  // write chain as writePreferencesTo (enqueueWrite): without this, two concurrent migration
+  // writes (or a migration racing an explicit writePreferencesTo) would call writeFileAtomic
+  // independently and could interleave/clobber each other. Safe against reentrancy —
+  // readPreferencesFrom is never called from inside an enqueueWrite callback; see there.
+  return enqueueWrite(async () => {
+    // Re-check under the chain: primary may have been created (by our own read above racing
+    // another queued write, or by that write itself) since we decided to migrate.
+    const p2 = await readJsonPrefs(primary)
+    if (p2) return withMigratedTeam(p2)
+    // The legacy dir may be read-only (Docker), so a failed migration write is expected and
+    // ignored — the caller still gets the migrated-in-memory result.
+    try { await writeFileAtomic(primary, JSON.stringify(prefs, null, 2)) } catch { /* read-only legacy dir */ }
+    return prefs
+  })
 }
 
 /** The ONE choke point where the shape migration runs, so every reader — CLI, uploader, WS
@@ -119,29 +137,49 @@ export async function readPreferences(): Promise<Preferences> {
   return readPreferencesFrom(PREFERENCES_FILE, LEGACY_PREFERENCES_FILE)
 }
 
+/** Monotonic per-process counter mixed into every tmp filename so concurrent `writeFileAtomic`
+ *  calls to the SAME target never pick the same tmp path — `${pid}` alone is unique per
+ *  process, not per call, and two calls racing on the identical tmp name would interleave their
+ *  writes before either `rename()` fires. */
+let _tmpSeq = 0
+
 /** tmp + rename. `Bun.write` truncates in place, so a concurrent reader can observe a
- *  half-written file; rename on the same filesystem is atomic. */
+ *  half-written file; rename on the same filesystem is atomic. The tmp name is unique per
+ *  CALL (pid + monotonic counter + random suffix), not just per process. */
 async function writeFileAtomic(path: string, text: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
-  const tmp = `${path}.tmp-${process.pid}`
+  const tmp = `${path}.tmp-${process.pid}-${++_tmpSeq}-${Math.random().toString(36).slice(2, 8)}`
   await writeFile(tmp, text, 'utf-8')
   await rename(tmp, path)
 }
 
-/** Single-writer chain: every write awaits the previous one, so a read-merge-write can never
- *  interleave with another and lose the connections array. */
+/** Single write chain for the WHOLE module: every enqueued function awaits the previous one,
+ *  so a read-merge-write can never interleave with another queued write and lose the
+ *  connections array. Both `writePreferencesTo` and `readPreferencesFrom`'s legacy-migration
+ *  branch enqueue onto this SAME chain, so the two can never interleave/clobber each other
+ *  either.
+ *
+ *  Deadlock-freedom: `enqueueWrite` is called only from `writePreferencesTo` and from
+ *  `readPreferencesFrom` (never from inside a callback already running as part of this chain).
+ *  The callbacks queued here call `readEffective` (a plain, non-enqueuing read) and
+ *  `writeFileAtomic` (plain fs I/O) — neither calls back into `enqueueWrite`. So no queued
+ *  callback ever awaits a promise that is itself waiting on that same callback to finish; the
+ *  chain is a straight FIFO with no cycle. */
 let _writeChain: Promise<unknown> = Promise.resolve()
+
+function enqueueWrite<T>(fn: () => Promise<T>): Promise<T> {
+  const next = _writeChain.then(fn, fn)
+  _writeChain = next.catch(() => {})
+  return next
+}
 
 /** Merge `prefs` over the current preferences and persist to `primary`. Exported for tests. */
 export async function writePreferencesTo(primary: string, legacy: string, prefs: Preferences): Promise<void> {
-  const run = async () => {
-    const current = await readPreferencesFrom(primary, legacy)
+  return enqueueWrite(async () => {
+    const { prefs: current } = await readEffective(primary, legacy)
     const merged = { ...current, ...prefs }
     await writeFileAtomic(primary, JSON.stringify(merged, null, 2))
-  }
-  const next = _writeChain.then(run, run)
-  _writeChain = next.catch(() => {})
-  return next
+  })
 }
 
 export async function writePreferences(prefs: Preferences): Promise<void> {
