@@ -23,7 +23,21 @@ import { PROJECTS_DIR } from './config'
 import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
-import { handleLogout, handleSession, getPrincipal } from './auth'
+import { handleLogout, handleSession, getPrincipal, getPrincipalSession, makePrincipalSessionCookieHeader, SESSION_REFRESH_MS } from './auth'
+import { routeCapability, capabilityDenied } from './capability-guard'
+import { AUTH_PUBLIC, isAdminPath, MFA_EXEMPT } from './index-routes'
+import { CAPS, PROFILE } from './exposure'
+import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
+import { resolveClientIp } from './client-ip'
+import { corsHeadersFor } from './cors'
+import { csrfVerdict } from './csrf'
+import { securityHeaders } from './security-headers'
+import { TRUST_PROXY, ALLOWED_ORIGINS, TEAM_TLS, TEAM_SESSION_SECRET_ENV, TEAM_SESSION_SECRET, setResolvedSessionSecret } from './config'
+import { validateSecret, ensureSessionSecret } from './secret-store'
+import { requiresStepUp, verifyStepUp, STEPUP_HEADER } from './stepup'
+import { writeAudit, ensureAuditIndexes, listAudit } from './audit'
+import { safeError } from './errors'
+import { LIMITS } from './limits'
 import { canSeeMemberNames } from './iam-view'
 import {
   readEnvConfig,
@@ -99,12 +113,44 @@ if (TEAM_CENTRAL) {
 // IAM bootstrap init (central only): ensure indexes + Default team, backfill teamId, and —
 // when no owner exists yet — mint a one-time setup token and print it to the logs.
 if (TEAM_CENTRAL) {
+  // Resolve the session-signing secret before anything can mint a cookie. A bad explicit value
+  // is fatal on purpose: booting with a session key equal to the shared dashboard password is
+  // worse than not booting, because every account becomes forgeable and nobody notices.
+  if (TEAM_SESSION_SECRET_ENV) {
+    const v = validateSecret(TEAM_SESSION_SECRET_ENV, TEAM_PASSWORD)
+    if (!v.ok) {
+      console.error(`[server] refusing to start: AGENTISTICS_TEAM_SESSION_SECRET is invalid (${v.reason}).`)
+      console.error('[server] generate one with: openssl rand -hex 32')
+      process.exit(1)
+    }
+    setResolvedSessionSecret(TEAM_SESSION_SECRET_ENV)
+  } else {
+    // Bounded: the secret must be settled before any cookie is minted, but an unreachable
+    // database must not keep the server from ever listening. On timeout we keep the
+    // per-process random secret already in config.ts — safe, just not durable.
+    try {
+      const secret = await Promise.race([
+        ensureSessionSecret(),
+        new Promise<null>(resolve => setTimeout(() => resolve(null), 10_000)),
+      ])
+      if (secret) {
+        setResolvedSessionSecret(secret)
+        console.log('[server] using the persisted random session secret (set AGENTISTICS_TEAM_SESSION_SECRET to pin your own).')
+      } else {
+        console.warn('[server] database unreachable — using a per-process session secret; sessions will not survive a restart.')
+      }
+    } catch {
+      console.warn('[server] could not persist a session secret — using a per-process one; sessions will not survive a restart.')
+    }
+  }
+
   void (async () => {
     try {
       const { ensureAccountIndexes, hasAnyOwner, purgeUnknownTeamsFromAccounts } = await import('./accounts')
       const { backfillTokenTeamIds, purgeUnknownTeamsFromMachines } = await import('./team-tokens')
       const { backfillRepoTeamIds } = await import('./team-repos')
       await ensureAccountIndexes()
+      await ensureAuditIndexes()
       // No Default team is seeded — machines/accounts are loose until assigned to real teams.
       await backfillTokenTeamIds()
       await backfillRepoTeamIds()
@@ -154,69 +200,14 @@ ensureClaudeChat().catch(err => console.error('[claude-chat] failed to initializ
 
 
 // ---------------------------------------------------------------------------
-// CORS headers
+// CORS is computed per request from the caller's Origin against an explicit allowlist
+// (see cors.ts). The old wildcard `Access-Control-Allow-Origin: *` let any web page probe
+// this instance from a victim's network. `corsHeadersFor` emits no ACAO at all for an
+// unknown origin, which is the right answer for a same-origin dashboard.
 // ---------------------------------------------------------------------------
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, PUT, POST, PATCH, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-}
-
-/** JSON response with the CORS headers every route here needs. */
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-  })
-}
-
-// Routes that are always public (no auth gate applied)
-const AUTH_PUBLIC = new Set([
-  '/api/health',
-  '/api/team/login',
-  '/api/team/logout',
-  '/api/team/session',
-  '/api/team/ingest',
-  '/api/team/leave',
-  '/api/team/policy',
-  // WebSocket upgrade for the member→central reverse channel; auth is via
-  // validateIngestToken (Bearer token in the Upgrade request headers).
-  '/api/team/whoami',
-  '/api/team/agent',
-  '/api/iam/status',
-  '/api/iam/bootstrap',
-  '/api/iam/login',
-  '/api/iam/logout',
-  '/api/iam/me',
-  '/api/iam/change-password',
-  '/api/iam/accounts',
-  '/api/iam/teams',
-  '/api/iam/machines',
-])
-
-// Admin routes that require a real session cookie even on a passwordless central
-// NOTE: `/api/tags` is deliberately NOT here — tags are readable by any authed principal and
-// writable by managers (authority is source-derived, see tags-handlers.ts). It is still gated:
-// the auth check below 401s every /api/* path outside AUTH_PUBLIC, `/api/tags/<id>` included.
-const ADMIN_PATHS = new Set([
-  '/api/team/members',
-  '/api/team/tokens',
-  '/api/team/tokens/rotate',
-  '/api/team/repos',
-  '/api/team/config',
-])
-
-/**
- * ADMIN_PATHS is an exact-match Set, so a nested detail route (`/api/team/repos/<id>`) would
- * otherwise escape the owner gate the moment one is added. Treat any path *under* an admin
- * path as admin too.
- */
-function isAdminPath(pathname: string): boolean {
-  if (ADMIN_PATHS.has(pathname)) return true
-  for (const p of ADMIN_PATHS) if (pathname.startsWith(p + '/')) return true
-  return false
-}
+// Route tables (AUTH_PUBLIC / ADMIN_PATHS / MFA_EXEMPT) live in index-routes.ts so the
+// authorization regression suite can assert them without booting the server.
 
 // ---------------------------------------------------------------------------
 // Bun HTTP server
@@ -233,13 +224,53 @@ const _wsHandlers = {
   close(ws: ServerWebSocket<WSData>) { if (!ws.data.isAgent) return; unregisterAgent(ws) },
 }
 
+/**
+ * Outer handler: runs the router, then stamps the OWASP baseline security headers on whatever
+ * it produced. Doing it here (rather than at ~60 individual call sites) means a newly added
+ * route cannot forget them. SSE responses set their headers before the first flush, so
+ * mutating `res.headers` afterwards is still safe.
+ */
 async function handleRequest(req: Request, server: Server<WSData>): Promise<Response | undefined> {
+  const res = await handleRequestInner(req, server)
+  if (!res) return res // WebSocket upgrade handed off
+  const isApi = new URL(req.url).pathname.startsWith('/api/')
+  for (const [k, v] of Object.entries(securityHeaders({ tls: TEAM_TLS, dev: !SERVE_STATIC, isApi }))) {
+    res.headers.set(k, v)
+  }
+  // A sliding-session refresh recorded by the auth gate. Appended (not set) so a route that
+  // issues its own cookie — login, logout — is never overwritten.
+  const refreshed = refreshedCookies.get(req)
+  if (refreshed) {
+    refreshedCookies.delete(req)
+    if (!res.headers.has('Set-Cookie')) res.headers.append('Set-Cookie', refreshed)
+  }
+  return res
+}
+
+/**
+ * Per-request channel for a sliding-session cookie refresh: the auth gate decides, the outer
+ * wrapper attaches. Keyed by the Request object (WeakMap) so concurrent requests never share
+ * state and nothing leaks if a handler throws.
+ */
+const refreshedCookies = new WeakMap<Request, string>()
+
+async function handleRequestInner(req: Request, server: Server<WSData>): Promise<Response | undefined> {
     const url = new URL(req.url)
     // Collapse repeated slashes in the path. A member whose endpoint has a trailing slash
     // builds URLs like `//api/team/ingest` / `//api/team/agent`; without this they'd miss the
     // exact-match API routes and silently fall through to the static handler (200, no ingest)
     // or fail the WS upgrade — making pushes/presence look fine while nothing lands.
     if (url.pathname.includes('//')) url.pathname = url.pathname.replace(/\/{2,}/g, '/')
+
+    // Per-request CORS. Every `...CORS_HEADERS` spread below keeps working unchanged.
+    const CORS_HEADERS = corsHeadersFor(req.headers.get('origin'), ALLOWED_ORIGINS, !SERVE_STATIC)
+
+    /** JSON response carrying this request's CORS headers. */
+    const json = (body: unknown, status = 200): Response =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
 
     if (req.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS_HEADERS })
@@ -255,24 +286,145 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       return new Response('Not found', { status: 404, headers: CORS_HEADERS })
     }
 
+    // The caller's real IP, resolved once per request. Forwarded headers are only believed
+    // when AGENTISTICS_TRUST_PROXY=1 (see client-ip.ts) — otherwise the socket address wins.
+    const clientIp = resolveClientIp({
+      socketAddress: server.requestIP(req)?.address ?? null,
+      headers: req.headers,
+      trustProxy: TRUST_PROXY,
+    })
+
+    // ---------------------------------------------------------------------------
+    // Rate limiting. Auth endpoints get the strict rule, token-bearing endpoints their own,
+    // and everything else under /api a generous ceiling so a single client cannot scrape the
+    // whole dataset in a loop. `unknown` IPs share one bucket on purpose — fail closed.
+    // ---------------------------------------------------------------------------
+    if (url.pathname.startsWith('/api/')) {
+      const rule = rateRuleFor(url.pathname)
+      const key = rule === RULES.api ? `ip:${clientIp}:api` : `ip:${clientIp}:${url.pathname}`
+      const verdict = limiter.check(key, rule)
+      if (!verdict.allowed) {
+        if (rule === RULES.login) void writeAudit({ action: 'rate.blocked', ip: clientIp, meta: { path: url.pathname } })
+        const res = tooManyRequests(verdict.retryAfterSec)
+        const headers = new Headers(res.headers)
+        for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+        return new Response(res.body, { status: res.status, headers })
+      }
+    }
+
+    // ---------------------------------------------------------------------------
+    // CSRF defence in depth (see csrf.ts). SameSite=Strict is the first line; this rejects any
+    // unsafe method that carries a session cookie without proving same-origin provenance.
+    // Token-authenticated machine clients send no cookie and are exempt.
+    // ---------------------------------------------------------------------------
+    if (url.pathname.startsWith('/api/')) {
+      const verdict = csrfVerdict({
+        method: req.method,
+        origin: req.headers.get('origin'),
+        secFetchSite: req.headers.get('sec-fetch-site'),
+        host: url.host,
+        hasCookie: req.headers.has('cookie'),
+        allowlist: ALLOWED_ORIGINS,
+        dev: !SERVE_STATIC,
+      })
+      if (!verdict.ok) {
+        return new Response(JSON.stringify({ error: 'csrf_blocked' }), {
+          status: 403,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Local-capability guard. Routes that execute shell commands, spawn coding-assistant
+    // CLIs, read the host's raw transcripts, or edit ~/.claude.json are unreachable
+    // whenever the exposure profile revokes the capability (see exposure.ts). Checked
+    // BEFORE auth on purpose: an exposed instance never even reveals whether the caller
+    // is authenticated, and no account role can talk its way into a shell.
+    // ---------------------------------------------------------------------------
+    {
+      const needed = routeCapability(url.pathname)
+      if (needed) {
+        const denied = capabilityDenied(needed)
+        if (denied) {
+          void writeAudit({ action: 'capability.denied', ip: clientIp, meta: { path: url.pathname, capability: needed } })
+          return new Response(denied.body, {
+            status: denied.status,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+      }
+    }
+
     // ---------------------------------------------------------------------------
     // Auth gate (Phase 5): account-principal auth on the central.
     // All /api/* routes require a valid account session except the public allowlist.
     // Static assets are always served (the SPA + login UI must load without auth).
     // ---------------------------------------------------------------------------
     if (TEAM_CENTRAL && url.pathname.startsWith('/api/') && !AUTH_PUBLIC.has(url.pathname)) {
-      const principal = await getPrincipal(req)
-      if (!principal) {
+      const session = await getPrincipalSession(req)
+      if (!session) {
         return new Response(JSON.stringify({ error: 'auth required' }), { status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
       }
       // Admin routes require the owner.
-      if (isAdminPath(url.pathname) && principal.role !== 'owner') {
+      if (isAdminPath(url.pathname) && session.principal.role !== 'owner') {
+        void writeAudit({ action: 'authz.denied', ip: clientIp, actorId: session.principal.accountId, meta: { path: url.pathname } })
         return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+      }
+      // On an internet-exposed instance an owner must hold a second factor: their account can
+      // reach every team's data and every admin route, so a single leaked password would be the
+      // whole instance. Until they enrol, only the enrolment and identity routes answer.
+      if (CAPS.requireMfaForOwner && session.principal.role === 'owner' && !MFA_EXEMPT.has(url.pathname)) {
+        const { isMfaEnabled } = await import('./mfa-store')
+        if (!(await isMfaEnabled(session.principal.accountId).catch(() => true))) {
+          return new Response(JSON.stringify({ error: 'mfa_enrollment_required' }), {
+            status: 403,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+      }
+      // Step-up ("sudo mode"): a session cookie proves who you are, not that you are still at
+      // the keyboard. Operations that destroy data or mint a credential additionally require a
+      // fresh grant from POST /api/iam/stepup, presented in X-Stepup. This does not prevent a
+      // cookie being stolen — it bounds what the theft is worth.
+      if (requiresStepUp(req.method, url.pathname)) {
+        const granted = verifyStepUp(
+          req.headers.get(STEPUP_HEADER),
+          session.principal.accountId,
+          session.sessionVersion,
+          TEAM_SESSION_SECRET,
+          Date.now(),
+        )
+        if (!granted) {
+          void writeAudit({
+            action: 'stepup.missing',
+            ip: clientIp,
+            actorId: session.principal.accountId,
+            meta: { path: url.pathname, method: req.method },
+          })
+          return new Response(JSON.stringify({ error: 'stepup_required' }), {
+            status: 403,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+      }
+      // Sliding session: reissue the cookie periodically so an active user is never logged out
+      // at the idle wall, while an abandoned session still dies IDLE_TIMEOUT_MS after last use.
+      if (Date.now() - session.issuedAtMs > SESSION_REFRESH_MS) {
+        refreshedCookies.set(req, makePrincipalSessionCookieHeader(session.principal.accountId, session.sessionVersion))
       }
     }
 
 
     if (url.pathname === '/api/events' && req.method === 'GET') {
+      // Each SSE client holds a socket and a controller for as long as it stays connected, so an
+      // unbounded count is a free way to exhaust the process (OWASP API4).
+      if (sseClients.size >= LIMITS.sseClients) {
+        return new Response(JSON.stringify({ error: 'too_many_streams' }), {
+          status: 503,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
           sseClients.add(controller)
@@ -312,8 +464,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -354,8 +507,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -377,7 +531,7 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
             })
             send('done', {})
           } catch (err) {
-            send('error', { message: err instanceof Error ? err.message : String(err) })
+            send('error', safeError(err, { verbose: PROFILE === 'local' }).body)
           } finally {
             try { controller.close() } catch { /* already closed */ }
           }
@@ -448,8 +602,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -486,8 +641,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -541,8 +697,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
@@ -680,7 +837,7 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        return new Response(JSON.stringify({ ok: false, error: String(err) }), {
+        return new Response(JSON.stringify({ ok: false, ...safeError(err, { verbose: PROFILE === 'local' }).body }), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -773,8 +930,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -824,8 +982,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -869,8 +1028,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
@@ -889,8 +1049,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -907,8 +1068,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -924,8 +1086,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -991,9 +1154,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        console.error('[/api/data error]', message)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error('[/api/data]', safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -1022,6 +1185,44 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       return new Response(res.body, { status: res.status, headers })
     }
 
+    if (url.pathname === '/api/iam/login/mfa' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleIamLoginMfa } = await import('./iam-handlers')
+      const res = await handleIamLoginMfa(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/stepup' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleStepUp } = await import('./iam-handlers')
+      const res = await handleStepUp(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/mfa' || url.pathname.startsWith('/api/iam/mfa/')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleMfa } = await import('./iam-handlers')
+      const res = await handleMfa(req, url.pathname)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // Owner-only (enforced by isAdminPath in the gate above): the security event log.
+    if (url.pathname === '/api/iam/audit' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const limit = parseInt(url.searchParams.get('limit') ?? '200', 10)
+      const events = await listAudit({ limit: Number.isFinite(limit) ? limit : 200 })
+      return new Response(JSON.stringify({ events }), {
+        status: 200,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (url.pathname === '/api/iam/status' && req.method === 'GET') {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleIamStatus } = await import('./iam-handlers')
@@ -1043,7 +1244,12 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     if (url.pathname === '/api/iam/login' && req.method === 'POST') {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleIamLogin } = await import('./iam-handlers')
-      const res = await handleIamLogin(req)
+      // A successful login clears this IP's login bucket, so someone who mistyped twice
+      // before getting it right is not left one attempt away from a block.
+      const res = await handleIamLogin(req, {
+        ip: clientIp,
+        onSuccess: () => limiter.reset(`ip:${clientIp}:${url.pathname}`),
+      })
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })
@@ -1352,8 +1558,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -1571,12 +1778,12 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
 
 try {
 // PORT (47291) is always the api + mcp endpoint.
-Bun.serve<WSData>({ port: PORT, idleTimeout: 60, websocket: _wsHandlers, fetch: handleRequest })
+Bun.serve<WSData>({ port: PORT, idleTimeout: 60, maxRequestBodySize: LIMITS.ingestBodyBytes, websocket: _wsHandlers, fetch: handleRequest })
 // Binary mode also serves the web dashboard on WEB_PORT (47292) — that's the URL you open.
 // Same handler → the SPA's same-origin `/api/*` calls resolve against 47292 and just work,
 // while 47291 stays the dedicated api + mcp port.
 if (SERVE_STATIC) {
-  Bun.serve<WSData>({ port: WEB_PORT, idleTimeout: 60, websocket: _wsHandlers, fetch: handleRequest })
+  Bun.serve<WSData>({ port: WEB_PORT, idleTimeout: 60, maxRequestBodySize: LIMITS.ingestBodyBytes, websocket: _wsHandlers, fetch: handleRequest })
 }
 
 const _ESC = '\x1b'

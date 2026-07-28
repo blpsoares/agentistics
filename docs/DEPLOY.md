@@ -44,8 +44,9 @@ first time (when `central.env` is missing).
 > (a developer's local/member instance) and would make that instance wrongly think it is
 > the central. Using `central.env` keeps the two roles cleanly separated.
 
-> **Security note**: the setup keeps `AGENTISTICS_TEAM_SESSION_SECRET` separate from the
-> password. If the password is ever leaked, an attacker still cannot forge session cookies
+> **Security note**: `AGENTISTICS_TEAM_SESSION_SECRET` is always separate from the password —
+> there is no fallback, and a value equal to the password refuses to boot. If the password is
+> ever leaked, an attacker still cannot forge session cookies
 > as long as the session secret is unknown.
 
 **Manual alternative** — copy the example and edit it yourself:
@@ -187,13 +188,18 @@ agentop central up        # runs the central natively in the FOREGROUND (Ctrl-C 
 | Variable | Default | Description |
 |---|---|---|
 | `APP_PORT` | `48080` | Host port the central is served on (distinct from a member/dev's `47291`) |
-| `BIND_IP` | `0.0.0.0` | Interface the app binds to. Default `0.0.0.0` = all interfaces. Set to a specific IP (e.g. your Tailscale address) to restrict exposure |
+| `BIND_IP` | `127.0.0.1` | Interface the app binds to. Default `127.0.0.1` = this host only, which is all a tunnel or a local reverse proxy needs. Set `0.0.0.0` for LAN access, or a specific IP (e.g. your Tailscale address) to restrict it to that network |
 | `MONGO_URL` | `mongodb://mongo:27017/?replicaSet=rs0` | MongoDB connection string. Point it at Atlas (`mongodb+srv://…`) or a remote Mongo to skip the bundled container — the standalone `agentop central` then runs natively without Docker (see [External database](#external-database-atlas--remote-mongo--no-docker-required)) |
 | `MONGO_DB` | `agentistics` | MongoDB database name |
 | `AGENTISTICS_TEAM_CENTRAL` | `1` | Enable central aggregator mode (always `1` in Docker) |
 | `AGENTISTICS_TEAM_ORG` | `default` | Organisation namespace for team sessions |
 | `AGENTISTICS_TEAM_PASSWORD` | _(required)_ | Dashboard login password |
-| `AGENTISTICS_TEAM_SESSION_SECRET` | _(required)_ | HMAC key for session cookies |
+| `AGENTISTICS_TEAM_SESSION_SECRET` | _(generated)_ | HMAC key for session cookies. Leave empty and the central generates a random one and persists it. It **never** falls back to the password — setting it equal to `AGENTISTICS_TEAM_PASSWORD` refuses to boot |
+| `AGENTISTICS_EXPOSURE` | `lan` on a central | `local` \| `lan` \| `public`. `public` permanently revokes the local-shell, local-chat, host-transcript and MCP-admin routes and requires every owner to hold a second factor. An unrecognised value fails closed to `public`. See [docs/exposure.md](exposure.md) |
+| `AGENTISTICS_ALLOW_LOCAL_SHELL` | _(unset)_ | Re-enables those host-power routes on a `lan` central. **Ignored on `public`** |
+| `AGENTISTICS_TRUST_PROXY` | _(unset)_ | Believe `CF-Connecting-IP` / `X-Forwarded-For` for rate limiting and audit logging. Set to `1` **only** when a proxy that rewrites them is the sole way in |
+| `AGENTISTICS_ALLOWED_ORIGINS` | _(empty)_ | Comma-separated browser origins allowed cross-origin. Normally empty — the dashboard is same-origin |
+| `AGENTISTICS_TEAM_TLS` | _(unset)_ | `1` when TLS is terminated in front: adds `Secure` + the `__Host-` cookie prefix and emits HSTS |
 | `AGENTISTICS_TEAM_INGEST_TOKEN` | _(empty)_ | Bearer token for `/api/team/ingest`; leave empty to allow unauthenticated ingestion |
 
 ---
@@ -204,19 +210,23 @@ agentop central up        # runs the central natively in the FOREGROUND (Ctrl-C 
 
 | Goal | `BIND_IP` | Reachable from |
 |---|---|---|
-| Works everywhere (default) | _unset_ → `0.0.0.0` | Every interface that can route to the host |
-| Serve a private tailnet only | your Tailscale IP (e.g. `100.x.y.z`) | This host + Tailscale peers |
-| Local machine only | `127.0.0.1` | Just this host's browser |
+| This host only (default) | _unset_ → `127.0.0.1` | Just this host's browser, a tunnel, or a local reverse proxy |
+| Serve a private tailnet | your Tailscale IP (e.g. `100.x.y.z`) | This host + Tailscale peers |
+| Serve the whole LAN | `0.0.0.0` | Every interface that can route to the host |
 
-The default `0.0.0.0` just works. If you want to **restrict** exposure, set `BIND_IP` to a
-specific address — binding your Tailscale IP serves remote teammates over Tailscale's
-encrypted network, so plain HTTP inside the tailnet is fine (Tailscale encrypts the
-transport). Only reach for a TLS reverse proxy + `AGENTISTICS_TEAM_TLS=1` if you must
-expose the dashboard **outside** Tailscale.
+**The default is loopback on purpose.** It used to be `0.0.0.0`, which meant a fresh install
+landed on every interface the host could route — including, on plenty of machines, one facing
+the internet. Widening it is now a decision you make, not one you inherit.
+
+Binding your Tailscale IP serves remote teammates over Tailscale's encrypted network, so plain
+HTTP inside the tailnet is fine. To publish **outside** a tailnet, do not widen `BIND_IP` —
+keep it on loopback and put a tunnel or a TLS reverse proxy in front, then set
+`AGENTISTICS_TEAM_TLS=1` and `AGENTISTICS_EXPOSURE=public`. That path is documented end to end
+in **[docs/exposure.md](exposure.md)**, and `agentop doctor --exposed` checks it for you.
 
 > **WSL2 note:** binding to a specific non-loopback IP (e.g. Tailscale) means Windows'
 > `localhost` forwarding no longer reaches the app — browse via that IP instead. The default
-> `0.0.0.0` keeps `http://localhost:<APP_PORT>` working.
+> `127.0.0.1` keeps `http://localhost:<APP_PORT>` working from this host.
 
 ### WSL2 + Tailscale: use `tailscale serve` (recommended)
 
@@ -243,6 +253,59 @@ Everyone then uses the **HTTPS MagicDNS URL with no port** — e.g.
 the reverse-channel WebSocket (`/api/team/agent`) too, so presence and on-demand chat keep
 working. Undo with `tailscale serve reset`. (Requires HTTPS certificates enabled for your
 tailnet — the default on modern Tailscale.)
+
+---
+
+## Upgrading an existing central
+
+Three changes in this release affect an instance that is already running. `central.sh up`
+handles the first two for you and warns about the third.
+
+| Change | Effect | What happens |
+|---|---|---|
+| The container now runs as **uid 10001** instead of root | the existing `agentistics_data` volume is owned by root, so the app could not write preferences or the consolidate store | `central.sh up` chowns the volume once, automatically. Doing it by hand: `docker run --rm --user 0 -v team-mode_agentistics_data:/d alpine chown -R 10001:10001 /d` |
+| **`BIND_IP` now defaults to `127.0.0.1`** instead of `0.0.0.0` | a central teammates reached directly over the LAN or a tailnet becomes unreachable | `central.sh up` prints a notice when `BIND_IP` is unset. Add `BIND_IP=0.0.0.0` (LAN, as before) or your Tailscale address to `central.env`. Tunnels and local access are unaffected |
+| The **session cookie format changed** (it now carries a signed issue time for the idle timeout) | every existing session cookie is invalid | Everyone signs in again once, after the upgrade. No action needed |
+
+Nothing else migrates: accounts, machine tokens, teams, tags and all metrics are untouched, and
+existing passwords keep working — the 12-character policy applies when a password is *set*, not
+when it is used.
+
+---
+
+## Security controls
+
+A central is multi-tenant and can be published on the internet, so it carries controls a solo
+machine does not. This is the summary. The **security model** — threat model, trust boundaries,
+the request pipeline and the limits of each control — is **[docs/security.md](security.md)**;
+the deployment runbook and go-live checklist are **[docs/exposure.md](exposure.md)**.
+
+| Control | Where |
+|---|---|
+| **Exposure profile** — `local` / `lan` / `public` decides which host-power routes exist at all. `public` permanently revokes `/api/exec`, `/api/chat-tty`, the host transcript readers and `/api/mcp-action`, checked *before* the auth gate | `server/exposure.ts`, `server/capability-guard.ts` |
+| **Accounts** — argon2id hashes, generic 401 (no user enumeration), `sessionVersion` revokes every live cookie instantly, role + memberships read fresh from the DB per request | `server/accounts.ts`, `server/auth.ts` |
+| **Two-factor** — RFC 6238 TOTP with single-use recovery codes (sha256-hashed). The password stage issues no cookie when a factor is enrolled; a `public` profile requires it of every owner | `server/totp.ts`, `server/mfa-store.ts` |
+| **Password policy** — 12-character floor with a 1024 ceiling, common-password blocklist, rejects anything containing the account's own name or e-mail | `server/password-policy.ts` |
+| **Rate limiting** — 5 logins per 15 min per IP with doubling backoff; a separate soft per-account bucket checked *before* the argon2 verify; token and ingest rules of their own | `server/rate-limit.ts` |
+| **Step-up ("sudo mode")** — deleting an account or team, editing an account, and minting/rotating/revoking a machine token each require a fresh five-minute grant obtained with the password or a TOTP code, so a stolen cookie alone cannot destroy data | `server/stepup.ts` |
+| **Session cookie** — `__Host-` prefixed when Secure, `SameSite=Strict`, `HttpOnly`, 12h idle timeout with a 15-minute sliding refresh inside a 7-day absolute cap | `server/auth.ts` |
+| **Session secret** — never derived from the dashboard password; a value equal to it refuses to boot | `server/secret-store.ts` |
+| **Security headers** — CSP (no inline script, `frame-ancestors 'none'`), HSTS under TLS, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, COOP/CORP, `no-store` on `/api` | `server/security-headers.ts` |
+| **CORS + CSRF** — explicit origin allowlist (no wildcard, no ACAO for an unknown origin); unsafe methods carrying a cookie must prove same-origin provenance. Bearer clients are exempt, since CSRF rides cookies | `server/cors.ts`, `server/csrf.ts` |
+| **Authorization** — deny-by-default gate; owner-only admin paths incl. nested detail routes; per-team scoping of every response. The exact public allowlist is asserted by a test | `server/index-routes.ts`, `server/team-scope.ts`, `server/authz-gate.test.ts` |
+| **Audit log** — append-only, 180-day TTL: logins, failures, lockouts, MFA events, password changes, account/team/token changes, every gate denial. Secret-shaped fields are redacted before write. Owner-only at `GET /api/iam/audit` | `server/audit.ts` |
+| **Resource limits** — bodies read through a byte counter that abandons an oversized payload mid-stream, SSE client cap, `maxRequestBodySize`, timeouts on every outbound fetch | `server/limits.ts` |
+| **Error hygiene** — clients get a code plus a correlation ref; the real message goes to the log only | `server/errors.ts` |
+| **Container** — uid 10001, read-only root filesystem, `cap_drop: ALL`, `no-new-privileges`, loopback bind, Mongo unpublished. Host harness dirs are mounted only when `AGENTISTICS_CENTRAL_USER` is set | `Dockerfile`, `docker-compose*.yml` |
+
+Before exposing anything, run:
+
+```bash
+agentop doctor --exposed
+```
+
+It prints the nine-point checklist and exits non-zero on any failure. A check that could not be
+verified (e.g. the database was unreachable) reports a failure, never a reassuring pass.
 
 ---
 
