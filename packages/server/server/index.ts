@@ -23,7 +23,10 @@ import { handleLogout, handleSession, getPrincipal } from './auth'
 import { routeCapability, capabilityDenied } from './capability-guard'
 import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
 import { resolveClientIp } from './client-ip'
-import { TRUST_PROXY } from './config'
+import { corsHeadersFor } from './cors'
+import { csrfVerdict } from './csrf'
+import { securityHeaders } from './security-headers'
+import { TRUST_PROXY, ALLOWED_ORIGINS, TEAM_TLS } from './config'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -153,14 +156,11 @@ ensureClaudeChat().catch(err => console.error('[claude-chat] failed to initializ
 
 
 // ---------------------------------------------------------------------------
-// CORS headers
+// CORS is computed per request from the caller's Origin against an explicit allowlist
+// (see cors.ts). The old wildcard `Access-Control-Allow-Origin: *` let any web page probe
+// this instance from a victim's network. `corsHeadersFor` emits no ACAO at all for an
+// unknown origin, which is the right answer for a same-origin dashboard.
 // ---------------------------------------------------------------------------
-
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, PUT, POST, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-}
 
 // Routes that are always public (no auth gate applied)
 const AUTH_PUBLIC = new Set([
@@ -224,13 +224,32 @@ const _wsHandlers = {
   close(ws: ServerWebSocket<WSData>) { if (!ws.data.isAgent) return; unregisterAgent(ws) },
 }
 
+/**
+ * Outer handler: runs the router, then stamps the OWASP baseline security headers on whatever
+ * it produced. Doing it here (rather than at ~60 individual call sites) means a newly added
+ * route cannot forget them. SSE responses set their headers before the first flush, so
+ * mutating `res.headers` afterwards is still safe.
+ */
 async function handleRequest(req: Request, server: Server<WSData>): Promise<Response | undefined> {
+  const res = await handleRequestInner(req, server)
+  if (!res) return res // WebSocket upgrade handed off
+  const isApi = new URL(req.url).pathname.startsWith('/api/')
+  for (const [k, v] of Object.entries(securityHeaders({ tls: TEAM_TLS, dev: !SERVE_STATIC, isApi }))) {
+    res.headers.set(k, v)
+  }
+  return res
+}
+
+async function handleRequestInner(req: Request, server: Server<WSData>): Promise<Response | undefined> {
     const url = new URL(req.url)
     // Collapse repeated slashes in the path. A member whose endpoint has a trailing slash
     // builds URLs like `//api/team/ingest` / `//api/team/agent`; without this they'd miss the
     // exact-match API routes and silently fall through to the static handler (200, no ingest)
     // or fail the WS upgrade — making pushes/presence look fine while nothing lands.
     if (url.pathname.includes('//')) url.pathname = url.pathname.replace(/\/{2,}/g, '/')
+
+    // Per-request CORS. Every `...CORS_HEADERS` spread below keeps working unchanged.
+    const CORS_HEADERS = corsHeadersFor(req.headers.get('origin'), ALLOWED_ORIGINS, !SERVE_STATIC)
 
     if (req.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS_HEADERS })
@@ -268,6 +287,29 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
         const headers = new Headers(res.headers)
         for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
         return new Response(res.body, { status: res.status, headers })
+      }
+    }
+
+    // ---------------------------------------------------------------------------
+    // CSRF defence in depth (see csrf.ts). SameSite=Strict is the first line; this rejects any
+    // unsafe method that carries a session cookie without proving same-origin provenance.
+    // Token-authenticated machine clients send no cookie and are exempt.
+    // ---------------------------------------------------------------------------
+    if (url.pathname.startsWith('/api/')) {
+      const verdict = csrfVerdict({
+        method: req.method,
+        origin: req.headers.get('origin'),
+        secFetchSite: req.headers.get('sec-fetch-site'),
+        host: url.host,
+        hasCookie: req.headers.has('cookie'),
+        allowlist: ALLOWED_ORIGINS,
+        dev: !SERVE_STATIC,
+      })
+      if (!verdict.ok) {
+        return new Response(JSON.stringify({ error: 'csrf_blocked' }), {
+          status: 403,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
       }
     }
 

@@ -94,6 +94,13 @@ export const ALLOW_LOCAL_SHELL = process.env.AGENTISTICS_ALLOW_LOCAL_SHELL === '
 // the app is reachable exclusively through a proxy that rewrites them (cloudflared on the same
 // host + BIND_IP=127.0.0.1) — otherwise a client can pick its own rate-limit bucket.
 export const TRUST_PROXY = process.env.AGENTISTICS_TRUST_PROXY === '1'
+// Comma-separated browser origins allowed to call this instance cross-origin. Normally EMPTY:
+// the dashboard is served by this same process, so it is same-origin. Only set it for a split
+// deployment (SPA hosted elsewhere).
+export const ALLOWED_ORIGINS = (process.env.AGENTISTICS_ALLOWED_ORIGINS ?? '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean)
 
 // ---------------------------------------------------------------------------
 // Phase 3 — auth gate. When AGENTISTICS_TEAM_PASSWORD is set, the central
