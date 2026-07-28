@@ -502,3 +502,15 @@ test('HARNESS_ORDER lists every harness exactly once', () => {
   expect([...HARNESS_ORDER].sort()).toEqual(Object.keys(HARNESS_CAPABILITIES).sort() as typeof HARNESS_ORDER)
   expect(new Set(HARNESS_ORDER).size).toBe(HARNESS_ORDER.length)
 })
+
+test('a gpt-5.6 variant is priced as itself, not as legacy gpt-5', () => {
+  // Regression: `gpt-5.6-terra` (what Codex actually reports) prefix-matched the legacy `gpt-5`
+  // row and was priced at 1.25/10 instead of 2.5/15 — every Codex session cost half of the truth.
+  expect(getModelPrice('gpt-5.6-terra').input).toBe(2.5)
+  expect(getModelPrice('gpt-5.6-terra').output).toBe(15)
+  expect(getModelPrice('gpt-5.6-sol').output).toBe(30)
+  expect(getModelPrice('gpt-5.6-luna').output).toBe(6)
+  // The legacy rows still resolve for old sessions.
+  expect(getModelPrice('gpt-5').output).toBe(10)
+  expect(getModelPrice('gpt-5-mini').output).toBe(2)
+})

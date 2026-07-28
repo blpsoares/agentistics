@@ -478,9 +478,16 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; cach
   'gemini-3-flash-preview': { input: 0.5, output: 3,   cacheRead: 0.05, cacheWrite: 0.5  },
   'gemini-3-flash':         { input: 0.5, output: 3,   cacheRead: 0.05, cacheWrite: 0.5  },
   'gemini-2.5-flash':       { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0.3  },
-  // OpenAI (Codex CLI) — verified from OpenAI API pricing page, 2026-06-20.
+  // OpenAI (Codex CLI, Copilot CLI) — verified against developers.openai.com/api/docs/pricing.
+  // 5.6 rows added and 5.5/5.4 rows re-checked 2026-07-27; the rest dated 2026-06-20.
+  // `gpt-5` and `gpt-5-mini` are no longer on the page — they are kept as legacy rows for old
+  // sessions. They are also why the 5.6 rows matter: without them `gpt-5.6-terra` prefix-matched
+  // `gpt-5` and was priced at 1.25/10 instead of 2.5/15, halving every Codex session's cost.
   // OpenAI has no separate cache-write charge; cacheWrite is set to the input rate
   // and is unused in practice (the Codex parser always sets cache_creation tokens to 0).
+  'gpt-5.6-sol':    { input: 5,    output: 30, cacheRead: 0.50,  cacheWrite: 5    },
+  'gpt-5.6-terra':  { input: 2.5,  output: 15, cacheRead: 0.25,  cacheWrite: 2.5  },
+  'gpt-5.6-luna':   { input: 1,    output: 6,  cacheRead: 0.10,  cacheWrite: 1    },
   'gpt-5.5':        { input: 5,    output: 30, cacheRead: 0.50,  cacheWrite: 5    },
   'gpt-5.4-mini':   { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0.75 },
   'gpt-5.4':        { input: 2.5,  output: 15, cacheRead: 0.25,  cacheWrite: 2.5  },
