@@ -17,3 +17,17 @@ export function valueFontSize(value: string | number): number {
   if (measured.length > 5) return 22
   return 26
 }
+
+/**
+ * The longer of two renderings of the SAME quantity — used as the sizing basis of a card whose
+ * value can be re-rendered in place (the cost card's USD/BRL toggle).
+ *
+ * Stripping the prefix is not enough there: BRL is ~5× USD, so one amount can legitimately carry
+ * an extra digit ("9,819.26" → "53.001,64") and cross a bucket, resizing the headline on every
+ * toggle. Sizing both currencies by the wider string keeps the number still while its value
+ * changes — the card must not twitch just because you asked the same figure in another currency.
+ */
+export function widerValue(a: string, b: string): string {
+  const len = (s: string) => s.replace(/^[^\d-]+/, '').trim().length
+  return len(b) > len(a) ? b : a
+}

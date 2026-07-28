@@ -663,6 +663,17 @@ export function formatProjectName(projectPath: string): string {
   return projectPath.replace(/\\/g, '/')
 }
 
+/**
+ * Just the project's folder name — for places where the full path does not fit and would be
+ * ellipsized into uselessness ("/home/mithrandir/agenti…"). The path itself belongs in the
+ * tooltip, never dropped: two machines can each have a `web` folder.
+ */
+export function projectFolder(projectPath: string): string {
+  const norm = formatProjectName(projectPath).replace(/\/+$/, '')
+  if (norm === 'Unknown') return norm
+  return norm.slice(norm.lastIndexOf('/') + 1) || norm
+}
+
 export function getModelColor(modelId: string): string {
   if (modelId.includes('opus')) return '#D97706'
   if (modelId.includes('sonnet')) return '#6366f1'

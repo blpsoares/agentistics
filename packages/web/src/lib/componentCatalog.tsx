@@ -7,7 +7,8 @@ import {
 } from 'lucide-react'
 import type { AppContext } from './app-context'
 import { sessionTime } from './sessionTime'
-import { formatProjectName, fmt, fmtDuration, fmtCost, fmtFull } from '@agentistics/core'
+import { widerValue } from './statCardSize'
+import { projectFolder, fmt, fmtDuration, fmtCost, fmtFull } from '@agentistics/core'
 import { StatCard } from '../components/StatCard'
 import { StreakBreakdownButton } from '../components/StreakBreakdownButton'
 import { HighlightsBoard } from '../components/HighlightsBoard'
@@ -133,6 +134,9 @@ export const CATALOG: CatalogItem[] = [
       <StatCard
         label={lang === 'pt' ? 'Custo estimado' : 'Est. cost'}
         value={fmtCost(derived.totalCostUSD, currency, brlRate)}
+        // Same rule as the HomePage cost card: size by the wider currency so switching
+        // USD ⇄ BRL leaves the headline alone.
+        sizeBasis={widerValue(fmtCost(derived.totalCostUSD, 'USD', brlRate), fmtCost(derived.totalCostUSD, 'BRL', brlRate))}
         sub={lang === 'pt' ? 'preços da API Anthropic' : 'Anthropic API pricing'}
         icon={<TrendingUp size={15} />}
         accent="var(--anthropic-orange)"
@@ -171,11 +175,12 @@ export const CATALOG: CatalogItem[] = [
         sub={derived.longestSession ? (() => {
           const t = sessionTime(derived.longestSession, lang)
           const msgs = (derived.longestSession!.user_message_count ?? 0) + (derived.longestSession!.assistant_message_count ?? 0)
-          const msgStr = `${t.activeLabel} · ${t.elapsed} ${t.elapsedLabel} · ${msgs} ${lang === 'pt' ? 'mensagens' : 'messages'}`
+          const msgStr = `${t.activeLabel} · ${t.elapsed} ${t.elapsedLabel} · ${msgs} msgs`
           if (filters.projects.length === 0 && derived.longestSession!.project_path)
-            return `${msgStr} · ${formatProjectName(derived.longestSession!.project_path)}`
+            return `${msgStr} · ${projectFolder(derived.longestSession!.project_path)}`
           return msgStr
         })() : ''}
+        subNoWrap
         icon={<Clock size={15} />}
         accent="var(--accent-purple)"
       />
