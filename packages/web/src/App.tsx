@@ -756,7 +756,7 @@ function MobileBottomNav({
         }}
       />
       <div style={{
-        position: 'fixed', left: 0, right: 0, bottom: 56, zIndex: 320,
+        position: 'fixed', left: 0, right: 0, bottom: 'var(--mobile-nav-h)', zIndex: 320,
         background: 'var(--bg-surface)', borderTop: '1px solid var(--border)',
         borderRadius: '16px 16px 0 0', boxShadow: '0 -8px 30px rgba(0,0,0,0.35)',
         padding: '8px 12px 16px',
@@ -872,7 +872,8 @@ function MobileBottomNav({
           borderTop: '1px solid var(--border)',
           display: 'flex',
           alignItems: 'stretch',
-          height: 56,
+          // Height comes from .mobile-bottom-nav (56px + the home-indicator inset). An inline
+          // `height: 56` would win over the class and re-break the installed PWA.
         }}
       >
         {primary.map(tab => {
@@ -2432,7 +2433,9 @@ export default function AppLayout() {
         // Fill at least the viewport so the footer always sits below the fold (a scroll away),
         // even on short pages — it never floats up into a half-empty screen.
         minHeight: '100vh',
-        padding: isMobile ? '16px 16px 80px' : '24px 32px',
+        // The bottom padding clears the fixed nav, so it has to grow with it: installed as a PWA
+        // the bar is 56px + the home-indicator inset, and a flat 80px hid the last card.
+        padding: isMobile ? '16px 16px calc(24px + var(--mobile-nav-h))' : '24px 32px',
         display: 'flex',
         flexDirection: 'column',
         gap: isMobile ? 14 : 20,
