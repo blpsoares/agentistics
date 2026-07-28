@@ -69,7 +69,7 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── team-agent.ts / team-agent-client.ts → reverse-channel WebSocket: WS-authoritative presence signals, ping/pong latency, on-demand chat fetch
   ├── team-presence.ts     → computePresence (WS-authoritative online/offline + latency; heartbeat only for pure-HTTP members)
   ├── tags-store.ts        → Mongo CRUD for the `tags` collection (TagDoc: name/color/sources/sharedWith/createdBy) + visibleTagsFor(canRead)
-  ├── tags-resolve.ts      → **pure**: sessionMatchesTag / resolveTagSessions — a tag's sources (`repo` | `project` | `machine` | `team` | `account`) resolve to a deduped session SET (union/OR, counted once)
+  ├── tags-resolve.ts      → **pure**: sessionMatchesTag / resolveTagSessions / sessionInWindow — a tag's sources (`repo` | `project` | `machine` | `team` | `account`) resolve to a deduped session SET (union/OR, counted once)
   ├── tags-aggregate.ts    → **pure**: aggregateSessions() → headline numbers (costUSD via calcCost, sessions, tokens, top project/model/harness)
   ├── tags-detail.ts       → **pure**: aggregateTagDetail() → distributions (projects/models/harnesses/repos/members), daily series, activity window, distinct member/machine counts — counts and sums only
   ├── tags-authority.ts    → **pure** gates: canSeeSource / canWriteTagSources (Rule 1) / canReadTag + redactBuckets / redactTopValue / **redactSources** (any key OR source value the viewer cannot see is collapsed into `__other__` / `__hidden__` — without redacting the source list the bucket redaction is bypassable by reading `tag.sources`)
@@ -539,6 +539,18 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
     the page body.
   - New pages need their nav entry in **both** the desktop `SideNav` `items` array **and** the
     `MobileBottomNav` `navTiles` array in `App.tsx` — adding only the first hides the page on a phone.
+- **A tag may be pinned to a PERIOD** (`TagDoc.window`, inclusive `yyyy-MM-dd`, each end independently
+  optional) — that is what makes a tag answer "I ran harness X on this project from the 4th to the
+  18th; what did it cost?" instead of only "these sources, all time". It is an AND on top of the
+  source union, so like `filters` it can only ever narrow. Two rules:
+  **(a) the day rule is `tagSessionDay` (`start_time.slice(0,10)`)**, the same one `tags-detail.ts`
+  uses for the daily series — a local-clock day would be more correct in isolation and wrong here,
+  since at UTC-3 a 23:00 session would sit inside the window while being plotted on the next day's
+  bar of the tag's own chart; **(b) `packages/web/src/lib/tagMatch.ts` mirrors the rule by hand**
+  (the web bundle cannot import `packages/server/*`), so the window must land in BOTH or the tag's
+  card and the tag FILTER disagree — `tagMatch.test.ts` has a cross-check that fails when only one
+  side is updated. Because the period is per tag, `makeTagFilter` evaluates tag by tag; the old
+  flattened source union cannot express it.
 - **Tags are aggregate-only and explicitly shared** — a tag's visibility is the explicit `sharedWith` account list (plus its creator and every owner) and is **never** derived from teams; **anyone signed in may create a tag** — the role difference is REACH, not permission: writing requires that the principal can already see **every** one of its sources (`canWriteTagSources`, re-checked on edit), so an owner reaches anything, a manager what their teams reach, and a plain user only what their own account owns, otherwise a tag becomes a privilege-escalation path; and tag responses return **only counts and sums** — never session rows, transcripts or agent metrics — with keys the viewer cannot see collapsed into an "other" bucket. Tag math runs server-side against the unscoped session set, per-session (never from `stats-cache.json`).
 - **`stats-cache.json` is Claude-only** — never aggregate non-Claude harness metrics from it; use per-session sums for all other harnesses (see "Multi-harness tracking" above)
 - **Harness adapters are modules, not packages** — all adapters live under `packages/server/server/adapters/`; never create a separate package per harness
@@ -586,6 +598,30 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
 - **`files_modified` counting** (`packages/server/server/jsonl.ts`): tracks unique file paths from Edit/Write/MultiEdit tool calls (`claudeFilesModified` Set), then takes `Math.max(gitFileStats.filesModified, claudeFilesModified.size)` — whichever is higher. This captures files Claude edited in non-git directories.
 - **`getProjectGitStats`** (`packages/server/server/git.ts`): first tries the project path as a single git repo; if that fails (not a git repo), falls back to scanning one level of subdirectories and aggregating stats across all git repos found there (handles workspace folders like `~/zuke`).
 - **FILES KPI** (`packages/web/src/hooks/useData.ts`): always uses session-level `files_modified` count first (Edit/Write/MultiEdit calls); falls back to project-level `git_stats.files_modified` only if sessions show 0. This is different from commits/lines which prefer project-level git stats when a project filter is active.
+
+## Concurrent work — one worktree per session, never the shared checkout
+
+Several agents/sessions routinely run against this repo at the same time. A checkout can only be
+on ONE branch and every session sees the same files, so sharing the main checkout is not "slightly
+risky", it silently corrupts work. All four of these happened in a single afternoon:
+
+- **A commit landed on the wrong branch.** Another session ran `git checkout` mid-session; the next
+  commit went onto ITS branch, on top of an unrelated stack.
+- **`git add -A` swept another session's in-progress files** into an unrelated commit. Always stage
+  explicit paths, and read `git status` before every commit — the diff is not only yours.
+- **`bun test` measured a tree someone else was mutating.** The count moved 656 → 842 mid-run: a red
+  test may not be yours, and a green one may prove nothing about your change.
+- **Two agents edited the same file minutes apart.** A "the tree is clean, nobody is working" check
+  is a snapshot, not a lock — it was clean because the other agent was between reads and writes.
+
+So: **work in `.claude/worktrees/<name>/` on your own branch** (the `EnterWorktree` tool, or
+`git worktree add`). A fresh worktree needs `bun install` plus
+`bun run packages/server/scripts/ensure-type-stub.ts` — without the stub `tsc` fails on the
+gitignored `embedded-dist.generated.ts`. Base it on `origin/dev`, not `origin/main`.
+
+**Never rebase or reset a branch another session is committing to** — leave a stray commit where it
+is and land your own copy on the target branch. A cherry-picked duplicate resolves itself on merge
+(same patch, no conflict); a rebase under a live session destroys work.
 
 ## Development
 
