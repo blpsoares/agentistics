@@ -107,6 +107,11 @@ export const HARNESS_ORDER: HarnessId[] = (Object.keys(HARNESS_SORT) as HarnessI
 export interface SessionMeta {
   session_id: string
   project_path: string
+  /** The directory the session is in NOW, when it differs from `project_path` — a session that
+   *  moved into a git worktree (or any subdirectory) keeps `project_path` at the directory it was
+   *  opened in, so that it stays grouped under the same project. Live-session detection matches a
+   *  running process by its cwd, and without this the moved session looks closed while it is open. */
+  current_cwd?: string
   start_time: string
   end_time?: string
   /** WALL CLOCK: last event − first event. A session reopened over three weeks reports ~500h here,
