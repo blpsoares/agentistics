@@ -20,7 +20,8 @@ export interface Principal {
   memberships: Membership[]
 }
 
-/** Mongo doc in the `accounts` collection. */
+/** Mongo doc in the `accounts` collection. Timestamps are BSON `Date`s — the API shape
+ *  (`AccountView` in iam-view.ts) carries ISO strings; see mongo-dates.ts. */
 export interface AccountDoc {
   _id: string
   name: string
@@ -30,10 +31,11 @@ export interface AccountDoc {
   role: Role
   memberships: Membership[]
   sessionVersion: number
-  createdAt: string
-  updatedAt: string
+  createdAt: Date
+  updatedAt: Date
   createdBy?: string
-  lastLoginAt?: string | null
+  /** `null` means "has never signed in" — kept distinct from a real date, never zeroed. */
+  lastLoginAt?: Date | null
   mustChangePassword?: boolean
 }
 
@@ -41,7 +43,7 @@ export interface AccountDoc {
 export interface TeamDoc {
   _id: string
   name: string
-  createdAt: string
+  createdAt: Date
   createdBy?: string
 }
 

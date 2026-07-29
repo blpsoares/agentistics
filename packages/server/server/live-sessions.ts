@@ -29,6 +29,14 @@ function lastActivityMs(s: SessionMeta): number {
   return 0
 }
 
+/** Where a session IS, which is not always the project it belongs to: a session that moved into a
+ *  git worktree keeps `project_path` at the directory it was opened in (so the worktree's work
+ *  still counts as the same project) while its process runs in the worktree. The process cwd is
+ *  matched against this, and against this alone — a moved session is in one place, not two. */
+export function sessionCwd(s: SessionMeta): string {
+  return s.current_cwd || s.project_path
+}
+
 /** Process name (`/proc/<pid>/comm`) → the harness it belongs to. `comm` is truncated to 15 chars
  *  by the kernel, which none of these reach. A session is only ever matched to a process of its own
  *  harness, so a `gemini` process can never mark an `antigravity` session open (they share a home
@@ -249,7 +257,7 @@ export function resolveOpenSessionIds(
   for (const group of groups.values()) {
     const { harness, cwd } = group[0]!
     const candidates = sessions
-      .filter(s => s.harness === harness && s.project_path === cwd && !open.has(s.session_id))
+      .filter(s => s.harness === harness && sessionCwd(s) === cwd && !open.has(s.session_id))
       .filter(isFresh)
       .sort((a, b) => lastActivityMs(b) - lastActivityMs(a))
     // Strictest bound first, so the newest process claims the newest session it could be driving
@@ -307,7 +315,10 @@ export function resolveLiveSnapshot(
   const remaining = new Map<string, number>()
   for (const id of open) {
     const s = sessions.find(x => x.session_id === id)
-    if (s) remaining.set(`${s.harness} ${s.project_path}`, (remaining.get(`${s.harness} ${s.project_path}`) ?? 0) + 1)
+    if (s) {
+      const key = `${s.harness} ${sessionCwd(s)}`
+      remaining.set(key, (remaining.get(key) ?? 0) + 1)
+    }
   }
 
   const known = new Set(sessions.map(s => s.session_id))

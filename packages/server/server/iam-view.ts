@@ -3,6 +3,7 @@
  * passwordHash) + account/team visibility & management capability checks.
  */
 import type { AccountDoc, Principal, Membership, Role } from './iam-types'
+import { fromBsonDate, fromBsonDateOrNull } from './mongo-dates'
 
 export interface PublicAccount {
   id: string
@@ -15,7 +16,8 @@ export interface PublicAccount {
   mustChangePassword: boolean
 }
 
-/** Client-safe view of an account — drops passwordHash/emailLower/sessionVersion. */
+/** Client-safe view of an account — drops passwordHash/emailLower/sessionVersion, and renders
+ *  the stored BSON dates as ISO strings (the wire shape the frontend parses). */
 export function publicAccount(a: AccountDoc): PublicAccount {
   return {
     id: a._id,
@@ -23,8 +25,8 @@ export function publicAccount(a: AccountDoc): PublicAccount {
     email: a.email,
     role: a.role,
     memberships: a.memberships,
-    createdAt: a.createdAt,
-    lastLoginAt: a.lastLoginAt ?? null,
+    createdAt: fromBsonDate(a.createdAt),
+    lastLoginAt: fromBsonDateOrNull(a.lastLoginAt),
     mustChangePassword: a.mustChangePassword ?? false,
   }
 }
@@ -89,6 +91,18 @@ export function canManageMachineTeam(p: Principal, teamId: string | undefined): 
   if (p.role === 'owner') return true
   if (!teamId) return false
   return p.memberships.some(m => m.teamId === teamId && m.role === 'manager')
+}
+
+/**
+ * Whether a principal may see OTHER PEOPLE'S names: the instance owner, or a manager of any team.
+ *
+ * This is the server-side twin of the frontend's `canFilterMembers` (App.tsx) — the same condition
+ * that gates the members panel and the member filter. Anything that reveals who else uses the
+ * instance must sit behind it, or a plain user learns their colleagues' names through whichever
+ * surface forgot the check.
+ */
+export function canSeeMemberNames(p: Principal): boolean {
+  return p.role === 'owner' || p.memberships.some(m => m.role === 'manager')
 }
 
 /** Whether a principal may view/manage a specific machine: owner, a manager of ANY of the machine's

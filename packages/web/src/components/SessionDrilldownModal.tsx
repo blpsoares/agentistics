@@ -5,6 +5,7 @@ import {
   CheckCircle, XCircle, Globe, Server, ExternalLink, Workflow as WorkflowIcon,
 } from 'lucide-react'
 import type { SessionMeta, Lang, WorkflowRun } from '@agentistics/core'
+import { sessionTime } from '../lib/sessionTime'
 import { formatProjectName, formatModel, calcCost, getModelColor, sessionLabel, fmtCost } from '@agentistics/core'
 import { blendedCostPerToken } from '../hooks/useData'
 import { buildWorkflowSteps } from '../lib/workflowSteps'
@@ -12,39 +13,7 @@ import { fmtFull } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { PrecisionToggle } from './PrecisionToggle'
 import { useIsMobile } from '../hooks/useIsMobile'
-
-// splitInlinedHistory
-// Non-Claude harnesses sometimes concatenate a whole conversation into a single
-// user-turn (e.g. "User: hi\nAssistant: hello"). This helper splits such blocks
-// into individual bubbles so the transcript renders correctly.
-
-/** Pattern that matches a newline immediately followed by a conversation label. */
-const SPLIT_LABEL_RE = /\n(?=(?:User|Assistant|Gemini|Copilot):)/
-
-export function splitInlinedHistory(
-  role: 'user' | 'assistant',
-  content: string
-): { role: 'user' | 'assistant'; content: string }[] {
-  if (role !== 'user' || !SPLIT_LABEL_RE.test(content)) {
-    return [{ role, content }]
-  }
-  const segments = content.split(SPLIT_LABEL_RE).filter(Boolean)
-  const result: { role: 'user' | 'assistant'; content: string }[] = []
-  for (const seg of segments) {
-    const match = seg.match(/^(User|Assistant|Gemini|Copilot):\s*/)
-    if (match) {
-      const label = match[1]!
-      const text = seg.slice(match[0].length).trim()
-      if (!text) continue
-      result.push({ role: label === 'User' ? 'user' : 'assistant', content: text })
-    } else {
-      const text = seg.trim()
-      if (text) result.push({ role, content: text })
-    }
-  }
-  return result.length > 0 ? result : [{ role, content }]
-}
-
+import { splitInlinedHistory } from '../lib/transcriptSplit'
 
 interface Props {
   session: SessionMeta
@@ -237,7 +206,10 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
               <span style={{ opacity: 0.4 }}>·</span>
               <span>{session.start_time ? format(parseISO(session.start_time), 'MMM d, yyyy HH:mm') : '—'}</span>
               <span style={{ opacity: 0.4 }}>·</span>
-              <span>{fmtDuration(session.duration_minutes ?? 0)}</span>
+              <span title={sessionTime(session, lang).tooltip}
+                style={{ cursor: 'help' }}>
+                {sessionTime(session, lang).combined}
+              </span>
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>

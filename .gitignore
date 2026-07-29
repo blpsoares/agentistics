@@ -68,3 +68,6 @@ packages/web/public/*.webm
 *.env
 *.env.bak
 central.env.*
+
+# git worktrees created by the harness
+.claude/worktrees/

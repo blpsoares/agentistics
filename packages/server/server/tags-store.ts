@@ -2,7 +2,7 @@
  * tags-store.ts — Mongo persistence for tags (B5).
  *
  * Collection: `tags`
- *   { _id, name, color?, sources[], filters[], sharedWith[], createdBy, createdAt, updatedAt }
+ *   { _id, name, color?, sources[], filters[], window?, sharedWith[], createdBy, createdAt: Date, updatedAt: Date }
  *
  * Visibility is an explicit account list — never derived from teams. The creator and every owner
  * always see a tag; everyone else must be in `sharedWith`.
@@ -10,7 +10,7 @@
 import { randomBytes } from 'node:crypto'
 import type { Collection } from 'mongodb'
 import { getMongoDb } from './mongo'
-import type { TagSource } from './tags-resolve'
+import type { TagSource, TagWindow } from './tags-resolve'
 
 export interface TagDoc {
   _id: string
@@ -19,11 +19,14 @@ export interface TagDoc {
   sources: TagSource[]
   /** Optional narrowing of the union: OR within a type, AND across types. Never widens. */
   filters?: TagSource[]
+  /** Optional period the tag is pinned to (inclusive `yyyy-MM-dd`). Absent = all time. */
+  window?: TagWindow
   /** accountIds granted read access. The creator and owners are implicit and not stored here. */
   sharedWith: string[]
   createdBy: string
-  createdAt: string
-  updatedAt: string
+  /** BSON Dates — see mongo-dates.ts. The /api/tags responses render them as ISO strings. */
+  createdAt: Date
+  updatedAt: Date
 }
 
 async function getTagsCollection(): Promise<Collection<TagDoc>> {
@@ -42,15 +45,17 @@ export async function getTag(id: string): Promise<TagDoc | null> {
 }
 
 export async function createTag(input: {
-  name: string; color?: string; sources: TagSource[]; filters?: TagSource[]; sharedWith: string[]; createdBy: string
+  name: string; color?: string; sources: TagSource[]; filters?: TagSource[]; window?: TagWindow
+  sharedWith: string[]; createdBy: string
 }): Promise<TagDoc> {
-  const now = new Date().toISOString()
+  const now = new Date()
   const doc: TagDoc = {
     _id: randomBytes(12).toString('hex'),
     name: input.name,
     ...(input.color ? { color: input.color } : {}),
     sources: input.sources,
     ...(input.filters && input.filters.length ? { filters: input.filters } : {}),
+    ...(input.window ? { window: input.window } : {}),
     sharedWith: [...new Set(input.sharedWith.filter(Boolean))],
     createdBy: input.createdBy,
     createdAt: now,
@@ -62,16 +67,28 @@ export async function createTag(input: {
 }
 
 export async function updateTag(id: string, patch: {
-  name?: string; color?: string; sources?: TagSource[]; filters?: TagSource[]; sharedWith?: string[]
+  name?: string; color?: string; sources?: TagSource[]; filters?: TagSource[]
+  /** `null` clears the period; `undefined` leaves it alone. */
+  window?: TagWindow | null; sharedWith?: string[]
 }): Promise<boolean> {
   const col = await getTagsCollection()
-  const $set: Partial<TagDoc> = { updatedAt: new Date().toISOString() }
+  const $set: Partial<TagDoc> = { updatedAt: new Date() }
   if (patch.name !== undefined) $set.name = patch.name
   if (patch.color !== undefined) $set.color = patch.color
   if (patch.sources !== undefined) $set.sources = patch.sources
   if (patch.filters !== undefined) $set.filters = patch.filters
+  // Clearing has to UNSET, not store an empty object: `{}` would read back as a window and every
+  // `tag.window &&` guard downstream would take the wrong branch.
+  const $unset: Record<string, ''> = {}
+  if (patch.window !== undefined) {
+    if (patch.window) $set.window = patch.window
+    else $unset.window = ''
+  }
   if (patch.sharedWith !== undefined) $set.sharedWith = [...new Set(patch.sharedWith.filter(Boolean))]
-  const res = await col.updateOne({ _id: id }, { $set })
+  const res = await col.updateOne(
+    { _id: id },
+    Object.keys($unset).length ? { $set, $unset } : { $set },
+  )
   return res.matchedCount > 0
 }
 

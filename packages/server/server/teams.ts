@@ -10,8 +10,8 @@ import type { TeamDoc } from './iam-types'
 /** Stable id of the seeded team every pre-existing member/repo is migrated into (Phase 2). */
 export const DEFAULT_TEAM_ID = 'default'
 
-export function makeTeamDoc(name: string, id: string, nowIso: string, createdBy?: string): TeamDoc {
-  return { _id: id, name, createdAt: nowIso, createdBy }
+export function makeTeamDoc(name: string, id: string, now: Date, createdBy?: string): TeamDoc {
+  return { _id: id, name, createdAt: now, createdBy }
 }
 
 export async function getTeamsCollection(): Promise<Collection<TeamDoc>> {
@@ -20,7 +20,7 @@ export async function getTeamsCollection(): Promise<Collection<TeamDoc>> {
 }
 
 export async function createTeam(name: string, createdBy?: string): Promise<TeamDoc> {
-  const doc = makeTeamDoc(name, randomBytes(8).toString('hex'), new Date().toISOString(), createdBy)
+  const doc = makeTeamDoc(name, randomBytes(8).toString('hex'), new Date(), createdBy)
   const col = await getTeamsCollection()
   await col.insertOne(doc)
   return doc
@@ -51,7 +51,7 @@ export async function seedDefaultTeam(): Promise<void> {
   const col = await getTeamsCollection()
   await col.updateOne(
     { _id: DEFAULT_TEAM_ID },
-    { $setOnInsert: { name: 'Default team', createdAt: new Date().toISOString() } },
+    { $setOnInsert: { name: 'Default team', createdAt: new Date() } },
     { upsert: true },
   )
 }

@@ -55,10 +55,22 @@ COPY --from=builder /app/packages ./packages
 # agentistics runs on port 47291; expose it
 EXPOSE 47291
 
+# Run unprivileged. The app only ever reads its own code and writes /data, so root buys
+# nothing and costs everything if a process is ever compromised. HOME=/data because the
+# server resolves its writable data dir (~/.agentistics) from it.
+# groupadd/useradd (passwd), not addgroup/adduser: the bun runtime image is
+# debian-slim, which ships passwd but NOT the adduser package.
+RUN groupadd --system --gid 10001 agentistics \
+ && useradd  --system --uid 10001 --gid agentistics --home-dir /data --shell /usr/sbin/nologin agentistics \
+ && mkdir -p /data/.agentistics \
+ && chown -R agentistics:agentistics /data /app
+USER agentistics
+
 # SERVE_STATIC=1: server.ts will serve the embedded frontend on the same port.
 # AGENTISTICS_TEAM_CENTRAL=1: activate central aggregator mode.
 ENV SERVE_STATIC=1 \
     AGENTISTICS_TEAM_CENTRAL=1 \
-    PORT=47291
+    PORT=47291 \
+    HOME=/data
 
 CMD ["bun", "run", "packages/server/server/index.ts"]

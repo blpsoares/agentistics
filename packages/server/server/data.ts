@@ -9,7 +9,8 @@ import { mergeLocalAndIngestedSessions, sessionKey } from './session-merge'
 import { writeWorkflowRuns, loadWorkflowRuns } from './workflow-store'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
 import { UUID_RE, decodeProjectDir, getProjectGitStats, getGitRemote } from './git'
-import { parseSessionJsonl } from './jsonl'
+import { activeMinutesFromClaudeJsonl, parseSessionJsonl } from './jsonl'
+import type { MachineInfo } from './team-tokens'
 import { runHealthChecks, analyzeToolHealthIssues, analyzeCacheStaleness } from './health'
 import { extractAgentMetricsFromFile } from './agent-metrics'
 import { accumulateClaudeSessions } from './share-rules'
@@ -102,6 +103,10 @@ export async function loadSessionMetas(roots: string[] = [SESSION_META_DIR]): Pr
             project_path: (data.project_path as string) ?? '',
             start_time: (data.start_time as string) ?? '',
             duration_minutes: (data.duration_minutes as number) ?? 0,
+            // Present only on records written by US (the consolidate store / a team push).
+            // Claude's own session-meta files have no per-turn timing — for those it stays
+            // undefined here and is filled from the transcript in scanProjectDir.
+            active_minutes: typeof data.active_minutes === 'number' ? data.active_minutes : undefined,
             user_message_count: (data.user_message_count as number) ?? 0,
             assistant_message_count: (data.assistant_message_count as number) ?? 0,
             tool_counts: (data.tool_counts as Record<string, number>) ?? {},
@@ -202,12 +207,18 @@ async function scanProjectDir(
         const session = await fileLimit(() => parseSessionJsonl(filePath, sessionId, fallbackPath, 'jsonl'))
         cwdCounts[session.project_path] = (cwdCounts[session.project_path] ?? 0) + 1
         extraSessions.push(session)
-      } else if (metaEntry && (!metaEntry.model || (metaEntry.uses_task_agent && !metaEntry.agentMetrics))) {
-        // Meta session — extract model and/or agent metrics from the JSONL (single read)
+      } else if (metaEntry && (!metaEntry.model || metaEntry.active_minutes === undefined
+        || (metaEntry.uses_task_agent && !metaEntry.agentMetrics))) {
+        // Meta session — extract model, active time and/or agent metrics from the JSONL
+        // (single read). Claude's own session-meta files carry none of the three.
         await fileLimit(async () => {
           const needsModel = !metaEntry.model
           const needsAgentMetrics = metaEntry.uses_task_agent && !metaEntry.agentMetrics
-          if (!needsModel && !needsAgentMetrics) return
+          // Wall-clock duration is in the meta file; per-turn active time only exists in the
+          // transcript, so it has to be computed here or the metric is blank for the path that
+          // serves MOST Claude sessions.
+          const needsActive = metaEntry.active_minutes === undefined
+          if (!needsModel && !needsAgentMetrics && !needsActive) return
 
           const content = await readFile(filePath, 'utf-8').catch(() => '')
           if (!content) return
@@ -225,6 +236,10 @@ async function scanProjectDir(
                 }
               } catch { /* skip */ }
             }
+          }
+
+          if (needsActive) {
+            metaEntry.active_minutes = activeMinutesFromClaudeJsonl(content.split('\n'))
           }
 
           if (needsAgentMetrics) {
@@ -875,7 +890,9 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
         loadAllMemberStats().catch(() => [] as { memberId: string; user: string; statsCache: StatsCache }[]),
         getMemberNameMap().catch(() => ({} as Record<string, string>)),
         getLiveTokenIds().catch(() => null),
-        listMachines().catch(() => [] as { id: string; user: string; teamIds: string[] }[]),
+        // The empty fallback must be typed as MachineInfo[], not a narrower literal: a literal
+        // missing the effective/inherited/excluded team fields collapses the union and hides them.
+        listMachines().catch(() => [] as MachineInfo[]),
       ])
       userStatsCaches = {}
       machineStatsCaches = {}
@@ -895,7 +912,16 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       machineOwners = {}
       for (const m of machines) {
         if (liveIds && !liveIds.has(m.id)) continue
-        machineOwners[m.id] = { user: nameMap[m.id] ?? m.user, teamIds: m.teamIds ?? [] }
+        // EFFECTIVE teams (explicit ∪ inherited-from-owner-accounts − excluded), not the stored
+        // ones: this feeds resolveMachineCacheScope(), which expands a team selection into
+        // machineStatsCaches keys. With the stored list, a team whose machines are inherited
+        // through its member accounts would list the right sessions but resolve fewer caches
+        // than the scope covers — the "a scope reports a fraction of itself" failure that
+        // cacheBlindScope exists to prevent. Authority checks still use the stored fields.
+        machineOwners[m.id] = {
+          user: nameMap[m.id] ?? m.user,
+          teamIds: m.effectiveTeamIds ?? m.teamIds ?? [],
+        }
       }
     }
 

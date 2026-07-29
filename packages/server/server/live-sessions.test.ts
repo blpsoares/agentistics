@@ -49,6 +49,28 @@ test('no processes → nothing open; process with no matching project → nothin
   expect(resolveOpenSessionIds(['/proj/zzz'], sessions, NOW).size).toBe(0)
 })
 
+// --- the directory the session is actually in ---------------------------------------------------
+
+test('a session whose cwd moved (git worktree) is matched on its current_cwd, not project_path', () => {
+  // Real shape: a session opened at the repo root and then moved into a worktree keeps
+  // project_path = the repo (so it stays in the same project) while its process runs in the
+  // worktree. Matching on project_path alone reported it closed while it was plainly open.
+  const wt = '/repo/.claude/worktrees/feature'
+  const moved = { ...s('moved', '/repo', minsAgo(1)), current_cwd: wt }
+  const atRoot = s('root', '/repo', minsAgo(2))
+  const procs = [
+    { harness: 'claude' as HarnessId, cwd: wt, startedMs: 0 },
+    { harness: 'claude' as HarnessId, cwd: '/repo', startedMs: 0 },
+  ]
+  expect(resolveOpenSessionIds(procs, [moved, atRoot], NOW)).toEqual(new Set(['moved', 'root']))
+})
+
+test('current_cwd does not let a session be claimed by a process in an unrelated directory', () => {
+  const moved = { ...s('moved', '/repo', minsAgo(1)), current_cwd: '/repo/wt' }
+  const open = resolveOpenSessionIds([{ harness: 'claude' as HarnessId, cwd: '/elsewhere', startedMs: 0 }], [moved], NOW)
+  expect(open.size).toBe(0)
+})
+
 // --- identity from argv ------------------------------------------------------------------------
 
 const UUID_A = '1f9f48c3-6e75-4009-addd-fba4c3a53877'

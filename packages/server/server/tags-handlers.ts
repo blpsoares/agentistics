@@ -22,7 +22,7 @@ import { TEAM_CENTRAL } from './config'
 import { can } from './iam-caps'
 import { accountVisibleTo } from './iam-view'
 import { localTagStore, type TagStore } from './tags-local-store'
-import { resolveTagSessions, type TagSource, type TagSourceType, type TagLookups } from './tags-resolve'
+import { resolveTagSessions, type TagSource, type TagSourceType, type TagLookups, type TagWindow } from './tags-resolve'
 import { aggregateSessions, type TagAggregate } from './tags-aggregate'
 import { aggregateTagDetail, type TagDetailStats } from './tags-detail'
 import {
@@ -114,7 +114,9 @@ async function buildContext(p: Principal, sessions: SessionMeta[]): Promise<TagC
   const myTeamIds = new Set(p.memberships.map(m => m.teamId))
   const visibleMachineIds = new Set(
     machines
-      .filter(m => m.teamIds.some(t => myTeamIds.has(t)) || m.accountIds.includes(p.accountId))
+      // EFFECTIVE teams: a machine reachable through its owner account's team is visible for the
+      // same reason an explicitly-attached one is (see resolveMachineTeams in @agentistics/core).
+      .filter(m => m.effectiveTeamIds.some(t => myTeamIds.has(t)) || m.accountIds.includes(p.accountId))
       .map(m => m.id),
   )
   const visibleAccountIds = new Set(
@@ -166,6 +168,10 @@ function soloContext(sessions: SessionMeta[]): TagContext {
     machineName: 'This machine',
     user: '',
     teamIds: [],
+    // Solo mode has no teams and no accounts, so there is nothing to inherit or exclude.
+    effectiveTeamIds: [],
+    inheritedTeamIds: [],
+    excludedTeamIds: [],
     createdAt: '',
     lastSeenAt: null,
   }
@@ -265,7 +271,7 @@ function redactAggregate(p: Principal, agg: TagAggregate, ctx: TagAuthorityConte
 function withAggregate(p: Principal, tag: TagDoc, sessions: SessionMeta[], ctx: TagContext): TagDoc & { aggregate: TagAggregate } {
   // Resolve against the STORED sources (the real values) but ship the REDACTED list — otherwise the
   // response hands back the same identifying strings the bucket redaction just collapsed.
-  const resolved = resolveTagSessions(sessions, tag.sources, ctx.lookups, tag.filters ?? [])
+  const resolved = resolveTagSessions(sessions, tag.sources, ctx.lookups, tag.filters ?? [], tag.window)
   return {
     ...tag,
     sources: redactSources(p, tag.sources, ctx.authority),
@@ -342,6 +348,45 @@ function parseColor(raw: unknown): { ok: true; value: string | undefined } | { o
   return HEX_COLOR.test(v) ? { ok: true, value: v } : { ok: false }
 }
 
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/** `yyyy-MM-dd` AND a real calendar day. The regex alone accepts 2026-02-31, which `Date` then
+ *  rolls forward to 3 March — a window silently one to three days wider than the one written. */
+function isCalendarDay(v: string): boolean {
+  if (!DAY_RE.test(v)) return false
+  const d = new Date(`${v}T00:00:00Z`)
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v
+}
+
+/**
+ * Parse the optional period. `undefined` = field absent (leave alone); `null` = explicitly cleared.
+ *
+ * An empty string on either end clears THAT end, so the UI can drop one side without having to
+ * send a differently-shaped body, and a window that ends up with neither end set collapses to
+ * `null` rather than being stored as a `{}` that reads as "has a window" everywhere downstream.
+ */
+export function parseWindow(raw: unknown):
+  { ok: true; value: TagWindow | null | undefined } | { ok: false; error: string } {
+  if (raw === undefined) return { ok: true, value: undefined }
+  if (raw === null) return { ok: true, value: null }
+  if (typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'window must be an object' }
+  const w = raw as Record<string, unknown>
+  const read = (k: 'start' | 'end'): string | undefined | false => {
+    const v = w[k]
+    if (v === undefined || v === null || v === '') return undefined
+    if (typeof v !== 'string' || !isCalendarDay(v.trim())) return false
+    return v.trim()
+  }
+  const start = read('start')
+  const end = read('end')
+  if (start === false || end === false) {
+    return { ok: false, error: 'window dates must be calendar days in YYYY-MM-DD' }
+  }
+  if (!start && !end) return { ok: true, value: null }
+  if (start && end && start > end) return { ok: false, error: 'window start must not be after end' }
+  return { ok: true, value: { ...(start ? { start } : {}), ...(end ? { end } : {}) } }
+}
+
 /** Every grantee must be a real account the caller can already see — otherwise `sharedWith` is a
  *  blind account-id oracle, and a manager could grant a tag to someone outside their scope. */
 function checkSharedWith(p: Principal, ids: string[], accounts: AccountDoc[]): Response | null {
@@ -385,12 +430,14 @@ export async function handleTags(req: Request): Promise<Response> {
     const sessions = await loadAllSessions()
     const ctx = await buildContext(principal, sessions)
     if (!canReadTag(principal, tag, ctx.authority)) return json({ error: 'tag not found' }, 404)
-    const resolved = resolveTagSessions(sessions, tag.sources, ctx.lookups, tag.filters ?? [])
+    // The period applies to the per-source breakdown too — otherwise the parts of a windowed tag
+    // add up to more than the whole it is shown next to.
+    const resolved = resolveTagSessions(sessions, tag.sources, ctx.lookups, tag.filters ?? [], tag.window)
     // Same rule as withAggregate: resolve on the real source, report the redacted one.
     const breakdown = tag.sources.map(src => ({
       source: redactSources(principal, [src], ctx.authority)[0]!,
       aggregate: redactAggregate(principal, aggregateSessions(
-        resolveTagSessions(sessions, [src], ctx.lookups, tag.filters ?? [])), ctx.authority),
+        resolveTagSessions(sessions, [src], ctx.lookups, tag.filters ?? [], tag.window)), ctx.authority),
     }))
     return json({
       // `resolved` is exactly what withAggregate would re-derive — reuse it rather than walking
@@ -432,6 +479,10 @@ export async function handleTags(req: Request): Promise<Response> {
     const filters = parseSources(body.filters)
     const badType = checkSourceTypes(sources) ?? checkSourceTypes(filters)
     if (badType) return badType
+    // The period only ever narrows, so it is NOT part of the Rule 1 source check below: it cannot
+    // reach anything the sources do not already cover, and it names nothing identifying.
+    const window = parseWindow(body.window)
+    if (!window.ok) return json({ error: window.error }, 400)
     // Sharing needs accounts to share WITH; a non-central instance has none, so the field is
     // ignored rather than validated (the UI does not offer it either).
     const sharedWith = TEAM_CENTRAL ? parseStringList(body.sharedWith) : []
@@ -449,6 +500,7 @@ export async function handleTags(req: Request): Promise<Response> {
       color: color.value,
       sources,
       filters,
+      window: window.value ?? undefined,
       sharedWith,
       createdBy: principal.accountId,
     })
@@ -480,6 +532,8 @@ export async function handleTags(req: Request): Promise<Response> {
     const nextFilters = body.filters !== undefined ? parseSources(body.filters) : (existing.filters ?? [])
     const badType = checkSourceTypes(nextSources) ?? checkSourceTypes(nextFilters)
     if (badType) return badType
+    const window = parseWindow(body.window)
+    if (!window.ok) return json({ error: window.error }, 400)
     if (!canWriteTagSources(principal, [...nextSources, ...nextFilters], ctx.authority)) {
       return json({ error: 'forbidden' }, 403)
     }
@@ -493,6 +547,7 @@ export async function handleTags(req: Request): Promise<Response> {
       color: color.value,
       sources: body.sources !== undefined ? nextSources : undefined,
       filters: body.filters !== undefined ? nextFilters : undefined,
+      window: window.value,
       sharedWith,
     })
     return json({ ok: true })
