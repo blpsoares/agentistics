@@ -216,6 +216,9 @@ async function resolveCliLang(): Promise<'en' | 'pt'> {
     const prefs = await readPreferences()
     return prefs.lang === 'pt' ? 'pt' : 'en'
   } catch {
+    // Deliberately NOT readPreferencesOrExit: this runs before every command, including the one
+    // that is about to report the corrupt file. Picking a language must never be what kills the
+    // process — the command's own read (readPreferencesOrExit) reports it, in English.
     return 'en'
   }
 }
@@ -272,14 +275,12 @@ if (command === '--help' || command === '-h') {
 // team.mode==='solo') AND stdin is a TTY, launch the interactive setup wizard.
 // Otherwise fall back to printing HELP exactly as before.
 if (!command) {
-  let unconfigured = true
-  try {
-    const { readPreferences } = await import('../server/preferences.ts')
-    const prefs = await readPreferences()
-    unconfigured = !prefs.team || prefs.team.mode === 'solo'
-  } catch {
-    // If preferences can't be read, treat as unconfigured (wizard is safe/idempotent).
-  }
+  // A corrupt preferences file must not be silently read as "unconfigured": the wizard would
+  // then offer to overwrite a file that still holds this machine's connections and denylists.
+  // readPreferencesOrExit names the file on stderr and exits non-zero.
+  const { readPreferencesOrExit } = await import('../server/preferences.ts')
+  const prefs = await readPreferencesOrExit()
+  const unconfigured = !prefs.team || prefs.team.mode === 'solo'
   if (unconfigured && process.stdin.isTTY) {
     const { runSetup } = await import('../server/cli-setup.ts')
     const code = await runSetup()

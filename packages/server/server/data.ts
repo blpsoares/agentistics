@@ -13,6 +13,7 @@ import { activeMinutesFromClaudeJsonl, parseSessionJsonl } from './jsonl'
 import type { MachineInfo } from './team-tokens'
 import { runHealthChecks, analyzeToolHealthIssues, analyzeCacheStaleness } from './health'
 import { extractAgentMetricsFromFile } from './agent-metrics'
+import { accumulateClaudeSessions } from './share-rules'
 
 /** Extract the model ID from a JSONL file by reading only the first assistant message.
  *  Skips `<synthetic>` — Claude Code sentinel for system-generated turns, not a real model. */
@@ -526,41 +527,10 @@ function supplementStatsCache(statsCache: StatsCache, sessions: SessionMeta[]): 
   if (sessions.length === 0) return
   const lastComputed = statsCache.lastComputedDate ?? ''
 
-  const dailyModel = new Map<string, Map<string, number>>()
-  const modelTotals = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>()
-  const dailyActivity = new Map<string, { messageCount: number; sessionCount: number; toolCallCount: number }>()
-
-  for (const s of sessions) {
-    if (!s.start_time) continue
-    const day = s.start_time.slice(0, 10)
-    if (lastComputed && day <= lastComputed) continue
-
-    const da = dailyActivity.get(day) ?? { messageCount: 0, sessionCount: 0, toolCallCount: 0 }
-    da.messageCount += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
-    da.sessionCount += 1
-    da.toolCallCount += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
-    dailyActivity.set(day, da)
-
-    const model = s.model
-    if (!model || !model.startsWith('claude-')) continue
-    const inp = s.input_tokens ?? 0
-    const out = s.output_tokens ?? 0
-    const cr  = s.cache_read_input_tokens ?? 0
-    const cw  = s.cache_creation_input_tokens ?? 0
-    const total = inp + out + cr + cw
-    if (total === 0) continue
-
-    const byModel = dailyModel.get(day) ?? new Map<string, number>()
-    byModel.set(model, (byModel.get(model) ?? 0) + total)
-    dailyModel.set(day, byModel)
-
-    const mt = modelTotals.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-    mt.input     += inp
-    mt.output    += out
-    mt.cacheRead += cr
-    mt.cacheWrite += cw
-    modelTotals.set(model, mt)
-  }
+  const acc = accumulateClaudeSessions(sessions, { after: lastComputed })
+  const dailyModel = acc.dailyModel
+  const modelTotals = acc.modelTotals
+  const dailyActivity = acc.dailyActivity
 
   if (dailyActivity.size === 0 && dailyModel.size === 0 && modelTotals.size === 0) return
 

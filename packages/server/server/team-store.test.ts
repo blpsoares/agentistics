@@ -51,6 +51,29 @@ test('round-trip toTeamDoc→fromTeamDoc preserves the session fields', () => {
   expect(meta.project_path).toBe(s.project_path)
 })
 
+test('toTeamDoc redacts a credential pasted into first_prompt (central-side defence)', () => {
+  // The exact shape that leaked in production: a connection string as the opening message.
+  const s = { ...session('s1'), first_prompt: 'MONGO_URL=mongodb+srv://appuser:s3cr3tP4ssw0rd@cluster.mongodb.net/db' }
+  const doc = toTeamDoc(s, 'acme', 'm1', 'devA')
+  expect(doc.first_prompt).not.toContain('s3cr3tP4ssw0rd')
+  expect(doc.first_prompt).toContain('[REDACTED]')
+  // The host survives, so the session is still recognisable in a list.
+  expect(doc.first_prompt).toContain('cluster.mongodb.net')
+  expect(s.first_prompt).toContain('s3cr3tP4ssw0rd') // input not mutated
+})
+
+test('toTeamDoc redacts the session title too', () => {
+  // Assembled at runtime: a token-shaped literal in a committed file trips GitHub push protection.
+  const tok = ['ghp', '_', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0123456789'].join('')
+  const s = { ...session('s1'), title: `debug ${tok} failure` }
+  expect(toTeamDoc(s, 'acme', 'm1', 'devA').title).not.toContain(tok)
+})
+
+test('toTeamDoc leaves an ordinary prompt exactly as it was', () => {
+  const s = { ...session('s1'), first_prompt: 'reduce token usage, input_tokens=123' }
+  expect(toTeamDoc(s, 'acme', 'm1', 'devA').first_prompt).toBe('reduce token usage, input_tokens=123')
+})
+
 // --- timestamps: BSON Dates in Mongo, ISO strings on the wire -------------------------------
 
 test('toTeamDoc stores timestamps as BSON Dates, never as strings', () => {

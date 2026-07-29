@@ -87,6 +87,17 @@ async function readCwdFromJsonl(filePath: string): Promise<string | null> {
 // Start file watching and optionally spawn the OTel watcher daemon
 // ---------------------------------------------------------------------------
 
+// Fail loudly at boot on a corrupt preferences file instead of crash-looping (or worse,
+// silently defaulting) — this is the first place preferences are read.
+try {
+  await readPreferences()
+} catch (err) {
+  console.error('[boot] preferences file is corrupt — refusing to start with default settings.')
+  console.error('[boot] fix or move aside ~/.agentistics/preferences.json, then restart.')
+  console.error(err instanceof Error ? err.message : String(err))
+  process.exit(1)
+}
+
 // Preserve history before Claude's next cleanup (transcripts > cleanupPeriodDays,
 // default 30 days). 'full' mirrors raw files; both modes warm a build that persists
 // the consolidated per-session metrics store.

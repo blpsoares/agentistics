@@ -7,9 +7,9 @@
  * config plus the live uploader status. The bearer token is never logged.
  */
 
-import { DEFAULT_TEAM, unpackConnectToken } from '@agentistics/core'
+import { defaultTeam, unpackConnectToken } from '@agentistics/core'
 import { PORT } from './config'
-import { readPreferences, writePreferences, type Preferences } from './preferences'
+import { readPreferencesOrExit, writePreferences, type Preferences } from './preferences'
 import { getUploaderStatus } from './team-uploader'
 
 /**
@@ -89,7 +89,7 @@ export async function memberConnect(opts: MemberConnectOptions): Promise<number>
   const resolvedOrg = opts.org?.trim() || whoami.org || 'default'
 
   const team: NonNullable<Preferences['team']> = {
-    ...DEFAULT_TEAM,
+    ...defaultTeam(),
     mode: 'member',
     endpoint,
     token,
@@ -110,7 +110,7 @@ export async function memberConnect(opts: MemberConnectOptions): Promise<number>
  * Always returns 0 (leaving locally must succeed even if the central is down).
  */
 export async function memberLeave(): Promise<number> {
-  const prefs = await readPreferences()
+  const prefs = await readPreferencesOrExit()
   const team = prefs.team
 
   if (!team || team.mode !== 'member') {
@@ -132,15 +132,15 @@ export async function memberLeave(): Promise<number> {
     } catch { /* best-effort — leaving locally proceeds regardless */ }
   }
 
-  await writePreferences({ team: { ...DEFAULT_TEAM } })
+  await writePreferences({ team: defaultTeam() })
   process.stdout.write('left the central\n')
   return 0
 }
 
 /** Print the current team mode/endpoint/user and, if member, the uploader status. */
 export async function memberStatus(): Promise<number> {
-  const prefs = await readPreferences()
-  const team = prefs.team ?? { ...DEFAULT_TEAM }
+  const prefs = await readPreferencesOrExit()
+  const team = prefs.team ?? defaultTeam()
 
   process.stdout.write(`mode:     ${team.mode}\n`)
   if (team.mode === 'member') {

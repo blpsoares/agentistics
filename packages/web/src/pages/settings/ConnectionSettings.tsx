@@ -3,14 +3,9 @@ import { useOutletContext } from 'react-router-dom'
 import type { AppContext } from '../../lib/app-context'
 import { TeamSettings, type TeamConfig } from '../../components/TeamSettings'
 import { SectionHeader } from './primitives'
+import { defaultTeam } from '@agentistics/core'
 
-const DEFAULT_TEAM_CONFIG: TeamConfig = {
-  mode: 'solo',
-  endpoint: '',
-  org: 'default',
-  user: '',
-  token: '',
-}
+const DEFAULT_TEAM_CONFIG: TeamConfig = defaultTeam()
 
 export default function ConnectionSettings() {
   const ctx = useOutletContext<AppContext>()
