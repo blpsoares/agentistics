@@ -582,9 +582,16 @@ export async function pushOnceDetailed(conn: TeamConnection, ctx: PushCycleConte
 // connection would have no such bound.
 // ---------------------------------------------------------------------------
 
-const MAX_CONCURRENT_PUSHES = 2
+export const MAX_CONCURRENT_PUSHES = 2
 let _activeSlots = 0
 const _slotWaiters: Array<() => void> = []
+
+/** Test-only accessor onto the semaphore's internal count — lets a test assert the invariant
+ *  (`_activeSlots` never exceeds `MAX_CONCURRENT_PUSHES`) directly instead of inferring it from
+ *  timing. Never called from production code. */
+export function __activeSlotsForTests(): number {
+  return _activeSlots
+}
 
 /**
  * Release a slot. If a waiter is queued, the slot is TRANSFERRED directly to it (the woken
@@ -598,7 +605,9 @@ function releaseSlot(): void {
   _activeSlots--
 }
 
-async function acquireSlot(): Promise<() => void> {
+/** Exported for tests only (the B-5 semaphore regression test) — every production call site
+ *  stays internal to this module. */
+export async function acquireSlot(): Promise<() => void> {
   if (_activeSlots < MAX_CONCURRENT_PUSHES) {
     _activeSlots++
     return releaseSlot
@@ -710,10 +719,18 @@ function scheduleConnectionCycle(connId: string, delaySec: number): void {
   _chainTimer.set(connId, t)
 }
 
+/** Injectable for tests — `ctx`, when supplied, is used VERBATIM instead of calling the internal
+ *  `getPushContext()`, which otherwise touches the real `~/.claude`/`~/.agentistics` (via
+ *  `buildApiResponse()`/`loadConsolidated()`) unless a NEIGHBOURING test happens to have left a
+ *  still-fresh fake context in the module-level cache — an accident a test must never depend on. */
+interface RunPushCycleDeps {
+  ctx?: PushCycleContext
+}
+
 /** The bounded (semaphore-limited) network portion of one connection's cycle: learn the
  *  central's policy, reconcile sync state, then push against the SHARED context. Returns the
  *  next interval (seconds) this connection should wait before its next cycle. */
-async function runConnectionPushCycle(conn: TeamConnection): Promise<number> {
+async function runConnectionPushCycle(conn: TeamConnection, deps: RunPushCycleDeps = {}): Promise<number> {
   const release = await acquireSlot()
   try {
     const endpoint = conn.endpoint.replace(/\/+$/, '')
@@ -725,7 +742,7 @@ async function runConnectionPushCycle(conn: TeamConnection): Promise<number> {
     // Auto-heal a sent-state that no longer matches this central BEFORE pushing, so this cycle
     // re-sends the full history when needed.
     await reconcileSyncState(conn.id, endpoint, conn.token ?? '', policy.instanceId)
-    const ctx = await getPushContext()
+    const ctx = deps.ctx ?? await getPushContext()
     await pushOnceDetailed({ ...conn, endpoint }, ctx)
     return nextIntervalSec
   } finally {
@@ -736,10 +753,12 @@ async function runConnectionPushCycle(conn: TeamConnection): Promise<number> {
 let _migrated = false
 
 /** Injectable for tests — the defaults touch the developer's real preferences file and run the
- *  real (marker-guarded, so normally cheap) state migration; a test must never do either. */
+ *  real (marker-guarded, so normally cheap) state migration; a test must never do either. `ctx`
+ *  is threaded straight through to `runConnectionPushCycle` (see `RunPushCycleDeps`). */
 interface RunCycleDeps {
   readPreferences?: typeof readPreferences
   migrateTeamStateOnce?: () => Promise<void>
+  ctx?: PushCycleContext
 }
 
 /**
@@ -773,7 +792,7 @@ export async function runConnectionCycle(connId: string, deps: RunCycleDeps = {}
       stopConnectionChain(connId)
       return
     }
-    nextIntervalSec = await runConnectionPushCycle(conn)
+    nextIntervalSec = await runConnectionPushCycle(conn, { ctx: deps.ctx })
   } catch (err) {
     console.warn(`[team-uploader] cycle error for ${connId}:`, err instanceof Error ? err.message : String(err))
   } finally {
@@ -1115,6 +1134,7 @@ export async function handleLeaveCentral(req: Request): Promise<Response> {
       method: 'POST',
       headers,
       body: JSON.stringify({ org, user }),
+      signal: AbortSignal.timeout(10_000),
     })
     const data = (await res.json().catch(() => ({}))) as { deleted?: number; error?: string }
     // Leaving deletes this member's data on the central. Reset the matching connection's local

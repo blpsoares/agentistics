@@ -16,10 +16,12 @@ import {
   pushOnceDetailed, removeConnection, runConnectionCycle,
   buildPushContext, getPushContext, invalidatePushContext,
   __setNotifierForTests, saveSentState,
+  acquireSlot, MAX_CONCURRENT_PUSHES, __activeSlotsForTests,
   type PushCycleContext,
 } from './team-uploader'
-import { __setTeamConnDirForTests, teamSentFile } from './config'
-import type { SessionMeta, TeamConnection, StatsCache } from '@agentistics/core'
+import { updateTeamConfigAt, type TeamConfigMutator, type Preferences } from './preferences'
+import { __setTeamConnDirForTests, TEAM_CONN_DIR, teamSentFile } from './config'
+import type { SessionMeta, TeamConnection, StatsCache, TeamConfig } from '@agentistics/core'
 
 // Minimal SessionMeta factory — only the fields needed for hashing/keying
 function makeSession(id: string, extra?: Partial<SessionMeta>): SessionMeta {
@@ -211,16 +213,27 @@ function makeCtx(overrides?: Partial<PushCycleContext>): PushCycleContext {
   }
 }
 
-let _origConnDir: string
+/** A `deps.readPreferences` fake for `runConnectionCycle` — a single connection, member mode,
+ *  properly typed against the real `Preferences` shape so drift in `readPreferences`'s signature
+ *  fails `tsc` instead of being silently cast away. */
+function fakeReadPreferences(conn: TeamConnection): () => Promise<Preferences> {
+  const prefs: Preferences = { team: { schema: 2, mode: 'member', connections: [conn] } }
+  return async () => prefs
+}
+
+// Captured from the LIVE binding at import time — this is whatever config.ts actually resolved
+// (the real ~/.agentistics/connections, or another test file's override if one already ran and
+// redirected it first). Restoring THIS value, not a fabricated path, is what actually undoes the
+// override.
+const _origConnDir = TEAM_CONN_DIR
+let _tmpConnDir: string
 
 beforeAll(async () => {
   // Redirect TEAM_CONN_DIR (a live `let` binding, see config.ts) at the module level, for the
-  // whole rest of this bun test process. Nothing else in the suite writes through it, and it is
-  // restored in afterAll regardless.
-  _origConnDir = join(tmpdir(), 'agentistics-team-conn-orig-noop')
-  const dir = join(tmpdir(), `agentistics-team-conn-${crypto.randomUUID()}`)
-  await mkdir(dir, { recursive: true })
-  __setTeamConnDirForTests(dir)
+  // whole rest of this bun test process — restored to `_origConnDir` in afterAll below.
+  _tmpConnDir = join(tmpdir(), `agentistics-team-conn-${crypto.randomUUID()}`)
+  await mkdir(_tmpConnDir, { recursive: true })
+  __setTeamConnDirForTests(_tmpConnDir)
   // Every error/recovery/removal notification in these tests goes through this no-op instead of
   // sse.ts's real broadcastNotification, which would otherwise append a real entry to the
   // developer's ~/.agentistics/notifications.json.
@@ -229,7 +242,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   __setNotifierForTests(null)
-  try { await rm(_origConnDir, { recursive: true, force: true }) } catch { /* never created */ }
+  __setTeamConnDirForTests(_origConnDir)
+  try { await rm(_tmpConnDir, { recursive: true, force: true }) } catch { /* best-effort cleanup */ }
 })
 
 describe('getUploaderStatus — per-connection divergence', () => {
@@ -384,10 +398,14 @@ describe('runConnectionCycle — pendingTrigger deferral', () => {
       },
     })
     const conn = fakeConn(connId, server.port!)
-    const fakePrefs = { team: { schema: 2 as const, mode: 'member' as const, connections: [conn] } }
     const deps = {
-      readPreferences: async () => fakePrefs as never,
+      readPreferences: fakeReadPreferences(conn),
       migrateTeamStateOnce: async () => {},
+      // Injected explicitly (N-1) — `runConnectionPushCycle` would otherwise call the internal,
+      // un-DI'd `getPushContext()`, which touches the real ~/.claude/~/.agentistics UNLESS a
+      // neighbouring test happens to have left a still-fresh fake context cached from an earlier
+      // call — an accident this test must not depend on for its own isolation.
+      ctx: makeCtx({ storedSessions: [] }), // nothing to push — this test is about the GUARD, not content
     }
 
     // `runConnectionCycle` runs synchronously up to its first `await`, setting `_running` before
@@ -401,17 +419,118 @@ describe('runConnectionCycle — pendingTrigger deferral', () => {
     // The deferred trigger did NOT cause a second, concurrent CYCLE — only one policy fetch (one
     // full cycle) ran, proving `second` truly deferred instead of racing `first` for the same
     // connId (which would have raced two `saveSentState` calls for the same sent-state file).
+    // ctx.storedSessions is empty, so the ingest endpoint is never even hit — asserted at 0, not
+    // "at most 1", since a non-zero count here would mean the deferred trigger DID cause an
+    // unexpected push.
     expect(policyCalls).toBe(1)
+    expect(ingestCalls).toBe(0)
 
     // The guard was properly released (not left stuck "running" forever) and the deferred flag
     // was consumed — a further call runs the cycle again for real rather than being silently
-    // swallowed. (No NEW ingest call is expected here: the shared push context this connection's
-    // cycle reads from hasn't changed between calls, so there is genuinely nothing new to send —
-    // that idempotency is `selectDeltas`'s job, not this guard's; this assertion is specifically
-    // about the guard letting the cycle run again, not about push content.)
+    // swallowed.
     await runConnectionCycle(connId, deps)
     expect(policyCalls).toBe(2)
-    expect(ingestCalls).toBeLessThanOrEqual(1)
+    expect(ingestCalls).toBe(0)
+  })
+})
+
+describe('runConnectionCycle — concurrency cap under real contention (B-1 slot release)', () => {
+  it('two hung connections occupy both slots; a third pushed concurrently is DELAYED until one times out and releases its slot', async () => {
+    const idH1 = randomConnId()
+    const idH2 = randomConnId()
+    const idOk = randomConnId()
+
+    // Answers /api/team/policy immediately (so the connection reaches acquireSlot() quickly) but
+    // NEVER answers /api/team/ingest — the exact "central that accepts the connection and never
+    // responds" scenario, this time exercised through the semaphore-guarded path
+    // (runConnectionPushCycle), not pushOnceDetailed directly.
+    const hungHandler = (req: Request): Response | Promise<Response> => {
+      const url = new URL(req.url)
+      if (url.pathname === '/api/team/ingest') return new Promise<Response>(() => { /* never resolves */ })
+      return Response.json({ pushIntervalSec: 30, instanceId: null })
+    }
+    await using h1 = Bun.serve({ port: 0, fetch: hungHandler })
+    await using h2 = Bun.serve({ port: 0, fetch: hungHandler })
+
+    let okHitAt: number | null = null
+    await using ok = Bun.serve({
+      port: 0,
+      fetch: (req) => {
+        const url = new URL(req.url)
+        if (url.pathname === '/api/team/ingest') { okHitAt = Date.now(); return Response.json({ ok: true }) }
+        return Response.json({ pushIntervalSec: 30, instanceId: null })
+      },
+    })
+
+    const connH1 = fakeConn(idH1, h1.port!)
+    const connH2 = fakeConn(idH2, h2.port!)
+    const connOk = fakeConn(idOk, ok.port!)
+
+    const ingestTimeoutMs = 300
+    const ctxFor = (label: string) => makeCtx({ storedSessions: [makeSession(`s-${label}`)], ingestTimeoutMs })
+
+    // Start BOTH hung connections first, unawaited — with MAX_CONCURRENT_PUSHES = 2 they should
+    // occupy both slots almost immediately (their own /api/team/policy round-trip is real
+    // network, but to localhost, so this is fast).
+    const h1Promise = runConnectionCycle(idH1, { readPreferences: fakeReadPreferences(connH1), migrateTeamStateOnce: async () => {}, ctx: ctxFor('h1') })
+    const h2Promise = runConnectionCycle(idH2, { readPreferences: fakeReadPreferences(connH2), migrateTeamStateOnce: async () => {}, ctx: ctxFor('h2') })
+    // Give the event loop time for both to reach acquireSlot() and occupy both slots before the
+    // third (connOk) is started — generous relative to a localhost round-trip.
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const okStart = Date.now()
+    await runConnectionCycle(idOk, { readPreferences: fakeReadPreferences(connOk), migrateTeamStateOnce: async () => {}, ctx: ctxFor('ok') })
+    const okElapsed = Date.now() - okStart
+
+    await Promise.all([h1Promise, h2Promise]) // let the hung cycles finish (time out) too
+
+    expect(okHitAt).not.toBeNull()
+    // The ok push could only start once a hung connection's ingest fetch timed out and released
+    // its slot — i.e. it was genuinely BLOCKED, not immediate. A generous lower bound (half the
+    // injected timeout) avoids flaking on a loaded CI box while still failing hard if the old,
+    // unbounded `Promise.all`-style dispatch (or a leaked slot) let it through immediately.
+    expect(okElapsed).toBeGreaterThanOrEqual(ingestTimeoutMs / 2)
+  }, 15_000)
+})
+
+describe('acquireSlot/releaseSlot — concurrency cap semaphore (B-5)', () => {
+  it('a release racing a brand-new synchronous acquire never admits a third holder against the cap', async () => {
+    expect(MAX_CONCURRENT_PUSHES).toBe(2)
+    const cap = MAX_CONCURRENT_PUSHES
+
+    const r1 = await acquireSlot()
+    const r2 = await acquireSlot()
+    expect(__activeSlotsForTests()).toBe(cap)
+
+    // A third caller queues — the cap is full.
+    const queued = acquireSlot()
+
+    // Release one slot, then IMMEDIATELY (same synchronous tick — before the woken queued
+    // caller's own suspended continuation gets a chance to run as a microtask) issue a
+    // brand-new acquire call. This is the exact race the old decrement-then-signal
+    // implementation lost: it would let this new call admit itself synchronously off the
+    // stale (already-decremented) count, and the woken queued caller's continuation would THEN
+    // ALSO increment — three grants against a cap of two.
+    r1()
+    const brandNew = acquireSlot()
+
+    const rQueued = await queued
+    // The critical assertion: right after the woken (transferred) caller has fully resolved, the
+    // active count must still be exactly at the cap — never one over it. Verified this actually
+    // catches the bug: temporarily reverting `releaseSlot`/`acquireSlot` to the old
+    // decrement-then-signal implementation makes this specific assertion read 3 here and fail
+    // (see the report for the red/green transcript).
+    expect(__activeSlotsForTests()).toBeLessThanOrEqual(cap)
+
+    // Free a slot for `brandNew` (still queued under the fix — nothing has released for it yet).
+    r2()
+    const rBrandNew = await brandNew
+    expect(__activeSlotsForTests()).toBeLessThanOrEqual(cap)
+
+    // Drain back to zero so this private module-level semaphore doesn't affect later tests.
+    rQueued()
+    rBrandNew()
+    expect(__activeSlotsForTests()).toBe(0)
   })
 })
 
@@ -428,17 +547,17 @@ describe('removeConnection — splices one entry, GCs only its own files (B-2)',
     expect(await Bun.file(teamSentFile(idA)).exists()).toBe(true)
     expect(await Bun.file(teamSentFile(idB)).exists()).toBe(true)
 
-    let store = { schema: 2 as const, mode: 'member' as const, connections: [connA, connB] }
+    let store: TeamConfig = { schema: 2, mode: 'member', connections: [connA, connB] }
     let writes = 0
-    const fakeUpdateTeamConfig = async (mutate: (c: typeof store) => typeof store | undefined) => {
+    const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
       const next = mutate(store)
       if (next === undefined) return store
       writes++
-      store = next as typeof store
+      store = next
       return store
     }
 
-    await removeConnection(idA, 'manual', { updateTeamConfig: fakeUpdateTeamConfig as never })
+    await removeConnection(idA, 'manual', { updateTeamConfig: fakeUpdateTeamConfig })
 
     expect(writes).toBe(1)
     expect(store.connections.map(c => c.id)).toEqual([idB])
@@ -446,11 +565,11 @@ describe('removeConnection — splices one entry, GCs only its own files (B-2)',
     expect(await Bun.file(teamSentFile(idB)).exists()).toBe(true) // untouched
 
     // Idempotent — a second removal of the same (now-gone) connection does not re-write.
-    await removeConnection(idA, 'manual', { updateTeamConfig: fakeUpdateTeamConfig as never })
+    await removeConnection(idA, 'manual', { updateTeamConfig: fakeUpdateTeamConfig })
     expect(writes).toBe(1)
   })
 
-  it('two concurrent removals for DIFFERENT connections both survive when routed through an atomic mutator', async () => {
+  it('two concurrent removals for DIFFERENT connections both survive — exercised against the REAL enqueueWrite chain via updateTeamConfigAt (B-2)', async () => {
     const idA = randomConnId()
     const idB = randomConnId()
     const idC = randomConnId()
@@ -461,29 +580,32 @@ describe('removeConnection — splices one entry, GCs only its own files (B-2)',
     await saveSentState(idB, {})
     await saveSentState(idC, {})
 
-    // A minimal stand-in for preferences.ts's real `updateTeamConfig`: a single in-memory value
-    // plus a queue that serializes mutators exactly the way `enqueueWrite` does — each mutator
-    // reads the CURRENT value at ITS turn, not a value captured before either call started. This
-    // is the exact property the review's B-2 finding says a plain read-then-write does not have.
-    let store = { schema: 2 as const, mode: 'member' as const, connections: [connA, connB, connC] }
-    let chain: Promise<unknown> = Promise.resolve()
-    const serializedUpdateTeamConfig = (mutate: (c: typeof store) => typeof store | undefined) => {
-      const next = chain.then(() => {
-        const result = mutate(store)
-        if (result !== undefined) store = result as typeof store
-        return store
-      })
-      chain = next.catch(() => {})
-      return next
-    }
+    // Real tmp preference files (never the developer's real ~/.agentistics/preferences.json) fed
+    // through `updateTeamConfigAt` — the SAME path-parameterized function `updateTeamConfig`
+    // binds to the real path in production, and the SAME module-level `enqueueWrite` chain in
+    // preferences.ts. This is not a hand-rolled stand-in: it is the real atomicity mechanism.
+    const primary = join(tmpdir(), `agentistics-prefs-${crypto.randomUUID()}`, 'preferences.json')
+    const legacy = join(tmpdir(), `agentistics-prefs-legacy-${crypto.randomUUID()}`, 'agentistics-preferences.json')
+    const seed: TeamConfig = { schema: 2, mode: 'member', connections: [connA, connB, connC] }
+    await updateTeamConfigAt(primary, legacy, () => seed)
 
-    // Fire both removals "concurrently" (before either's internal await resolves).
+    const boundUpdateTeamConfig = (mutate: TeamConfigMutator) => updateTeamConfigAt(primary, legacy, mutate)
+
+    // Fire both removals "concurrently" (before either's internal await resolves) through the
+    // REAL write chain.
     await Promise.all([
-      removeConnection(idA, 'manual', { updateTeamConfig: serializedUpdateTeamConfig as never }),
-      removeConnection(idB, 'manual', { updateTeamConfig: serializedUpdateTeamConfig as never }),
+      removeConnection(idA, 'manual', { updateTeamConfig: boundUpdateTeamConfig }),
+      removeConnection(idB, 'manual', { updateTeamConfig: boundUpdateTeamConfig }),
     ])
 
-    // Neither removal was lost, and neither resurrected the other's already-removed entry.
-    expect(store.connections.map(c => c.id).sort()).toEqual([idC])
+    // Neither removal was lost, and neither resurrected the other's already-removed entry — read
+    // back from the real tmp file, not from in-memory state, so this proves the WRITE, not just
+    // the in-process return value.
+    const finalRaw = await Bun.file(primary).text()
+    const final = JSON.parse(finalRaw) as { team: TeamConfig }
+    expect(final.team.connections.map(c => c.id).sort()).toEqual([idC])
+
+    await rm(join(primary, '..'), { recursive: true, force: true }).catch(() => {})
+    await rm(join(legacy, '..'), { recursive: true, force: true }).catch(() => {})
   })
 })

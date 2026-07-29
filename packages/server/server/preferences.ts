@@ -174,16 +174,18 @@ async function writeFileAtomic(path: string, text: string): Promise<void> {
 
 /** Single write chain for the WHOLE module: every enqueued function awaits the previous one,
  *  so a read-merge-write can never interleave with another queued write and lose the
- *  connections array. Both `writePreferencesTo` and `readPreferencesFrom`'s legacy-migration
- *  branch enqueue onto this SAME chain, so the two can never interleave/clobber each other
- *  either.
+ *  connections array. `writePreferencesTo`, `readPreferencesFrom`'s legacy-migration branch, and
+ *  `updateTeamConfig` all enqueue onto this SAME chain, so none of the three can interleave or
+ *  clobber another.
  *
- *  Deadlock-freedom: `enqueueWrite` is called only from `writePreferencesTo` and from
- *  `readPreferencesFrom` (never from inside a callback already running as part of this chain).
- *  The callbacks queued here call `readEffective` (a plain, non-enqueuing read) and
- *  `writeFileAtomic` (plain fs I/O) — neither calls back into `enqueueWrite`. So no queued
- *  callback ever awaits a promise that is itself waiting on that same callback to finish; the
- *  chain is a straight FIFO with no cycle. */
+ *  Deadlock-freedom: `enqueueWrite` is called only from those three call sites (never from inside
+ *  a callback already running as part of this chain). The callbacks queued here call
+ *  `readEffective` (a plain, non-enqueuing read) and `writeFileAtomic` (plain fs I/O) — neither
+ *  calls back into `enqueueWrite`. `updateTeamConfig`'s `mutate` callback is synchronous and pure
+ *  by contract (it must never itself call `readPreferences`/`writePreferences`/
+ *  `updateTeamConfig`), so it cannot reintroduce a cycle either. No queued callback ever awaits a
+ *  promise that is itself waiting on that same callback to finish; the chain is a straight FIFO
+ *  with no cycle. */
 let _writeChain: Promise<unknown> = Promise.resolve()
 
 function enqueueWrite<T>(fn: () => Promise<T>): Promise<T> {
@@ -268,16 +270,26 @@ export async function writePreferences(prefs: Preferences): Promise<void> {
  * `undefined` to signal "nothing to do" — no write happens in that case, so a caller like
  * `removeConnection` can stay idempotent without an extra disk write on a repeat call.
  */
-export async function updateTeamConfig(mutate: (current: TeamConfig) => TeamConfig | undefined): Promise<TeamConfig> {
+export type TeamConfigMutator = (current: TeamConfig) => TeamConfig | undefined
+
+/** Path-parameterized implementation — exported for tests (mirrors `writePreferencesTo`'s split
+ *  from `writePreferences`), so the atomicity `updateTeamConfig` provides can be exercised
+ *  against real tmp files and the REAL `enqueueWrite` chain, without ever touching the
+ *  developer's actual `~/.agentistics/preferences.json`. */
+export async function updateTeamConfigAt(primary: string, legacy: string, mutate: TeamConfigMutator): Promise<TeamConfig> {
   return enqueueWrite(async () => {
-    const { prefs: current } = await readEffective(PREFERENCES_FILE, LEGACY_PREFERENCES_FILE)
+    const { prefs: current } = await readEffective(primary, legacy)
     const currentTeam = current.team ?? migrateTeamConfig(undefined)
     const nextTeam = mutate(currentTeam)
     if (nextTeam === undefined) return currentTeam
     const merged = { ...current, team: mergeTeamPayload(current.team, nextTeam) }
-    await writeFileAtomic(PREFERENCES_FILE, JSON.stringify(merged, null, 2))
+    await writeFileAtomic(primary, JSON.stringify(merged, null, 2))
     return merged.team as TeamConfig
   })
+}
+
+export async function updateTeamConfig(mutate: TeamConfigMutator): Promise<TeamConfig> {
+  return updateTeamConfigAt(PREFERENCES_FILE, LEGACY_PREFERENCES_FILE, mutate)
 }
 
 /**
