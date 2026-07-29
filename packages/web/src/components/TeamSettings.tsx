@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Loader2, CheckCircle, XCircle, Users, User, Server, LogOut } from 'lucide-react'
 import { TeamMembers } from './TeamMembers'
-import { PUSH_INTERVAL, type TeamConfig, type MemberPresence, unpackConnectToken, DEFAULT_TEAM } from '@agentistics/core'
+import { PUSH_INTERVAL, type TeamConfig, type MemberPresence, unpackConnectToken, defaultTeam } from '@agentistics/core'
 import { pushNotification } from '../lib/notifications'
 import { MemberConnectionStatus } from './MemberConnectionStatus'
 
@@ -524,7 +524,7 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
       }).catch(() => { /* non-fatal */ })
 
       // (b) Reset the local config to solo and persist it (stops pushing).
-      const solo: TeamConfig = { ...DEFAULT_TEAM, pushIntervalSec: team.pushIntervalSec }
+      const solo: TeamConfig = { ...defaultTeam(), pushIntervalSec: team.pushIntervalSec }
       await fetch('/api/preferences', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },

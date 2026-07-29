@@ -221,7 +221,7 @@ test('resolveMachineCacheScope: null (never a partial sum) when the caches canno
 
 import {
   migrateTeamConfig, normalizeTeamConfig, connectionId, legacyConnectionId,
-  readTeamConnections, NO_REPO_KEY, DEFAULT_TEAM,
+  readTeamConnections, NO_REPO_KEY, DEFAULT_TEAM, defaultTeam,
 } from './team'
 
 test('migrateTeamConfig: a legacy flat member config becomes one connection', () => {
@@ -360,4 +360,55 @@ test('NO_REPO_KEY is the exact sentinel and contains no slash', () => {
 test('DEFAULT_TEAM is solo with an empty connections array', () => {
   expect(DEFAULT_TEAM.mode).toBe('solo')
   expect(DEFAULT_TEAM.connections).toEqual([])
+})
+
+test('defaultTeam() hands out a FRESH array; DEFAULT_TEAM is frozen so it cannot be shared into', () => {
+  const a = defaultTeam()
+  const b = defaultTeam()
+  expect(a.connections).not.toBe(b.connections)
+  a.connections.push({ id: 'c_aaaaaaaaaaaa', endpoint: 'http://c:1', org: 'o', user: 'u', token: 't', deniedRepos: [] })
+  expect(b.connections).toEqual([])
+  expect(Object.isFrozen(DEFAULT_TEAM)).toBe(true)
+  expect(Object.isFrozen(DEFAULT_TEAM.connections)).toBe(true)
+})
+
+// C1 (merge blocker): `agentop member connect` and the web "Connect to central" flow persist
+// `{ ...defaultTeam(), mode:'member', endpoint, token }` — an EMPTY connections array alongside
+// the legacy flat fields. Treating any array as authoritative read that back as solo: the
+// uploader never pushed, no WebSocket ever opened, and the CLI still printed "connected as …".
+
+test('migrateTeamConfig: an empty connections array WITH a flat endpoint still migrates (C1)', () => {
+  const written = { ...defaultTeam(), mode: 'member' as const, endpoint: 'http://c:48080', token: 't', org: 'acme', user: 'lucas' }
+  const out = migrateTeamConfig(written)
+  expect(out.connections).toHaveLength(1)
+  expect(out.connections[0]!.endpoint).toBe('http://c:48080')
+  expect(out.connections[0]!.token).toBe('t')
+  expect(out.connections[0]!.user).toBe('lucas')
+  expect(out.mode).toBe('member')
+})
+
+test('migrateTeamConfig: an empty connections array with NO endpoint stays genuinely solo (C1)', () => {
+  const out = migrateTeamConfig({ ...defaultTeam(), endpoint: '', token: '', user: '' })
+  expect(out.connections).toEqual([])
+  expect(out.mode).toBe('solo')
+  expect(migrateTeamConfig(defaultTeam()).connections).toEqual([])
+  expect(migrateTeamConfig(defaultTeam()).mode).toBe('solo')
+})
+
+test('migrateTeamConfig: a NON-empty connections array wins over a stale flat mirror (C1)', () => {
+  const out = migrateTeamConfig({
+    mode: 'member', endpoint: 'http://stale:48080', token: 'stale',
+    connections: [{ id: 'c_aaaaaaaaaaaa', endpoint: 'http://real:48080', org: 'default', user: 'u', token: 'real', deniedRepos: [] }],
+  })
+  expect(out.connections).toHaveLength(1)
+  expect(out.connections[0]!.endpoint).toBe('http://real:48080')
+  expect(out.endpoint).toBe('http://real:48080')
+})
+
+test('legacyConnectionId needs no node:crypto — deterministic, well-formed and input-sensitive', () => {
+  expect(legacyConnectionId('http://c:48080', 't')).toMatch(/^c_[a-f0-9]{12}$/)
+  expect(legacyConnectionId('http://c:48080', 't')).toBe(legacyConnectionId('http://c:48080', 't'))
+  expect(legacyConnectionId('http://c:48080', 't')).not.toBe(legacyConnectionId('http://d:48080', 't'))
+  const ids = new Set(Array.from({ length: 2000 }, (_, i) => legacyConnectionId(`http://c${i}:48080`, `tok${i}`)))
+  expect(ids.size).toBe(2000)
 })
