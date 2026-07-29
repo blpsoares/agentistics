@@ -43,10 +43,13 @@ function loadCentralEnv(): string | null {
 }
 
 const HELP = `
-Usage: agentop <command> [options]
+Usage: agentop [command] [options]
+
+Bare \`agentop\` on a terminal opens the control center (services, setup, logs, help).
+Without a terminal it prints this help. \`--help\` always prints it.
 
 Commands:
-  start         Interactive launcher — pick mode + how to run (foreground/bg/docker/boot)
+  start         Same control center as bare agentop (non-interactive: runs like 'server')
   setup         Interactive first-run wizard (solo / central / member)
   server        Start the web dashboard + background daemon (non-interactive)
                 (add --central to run the team central natively, no Docker; --bg to detach)
@@ -56,6 +59,7 @@ Commands:
   watch         Start the background metrics daemon only
   central       Manage the team central (Docker; runs from anywhere)
   member        Configure this machine as a team member
+  ci-push       One-shot push of a CI runner's metrics to a central
   upgrade       Upgrade agentop to the latest version
   autostart     Start a mode with the system (systemd user service on Linux)
   check-update  Print a notice if a newer version is available (else silent);
@@ -66,7 +70,7 @@ Commands:
 Options:
   --help, -h       Show this help message
   --version, -v    Show current version
-  --port <n>       Port for the web server (default: 47291)  [server only]
+  --port <n>       Port for the web server (default: 47291)  [server, start]
   --central        Run as the team central natively (no Docker) — reads central.env for
                    MONGO_URL + secrets; requires an external MONGO_URL (Atlas/mongod)  [server only]
   --bg             Start detached in the background (logs to ~/.agentistics)  [server only]
@@ -78,11 +82,15 @@ Native central (no Docker):
     bundled Mongo — set MONGO_URL to an external cluster. Use --bg to run in the background like
     the local server. For the all-in-one Docker flow (bundled Mongo) use \`agentop central up\`.
 
-Start:
+Control center:
+  agentop            (on a terminal)
   agentop start
-    Interactive launcher. Shows the current mode, offers to (re)configure, then asks
-    how to run: foreground, background (detached), Docker, or a boot service (systemd).
-    A central is started via its Docker flow. Non-interactive stdin runs like 'agentop server'.
+    One full-screen application, in the terminal's alternate buffer — it adds nothing to
+    your scrollback. Tabs: Services (start/stop/restart this machine, a central or the
+    Docker machine; connect to or leave a central; enable a boot service), Setup (solo /
+    central / member and the history-preservation consent), Logs, Cheat sheet, Help,
+    Contribute. Picking "foreground" closes it and starts the server in this terminal.
+    Non-interactive stdin runs like 'agentop server'.
 
 Restart:
   agentop restart [server|watch|central|--all] [--rebuild]
@@ -95,7 +103,7 @@ Restart:
 Setup:
   agentop setup
     Interactive wizard: pick solo, host a central, or join one as a member.
-    Running bare agentop on an unconfigured machine launches this too.
+    The control center's Setup tab asks the same questions.
 
 Central:
   agentop central <up|init|down|logs|status|restart|pull>
@@ -271,23 +279,38 @@ if (command === '--help' || command === '-h') {
   process.exit(0)
 }
 
-// Bare `agentop` (no command): if this machine isn't configured yet (no team or
-// team.mode==='solo') AND stdin is a TTY, launch the interactive setup wizard.
-// Otherwise fall back to printing HELP exactly as before.
+/**
+ * `--port` has to be in the environment BEFORE anything imports `server/config.ts`, which freezes
+ * `PORT` at module load. `agentop start --port N` used to set it after `runStart()` had already
+ * pulled `cli-start.ts` — and therefore `config.ts` — in, so the control center detected, reported
+ * and started a server on 47291 while the flag it was given said otherwise, in silence.
+ */
+{
+  const portIdx = args.indexOf('--port')
+  const port = portIdx !== -1 ? args[portIdx + 1] : undefined
+  if (port) process.env.PORT = port
+}
+
+// Bare `agentop` on a terminal IS the control center — the same screen `agentop start` opens,
+// regardless of whether this machine is configured (setup is one of its tabs). Without a TTY it
+// still prints HELP: a pipe, a CI job or `agentop | less` must keep answering in text.
 if (!command) {
-  // A corrupt preferences file must not be silently read as "unconfigured": the wizard would
-  // then offer to overwrite a file that still holds this machine's connections and denylists.
-  // readPreferencesOrExit names the file on stderr and exits non-zero.
-  const { readPreferencesOrExit } = await import('../server/preferences.ts')
-  const prefs = await readPreferencesOrExit()
-  const unconfigured = !prefs.team || prefs.team.mode === 'solo'
-  if (unconfigured && process.stdin.isTTY) {
-    const { runSetup } = await import('../server/cli-setup.ts')
-    const code = await runSetup()
-    process.exit(code)
+  if (!process.stdin.isTTY) {
+    console.log(HELP)
+    process.exit(0)
   }
-  console.log(HELP)
-  process.exit(0)
+  // Read the preferences BEFORE the control center opens, and before the alternate screen is
+  // entered — a corrupt file must not be silently treated as "nothing configured". The control
+  // center would then present this machine as solo and offer to write over a file that still
+  // holds its connections. readPreferencesOrExit names the file on stderr and exits non-zero,
+  // which it can only do while stdout is still the real terminal.
+  const { readPreferencesOrExit } = await import('../server/preferences.ts')
+  await readPreferencesOrExit()
+
+  const { runStart } = await import('../server/cli-start.ts')
+  const result = await runStart()
+  if (result !== 'foreground') process.exit(result)
+  // else: fall through to the shared server startup below.
 }
 
 if (command === 'setup') {
@@ -544,9 +567,9 @@ if (command === 'restart') {
   process.exit(res.ok ? 0 : 1)
 }
 
-// `agentop start` — interactive launcher. It resolves to a run method; when the user picks
-// "foreground" (or stdin isn't a TTY) runStart returns 'foreground' and we fall through to the
-// same in-process server startup as `agentop server` below (keeping the Bun.serve alive).
+// `agentop start` — the control center, same as bare `agentop`. When the user picks "foreground"
+// (or stdin isn't a TTY) runStart returns 'foreground' and we fall through to the same in-process
+// server startup as `agentop server` below (keeping the Bun.serve alive).
 if (command === 'start') {
   const { runStart } = await import('../server/cli-start.ts')
   const result = await runStart()
@@ -554,11 +577,10 @@ if (command === 'start') {
   // else: fall through to the shared server startup below.
 }
 
-if (command === 'server' || command === 'start') {
+if (command === 'server' || command === 'start' || !command) {
+  // `--port` is already in the environment — see the note above the command dispatch. The index is
+  // still needed here to forward the flag to a detached copy.
   const portIdx = args.indexOf('--port')
-  if (portIdx !== -1 && args[portIdx + 1]) {
-    process.env.PORT = args[portIdx + 1]
-  }
   // Native central (no Docker): same server process with TEAM_CENTRAL=1, reading central.env for
   // MONGO_URL + secrets. Unlike the Docker central there is NO bundled Mongo, so an external
   // MONGO_URL (Atlas or your own mongod) is required.

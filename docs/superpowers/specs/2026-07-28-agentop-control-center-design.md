@@ -171,3 +171,35 @@ Pure and near-pure logic is unit tested; rendering is not snapshot-tested.
 - Any metrics, session, cost or harness view (that is `agentop tui`).
 - Changing what any action executes.
 - Windows-native terminal support beyond what Ink already provides.
+
+---
+
+## Revision — the Services screen is a cockpit
+
+Everything above shipped and works; what changed afterwards is the SHAPE of the default screen.
+The flat arrangement this document specifies — a MODE line, a SERVICES list, an ACTIONS menu and
+submenus rendered under the panel — had no relationship between its parts: reading a service's log
+meant leaving the screen that showed the service. It is replaced by a lazygit-style cockpit.
+
+- **Four panes.** Left column, narrow: `services` (the selection) above `config` (mode, endpoint,
+  history, language). Right column, flexible: `detail` (runtime, pid, uptime, the web and api URLs,
+  and the action row) above `log`. The right column follows the services selection — that
+  relationship is the point.
+- **Focus.** `tab` / `shift+tab` cycle panes; the focused pane's border is `COLORS.accent`. Screens
+  moved to `←`/`→` and the digits printed by a slim strip at the bottom left. The footer states the
+  keys valid in the CURRENT focus and nothing else.
+- **Actions are focus-scoped.** With a service focused they act on that service, so the
+  "Stop which? / Restart which?" submenus are gone — their `Everything` option survives as an
+  explicit `Stop all` / `Restart all`, offered only when more than one service is running. With the
+  config pane focused they are connect / disconnect, change history, switch language.
+- **The header is one row.** The compact wordmark plus the SHORT mode token, the version and the
+  update dot. The mode sentence and the endpoint moved to the config pane; in member mode the old
+  header read `member — sends metrics to a central · http://100.109.247.39:48080` and wrapped.
+- **Geometry is pure and tested.** `cockpitLayout` in `chrome.ts` owns the column widths, the row
+  split and the collapse thresholds, all derived from measured content; below the two columns'
+  added floors the layout stacks rather than letting Ink compress it.
+- **One containment style.** `Pane.tsx` frames every region on every screen, the cockpit's four and
+  the five linear screens alike.
+
+`tabs/CheatSheet.tsx` / `Help.tsx` / `Contribute.tsx` were also collapsed into one `tabs/Static.tsx`
+before this revision — three tabs that are typographically the same thing.

@@ -6,10 +6,12 @@
   "main": "src/index.tsx",
   "exports": {
     ".": "./src/index.tsx",
-    "./launcher": "./src/launcher/Launcher.tsx"
+    "./control": "./src/control/index.ts",
+    "./control/altScreen": "./src/control/altScreen.ts"
   },
   "scripts": {
-    "dev": "bun run src/index.tsx"
+    "dev": "bun run src/index.tsx",
+    "preview": "bun run scripts/preview.tsx"
   },
   "dependencies": {
     "@agentistics/core": "workspace:*",

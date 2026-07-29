@@ -38,6 +38,7 @@
     "packages/server/scripts",
     "packages/web/src",
     "packages/tui/src",
+    "packages/tui/scripts",
     "packages/mcp"
   ]
 }

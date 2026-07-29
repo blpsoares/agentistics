@@ -14,7 +14,7 @@ packages/
   server/   (@agentistics/server) — Bun HTTP server, CLI (agentop), otel-watcher, scripts
   web/      (@agentistics/web)    — React + Vite frontend
   mcp/      (@agentistics/mcp)    — MCP server, publishable to npm standalone
-  tui/      (@agentistics/tui)    — Ink (React) terminal dashboard + the `agentop start` launcher
+  tui/      (@agentistics/tui)    — Ink (React) terminal dashboard + the `agentop` control center
   desktop/                        — Tauri v2 Windows installer (spawns agentop as sidecar)
 ```
 
@@ -22,10 +22,10 @@ packages/
 
 ```
 packages/server/bin/cli.ts  (binary entry point — agentop)
-  ├── agentop start        → server/cli-start.ts (interactive arrow-key launcher; EN default + pt-BR toggle; non-TTY stdin falls through to `server`)
-  ├── agentop setup        → server/cli-setup.ts (interactive solo/central/member wizard; bare `agentop` on a TTY when unconfigured)
+  ├── agentop (bare) / start → server/cli-start.ts → @agentistics/tui/control (the full-screen control center: Services / Setup / Logs / Cheat sheet / Help / Contribute; EN default + pt-BR toggle; opens on Setup when the machine is unconfigured). Non-TTY stdin falls through to `server`; without a terminal bare `agentop` prints the help instead
+  ├── agentop setup        → server/cli-setup.ts (the same solo/central/member wizard, non-interactively scriptable and as the control center's Setup tab)
   ├── agentop server       → server/index.ts + server/otel-watcher.ts (always together)
-  ├── agentop restart …    → bounce a mode's service (`server`/`watch` → systemd; `central` → central.sh restart; `--all` → cli-start.ts restartAllServices over every running service). `--rebuild` recreates the Docker image/container instead of bouncing (`central` → `up`; machine → `compose up -d --build`); native server ignores it (use `bun bin`/`upgrade`)
+  ├── agentop restart …    → bounce a mode's service (`server`/`watch` → systemd; `central` → central.sh restart; `--all` → cli-start.ts restartAllServices over every running service). `--rebuild` rebuilds before restarting instead of just bouncing (`central` → `up`; machine → `compose up -d --build`; `server`/`watch` → `rebuildNativeBinary()`, i.e. `bun run bin`, which needs the repo checkout — outside one it says so and restarts the existing build)
   ├── agentop tui          → @agentistics/tui (Ink dashboard; language resolved via cli-lang.ts)
   ├── agentop watch        → server/otel-watcher.ts (daemon only)
   ├── agentop central …    → server/cli-central.ts (wraps central.sh: up/init/down/logs/status/restart/pull)
@@ -55,9 +55,9 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── version.ts           → getVersionInfo (current vs latest); drives update banners/notifications
   ├── autostart.ts         → systemd user service + loginctl linger + ~/.bashrc + ~/.zshrc update-check hook
   ├── cli-setup.ts / cli-central.ts / cli-member.ts → the agentop setup/central/member command handlers
-  ├── cli-start.ts         → the `agentop start` interactive launcher (config vs running status, start agentistics / agentistics central, connect/disconnect, restart-all, stop, language)
+  ├── cli-start.ts         → the control center's HOST (`ControlHost`): service detection, start/stop/restart, connect/disconnect, boot service, archive consent, language — every action returns an already-localized `ActionResult` instead of printing
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
-  ├── cli-i18n.ts          → EN/PT strings for the launcher (CLI is English by default; language follows --lang / preferences.lang / the in-launcher toggle)
+  ├── cli-i18n.ts          → EN/PT strings the HOST produces (CLI is English by default; language follows --lang / preferences.lang / the in-app toggle). The control center's own chrome strings live in tui/src/control/i18n.ts
   ├── team-tokens.ts       → mint / rotate / revoke / validate tokens (stored as sha256 hashes only)
   ├── mongo-dates.ts       → **the date boundary**: BSON `Date` in Mongo, ISO string on the wire. Pure toBsonDate/fromBsonDate(+OrNull)/toBsonDates/fromBsonDates + `DATE_FIELDS` (every stored timestamp, by collection) + `migrateStringDatesToBson()` (idempotent, runs at boot; also `scripts/migrate-mongo-dates.ts`)
   ├── team-store.ts / team-stats.ts → Mongo team-session doc shape + per-member statsCache store
@@ -567,8 +567,9 @@ absence was a real finding.
   verified reports `fail`, never a reassuring `pass`.
 ## Terminal UI (`packages/tui`)
 
-`agentop tui` is an [Ink](https://term.ink) (React for CLIs) application; `agentop start` uses the
-same renderer for its launcher. It replaced a single 938-line hand-rolled ANSI file.
+`agentop tui` is an [Ink](https://term.ink) (React for CLIs) application; bare `agentop` and
+`agentop start` open the **control center**, a second Ink app in the same package. It replaced a
+single 938-line hand-rolled ANSI file.
 
 ```
 packages/tui/src/
@@ -582,9 +583,28 @@ packages/tui/src/
   components/        Primitives (Kpi/Bar/DataTable/fitColumns), Sparkline
   screens/           Overview, Projects, Sessions, Costs, Harnesses
   overlays/          help + harness filter
-  launcher/          the `agentop start` screen (presentation only)
+  control/           the control center — the `agentop` front door
+    index.ts         runControlCenter({ lang, host, tab }) → ControlExit; the ONLY server import
+    types.ts         ControlHost / ControlStatus / TabId — the presentation ↔ logic contract
+    altScreen.ts     the alternate buffer + `suspend` + the signal guard
+    ControlCenter.tsx  the one mounted component: screen router, global keys, shared chrome state
+    nav.ts chrome.ts  PURE key/focus/scroll reducers and PURE layout arithmetic — `headerLayout`
+                     (block art vs the compact mark), the tab bar and its underline, the header tag,
+                     `cockpitLayout`'s band/detail geometry, `detailContent` + `fitDetailLines`, the
+                     services and action row fits (both tested)
+    surface.ts       PURE arithmetic for the LINEAR screens and the questions: section rules, menu
+                     and prompt cells, word wrap, `logSources` (the Logs screen's source list,
+                     DERIVED from ControlStatus.services), the selector's fit, and the `staticRows`
+                     / `setupRows` row budgets (tested in surface.test.ts)
+    i18n.ts lang.ts content.ts  EN/PT chrome strings; the CliLang type; the Help / Cheat sheet / Contribute copy
+    Pane.tsx         the ONE containment style: rounded frame, title in the border, accent when focused
+    Chrome.tsx Surface.tsx Menu.tsx Prompt.tsx ArchiveChoice.tsx   shared primitives (cockpit / linear / questions)
+    tabs/            Services (the cockpit), Setup, Logs, Static (Help / Cheat sheet / Contribute)
   stubs/react-devtools-core/   REQUIRED for the binary build — see below
+packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to stdout at a chosen
+                                   size/lang/mode, with `--keys` to drive it into a question first
 ```
+(`stubs/` sits at the package root, `packages/tui/stubs/`, not under `src/`.)
 
 ### Rules
 
@@ -600,9 +620,102 @@ packages/tui/src/
   `fitColumns` and `Overview` drops KPIs via `fitKpis`; declare columns most-important-first. A
   row wider than the terminal wraps and misaligns everything below it. `App` passes
   `columns - 2` because the shell Box has `paddingX={1}`.
-- **The launcher owns no logic.** `cli-start.ts` still decides the choices and performs the
-  actions; `packages/tui/src/launcher` only renders and returns the chosen value. `cli-ui.ts`
-  stays as the non-TTY fallback — do not delete it.
+- **The control center owns no logic.** `cli-start.ts` decides what the state is and performs
+  every action behind the `ControlHost` interface; `packages/tui/src/control` renders and reports
+  intents. `cli-ui.ts` stays as the non-TTY fallback — do not delete it.
+- **Nothing may print while the alternate buffer is live.** An Ink frame erases the lines above
+  itself, so a stray `process.stdout.write` lands in a buffer Ink is repainting. Host actions
+  either run under `captureOutput` (their output becomes the status-line message) or under
+  `suspend` (they get the real tty and the screen is handed back). The same ordering rule applies
+  to teardown: **unmount Ink BEFORE leaving the buffer**. Restore first and Ink's own exit handler
+  repaints the whole frame onto the primary screen, prefixed with a clear-scrollback — which is
+  why signals route through `onAltScreenSignal` instead of `process.exit`.
+- **A screen that overflows its `height` is composited, not clipped.** Ink draws the extra rows on
+  top of the ones below, so a miscount reads as a corrupted frame. Budget against the `height`
+  prop (`cockpitLayout`, `staticRows` and `setupRows` are the worked examples), keep
+  `flexShrink={0}` on every screen's root Box — a Box that shrinks blends its rows instead of
+  letting the parent cut them — and keep `overflowY="hidden"` on the body as the backstop.
+  `Math.max(1, height - chrome)` is the shape of the bug, not the fix: it hands out a row that does
+  not exist. Give up a PIECE the screen can afford to lose (the intro, a section header) instead.
+- **A list that can outgrow its pane must scroll with `windowOffset`.** Slicing from zero leaves the
+  cursor below the fold — invisible, and still the thing `enter` acts on. The config pane once ran
+  the language toggle from a row nobody could see.
+- **The services list is one row per LOGICAL service, and a runtime is not a service.**
+  `agentistics` run natively and the same program in a container are `RuntimeId`s of ONE
+  `ServiceId`, never two rows — listing them separately is what made the screen offer to start a
+  Docker copy of a server that was already running. A running service therefore offers NO start at
+  all (the host hands over an empty `startOptions`; the offer is unreachable rather than refused),
+  a stopped one keeps its row DIMMED and its action row becomes exactly the starts this box can
+  perform, and a service running under BOTH runtimes says so — `ControlService.conflict`, named on
+  the row in `COLORS.danger` with a glyph and a word, spelled out in the detail pane, with
+  per-runtime `Stop (native)` / `Stop (docker)` verbs. Never normalise a conflict away by showing
+  one of the two: they read the same files and fight over the same port. Under width pressure
+  `serviceCells` gives up the NAME first, then the runtime cell, and the state WORD last — the word
+  is the cell nothing else repeats, while the runtimes are said again by the detail pane's badge and
+  by the conflict sentence that leads its facts. A row reduced to a coloured glyph is a conflict
+  announced in colour alone, which is the one thing this model exists to prevent.
+- **The Services screen is a cockpit, and its panes relate.** The services list is the selection;
+  the detail pane is a view OF it, so moving the cursor repaints it. Actions are focus-scoped —
+  with a service focused they act on THAT service (which is why there is no "stop which?" submenu),
+  with the config pane focused they are the config ones. There are three focusable panes
+  (`PANE_ORDER`: services → config → actions) and **no log pane**: logs belong to the Logs screen,
+  and a tailing viewer squeezed into six rows was a worse copy of a full screen one keypress away.
+- **The detail pane earns the height it has.** It states every RUNTIME the service could run under
+  and the state of each — with the localized reason when one cannot be run here at all, which is
+  the answer to "why does this offer me nothing" — the pid and uptime of the one that is serving,
+  the web and api addresses, and, under a `MACHINE` rule, whether it starts at boot plus the archive
+  mode and (in member mode) the endpoint. **Boot is `ControlService.boot?: 'on' | 'off'` and is
+  ABSENT when the host cannot tell** (`parseBootState` maps only the words systemd actually prints;
+  macOS/Windows are never asked), and an absent boot draws no row — the same N/A-versus-real-0 rule
+  the dashboard applies to harness capabilities. `fitDetailLines` cuts from the bottom and then
+  drops a trailing rule or blank, so a short pane never spends a row heading nothing.
+- **Screens change with `←`/`→` and nothing else.** The tab bar is at the TOP, under the title, with
+  an accent rule under the active cell (`tabUnderline`), so the reading order is title, where-am-I,
+  content, keys. There are no digit shortcuts for screens: the numbered bottom strip is gone, and
+  with it the double-booking that made `2` on the log viewer switch the source AND leave the screen.
+  The digits belong to whatever list draws them (the log sources, a numbered `Menu`). `tab` /
+  `shift+tab` cycle the cockpit's PANES, and the one claim left is `ScreenChrome.claimArrows`, taken
+  by the action row because it is a horizontal list — the footer stops saying `←→ screens` for
+  exactly as long as that is true, and `esc` is the way back out. A key answered by the screen AND by
+  the shell does two things at once, which is the same class of bug as a footer hint for a key that
+  does nothing.
+- **The cockpit is a BAND over a full-width DETAIL pane, and no region may be dead.**
+  `cockpitLayout` puts the services list beside the config pane in a band as tall as the taller of
+  the two and no taller, and gives everything below it to the detail pane at the full terminal
+  width — which is what stops its URLs and its reasons being truncated by a column that was never
+  wide enough for them. The detail region is reserved BEFORE the band on a short terminal (it holds
+  the verbs, and a question needs `QUESTION_ROWS`), so the config pane scrolls rather than the
+  actions disappearing. Surplus width goes to the CONFIG pane, which can spend it: `fitValue` shows
+  the mode sentence and the whole endpoint URL as soon as the column holds them whole. Air under a
+  pane is a fault; air inside one is a pane.
+- **The header is the block wordmark when the row can carry it, the compact mark when it cannot.**
+  `headerLayout` derives the threshold from the MEASURED art (`WORDMARK_ART`) plus the MEASURED tag
+  (`headerMetaWidth`), never a column count — the tag grows with the mode word, the version and the
+  update dot. It is all-or-nothing: taking the art must not cost the version. The tag is
+  right-aligned on the art's LAST line so the two share a baseline. The header's height is therefore
+  NOT a constant, and `bodyHeight(rows, headerRows)` is what every screen's budget goes through.
+- **The Logs screen's sources are DERIVED from `ControlStatus.services`, never a constant.**
+  `logSources` returns one entry per LOGICAL service under the service's own already-localized
+  label (`1 agentistics   2 agentistics central`), and expands a service into its running runtimes
+  ONLY in the conflict case, where they genuinely are two different logs. The screen used to hold
+  `['local', 'central', 'machine'] as const` and print those internal ids, so it offered the native
+  process and the container of the same service as two things long after the model had merged them
+  — the same class of bug CLAUDE.md forbids for a hardcoded harness list, failing the same way.
+- **Every scrolling surface answers the same keys, through the same pure reducer.**
+  `resolveScrollKey` (↑↓ / j k, page up/down, home/end and g/G) CLAMPS at the ends — a document is
+  not a ring, unlike `resolveListKey`'s menus — and `resolveTailKey` layers the Logs screen's
+  follow state on it, unpinning the tail on any movement. The static screens' positions live in the
+  shell's `scroll` record and the Logs viewport in one `TailState`, so a driver that is not the
+  keyboard has one setter per surface to call.
+- **Every framed region goes through `Pane`.** One containment style is what makes six screens read
+  as one application; the shell frames the non-cockpit screens itself so they cannot disagree about
+  it. Pane titles are the SHORT lowercase names, the same words the tab bar prints.
+- **The footer must describe the keys that work in the CURRENT focus.** `cockpitHints` is the only
+  place that decides this, and a hint for a key that does nothing here is a bug, not a cosmetic
+  issue — the footer is the only documentation this screen has.
+- **Order footer hints most-important-first** — `footerHints` drops from the RIGHT, so `q quit`
+  and the tab keys lead. A narrow terminal that hides how to leave strands the user in a buffer
+  that hides their shell.
 - **`stats-cache.json` stays Claude-only here too.** `selectors.ts` reads Claude totals from the
   cache and every other harness from per-session sums; `applyHarnessFilter` blanks the cache when
   a non-Claude harness is selected, or Claude's numbers would survive the filter.
@@ -671,7 +784,7 @@ packages/tui/src/
 - **BRL costs**: conversion via `/api/rates` (fetches live exchange rate); falls back to a fixed rate if the API fails
 - **Session sources**: `_source: 'meta'` sessions are the most complete; `'jsonl'` and `'subdir'` are fallbacks with partial data (no git line counts, no cache tokens)
 - **Binary mode**: `agentop server` sets `SERVE_STATIC=1`; `index.ts` then binds **two ports with one shared request handler** — `PORT` (47291) is the api + mcp endpoint, `WEB_PORT` (47292) serves the web dashboard (the URL you open). Same handler → the SPA on 47292 makes same-origin `/api/*` calls that resolve locally, so 91 stays api+mcp and 92 is the dashboard. The startup log lists `web` (92) above `api` (91)
-- **Machine in Docker**: `docker-compose.machine.yml` (repo root) runs a solo/member machine in a container — reuses the central image (minus Mongo/central mode), mounts the host harness dirs read-only + `~/.agentistics` read-write, host networking. Offered as the `docker` option in `agentop start`. Run the machine in Docker **or** natively, never both
+- **Machine in Docker**: `docker-compose.machine.yml` (repo root) runs a solo/member machine in a container — reuses the central image (minus Mongo/central mode), mounts the host harness dirs read-only + `~/.agentistics` read-write, host networking. Offered as the `docker` option in the control center's Services tab. Run the machine in Docker **or** natively, never both
 - **`packages/server/server/embedded-dist.generated.ts`** is in `.gitignore` — auto-generated, never commit it
 - **`packages/server/` modules** are server-only — never import them from `packages/web/src/` (Vite would try to bundle them and fail on Node/Bun APIs)
 - **`@agentistics/core`** is the shared package — import types, pricing, and formatters from there; never duplicate them inline
