@@ -554,3 +554,79 @@ test('deniedTouchesPrehistory ignores non-Claude sessions', () => {
   expect(deniedTouchesPrehistory(claudeOld, normalizeDenied(['github.com/o/public']), '2026-06-23')).toBe(false)
   expect(deniedTouchesPrehistory(claudeOld, denied, '')).toBe(false)
 })
+
+// --- review round 1 fixes: longestSession leak, seal double-subtraction on a regressed
+//     boundary, unparseable/self-contradictory watermark handling, no duplicate merged dates ---
+
+test('REVIEW FIX 1: longestSession naming a denied STORED session is zeroed', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const named: StatsCache = { ...realCache(), longestSession: { sessionId: 'drop', duration: 999, messageCount: 3, timestamp: 'x' } }
+  const out = buildSplitStatsCache({ real: named, allStored: all, shared, boundary: '2026-06-23', sealed: NO_SEAL })!
+  expect(out.longestSession).toEqual({ sessionId: '', duration: 0, messageCount: 0, timestamp: '' })
+})
+
+test('REVIEW FIX 1: longestSession naming a SHARED session survives untouched', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const kept: StatsCache = { ...realCache(), longestSession: { sessionId: 'keep', duration: 999, messageCount: 3, timestamp: 'x' } }
+  const out = buildSplitStatsCache({ real: kept, allStored: all, shared, boundary: '2026-06-23', sealed: NO_SEAL })!
+  expect(out.longestSession).toEqual({ sessionId: 'keep', duration: 999, messageCount: 3, timestamp: 'x' })
+})
+
+test('REVIEW FIX 1: longestSession naming a session absent from the store (prehistory) is kept — absence is not proof of denial', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const prehistoric: StatsCache = { ...realCache(), longestSession: { sessionId: 'gone-from-store', duration: 42, messageCount: 1, timestamp: 'y' } }
+  const out = buildSplitStatsCache({ real: prehistoric, allStored: all, shared, boundary: '2026-06-23', sealed: NO_SEAL })!
+  expect(out.longestSession).toEqual({ sessionId: 'gone-from-store', duration: 42, messageCount: 1, timestamp: 'y' })
+})
+
+test('REVIEW FIX 2: a seal is not re-applied once its day is no longer prehistory (boundary regression)', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const pending = deniedDeltaByDay(all, shared, '2026-06-23')
+  const { sealed } = advanceSeal({ sealed: {}, pending }, {}, '2026-06-26')
+  expect(Object.keys(sealed)).toEqual(['2026-06-25'])
+
+  // The boundary regresses back to BEFORE the sealed day (a restored backup / regenerated
+  // stats-cache.json with an older watermark) — 2026-06-25 is now >= boundary again, so it is
+  // rebuilt from `shared` (which already excludes the denied session). The seal must NOT also
+  // subtract from it, or the day's volume is removed twice.
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-06-23', sealed })!
+  const unsealedOut = buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-06-23', sealed: NO_SEAL })!
+  expect(out).toEqual(unsealedOut)
+  const june = out.dailyActivity.find(d => d.date === '2026-06-25')!
+  expect(june.sessionCount).toBe(1) // from `shared` alone, not further reduced by the stale seal
+})
+
+test('REVIEW FIX 3: attributionBoundary distinguishes "nothing rolled up" from an unparseable watermark', () => {
+  expect(attributionBoundary(emptyStatsCache())).toBe('')
+  expect(attributionBoundary({ ...emptyStatsCache(), lastComputedDate: 'not-a-real-date' })).toBeNull()
+})
+
+test('REVIEW FIX 3: buildSplitStatsCache refuses when the boundary is null (unparseable watermark)', () => {
+  const all = storeSessions()
+  const real: StatsCache = { ...realCache(), lastComputedDate: 'not-a-real-date' }
+  expect(attributionBoundary(real)).toBeNull()
+  expect(buildSplitStatsCache({ real, allStored: all, shared: all, boundary: attributionBoundary(real), sealed: NO_SEAL })).toBeNull()
+})
+
+test('REVIEW FIX 3: buildSplitStatsCache refuses a self-contradictory cache — no watermark but a nonzero rollup-only field', () => {
+  const all = storeSessions()
+  const noWatermarkButSessions: StatsCache = { ...emptyStatsCache(), lastComputedDate: '', totalSessions: 5 }
+  expect(buildSplitStatsCache({ real: noWatermarkButSessions, allStored: all, shared: all, boundary: '', sealed: NO_SEAL })).toBeNull()
+
+  const noWatermarkButHours: StatsCache = { ...emptyStatsCache(), lastComputedDate: '', hourCounts: { '8': 1 } }
+  expect(buildSplitStatsCache({ real: noWatermarkButHours, allStored: all, shared: all, boundary: '', sealed: NO_SEAL })).toBeNull()
+})
+
+test('REVIEW FIX 5: the merged dailyActivity and dailyModelTokens carry no duplicate dates', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-06-23', sealed: NO_SEAL })!
+  const activityDates = out.dailyActivity.map(d => d.date)
+  const tokenDates = out.dailyModelTokens.map(d => d.date)
+  expect(new Set(activityDates).size).toBe(activityDates.length)
+  expect(new Set(tokenDates).size).toBe(tokenDates.length)
+})

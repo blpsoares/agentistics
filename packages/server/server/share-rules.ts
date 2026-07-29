@@ -345,11 +345,20 @@ function nextDay(day: string): string {
  * by construction.
  *
  * `''` means Claude has rolled up nothing, so the entire cache is gap-filled and EVERY day is
- * decomposable. It is not a refusal signal.
+ * decomposable. It is not a refusal signal — treat it as "everything decomposable".
+ *
+ * `null` means a watermark IS present but could not be parsed as a calendar day. This is a
+ * DIFFERENT fact from "nothing rolled up" and must not collapse into `''`: an unparseable
+ * watermark says nothing about which days are session-derived, so `buildSplitStatsCache` must
+ * refuse rather than treat the whole cache as decomposable (which would rebuild every rollup
+ * row from the store's necessarily-partial subset) or as entirely prehistory (which would ship
+ * the rollup verbatim, denylist and all).
  */
-export function attributionBoundary(real: StatsCache): string {
+export function attributionBoundary(real: StatsCache): string | null {
   const watermark = real?.lastComputedDate ?? ''
-  return watermark ? nextDay(watermark) : ''
+  if (!watermark) return ''
+  const next = nextDay(watermark)
+  return next || null
 }
 
 /** What the denylist excluded from one day, measured while that day was still decomposable. */
@@ -363,13 +372,23 @@ export interface DeniedDayDelta {
 }
 export type DeniedLedger = Record<string, DeniedDayDelta>
 
-/** Per-day denied contribution over the decomposable window (`day >= boundary`). Pure.
- *  Mirrors `accumulateClaudeSessions`'s gates exactly — harness, start_time, the `claude-` model
- *  id and the zero-token continue — so the two can be subtracted from each other. */
+/**
+ * Per-day denied contribution over the decomposable window (`day >= boundary`). Pure.
+ * Mirrors `accumulateClaudeSessions`'s gates exactly — harness, start_time, the `claude-` model
+ * id and the zero-token continue — so the two can be subtracted from each other.
+ *
+ * This is a LOWER BOUND for a denied session whose `model` is missing, not a `claude-` id, or
+ * whose four token fields sum to zero: `tokensByModel` / `usageByModel` skip that session (the
+ * `continue` below), yet Claude's own rollup DOES attribute whatever tokens it recorded once the
+ * day crosses the watermark. The gap between what this function measures and what the rollup
+ * later reports is real and cannot be closed from session data — those tokens stay in the pushed
+ * cache permanently, sealed or not. `sessionCount` / `messageCount` / `toolCallCount` /
+ * `hourCounts` have no such gap: they come straight off the session record.
+ */
 export function deniedDeltaByDay(
   allStored: readonly SessionMeta[],
   shared: readonly SessionMeta[],
-  boundary: string,
+  boundary: string | null,
 ): DeniedLedger {
   const keep = sharedSessionIds(shared)
   const out: DeniedLedger = {}
@@ -415,11 +434,16 @@ export function deniedDeltaByDay(
  * is sealed as it crosses, and subtracted from the rollup row forever after. A day already sealed is
  * never re-sealed — the first measurement was taken when the day was fully session-derived, and any
  * later one would be taken against a store that is now a subset.
+ *
+ * CALLER CONTRACT: this must be invoked on EVERY push cycle, without skipping one. A day only
+ * seals while it is still in `prev.pending` and the boundary has just passed it; a skipped cycle
+ * whose window spans both — the day entering `pending` AND crossing the boundary — loses that
+ * day's seal forever, and its denied volume ships once the day becomes prehistory.
  */
 export function advanceSeal(
   prev: { sealed: DeniedLedger; pending: DeniedLedger },
   fresh: DeniedLedger,
-  boundary: string,
+  boundary: string | null,
 ): { sealed: DeniedLedger; pending: DeniedLedger } {
   const sealed: DeniedLedger = { ...(prev.sealed ?? {}) }
   for (const [day, delta] of Object.entries(prev.pending ?? {})) {
@@ -429,7 +453,7 @@ export function advanceSeal(
 }
 
 /** Sessions Claude has already rolled up — the size of the block no rule can split. */
-export function prehistoryCount(real: StatsCache, boundary: string): number {
+export function prehistoryCount(real: StatsCache, boundary: string | null): number {
   if (!boundary) return 0
   return (real?.dailyActivity ?? [])
     .filter(d => d.date < boundary)
@@ -442,7 +466,7 @@ export function prehistoryCount(real: StatsCache, boundary: string): number {
 export function deniedTouchesPrehistory(
   allStored: readonly SessionMeta[],
   denied: ReadonlySet<RepoKey>,
-  boundary: string,
+  boundary: string | null,
   index?: PathRepoIndex,
 ): boolean {
   if (!boundary || denied.size === 0) return false
@@ -482,16 +506,40 @@ function sumUsage(sessions: readonly SessionMeta[], from: string) {
  * NOT gap-filled by `supplementStatsCache`, so they describe the rollup alone — they are reduced by
  * the seal and never gain a `kept` term. Every value is copied, summed or subtracted; nothing is
  * estimated, ratioed or prorated.
+ *
+ * PRECONDITION the caller must uphold: `real` was supplemented from the SAME session array passed
+ * here as `allStored`. If the store has shrunk between the two reads (files pruned, a partial
+ * store re-read), `dailyActivity`/`dailyModelTokens` lose a day's row while `real.modelUsage` still
+ * carries that day's tokens — a fail-open for a denied repo that the cold-store guard below cannot
+ * catch, because it only detects TOTAL loss (zero Claude sessions), not partial shrinkage.
+ *
+ * Returns null rather than an unsplit or inconsistent cache when:
+ * - `real` is missing,
+ * - the store yields no Claude session while `real` reports data (cold-store signature),
+ * - `boundary` is `null` — a watermark IS present but could not be parsed, which is a fact
+ *   distinct from "nothing rolled up" and must not be treated as either extreme, or
+ * - `real` is self-contradictory: no watermark (`lastComputedDate === ''`) yet it still reports a
+ *   nonzero `totalSessions` or a non-empty `hourCounts` — both of which describe the rollup ALONE
+ *   and must be zero when there is no rollup.
  */
 export function buildSplitStatsCache(input: {
   real: StatsCache
   allStored: readonly SessionMeta[]
   shared: readonly SessionMeta[]
-  boundary: string
+  boundary: string | null
   sealed: DeniedLedger
 }): StatsCache | null {
   const { real, allStored, shared, boundary, sealed } = input
   if (!real) return null
+
+  // An unparseable (but present) watermark says nothing about which days are session-derived.
+  if (boundary === null) return null
+
+  // No watermark means no rollup: totalSessions/hourCounts describe the rollup alone and must be
+  // zero. A cache claiming otherwise is internally inconsistent input, not a valid empty rollup.
+  if (!real.lastComputedDate && ((real.totalSessions ?? 0) > 0 || Object.keys(real.hourCounts ?? {}).length > 0)) {
+    return null
+  }
 
   // Cold-store signature: a populated cache while the store yields no Claude session means the
   // store was not read, not that the machine did nothing. Push nothing rather than the unsplit cache.
@@ -508,7 +556,16 @@ export function buildSplitStatsCache(input: {
   out.lastComputedDate = real.lastComputedDate
   out.firstSessionDate = real.firstSessionDate
   out.totalSpeculationTimeSavedMs = real.totalSpeculationTimeSavedMs
-  out.longestSession = { ...real.longestSession }
+
+  // --- longestSession names a single session; zero it when that session is one we withhold.
+  //     Absence from the store (prehistory, whose transcripts are gone) is NOT proof of denial —
+  //     only a session present in the store AND excluded from `shared` is zeroed. ---
+  const sharedIds = sharedSessionIds(shared)
+  const storedIds = sharedSessionIds(allStored)
+  const namedSession = real.longestSession?.sessionId ?? ''
+  out.longestSession = (namedSession && storedIds.has(namedSession) && !sharedIds.has(namedSession))
+    ? { sessionId: '', duration: 0, messageCount: 0, timestamp: '' }
+    : { ...real.longestSession }
 
   // --- dailyActivity: rollup minus seal, then the rebuilt window ---
   const activity = (real.dailyActivity ?? [])
@@ -546,7 +603,13 @@ export function buildSplitStatsCache(input: {
   const attributable = sumUsage(allStored, boundary)
   const kept = sumUsage(shared, boundary)
   const sealedUsage = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>()
-  for (const delta of Object.values(sealed ?? {})) {
+  for (const [day, delta] of Object.entries(sealed ?? {})) {
+    // A seal is only meaningful against the prehistory row it was subtracted from. If the
+    // boundary ever regresses (a restored backup, a regenerated stats-cache.json with an older
+    // watermark), a previously-sealed day can find itself back in the rebuilt-from-shared window,
+    // which already excludes the denied session on its own — applying the seal there too would
+    // double-subtract.
+    if (!isPrehistory(day)) continue
     for (const [model, u] of Object.entries(delta.usageByModel)) {
       const acc = sealedUsage.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
       acc.input += u.input; acc.output += u.output; acc.cacheRead += u.cacheRead; acc.cacheWrite += u.cacheWrite
@@ -582,7 +645,8 @@ export function buildSplitStatsCache(input: {
   let sealedSessions = 0
   let sealedMessages = 0
   const sealedHours = new Map<string, number>()
-  for (const delta of Object.values(sealed ?? {})) {
+  for (const [day, delta] of Object.entries(sealed ?? {})) {
+    if (!isPrehistory(day)) continue // see the comment on sealedUsage above
     sealedSessions += delta.sessionCount
     sealedMessages += delta.messageCount
     for (const [h, c] of Object.entries(delta.hourCounts)) sealedHours.set(h, (sealedHours.get(h) ?? 0) + c)
