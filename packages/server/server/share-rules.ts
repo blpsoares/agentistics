@@ -325,38 +325,120 @@ export function buildSharedStatsCache(
   return out
 }
 
+/** UTC day arithmetic on a YYYY-MM-DD string. '' for anything unparseable. */
+function nextDay(day: string): string {
+  const d = new Date(`${day}T00:00:00Z`)
+  if (Number.isNaN(d.getTime())) return ''
+  d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString().slice(0, 10)
+}
+
 /**
- * First local day from which the consolidate store is the authority on what happened — the
- * earliest start_time day across ALL stored Claude sessions, shared and denied alike. Days
- * before it cannot be attributed to any repository by anyone, including this machine.
+ * The first day whose cache rows are session-derived, and therefore decomposable by repository:
+ * the day AFTER Claude's rollup watermark.
  *
- * '' when the store holds no Claude session: nothing is attributable, and buildSplitStatsCache
- * then refuses rather than shipping an unfiltered cache.
+ * Measured, not assumed: for every day at or before `lastComputedDate` the consolidate store is a
+ * strict SUBSET of Claude's rollup (4 stored sessions against 9 rolled up on one real day; per-day
+ * reconciliation matched 0 of 23 days), so those rows cannot be decomposed by anyone — including
+ * this machine. Every later day is written by `supplementStatsCache` from the very session set this
+ * module filters, so rebuilding it from `shared` is exact and the date-less subtraction reconciles
+ * by construction.
+ *
+ * `''` means Claude has rolled up nothing, so the entire cache is gap-filled and EVERY day is
+ * decomposable. It is not a refusal signal.
  */
-export function attributionBoundary(allStored: readonly SessionMeta[]): string {
-  let min = ''
+export function attributionBoundary(real: StatsCache): string {
+  const watermark = real?.lastComputedDate ?? ''
+  return watermark ? nextDay(watermark) : ''
+}
+
+/** What the denylist excluded from one day, measured while that day was still decomposable. */
+export interface DeniedDayDelta {
+  sessionCount: number
+  messageCount: number
+  toolCallCount: number
+  tokensByModel: Record<string, number>
+  usageByModel: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>
+  hourCounts: Record<string, number>
+}
+export type DeniedLedger = Record<string, DeniedDayDelta>
+
+/** Per-day denied contribution over the decomposable window (`day >= boundary`). Pure.
+ *  Mirrors `accumulateClaudeSessions`'s gates exactly — harness, start_time, the `claude-` model
+ *  id and the zero-token continue — so the two can be subtracted from each other. */
+export function deniedDeltaByDay(
+  allStored: readonly SessionMeta[],
+  shared: readonly SessionMeta[],
+  boundary: string,
+): DeniedLedger {
+  const keep = sharedSessionIds(shared)
+  const out: DeniedLedger = {}
   for (const s of allStored) {
     if (!s.start_time) continue
     if ((s.harness ?? 'claude') !== 'claude') continue
     const day = s.start_time.slice(0, 10)
-    if (!min || day < min) min = day
+    if (boundary && day < boundary) continue
+    if (!s.session_id || keep.has(s.session_id)) continue
+
+    const d = out[day] ?? (out[day] = {
+      sessionCount: 0, messageCount: 0, toolCallCount: 0,
+      tokensByModel: {}, usageByModel: {}, hourCounts: {},
+    })
+    d.sessionCount += 1
+    d.messageCount += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
+    d.toolCallCount += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
+    const hour = new Date(s.start_time).getHours()
+    if (Number.isFinite(hour)) {
+      const k = String(hour)
+      d.hourCounts[k] = (d.hourCounts[k] ?? 0) + 1
+    }
+
+    const model = s.model
+    if (!model || !model.startsWith('claude-')) continue
+    const inp = s.input_tokens ?? 0
+    const outT = s.output_tokens ?? 0
+    const cr = s.cache_read_input_tokens ?? 0
+    const cw = s.cache_creation_input_tokens ?? 0
+    if (inp + outT + cr + cw === 0) continue
+    d.tokensByModel[model] = (d.tokensByModel[model] ?? 0) + inp + outT + cr + cw
+    const u = d.usageByModel[model] ?? (d.usageByModel[model] = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
+    u.input += inp; u.output += outT; u.cacheRead += cr; u.cacheWrite += cw
   }
-  return min
+  return out
 }
 
-/** Stored sessions strictly before the boundary — the size of the block no rule can filter. */
-export function prehistoryCount(allStored: readonly SessionMeta[], boundary: string): number {
+/**
+ * Advance the seal as Claude's watermark moves.
+ *
+ * A day filtered today joins the undecomposable rollup tomorrow, and the denied repository's volume
+ * for it would silently start shipping. So the delta measured while the day was still decomposable
+ * is sealed as it crosses, and subtracted from the rollup row forever after. A day already sealed is
+ * never re-sealed — the first measurement was taken when the day was fully session-derived, and any
+ * later one would be taken against a store that is now a subset.
+ */
+export function advanceSeal(
+  prev: { sealed: DeniedLedger; pending: DeniedLedger },
+  fresh: DeniedLedger,
+  boundary: string,
+): { sealed: DeniedLedger; pending: DeniedLedger } {
+  const sealed: DeniedLedger = { ...(prev.sealed ?? {}) }
+  for (const [day, delta] of Object.entries(prev.pending ?? {})) {
+    if (boundary && day < boundary && !sealed[day]) sealed[day] = delta
+  }
+  return { sealed, pending: { ...fresh } }
+}
+
+/** Sessions Claude has already rolled up — the size of the block no rule can split. */
+export function prehistoryCount(real: StatsCache, boundary: string): number {
   if (!boundary) return 0
-  let n = 0
-  for (const s of allStored) {
-    if (s.start_time && s.start_time.slice(0, 10) < boundary) n++
-  }
-  return n
+  return (real?.dailyActivity ?? [])
+    .filter(d => d.date < boundary)
+    .reduce((a, d) => a + d.sessionCount, 0)
 }
 
-/** Does any DENIED repo have a stored session before the boundary? Drives the specific
- *  variant of the confirm copy. A false answer is not a proof of absence — it only means the
- *  store holds no such session — which is why the generic copy is always shown too. */
+/** Does any DENIED repo have a stored CLAUDE session inside the rollup window? Drives the specific
+ *  variant of the confirm copy. A false answer is not proof of absence — the store holds only a
+ *  subset of that window — which is why the generic copy is always shown too. */
 export function deniedTouchesPrehistory(
   allStored: readonly SessionMeta[],
   denied: ReadonlySet<RepoKey>,
@@ -366,6 +448,7 @@ export function deniedTouchesPrehistory(
   if (!boundary || denied.size === 0) return false
   for (const s of allStored) {
     if (!s.start_time || s.start_time.slice(0, 10) >= boundary) continue
+    if ((s.harness ?? 'claude') !== 'claude') continue
     if (!sessionShared(s, denied, index)) return true
   }
   return false
@@ -394,90 +477,122 @@ function sumUsage(sessions: readonly SessionMeta[], from: string) {
 /**
  * The cache a RESTRICTED connection pushes.
  *
- * Days `< boundary` are copied verbatim from `real` — the prehistory, which no rule can reach
- * because the transcripts behind it are gone. Days `>= boundary` are rebuilt from `shared`.
- * Date-less fields (modelUsage, hourCounts) have no day dimension in the cache, so their
- * prehistory term is recovered as `real − attributable`, a difference of two exactly-known
- * quantities — never a proration.
- *
- * Returns null when the split cannot be made faithfully; the caller must then push NO
- * statsCache at all. A missing cache is recoverable; a leaked one is not.
+ * Days `>= boundary` are rebuilt from `shared`. Earlier days are Claude's rollup row minus their
+ * sealed delta, or verbatim when unsealed. `hourCounts`, `totalSessions` and `totalMessages` are
+ * NOT gap-filled by `supplementStatsCache`, so they describe the rollup alone — they are reduced by
+ * the seal and never gain a `kept` term. Every value is copied, summed or subtracted; nothing is
+ * estimated, ratioed or prorated.
  */
 export function buildSplitStatsCache(input: {
   real: StatsCache
   allStored: readonly SessionMeta[]
   shared: readonly SessionMeta[]
   boundary: string
+  sealed: DeniedLedger
 }): StatsCache | null {
-  const { real, allStored, shared, boundary } = input
-  if (!real || !boundary) return null
+  const { real, allStored, shared, boundary, sealed } = input
+  if (!real) return null
 
+  // Cold-store signature: a populated cache while the store yields no Claude session means the
+  // store was not read, not that the machine did nothing. Push nothing rather than the unsplit cache.
+  const realHasData = (real.dailyActivity?.length ?? 0) > 0 || (real.totalSessions ?? 0) > 0
+  const storeHasClaude = allStored.some(s => !!s.start_time && (s.harness ?? 'claude') === 'claude')
+  if (realHasData && !storeHasClaude) return null
+
+  // boundary '' means Claude rolled up nothing, so NO day is prehistory.
+  const isPrehistory = (day: string) => boundary !== '' && day < boundary
   const fromShared = buildSharedStatsCache(shared, { version: real.version })
+
   const out = emptyStatsCache()
   out.version = real.version
-  out.lastComputedDate = ''
-  out.totalSpeculationTimeSavedMs = real.totalSpeculationTimeSavedMs
+  out.lastComputedDate = real.lastComputedDate
   out.firstSessionDate = real.firstSessionDate
+  out.totalSpeculationTimeSavedMs = real.totalSpeculationTimeSavedMs
+  out.longestSession = { ...real.longestSession }
 
-  // --- date-dimensioned: copy before, rebuild from ---
-  out.dailyActivity = [
-    ...real.dailyActivity.filter(d => d.date < boundary),
-    ...fromShared.dailyActivity.filter(d => d.date >= boundary),
-  ].sort((a, b) => a.date.localeCompare(b.date))
+  // --- dailyActivity: rollup minus seal, then the rebuilt window ---
+  const activity = (real.dailyActivity ?? [])
+    .filter(d => isPrehistory(d.date))
+    .map(d => {
+      const seal = sealed?.[d.date]
+      if (!seal) return { ...d }
+      return {
+        date: d.date,
+        messageCount: Math.max(0, d.messageCount - seal.messageCount),
+        sessionCount: Math.max(0, d.sessionCount - seal.sessionCount),
+        toolCallCount: Math.max(0, d.toolCallCount - seal.toolCallCount),
+      }
+    })
+  for (const d of fromShared.dailyActivity) if (!isPrehistory(d.date)) activity.push({ ...d })
+  out.dailyActivity = activity.sort((a, b) => a.date.localeCompare(b.date))
 
-  out.dailyModelTokens = [
-    ...real.dailyModelTokens.filter(d => d.date < boundary),
-    ...fromShared.dailyModelTokens.filter(d => d.date >= boundary),
-  ].sort((a, b) => a.date.localeCompare(b.date))
+  // --- dailyModelTokens: same three-way rule, per model ---
+  const daily = (real.dailyModelTokens ?? [])
+    .filter(d => isPrehistory(d.date))
+    .map(d => {
+      const seal = sealed?.[d.date]
+      if (!seal) return { date: d.date, tokensByModel: { ...d.tokensByModel } }
+      const tokensByModel: Record<string, number> = {}
+      for (const [model, value] of Object.entries(d.tokensByModel)) {
+        const left = Math.max(0, value - (seal.tokensByModel[model] ?? 0))
+        if (left > 0) tokensByModel[model] = left
+      }
+      return { date: d.date, tokensByModel }
+    })
+  for (const d of fromShared.dailyModelTokens) if (!isPrehistory(d.date)) daily.push({ date: d.date, tokensByModel: { ...d.tokensByModel } })
+  out.dailyModelTokens = daily.sort((a, b) => a.date.localeCompare(b.date))
 
-  // --- totals: derived from the result's own dailyActivity, preserving the real file's
-  //     invariant totalSessions === Σ dailyActivity.sessionCount ---
-  out.totalSessions = out.dailyActivity.reduce((a, d) => a + d.sessionCount, 0)
-  out.totalMessages = out.dailyActivity.reduce((a, d) => a + d.messageCount, 0)
-
-  // --- date-less: real − attributable + shared, clamped at 0 ---
+  // --- modelUsage: real − sealed − attributable + kept, subtraction clamped ---
   const attributable = sumUsage(allStored, boundary)
   const kept = sumUsage(shared, boundary)
+  const sealedUsage = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>()
+  for (const delta of Object.values(sealed ?? {})) {
+    for (const [model, u] of Object.entries(delta.usageByModel)) {
+      const acc = sealedUsage.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+      acc.input += u.input; acc.output += u.output; acc.cacheRead += u.cacheRead; acc.cacheWrite += u.cacheWrite
+      sealedUsage.set(model, acc)
+    }
+  }
 
   const models = new Set([
-    ...Object.keys(real.modelUsage),
+    ...Object.keys(real.modelUsage ?? {}),
     ...attributable.totals.keys(),
     ...kept.totals.keys(),
+    ...sealedUsage.keys(),
   ])
   for (const model of models) {
-    const r = real.modelUsage[model]
+    const r = real.modelUsage?.[model]
     const a = attributable.totals.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
     const k = kept.totals.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    const sl = sealedUsage.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
     const usage = {
-      inputTokens: Math.max(0, (r?.inputTokens ?? 0) - a.input) + k.input,
-      outputTokens: Math.max(0, (r?.outputTokens ?? 0) - a.output) + k.output,
-      cacheReadInputTokens: Math.max(0, (r?.cacheReadInputTokens ?? 0) - a.cacheRead) + k.cacheRead,
-      cacheCreationInputTokens: Math.max(0, (r?.cacheCreationInputTokens ?? 0) - a.cacheWrite) + k.cacheWrite,
+      inputTokens: Math.max(0, (r?.inputTokens ?? 0) - sl.input - a.input) + k.input,
+      outputTokens: Math.max(0, (r?.outputTokens ?? 0) - sl.output - a.output) + k.output,
+      cacheReadInputTokens: Math.max(0, (r?.cacheReadInputTokens ?? 0) - sl.cacheRead - a.cacheRead) + k.cacheRead,
+      cacheCreationInputTokens: Math.max(0, (r?.cacheCreationInputTokens ?? 0) - sl.cacheWrite - a.cacheWrite) + k.cacheWrite,
       webSearchRequests: 0,
       costUSD: 0,
     }
-    const any = usage.inputTokens || usage.outputTokens || usage.cacheReadInputTokens || usage.cacheCreationInputTokens
-    if (any) out.modelUsage[model] = usage
+    if (usage.inputTokens || usage.outputTokens || usage.cacheReadInputTokens || usage.cacheCreationInputTokens) {
+      out.modelUsage[model] = usage
+    }
   }
 
-  const hourKeys = new Set([
-    ...Object.keys(real.hourCounts),
-    ...[...attributable.hours.keys()].map(String),
-    ...[...kept.hours.keys()].map(String),
-  ])
-  for (const key of hourKeys) {
-    const h = Number(key)
-    const value = Math.max(0, (real.hourCounts[key] ?? 0) - (attributable.hours.get(h) ?? 0)) + (kept.hours.get(h) ?? 0)
-    if (value > 0) out.hourCounts[key] = value
+  // --- rollup-only fields: reduced by the seal, never given a kept term ---
+  let sealedSessions = 0
+  let sealedMessages = 0
+  const sealedHours = new Map<string, number>()
+  for (const delta of Object.values(sealed ?? {})) {
+    sealedSessions += delta.sessionCount
+    sealedMessages += delta.messageCount
+    for (const [h, c] of Object.entries(delta.hourCounts)) sealedHours.set(h, (sealedHours.get(h) ?? 0) + c)
   }
-
-  // --- longestSession names a session; zero it when that session is one we withhold ---
-  const sharedIds = sharedSessionIds(shared)
-  const storedIds = sharedSessionIds(allStored)
-  const named = real.longestSession?.sessionId ?? ''
-  out.longestSession = (named && storedIds.has(named) && !sharedIds.has(named))
-    ? { sessionId: '', duration: 0, messageCount: 0, timestamp: '' }
-    : { ...real.longestSession }
+  out.totalSessions = Math.max(0, (real.totalSessions ?? 0) - sealedSessions)
+  out.totalMessages = Math.max(0, (real.totalMessages ?? 0) - sealedMessages)
+  for (const [h, c] of Object.entries(real.hourCounts ?? {})) {
+    const left = Math.max(0, c - (sealedHours.get(h) ?? 0))
+    if (left > 0) out.hourCounts[h] = left
+  }
 
   return out
 }
