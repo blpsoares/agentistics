@@ -342,6 +342,12 @@ export function resolveMachineCacheScope(input: MachineScopeInput): string[] | n
 
   // A machine in scope with no cache would be counted as zero — under-report rather than admit it.
   if (scope.some(id => !machineStatsCaches[id])) return null
+  // A selection that resolves to NO machine is not an authoritative empty history — it means this
+  // viewer's `machineOwners` cannot express the selection. A scoped principal (a manager) receives
+  // the map pruned to the machines they may see, and a machine that was never linked to a team is
+  // absent from every team's scope, so `[]` here is "I don't know", not "zero". Returning it made
+  // the caller merge an EMPTY statsCache and render a confident 0 across every KPI. Fall back.
+  if (scope.length === 0) return null
   return scope
 }
 

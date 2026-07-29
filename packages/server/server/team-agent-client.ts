@@ -25,6 +25,55 @@ const BACKOFF_MS: number[] = [1_000, 2_000, 5_000, 10_000, 30_000]
 let activeWs: WebSocket | null = null
 let backoffIdx = 0
 
+/**
+ * How often the member reports its open assistants to the central. Must stay comfortably below
+ * `LIVE_REPORT_TTL_MS` in team-live.ts, so one dropped frame never blinks the central's panel.
+ */
+const LIVE_REPORT_INTERVAL_MS = 8_000
+
+let liveTimer: ReturnType<typeof setInterval> | null = null
+
+/**
+ * Report this machine's live sessions to the central over the reverse channel.
+ *
+ * The central detects open assistants by reading /proc, which only ever sees its OWN machine — so
+ * without this a team dashboard could never show what members are working on right now. Metrics
+ * only: session ids plus the cwd of a process too new to have written a transcript. Never chat,
+ * matching the rule that members push computed data only.
+ *
+ * Best-effort throughout: a failed snapshot or a dead socket skips a beat rather than throwing
+ * into the connection's event handlers.
+ */
+function startLiveReporting(socket: WebSocket): void {
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null }
+
+  const send = async (): Promise<void> => {
+    if (socket.readyState !== WebSocket.OPEN) return
+    try {
+      const [{ buildApiResponse }, { getLiveSnapshot }] = await Promise.all([
+        import('./data'),
+        import('./live-sessions'),
+      ])
+      const data = await buildApiResponse()
+      const snap = await getLiveSnapshot(data.sessions)
+      if (socket.readyState !== WebSocket.OPEN) return
+      socket.send(JSON.stringify({
+        type: 'live-sessions',
+        sessionIds: snap.liveSessionIds,
+        processes: snap.liveProcesses,
+      }))
+    } catch { /* transient — the next tick retries */ }
+  }
+
+  void send()
+  liveTimer = setInterval(() => { void send() }, LIVE_REPORT_INTERVAL_MS)
+  liveTimer.unref?.()
+}
+
+function stopLiveReporting(): void {
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null }
+}
+
 function scheduleReconnect(): void {
   const delay = BACKOFF_MS[Math.min(backoffIdx, BACKOFF_MS.length - 1)] ?? 30_000
   backoffIdx++
@@ -70,6 +119,7 @@ function openConnection(endpoint: string, token: string): void {
 
   socket.addEventListener('open', () => {
     backoffIdx = 0 // successful open — reset backoff
+    startLiveReporting(socket)
   })
 
   // Inbound admin actions from the central: 'renamed' (the central renamed this machine) and
@@ -102,6 +152,7 @@ function openConnection(endpoint: string, token: string): void {
 
   socket.addEventListener('close', () => {
     if (activeWs === socket) activeWs = null
+    stopLiveReporting()
     scheduleReconnect()
   })
 
@@ -155,6 +206,7 @@ async function reconcileConnection(): Promise<void> {
       // Switched back to solo (or credentials cleared) — tear down the socket.
       const socket = activeWs
       activeWs = null
+      stopLiveReporting()
       try {
         socket.close()
       } catch {

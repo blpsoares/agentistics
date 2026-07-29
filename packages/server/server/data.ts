@@ -870,12 +870,13 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     let machineOwners: Record<string, { user: string; teamIds: string[] }> | undefined
     if (TEAM_CENTRAL) {
       const { loadAllMemberStats } = await import('./team-stats')
-      const { getMemberNameMap, getLiveTokenIds, listMachines } = await import('./team-tokens')
-      const [memberStats, nameMap, liveIds, machines] = await Promise.all([
+      const { getMemberNameMap, getLiveTokenIds, listMachines, getEffectiveMemberTeamsMap } = await import('./team-tokens')
+      const [memberStats, nameMap, liveIds, machines, effectiveTeams] = await Promise.all([
         loadAllMemberStats().catch(() => [] as { memberId: string; user: string; statsCache: StatsCache }[]),
         getMemberNameMap().catch(() => ({} as Record<string, string>)),
         getLiveTokenIds().catch(() => null),
         listMachines().catch(() => [] as { id: string; user: string; teamIds: string[] }[]),
+        getEffectiveMemberTeamsMap().catch(() => ({} as Record<string, string[]>)),
       ])
       userStatsCaches = {}
       machineStatsCaches = {}
@@ -895,7 +896,10 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       machineOwners = {}
       for (const m of machines) {
         if (liveIds && !liveIds.has(m.id)) continue
-        machineOwners[m.id] = { user: nameMap[m.id] ?? m.user, teamIds: m.teamIds ?? [] }
+        // Effective teams (stored ∪ the owner accounts' teams) — the SAME rule the session tagging
+        // and the machines list use. Reading the stored `teamIds` here made a team filter resolve
+        // to no machine for a team whose members were linked by account only.
+        machineOwners[m.id] = { user: nameMap[m.id] ?? m.user, teamIds: effectiveTeams[m.id] ?? m.teamIds ?? [] }
       }
     }
 

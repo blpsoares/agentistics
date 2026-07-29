@@ -1,6 +1,6 @@
 // packages/server/server/iam-view.test.ts
 import { test, expect } from 'bun:test'
-import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships } from './iam-view'
+import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships, effectiveMachineTeams } from './iam-view'
 import type { AccountDoc, Principal } from './iam-types'
 
 const owner: Principal = { accountId: 'o1', role: 'owner', memberships: [] }
@@ -13,6 +13,34 @@ test('canManageMachine: owner any; manager if managing ANY of the machine teams;
   expect(canManageMachine(mgrA, { teamId: 'A' })).toBe(true)           // legacy single
   expect(canManageMachine(mgrA, { teamIds: ['B'], accountIds: ['m1'] })).toBe(true) // owns it
   expect(canManageMachine(mgrA, {})).toBe(false)                        // loose, not owned
+})
+
+// Regression: team membership is stored on ACCOUNTS, but visibility keys off the MACHINE's teams.
+// Nothing connected the two, so adding an account to a team left that account's machines loose and
+// the team's own manager saw an empty machine list and a blank dashboard.
+test('effectiveMachineTeams: stored teams UNION the teams of the owner accounts', () => {
+  const accountTeams = { u1: ['A'], u2: ['B', 'C'] }
+  expect(effectiveMachineTeams({ accountIds: ['u1'] }, accountTeams)).toEqual(['A'])
+  expect(effectiveMachineTeams({ teamIds: ['Z'], accountIds: ['u1'] }, accountTeams).sort()).toEqual(['A', 'Z'])
+  expect(effectiveMachineTeams({ accountIds: ['u1', 'u2'] }, accountTeams).sort()).toEqual(['A', 'B', 'C'])
+  expect(effectiveMachineTeams({ accountId: 'u1' }, accountTeams)).toEqual(['A']) // legacy single
+  // Deduped, and a truly loose machine stays loose.
+  expect(effectiveMachineTeams({ teamIds: ['A'], accountIds: ['u1'] }, accountTeams)).toEqual(['A'])
+  expect(effectiveMachineTeams({}, accountTeams)).toEqual([])
+  // No account map (lookup failed) → stored assignment only. Narrower, never wider.
+  expect(effectiveMachineTeams({ accountIds: ['u1'] })).toEqual([])
+})
+
+test('canManageMachine: a manager reaches the machines of accounts in the team they manage', () => {
+  const accountTeams = { u1: ['A'], u2: ['B'] }
+  // The machine carries NO team of its own — only its owner account is in team A.
+  expect(canManageMachine(mgrA, { accountIds: ['u1'] }, accountTeams)).toBe(true)
+  // An account in a team this principal does not manage stays invisible.
+  expect(canManageMachine(mgrA, { accountIds: ['u2'] }, accountTeams)).toBe(false)
+  // A genuinely loose machine is still not reachable by a manager.
+  expect(canManageMachine(mgrA, { accountIds: ['u3'] }, accountTeams)).toBe(false)
+  // Without the account map the old, stricter behaviour holds.
+  expect(canManageMachine(mgrA, { accountIds: ['u1'] })).toBe(false)
 })
 
 test('canAssignMemberships: a manager may grant manager OR user inside a team they manage', () => {

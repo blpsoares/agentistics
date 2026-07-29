@@ -11,7 +11,7 @@ export type IamAction =
   | 'tokens:write'     // mint/rotate/revoke machine tokens — owner or manager of ctx.teamId
   | 'members:write'    // add/remove members in a team — owner or manager of ctx.teamId
   | 'tags:write'       // create/edit tags (B5) — owner or any manager; sources gated separately
-  | 'team:view'        // read a team's metrics — owner or any membership of ctx.teamId
+  | 'team:view'        // read a team's metrics — owner or a MANAGER of ctx.teamId
   | 'accounts:manage'  // create/edit/delete accounts — owner (any), manager (user-role, own team)
 
 export interface IamContext {
@@ -47,7 +47,10 @@ export function can(p: Principal, action: IamAction, ctx: IamContext = {}): bool
       // since the source check already stops them touching anything else.
       return true
     case 'team:view':
-      return isMemberOf(p, ctx.teamId)
+      // Managing the team, not merely belonging to it — the same rule `dataTeamIdsOf` enforces on
+      // /api/data and /api/tags. This capability is currently unwired; it is kept aligned so that
+      // wiring it up cannot silently reopen team-wide reads for plain users.
+      return isManagerOf(p, ctx.teamId)
     case 'accounts:manage':
       // A manager may manage only 'user'-role accounts within a team they manage.
       return ctx.targetRole === 'user' && isManagerOf(p, ctx.teamId)

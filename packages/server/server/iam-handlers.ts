@@ -366,6 +366,19 @@ export async function handleTeams(req: Request): Promise<Response> {
   return json({ error: 'method not allowed' }, 405)
 }
 
+/** accountId → team ids, for `canManageMachine` / `effectiveMachineTeams`. Empty map on failure —
+ *  which narrows visibility to the stored assignment, never widens it. */
+async function accountTeamsMap(): Promise<Record<string, string[]>> {
+  try {
+    const accounts = await listAccounts()
+    const map: Record<string, string[]> = {}
+    for (const a of accounts) map[a._id] = a.memberships.map(m => m.teamId)
+    return map
+  } catch {
+    return {}
+  }
+}
+
 /**
  * /api/iam/machines — GET list (scoped), POST add-to-account (gated). Self-guarding.
  * Owner sees/manages all; a manager only their team's machines.
@@ -377,13 +390,17 @@ export async function handleMachines(req: Request): Promise<Response> {
     const all = await listMachines()
     // Owner sees all; anyone else sees machines in teams they manage PLUS their own account's
     // machines (so a user can view/manage the machines linked to them).
-    const visible = principal.role === 'owner' ? all : all.filter(m => canManageMachine(principal, m))
-
     // Enrich with owner account info — ONLY for accounts the caller may actually see, so a manager
     // never learns an owner account's name/email via a default-team machine.
     const accounts = await listAccounts()
     const accountMap = new Map<string, AccountDoc>()
     for (const a of accounts) accountMap.set(a._id, a)
+    // A machine's teams include its owner accounts' teams, so a manager sees the machines of the
+    // people in the team they manage — not only machines someone separately stamped with the team.
+    const accountTeams: Record<string, string[]> = {}
+    for (const a of accounts) accountTeams[a._id] = a.memberships.map(m => m.teamId)
+
+    const visible = principal.role === 'owner' ? all : all.filter(m => canManageMachine(principal, m, accountTeams))
 
     // Enrich with presence (keyed by user, mirroring the members panel).
     const presence = await import('./team-presence').then(m => m.computePresence()).catch(() => ({} as Record<string, { online: boolean; latencyMs: number | null }>))
@@ -420,7 +437,7 @@ export async function handleMachines(req: Request): Promise<Response> {
         : (typeof b.accountId === 'string' ? [b.accountId] : [])
       const machine = (await listMachines()).find(m => m.id === ownerId)
       if (!machine) return json({ error: 'machine not found' }, 404)
-      if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
+      if (!canManageMachine(principal, machine, await accountTeamsMap())) return json({ error: 'forbidden' }, 403)
       // Validate every target account exists + is visible to the caller (no assigning to
       // out-of-scope accounts). An empty list is allowed (clears ownership) only for an owner.
       if (accountIds.length === 0 && principal.role !== 'owner') return json({ error: 'accountIds is required' }, 400)
@@ -451,7 +468,7 @@ export async function handleMachines(req: Request): Promise<Response> {
       if (!newName) return json({ error: 'name is required' }, 400)
       const machine = (await listMachines()).find(m => m.id === renameId)
       if (!machine) return json({ error: 'machine not found' }, 404)
-      if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
+      if (!canManageMachine(principal, machine, await accountTeamsMap())) return json({ error: 'forbidden' }, 403)
       await setMachineLabel(renameId, newName)
       // Notify the machine over the reverse WebSocket (best-effort) with the new name + who did it.
       try {
@@ -467,7 +484,7 @@ export async function handleMachines(req: Request): Promise<Response> {
     if (rotateId) {
       const machine = (await listMachines()).find(m => m.id === rotateId)
       if (!machine) return json({ error: 'machine not found' }, 404)
-      if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
+      if (!canManageMachine(principal, machine, await accountTeamsMap())) return json({ error: 'forbidden' }, 403)
       const token = await rotateToken(rotateId)
       if (token === null) return json({ error: 'machine not found' }, 404)
       return json({ token: packConnectToken(token, (await getCentralConfig()).publicUrl) }, 200)
@@ -485,7 +502,7 @@ export async function handleMachines(req: Request): Promise<Response> {
       // You must ALREADY manage the machine to change its teams — otherwise a manager could seize a
       // machine they only observed the id of (via a shared/Default team) by attaching it to a team
       // they manage, then rotate/revoke/re-own it. Owner bypasses.
-      if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
+      if (!canManageMachine(principal, machine, await accountTeamsMap())) return json({ error: 'forbidden' }, 403)
       const current = machine.teamIds && machine.teamIds.length ? machine.teamIds : (machine.teamId ? [machine.teamId] : [])
       const addTeamId = typeof b.addTeamId === 'string' && b.addTeamId ? b.addTeamId : ''
       const removeTeamId = typeof b.removeTeamId === 'string' && b.removeTeamId ? b.removeTeamId : ''
@@ -559,7 +576,7 @@ export async function handleMachines(req: Request): Promise<Response> {
     if (!id) return json({ error: 'id is required' }, 400)
     const machine = (await listMachines()).find(m => m.id === id)
     if (!machine) return json({ error: 'machine not found' }, 404)
-    if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
+    if (!canManageMachine(principal, machine, await accountTeamsMap())) return json({ error: 'forbidden' }, 403)
     const deleted = await revokeToken(id)
     // Cascade cleanup (best-effort) — mirrors handleRevokeToken so the member disappears too.
     try {

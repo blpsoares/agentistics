@@ -1052,4 +1052,39 @@ describe('machine filter reads the same deep history as the member filter', () =
     const out = computeFilteredHarnessSummaries(partial, filters({ machines: ['alienware', 'dell'] }))
     expect(out.summaries.claude!.sessions).toBe(0)  // no session docs → old behaviour, unchanged
   })
+
+  // Regression: a scoped principal (a manager) receives `machineOwners` / `userStatsCaches` pruned
+  // to what they may see. A selection that resolves to NO cache used to merge an EMPTY cache and
+  // report a confident 0 on every KPI, instead of falling back to the per-session sum. The session
+  // here is deliberately visible so a correct fallback is non-zero and the zero is unmistakable.
+  const scoped = {
+    ...data,
+    sessions: [{
+      session_id: 's1', harness: 'claude', user: 'Bryan Soares', memberId: 'alienware',
+      teamIds: ['dev'], project_path: '/p', start_time: '2026-06-01T10:00:00.000Z',
+      input_tokens: 10, output_tokens: 20, user_message_count: 1, assistant_message_count: 1,
+    }],
+  } as unknown as import('@agentistics/core').AppData
+
+  test('a team the viewer holds no machine for falls back to sessions, not a confident zero', () => {
+    const out = computeFilteredHarnessSummaries(scoped, filters({ teams: ['finance'] }))
+    expect(out.summaries.claude?.sessions ?? 0).toBe(0) // no session is in `finance` — a true zero
+    // …but the team the viewer CAN see must not be zeroed just because the pruned map lacks it.
+    const blind = { ...scoped, machineOwners: {}, machineStatsCaches: {} } as import('@agentistics/core').AppData
+    const seen = computeFilteredHarnessSummaries(blind, filters({ teams: ['dev'] }))
+    expect(seen.summaries.claude!.sessions).toBe(1)
+    expect(seen.summaries.claude!.inputTokens).toBe(10)
+  })
+
+  test('a member whose cache was pruned away falls back to sessions, not a confident zero', () => {
+    // `userStatsCaches` holds another member only — the selected one was pruned out for this viewer.
+    const pruned = {
+      ...scoped,
+      userStatsCaches: { 'Someone Else': alienware },
+      machineOwners: {}, machineStatsCaches: {},
+    } as unknown as import('@agentistics/core').AppData
+    const out = computeFilteredHarnessSummaries(pruned, filters({ users: ['Bryan Soares'] }))
+    expect(out.summaries.claude!.sessions).toBe(1)
+    expect(out.summaries.claude!.inputTokens).toBe(10)
+  })
 })

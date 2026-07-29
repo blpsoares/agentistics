@@ -10,8 +10,23 @@ import type { ServerProject } from './data'
 import type { WorkflowRun } from '@agentistics/core'
 import type { Principal } from './iam-types'
 
-export function visibleTeamIdsOf(principal: Principal): Set<string> {
-  return new Set(principal.memberships.map(m => m.teamId))
+/**
+ * The teams whose DATA a principal may read — the teams they MANAGE, not merely belong to.
+ *
+ * Belonging to a team is not a licence to read every teammate's work. A manager is accountable for
+ * the team and gets the team's numbers; a plain user gets their own machines (the caller passes
+ * those separately as `ownedMachineIds`, so they never lose their own data by having no team).
+ *
+ * This used to return every membership regardless of role, which made "member of team A" and
+ * "manager of team A" the same read scope. That was invisible while machines carried no team —
+ * everyone effectively saw only themselves — and would have turned into "every member reads the
+ * whole team" the moment machines started resolving to teams.
+ *
+ * NOTE this is deliberately narrower than `teamVisibleTo` in iam-view.ts: a plain user still SEES
+ * their team exists (it is listed, they are in it), they just do not read its aggregate data.
+ */
+export function dataTeamIdsOf(principal: Principal): Set<string> {
+  return new Set(principal.memberships.filter(m => m.role === 'manager').map(m => m.teamId))
 }
 
 function pickKeys<T>(obj: Record<string, T> | undefined, keep: Set<string>): Record<string, T> | undefined {

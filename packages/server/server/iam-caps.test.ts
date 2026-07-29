@@ -26,10 +26,13 @@ test('team-scoped writes require managing that exact team', () => {
   expect(can(userA, 'tokens:write', { teamId: 'A' })).toBe(false) // users can't write
 })
 
-test('team:view requires any membership of that team', () => {
-  expect(can(userA, 'team:view', { teamId: 'A' })).toBe(true)
+// Reading a team's metrics requires MANAGING it — belonging is not reading. Mirrors `dataTeamIdsOf`
+// on /api/data and /api/tags; a plain user reads their own machines, not their teammates'.
+test('team:view requires MANAGING that team, not merely belonging to it', () => {
+  expect(can(userA, 'team:view', { teamId: 'A' })).toBe(false)
   expect(can(mgrA, 'team:view', { teamId: 'A' })).toBe(true)
-  expect(can(userA, 'team:view', { teamId: 'B' })).toBe(false)
+  expect(can(mgrA, 'team:view', { teamId: 'B' })).toBe(false)
+  expect(can(owner, 'team:view', { teamId: 'B' })).toBe(true) // owner short-circuits
 })
 
 test('accounts:manage — a manager may manage only user-role accounts in their team', () => {

@@ -20,7 +20,8 @@
  */
 import { TEAM_CENTRAL } from './config'
 import { can } from './iam-caps'
-import { accountVisibleTo } from './iam-view'
+import { accountVisibleTo, effectiveMachineTeams } from './iam-view'
+import { dataTeamIdsOf } from './team-scope'
 import { localTagStore, type TagStore } from './tags-local-store'
 import { resolveTagSessions, type TagSource, type TagSourceType, type TagLookups } from './tags-resolve'
 import { aggregateSessions, type TagAggregate } from './tags-aggregate'
@@ -111,10 +112,20 @@ async function buildContext(p: Principal, sessions: SessionMeta[]): Promise<TagC
     }
   }
 
-  const myTeamIds = new Set(p.memberships.map(m => m.teamId))
+  // The teams this principal may READ — the ones they manage, matching /api/data's scoping
+  // (`dataTeamIdsOf`). Keying this off plain membership would reopen exactly what that gate closes:
+  // a tag is an aggregate over the unscoped session set, so a plain user could scope a tag to their
+  // team and read its cost/token totals through /api/tags after being denied them on the dashboard.
+  // Their own machines and their own account still resolve below, independently of any team.
+  const myTeamIds = dataTeamIdsOf(p)
+  // A machine's teams are its stored ones UNION its owner accounts' — the same rule /api/data and
+  // /api/iam/machines use. Reading only the stored value here made a manager's own team resolve to
+  // no machine whenever its members were linked by account alone.
+  const accountTeams: Record<string, string[]> = {}
+  for (const a of accounts) accountTeams[a._id] = a.memberships.map(m => m.teamId)
   const visibleMachineIds = new Set(
     machines
-      .filter(m => m.teamIds.some(t => myTeamIds.has(t)) || m.accountIds.includes(p.accountId))
+      .filter(m => effectiveMachineTeams(m, accountTeams).some(t => myTeamIds.has(t)) || m.accountIds.includes(p.accountId))
       .map(m => m.id),
   )
   const visibleAccountIds = new Set(

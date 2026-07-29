@@ -691,16 +691,19 @@ export function computeFilteredHarnessSummaries(data: AppData, filters: Filters)
     projects.length > 0 || modelSet !== null ||
     filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd ||
     ((teamsSel.length > 0 || machinesSel.length > 0) && !machineCacheScoped)
+  // Same "empty pool is not an authoritative zero" rule as useDerivedStats — a selected member
+  // whose cache this viewer never received must fall back to the per-session sum, not merge to an
+  // empty cache. The two must agree or Compare contradicts the dashboard for the same selection.
+  const resolvedUserCaches = (usersSel.length > 0 ? usersSel : Object.keys(usc ?? {}))
+    .map(u => usc![u])
+    .filter((c): c is NonNullable<typeof c> => !!c)
+  const userCacheUsable = hasUserStats && resolvedUserCaches.length > 0
   const claudeStatsCache = machineCacheScoped
     ? mergeStatsCaches(machineScope.map(id => data.machineStatsCaches![id]!))
-    : hasUserStats
-      ? mergeStatsCaches(
-          (usersSel.length > 0 ? usersSel : Object.keys(usc!))
-            .map(u => usc![u])
-            .filter((c): c is NonNullable<typeof c> => !!c),
-        )
+    : userCacheUsable
+      ? mergeStatsCaches(resolvedUserCaches)
       : data.statsCache
-  const claudeFromStatsCache = (hasUserStats || machineCacheScoped) && !sliceActive
+  const claudeFromStatsCache = (userCacheUsable || machineCacheScoped) && !sliceActive
 
   const sums = {} as Record<HarnessId, HarnessSummary>
   const la = {} as Record<HarnessId, string | null>
@@ -806,14 +809,19 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
       allowedUsers: presenceAllowedUsers,
     })
     const machineCacheScoped = machineScope !== null
+    // The selected members' caches that actually resolved. A selection can name a member whose
+    // cache this viewer never received — a scoped principal (a manager) gets `userStatsCaches`
+    // pruned to the members they may see — and merging an EMPTY list yields an empty cache that
+    // every KPI then reports as a confident 0. An unusable pool must fall back to the per-session
+    // sum (`cacheBlindScope` below), never stand in as an authoritative zero.
+    const resolvedUserCaches = statsCachePool
+      .map(u => userStatsCaches![u])
+      .filter((c): c is NonNullable<typeof c> => !!c)
+    const userCacheUsable = hasUserStats && resolvedUserCaches.length > 0
     const effectiveStatsCache = machineCacheScoped
       ? mergeStatsCaches(machineScope.map(id => data.machineStatsCaches![id]!))
-      : hasUserStats
-        ? mergeStatsCaches(
-            statsCachePool
-              .map(u => userStatsCaches![u])
-              .filter((c): c is NonNullable<typeof c> => !!c),
-          )
+      : userCacheUsable
+        ? mergeStatsCaches(resolvedUserCaches)
         : data.statsCache
 
     // Filter daily activity (date-range only — no project granularity in statsCache)
@@ -881,7 +889,10 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
     // fraction of what the member filter reports.
     const cacheBlindScope: boolean = projectFiltered || repoFiltered || tagFiltered || modelSet !== null
       || ((teamsFiltered || machinesFiltered) && !machineCacheScoped)
-      || (userFiltered && !hasUserStats)
+      // `!userCacheUsable`, not `!hasUserStats`: a central HAS member caches, but the selected
+      // member's cache may be missing from this viewer's pruned copy. Keying on `hasUserStats`
+      // left that case cache-backed and reported the empty merge as a real zero.
+      || (userFiltered && !userCacheUsable)
 
     let allTimeTotalSessions: number
     if (nonClaudeHarness || cacheBlindScope) {

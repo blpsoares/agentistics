@@ -122,6 +122,9 @@ export function unregisterAgent(ws: ServerWebSocket<AgentSocketData>): void {
   sockets.delete(ws)
   if (sockets.size === 0) {
     agentSockets.delete(user)
+    // A clean disconnect means nothing of theirs is open any more — drop the live report now
+    // instead of leaving stale rows on the dashboard until the TTL expires.
+    void import('./team-live').then(m => m.clearMemberLive(user)).catch(() => { /* best-effort */ })
     // Record the drop; after the grace, the member counts as offline. Fire a presence update
     // AT grace-expiry so the dashboard flips without waiting for its next poll.
     lastDropAt.set(user, Date.now())
@@ -189,10 +192,32 @@ export function getPresenceSignals(now = Date.now()): Map<string, PresenceSignal
  * (handled separately by Bun's WebSocket `pong` event → onAgentPong).
  */
 export function onAgentMessage(
-  _ws: ServerWebSocket<AgentSocketData>,
-  _raw: string | Buffer,
+  ws: ServerWebSocket<AgentSocketData>,
+  raw: string | Buffer,
 ): void {
-  // No inbound message types are currently handled.
+  // 'live-sessions' — the member's own open-assistant snapshot, which the central cannot detect
+  // itself (it reads /proc, and member processes are not on this machine). Metrics only: session
+  // ids and the cwd of a not-yet-persisted process, never chat. Rejected wholesale if malformed,
+  // so a bad frame can never poison the panel.
+  try {
+    const text = typeof raw === 'string' ? raw : raw.toString('utf8')
+    if (!text) return
+    const msg = JSON.parse(text) as { type?: string; sessionIds?: unknown; processes?: unknown }
+    if (msg?.type !== 'live-sessions') return
+    const sessionIds = Array.isArray(msg.sessionIds)
+      ? msg.sessionIds.filter((x): x is string => typeof x === 'string')
+      : []
+    const processes = Array.isArray(msg.processes)
+      ? msg.processes.filter((p): p is { harness: string; cwd: string } =>
+          !!p && typeof p === 'object' && typeof (p as { cwd?: unknown }).cwd === 'string')
+      : []
+    void import('./team-live').then(m => {
+      // The member NEVER names itself — the display name is taken from the authenticated socket,
+      // so a member cannot report live sessions on someone else's behalf.
+      m.recordMemberLive(ws.data.user, sessionIds, processes as never)
+      onPresenceChange?.()
+    }).catch(() => { /* best-effort */ })
+  } catch { /* ignore malformed frames */ }
 }
 
 /** Push a JSON message to every live socket of a member (by resolved user). Best-effort — dead

@@ -209,6 +209,17 @@ test('resolveMachineCacheScope: presence scope excludes machines of filtered-out
   expect(scope).toEqual(['thinkpadVini'])
 })
 
+test('resolveMachineCacheScope: a selection that resolves to NO machine is null, never an empty scope', () => {
+  // A scoped principal (e.g. a manager) receives `machineOwners` pruned to the machines they may
+  // see. Selecting a team whose machines are not in that pruned map — or whose machines were never
+  // linked to the team — must fall back to the per-session sum, NOT return [], which the caller
+  // merges into an EMPTY statsCache and renders as an authoritative zero across every KPI.
+  expect(resolveMachineCacheScope({ ...base, teams: ['finance'] })).toBeNull()
+  expect(resolveMachineCacheScope({ ...base, machineOwners: {}, machineStatsCaches: {}, teams: ['dev'] })).toBeNull()
+  // Same trap via the presence scope: no member in the team passes the presence filter.
+  expect(resolveMachineCacheScope({ ...base, teams: ['ops'], allowedUsers: new Set(['Nobody']) })).toBeNull()
+})
+
 test('resolveMachineCacheScope: null (never a partial sum) when the caches cannot serve the scope', () => {
   // No machine maps at all — a solo instance, or a central that predates them.
   expect(resolveMachineCacheScope({ ...base, machineOwners: undefined, machines: ['alienware'] })).toBeNull()

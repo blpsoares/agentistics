@@ -332,6 +332,9 @@ export interface LiveProcess {
   startedMs?: number
   /** Set when the process named a session id we have no record of. */
   sessionId?: string
+  /** Central only: the member (display name) this process is running on. Absent on a solo machine,
+   *  where every process is by definition local. */
+  user?: string
 }
 
 export interface AppData {

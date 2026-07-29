@@ -1,13 +1,48 @@
 import { test, expect } from 'bun:test'
-import { visibleTeamIdsOf, scopeAppDataToTeams } from './team-scope'
+import { dataTeamIdsOf, scopeAppDataToTeams } from './team-scope'
 import type { Principal } from './iam-types'
 import type { AppData } from '@agentistics/core'
 
 const principal: Principal = { accountId: 'p', role: 'member', memberships: [{ teamId: 'A', role: 'user' }] }
 
-test('visibleTeamIdsOf collects membership team ids', () => {
-  const s = visibleTeamIdsOf({ accountId: 'x', role: 'member', memberships: [{ teamId: 'A', role: 'user' }, { teamId: 'B', role: 'manager' }] })
-  expect([...s].sort()).toEqual(['A', 'B'])
+// Belonging to a team is not a licence to read every teammate's work: the read scope is the teams
+// you MANAGE. A plain user keeps their own data via the ownedMachineIds argument instead.
+test('dataTeamIdsOf returns only the teams the principal MANAGES', () => {
+  const s = dataTeamIdsOf({ accountId: 'x', role: 'member', memberships: [{ teamId: 'A', role: 'user' }, { teamId: 'B', role: 'manager' }] })
+  expect([...s]).toEqual(['B'])
+})
+
+test('dataTeamIdsOf: a plain user reads no team at all', () => {
+  expect([...dataTeamIdsOf(principal)]).toEqual([])
+})
+
+test('a plain user still reads their own machines, and none of their teammates\'', () => {
+  const data = {
+    sessions: [
+      { session_id: 'mine', user: 'Me', memberId: 'mineMachine', teamIds: ['A'] },
+      { session_id: 'theirs', user: 'Colleague', memberId: 'theirMachine', teamIds: ['A'] },
+    ],
+    machineOwners: {
+      mineMachine: { user: 'Me', teamIds: ['A'] },
+      theirMachine: { user: 'Colleague', teamIds: ['A'] },
+    },
+  } as unknown as AppData
+  // Plain user of team A: no team read scope, but they own `mineMachine`.
+  const scoped = scopeAppDataToTeams(data, dataTeamIdsOf(principal), new Set(['mineMachine']))
+  expect(scoped.sessions.map(s => s.session_id)).toEqual(['mine'])
+  expect(Object.keys(scoped.machineOwners ?? {})).toEqual(['mineMachine'])
+})
+
+test('a manager of the team reads the whole team', () => {
+  const mgr: Principal = { accountId: 'm', role: 'member', memberships: [{ teamId: 'A', role: 'manager' }] }
+  const data = {
+    sessions: [
+      { session_id: 'mine', user: 'Me', memberId: 'mineMachine', teamIds: ['A'] },
+      { session_id: 'theirs', user: 'Colleague', memberId: 'theirMachine', teamIds: ['A'] },
+    ],
+  } as unknown as AppData
+  const scoped = scopeAppDataToTeams(data, dataTeamIdsOf(mgr), new Set())
+  expect(scoped.sessions.map(s => s.session_id).sort()).toEqual(['mine', 'theirs'])
 })
 
 test('scopeAppDataToTeams keeps only sessions in visible teams and prunes derived data', () => {

@@ -21,8 +21,9 @@ export default function SessionsPage() {
   // opening/closing a `claude` tab fires none — so poll the lightweight endpoint directly.
   const [liveIdList, setLiveIdList] = useState<string[]>(data.liveSessionIds ?? [])
   const [liveProcs, setLiveProcs] = useState<LiveProcess[]>(data.liveProcesses ?? [])
+  // Polls on a central too: members report their own open assistants over the reverse channel and
+  // the endpoint merges them in, so "Open now" is live for the whole team, not just this machine.
   useEffect(() => {
-    if (isCentral) return
     let alive = true
     const poll = async () => {
       try {
@@ -53,18 +54,17 @@ export default function SessionsPage() {
     <>
       <PageHead pt={pt} central={isCentral} />
 
-      {/* "Open now" is real-time process detection on the local machine, so it only applies
-          to this machine's own sessions — hidden on a central (member processes aren't visible). */}
-      {!isCentral && (
-        <Section flashId="live-sessions" title={<><Radio size={14} /> {pt ? 'Abertas agora' : 'Open now'} {liveCount > 0 && <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>({liveCount})</span>}</>}>
-          {liveCount === 0
-            ? <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>{pt ? 'Nenhuma sessão aberta agora.' : 'No sessions open right now.'}</div>
-            : <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {live.map(s => <LiveCard key={s.session_id} s={s} pt={pt} onOpen={() => setSelectedSession(s)} />)}
-                {liveProcs.map((p, i) => <StartingCard key={`${p.harness}-${p.cwd}-${i}`} p={p} pt={pt} />)}
-              </div>}
-        </Section>
-      )}
+      {/* "Open now" is real-time process detection. On a solo machine that is this machine's own
+          /proc; on a central it is the members' own reports arriving over the reverse channel,
+          already scoped server-side to the members this principal may see. */}
+      <Section flashId="live-sessions" title={<><Radio size={14} /> {pt ? 'Abertas agora' : 'Open now'} {liveCount > 0 && <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>({liveCount})</span>}</>}>
+        {liveCount === 0
+          ? <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>{pt ? 'Nenhuma sessão aberta agora.' : 'No sessions open right now.'}</div>
+          : <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {live.map(s => <LiveCard key={s.session_id} s={s} pt={pt} central={isCentral} onOpen={() => setSelectedSession(s)} />)}
+              {liveProcs.map((p, i) => <StartingCard key={`${p.harness}-${p.cwd}-${i}`} p={p} pt={pt} />)}
+            </div>}
+      </Section>
 
       <Section flashId="recent-sessions" title={<><Clock size={14} /> {pt ? 'Últimas sessões' : 'Latest sessions'}</>}>
         <RecentSessions sessions={derived.filteredSessions} lang={lang} onSelect={setSelectedSession} pinnedIds={liveIds} />
@@ -93,8 +93,10 @@ function PageHead({ pt, central }: { pt: boolean; central?: boolean }) {
   )
 }
 
-function LiveCard({ s, pt, onOpen }: { s: SessionMeta; pt: boolean; onOpen: () => void }) {
-  const cmd = resumeCommand(s)
+function LiveCard({ s, pt, onOpen, central }: { s: SessionMeta; pt: boolean; onOpen: () => void; central?: boolean }) {
+  // No resume command on a central: the session is open on somebody else's machine, so pasting
+  // `claude --resume <id>` here would target a session id that does not exist locally.
+  const cmd = central ? null : resumeCommand(s)
   const [copied, setCopied] = useState(false)
   const mins = Math.max(0, Math.round((Date.now() - lastActivityMs(s)) / 60_000))
   return (
@@ -115,7 +117,9 @@ function LiveCard({ s, pt, onOpen }: { s: SessionMeta; pt: boolean; onOpen: () =
               {copied ? <Check size={13} color="#22c55e" /> : <Copy size={13} />}
             </button>
           </div>
-        : <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6, fontStyle: 'italic' }}>{pt ? 'Retomar não disponível para este harness.' : 'Resume not available for this harness.'}</div>}
+        : central
+          ? (s.user ? <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6 }}>{s.user}</div> : null)
+          : <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6, fontStyle: 'italic' }}>{pt ? 'Retomar não disponível para este harness.' : 'Resume not available for this harness.'}</div>}
     </div>
   )
 }
@@ -145,6 +149,9 @@ function StartingCard({ p, pt }: { p: LiveProcess; pt: boolean }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: colour, flexShrink: 0, opacity: 0.7 }} />
         <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{label}</span>
+        {/* On a central, say WHOSE machine this is — otherwise several members' starting processes
+            are an indistinguishable stack of identical cards. */}
+        {p.user && <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>· {p.user}</span>}
         <span style={{ fontSize: 11, color: 'var(--text-tertiary)', marginLeft: 'auto' }}>
           {pt ? 'sem conversa ainda' : 'no conversation yet'}
         </span>

@@ -281,12 +281,44 @@ export async function getMemberTeamMap(): Promise<Record<string, string>> {
 
 /** memberId (token hash) → ALL teams the machine belongs to (empty when loose — no Default fallback).
  *  Used for read-time multi-team tagging + scoping (a session is visible to any of its teams;
- *  a loose session with no team is visible only to an owner). */
+ *  a loose session with no team is visible only to an owner).
+ *
+ *  This is the STORED assignment only. Prefer `getEffectiveMemberTeamsMap()` for anything deciding
+ *  visibility — it also counts the teams of the machine's owner accounts. */
 export async function getMemberTeamsMap(): Promise<Record<string, string[]>> {
   const col = await getTokensCollection()
   const docs = await col.find({}, { projection: { _id: 1, teamId: 1, teamIds: 1 } }).toArray()
   const map: Record<string, string[]> = {}
   for (const d of docs) map[d._id] = teamIdsOf(d)
+  return map
+}
+
+/** accountId → the team ids that account belongs to (any membership role). */
+export async function getAccountTeamsMap(): Promise<Record<string, string[]>> {
+  const { listAccounts } = await import('./accounts')
+  const accounts = await listAccounts()
+  const map: Record<string, string[]> = {}
+  for (const a of accounts) map[a._id] = a.memberships.map(m => m.teamId)
+  return map
+}
+
+/**
+ * memberId → the teams a machine EFFECTIVELY belongs to: its stored `teamIds` UNION the teams of
+ * every account that owns it (see `effectiveMachineTeams`). This is the map that visibility must
+ * use. Keying scoping off the stored assignment alone meant putting an account in a team did
+ * nothing for that account's machines, so a team's own manager saw a blank dashboard.
+ *
+ * Falls back to the stored map if the accounts collection cannot be read — narrower, never wider.
+ */
+export async function getEffectiveMemberTeamsMap(): Promise<Record<string, string[]>> {
+  const col = await getTokensCollection()
+  const [docs, accountTeams] = await Promise.all([
+    col.find({}, { projection: { _id: 1, teamId: 1, teamIds: 1, accountId: 1, accountIds: 1 } }).toArray(),
+    getAccountTeamsMap().catch(() => ({} as Record<string, string[]>)),
+  ])
+  const { effectiveMachineTeams } = await import('./iam-view')
+  const map: Record<string, string[]> = {}
+  for (const d of docs) map[d._id] = effectiveMachineTeams(d, accountTeams)
   return map
 }
 

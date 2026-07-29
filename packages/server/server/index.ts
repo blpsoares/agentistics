@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { PORT, WEB_PORT, TEAM_CENTRAL, TEAM_PASSWORD, TEAM_ORG, INGEST_ONLY } from './config'
 import { sensitiveCorsHeaders } from './cors'
 import type { Server, ServerWebSocket } from 'bun'
+import type { LiveProcess } from '@agentistics/core'
 import { getRates } from './rates'
 import { getVersionInfo, startVersionRecheck } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
@@ -921,7 +922,27 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
         const data = await buildApiResponse()
         const { getLiveSnapshot } = await import('./live-sessions')
         const snapshot = await getLiveSnapshot(data.sessions)
-          .catch(() => ({ liveSessionIds: [], liveProcesses: [] }))
+          .catch(() => ({ liveSessionIds: [] as string[], liveProcesses: [] as LiveProcess[] }))
+        // Same member merge as /api/data — this is the endpoint the Sessions page actually polls,
+        // so without it the central's "Open now" would only refresh on a full data rebuild.
+        if (TEAM_CENTRAL) {
+          try {
+            const { collectMemberLive } = await import('./team-live')
+            const { scopeAppDataToTeams, dataTeamIdsOf } = await import('./team-scope')
+            const principal = await getPrincipal(req)
+            let visibleUsers: Set<string> | null = null
+            if (principal && principal.role !== 'owner') {
+              const { listMachines } = await import('./team-tokens')
+              const machines = await listMachines().catch(() => [])
+              const owned = new Set(machines.filter(m => m.accountIds.includes(principal.accountId)).map(m => m.id))
+              const scoped = scopeAppDataToTeams(data, dataTeamIdsOf(principal), owned)
+              visibleUsers = new Set(scoped.sessions.map(s => s.user).filter((u): u is string => !!u))
+            }
+            const team = collectMemberLive(visibleUsers)
+            snapshot.liveSessionIds = [...new Set([...snapshot.liveSessionIds, ...team.liveSessionIds])]
+            snapshot.liveProcesses = [...snapshot.liveProcesses, ...team.liveProcesses]
+          } catch { /* best-effort — the local snapshot still stands */ }
+        }
         return new Response(JSON.stringify(snapshot), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -950,23 +971,40 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
             getCentralConfig().catch(() => null),
           ])
           extra = { presence, includeOfflineData: cfg?.includeOfflineData ?? true }
-          // Apply per-team scoping for non-owner principals. A non-owner sees sessions from teams
-          // they belong to PLUS any machine they own (a loose machine with no team is visible only
-          // to its owner) — so their own machines never disappear just because they have no team.
+          // Apply per-team scoping for non-owner principals. A non-owner sees sessions from the
+          // teams they MANAGE (see dataTeamIdsOf — belonging is not reading) PLUS any machine they
+          // own — so a plain user keeps their own data, and their machines never disappear just
+          // because they have no team.
           const principal = await getPrincipal(req)
           if (principal && principal.role !== 'owner') {
-            const { scopeAppDataToTeams, visibleTeamIdsOf } = await import('./team-scope')
+            const { scopeAppDataToTeams, dataTeamIdsOf } = await import('./team-scope')
             const { listMachines } = await import('./team-tokens')
             const machines = await listMachines().catch(() => [])
             const owned = new Set(machines.filter(m => m.accountIds.includes(principal.accountId)).map(m => m.id))
-            data = scopeAppDataToTeams(data, visibleTeamIdsOf(principal), owned)
+            data = scopeAppDataToTeams(data, dataTeamIdsOf(principal), owned)
           }
         }
         // Live open-session detection — computed per request (not part of the cached build)
         // so it reflects `claude` processes in real time.
         const { getLiveSnapshot } = await import('./live-sessions')
-        const { liveSessionIds, liveProcesses } = await getLiveSnapshot(data.sessions)
-          .catch(() => ({ liveSessionIds: [] as string[], liveProcesses: [] }))
+        let { liveSessionIds, liveProcesses } = await getLiveSnapshot(data.sessions)
+          .catch(() => ({ liveSessionIds: [] as string[], liveProcesses: [] as LiveProcess[] }))
+        // Central: members report their own open assistants over the reverse channel (the central
+        // reads /proc, which never sees a member's processes). Scoped to the members whose sessions
+        // survived the team scoping above, so a principal never learns that a machine they cannot
+        // see is running, nor reads its cwd off an unmatched process.
+        if (TEAM_CENTRAL) {
+          try {
+            const { collectMemberLive } = await import('./team-live')
+            const principal = await getPrincipal(req)
+            const visibleUsers = principal && principal.role !== 'owner'
+              ? new Set(data.sessions.map(s => s.user).filter((u): u is string => !!u))
+              : null
+            const team = collectMemberLive(visibleUsers)
+            liveSessionIds = [...new Set([...liveSessionIds, ...team.liveSessionIds])]
+            liveProcesses = [...liveProcesses, ...team.liveProcesses]
+          } catch { /* best-effort — the local snapshot still stands */ }
+        }
         return new Response(JSON.stringify({ ...data, liveSessionIds, liveProcesses, ...extra }), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
