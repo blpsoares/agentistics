@@ -601,16 +601,47 @@ export function buildSplitStatsCache(input: {
   // daily row entirely while `real.modelUsage` still carries its tokens and the `attributable`
   // term subtracts nothing — a denied repo's volume rides out. The cold-store guard above only
   // catches TOTAL loss. Refuse, like every other unsatisfiable case.
-  const storeDays = new Set<string>()
-  for (const s of allStored) {
-    const day = sessionDay(s)
-    if (day !== null && !isPrehistory(day)) storeDays.add(day)
+  // PRECONDITION, asserted rather than trusted: `real` must have been supplemented from the very
+  // array passed as `allStored`. For every decomposable day the cache's rows were WRITTEN by that
+  // array, so recomputing them from it must reproduce them exactly.
+  //
+  // This is not a data-quality check — it is what makes the subtraction sound. A day the store
+  // covers only partly still appears, so a presence-only guard passes it: `attributable` then
+  // under-subtracts and a denied session's tokens ride out in `modelUsage`, which is the whole
+  // fail-open this closes. Measured on a real machine, feeding `loadConsolidated()` here while the
+  // cache was supplemented from the live session array made one day disagree (5 stored sessions
+  // against 12 in the cache) — exactly the mistake this refuses.
+  //
+  // Prehistory days are exempt: there the store is legitimately a strict subset of Claude's rollup
+  // and reconciliation is impossible by construction (see §4.3b).
+  const fromStored = buildSharedStatsCache(allStored)
+  const storedActivity = new Map(fromStored.dailyActivity.map(d => [d.date, d]))
+  const storedTokens = new Map(fromStored.dailyModelTokens.map(d => [d.date, d.tokensByModel]))
+
+  const sameTokens = (a: Record<string, number>, b: Record<string, number>): boolean => {
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+    for (const k of keys) if ((a[k] ?? 0) !== (b[k] ?? 0)) return false
+    return true
   }
+
   for (const d of real.dailyActivity ?? []) {
-    if (!isPrehistory(d.date) && !storeDays.has(d.date)) return null
+    if (isPrehistory(d.date)) continue
+    const mine = storedActivity.get(d.date)
+    if (!mine) return null
+    if (mine.sessionCount !== d.sessionCount) return null
+    if (mine.messageCount !== d.messageCount) return null
+    if (mine.toolCallCount !== d.toolCallCount) return null
   }
   for (const d of real.dailyModelTokens ?? []) {
-    if (!isPrehistory(d.date) && !storeDays.has(d.date)) return null
+    if (isPrehistory(d.date)) continue
+    const mine = storedTokens.get(d.date)
+    if (!mine || !sameTokens(mine, d.tokensByModel)) return null
+  }
+  // The reverse direction is the same disagreement: a decomposable day the store knows and the
+  // cache does not means `real` was built from a smaller set than `allStored`.
+  const realActivityDays = new Set((real.dailyActivity ?? []).map(d => d.date))
+  for (const d of fromStored.dailyActivity) {
+    if (!isPrehistory(d.date) && !realActivityDays.has(d.date)) return null
   }
 
   const fromShared = buildSharedStatsCache(shared)

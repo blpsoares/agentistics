@@ -2445,12 +2445,21 @@ Verified residuals from the whole-branch review and its fix wave. None blocks th
 has no caller outside its tests yet — but the first is a privacy fail-open and must be closed **before Plan 2
 wires the module into the push path**.
 
-1. **Sub-day store shrinkage still fails open in `modelUsage`.** `buildSplitStatsCache` refuses when a
-   non-prehistory day present in `real` has no session left in `allStored`, but shrinkage *within* a
-   still-present day (some sessions lost, at least one remaining) leaves the day in `storeDays`, so the
-   `attributable` term under-subtracts and a denied session's tokens ride out. The fix is as cheap as the
-   day-level one: compare `real.dailyModelTokens[day]` against the `attributable` totals for that day and
-   refuse on a mismatch. **Do this in Plan 2's first task, before the uploader calls the module.**
+1. ~~**Sub-day store shrinkage still fails open in `modelUsage`.**~~ **CLOSED** — `buildSplitStatsCache`
+   now asserts the same-array precondition instead of trusting it: for every decomposable day it
+   recomputes `dailyActivity` and `dailyModelTokens` from `allStored` and refuses unless they reproduce
+   `real`'s rows exactly, in both directions. Prehistory days stay exempt, where the store is
+   legitimately a subset.
+
+   **This turns a documented precondition into a hard requirement on Plan 2's wiring, and the obvious
+   wiring violates it.** Measured on a real machine: `supplementStatsCache` builds the cache from
+   `buildApiResponse`'s LIVE session array, while `loadConsolidated()` is a subset written
+   asynchronously — one day disagreed by 5 stored sessions against 12 in the cache. So the uploader must
+   pass `buildSplitStatsCache` **the same array that supplemented the cache** (both come out of one
+   `buildApiResponse` call), not `loadConsolidated()`. Feeding it the store makes the split refuse and
+   the machine push no `statsCache` at all — loudly, which is the point, but it will look like a bug if
+   this note is missed. The session *documents* pushed to the central remain the consolidate store; only
+   the split's arithmetic inputs are constrained.
 
 2. **Spec §5.8's legacy-team merge is only half implemented.** `mergeTeamPayload` preserves the stored
    `connections` when an incoming `team` payload omits the key — which is what stopped C1's data loss — but

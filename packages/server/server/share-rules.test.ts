@@ -761,3 +761,47 @@ test('hourCounts is bucketed on the LOCAL clock — discriminating under an expl
   }
   expect(new Date().getTimezoneOffset()).toBe(ambientOffsetMin) // the zone really is back
 })
+
+// ---------------------------------------------------------------------------
+// The same-array precondition, asserted rather than trusted
+// ---------------------------------------------------------------------------
+
+test('sub-day shrinkage REFUSES — a decomposable day the store only partly covers', () => {
+  // real says 2026-06-25 had 2 sessions; the store now holds only one of them.
+  const all = [storeSessions()[0]!]
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  expect(buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-06-23', sealed: {} })).toBeNull()
+})
+
+test('a token disagreement on a decomposable day REFUSES', () => {
+  const all = storeSessions().map(s => ({ ...s, input_tokens: s.input_tokens + 1 }))
+  expect(buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })).toBeNull()
+})
+
+test('a message-count disagreement on a decomposable day REFUSES', () => {
+  const all = storeSessions()
+  all[0]!.user_message_count += 3
+  expect(buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })).toBeNull()
+})
+
+test('a decomposable day the STORE has and the cache does not also REFUSES', () => {
+  const all = [
+    ...storeSessions(),
+    s({ session_id: 'extra', start_time: localAt('2026-06-30', 9), model: 'claude-opus-5', input_tokens: 7, user_message_count: 1 }),
+  ]
+  expect(buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })).toBeNull()
+})
+
+test('PREHISTORY days are never checked — the store is legitimately a subset there', () => {
+  // realCache()'s 2026-02-06 row (10 sessions) has no counterpart in the store at all.
+  const all = storeSessions()
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })
+  expect(out).not.toBeNull()
+  expect(out!.dailyActivity.find(d => d.date === '2026-02-06')!.sessionCount).toBe(10)
+})
+
+test('non-Claude sessions in the store do not trip the precondition', () => {
+  const all = [...storeSessions(), s({ session_id: 'cx', harness: 'codex', start_time: localAt('2026-06-25', 9), user_message_count: 4 })]
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })
+  expect(out).not.toBeNull()
+})
