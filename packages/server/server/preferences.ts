@@ -137,6 +137,25 @@ export async function readPreferences(): Promise<Preferences> {
   return readPreferencesFrom(PREFERENCES_FILE, LEGACY_PREFERENCES_FILE)
 }
 
+/**
+ * CLI entry points: read the preferences or die with ONE clear line naming the file.
+ *
+ * `readPreferences` now THROWS on a corrupt (present, non-empty, unparseable) file instead of
+ * silently presenting the machine as solo. Every command that reads it must therefore say what
+ * is wrong and exit non-zero — an unhandled rejection stack, or a bare `mode: solo`, are both
+ * worse than the truth. Never prints the file's contents (it holds central tokens).
+ */
+export async function readPreferencesOrExit(): Promise<Preferences> {
+  try {
+    return await readPreferences()
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    process.stderr.write(`agentop: cannot read ${PREFERENCES_FILE} — ${reason}\n`)
+    process.stderr.write('  fix or move that file, then run the command again.\n')
+    process.exit(1)
+  }
+}
+
 /** Monotonic per-process counter mixed into every tmp filename so concurrent `writeFileAtomic`
  *  calls to the SAME target never pick the same tmp path — `${pid}` alone is unique per
  *  process, not per call, and two calls racing on the identical tmp name would interleave their
@@ -173,11 +192,31 @@ function enqueueWrite<T>(fn: () => Promise<T>): Promise<T> {
   return next
 }
 
+/**
+ * Spec §5.8: **a `team` payload with no `connections` key is a legacy single-connection edit,
+ * never a replacement of the array.**
+ *
+ * The top-level merge is shallow, so any caller handing over a `team` object replaces the whole
+ * connections array. An old cached tab — or an older sidecar sharing ~/.agentistics — that saves
+ * Settings, or clicks Disconnect (which PUTs a full flat solo object), would otherwise delete
+ * every connection and every denylist. When the payload carries `connections` explicitly it
+ * replaces, exactly as before.
+ */
+function mergeTeamPayload(current: TeamConfig | undefined, incoming: TeamConfig): TeamConfig {
+  if (Object.prototype.hasOwnProperty.call(incoming, 'connections')) return incoming
+  const stored = current?.connections ?? []
+  // With nothing stored there is no array to protect: run the payload through the migration so
+  // a legacy flat edit that DOES name an endpoint still lands as a connection.
+  if (stored.length === 0) return migrateTeamConfig(incoming)
+  return migrateTeamConfig({ ...incoming, connections: stored })
+}
+
 /** Merge `prefs` over the current preferences and persist to `primary`. Exported for tests. */
 export async function writePreferencesTo(primary: string, legacy: string, prefs: Preferences): Promise<void> {
   return enqueueWrite(async () => {
     const { prefs: current } = await readEffective(primary, legacy)
     const merged = { ...current, ...prefs }
+    if (prefs.team) merged.team = mergeTeamPayload(current.team, prefs.team)
     await writeFileAtomic(primary, JSON.stringify(merged, null, 2))
   })
 }

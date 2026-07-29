@@ -122,10 +122,40 @@ test('concurrent writes are serialized — no lost update', async () => {
   expect(prefs.monthlyBudgetUSD).toBe(100)
 })
 
-test('a write leaves no partial file behind — the target is always valid JSON', async () => {
+/**
+ * A CONCURRENT READER is what makes this test about atomicity. Asserting only that the file
+ * parses AFTER every write has settled passes just as well against a plain `Bun.write`, which
+ * truncates in place — the torn state exists, the old test simply never looked at it. Here a
+ * second task reads the file in a tight loop while the writes run and every single read must
+ * parse.
+ */
+async function readUntilDone(path: string, done: () => boolean): Promise<number> {
+  let reads = 0
+  while (!done()) {
+    let text: string
+    try {
+      text = await readFile(path, 'utf-8')
+    } catch {
+      continue // not created yet, or observed exactly between unlink and rename — not a tear
+    }
+    if (text === '') continue
+    reads++
+    JSON.parse(text) // throws → the reader observed a partially written file
+    await new Promise(r => setTimeout(r, 0))
+  }
+  return reads
+}
+
+test('a concurrent reader NEVER observes a partially written file', async () => {
   const { primary, legacy } = await tmpPaths2()
-  const writes = Array.from({ length: 40 }, (_, i) => writePreferencesTo(primary, legacy, { monthlyBudgetUSD: i }))
+  await writePreferencesTo(primary, legacy, { monthlyBudgetUSD: -1 })
+  let finished = false
+  const reader = readUntilDone(primary, () => finished)
+  const writes = Array.from({ length: 40 }, (_, i) => writePreferencesTo(primary, legacy, { monthlyBudgetUSD: i, theme: i % 2 ? 'dark' : 'light' }))
   await Promise.all(writes)
+  finished = true
+  const reads = await reader
+  expect(reads).toBeGreaterThan(0)
   const text = await readFile(primary, 'utf-8')
   expect(() => JSON.parse(text)).not.toThrow()
   const leftoverTmp = (await readdir(dirname(primary))).filter(f => f.includes('.tmp-'))
@@ -142,10 +172,14 @@ test('a write leaves no partial file behind — the target is always valid JSON'
 // writePreferencesTo (via a non-writing `readEffective` helper so the chain can't re-enter
 // itself and deadlock).
 
-test('concurrent legacy-migration reads never collide on the tmp filename — no corruption, no leftover tmp file', async () => {
+test('concurrent legacy-migration reads never collide on the tmp filename — a reader mid-flight always sees whole JSON', async () => {
   const { primary, legacy } = await tmpPaths2()
   await writeFile(legacy, JSON.stringify({ archiveMode: 'full', theme: 'light' }))
+  let finished = false
+  const reader = readUntilDone(primary, () => finished)
   const results = await Promise.all(Array.from({ length: 20 }, () => readPreferencesFrom(primary, legacy)))
+  finished = true
+  await reader
   for (const r of results) {
     expect(r.archiveMode).toBe('full')
     expect(r.theme).toBe('light')
@@ -173,6 +207,57 @@ test('a legacy migration racing an explicit write never loses either — both su
   expect(final.archiveMode).toBe('full')
   expect(final.theme).toBe('light')
   expect(final.installDismissed).toBe(true)
+})
+
+// I4 / spec §5.8: a `team` payload with NO `connections` key is a legacy single-connection edit,
+// never a replacement of the array. The shallow top-level merge would otherwise let an old
+// cached tab (or an older sidecar sharing ~/.agentistics) wipe every connection and denylist.
+
+const conn = (id: string, endpoint: string, denied: string[] = []) => ({
+  id, endpoint, org: 'default', user: 'u', token: 'tok', deniedRepos: denied,
+})
+
+test('a legacy-shaped team payload CANNOT empty a stored two-connection array', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  await writePreferencesTo(primary, legacy, {
+    team: { schema: 2, mode: 'member', connections: [conn('c_aaaaaaaaaaaa', 'http://a:48080', ['github.com/o/secret']), conn('c_bbbbbbbbbbbb', 'http://b:48080')] },
+  })
+  // The pre-upgrade SPA's "Disconnect": a full flat solo object, no connections key.
+  await writePreferencesTo(primary, legacy, { team: { mode: 'solo', endpoint: '', token: '', user: '', org: 'default' } as never })
+  const prefs = await readPreferencesFrom(primary, legacy)
+  expect(prefs.team?.connections.map(c => c.id)).toEqual(['c_aaaaaaaaaaaa', 'c_bbbbbbbbbbbb'])
+  expect(prefs.team?.connections[0]!.deniedRepos).toEqual(['github.com/o/secret'])
+  expect(prefs.team?.mode).toBe('member')
+})
+
+test('a team payload WITH a connections key replaces the array, as before', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  await writePreferencesTo(primary, legacy, {
+    team: { schema: 2, mode: 'member', connections: [conn('c_aaaaaaaaaaaa', 'http://a:48080'), conn('c_bbbbbbbbbbbb', 'http://b:48080')] },
+  })
+  await writePreferencesTo(primary, legacy, {
+    team: { schema: 2, mode: 'member', connections: [conn('c_cccccccccccc', 'http://c:48080')] },
+  })
+  const prefs = await readPreferencesFrom(primary, legacy)
+  expect(prefs.team?.connections.map(c => c.id)).toEqual(['c_cccccccccccc'])
+})
+
+test('a legacy flat team edit on a machine with NO stored connections still lands as one', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  await writePreferencesTo(primary, legacy, { team: { mode: 'member', endpoint: 'http://c:48080', token: 't', user: 'lucas', org: 'acme' } as never })
+  const prefs = await readPreferencesFrom(primary, legacy)
+  expect(prefs.team?.connections).toHaveLength(1)
+  expect(prefs.team?.connections[0]!.endpoint).toBe('http://c:48080')
+  expect(prefs.team?.mode).toBe('member')
+})
+
+test('a legacy team edit leaves the rest of the preferences alone', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  await writePreferencesTo(primary, legacy, { theme: 'light', archiveMode: 'consolidate' })
+  await writePreferencesTo(primary, legacy, { team: { mode: 'solo' } as never })
+  const prefs = await readPreferencesFrom(primary, legacy)
+  expect(prefs.theme).toBe('light')
+  expect(prefs.archiveMode).toBe('consolidate')
 })
 
 test('a corrupt LEGACY file does not throw — the primary is authoritative and legacy corruption is not fatal', async () => {
