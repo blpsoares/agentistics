@@ -404,7 +404,7 @@ The display **name is set by the central** on the minted token — there is no n
 
 ### Team-mode rules
 
-- **Members never push chat** — only computed metrics + statsCache; raw chat is on-demand over the WebSocket.
+- **Members never push chat** — only computed metrics + statsCache; raw chat is on-demand over the WebSocket. The ONE exception is `first_prompt` / `title`, which are chat-derived and DO travel; they are scrubbed by `redactSecrets` (`@agentistics/core`, `redact.ts`) at **two** boundaries: `selectDeltas` on the member (so a pasted credential never crosses the wire) and `toTeamDoc` on the central (because a central cannot assume its members run current code — in a mixed-version fleet the machine on the old build is exactly the one that leaks). The redactor is deliberately PRECISE, not exhaustive: `first_prompt` labels every session in the UI, so a rule that also ate `input_tokens=123` would make labels useless and get switched off. Generic `key=value` rules are guarded by a value-shape test; when in doubt it leaves text alone. It is a safety net for the accidental paste — **never a substitute for rotating a leaked credential**.
 - **Tokens are stored only as sha256 hashes** (`team-tokens.ts`) and never logged; the central's session-cookie secret is **separate** from the dashboard password; auth compares are constant-time.
 - **Non-Claude team metrics still come from per-session sums** — `stats-cache.json` remains Claude-only, on the central too (Compare-page Claude totals match the dashboard).
 - **The member's deep Claude history exists ONLY aggregated** (`AppData.userStatsCaches`, keyed by

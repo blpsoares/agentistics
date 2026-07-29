@@ -12,7 +12,7 @@
 import { createHash } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import type { SessionMeta, StatsCache, WorkflowRun } from '@agentistics/core'
-import { PUSH_INTERVAL, clampPushInterval, defaultTeam } from '@agentistics/core'
+import { PUSH_INTERVAL, clampPushInterval, defaultTeam, redactSessionText } from '@agentistics/core'
 import type { Preferences } from './preferences'
 import { TEAM_SENT_FILE, TEAM_SYNC_FILE, STATS_CACHE_FILE } from './config'
 import { loadConsolidated } from './consolidate'
@@ -180,9 +180,14 @@ export function selectDeltas(sessions: SessionMeta[], sent: SentState): SelectDe
   const toSend: SessionMeta[] = []
   const nextSent: SentState = { ...sent }
 
-  for (const s of sessions) {
-    const id = s.session_id
+  for (const raw of sessions) {
+    const id = raw.session_id
     if (!id) continue
+    // Scrub credentials out of the free text BEFORE anything else. This is the last point the
+    // data is still purely local, so a secret pasted into a first prompt never crosses the wire.
+    // Hashing the REDACTED session keeps sent-state consistent: an unchanged session still hashes
+    // the same on every run, so this does not cause a permanent re-send loop.
+    const s = redactSessionText(raw)
     const hash = sessionHash(s)
     if (sent[id] !== hash) {
       toSend.push(s)
