@@ -2436,3 +2436,40 @@ git commit --no-verify -m "fix(share-rules): split on Claude's watermark, and se
 
 - **Plan 2 — multi-central runtime:** per-connection state in `team-uploader.ts`, one WebSocket per connection, the connection routes, `/api/team/status`, the boot-time `migrateTeamStateOnce` (sent-state file rename + lossless v1→v2 hash conversion), the cross-process preferences lock, and the CLI.
 - **Plan 3 — repo sharing:** `POST /api/team/forget` and `capabilities` on the central, the denylist wired into the push path, the removal sequence with its journal, and the Settings UI.
+
+---
+
+## Follow-ups booked out of the final review
+
+Verified residuals from the whole-branch review and its fix wave. None blocks this branch — `share-rules.ts`
+has no caller outside its tests yet — but the first is a privacy fail-open and must be closed **before Plan 2
+wires the module into the push path**.
+
+1. **Sub-day store shrinkage still fails open in `modelUsage`.** `buildSplitStatsCache` refuses when a
+   non-prehistory day present in `real` has no session left in `allStored`, but shrinkage *within* a
+   still-present day (some sessions lost, at least one remaining) leaves the day in `storeDays`, so the
+   `attributable` term under-subtracts and a denied session's tokens ride out. The fix is as cheap as the
+   day-level one: compare `real.dailyModelTokens[day]` against the `attributable` totals for that day and
+   refuse on a mismatch. **Do this in Plan 2's first task, before the uploader calls the module.**
+
+2. **Spec §5.8's legacy-team merge is only half implemented.** `mergeTeamPayload` preserves the stored
+   `connections` when an incoming `team` payload omits the key — which is what stopped C1's data loss — but
+   §5.8 also requires matching the payload's `endpoint` into `connections[]` and merging it (preserving `id`
+   and `deniedRepos`), never blanking a stored token, and returning `409` when `connections.length > 1`.
+   Today a legacy single-connection edit is a silent no-op. Safe direction, but the route contract in §5.8 is
+   not met. Land it with the connection routes in Plan 2.
+   Related: a payload carrying an explicit `connections: undefined` takes the replace branch. Unreachable over
+   `PUT /api/preferences` (JSON drops undefined) but reachable in-process; tighten when the routes land.
+
+3. **The TZ-restoring test breaks on non-whole-hour zones.** `share-rules.test.ts`'s local-clock test restores
+   the ambient zone as `Etc/GMT±h`, which is invalid for offsets of :30 or :45 (India, Nepal, Adelaide) — the
+   runtime falls back to UTC and the test's own offset assertion fails, so the suite-wide leak it exists to
+   prevent happens anyway, loudly. It also erases DST for the rest of the run on a DST zone. Benign on a UTC
+   or UTC−3 machine; fix if CI ever runs elsewhere.
+
+4. **Two leftovers from the minors sweep.** `cli-start.ts`'s `loadState()` still swallows a corrupt
+   preferences file into `mode: 'solo'` — the exact lie that was converted to an explicit exit in
+   `cli-status.ts`, so the two are now inconsistent. And `ConnectionSettings.tsx` / `MachinesSettings.tsx`
+   replaced `{ ...DEFAULT_TEAM }` with a module-level `defaultTeam()` const that is still spread on every
+   render, so the aliased-array hazard survives in web; §3.5 wants those duplicates deleted in favour of
+   `readTeamConnections`.
