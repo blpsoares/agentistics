@@ -21,6 +21,7 @@
 import { TEAM_CENTRAL } from './config'
 import { can } from './iam-caps'
 import { accountVisibleTo } from './iam-view'
+import { dataTeamIdsOf } from './team-scope'
 import { localTagStore, type TagStore } from './tags-local-store'
 import { resolveTagSessions, type TagSource, type TagSourceType, type TagLookups, type TagWindow } from './tags-resolve'
 import { aggregateSessions, type TagAggregate } from './tags-aggregate'
@@ -111,7 +112,12 @@ async function buildContext(p: Principal, sessions: SessionMeta[]): Promise<TagC
     }
   }
 
-  const myTeamIds = new Set(p.memberships.map(m => m.teamId))
+  // The teams this principal may READ — the ones they MANAGE, matching `dataTeamIdsOf` on
+  // /api/data. Keying this off plain membership reopens exactly what that gate closes: a tag
+  // aggregates over the UNSCOPED session set (see the header), so a plain user could scope a tag
+  // to their own team and read its cost/token totals here after being denied them on the
+  // dashboard. Their own machines and account still resolve below, independently of any team.
+  const myTeamIds = dataTeamIdsOf(p)
   const visibleMachineIds = new Set(
     machines
       // EFFECTIVE teams: a machine reachable through its owner account's team is visible for the
