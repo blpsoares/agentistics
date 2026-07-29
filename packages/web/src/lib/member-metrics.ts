@@ -12,7 +12,8 @@
 // which sessions are visible — the page feeds it `/api/data`, which the central already scopes
 // per signed-in principal.
 
-import { calcCost, sessionCostUSD as sessionCostByModel, type HarnessId, type SessionMeta } from '@agentistics/core'
+import { calcCost, sessionCostUSD as sessionCostByModel, type HarnessId, type SessionMeta, type StatsCache } from '@agentistics/core'
+import { format, parseISO } from 'date-fns'
 
 /** How rows are grouped: one row per person (`user`) or one row per machine (`memberId`). */
 export type MemberGroupBy = 'user' | 'machine'
@@ -31,6 +32,14 @@ export interface TopProject extends TopEntry {
   kind: 'repo' | 'folder'
 }
 
+/** One machine's slice of a member row. `key` is the `memberId` (the machine's stable id). */
+export interface MachineUsage {
+  key: string
+  sessions: number
+  costUSD: number
+  totalTokens: number
+}
+
 export interface MemberMetrics {
   /** Stable row identity: the `memberId` (machine grouping) or the `user` (user grouping). */
   key: string
@@ -40,6 +49,17 @@ export interface MemberMetrics {
   memberId: string | null
   /** Distinct machines contributing to this row (always 1 when grouping by machine). */
   machineCount: number
+  /** Per-machine breakdown of this row, ranked by cost desc (the page's primary metric), then
+   *  sessions desc, then key asc. One entry when grouping by machine; the member's whole fleet
+   *  when grouping by user — which is the only place the reader can see WHERE the work happened.
+   *  Sums the same visible sessions as every other field on the row, so the parts always add up
+   *  to the whole; it is NOT the deep statsCache history. */
+  machines: MachineUsage[]
+  /** True when this row's headline totals were replaced by the statsCache history rather than
+   *  summed from the visible sessions. The per-machine `machines` breakdown is ALWAYS the visible
+   *  sessions, so when this is set the parts legitimately add up to less than the whole and the UI
+   *  must say so — silently showing chips that do not close is how a reader stops trusting both. */
+  totalsFromCache?: boolean
   sessions: number
   costUSD: number
   inputTokens: number
@@ -104,7 +124,8 @@ function ms(value: string | undefined): number | null {
 interface Acc {
   key: string
   users: Map<string, number>
-  memberIds: Set<string>
+  /** memberId → that machine's slice of this row. Also the machine count (its size). */
+  memberIds: Map<string, { sessions: number; costUSD: number; totalTokens: number }>
   sessions: number
   costUSD: number
   inputTokens: number
@@ -145,7 +166,7 @@ export function aggregateMemberMetrics(
       a = {
         key,
         users: new Map(),
-        memberIds: new Set(),
+        memberIds: new Map(),
         sessions: 0,
         costUSD: 0,
         inputTokens: 0,
@@ -164,15 +185,26 @@ export function aggregateMemberMetrics(
       acc.set(key, a)
     }
 
+    const cost = sessionCostUSD(s)
     a.sessions++
-    a.costUSD += sessionCostUSD(s)
+    a.costUSD += cost
     a.inputTokens += s.input_tokens ?? 0
     a.outputTokens += s.output_tokens ?? 0
     a.cacheReadTokens += s.cache_read_input_tokens ?? 0
     a.cacheWriteTokens += s.cache_creation_input_tokens ?? 0
 
     if (user) bump(a.users, user)
-    if (memberId) a.memberIds.add(memberId)
+    if (memberId) {
+      // The machine's slice is accumulated from the SAME session totals used above, so the
+      // per-machine numbers always sum back to the row's own numbers.
+      const slice = a.memberIds.get(memberId)
+        ?? { sessions: 0, costUSD: 0, totalTokens: 0 }
+      slice.sessions++
+      slice.costUSD += cost
+      slice.totalTokens += (s.input_tokens ?? 0) + (s.output_tokens ?? 0)
+        + (s.cache_read_input_tokens ?? 0) + (s.cache_creation_input_tokens ?? 0)
+      a.memberIds.set(memberId, slice)
+    }
 
     const startAt = ms(s.start_time)
     if (startAt !== null && (a.firstAt === null || startAt < a.firstAt)) {
@@ -219,8 +251,11 @@ export function aggregateMemberMetrics(
     rows.push({
       key: a.key,
       user: topUser?.key ?? '',
-      memberId: a.memberIds.size === 1 ? [...a.memberIds][0]! : null,
+      memberId: a.memberIds.size === 1 ? [...a.memberIds.keys()][0]! : null,
       machineCount: a.memberIds.size,
+      machines: [...a.memberIds.entries()]
+        .map(([key, v]) => ({ key, sessions: v.sessions, costUSD: v.costUSD, totalTokens: v.totalTokens }))
+        .sort((x, y) => (y.costUSD - x.costUSD) || (y.sessions - x.sessions) || x.key.localeCompare(y.key)),
       sessions: a.sessions,
       costUSD: a.costUSD,
       inputTokens: a.inputTokens,
@@ -239,4 +274,101 @@ export function aggregateMemberMetrics(
 
   rows.sort((a, b) => (b.sessions - a.sessions) || (b.costUSD - a.costUSD) || a.key.localeCompare(b.key))
   return rows
+}
+
+/**
+ * Replace the session-summed totals with the member's / machine's authoritative statsCache.
+ *
+ * The session documents are only what has not been pruned — Claude Code deletes transcripts past
+ * `cleanupPeriodDays`, while `stats-cache.json` is the running aggregate it never prunes. Measured
+ * on live central data, one person's two machines held $17,981.82 across 783 sessions of history
+ * against $11,163.39 across the 255 session documents that survived: this page reported 62% of the
+ * money and 33% of the sessions, and disagreed with the dashboard for the same person.
+ *
+ * `caches` is keyed to match `row.key` — `userStatsCaches` for `groupBy: 'user'`,
+ * `machineStatsCaches` for `'machine'`. Pass `undefined` when a filter the caches cannot represent
+ * is active (project / repo / tag / model / date / harness): they are all-time Claude-only totals,
+ * so under such a filter the per-session sum is the only source that can answer at all.
+ *
+ * Mirrors `useDerivedStats` so the pages agree: a non-Claude session adds its full cost, tokens and
+ * count (statsCache is Claude-only, so that spend is in NO cache), while a Claude session on a day
+ * the cache has not computed yet adds only its COUNT — its money is already inside `modelUsage`.
+ * A row with no cache is returned untouched; its sessions are all the history there is.
+ *
+ * Only the totals are overlaid. `topProject` / `topModel` / `topHarness` and the activity window
+ * stay session-derived — the cache has no such breakdown, so those keep describing the surviving
+ * sessions rather than the whole history.
+ */
+export function withStatsCacheTotals(
+  rows: MemberMetrics[],
+  sessions: SessionMeta[],
+  groupBy: MemberGroupBy,
+  caches: Record<string, StatsCache> | undefined,
+): MemberMetrics[] {
+  if (!caches) return rows
+
+  const cachedDays = new Map<string, Set<string>>()
+  for (const [key, c] of Object.entries(caches)) {
+    cachedDays.set(key, new Set((c.dailyActivity ?? []).map(d => d.date)))
+  }
+
+  interface Extra {
+    cost: number; input: number; output: number; cacheRead: number; cacheWrite: number
+    nonClaudeSessions: number; gapSessions: number
+  }
+  const extra = new Map<string, Extra>()
+  for (const s of sessions) {
+    const user = (s.user ?? '').trim()
+    const memberId = (s.memberId ?? '').trim()
+    const key = groupBy === 'machine' ? (memberId || user || LOCAL_KEY) : (user || LOCAL_KEY)
+    if (!caches[key]) continue
+    let e = extra.get(key)
+    if (!e) {
+      e = { cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, nonClaudeSessions: 0, gapSessions: 0 }
+      extra.set(key, e)
+    }
+    if ((s.harness ?? 'claude') !== 'claude') {
+      e.cost += sessionCostUSD(s)
+      e.input += s.input_tokens ?? 0
+      e.output += s.output_tokens ?? 0
+      e.cacheRead += s.cache_read_input_tokens ?? 0
+      e.cacheWrite += s.cache_creation_input_tokens ?? 0
+      e.nonClaudeSessions += 1
+    } else if (s.start_time && !cachedDays.get(key)!.has(format(parseISO(s.start_time), 'yyyy-MM-dd'))) {
+      e.gapSessions += 1
+    }
+  }
+
+  return rows.map(row => {
+    const c = caches[row.key]
+    if (!c) return row
+    const e = extra.get(row.key)
+    let cost = 0, input = 0, output = 0, cacheRead = 0, cacheWrite = 0
+    for (const [model, u] of Object.entries(c.modelUsage ?? {})) {
+      cost += calcCost(u, model)
+      input += u.inputTokens ?? 0
+      output += u.outputTokens ?? 0
+      cacheRead += u.cacheReadInputTokens ?? 0
+      cacheWrite += u.cacheCreationInputTokens ?? 0
+    }
+    const cacheSessions = (c.dailyActivity ?? []).reduce((n, d) => n + (d.sessionCount ?? 0), 0)
+    cost += e?.cost ?? 0
+    input += e?.input ?? 0
+    output += e?.output ?? 0
+    cacheRead += e?.cacheRead ?? 0
+    cacheWrite += e?.cacheWrite ?? 0
+    return {
+      ...row,
+      sessions: cacheSessions + (e?.gapSessions ?? 0) + (e?.nonClaudeSessions ?? 0),
+      costUSD: cost,
+      inputTokens: input,
+      outputTokens: output,
+      cacheReadTokens: cacheRead,
+      cacheWriteTokens: cacheWrite,
+      totalTokens: input + output + cacheRead + cacheWrite,
+      // Flags that the headline no longer equals the sum of `machines` (which stays session-based),
+      // so the card can disclose it instead of showing parts that quietly fail to close.
+      totalsFromCache: true,
+    }
+  }).sort((a, b) => (b.sessions - a.sessions) || (b.costUSD - a.costUSD) || a.key.localeCompare(b.key))
 }

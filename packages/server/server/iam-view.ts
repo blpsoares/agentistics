@@ -3,6 +3,7 @@
  * passwordHash) + account/team visibility & management capability checks.
  */
 import type { AccountDoc, Principal, Membership, Role } from './iam-types'
+import { fromBsonDate, fromBsonDateOrNull } from './mongo-dates'
 
 export interface PublicAccount {
   id: string
@@ -15,7 +16,8 @@ export interface PublicAccount {
   mustChangePassword: boolean
 }
 
-/** Client-safe view of an account — drops passwordHash/emailLower/sessionVersion. */
+/** Client-safe view of an account — drops passwordHash/emailLower/sessionVersion, and renders
+ *  the stored BSON dates as ISO strings (the wire shape the frontend parses). */
 export function publicAccount(a: AccountDoc): PublicAccount {
   return {
     id: a._id,
@@ -23,8 +25,8 @@ export function publicAccount(a: AccountDoc): PublicAccount {
     email: a.email,
     role: a.role,
     memberships: a.memberships,
-    createdAt: a.createdAt,
-    lastLoginAt: a.lastLoginAt ?? null,
+    createdAt: fromBsonDate(a.createdAt),
+    lastLoginAt: fromBsonDateOrNull(a.lastLoginAt),
     mustChangePassword: a.mustChangePassword ?? false,
   }
 }
@@ -91,55 +93,28 @@ export function canManageMachineTeam(p: Principal, teamId: string | undefined): 
   return p.memberships.some(m => m.teamId === teamId && m.role === 'manager')
 }
 
-/** Canonical owner-account ids of a machine (handles the legacy single-`accountId` shape). */
-export function machineOwnerIds(machine: { accountId?: string; accountIds?: string[] }): string[] {
-  return machine.accountIds && machine.accountIds.length
-    ? machine.accountIds
-    : (machine.accountId ? [machine.accountId] : [])
-}
-
 /**
- * The teams a machine effectively belongs to: the teams stamped on the machine token UNION the
- * teams of every account that owns it.
+ * Whether a principal may see OTHER PEOPLE'S names: the instance owner, or a manager of any team.
  *
- * WHY the union: team membership is stored on ACCOUNTS, but both session visibility
- * (`scopeAppDataToTeams`) and machine visibility (`canManageMachine`) key off the MACHINE's
- * `teamIds`. Nothing ever connected the two — adding an account to a team as manager left that
- * account's machines loose, so the team's own manager saw an empty machine list and an empty
- * dashboard, with no hint that a second, separate linking step existed. Deriving the union here
- * fixes that without mutating any token: explicit per-machine assignment still works and still
- * widens reach, and revoking a membership narrows visibility again immediately, with no stored
- * state left to drift.
- *
- * `accountTeams` maps accountId → that account's team ids. Pure.
+ * This is the server-side twin of the frontend's `canFilterMembers` (App.tsx) — the same condition
+ * that gates the members panel and the member filter. Anything that reveals who else uses the
+ * instance must sit behind it, or a plain user learns their colleagues' names through whichever
+ * surface forgot the check.
  */
-export function effectiveMachineTeams(
-  machine: { teamId?: string; teamIds?: string[]; accountId?: string; accountIds?: string[] },
-  accountTeams: Record<string, string[]> = {},
-): string[] {
-  const stored = machine.teamIds && machine.teamIds.length
-    ? machine.teamIds
-    : (machine.teamId ? [machine.teamId] : [])
-  const out = new Set(stored)
-  for (const id of machineOwnerIds(machine)) {
-    for (const t of accountTeams[id] ?? []) out.add(t)
-  }
-  return [...out]
+export function canSeeMemberNames(p: Principal): boolean {
+  return p.role === 'owner' || p.memberships.some(m => m.role === 'manager')
 }
 
 /** Whether a principal may view/manage a specific machine: owner, a manager of ANY of the machine's
- *  effective teams (see `effectiveMachineTeams` — includes the teams of its owner accounts), OR one
- *  of the machine's owner accounts (a user managing a machine they own). A machine may have several
- *  owner accounts AND belong to several teams. */
-export function canManageMachine(
-  p: Principal,
-  machine: { teamId?: string; teamIds?: string[]; accountId?: string; accountIds?: string[] },
-  accountTeams: Record<string, string[]> = {},
-): boolean {
+ *  teams, OR one of the machine's owner accounts (a user managing a machine they own). A machine may
+ *  have several owner accounts AND belong to several teams. */
+export function canManageMachine(p: Principal, machine: { teamId?: string; teamIds?: string[]; accountId?: string; accountIds?: string[] }): boolean {
   // An owner manages every machine, including a LOOSE one (no teams, no owner accounts). Without
   // this the team check below (`[].some(...)` → false) locked owners out of exactly the machines
   // that need re-linking — the ones orphaned when their owning account was deleted.
   if (p.role === 'owner') return true
-  if (machineOwnerIds(machine).includes(p.accountId)) return true
-  return effectiveMachineTeams(machine, accountTeams).some(t => canManageMachineTeam(p, t))
+  const owners = machine.accountIds && machine.accountIds.length ? machine.accountIds : (machine.accountId ? [machine.accountId] : [])
+  if (owners.includes(p.accountId)) return true
+  const teams = machine.teamIds && machine.teamIds.length ? machine.teamIds : (machine.teamId ? [machine.teamId] : [])
+  return teams.some(t => canManageMachineTeam(p, t))
 }

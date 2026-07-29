@@ -4,6 +4,7 @@ import {
 } from 'lucide-react'
 import { format, parseISO, subDays } from 'date-fns'
 import type { AppData, Filters, Lang, ModelUsage, SessionMeta, HarnessId } from '@agentistics/core'
+import { sessionTime } from '../lib/sessionTime'
 import { formatModel, formatProjectName, repoShortName, calcCost, sessionLabel, fmt, fmtCost, fmtFull } from '@agentistics/core'
 import { useDerivedStats, blendedCostPerToken, type HarnessSummary } from '../hooks/useData'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
@@ -464,7 +465,8 @@ function MiniSessionsTable({ sessions, c, lang, currency, brlRate, blendedRates 
   sessions: SessionMeta[]; c: Colors; lang: Lang; currency: 'USD' | 'BRL'; brlRate: number
   blendedRates: { input: number; output: number }
 }) {
-  const cols = '90px 1fr 48px 40px 40px 62px'
+  // The duration column carries "3h 12m ativo · 958h decorrido", so it needs real width.
+  const cols = '84px 1fr 150px 40px 40px 62px'
   const headers = [lang === 'pt' ? 'Data' : 'Date', lang === 'pt' ? 'Projeto' : 'Project',
     lang === 'pt' ? 'Dur.' : 'Dur.', 'Msgs', 'Tools', lang === 'pt' ? 'Custo' : 'Cost']
   return (
@@ -489,7 +491,7 @@ function MiniSessionsTable({ sessions, c, lang, currency, brlRate, blendedRates 
           <div key={i} style={{ display: 'grid', gridTemplateColumns: cols, gap: 6, padding: '4px 0', borderBottom: `1px solid ${c.border}40`, alignItems: 'center' }}>
             <div style={{ color: c.textSec }}>{s.start_time ? format(parseISO(s.start_time), 'MM/dd HH:mm') : '—'}</div>
             <div style={{ color: c.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatProjectName(s.project_path || '')}</div>
-            <div style={{ color: c.textSec }}>{s.duration_minutes ? fmtDur(s.duration_minutes) : '—'}</div>
+            <div style={{ color: c.textSec }}>{sessionTime(s, lang).combined}</div>
             <div style={{ color: c.orange, fontWeight: 600 }}>{msgs}</div>
             <div style={{ color: c.textSec }}>{tools}</div>
             <div style={{ color: c.textSec }}>{fmtCost(costUSD, currency, brlRate)}</div>
@@ -527,8 +529,12 @@ function MiniHighlightsSection({ sessions, c, lang }: {
 
   // sessions[0] is guaranteed defined because of the sessions.length === 0 guard above
   const firstSession = sessions[0]!
-  const longestSession = sessions.reduce((b, s) =>
-    (s.duration_minutes ?? 0) > (b.duration_minutes ?? 0) ? s : b, firstSession)
+  // Ranked by ACTIVE time (same rule as the dashboard's HighlightsBoard) — wall clock crowns
+  // whichever session merely stayed open longest. See lib/sessionTime.ts.
+  const anyActive = sessions.some(s => s.active_minutes !== undefined)
+  const sessionRank = (s: SessionMeta) =>
+    anyActive ? (s.active_minutes ?? -1) : (s.duration_minutes ?? 0)
+  const longestSession = sessions.reduce((b, s) => sessionRank(s) > sessionRank(b) ? s : b, firstSession)
   const mostInputTokens = sessions.reduce((b, s) =>
     (s.input_tokens ?? 0) > (b.input_tokens ?? 0) ? s : b, firstSession)
   const mostOutputTokens = sessions.reduce((b, s) =>
@@ -550,7 +556,9 @@ function MiniHighlightsSection({ sessions, c, lang }: {
   }
   const topProjectEntry = Object.entries(projectSessionCounts).sort((a, b) => b[1] - a[1])[0]
 
-  const avgDuration = avg(sessions.map(s => s.duration_minutes ?? 0).filter(v => v > 0))
+  const avgDuration = avg(sessions
+    .map(s => anyActive ? (s.active_minutes ?? 0) : (s.duration_minutes ?? 0))
+    .filter(v => v > 0))
   const avgInput    = avg(sessions.map(s => s.input_tokens ?? 0).filter(v => v > 0))
   const avgOutput   = avg(sessions.map(s => s.output_tokens ?? 0).filter(v => v > 0))
   const avgMessages = avg(sessions.map(s => (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)).filter(v => v > 0))
@@ -564,8 +572,8 @@ function MiniHighlightsSection({ sessions, c, lang }: {
   const records = [
     {
       label: pt ? 'Sessão mais longa' : 'Longest session',
-      value: fmtDuration(longestSession.duration_minutes ?? 0),
-      badge: multiplier(longestSession.duration_minutes ?? 0, avgDuration),
+      value: sessionTime(longestSession, pt ? 'pt' : 'en').combined,
+      badge: multiplier(sessionRank(longestSession), avgDuration),
       prompt: truncate(sessionLabel(longestSession), 80),
       project: formatProjectName(longestSession.project_path ?? ''),
       accent: '#a855f7',
@@ -1244,7 +1252,10 @@ export function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, 
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
                 <KPICard label={pt ? 'Sequência' : 'Streak'} value={`${derived.streak}d`} sub={pt ? 'dias consec.' : 'consecutive'} accent={c.red} c={c} />
-                <KPICard label={pt ? 'Sessão mais longa' : 'Longest session'} value={derived.longestSession?.duration_minutes ? fmtDur(derived.longestSession.duration_minutes) : '—'} sub="" accent={c.purple} c={c} />
+                <KPICard label={pt ? 'Sessão mais longa' : 'Longest session'}
+                  value={derived.longestSession ? (sessionTime(derived.longestSession, pt ? 'pt' : 'en').active ?? sessionTime(derived.longestSession, pt ? 'pt' : 'en').elapsed) : '—'}
+                  sub={derived.longestSession ? `${sessionTime(derived.longestSession, pt ? 'pt' : 'en').elapsed} ${pt ? 'decorrido' : 'elapsed'}` : ''}
+                  accent={c.purple} c={c} />
                 <KPICard label="Commits" value={fmt(derived.gitCommits)} sub={derived.gitPushes > 0 ? `${fmt(derived.gitPushes)} pushes` : `via ${harnessTitle}`} accent={c.cyan} c={c} />
                 <KPICard label={pt ? 'Arquivos' : 'Files'} value={fmt(derived.filesModified)} sub={`+${fmt(derived.linesAdded)} / -${fmt(derived.linesRemoved)}`} accent={c.green} c={c} />
               </div>

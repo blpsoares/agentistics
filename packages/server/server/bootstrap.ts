@@ -6,6 +6,7 @@
  */
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto'
 import { getMongoDb } from './mongo'
+import { validatePasswordPolicy } from './password-policy'
 
 const COLLECTION = 'config'
 const DOC_ID = 'bootstrap'
@@ -13,8 +14,9 @@ const DOC_ID = 'bootstrap'
 export interface BootstrapDoc {
   _id: string
   tokenHash?: string
-  createdAt: string
-  consumedAt?: string
+  /** BSON Dates — see mongo-dates.ts. `consumedAt` present at all means the token is spent. */
+  createdAt: Date
+  consumedAt?: Date
 }
 
 export interface OwnerInput {
@@ -51,7 +53,8 @@ export function validateOwnerInput(
   if (!token) return { ok: false, error: 'missing bootstrap token' }
   if (!name) return { ok: false, error: 'name is required' }
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { ok: false, error: 'valid email is required' }
-  if (password.length < 8) return { ok: false, error: 'password must be at least 8 characters' }
+  const policy = validatePasswordPolicy(password, { email, name })
+  if (!policy.ok) return { ok: false, error: policy.error }
   if (password !== confirm) return { ok: false, error: 'passwords do not match' }
   return { ok: true, value: { name, email, password, confirm, token } }
 }
@@ -62,12 +65,12 @@ async function bootstrapCollection() {
 }
 
 /** Generate a fresh token, store its hash (clearing any prior consumed state), return plaintext once. */
-export async function generateBootstrapToken(nowIso: string): Promise<string> {
+export async function generateBootstrapToken(now: Date): Promise<string> {
   const token = randomBytes(24).toString('hex')
   const col = await bootstrapCollection()
   await col.updateOne(
     { _id: DOC_ID },
-    { $set: { tokenHash: hashBootstrapToken(token), createdAt: nowIso }, $unset: { consumedAt: '' } },
+    { $set: { tokenHash: hashBootstrapToken(token), createdAt: now }, $unset: { consumedAt: '' } },
     { upsert: true },
   )
   return token
@@ -91,7 +94,7 @@ export async function verifyBootstrapToken(token: string): Promise<boolean> {
 }
 
 /** Mark the token consumed (one-time) and drop the hash. */
-export async function consumeBootstrapToken(nowIso: string): Promise<void> {
+export async function consumeBootstrapToken(now: Date): Promise<void> {
   const col = await bootstrapCollection()
-  await col.updateOne({ _id: DOC_ID }, { $set: { consumedAt: nowIso }, $unset: { tokenHash: '' } })
+  await col.updateOne({ _id: DOC_ID }, { $set: { consumedAt: now }, $unset: { tokenHash: '' } })
 }

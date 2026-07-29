@@ -52,15 +52,24 @@ export interface HarnessCapabilities {
   /** Runs of the harness's multi-agent orchestration tool (Claude Code's Workflow tool).
    *  Gates the repo-detail "Dynamic Workflows" tab. */
   dynamicWorkflows: boolean
+  /** The harness writes per-event timestamps (or its own measured turn durations), so
+   *  `SessionMeta.active_minutes` can be computed — see `activeTime.ts` and
+   *  docs/harness-contract.md. False means the UI shows only wall-clock elapsed time. */
+  activeTime: boolean
 }
 
 /** Single source of truth for which metrics each harness can produce.
  *  Drives "N/A vs real 0" rendering and what the unified view aggregates. */
 export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
-  claude:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: true,  gitLines: true,  dynamicWorkflows: true  },
-  codex:   { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false },
-  gemini:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false },
-  copilot: { tokens: true,  cost: true,  model: true,  tools: false, agents: false, gitLines: true,  dynamicWorkflows: false },
+  // `activeTime` — where each harness's per-turn time comes from (docs/harness-contract.md):
+  //   claude  → `system`/`turn_duration`.durationMs when present, timestamps otherwise
+  //   codex   → `task_complete`.duration_ms (measured by Codex itself)
+  //   copilot → `assistant.turn_start` → `assistant.turn_end` brackets
+  //   gemini / antigravity / kimi → reconstructed from per-message timestamps (no measured field)
+  claude:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: true,  gitLines: true,  dynamicWorkflows: true,  activeTime: true },
+  codex:   { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true },
+  gemini:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true },
+  copilot: { tokens: true,  cost: true,  model: true,  tools: false, agents: false, gitLines: true,  dynamicWorkflows: false, activeTime: true },
   // Antigravity (agy): tokens + model come from the `gen_metadata` protobuf blobs in
   // ~/.gemini/antigravity-cli/conversations/<id>.db (decoded by adapters/antigravity-protobuf.ts)
   // and cost is derived from them via calcCost().
@@ -71,7 +80,7 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   // exactly the misleading-zero this flag exists to prevent, so the UI shows N/A instead. The
   // per-session lines_added / lines_removed fields are still populated (and files_modified, which
   // this flag does NOT gate, stays real).
-  antigravity: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false },
+  antigravity: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true },
   // Kimi Code CLI. Tokens and model are real (usage.record events in each agent's wire.jsonl).
   // Kimi ROUTES to other providers and stamps the provider's own model on each usage record
   // (`google/gemini-3.5-flash-lite`), so in practice the model is one MODEL_PRICING already knows
@@ -79,7 +88,7 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   // any unknown id on any harness they would take the shared fallback price, so add them here when
   // Moonshot publishes verified rates. `gitLines` is false because Kimi records the Edit/Write
   // strings but no diff counters.
-  kimi: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false },
+  kimi: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true },
 }
 
 /** Display order for harness lists, and the single source of truth for "every harness".
@@ -98,9 +107,22 @@ export const HARNESS_ORDER: HarnessId[] = (Object.keys(HARNESS_SORT) as HarnessI
 export interface SessionMeta {
   session_id: string
   project_path: string
+  /** The directory the session is in NOW, when it differs from `project_path` — a session that
+   *  moved into a git worktree (or any subdirectory) keeps `project_path` at the directory it was
+   *  opened in, so that it stays grouped under the same project. Live-session detection matches a
+   *  running process by its cwd, and without this the moved session looks closed while it is open. */
+  current_cwd?: string
   start_time: string
   end_time?: string
+  /** WALL CLOCK: last event − first event. A session reopened over three weeks reports ~500h here,
+   *  which is true and says nothing about how long it was worked on. Use `active_minutes` for that. */
   duration_minutes: number
+  /** Time the session was actually being worked on: Σ per-turn duration (human prompt → the
+   *  harness's last event for that turn), preferring a duration the harness measured itself.
+   *  Computed by `computeActiveTime()` in activeTime.ts — one rule for every harness.
+   *  `undefined` when the transcript carries no usable timing (old sessions whose raw file was
+   *  already deleted, or a harness with `activeTime: false`); the UI shows "—", never a guess. */
+  active_minutes?: number
   user_message_count: number
   assistant_message_count: number
   tool_counts: Record<string, number>
@@ -642,6 +664,17 @@ export function formatModel(modelId: string): string {
 export function formatProjectName(projectPath: string): string {
   if (!projectPath) return 'Unknown'
   return projectPath.replace(/\\/g, '/')
+}
+
+/**
+ * Just the project's folder name — for places where the full path does not fit and would be
+ * ellipsized into uselessness ("/home/mithrandir/agenti…"). The path itself belongs in the
+ * tooltip, never dropped: two machines can each have a `web` folder.
+ */
+export function projectFolder(projectPath: string): string {
+  const norm = formatProjectName(projectPath).replace(/\/+$/, '')
+  if (norm === 'Unknown') return norm
+  return norm.slice(norm.lastIndexOf('/') + 1) || norm
 }
 
 export function getModelColor(modelId: string): string {

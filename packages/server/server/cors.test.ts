@@ -1,62 +1,60 @@
-import { test, expect } from 'bun:test'
-import { allowedOrigin } from './cors'
+/**
+ * cors.test.ts — the origin allowlist. The suffix-confusion cases are the point: a naive
+ * `endsWith` check is how wildcard-by-accident happens.
+ */
+import { describe, expect, it } from 'bun:test'
+import { originAllowed, corsHeadersFor } from './cors'
 
-const OURS = { ports: [47291, 47292] as const }
+describe('originAllowed', () => {
+  it('allows an exact allowlist match', () => {
+    expect(originAllowed('https://metrics.example.com', ['https://metrics.example.com'], false)).toBe(true)
+  })
 
-test('no Origin header yields no echo — same-origin and non-browser callers are unaffected', () => {
-  expect(allowedOrigin(null, OURS)).toBeNull()
-  expect(allowedOrigin(undefined, OURS)).toBeNull()
-  expect(allowedOrigin('', OURS)).toBeNull()
+  it('rejects a different scheme or port', () => {
+    expect(originAllowed('http://metrics.example.com', ['https://metrics.example.com'], false)).toBe(false)
+    expect(originAllowed('https://metrics.example.com:8443', ['https://metrics.example.com'], false)).toBe(false)
+  })
+
+  it('rejects a suffix-confusion attempt', () => {
+    expect(originAllowed('https://evil-metrics.example.com', ['https://metrics.example.com'], false)).toBe(false)
+    expect(originAllowed('https://metrics.example.com.evil.tld', ['https://metrics.example.com'], false)).toBe(false)
+  })
+
+  it('rejects a null or missing origin', () => {
+    expect(originAllowed(null, ['https://metrics.example.com'], false)).toBe(false)
+    expect(originAllowed('null', ['https://metrics.example.com'], false)).toBe(false)
+  })
+
+  it('allows localhost origins in dev only', () => {
+    expect(originAllowed('http://localhost:47292', [], true)).toBe(true)
+    expect(originAllowed('http://127.0.0.1:47292', [], true)).toBe(true)
+    expect(originAllowed('http://localhost:47292', [], false)).toBe(false)
+  })
+
+  it('does not treat a localhost-lookalike host as dev', () => {
+    expect(originAllowed('http://localhost.evil.tld', [], true)).toBe(false)
+  })
 })
 
-test('a loopback origin on one of our ports is echoed back verbatim', () => {
-  expect(allowedOrigin('http://localhost:47292', OURS)).toBe('http://localhost:47292')
-  expect(allowedOrigin('http://127.0.0.1:47291', OURS)).toBe('http://127.0.0.1:47291')
-  expect(allowedOrigin('http://[::1]:47292', OURS)).toBe('http://[::1]:47292')
-})
+describe('corsHeadersFor', () => {
+  it('never emits a wildcard', () => {
+    const h = corsHeadersFor('https://metrics.example.com', ['https://metrics.example.com'], false)
+    expect(h['Access-Control-Allow-Origin']).toBe('https://metrics.example.com')
+    expect(Object.values(h)).not.toContain('*')
+  })
 
-test('a loopback origin on a FOREIGN port is refused — another local app is not us', () => {
-  expect(allowedOrigin('http://localhost:3000', OURS)).toBeNull()
-  expect(allowedOrigin('http://127.0.0.1:8080', OURS)).toBeNull()
-})
+  it('emits Vary: Origin so caches do not cross-serve', () => {
+    expect(corsHeadersFor('https://metrics.example.com', ['https://metrics.example.com'], false)['Vary'])
+      .toBe('Origin')
+  })
 
-test('an unrelated site is refused even on one of our ports', () => {
-  expect(allowedOrigin('https://evil.example:47291', OURS)).toBeNull()
-  expect(allowedOrigin('https://evil.example', OURS)).toBeNull()
-})
+  it('emits no ACAO at all for a disallowed origin', () => {
+    const h = corsHeadersFor('https://evil.tld', ['https://metrics.example.com'], false)
+    expect(h['Access-Control-Allow-Origin']).toBeUndefined()
+    expect(h['Access-Control-Allow-Credentials']).toBeUndefined()
+  })
 
-test('the host the client actually used is honoured — LAN IP and hostname', () => {
-  const lan = { ...OURS, host: '192.168.1.5:47292' }
-  expect(allowedOrigin('http://192.168.1.5:47292', lan)).toBe('http://192.168.1.5:47292')
-  const named = { ...OURS, host: 'desktop.tail1234.ts.net:47292' }
-  expect(allowedOrigin('http://desktop.tail1234.ts.net:47292', named)).toBe('http://desktop.tail1234.ts.net:47292')
-})
-
-test('a Host header does NOT open the door to a different hostname', () => {
-  const lan = { ...OURS, host: '192.168.1.5:47292' }
-  expect(allowedOrigin('http://192.168.1.9:47292', lan)).toBeNull()
-  expect(allowedOrigin('https://evil.example:47292', lan)).toBeNull()
-})
-
-test('a Host header with no port still matches its own hostname on our ports', () => {
-  const named = { ...OURS, host: 'agentistics.local' }
-  expect(allowedOrigin('http://agentistics.local:47291', named)).toBe('http://agentistics.local:47291')
-})
-
-test('non-http schemes are refused — a file:// or extension page is not an origin we serve', () => {
-  expect(allowedOrigin('file://', OURS)).toBeNull()
-  expect(allowedOrigin('null', OURS)).toBeNull()
-  expect(allowedOrigin('chrome-extension://abcdef', OURS)).toBeNull()
-})
-
-test('junk never throws', () => {
-  for (const junk of ['http://', '://x', 'not a url', '   ', 'http://localhost:notaport']) {
-    expect(() => allowedOrigin(junk, OURS)).not.toThrow()
-    expect(allowedOrigin(junk, OURS)).toBeNull()
-  }
-})
-
-test('a case-different host still matches — hostnames are case-insensitive', () => {
-  const named = { ...OURS, host: 'Desktop.Local:47292' }
-  expect(allowedOrigin('http://desktop.local:47292', named)).toBe('http://desktop.local:47292')
+  it('emits no ACAO for a same-origin request that carries no Origin header', () => {
+    expect(corsHeadersFor(null, [], false)['Access-Control-Allow-Origin']).toBeUndefined()
+  })
 })

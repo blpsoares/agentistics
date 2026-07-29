@@ -60,6 +60,8 @@ Commands:
   autostart     Start a mode with the system (systemd user service on Linux)
   check-update  Print a notice if a newer version is available (else silent);
                 a release marked [critical] says so louder (auto-install is opt-in)
+  doctor        Run the exposure preflight; add --exposed to check against the
+                strict public bar before opening a tunnel
 
 Options:
   --help, -h       Show this help message
@@ -608,6 +610,9 @@ if (command === 'server' || command === 'start') {
 } else if (command === 'watch') {
   checkVersionAndWarn() // fire-and-forget
   await import('../server/otel-watcher.ts')
+} else if (command === 'doctor') {
+  const { runDoctor } = await import('../server/cli-doctor.ts')
+  await runDoctor(args)
 } else {
   console.error(`Unknown command: ${command}\n`)
   console.log(HELP)

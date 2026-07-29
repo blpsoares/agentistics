@@ -38,6 +38,7 @@ agentop --version    # print version (and a notice if an update exists)
 | [`autostart`](#autostart) | Start a mode with the system (systemd user service) |
 | [`upgrade`](#upgrade) | Upgrade `agentop` to the latest release |
 | [`check-update`](#check-update) | Print an "update available" banner, else stay silent |
+| [`doctor`](#doctor) | Run the exposure preflight before publishing a central |
 
 Running **bare `agentop`** on an interactive terminal, on a machine that isn't
 configured yet, launches the [`setup`](#setup) wizard. Otherwise it prints help.
@@ -392,3 +393,46 @@ version check:
   showing the exact command for your role (a central shows `bun run up:central`; a
   member shows `agentop upgrade` then `systemctl --user restart agentop-server`). A
   periodic (~6h) server re-check pushes the notification live over SSE.
+
+
+---
+
+## `doctor`
+
+Runs the exposure preflight: nine checks that decide whether this instance is safe to publish.
+Exits non-zero on any failure, so going live can be gated on one command instead of on
+remembering nine environment variables.
+
+```bash
+agentop doctor              # check against the current profile
+agentop doctor --exposed    # check against the strict public bar
+
+./central.sh doctor --exposed        # from a repo checkout, INSIDE the container
+agentop central doctor --exposed     # same, from the standalone binary
+```
+
+**On a Docker central, prefer the `central.sh` / `agentop central` form.** The command
+evaluates the configuration the deployment will actually run with — it reads `central.env` when
+present and prints which file it used — but the owner-MFA and machine-token checks also need
+MongoDB, which is reachable only from inside the compose network. Run on the host, those two
+report as unverified, which counts as a failure by design.
+
+`--exposed` evaluates as if `AGENTISTICS_EXPOSURE=public` were already set, which is how you
+verify readiness **before** flipping it.
+
+What it checks:
+
+| Check | Fails when |
+|---|---|
+| `local-shell` | `/api/exec`, `/api/chat-tty`, the host transcript readers or `/api/mcp-action` are still reachable |
+| `session-secret` | The secret is missing, shorter than 32 chars, or equal to the dashboard password |
+| `tls` | `AGENTISTICS_TEAM_TLS` is unset on a public profile |
+| `bind-ip` | `BIND_IP` is not loopback on a public profile — the tunnel connects locally, so anything wider is a way in that bypasses it |
+| `trust-proxy` | *(warn)* forwarded-IP trust does not match the deployment, so per-IP limits apply to everyone at once |
+| `owner-mfa` | Any owner account has no TOTP enrolled |
+| `cors` | A plaintext origin sits in `AGENTISTICS_ALLOWED_ORIGINS` |
+| `mongo-auth` | *(warn)* the database has no credentials — acceptable only while its port stays unpublished |
+| `machine-tokens` | *(warn)* no machine tokens have been minted yet |
+
+A check that could not be verified — the database was unreachable, say — reports a **failure**,
+not a reassuring pass. See [exposure.md](exposure.md) for the full deployment runbook.

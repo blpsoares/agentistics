@@ -1,6 +1,6 @@
 // packages/server/server/iam-view.test.ts
 import { test, expect } from 'bun:test'
-import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships, effectiveMachineTeams } from './iam-view'
+import { canSeeMemberNames, publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships } from './iam-view'
 import type { AccountDoc, Principal } from './iam-types'
 
 const owner: Principal = { accountId: 'o1', role: 'owner', memberships: [] }
@@ -13,34 +13,6 @@ test('canManageMachine: owner any; manager if managing ANY of the machine teams;
   expect(canManageMachine(mgrA, { teamId: 'A' })).toBe(true)           // legacy single
   expect(canManageMachine(mgrA, { teamIds: ['B'], accountIds: ['m1'] })).toBe(true) // owns it
   expect(canManageMachine(mgrA, {})).toBe(false)                        // loose, not owned
-})
-
-// Regression: team membership is stored on ACCOUNTS, but visibility keys off the MACHINE's teams.
-// Nothing connected the two, so adding an account to a team left that account's machines loose and
-// the team's own manager saw an empty machine list and a blank dashboard.
-test('effectiveMachineTeams: stored teams UNION the teams of the owner accounts', () => {
-  const accountTeams = { u1: ['A'], u2: ['B', 'C'] }
-  expect(effectiveMachineTeams({ accountIds: ['u1'] }, accountTeams)).toEqual(['A'])
-  expect(effectiveMachineTeams({ teamIds: ['Z'], accountIds: ['u1'] }, accountTeams).sort()).toEqual(['A', 'Z'])
-  expect(effectiveMachineTeams({ accountIds: ['u1', 'u2'] }, accountTeams).sort()).toEqual(['A', 'B', 'C'])
-  expect(effectiveMachineTeams({ accountId: 'u1' }, accountTeams)).toEqual(['A']) // legacy single
-  // Deduped, and a truly loose machine stays loose.
-  expect(effectiveMachineTeams({ teamIds: ['A'], accountIds: ['u1'] }, accountTeams)).toEqual(['A'])
-  expect(effectiveMachineTeams({}, accountTeams)).toEqual([])
-  // No account map (lookup failed) → stored assignment only. Narrower, never wider.
-  expect(effectiveMachineTeams({ accountIds: ['u1'] })).toEqual([])
-})
-
-test('canManageMachine: a manager reaches the machines of accounts in the team they manage', () => {
-  const accountTeams = { u1: ['A'], u2: ['B'] }
-  // The machine carries NO team of its own — only its owner account is in team A.
-  expect(canManageMachine(mgrA, { accountIds: ['u1'] }, accountTeams)).toBe(true)
-  // An account in a team this principal does not manage stays invisible.
-  expect(canManageMachine(mgrA, { accountIds: ['u2'] }, accountTeams)).toBe(false)
-  // A genuinely loose machine is still not reachable by a manager.
-  expect(canManageMachine(mgrA, { accountIds: ['u3'] }, accountTeams)).toBe(false)
-  // Without the account map the old, stricter behaviour holds.
-  expect(canManageMachine(mgrA, { accountIds: ['u1'] })).toBe(false)
 })
 
 test('canAssignMemberships: a manager may grant manager OR user inside a team they manage', () => {
@@ -65,13 +37,21 @@ test('canManageMachine: an owner may manage a LOOSE machine (no teams, no owner 
 })
 
 function acc(id: string, over: Partial<AccountDoc> = {}): AccountDoc {
-  return { _id: id, name: 'N', email: `${id}@x.co`, emailLower: `${id}@x.co`, passwordHash: '$argon2id$secret', role: 'member', memberships: [], sessionVersion: 0, createdAt: 't', updatedAt: 't', lastLoginAt: null, ...over }
+  return { _id: id, name: 'N', email: `${id}@x.co`, emailLower: `${id}@x.co`, passwordHash: '$argon2id$secret', role: 'member', memberships: [], sessionVersion: 0, createdAt: new Date('2026-07-22T00:00:00.000Z'), updatedAt: new Date('2026-07-22T00:00:00.000Z'), lastLoginAt: null, ...over }
 }
 
 test('publicAccount strips passwordHash and maps _id → id', () => {
   const p = publicAccount(acc('u1', { memberships: [{ teamId: 'A', role: 'user' }] }))
-  expect(p).toEqual({ id: 'u1', name: 'N', email: 'u1@x.co', role: 'member', memberships: [{ teamId: 'A', role: 'user' }], createdAt: 't', lastLoginAt: null, mustChangePassword: false })
+  // createdAt crosses the boundary as an ISO STRING: the doc stores a BSON Date, the API shape
+  // the frontend parses is a string.
+  expect(p).toEqual({ id: 'u1', name: 'N', email: 'u1@x.co', role: 'member', memberships: [{ teamId: 'A', role: 'user' }], createdAt: '2026-07-22T00:00:00.000Z', lastLoginAt: null, mustChangePassword: false })
   expect((p as unknown as Record<string, unknown>).passwordHash).toBeUndefined()
+})
+
+test('publicAccount renders lastLoginAt as ISO, and keeps "never signed in" as null', () => {
+  expect(publicAccount(acc('u1', { lastLoginAt: new Date('2026-07-25T09:00:00.000Z') })).lastLoginAt)
+    .toBe('2026-07-25T09:00:00.000Z')
+  expect(publicAccount(acc('u2', { lastLoginAt: null })).lastLoginAt).toBeNull()
 })
 
 test('accountVisibleTo: owner sees all; manager sees users in their team + self', () => {
@@ -113,4 +93,14 @@ test('canManageMachineTeam: owner any team; manager own team only; user never', 
   expect(canManageMachineTeam(mgrA, 'B')).toBe(false)
   expect(canManageMachineTeam(userA, 'A')).toBe(false)
   expect(canManageMachineTeam(mgrA, undefined)).toBe(false)
+})
+
+test('canSeeMemberNames: owner and any-team manager yes; a plain user never', () => {
+  // Mirrors the frontend's canFilterMembers — the gate on anything revealing who else is here.
+  const userA: Principal = { accountId: 'uu', role: 'member', memberships: [{ teamId: 'A', role: 'user' }] }
+  const loose: Principal = { accountId: 'll', role: 'member', memberships: [] }
+  expect(canSeeMemberNames(owner)).toBe(true)
+  expect(canSeeMemberNames(mgrA)).toBe(true)
+  expect(canSeeMemberNames(userA)).toBe(false)
+  expect(canSeeMemberNames(loose)).toBe(false)
 })

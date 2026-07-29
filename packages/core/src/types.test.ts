@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcCost, getModelPrice, sessionModelUsage, sessionCostUSD, MODEL_PRICING, formatModel, getModelColor, formatProjectName, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName, canonicalProjectPath, HARNESS_ORDER } from './types'
+import { calcCost, getModelPrice, sessionModelUsage, sessionCostUSD, MODEL_PRICING, formatModel, getModelColor, formatProjectName, projectFolder, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName, canonicalProjectPath, HARNESS_ORDER } from './types'
 import type { ModelUsage, StatsCache } from './types'
 
 describe('mergeStatsCaches', () => {
@@ -211,6 +211,22 @@ describe('formatProjectName', () => {
 
   test('caminho fora do home retorna caminho completo', () => {
     expect(formatProjectName('/opt/apps/servidor')).toBe('/opt/apps/servidor')
+  })
+})
+
+describe('projectFolder', () => {
+  test('keeps only the folder name', () => {
+    expect(projectFolder('/home/mithrandir/agentistics')).toBe('agentistics')
+    expect(projectFolder('C:\\Users\\bryan\\app')).toBe('app')
+  })
+
+  test('a trailing slash does not yield an empty name', () => {
+    expect(projectFolder('/home/user/app/')).toBe('app')
+  })
+
+  test('a name with no separator is returned as is, and an empty path stays Unknown', () => {
+    expect(projectFolder('app')).toBe('app')
+    expect(projectFolder('')).toBe('Unknown')
   })
 })
 

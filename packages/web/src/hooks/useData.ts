@@ -725,6 +725,35 @@ export function computeFilteredHarnessSummaries(data: AppData, filters: Filters)
  *   the dashboard. Note the tag filter can only NARROW what the viewer already sees — /api/data
  *   is team-scoped, so a grantee may see smaller numbers here than on the tag's own card.
  */
+/**
+ * Picks the "longest session" — by ACTIVE time (work actually done), never wall clock.
+ *
+ * Wall clock crowns whichever session merely stayed OPEN longest: a session reopened across three
+ * weeks reports ~958h and maybe 3h of real work. Sessions whose transcript Claude already deleted
+ * carry no `active_minutes` and can never have one computed, so they are excluded from the
+ * ranking rather than winning it on a number that means something else.
+ *
+ * Falls back to wall clock only when NO session in the set has active time — otherwise the card
+ * would go blank for a set made entirely of old, already-cleaned-up sessions.
+ *
+ * `unmeasured` = how many sessions were excluded, so the UI can disclose it instead of pretending
+ * the set was fully measured.
+ */
+export function pickLongestSession(sessions: SessionMeta[]): {
+  session: SessionMeta | null
+  unmeasured: number
+} {
+  const withActive = sessions.filter(s => s.active_minutes !== undefined)
+  const useActive = withActive.length > 0
+  const pool = useActive ? withActive : sessions
+  const rank = useActive
+    ? (s: SessionMeta) => s.active_minutes ?? 0
+    : (s: SessionMeta) => s.duration_minutes ?? 0
+  const session = pool.reduce<SessionMeta | null>(
+    (best, s) => (!best || rank(s) > rank(best) ? s : best), null)
+  return { session, unmeasured: useActive ? sessions.length - withActive.length : 0 }
+}
+
 export function useDerivedStats(data: AppData | null, filters: Filters, tags: TagDef[] = []) {
   return useMemo(() => {
     if (!data) return null
@@ -1400,11 +1429,8 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
     const totalAgentCostUSD = agentInvocations.reduce((s, i) => s + i.costUSD, 0)
     const totalAgentDurationMs = agentInvocations.reduce((s, i) => s + i.totalDurationMs, 0)
 
-    // Sessão mais longa (respeita filtros)
-    const longestSession = filteredSessions.reduce<typeof filteredSessions[0] | null>((best, s) => {
-      if (!best || (s.duration_minutes ?? 0) > (best.duration_minutes ?? 0)) return s
-      return best
-    }, null)
+    const { session: longestSession, unmeasured: longestSessionUnmeasured } =
+      pickLongestSession(filteredSessions)
 
     // Cache efficiency (filter-aware, derived from filteredModelUsage)
     // hit rate = cacheRead / (input + cacheRead + cacheCreation).
@@ -1501,6 +1527,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
       filteredSessions,
       filteredDailyActivity,
       longestSession,
+      longestSessionUnmeasured,
       metaCoverageFrom,
       metaCoverageTo,
       agentInvocations,

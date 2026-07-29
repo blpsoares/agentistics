@@ -3,6 +3,7 @@ import { Users, Plus, Trash2, Copy, CheckCheck, RefreshCw, AlertCircle, Pencil, 
 import type { MemberPresence } from '@agentistics/core'
 import { copyText } from '../lib/clipboard'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { stepUpFetch } from '../lib/stepup'
 
 /** Shared 5-column grid for the desktop members table (status · user · label · last-seen · actions).
  *  minmax(0,…) lets the flexible columns actually shrink so long values ellipsize instead of
@@ -215,7 +216,7 @@ export function TeamMembers({ lang, presence }: Props) {
     setMintErr(null)
     setNewToken(null)
     try {
-      const res = await fetch('/api/team/tokens', {
+      const res = await stepUpFetch('/api/team/tokens', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user: mintUser.trim(), label: mintLabel.trim() }),
@@ -239,7 +240,7 @@ export function TeamMembers({ lang, presence }: Props) {
     setRevoking(prev => ({ ...prev, [id]: true }))
     setRevokeErr(null)
     try {
-      const res = await fetch('/api/team/tokens', {
+      const res = await stepUpFetch('/api/team/tokens', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),
@@ -259,7 +260,7 @@ export function TeamMembers({ lang, presence }: Props) {
     setRotateErr(null)
     setNewToken(null)
     try {
-      const res = await fetch('/api/team/tokens/rotate', {
+      const res = await stepUpFetch('/api/team/tokens/rotate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),

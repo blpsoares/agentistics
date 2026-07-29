@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Bell, AlertCircle, AlertTriangle, Info, CheckCircle2, Trash2 } from 'lucide-react'
-import { useNotifications, markAllRead, clearNotifications, resolveNotification, type NotificationType } from '../lib/notifications'
+import { Bell, AlertCircle, AlertTriangle, Info, CheckCircle2, Trash2, X } from 'lucide-react'
+import { useNotifications, markAllRead, clearNotifications, dismissNotification, resolveNotification, type NotificationType } from '../lib/notifications'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 const ICON: Record<NotificationType, { color: string; Icon: typeof AlertCircle }> = {
   error:   { color: '#ef4444', Icon: AlertCircle },
@@ -29,6 +30,7 @@ interface Props {
 export function NotificationBell({ lang, buttonStyle }: Props) {
   const pt = lang === 'pt'
   const notes = useNotifications()
+  const isMobile = useIsMobile()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const unread = notes.filter(n => !n.read).length
@@ -87,12 +89,15 @@ export function NotificationBell({ lang, buttonStyle }: Props) {
               <button
                 onClick={() => clearNotifications()}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 4, padding: '3px 7px', borderRadius: 6,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                  padding: isMobile ? '0 12px' : '3px 7px', minHeight: isMobile ? 44 : undefined,
+                  borderRadius: 6,
                   border: '1px solid var(--border)', background: 'transparent',
                   color: 'var(--text-tertiary)', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit',
                 }}
               >
-                <Trash2 size={11} />{pt ? 'Limpar' : 'Clear'}
+                {/* "tudo" matters now that each row has its own remove button. */}
+                <Trash2 size={11} />{pt ? 'Limpar tudo' : 'Clear all'}
               </button>
             )}
           </div>
@@ -119,9 +124,33 @@ export function NotificationBell({ lang, buttonStyle }: Props) {
                       </div>
                     )}
                   </div>
-                  <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                    {relTime(n.ts, pt)}
-                  </span>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0,
+                    alignSelf: 'flex-start',
+                  }}>
+                    <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
+                      {relTime(n.ts, pt)}
+                    </span>
+                    {/* Per-item delete. Always visible, never hover-only: the bell is rendered on
+                        mobile too, where hover does not exist, and the hit area is a full 44px
+                        there (the icon stays small — only the touch target grows). */}
+                    <button
+                      onClick={() => dismissNotification(n.id)}
+                      title={pt ? 'Remover notificação' : 'Remove notification'}
+                      aria-label={pt ? 'Remover notificação' : 'Remove notification'}
+                      style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        width: isMobile ? 44 : 22, height: isMobile ? 44 : 22,
+                        marginRight: isMobile ? -10 : 0,
+                        padding: 0, borderRadius: 6, border: 'none', background: 'transparent',
+                        color: 'var(--text-tertiary)', cursor: 'pointer',
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)' }}
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
                 </div>
               )
             })

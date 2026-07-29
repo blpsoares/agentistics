@@ -6,6 +6,7 @@ import type { AppContext } from '../../lib/app-context'
 import { SectionHeader, Section, Checkbox, Select, ConfirmModal, RecordCard, RecordCardAction } from './primitives'
 import { Drawer } from './Drawer'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { stepUpFetch } from '../../lib/stepup'
 
 interface Team { _id: string; name: string }
 interface Membership { teamId: string; role: 'manager' | 'user' }
@@ -285,7 +286,7 @@ export default function UsersSettings() {
       mustChangePassword: mustChange,
     }
     if (machines.length > 0) body.machines = machines
-    const res = await fetch('/api/iam/accounts', {
+    const res = await stepUpFetch('/api/iam/accounts', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
@@ -326,7 +327,7 @@ export default function UsersSettings() {
     return null
   }
   async function deleteAccount(id: string) {
-    await fetch('/api/iam/accounts', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
+    await stepUpFetch('/api/iam/accounts', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
     void load()
   }
 
@@ -361,7 +362,7 @@ export default function UsersSettings() {
     if (!en.trim()) { setEditErr(pt ? 'O nome não pode ficar vazio.' : 'Name cannot be empty.'); return }
     const body: Record<string, unknown> = { id: editId, name: en.trim() }
     if (!editIsOwner) body.memberships = eRows.filter(r => r.teamId)
-    const res = await fetch('/api/iam/accounts', {
+    const res = await stepUpFetch('/api/iam/accounts', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
@@ -373,7 +374,7 @@ export default function UsersSettings() {
   async function saveIdentity() {
     if (!editId) return
     if (!en.trim()) { setEditErr(pt ? 'O nome não pode ficar vazio.' : 'Name cannot be empty.'); return }
-    const res = await fetch('/api/iam/accounts', {
+    const res = await stepUpFetch('/api/iam/accounts', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: editId, name: en.trim() }),
     })
@@ -382,7 +383,7 @@ export default function UsersSettings() {
   }
   async function saveTeams() {
     if (!editId) return
-    const res = await fetch('/api/iam/accounts', {
+    const res = await stepUpFetch('/api/iam/accounts', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: editId, memberships: eRows.filter(r => r.teamId) }),
     })
@@ -424,7 +425,7 @@ export default function UsersSettings() {
 
   async function resetPassword() {
     if (!editId) return
-    const res = await fetch('/api/iam/accounts', {
+    const res = await stepUpFetch('/api/iam/accounts', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: editId, resetPassword: true }),
     })

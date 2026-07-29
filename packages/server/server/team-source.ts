@@ -7,7 +7,7 @@ import { getTeamCollection } from './mongo'
 import { sessionKey } from './session-merge'
 import { fromTeamDoc } from './team-store'
 import { loadAllTeamWorkflows } from './team-workflows'
-import { getMemberNameMap, getEffectiveMemberTeamsMap, getLiveTokenIds } from './team-tokens'
+import { getMemberNameMap, getMemberTeamsMap, getLiveTokenIds } from './team-tokens'
 import { getCentralConfig } from './central-config'
 
 /**
@@ -63,7 +63,7 @@ export async function loadTeamSessionsFromMongo(): Promise<SessionMeta[]> {
   const [docs, nameMap, teamMap, liveIds] = await Promise.all([
     col.find({}).toArray(),
     getMemberNameMap().catch(() => ({} as Record<string, string>)),
-    getEffectiveMemberTeamsMap().catch(() => ({} as Record<string, string[]>)),
+    getMemberTeamsMap().catch(() => ({} as Record<string, string[]>)),
     liveMemberFilter(),
   ])
   // null = keep everything (either the central opted into showing deleted members' history, or the
@@ -131,7 +131,7 @@ export async function loadTagSessionsFromMongo(): Promise<SessionMeta[]> {
     // reporting its old owner — which split ONE person into two rows in the member ranking and
     // inflated the distinct-member count.
     getMemberNameMap().catch(() => ({} as Record<string, string>)),
-    getEffectiveMemberTeamsMap().catch(() => ({} as Record<string, string[]>)),
+    getMemberTeamsMap().catch(() => ({} as Record<string, string[]>)),
     liveMemberFilter(),
   ])
   const live = liveIds

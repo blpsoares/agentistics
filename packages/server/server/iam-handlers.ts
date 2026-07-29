@@ -9,13 +9,29 @@ import { hasAnyOwner, countOwners, createAccount, findAccountByEmail, updateAcco
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
 import { listTeams, createTeam, getTeam, deleteTeam } from './teams'
-import { backfillTokenTeamIds, listMachines, mintMachineToken, mintMachine, revokeToken, rotateToken, setMachineTeams, setMachineLabel, setMachineOwners, detachTeamFromAllMachines, detachAccountFromAllMachines } from './team-tokens'
+import { backfillTokenTeamIds, listMachines, mintMachineToken, mintMachine, revokeToken, rotateToken, setMachineTeams, setMachineTeamsAndExclusions, setMachineLabel, setMachineOwners, detachTeamFromAllMachines, detachAccountFromAllMachines } from './team-tokens'
 import { getCentralConfig } from './central-config'
 import { packConnectToken } from '@agentistics/core'
 import { backfillRepoTeamIds } from './team-repos'
-import { makePrincipalSessionCookieHeader, getPrincipal } from './auth'
+import {
+  makePrincipalSessionCookieHeader,
+  getPrincipal,
+  getPrincipalSession,
+  signMfaChallenge,
+  verifyMfaChallenge,
+  MFA_CHALLENGE_TTL_MS,
+} from './auth'
+import { TEAM_SESSION_SECRET } from './config'
+import { generateSecret, otpauthUri, verifyTotp, generateRecoveryCodes, hashRecoveryCode } from './totp'
+import { getMfa, isMfaEnabled, enableMfa, disableMfa, consumeRecoveryCode } from './mfa-store'
 import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships } from './iam-view'
 import type { AccountDoc, Membership, Role } from './iam-types'
+import { normalizeEmail } from './iam-types'
+import { limiter, RULES, tooManyRequests } from './rate-limit'
+import { validatePasswordPolicy } from './password-policy'
+import { writeAudit } from './audit'
+import { readJsonLimited, LIMITS } from './limits'
+import { signStepUp, STEPUP_TTL_MS } from './stepup'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
 
@@ -43,12 +59,11 @@ export async function handleIamStatus(): Promise<Response> {
 export async function handleBootstrap(req: Request): Promise<Response> {
   if (await hasAnyOwner()) return json({ ok: false, error: 'already set up' }, 409)
 
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    return json({ ok: false, error: 'invalid JSON' }, 400)
+  const parsedBody = await readJsonLimited<unknown>(req, LIMITS.bodyBytes)
+  if (!parsedBody.ok) {
+    return json({ ok: false, error: parsedBody.error }, parsedBody.error === 'too_large' ? 413 : 400)
   }
+  const body: unknown = parsedBody.value
 
   const v = validateOwnerInput(body as Record<string, unknown>)
   if (!v.ok) return json({ ok: false, error: v.error }, 400)
@@ -70,7 +85,7 @@ export async function handleBootstrap(req: Request): Promise<Response> {
   // real teams explicitly. Backfills only normalize legacy shapes.
   await backfillTokenTeamIds()
   await backfillRepoTeamIds()
-  await consumeBootstrapToken(new Date().toISOString())
+  await consumeBootstrapToken(new Date())
 
   const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion)
   return new Response(JSON.stringify({ ok: true }), {
@@ -83,22 +98,231 @@ export async function handleBootstrap(req: Request): Promise<Response> {
  * POST /api/iam/login  Body: { email, password }
  * Generic 401 on unknown email OR wrong password (no user enumeration).
  */
-export async function handleIamLogin(req: Request): Promise<Response> {
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    return json({ ok: false, error: 'invalid JSON' }, 400)
+export async function handleIamLogin(
+  req: Request,
+  hooks: { onSuccess?: () => void; ip?: string } = {},
+): Promise<Response> {
+  const ip = hooks.ip ?? 'unknown'
+  const parsedBody = await readJsonLimited<unknown>(req, LIMITS.bodyBytes)
+  if (!parsedBody.ok) {
+    return json({ ok: false, error: parsedBody.error }, parsedBody.error === 'too_large' ? 413 : 400)
   }
+  const body: unknown = parsedBody.value
   const b = body as Record<string, unknown>
   const email = typeof b.email === 'string' ? b.email : ''
   const password = typeof b.password === 'string' ? b.password : ''
+
+  // Per-account soft backoff, on top of the per-IP limit applied in index.ts: an attacker
+  // guessing one mailbox is slowed even when they rotate source addresses. Checked BEFORE the
+  // argon2 verify so a locked account costs no CPU (that verify is the expensive part, and an
+  // unauthenticated caller must never be able to spend it freely).
+  const acctKey = `acct:${normalizeEmail(email)}`
+  const acctVerdict = limiter.check(acctKey, RULES.login)
+  if (!acctVerdict.allowed) return tooManyRequests(acctVerdict.retryAfterSec)
+
   const account = await findAccountByEmail(email)
   const ok = account ? await verifyPassword(password, account.passwordHash) : false
-  if (!account || !ok) return json({ ok: false, error: 'invalid credentials' }, 401)
-  await updateAccount(account._id, { lastLoginAt: new Date().toISOString() })
+  if (!account || !ok) {
+    limiter.fail(acctKey, RULES.login)
+    // The e-mail is recorded (it is not a secret and an incident review needs it); the password
+    // never is — buildAuditEvent drops it even if a caller passes it.
+    void writeAudit({ action: 'login.failure', ip, targetId: account?._id, meta: { email: normalizeEmail(email) } })
+    return json({ ok: false, error: 'invalid credentials' }, 401)
+  }
+  limiter.reset(acctKey)
+  hooks.onSuccess?.()
+
+  // Second factor, when enrolled: the password alone issues NO cookie. The caller gets a
+  // short-lived, HMAC-signed challenge that grants nothing by itself and must be exchanged
+  // for a session at /api/iam/login/mfa.
+  if (await isMfaEnabled(account._id)) {
+    const challenge = signMfaChallenge(
+      account._id,
+      account.sessionVersion,
+      TEAM_SESSION_SECRET,
+      Date.now() + MFA_CHALLENGE_TTL_MS,
+    )
+    void writeAudit({ action: 'login.mfa_challenge', ip, actorId: account._id })
+    return json({ ok: false, mfaRequired: true, challenge }, 200)
+  }
+
+  await updateAccount(account._id, { lastLoginAt: new Date() })
+  void writeAudit({ action: 'login.success', ip, actorId: account._id })
   const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion)
   return new Response(JSON.stringify({ ok: true, mustChangePassword: account.mustChangePassword ?? false }), { status: 200, headers: { ...JSON_CT, 'Set-Cookie': cookie } })
+}
+
+/**
+ * POST /api/iam/login/mfa  Body: { challenge, code }
+ * Exchanges a password-stage challenge for a session by proving the second factor.
+ * `code` is either a 6-digit TOTP or one of the account's single-use recovery codes.
+ */
+export async function handleIamLoginMfa(req: Request): Promise<Response> {
+  const parsedBody = await readJsonLimited<unknown>(req, LIMITS.bodyBytes)
+  if (!parsedBody.ok) {
+    return json({ ok: false, error: parsedBody.error }, parsedBody.error === 'too_large' ? 413 : 400)
+  }
+  const body: unknown = parsedBody.value
+  const b = body as Record<string, unknown>
+  const challenge = typeof b.challenge === 'string' ? b.challenge : ''
+  const code = typeof b.code === 'string' ? b.code : ''
+
+  const parsed = verifyMfaChallenge(challenge, TEAM_SESSION_SECRET, Date.now())
+  if (!parsed) return json({ ok: false, error: 'challenge expired' }, 401)
+
+  // Rate-limit the second factor on its own key: six digits is a small space, so an
+  // unbounded challenge would reduce 2FA to a brute-forceable formality.
+  const mfaKey = `mfa:${parsed.accountId}`
+  const verdict = limiter.check(mfaKey, RULES.login)
+  if (!verdict.allowed) return tooManyRequests(verdict.retryAfterSec)
+
+  const account = await getAccount(parsed.accountId)
+  if (!account || account.sessionVersion !== parsed.sessionVersion) {
+    return json({ ok: false, error: 'challenge expired' }, 401)
+  }
+  const mfa = await getMfa(parsed.accountId)
+  if (!mfa) return json({ ok: false, error: 'challenge expired' }, 401)
+
+  let usedRecovery = false
+  let ok = verifyTotp(mfa.secret, code, Math.floor(Date.now() / 1000))
+  if (!ok) {
+    ok = await consumeRecoveryCode(parsed.accountId, hashRecoveryCode(code))
+    usedRecovery = ok
+  }
+  if (!ok) {
+    limiter.fail(mfaKey, RULES.login)
+    void writeAudit({ action: 'login.mfa_failure', ip: 'unknown', actorId: parsed.accountId })
+    return json({ ok: false, error: 'invalid code' }, 401)
+  }
+  limiter.reset(mfaKey)
+  if (usedRecovery) void writeAudit({ action: 'mfa.recovery_used', ip: 'unknown', actorId: parsed.accountId })
+  void writeAudit({ action: 'login.success', ip: 'unknown', actorId: parsed.accountId, meta: { secondFactor: usedRecovery ? 'recovery' : 'totp' } })
+
+  await updateAccount(account._id, { lastLoginAt: new Date() })
+  const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion)
+  return new Response(
+    JSON.stringify({
+      ok: true,
+      mustChangePassword: account.mustChangePassword ?? false,
+      usedRecovery,
+      recoveryCodesLeft: usedRecovery ? Math.max(0, mfa.recoveryHashes.length - 1) : mfa.recoveryHashes.length,
+    }),
+    { status: 200, headers: { ...JSON_CT, 'Set-Cookie': cookie } },
+  )
+}
+
+/**
+ * POST /api/iam/stepup  Body: { password?, code? }
+ * Re-authenticates the CURRENT session and returns a short-lived grant for destructive
+ * operations (see stepup.ts). Accepts the account password, or a TOTP code when enrolled —
+ * either proves presence, and an account with a second factor should be able to use it.
+ */
+export async function handleStepUp(req: Request): Promise<Response> {
+  const session = await getPrincipalSession(req)
+  if (!session) return json({ ok: false, error: 'unauthorized' }, 401)
+  const account = await getAccount(session.principal.accountId)
+  if (!account) return json({ ok: false, error: 'unauthorized' }, 401)
+
+  const parsedBody = await readJsonLimited<unknown>(req, LIMITS.bodyBytes)
+  if (!parsedBody.ok) {
+    return json({ ok: false, error: parsedBody.error }, parsedBody.error === 'too_large' ? 413 : 400)
+  }
+  const b = parsedBody.value as Record<string, unknown>
+  const password = typeof b.password === 'string' ? b.password : ''
+  const code = typeof b.code === 'string' ? b.code : ''
+
+  // Same rate-limit treatment as login: this endpoint verifies a credential, so it is a
+  // guessing oracle if left unbounded — and the argon2 verify below is expensive.
+  const key = `stepup:${account._id}`
+  const verdict = limiter.check(key, RULES.login)
+  if (!verdict.allowed) return tooManyRequests(verdict.retryAfterSec)
+
+  let ok = false
+  if (code) {
+    const mfa = await getMfa(account._id)
+    ok = !!mfa && verifyTotp(mfa.secret, code, Math.floor(Date.now() / 1000))
+  } else if (password) {
+    ok = await verifyPassword(password, account.passwordHash)
+  }
+  if (!ok) {
+    limiter.fail(key, RULES.login)
+    void writeAudit({ action: 'stepup.failure', ip: 'unknown', actorId: account._id })
+    return json({ ok: false, error: 'invalid credentials' }, 401)
+  }
+  limiter.reset(key)
+  void writeAudit({ action: 'stepup.granted', ip: 'unknown', actorId: account._id })
+
+  const token = signStepUp(
+    account._id,
+    session.sessionVersion,
+    TEAM_SESSION_SECRET,
+    Date.now() + STEPUP_TTL_MS,
+  )
+  return json({ ok: true, token, expiresInSec: STEPUP_TTL_MS / 1000 })
+}
+
+/**
+ * MFA enrolment, all authenticated and all acting on the CALLER's own account:
+ *   GET    /api/iam/mfa        → { enabled }
+ *   POST   /api/iam/mfa/start  → { secret, otpauthUri }  (generated, not yet active)
+ *   POST   /api/iam/mfa/enable { secret, code } → { recoveryCodes } shown exactly once
+ *   DELETE /api/iam/mfa        { code } → disables
+ */
+export async function handleMfa(req: Request, pathname: string): Promise<Response> {
+  const principal = await getPrincipal(req)
+  if (!principal) return json({ error: 'unauthorized' }, 401)
+  const account = await getAccount(principal.accountId)
+  if (!account) return json({ error: 'unauthorized' }, 401)
+
+  if (pathname === '/api/iam/mfa' && req.method === 'GET') {
+    return json({ enabled: await isMfaEnabled(account._id) })
+  }
+
+  if (pathname === '/api/iam/mfa/start' && req.method === 'POST') {
+    const secret = generateSecret()
+    return json({ secret, otpauthUri: otpauthUri(secret, account.email, 'Agentistics') })
+  }
+
+  if (pathname === '/api/iam/mfa/enable' && req.method === 'POST') {
+    let body: unknown
+    try { body = await req.json() } catch { return json({ error: 'invalid JSON' }, 400) }
+    const b = body as Record<string, unknown>
+    const secret = typeof b.secret === 'string' ? b.secret : ''
+    const code = typeof b.code === 'string' ? b.code : ''
+    // Verifying the code before storing proves the authenticator is really in sync — enrolling
+    // an unverified secret locks the account out of its own second factor.
+    if (!secret || !verifyTotp(secret, code, Math.floor(Date.now() / 1000))) {
+      return json({ error: 'invalid code' }, 400)
+    }
+    const recoveryCodes = generateRecoveryCodes()
+    await enableMfa(account._id, secret, recoveryCodes.map(hashRecoveryCode))
+    void writeAudit({ action: 'mfa.enable', ip: 'unknown', actorId: account._id })
+    // Every session that authenticated with the password alone is now under-authenticated.
+    await bumpSessionVersion(account._id)
+    const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion + 1)
+    return new Response(JSON.stringify({ ok: true, recoveryCodes }), {
+      status: 200,
+      headers: { ...JSON_CT, 'Set-Cookie': cookie },
+    })
+  }
+
+  if (pathname === '/api/iam/mfa' && req.method === 'DELETE') {
+    let body: unknown
+    try { body = await req.json() } catch { body = {} }
+    const code = typeof (body as Record<string, unknown>).code === 'string'
+      ? ((body as Record<string, unknown>).code as string)
+      : ''
+    const mfa = await getMfa(account._id)
+    if (!mfa) return json({ ok: true })
+    if (!verifyTotp(mfa.secret, code, Math.floor(Date.now() / 1000))) {
+      return json({ error: 'invalid code' }, 401)
+    }
+    await disableMfa(account._id)
+    void writeAudit({ action: 'mfa.disable', ip: 'unknown', actorId: account._id })
+    return json({ ok: true })
+  }
+
+  return json({ error: 'not found' }, 404)
 }
 
 /**
@@ -127,13 +351,15 @@ export async function handleChangePassword(req: Request): Promise<Response> {
   const b = body as Record<string, unknown>
   const current = typeof b.currentPassword === 'string' ? b.currentPassword : ''
   const next = typeof b.newPassword === 'string' ? b.newPassword : ''
-  if (next.length < 8) return json({ error: 'password must be at least 8 characters' }, 400)
   const account = await getAccount(principal.accountId)
   if (!account) return json({ error: 'account not found' }, 404)
+  const policy = validatePasswordPolicy(next, { email: account.email, name: account.name })
+  if (!policy.ok) return json({ error: policy.error }, 400)
   // require currentPassword unless this is a forced first-login change
   if (!account.mustChangePassword) {
     if (!(await verifyPassword(current, account.passwordHash))) return json({ error: 'current password is incorrect' }, 401)
   }
+  void writeAudit({ action: 'password.change', ip: 'unknown', actorId: account._id })
   const passwordHash = await hashPassword(next)
   await updateAccount(account._id, { passwordHash, mustChangePassword: false })
   await bumpSessionVersion(account._id) // invalidate old sessions
@@ -199,7 +425,8 @@ export async function handleAccounts(req: Request): Promise<Response> {
     const machineReqs = parseMachineRequests(b.machines, b.machine)
     if (!name) return json({ error: 'name is required' }, 400)
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: 'valid email is required' }, 400)
-    if (password.length < 8) return json({ error: 'password must be at least 8 characters' }, 400)
+    const policy = validatePasswordPolicy(password, { email, name })
+    if (!policy.ok) return json({ error: policy.error }, 400)
     // Only an owner may create another owner (global, no team scope). A member account follows the
     // scoped canCreateAccount rule (owner→any; manager→user-role memberships in teams they manage).
     if (role === 'owner') {
@@ -400,7 +627,7 @@ export async function handleMachines(req: Request): Promise<Response> {
     const accountTeams: Record<string, string[]> = {}
     for (const a of accounts) accountTeams[a._id] = a.memberships.map(m => m.teamId)
 
-    const visible = principal.role === 'owner' ? all : all.filter(m => canManageMachine(principal, m, accountTeams))
+    const visible = principal.role === 'owner' ? all : all.filter(m => canManageMachine(principal, m))
 
     // Enrich with presence (keyed by user, mirroring the members panel).
     const presence = await import('./team-presence').then(m => m.computePresence()).catch(() => ({} as Record<string, { online: boolean; latencyMs: number | null }>))
@@ -437,7 +664,7 @@ export async function handleMachines(req: Request): Promise<Response> {
         : (typeof b.accountId === 'string' ? [b.accountId] : [])
       const machine = (await listMachines()).find(m => m.id === ownerId)
       if (!machine) return json({ error: 'machine not found' }, 404)
-      if (!canManageMachine(principal, machine, await accountTeamsMap())) return json({ error: 'forbidden' }, 403)
+      if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
       // Validate every target account exists + is visible to the caller (no assigning to
       // out-of-scope accounts). An empty list is allowed (clears ownership) only for an owner.
       if (accountIds.length === 0 && principal.role !== 'owner') return json({ error: 'accountIds is required' }, 400)
@@ -468,7 +695,7 @@ export async function handleMachines(req: Request): Promise<Response> {
       if (!newName) return json({ error: 'name is required' }, 400)
       const machine = (await listMachines()).find(m => m.id === renameId)
       if (!machine) return json({ error: 'machine not found' }, 404)
-      if (!canManageMachine(principal, machine, await accountTeamsMap())) return json({ error: 'forbidden' }, 403)
+      if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
       await setMachineLabel(renameId, newName)
       // Notify the machine over the reverse WebSocket (best-effort) with the new name + who did it.
       try {
@@ -484,7 +711,7 @@ export async function handleMachines(req: Request): Promise<Response> {
     if (rotateId) {
       const machine = (await listMachines()).find(m => m.id === rotateId)
       if (!machine) return json({ error: 'machine not found' }, 404)
-      if (!canManageMachine(principal, machine, await accountTeamsMap())) return json({ error: 'forbidden' }, 403)
+      if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
       const token = await rotateToken(rotateId)
       if (token === null) return json({ error: 'machine not found' }, 404)
       return json({ token: packConnectToken(token, (await getCentralConfig()).publicUrl) }, 200)
@@ -502,19 +729,30 @@ export async function handleMachines(req: Request): Promise<Response> {
       // You must ALREADY manage the machine to change its teams — otherwise a manager could seize a
       // machine they only observed the id of (via a shared/Default team) by attaching it to a team
       // they manage, then rotate/revoke/re-own it. Owner bypasses.
-      if (!canManageMachine(principal, machine, await accountTeamsMap())) return json({ error: 'forbidden' }, 403)
+      if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
       const current = machine.teamIds && machine.teamIds.length ? machine.teamIds : (machine.teamId ? [machine.teamId] : [])
+      const currentExcluded = machine.excludedTeamIds ?? []
+      const inherited = machine.inheritedTeamIds ?? []
       const addTeamId = typeof b.addTeamId === 'string' && b.addTeamId ? b.addTeamId : ''
       const removeTeamId = typeof b.removeTeamId === 'string' && b.removeTeamId ? b.removeTeamId : ''
       let next: string[]
+      let nextExcluded: string[] = currentExcluded
       if (addTeamId) {
         if (!(await getTeam(addTeamId))) return json({ error: 'team not found' }, 404)
         if (!canManageMachineTeam(principal, addTeamId)) return json({ error: 'forbidden' }, 403)
-        next = [...new Set([...current, addTeamId])]
+        // Re-checking a previously unchecked team just clears the exclusion: the machine goes back
+        // to inheriting it from its owner account instead of gaining a redundant direct link.
+        nextExcluded = currentExcluded.filter(t => t !== addTeamId)
+        const inheritsIt = inherited.includes(addTeamId) || currentExcluded.includes(addTeamId)
+        next = inheritsIt ? current : [...new Set([...current, addTeamId])]
       } else if (removeTeamId) {
         // Detach: must manage the team being removed (owner always).
         if (!canManageMachineTeam(principal, removeTeamId)) return json({ error: 'forbidden' }, 403)
+        // Dropping it from `teamIds` is NOT enough when the membership is inherited from an owner
+        // account — it would come straight back on the next read. The stored exclusion is the
+        // record of the removal, and it covers the explicit case too, so one path handles both.
         next = current.filter(t => t !== removeTeamId)
+        nextExcluded = [...new Set([...currentExcluded, removeTeamId])]
       } else {
         // Replace the whole set. A non-owner must manage EVERY team involved (old ∪ new) — no Default
         // exemption — so a replace can't drop or add teams outside their scope.
@@ -527,8 +765,14 @@ export async function handleMachines(req: Request): Promise<Response> {
           const ok = involved.every(t => canManageMachineTeam(principal, t))
           if (!ok) return json({ error: 'forbidden' }, 403)
         }
+        // A full replace states the whole intent, so anything the machine WOULD inherit but was
+        // not listed becomes an exclusion, and anything listed stops being excluded.
+        nextExcluded = [
+          ...currentExcluded.filter(t => !next.includes(t)),
+          ...inherited.filter(t => !next.includes(t)),
+        ]
       }
-      await setMachineTeams(reassignId, next)
+      await setMachineTeamsAndExclusions(reassignId, next, [...new Set(nextExcluded)])
       return json({ ok: true })
     }
     // Mint a new machine: { name, accountIds?: string[], teamId?: string }.
@@ -576,7 +820,7 @@ export async function handleMachines(req: Request): Promise<Response> {
     if (!id) return json({ error: 'id is required' }, 400)
     const machine = (await listMachines()).find(m => m.id === id)
     if (!machine) return json({ error: 'machine not found' }, 404)
-    if (!canManageMachine(principal, machine, await accountTeamsMap())) return json({ error: 'forbidden' }, 403)
+    if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
     const deleted = await revokeToken(id)
     // Cascade cleanup (best-effort) — mirrors handleRevokeToken so the member disappears too.
     try {

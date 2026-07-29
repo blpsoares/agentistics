@@ -2,12 +2,16 @@ import React from 'react'
 import { Info } from 'lucide-react'
 import { PrecisionToggle } from './PrecisionToggle'
 import { useIsMobile } from '../hooks/useIsMobile'
-
-// The pure size rule lives in lib/statCardSize.ts so its test never pulls React or
-// lucide-react into the module graph. Re-exported here for existing importers.
-export { valueFontSize } from '../lib/statCardSize'
 import { valueFontSize } from '../lib/statCardSize'
 
+/**
+ * Headline font size for a KPI value, scaled so the number stays readable as it grows.
+ *
+ * The size is measured on the NUMBER ONLY — any leading currency prefix is stripped first.
+ * Measuring the whole string made the same amount render two steps smaller in English than in
+ * Portuguese: "USD 16,611.61" (13 chars) crossed a threshold that "R$84.362,05" (11) did not,
+ * purely because "USD " is two characters longer than "R$".
+ */
 interface StatCardProps {
   label: string
   value: string | number
@@ -20,13 +24,22 @@ interface StatCardProps {
     note?: string
   }
   onInfoClick?: () => void
+  /** Native tooltip on the value itself — used where the headline number needs a qualifier that
+   *  does not fit the sub-line (e.g. how a session's active time was measured). */
+  valueTitle?: string
+  /** Size the headline by THIS string instead of the rendered value. For a value that can be
+   *  re-rendered in place (USD ⇄ BRL) pass the wider of the two, so the font never jumps. */
+  sizeBasis?: string | number
+  /** Keep the sub to a single ellipsized line (full text in its tooltip). A sub that wraps makes
+   *  this card taller than every other one in the grid row. */
+  subNoWrap?: boolean
   action?: React.ReactNode
   fullPrecision?: boolean
   onTogglePrecision?: () => void
   lang?: string
 }
 
-export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-orange)', info, onInfoClick, action, fullPrecision, onTogglePrecision, lang }: StatCardProps) {
+export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-orange)', info, onInfoClick, valueTitle, sizeBasis, subNoWrap, action, fullPrecision, onTogglePrecision, lang }: StatCardProps) {
   const isMobile = useIsMobile()
   return (
     <div style={{
@@ -108,15 +121,30 @@ export function StatCard({ label, value, sub, icon, accent = 'var(--anthropic-or
       </div>
 
       <div>
-        <div style={{
-          fontSize: valueFontSize(value),
-          fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.15,
-          wordBreak: 'break-all',
-        }}>
+        <div
+          title={valueTitle}
+          style={{
+            fontSize: valueFontSize(sizeBasis ?? value),
+            fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.15,
+            wordBreak: 'break-all',
+            cursor: valueTitle ? 'help' : undefined,
+          }}
+        >
           {value}
         </div>
         {sub && (
-          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 4 }}>
+          // `pre-line` so a sub can be several short labelled lines instead of one run-on
+          // sentence — a card that reports two different quantities has to name both.
+          // `subNoWrap` opts out: one ellipsized line, full text in the tooltip, so a long sub
+          // cannot stretch the whole KPI row (every card in a grid row shares its height).
+          <div
+            title={subNoWrap ? sub : undefined}
+            style={{
+              fontSize: 12, color: 'var(--text-tertiary)', marginTop: 4,
+              whiteSpace: subNoWrap ? 'nowrap' : 'pre-line',
+              ...(subNoWrap ? { overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'help' } : {}),
+            }}
+          >
             {sub}
           </div>
         )}

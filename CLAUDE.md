@@ -58,6 +58,7 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
   ├── cli-i18n.ts          → EN/PT strings for the launcher (CLI is English by default; language follows --lang / preferences.lang / the in-launcher toggle)
   ├── team-tokens.ts       → mint / rotate / revoke / validate tokens (stored as sha256 hashes only)
+  ├── mongo-dates.ts       → **the date boundary**: BSON `Date` in Mongo, ISO string on the wire. Pure toBsonDate/fromBsonDate(+OrNull)/toBsonDates/fromBsonDates + `DATE_FIELDS` (every stored timestamp, by collection) + `migrateStringDatesToBson()` (idempotent, runs at boot; also `scripts/migrate-mongo-dates.ts`)
   ├── team-store.ts / team-stats.ts → Mongo team-session doc shape + per-member statsCache store
   ├── team-ingest.ts       → POST /api/team/ingest → upsert + triggerSseNotification (real-time central)
   ├── team-source.ts / team-admin.ts → central-side team read for buildApiResponse + members-panel admin routes
@@ -69,7 +70,7 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── team-agent.ts / team-agent-client.ts → reverse-channel WebSocket: WS-authoritative presence signals, ping/pong latency, on-demand chat fetch
   ├── team-presence.ts     → computePresence (WS-authoritative online/offline + latency; heartbeat only for pure-HTTP members)
   ├── tags-store.ts        → Mongo CRUD for the `tags` collection (TagDoc: name/color/sources/sharedWith/createdBy) + visibleTagsFor(canRead)
-  ├── tags-resolve.ts      → **pure**: sessionMatchesTag / resolveTagSessions — a tag's sources (`repo` | `project` | `machine` | `team` | `account`) resolve to a deduped session SET (union/OR, counted once)
+  ├── tags-resolve.ts      → **pure**: sessionMatchesTag / resolveTagSessions / sessionInWindow — a tag's sources (`repo` | `project` | `machine` | `team` | `account`) resolve to a deduped session SET (union/OR, counted once)
   ├── tags-aggregate.ts    → **pure**: aggregateSessions() → headline numbers (costUSD via calcCost, sessions, tokens, top project/model/harness)
   ├── tags-detail.ts       → **pure**: aggregateTagDetail() → distributions (projects/models/harnesses/repos/members), daily series, activity window, distinct member/machine counts — counts and sums only
   ├── tags-authority.ts    → **pure** gates: canSeeSource / canWriteTagSources (Rule 1) / canReadTag + redactBuckets / redactTopValue / **redactSources** (any key OR source value the viewer cannot see is collapsed into `__other__` / `__hidden__` — without redacting the source list the bucket redaction is bypassable by reading `tag.sources`)
@@ -147,6 +148,13 @@ Agentistics tracks sessions from multiple AI coding assistants (harnesses), not 
 - `AppData.harnesses: HarnessId[]` lists which harnesses have data present, used by the frontend to decide whether to show the harness selector in the nav (shown only when >1 harness is active). Selecting "All" yields the unified view.
 - Each harness is implemented as a `HarnessAdapter` module under `server/adapters/` — never a separate package. `getEnabledAdapters()` lazily resolves and memoizes available adapters; individual adapters can be disabled via `AGENTISTICS_HARNESS_<ID>=0`.
 
+### The harness contract — read `docs/harness-contract.md`
+
+`docs/harness-contract.md` defines what each metric MUST MEAN across every harness (time, cost,
+tokens, capabilities, filters, timestamps, purity). The checklist below is the mechanical half —
+which files to touch. Do both: a harness that compiles and reports a metric computed its own way
+is a bug, not a variation.
+
 ### Adding a harness — the complete checklist
 
 Every point below is load-bearing; skipping one has, historically, produced a harness that compiles
@@ -178,7 +186,12 @@ clean and is then silently missing from half the product.
    entry (EN + PT) in `web/src/lib/harness.ts`.
 8. **Timestamps** — bucket activity hours on the **local** clock (`getHours()`), like every other
    adapter. Reading a UTC timestamp as local put the peak-usage chart hours off for four harnesses.
-9. **Docs** — this file, plus any `docs/` page enumerating harnesses.
+9. **Time** — emit `TurnEvent[]` and call `activeMinutesOf()` (`packages/core/src/activeTime.ts`)
+   for `SessionMeta.active_minutes`; never compute duration in the adapter. Prefer a duration the
+   harness measured itself, reconstruct from timestamps otherwise, and set `activeTime: false` only
+   when the transcript has no usable timing at all. See `docs/harness-contract.md` § 1 — in
+   particular, do NOT add an idle-gap threshold.
+10. **Docs** — this file, `docs/harness-contract.md`, plus any `docs/` page enumerating harnesses.
 
 ### Pricing — three layered sources, and the built-in table is the floor
 
@@ -520,6 +533,40 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
 - **Consent gate**: `ArchiveConsentModal.tsx` blocks first load (links the official doc) — primary Yes(consolidate)/No(off) + an "Advanced" expander revealing full-copy. `App.tsx` early-returns the modal when `archiveChoice === null`; `chooseArchive(mode)` PUTs `archiveMode`. Env `AGENTISTICS_ARCHIVE=0` hard-disables everything; `AGENTISTICS_ARCHIVE_DIR` overrides the archive path.
 - **No false metrics**: dedup by `session_id` (live always wins) + the `supplementStatsCache` guard (`day <= lastComputedDate` skip) mean revived old sessions show in lists/agent-metrics but never inflate aggregate totals. Boot + the PUT `/api/preferences` handler warm a build (persists the store) and `full` also runs `fullSync()`.
 
+## Security rules
+
+A central can be published on the internet. The model is documented in **`docs/security.md`**
+(threat model, trust boundaries, request pipeline, limits of each control) and the deployment
+runbook in `docs/exposure.md`. These rules are what keep it safe; each exists because its
+absence was a real finding.
+
+- **`exposure.ts` is the only place that decides what a profile may do.** `PROFILE` is
+  `local` | `lan` | `public`, and `CAPS` derives from it. Never re-derive a capability from env
+  vars at a call site, and never add an opt-in that re-enables host power on `public`.
+- **Any new route that touches the host** — spawns a process, reads `~/.claude`, writes a
+  dotfile — must be registered in `capability-guard.ts`. A route that is not registered is
+  assumed harmless, so a missed registration is a vulnerability, not an oversight. The guard
+  runs *before* the auth gate on purpose.
+- **Any new `/api` route is authenticated by default.** Adding one to `AUTH_PUBLIC`
+  (`index-routes.ts`) requires updating `authz-gate.test.ts`, which asserts the exact contents
+  of that Set — that test IS the review gate.
+- **Never return internal error text to a client** — use `safeError` (`errors.ts`). The client
+  gets a code plus a correlation ref; the message goes to the log.
+- **Never `await req.json()` on an unauthenticated route** — use `readJsonLimited` (`limits.ts`),
+  which abandons an oversized body mid-stream instead of buffering it first.
+- **Every authentication and admin action writes an audit event** (`audit.ts`). The pure builder
+  redacts secret-shaped fields; never add a field that carries a credential.
+- **The session secret is never derived from the dashboard password**, and cookies are
+  `__Host-` prefixed + `SameSite=Strict` whenever they are Secure.
+- **Rate-limit anything that can be guessed.** `rate-limit.ts` keys hard blocks per IP and soft
+  backoff per account — per-account lockout must stay soft, or it becomes a DoS against a
+  colleague.
+- **Destructive operations require step-up.** Anything that deletes an account or team, edits an
+  account (role and memberships live there) or mints/rotates/revokes a credential must be listed
+  in `stepup.ts`; the web side calls `stepUpFetch`, never bare `fetch`. Reads stay on `fetch`.
+- **`agentop doctor --exposed` must pass before exposing anything.** A check that could not be
+  verified reports `fail`, never a reassuring `pass`.
+
 ## Important rules
 
 - **EVERY new screen and EVERY layout fix MUST also deliver its mobile version — no exceptions.**
@@ -539,7 +586,37 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
     the page body.
   - New pages need their nav entry in **both** the desktop `SideNav` `items` array **and** the
     `MobileBottomNav` `navTiles` array in `App.tsx` — adding only the first hides the page on a phone.
+- **A tag may be pinned to a PERIOD** (`TagDoc.window`, inclusive `yyyy-MM-dd`, each end independently
+  optional) — that is what makes a tag answer "I ran harness X on this project from the 4th to the
+  18th; what did it cost?" instead of only "these sources, all time". It is an AND on top of the
+  source union, so like `filters` it can only ever narrow. Two rules:
+  **(a) the day rule is `tagSessionDay` (`start_time.slice(0,10)`)**, the same one `tags-detail.ts`
+  uses for the daily series — a local-clock day would be more correct in isolation and wrong here,
+  since at UTC-3 a 23:00 session would sit inside the window while being plotted on the next day's
+  bar of the tag's own chart; **(b) `packages/web/src/lib/tagMatch.ts` mirrors the rule by hand**
+  (the web bundle cannot import `packages/server/*`), so the window must land in BOTH or the tag's
+  card and the tag FILTER disagree — `tagMatch.test.ts` has a cross-check that fails when only one
+  side is updated. Because the period is per tag, `makeTagFilter` evaluates tag by tag; the old
+  flattened source union cannot express it.
 - **Tags are aggregate-only and explicitly shared** — a tag's visibility is the explicit `sharedWith` account list (plus its creator and every owner) and is **never** derived from teams; **anyone signed in may create a tag** — the role difference is REACH, not permission: writing requires that the principal can already see **every** one of its sources (`canWriteTagSources`, re-checked on edit), so an owner reaches anything, a manager what their teams reach, and a plain user only what their own account owns, otherwise a tag becomes a privilege-escalation path; and tag responses return **only counts and sums** — never session rows, transcripts or agent metrics — with keys the viewer cannot see collapsed into an "other" bucket. Tag math runs server-side against the unscoped session set, per-session (never from `stats-cache.json`).
+- **A date is NEVER stored as a string in Mongo.** Every persisted timestamp is a BSON `Date`;
+  the WIRE shape stays an ISO string (JSON has no date type and the frontend does `parseISO`), so
+  the conversion lives at the persistence boundary and nowhere else — `mongo-dates.ts`. Rules:
+  - Doc types (`TeamSessionDoc`, `TokenDoc`, `AccountDoc`, `TeamDoc`, `TagDoc`, `RepoDoc`,
+    `BootstrapDoc`, `TeamWorkflowDoc`, memberStats) declare `Date`; the API types they map to
+    (`MemberInfo`, `MachineInfo`, `RepoInfo`, `PublicAccount`, `SessionMeta`, `WorkflowRun`)
+    declare `string`. Write with `new Date()`, never `new Date().toISOString()`.
+  - **Reads must tolerate both shapes** — always go through `fromBsonDate`. A doc written by an
+    older central in a mixed-version fleet still holds a string, and rendering it as
+    "Invalid Date" is a regression the type checker cannot catch.
+  - **`''` is not a date.** An adapter that could not read a start time reports `''`; it is stored
+    as `null` and reads back as `''`. Storing `''` as a pseudo-date is the bug this replaced.
+  - **Add every new timestamp field to `DATE_FIELDS`** and bump `DATE_MIGRATION_VERSION`, or it
+    stays a string in the database forever while the writing code looks perfectly correct.
+  - Date-shaped map KEYS (`statsCache.dailyTokens`'s `YYYY-MM-DD`) stay strings — a BSON key must
+    be one. So do the local JSON stores (`tags-local-store.ts`, `preferences.ts`,
+    `~/.agentistics/sessions/*.json`), where ISO strings are the correct representation; the local
+    tag store revives them into `Date`s on read so the shared `TagDoc` contract holds in memory.
 - **`stats-cache.json` is Claude-only** — never aggregate non-Claude harness metrics from it; use per-session sums for all other harnesses (see "Multi-harness tracking" above)
 - **Harness adapters are modules, not packages** — all adapters live under `packages/server/server/adapters/`; never create a separate package per harness
 - **`stats-cache.json`** has no project-level granularity — project filters are computed by summing individual sessions
@@ -586,6 +663,30 @@ Claude Code deletes session transcripts (`~/.claude/projects/**/*.jsonl`) older 
 - **`files_modified` counting** (`packages/server/server/jsonl.ts`): tracks unique file paths from Edit/Write/MultiEdit tool calls (`claudeFilesModified` Set), then takes `Math.max(gitFileStats.filesModified, claudeFilesModified.size)` — whichever is higher. This captures files Claude edited in non-git directories.
 - **`getProjectGitStats`** (`packages/server/server/git.ts`): first tries the project path as a single git repo; if that fails (not a git repo), falls back to scanning one level of subdirectories and aggregating stats across all git repos found there (handles workspace folders like `~/zuke`).
 - **FILES KPI** (`packages/web/src/hooks/useData.ts`): always uses session-level `files_modified` count first (Edit/Write/MultiEdit calls); falls back to project-level `git_stats.files_modified` only if sessions show 0. This is different from commits/lines which prefer project-level git stats when a project filter is active.
+
+## Concurrent work — one worktree per session, never the shared checkout
+
+Several agents/sessions routinely run against this repo at the same time. A checkout can only be
+on ONE branch and every session sees the same files, so sharing the main checkout is not "slightly
+risky", it silently corrupts work. All four of these happened in a single afternoon:
+
+- **A commit landed on the wrong branch.** Another session ran `git checkout` mid-session; the next
+  commit went onto ITS branch, on top of an unrelated stack.
+- **`git add -A` swept another session's in-progress files** into an unrelated commit. Always stage
+  explicit paths, and read `git status` before every commit — the diff is not only yours.
+- **`bun test` measured a tree someone else was mutating.** The count moved 656 → 842 mid-run: a red
+  test may not be yours, and a green one may prove nothing about your change.
+- **Two agents edited the same file minutes apart.** A "the tree is clean, nobody is working" check
+  is a snapshot, not a lock — it was clean because the other agent was between reads and writes.
+
+So: **work in `.claude/worktrees/<name>/` on your own branch** (the `EnterWorktree` tool, or
+`git worktree add`). A fresh worktree needs `bun install` plus
+`bun run packages/server/scripts/ensure-type-stub.ts` — without the stub `tsc` fails on the
+gitignored `embedded-dist.generated.ts`. Base it on `origin/dev`, not `origin/main`.
+
+**Never rebase or reset a branch another session is committing to** — leave a stray commit where it
+is and land your own copy on the target branch. A cherry-picked duplicate resolves itself on merge
+(same patch, no conflict); a rebase under a live session destroys work.
 
 ## Development
 

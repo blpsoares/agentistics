@@ -1,4 +1,5 @@
-import type { SessionMeta } from '@agentistics/core'
+import type { SessionMeta, TurnEvent } from '@agentistics/core'
+import { activeMinutesOf } from '@agentistics/core'
 
 /**
  * Pure parser for Kimi Code CLI sessions.
@@ -69,6 +70,12 @@ export interface KimiWireTotals {
   userTimestamps: string[]
   firstTimeMs: number
   lastTimeMs: number
+  /** Per-turn timeline for computeActiveTime() (docs/harness-contract.md). Kimi records no
+   *  duration of its own, so turns are reconstructed: a `turn.prompt` of origin `user` opens one,
+   *  every later event advances the clock. A session's SUBAGENT wires are accumulated into this
+   *  same list and run DURING the parent's turn, so the list is sorted by time before it is
+   *  consumed — appending one agent's stream after another's would otherwise invent turns. */
+  turnEvents: TurnEvent[]
 }
 
 /** A factory, not a shared constant: spreading a constant copies its array REFERENCES, so every
@@ -78,7 +85,7 @@ export function emptyKimiTotals(): KimiWireTotals {
   return {
     inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheCreation: 0,
     userPrompts: 0, assistantTurns: 0, toolCounts: {}, toolErrors: 0, usesMcp: false,
-    firstPrompt: '', hours: [], userTimestamps: [], firstTimeMs: 0, lastTimeMs: 0,
+    firstPrompt: '', hours: [], userTimestamps: [], firstTimeMs: 0, lastTimeMs: 0, turnEvents: [],
   }
 }
 
@@ -90,9 +97,12 @@ export function accumulateKimiWire(text: string, acc: KimiWireTotals = emptyKimi
     try { d = JSON.parse(line) as Record<string, unknown> } catch { continue }
 
     const time = typeof d.time === 'number' ? d.time : 0
+    let turnEvent: TurnEvent | null = null
     if (time > 0) {
       if (!acc.firstTimeMs || time < acc.firstTimeMs) acc.firstTimeMs = time
       if (time > acc.lastTimeMs) acc.lastTimeMs = time
+      turnEvent = { ts: time }
+      acc.turnEvents.push(turnEvent)
     }
 
     switch (d.type) {
@@ -112,6 +122,7 @@ export function accumulateKimiWire(text: string, acc: KimiWireTotals = emptyKimi
         const origin = d.origin as { kind?: string } | undefined
         if (origin?.kind && origin.kind !== 'user') break
         acc.userPrompts++
+        if (turnEvent) turnEvent.userPrompt = true
         if (time > 0) {
           const dt = new Date(time)
           acc.hours.push(dt.getHours()) // local clock, same convention as every other adapter
@@ -184,6 +195,9 @@ export function buildKimiSession(
     : 0
 
   const toolCalls = Object.values(totals.toolCounts).reduce((a, b) => a + b, 0)
+  // Sorted: the events arrive one agent's wire at a time, but a subagent runs inside the parent's
+  // turn — merging them chronologically is what keeps that from reading as extra turns.
+  const activeMinutes = activeMinutesOf([...totals.turnEvents].sort((a, b) => a.ts - b.ts))
 
   return {
     session_id: sessionId,
@@ -191,6 +205,7 @@ export function buildKimiSession(
     start_time: start,
     end_time: end || undefined,
     duration_minutes: duration,
+    active_minutes: activeMinutes,
     user_message_count: totals.userPrompts,
     assistant_message_count: totals.assistantTurns,
     tool_counts: totals.toolCounts,

@@ -1,12 +1,13 @@
 /**
+ * transcriptSplit.ts — splitInlinedHistory, extracted from SessionDrilldownModal.
+ *
  * Non-Claude harnesses sometimes concatenate a whole conversation into a single user turn
  * (e.g. "User: hi\nAssistant: hello"). This splits such a block into individual bubbles so the
- * transcript renders as a conversation instead of one wall of text.
+ * transcript renders correctly.
  *
- * Lives here rather than in SessionDrilldownModal.tsx so its test can import it without dragging
- * React and `lucide-react` into the test module graph — that CJS/ESM interop is what made the
- * suite fail with `react.createContext is not a function`, but only when another file had already
- * loaded React, so it looked like a flake and forced every commit through `--no-verify`.
+ * It lives in lib/ rather than beside the component because it is a pure function with its own
+ * unit test: importing it from a .tsx dragged lucide-react's CJS bundle into the test process,
+ * which fails to resolve React in a clean environment (green locally, red in CI).
  */
 
 /** Pattern that matches a newline immediately followed by a conversation label. */

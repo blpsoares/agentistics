@@ -9,10 +9,10 @@ import { mergeLocalAndIngestedSessions, sessionKey } from './session-merge'
 import { writeWorkflowRuns, loadWorkflowRuns } from './workflow-store'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
 import { UUID_RE, decodeProjectDir, getProjectGitStats, getGitRemote } from './git'
-import { parseSessionJsonl } from './jsonl'
+import { activeMinutesFromClaudeJsonl, parseSessionJsonl } from './jsonl'
+import type { MachineInfo } from './team-tokens'
 import { runHealthChecks, analyzeToolHealthIssues, analyzeCacheStaleness } from './health'
 import { extractAgentMetricsFromFile } from './agent-metrics'
-import { accumulateClaudeSessions } from './share-rules'
 
 /** Extract the model ID from a JSONL file by reading only the first assistant message.
  *  Skips `<synthetic>` — Claude Code sentinel for system-generated turns, not a real model. */
@@ -102,6 +102,10 @@ export async function loadSessionMetas(roots: string[] = [SESSION_META_DIR]): Pr
             project_path: (data.project_path as string) ?? '',
             start_time: (data.start_time as string) ?? '',
             duration_minutes: (data.duration_minutes as number) ?? 0,
+            // Present only on records written by US (the consolidate store / a team push).
+            // Claude's own session-meta files have no per-turn timing — for those it stays
+            // undefined here and is filled from the transcript in scanProjectDir.
+            active_minutes: typeof data.active_minutes === 'number' ? data.active_minutes : undefined,
             user_message_count: (data.user_message_count as number) ?? 0,
             assistant_message_count: (data.assistant_message_count as number) ?? 0,
             tool_counts: (data.tool_counts as Record<string, number>) ?? {},
@@ -202,12 +206,18 @@ async function scanProjectDir(
         const session = await fileLimit(() => parseSessionJsonl(filePath, sessionId, fallbackPath, 'jsonl'))
         cwdCounts[session.project_path] = (cwdCounts[session.project_path] ?? 0) + 1
         extraSessions.push(session)
-      } else if (metaEntry && (!metaEntry.model || (metaEntry.uses_task_agent && !metaEntry.agentMetrics))) {
-        // Meta session — extract model and/or agent metrics from the JSONL (single read)
+      } else if (metaEntry && (!metaEntry.model || metaEntry.active_minutes === undefined
+        || (metaEntry.uses_task_agent && !metaEntry.agentMetrics))) {
+        // Meta session — extract model, active time and/or agent metrics from the JSONL
+        // (single read). Claude's own session-meta files carry none of the three.
         await fileLimit(async () => {
           const needsModel = !metaEntry.model
           const needsAgentMetrics = metaEntry.uses_task_agent && !metaEntry.agentMetrics
-          if (!needsModel && !needsAgentMetrics) return
+          // Wall-clock duration is in the meta file; per-turn active time only exists in the
+          // transcript, so it has to be computed here or the metric is blank for the path that
+          // serves MOST Claude sessions.
+          const needsActive = metaEntry.active_minutes === undefined
+          if (!needsModel && !needsAgentMetrics && !needsActive) return
 
           const content = await readFile(filePath, 'utf-8').catch(() => '')
           if (!content) return
@@ -225,6 +235,10 @@ async function scanProjectDir(
                 }
               } catch { /* skip */ }
             }
+          }
+
+          if (needsActive) {
+            metaEntry.active_minutes = activeMinutesFromClaudeJsonl(content.split('\n'))
           }
 
           if (needsAgentMetrics) {
@@ -512,10 +526,41 @@ function supplementStatsCache(statsCache: StatsCache, sessions: SessionMeta[]): 
   if (sessions.length === 0) return
   const lastComputed = statsCache.lastComputedDate ?? ''
 
-  const acc = accumulateClaudeSessions(sessions, { after: lastComputed })
-  const dailyModel = acc.dailyModel
-  const modelTotals = acc.modelTotals
-  const dailyActivity = acc.dailyActivity
+  const dailyModel = new Map<string, Map<string, number>>()
+  const modelTotals = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>()
+  const dailyActivity = new Map<string, { messageCount: number; sessionCount: number; toolCallCount: number }>()
+
+  for (const s of sessions) {
+    if (!s.start_time) continue
+    const day = s.start_time.slice(0, 10)
+    if (lastComputed && day <= lastComputed) continue
+
+    const da = dailyActivity.get(day) ?? { messageCount: 0, sessionCount: 0, toolCallCount: 0 }
+    da.messageCount += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
+    da.sessionCount += 1
+    da.toolCallCount += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
+    dailyActivity.set(day, da)
+
+    const model = s.model
+    if (!model || !model.startsWith('claude-')) continue
+    const inp = s.input_tokens ?? 0
+    const out = s.output_tokens ?? 0
+    const cr  = s.cache_read_input_tokens ?? 0
+    const cw  = s.cache_creation_input_tokens ?? 0
+    const total = inp + out + cr + cw
+    if (total === 0) continue
+
+    const byModel = dailyModel.get(day) ?? new Map<string, number>()
+    byModel.set(model, (byModel.get(model) ?? 0) + total)
+    dailyModel.set(day, byModel)
+
+    const mt = modelTotals.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    mt.input     += inp
+    mt.output    += out
+    mt.cacheRead += cr
+    mt.cacheWrite += cw
+    modelTotals.set(model, mt)
+  }
 
   if (dailyActivity.size === 0 && dailyModel.size === 0 && modelTotals.size === 0) return
 
@@ -870,13 +915,14 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     let machineOwners: Record<string, { user: string; teamIds: string[] }> | undefined
     if (TEAM_CENTRAL) {
       const { loadAllMemberStats } = await import('./team-stats')
-      const { getMemberNameMap, getLiveTokenIds, listMachines, getEffectiveMemberTeamsMap } = await import('./team-tokens')
-      const [memberStats, nameMap, liveIds, machines, effectiveTeams] = await Promise.all([
+      const { getMemberNameMap, getLiveTokenIds, listMachines } = await import('./team-tokens')
+      const [memberStats, nameMap, liveIds, machines] = await Promise.all([
         loadAllMemberStats().catch(() => [] as { memberId: string; user: string; statsCache: StatsCache }[]),
         getMemberNameMap().catch(() => ({} as Record<string, string>)),
         getLiveTokenIds().catch(() => null),
-        listMachines().catch(() => [] as { id: string; user: string; teamIds: string[] }[]),
-        getEffectiveMemberTeamsMap().catch(() => ({} as Record<string, string[]>)),
+        // The empty fallback must be typed as MachineInfo[], not a narrower literal: a literal
+        // missing the effective/inherited/excluded team fields collapses the union and hides them.
+        listMachines().catch(() => [] as MachineInfo[]),
       ])
       userStatsCaches = {}
       machineStatsCaches = {}
@@ -896,10 +942,16 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       machineOwners = {}
       for (const m of machines) {
         if (liveIds && !liveIds.has(m.id)) continue
-        // Effective teams (stored ∪ the owner accounts' teams) — the SAME rule the session tagging
-        // and the machines list use. Reading the stored `teamIds` here made a team filter resolve
-        // to no machine for a team whose members were linked by account only.
-        machineOwners[m.id] = { user: nameMap[m.id] ?? m.user, teamIds: effectiveTeams[m.id] ?? m.teamIds ?? [] }
+        // EFFECTIVE teams (explicit ∪ inherited-from-owner-accounts − excluded), not the stored
+        // ones: this feeds resolveMachineCacheScope(), which expands a team selection into
+        // machineStatsCaches keys. With the stored list, a team whose machines are inherited
+        // through its member accounts would list the right sessions but resolve fewer caches
+        // than the scope covers — the "a scope reports a fraction of itself" failure that
+        // cacheBlindScope exists to prevent. Authority checks still use the stored fields.
+        machineOwners[m.id] = {
+          user: nameMap[m.id] ?? m.user,
+          teamIds: m.effectiveTeamIds ?? m.teamIds ?? [],
+        }
       }
     }
 

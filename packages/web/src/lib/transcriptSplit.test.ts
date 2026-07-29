@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { splitInlinedHistory } from '../lib/splitInlinedHistory'
+import { splitInlinedHistory } from './transcriptSplit'
 
 describe('splitInlinedHistory', () => {
   test('returns single turn unchanged when no inlined pattern', () => {

@@ -1,4 +1,5 @@
 import { join } from 'path'
+import { randomBytes } from 'node:crypto'
 import { loadEnvConfig } from './env-config'
 
 loadEnvConfig()
@@ -83,18 +84,42 @@ export const TEAM_INGEST_TOKEN = process.env.AGENTISTICS_TEAM_INGEST_TOKEN || un
 export const CENTRAL_USER = process.env.AGENTISTICS_CENTRAL_USER || undefined
 
 // ---------------------------------------------------------------------------
+// Exposure profile (see exposure.ts). AGENTISTICS_EXPOSURE=local|lan|public.
+// Unset → 'lan' on a central, 'local' otherwise. An unknown value fails closed to 'public'.
+// AGENTISTICS_ALLOW_LOCAL_SHELL=1 re-enables /api/exec, /api/chat-tty, the host transcript
+// readers and /api/mcp-action on a 'lan' central. It is IGNORED on 'public'.
+// ---------------------------------------------------------------------------
+export const EXPOSURE = process.env.AGENTISTICS_EXPOSURE
+export const ALLOW_LOCAL_SHELL = process.env.AGENTISTICS_ALLOW_LOCAL_SHELL === '1'
+// Trust CF-Connecting-IP / X-Forwarded-For for rate limiting and audit logging. Enable ONLY when
+// the app is reachable exclusively through a proxy that rewrites them (cloudflared on the same
+// host + BIND_IP=127.0.0.1) — otherwise a client can pick its own rate-limit bucket.
+export const TRUST_PROXY = process.env.AGENTISTICS_TRUST_PROXY === '1'
+// Comma-separated browser origins allowed to call this instance cross-origin. Normally EMPTY:
+// the dashboard is served by this same process, so it is same-origin. Only set it for a split
+// deployment (SPA hosted elsewhere).
+export const ALLOWED_ORIGINS = (process.env.AGENTISTICS_ALLOWED_ORIGINS ?? '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean)
+
+// ---------------------------------------------------------------------------
 // Phase 3 — auth gate. When AGENTISTICS_TEAM_PASSWORD is set, the central
 // dashboard requires a valid session cookie to access all /api/* routes except
-// the public allowlist. TEAM_SESSION_SECRET defaults to the password itself.
-// TEAM_TLS=1 adds the Secure flag to the session cookie.
+// the public allowlist. TEAM_TLS=1 adds the Secure flag to the session cookie.
 // ---------------------------------------------------------------------------
 export const TEAM_PASSWORD = process.env.AGENTISTICS_TEAM_PASSWORD || undefined
-// SECURITY NOTE: When AGENTISTICS_TEAM_SESSION_SECRET is unset, it falls back to
-// TEAM_PASSWORD. This means a password leak also enables session-cookie forgery,
-// since the HMAC key equals the password. Operators should always set a separate
-// AGENTISTICS_TEAM_SESSION_SECRET (e.g. `openssl rand -hex 32`) to isolate the two
-// secrets, especially when the password is shared with team members.
-export const TEAM_SESSION_SECRET = process.env.AGENTISTICS_TEAM_SESSION_SECRET || TEAM_PASSWORD || ''
+// SECURITY: the session secret NEVER falls back to the password. It used to, which meant a
+// leaked or shared password also let anyone forge a session cookie for any account, since the
+// HMAC key equalled the password. Resolution order (see secret-store.ts + the boot block in
+// index.ts): the env var if set and valid → a random secret persisted in Mongo (central) → a
+// random per-process secret (non-central; sessions simply do not survive a restart).
+export const TEAM_SESSION_SECRET_ENV = process.env.AGENTISTICS_TEAM_SESSION_SECRET || undefined
+export let TEAM_SESSION_SECRET = TEAM_SESSION_SECRET_ENV ?? randomBytes(32).toString('hex')
+/** Called once at boot by index.ts. `export let` gives importers a live binding. */
+export function setResolvedSessionSecret(value: string): void {
+  TEAM_SESSION_SECRET = value
+}
 export const TEAM_TLS = process.env.AGENTISTICS_TEAM_TLS === '1'
 
 // ---------------------------------------------------------------------------
