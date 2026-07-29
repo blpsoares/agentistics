@@ -99,6 +99,16 @@ export interface DateFieldSpec {
  * Deliberately NOT here:
  *   - `statsCache.dailyTokens` & friends — those are `YYYY-MM-DD` map KEYS, not values. A BSON
  *     key must be a string; they are date-shaped identifiers and stay as they are.
+ *   - EVERYTHING ELSE INSIDE `memberStats.statsCache` — `lastComputedDate`, `firstSessionDate`,
+ *     `longestSession.timestamp`. Three reasons, any one of which is enough. (a) The blob is a
+ *     VERBATIM mirror of the member's own `~/.claude/stats-cache.json`, replaced wholesale by
+ *     `replaceOne` on every push — a conversion here is overwritten with strings again within
+ *     one push interval, so it would be permanent churn that never converges. (b)
+ *     `lastComputedDate` is `YYYY-MM-DD`, a CALENDAR DATE, not an instant; forcing it to a BSON
+ *     Date invents a timezone for something deliberately without one. (c) It is compared as a
+ *     string against `format(day, 'yyyy-MM-dd')` keys by the `supplementStatsCache` guard — the
+ *     one that stops revived old sessions from inflating totals. Converting it breaks that guard
+ *     silently, and a wrong number is worse than an untidy type.
  *   - the local (non-Mongo) JSON stores — `tags-local-store.ts`, `preferences.ts`,
  *     `~/.agentistics/sessions/*.json`. Those ARE JSON files, where ISO strings are correct.
  */
@@ -110,7 +120,12 @@ export const DATE_FIELDS: readonly DateFieldSpec[] = [
   { collection: 'teams', fields: ['createdAt'] },
   { collection: 'tags', fields: ['createdAt', 'updatedAt'] },
   { collection: 'repos', fields: ['createdAt'] },
+  // `updatedAt` only — see the statsCache carve-out above.
   { collection: 'memberStats', fields: ['updatedAt'] },
+  // The `audit` collection is written by a deployment outside this branch (nothing here creates
+  // it), but its `at` field is a timestamp and lives in the same database, so the migration owns
+  // it too. Any code that grows to READ it must go through fromBsonDate like everything else.
+  { collection: 'audit', fields: ['at'] },
   // The `config` collection holds the bootstrap doc (createdAt/consumedAt); the `team` doc in
   // the same collection has no dates, and a field-scoped update simply never matches it.
   { collection: 'config', fields: ['createdAt', 'consumedAt'] },

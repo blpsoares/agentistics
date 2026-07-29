@@ -103,7 +103,7 @@ describe('array helpers', () => {
 describe('DATE_FIELDS', () => {
   test('covers every collection that stores a timestamp', () => {
     const names = DATE_FIELDS.map(s => s.collection)
-    for (const c of ['sessions', 'workflows', 'tokens', 'accounts', 'teams', 'tags', 'repos', 'memberStats', 'config']) {
+    for (const c of ['sessions', 'workflows', 'tokens', 'accounts', 'teams', 'tags', 'repos', 'memberStats', 'config', 'audit']) {
       expect(names).toContain(c)
     }
   })
@@ -111,6 +111,14 @@ describe('DATE_FIELDS', () => {
   test('lists each collection exactly once', () => {
     const names = DATE_FIELDS.map(s => s.collection)
     expect(new Set(names).size).toBe(names.length)
+  })
+
+  test('memberStats declares ONLY updatedAt — the statsCache blob is deliberately excluded', () => {
+    // Converting inside the blob would be undone by the next verbatim push, and would break the
+    // string comparison `supplementStatsCache` does on lastComputedDate.
+    const ms = DATE_FIELDS.find(s => s.collection === 'memberStats')!
+    expect(ms.fields).toEqual(['updatedAt'])
+    expect(ms.arrays ?? []).toEqual([])
   })
 
   test('session timestamps are all declared', () => {
