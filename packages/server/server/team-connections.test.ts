@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'bun:test'
 import {
   validateConnectionBody, validatePatchBody, decideConnectionUpsert,
+  aggregateConnectionStatuses, type ConnectionStatusEntry,
 } from './team-connections'
 import type { TeamConnection } from '@agentistics/core'
 
@@ -70,9 +71,15 @@ describe('validateConnectionBody', () => {
   })
 
   it('rejects junk shapes without throwing', () => {
-    for (const junk of [null, undefined, 42, 'nope', [], []]) {
+    for (const junk of [null, undefined, 42, 'nope', []]) {
       expect('error' in validateConnectionBody(junk)).toBe(true)
     }
+  })
+
+  it('does not trim a token — accidental whitespace padding must not be silently normalized', () => {
+    const out = validateConnectionBody({ endpoint: 'https://central.example.com', token: ' sekrit ' })
+    expect('error' in out).toBe(false)
+    if (!('error' in out)) expect(out.token).toBe(' sekrit ')
   })
 })
 
@@ -117,6 +124,29 @@ describe('decideConnectionUpsert — the two uniqueness rules', () => {
     expect(decision.action).toBe('update')
   })
 
+  it('endpoint matching is case-insensitive on the HOST — a different host case still updates in place', () => {
+    // The exact double-count-under-two-memberIds failure endpoint-uniqueness exists to prevent:
+    // without host normalization this would insert a SECOND connection for the same central.
+    const existing = conn('c_a', { endpoint: 'https://central.example.com' })
+    const decision = decideConnectionUpsert([existing], 'https://Central.EXAMPLE.com', 'new-token')
+    expect(decision.action).toBe('update')
+    if (decision.action === 'update') expect(decision.existing.id).toBe('c_a')
+  })
+
+  it('endpoint matching folds the scheme default port — :443 compares equal to no port on https', () => {
+    const existing = conn('c_a', { endpoint: 'https://central.example.com' })
+    const decision = decideConnectionUpsert([existing], 'https://central.example.com:443', 'new-token')
+    expect(decision.action).toBe('update')
+  })
+
+  it('a token is compared EXACTLY — whitespace padding never collides with the stored bare token', () => {
+    // Documents intentional behavior: tokens are opaque secrets and are never trimmed/normalized
+    // for comparison, unlike an endpoint. A padded token reads as a genuinely different token.
+    const existing = conn('c_a', { token: 'abc123' })
+    const decision = decideConnectionUpsert([existing], 'https://different-endpoint.example.com', ' abc123 ')
+    expect(decision.action).toBe('insert')
+  })
+
   it('a token already owned by a DIFFERENT connection is refused, even for a brand-new endpoint', () => {
     const other = conn('c_other', { token: 'shared-token' })
     const decision = decideConnectionUpsert([other], 'https://different-endpoint.example.com', 'shared-token')
@@ -141,17 +171,49 @@ describe('decideConnectionUpsert — the two uniqueness rules', () => {
     const decision = decideConnectionUpsert([a], 'https://b.example.com', '')
     expect(decision.action).toBe('insert')
   })
+})
 
-  it('updating a connection with the token it ALREADY holds is not a conflict with itself', () => {
-    const existing = conn('c_a', { token: 'same-token' })
-    const decision = decideConnectionUpsert([existing], existing.endpoint, 'same-token')
-    expect(decision.action).toBe('update')
+function statusEntry(id: string, extra?: Partial<ConnectionStatusEntry>): ConnectionStatusEntry {
+  return {
+    id, endpoint: `https://${id}.example.com`, org: 'default', user: 'alice',
+    lastSuccessAt: null, errKind: null, latencyMs: null,
+    ...extra,
+  }
+}
+
+describe('aggregateConnectionStatuses — the top-level status the pill reads', () => {
+  it('no connections aggregates to a fresh/unknown status', () => {
+    expect(aggregateConnectionStatuses([])).toEqual({ lastSuccessAt: null, errKind: null, latencyMs: null })
   })
 
-  it('two existing connections with distinct endpoints and tokens: a third insert is unaffected', () => {
-    const a = conn('c_a')
-    const b = conn('c_b')
-    const decision = decideConnectionUpsert([a, b], 'https://c.example.com', 'token-c')
-    expect(decision.action).toBe('insert')
+  it('lastSuccessAt is the MOST RECENT across connections', () => {
+    const out = aggregateConnectionStatuses([
+      statusEntry('a', { lastSuccessAt: 1000 }),
+      statusEntry('b', { lastSuccessAt: 3000 }),
+      statusEntry('c', { lastSuccessAt: 2000 }),
+    ])
+    expect(out.lastSuccessAt).toBe(3000)
+  })
+
+  it('errKind is the WORST currently in force: auth outranks net outranks null', () => {
+    expect(aggregateConnectionStatuses([statusEntry('a', { errKind: 'net' }), statusEntry('b', { errKind: 'auth' })]).errKind).toBe('auth')
+    expect(aggregateConnectionStatuses([statusEntry('a', { errKind: null }), statusEntry('b', { errKind: 'net' })]).errKind).toBe('net')
+    expect(aggregateConnectionStatuses([statusEntry('a', { errKind: null }), statusEntry('b', { errKind: null })]).errKind).toBeNull()
+  })
+
+  it('latencyMs is taken from the connection that produced the chosen lastSuccessAt', () => {
+    const out = aggregateConnectionStatuses([
+      statusEntry('a', { lastSuccessAt: 1000, latencyMs: 5 }),
+      statusEntry('b', { lastSuccessAt: 3000, latencyMs: 42 }),
+    ])
+    expect(out.lastSuccessAt).toBe(3000)
+    expect(out.latencyMs).toBe(42)
+  })
+
+  it('a connection that has never succeeded does not contribute a lastSuccessAt/latencyMs', () => {
+    const out = aggregateConnectionStatuses([statusEntry('a', { lastSuccessAt: null, latencyMs: null, errKind: 'net' })])
+    expect(out.lastSuccessAt).toBeNull()
+    expect(out.latencyMs).toBeNull()
+    expect(out.errKind).toBe('net')
   })
 })

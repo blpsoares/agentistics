@@ -14,11 +14,11 @@
  */
 
 import type { TeamConnection, TeamConfig } from '@agentistics/core'
-import { connectionId, defaultTeam, normalizeTeamConfig } from '@agentistics/core'
+import { connectionId, defaultTeam, normalizeTeamConfig, normalizeEndpointKey } from '@agentistics/core'
 import { readPreferences, updateTeamConfig } from './preferences'
 import { safeConnId } from './config'
 import { readJsonLimited, LIMITS } from './limits'
-import { removeConnection, getUploaderStatus, reconcileUploaderNow } from './team-uploader'
+import { removeConnection, getUploaderStatus, reconcileUploaderNow, pushNow } from './team-uploader'
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -81,12 +81,20 @@ export type ConnectionUpsertDecision =
  *  - a KNOWN normalized endpoint always updates in place, whatever the new token is — token
  *    rotation is a documented admin action and is exactly when a user re-runs connect. Appending
  *    a second connection there would double-count the machine on the central under two
- *    `memberId`s, since the central keys members by `sha256(token)`.
+ *    `memberId`s, since the central keys members by `sha256(token)`. Endpoint identity uses
+ *    `normalizeEndpointKey` (lower-cased host, default port folded — see its docstring), not a
+ *    plain string compare: `https://Central.example.com` and `https://central.example.com` are
+ *    the same central, and comparing case-sensitively would insert a second connection for it.
  *  - a token that already belongs to a DIFFERENT connection is refused — two connections sharing
  *    one token collapse onto one `memberId` and would alternately `replaceOne` the same stats
  *    document, flipping the machine's reported totals on every push.
  * An empty token never triggers the conflict branch: it is the legitimate shape for a
  * token-less member against an open/legacy central, and several such connections may coexist.
+ * In practice `handleAddConnection` never reaches this function with an empty token today —
+ * `whoamiVerify` requires a bearer this central's `validateIngestToken` accepts, and it rejects a
+ * missing one before `decideConnectionUpsert` runs — but the branch stays correct standalone
+ * (this function's own contract, and what its unit tests exercise) for a central that one day
+ * accepts anonymous whoami, or a future caller that skips verification.
  * The endpoint match is checked first and wins even when the new token happens to collide with
  * some OTHER connection's token — that combination is still refused (see below): a token owned
  * by a connection other than the one being updated is a conflict regardless of which branch found
@@ -97,8 +105,8 @@ export function decideConnectionUpsert(
   endpoint: string,
   token: string,
 ): ConnectionUpsertDecision {
-  const norm = trimSlashes(endpoint)
-  const byEndpoint = connections.find(c => trimSlashes(c.endpoint) === norm)
+  const norm = normalizeEndpointKey(endpoint)
+  const byEndpoint = connections.find(c => normalizeEndpointKey(c.endpoint) === norm)
   const byToken = token ? connections.find(c => c.token === token) : undefined
   if (byToken && (!byEndpoint || byToken.id !== byEndpoint.id)) {
     return { action: 'conflict', existing: byToken }
@@ -145,15 +153,36 @@ async function whoamiVerify(endpoint: string, token: string): Promise<WhoamiResu
   }
 }
 
-/** Best-effort — never throws, never delays the HTTP response on its result. Kicks the
- *  uploader's supervisor and the reverse-channel client's reconciliation poll RIGHT NOW instead
- *  of waiting out their own ~5s cadence, so a newly added/rotated connection starts pushing and
- *  opens its socket promptly. */
-function nudgeReconcilers(): void {
-  void Promise.allSettled([
-    reconcileUploaderNow(),
-    import('./team-agent-client').then(m => m.reconcileNow()),
-  ])
+/** Best-effort, fire-and-forget socket reconciliation — never throws, never delays the HTTP
+ *  response. `team-agent-client`'s own diff is fingerprint-based (endpoint+token), so this is
+ *  correct for BOTH a brand-new connection and a rotated token: either way the stored fingerprint
+ *  changed and the client will (re)connect. */
+function nudgeSocket(): void {
+  void import('./team-agent-client').then(m => m.reconcileNow()).catch(() => { /* best-effort */ })
+}
+
+/**
+ * Best-effort nudge after a successful insert: starts this connection's push chain right now
+ * instead of waiting out `supervisorTick`'s ~5s poll. Never throws, never delays the response.
+ */
+function nudgeAfterInsert(): void {
+  void reconcileUploaderNow().catch(() => { /* best-effort */ })
+  nudgeSocket()
+}
+
+/**
+ * Best-effort nudge after a successful update (token rotation on a known endpoint): fires an
+ * IMMEDIATE push for this connection rather than relying on `reconcileUploaderNow`/
+ * `supervisorTick`, which only starts chains for ids NOT already in `_activeChains` — an existing
+ * connection's chain is already active, so the supervisor is a no-op for it and the new token
+ * would otherwise sit unused until the connection's current interval elapses (up to an hour on a
+ * non-express central). `pushNow` also reschedules that connection's recurring timer relative to
+ * now, so the cadence doesn't drift. The socket needs a separate nudge regardless — a rotated
+ * token changes its fingerprint too. Never throws, never delays the response.
+ */
+function nudgeAfterUpdate(connId: string): void {
+  void pushNow(connId).catch(() => { /* best-effort */ })
+  nudgeSocket()
 }
 
 /** Unambiguous wrapper around `readJsonLimited` — unlike stashing the error inside the parsed
@@ -194,7 +223,10 @@ export async function handleAddConnection(req: Request): Promise<Response> {
         ...existing,
         endpoint: body.endpoint,
         token: body.token,
-        org: who.org ?? body.org ?? existing.org,
+        // Same precedence as the insert branch below — an explicit body value wins, else the
+        // fresh whoami reading, else what's already stored: an explicit caller-supplied org must
+        // never be silently overridden by whoami on every reconnect.
+        org: body.org ?? who.org ?? existing.org,
         user: who.user ?? existing.user,
         // id and label are preserved on an update — renaming goes through PATCH.
       }
@@ -221,7 +253,11 @@ export async function handleAddConnection(req: Request): Promise<Response> {
     return json({ error: 'this token is already used by another connection' }, 409)
   }
 
-  nudgeReconcilers()
+  if (outcome.action === 'update' && outcome.connId) {
+    nudgeAfterUpdate(outcome.connId)
+  } else {
+    nudgeAfterInsert()
+  }
   return json({ ok: true, id: outcome.connId, action: outcome.action })
 }
 
@@ -334,12 +370,47 @@ export interface ConnectionStatusEntry {
   latencyMs: number | null
 }
 
+export interface AggregatedConnectionStatus {
+  lastSuccessAt: number | null
+  errKind: 'auth' | 'net' | null
+  latencyMs: number | null
+}
+
 /**
- * GET /api/team/status — the per-connection shape (spec §9.5, minus `deniedCount`/`boundary`).
- * Reads CACHED values only (`getUploaderStatus`, populated by the uploader's own push cycle,
- * latency included) — never makes its own blocking network call. The previous single-connection
- * handler did a fresh ~4s-timeout probe on every call while the frontend polls every 5s, which
- * with two offline centrals alone exceeds its own poll interval. Never returns a token.
+ * Aggregate several connections' statuses into the single top-level status the member-side pill
+ * (`MemberConnectionStatus.tsx`) has always read — `{lastSuccessAt, errKind, latencyMs}` at the
+ * TOP of the response, not nested under `connections[]`. `lastSuccessAt` is the MOST RECENT
+ * success across connections; `errKind` is the WORST currently in force ('auth' outranks 'net',
+ * since a revoked token is the more actionable state) — 'auth' if any connection has it, else
+ * 'net' if any does, else null only when every connection is clean; `latencyMs` is the one
+ * measured on the connection that produced the chosen `lastSuccessAt` (the freshest sample, and
+ * the one most representative of "how things stand right now" — an average across connections to
+ * unrelated centrals with unrelated RTTs would not mean anything). Pure.
+ */
+export function aggregateConnectionStatuses(entries: ConnectionStatusEntry[]): AggregatedConnectionStatus {
+  let lastSuccessAt: number | null = null
+  let latencyMs: number | null = null
+  for (const e of entries) {
+    if (e.lastSuccessAt != null && (lastSuccessAt === null || e.lastSuccessAt > lastSuccessAt)) {
+      lastSuccessAt = e.lastSuccessAt
+      latencyMs = e.latencyMs
+    }
+  }
+  const errKind: 'auth' | 'net' | null =
+    entries.some(e => e.errKind === 'auth') ? 'auth' :
+    entries.some(e => e.errKind === 'net') ? 'net' :
+    null
+  return { lastSuccessAt, errKind, latencyMs }
+}
+
+/**
+ * GET /api/team/status — the per-connection shape (spec §9.5, minus `deniedCount`/`boundary`)
+ * PLUS the aggregated `{lastSuccessAt, errKind, latencyMs}` at the top level, for
+ * `MemberConnectionStatus.tsx` (the status pill), which does not yet read `connections[]`. Reads
+ * CACHED values only (`getUploaderStatus`, populated by the uploader's own push cycle, latency
+ * included) — never makes its own blocking network call. The previous single-connection handler
+ * did a fresh ~4s-timeout probe on every call while the frontend polls every 5s, which with two
+ * offline centrals alone exceeds its own poll interval. Never returns a token.
  */
 export async function handleTeamStatus(_req: Request): Promise<Response> {
   const prefs = await readPreferences()
@@ -359,5 +430,6 @@ export async function handleTeamStatus(_req: Request): Promise<Response> {
       latencyMs: st?.latencyMs ?? null,
     }
   })
-  return json({ mode: team?.mode ?? 'solo', connections: entries })
+  const aggregated = aggregateConnectionStatuses(entries)
+  return json({ mode: team?.mode ?? 'solo', ...aggregated, connections: entries })
 }

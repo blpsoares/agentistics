@@ -219,7 +219,10 @@ function fireHandleAuthError(conn: TeamConnection, status: number): void {
  *   (iii) GC this connection's four state files (sent/sync/rules/forget) AFTER the write
  *         persists — never from the supervisor tick, which would race the add path,
  *   (iv)  best-effort nudge the reverse-channel client to re-reconcile its socket,
- *   (v)   emit a 'member.removed' notification naming this connection.
+ *   (v)   emit a notification naming this connection — 'member.removed' (warning) when the
+ *         central revoked the token, 'member.disconnected' (info) when the user removed it
+ *         themselves (DELETE /api/team/connections/:id) — `reason` decides which, so a
+ *         user-initiated disconnect never reads as "the central kicked you out".
  * Idempotent — once the connection is gone from preferences, a second call is a no-op (and,
  * since the mutator returns `undefined` in that case, does not even re-write the file).
  *
@@ -228,7 +231,7 @@ function fireHandleAuthError(conn: TeamConnection, status: number): void {
  */
 export async function removeConnection(
   connId: string,
-  _reason: 'revoked' | 'manual' = 'revoked',
+  reason: 'revoked' | 'manual' = 'revoked',
   deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
 ): Promise<void> {
   const _updateTeamConfig = deps.updateTeamConfig ?? updateTeamConfig
@@ -258,12 +261,18 @@ export async function removeConnection(
     unlink(teamForgetFile(connId)),
   ])
 
-  console.warn(`[team-uploader] removed connection ${connId} (${hostOf(removedConn.endpoint)}) — central revoked this token or it was removed`)
+  if (reason === 'manual') {
+    console.info(`[team-uploader] removed connection ${connId} (${hostOf(removedConn.endpoint)}) — user disconnected it`)
+  } else {
+    console.warn(`[team-uploader] removed connection ${connId} (${hostOf(removedConn.endpoint)}) — central revoked this token or it was removed`)
+  }
   try {
     const { reconcileNow } = await import('./team-agent-client')
     reconcileNow()
   } catch { /* best-effort — the reverse-channel client is still single-socket; see report */ }
-  _notify({ type: 'warning', code: 'member.removed', meta: notifyMeta(removedConn) })
+  _notify(reason === 'manual'
+    ? { type: 'info', code: 'member.disconnected', meta: notifyMeta(removedConn) }
+    : { type: 'warning', code: 'member.removed', meta: notifyMeta(removedConn) })
 }
 
 // ---------------------------------------------------------------------------

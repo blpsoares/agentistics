@@ -38,6 +38,10 @@ export const NOTIFICATION_TEXT: Record<string, { pt: Localized; en: Localized }>
     pt: { title: 'Removido da central', message: 'A central revogou o acesso desta máquina. O modo de time foi redefinido para individual — gere um novo token na central para reconectar.' },
     en: { title: 'Removed from the central', message: 'The central revoked this machine’s access. Team mode was reset to solo — mint a new token on the central to reconnect.' },
   },
+  'member.disconnected': {
+    pt: { title: 'Desconectado da central', message: 'Esta conexão foi removida.' },
+    en: { title: 'Disconnected from the central', message: 'This connection was removed.' },
+  },
   'central.connect_failed': {
     pt: { title: 'Falha ao conectar na central', message: 'Não foi possível conectar na central. Verifique o endereço e o token.' },
     en: { title: 'Failed to connect to the central', message: 'Couldn’t connect to the central. Check the endpoint and token.' },
