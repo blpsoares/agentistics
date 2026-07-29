@@ -88,6 +88,7 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
       { en: 'Sub-agent metrics', pt: 'Métricas de sub-agentes' },
       { en: 'Git line counts', pt: 'Contagem de linhas Git' },
       { en: 'Full session history', pt: 'Histórico completo de sessões' },
+      { en: 'Active session time (per-turn)', pt: 'Tempo ativo da sessão (por turno)' },
     ],
     missing: [],
     note: {
@@ -119,6 +120,7 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
       { en: 'Tool usage (e.g. web search)', pt: 'Uso de ferramentas (ex.: pesquisa web)' },
       { en: 'Messages', pt: 'Mensagens' },
       { en: 'Project (working directory)', pt: 'Projeto (diretório de trabalho)' },
+      { en: 'Active session time (per-turn)', pt: 'Tempo ativo da sessão (por turno)' },
     ],
     missing: [
       {
@@ -162,6 +164,7 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
       { en: 'Model per session', pt: 'Modelo por sessão' },
       { en: 'Tool usage', pt: 'Uso de ferramentas' },
       { en: 'Activity (real-content sessions only)', pt: 'Atividade (somente sessões com conteúdo real)' },
+      { en: 'Active session time (per-turn)', pt: 'Tempo ativo da sessão (por turno)' },
     ],
     missing: [
       {
@@ -207,6 +210,7 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
       { en: 'Git line counts', pt: 'Contagem de linhas Git' },
       { en: 'MCP usage', pt: 'Uso de MCP' },
       { en: 'Activity', pt: 'Atividade' },
+      { en: 'Active session time (per-turn)', pt: 'Tempo ativo da sessão (por turno)' },
     ],
     missing: [
       {
@@ -253,6 +257,7 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
       { en: 'Tool usage (Read, Write, Edit, Bash, Agent …) and MCP calls (mcp__ prefix)', pt: 'Uso de ferramentas (Read, Write, Edit, Bash, Agent …) e chamadas MCP (prefixo mcp__)' },
       { en: 'Sub-agent work, folded into the session that spawned it', pt: 'Trabalho de sub-agentes, consolidado na sessão que os criou' },
       { en: 'Start / end / duration and activity hours', pt: 'Início / fim / duração e horários de atividade' },
+      { en: 'Active session time (per-turn)', pt: 'Tempo ativo da sessão (por turno)' },
     ],
     missing: [
       {
@@ -311,6 +316,7 @@ export const HARNESS_INFO: Record<HarnessId, HarnessInfo> = {
       { en: 'Files modified (from the edit payloads) and lines ADDED', pt: 'Arquivos modificados (a partir dos payloads de edição) e linhas ADICIONADAS' },
       { en: 'Sub-agent (invoke_subagent) spend and work, folded into the parent session', pt: 'Gasto e trabalho dos sub-agentes (invoke_subagent), consolidados na sessão pai' },
       { en: 'Start / end / duration and activity hours', pt: 'Início / fim / duração e horários de atividade' },
+      { en: 'Active session time (per-turn)', pt: 'Tempo ativo da sessão (por turno)' },
     ],
     missing: [
       {

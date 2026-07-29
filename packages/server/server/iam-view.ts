@@ -93,6 +93,18 @@ export function canManageMachineTeam(p: Principal, teamId: string | undefined): 
   return p.memberships.some(m => m.teamId === teamId && m.role === 'manager')
 }
 
+/**
+ * Whether a principal may see OTHER PEOPLE'S names: the instance owner, or a manager of any team.
+ *
+ * This is the server-side twin of the frontend's `canFilterMembers` (App.tsx) — the same condition
+ * that gates the members panel and the member filter. Anything that reveals who else uses the
+ * instance must sit behind it, or a plain user learns their colleagues' names through whichever
+ * surface forgot the check.
+ */
+export function canSeeMemberNames(p: Principal): boolean {
+  return p.role === 'owner' || p.memberships.some(m => m.role === 'manager')
+}
+
 /** Whether a principal may view/manage a specific machine: owner, a manager of ANY of the machine's
  *  teams, OR one of the machine's owner accounts (a user managing a machine they own). A machine may
  *  have several owner accounts AND belong to several teams. */

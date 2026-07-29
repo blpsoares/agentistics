@@ -7,6 +7,7 @@ import { centralManifest, centralHtml } from './central-branding'
 import { invalidateCache } from './data'
 import { mirrorFile } from './archive'
 import { getEnabledAdapters } from './adapters/types'
+import { addStoredNotification } from './notifications-store'
 
 export type SseController = ReadableStreamDefaultController<Uint8Array>
 
@@ -34,6 +35,11 @@ export function broadcastNotification(n: {
   title?: string
   message?: string
 }) {
+  // Persist FIRST, and independently of whether anyone is listening: a notification raised while
+  // no dashboard is open (or only a phone that is asleep) still belongs in the history. Clients
+  // that receive the SSE event below just refetch — they never write it themselves, so the id is
+  // the server's and every device dismisses the same row.
+  addStoredNotification(n).catch(err => console.error('[notifications] failed to persist', err))
   const payload = sseEncoder.encode(`event: notification\ndata: ${JSON.stringify(n)}\n\n`)
   for (const ctrl of [...sseClients]) {
     try {

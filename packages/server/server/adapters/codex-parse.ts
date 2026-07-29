@@ -1,4 +1,5 @@
-import type { SessionMeta } from '@agentistics/core'
+import type { SessionMeta, TurnEvent } from '@agentistics/core'
+import { activeMinutesOf } from '@agentistics/core'
 
 /** Pure: parse a Codex rollout JSONL string into a normalized SessionMeta.
  *  Returns null when the content has no usable lines. */
@@ -21,6 +22,9 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
   const messageHours: number[] = []
   const userMessageTimestamps: string[] = []
   const toolCounts: Record<string, number> = {}
+  // Per-turn timeline for computeActiveTime() (docs/harness-contract.md). Codex measures each
+  // turn itself: `task_complete.duration_ms`, keyed by the same turn_id as `task_started`.
+  const turnEvents: TurnEvent[] = []
 
   for (const raw of lines) {
     let e: any
@@ -30,6 +34,12 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
     const wrapped = outer === 'event_msg' || outer === 'response_item'
     const type = wrapped ? (data.type as string | undefined) : outer
     const lineTs: string | undefined = typeof e.timestamp === 'string' ? e.timestamp : undefined
+    const lineMs = lineTs ? Date.parse(lineTs) : NaN
+    let turnEvent: TurnEvent | null = null
+    if (!Number.isNaN(lineMs)) {
+      turnEvent = { ts: lineMs }
+      turnEvents.push(turnEvent)
+    }
 
     if (type === 'session_meta') {
       sessionId = data.id ?? sessionId
@@ -48,6 +58,7 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
       }
     } else if (type === 'user_message') {
       userMessages++
+      if (turnEvent) turnEvent.userPrompt = true
       const text = typeof data.message === 'string' ? data.message : ''
       if (!firstPrompt && text) {
         firstPrompt = text.slice(0, 200)
@@ -56,6 +67,11 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
         userMessageTimestamps.push(lineTs)
         messageHours.push(new Date(lineTs).getHours())
       }
+    } else if (type === 'task_complete') {
+      // Codex's own measurement of the turn that just ended — authoritative over reconstruction.
+      // `completed_at` - `task_started.started_at` (epoch SECONDS) is the same value; duration_ms
+      // is preferred because it survives a missing task_started line.
+      if (turnEvent && typeof data.duration_ms === 'number') turnEvent.measuredMs = data.duration_ms
     } else if (type === 'agent_message') {
       assistantMessages++
       if (lineTs) {
@@ -85,6 +101,7 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
     start_time: startTime || endTime || '',
     end_time: endTime || undefined,
     duration_minutes: durationMinutes,
+    active_minutes: activeMinutesOf(turnEvents),
     user_message_count: userMessages,
     assistant_message_count: assistantMessages,
     tool_counts: toolCounts,

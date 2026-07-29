@@ -5,7 +5,7 @@ import remarkBreaks from 'remark-breaks'
 import { Loader, ChevronLeft, ChevronDown, ChevronUp } from 'lucide-react'
 import type { HarnessId } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
-import { splitInlinedHistory } from './SessionDrilldownModal'
+import { splitInlinedHistory } from '../lib/transcriptSplit'
 import { useIsMobile } from '../hooks/useIsMobile'
 
 interface HarnessChatProps {

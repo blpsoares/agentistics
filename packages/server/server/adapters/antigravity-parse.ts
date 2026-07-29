@@ -24,8 +24,8 @@
 //     model protobuf blobs. Read by the (impure) adapter, decoded by antigravity-protobuf.ts,
 //     and handed to this parser as `options.tokens` — this module stays pure.
 
-import type { ModelUsage, SessionMeta } from '@agentistics/core'
-import { emptyModelUsage, sessionModelUsage } from '@agentistics/core'
+import type { ModelUsage, SessionMeta, TurnEvent } from '@agentistics/core'
+import { activeMinutesOf, emptyModelUsage, sessionModelUsage } from '@agentistics/core'
 
 /** One parsed line of the global history.jsonl. */
 export interface AntigravityHistoryEntry {
@@ -354,6 +354,10 @@ export function parseAntigravityTranscriptDetailed(
   const messageHours: number[] = []
   const userMessageTimestamps: string[] = []
   const timestamps: number[] = []
+  // Per-turn timeline for computeActiveTime() (docs/harness-contract.md). agy records no duration
+  // of its own, so turns are reconstructed: a genuine USER_INPUT (never a slash command) opens
+  // one, every later step advances the clock.
+  const turnEvents: TurnEvent[] = []
   const modifiedFiles = new Set<string>()
   let linesAdded = 0
   let linesRemoved = 0
@@ -389,7 +393,12 @@ export function parseAntigravityTranscriptDetailed(
 
     const createdAt = typeof step.created_at === 'string' ? step.created_at : ''
     const ms = createdAt ? Date.parse(createdAt) : NaN
-    if (!isNaN(ms)) timestamps.push(ms)
+    let turnEvent: TurnEvent | null = null
+    if (!isNaN(ms)) {
+      timestamps.push(ms)
+      turnEvent = { ts: ms }
+      turnEvents.push(turnEvent)
+    }
 
     if (type === 'USER_INPUT') {
       const text = extractUserRequest(typeof step.content === 'string' ? step.content : '')
@@ -398,6 +407,7 @@ export function parseAntigravityTranscriptDetailed(
       const slash = isSlashCommandPrompt(text)
       if (!slash) {
         hasGenuineUserTurn = true
+        if (turnEvent) turnEvent.userPrompt = true
         if (!firstPrompt) firstPrompt = text.slice(0, 200)
       }
       userMessages++
@@ -528,6 +538,7 @@ export function parseAntigravityTranscriptDetailed(
     start_time: startTime,
     end_time: endTime,
     duration_minutes: durationMinutes,
+    active_minutes: activeMinutesOf(turnEvents),
     user_message_count: userMessages,
     assistant_message_count: assistantMessages,
     tool_counts: toolCounts,
@@ -664,6 +675,9 @@ export function mergeAntigravityChild(
     duration_minutes: isNaN(start) || isNaN(end)
       ? p.duration_minutes
       : Math.max(0, (end - start) / 60000),
+    // active_minutes is NOT summed (it comes through the `...p` spread): a subagent runs INSIDE
+    // the parent turn that dispatched it, so its time is already inside the parent's turn span.
+    // Adding it would count the same wall-clock twice.
     input_tokens: (p.input_tokens ?? 0) + (c.input_tokens ?? 0),
     output_tokens: (p.output_tokens ?? 0) + (c.output_tokens ?? 0),
     cache_read_input_tokens: (p.cache_read_input_tokens ?? 0) + (c.cache_read_input_tokens ?? 0),

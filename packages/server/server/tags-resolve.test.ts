@@ -115,3 +115,75 @@ test('an untouched type places no constraint even when other types are filtered'
     [{ type: 'project', value: '/c' }])
   expect(out.length).toBe(1)
 })
+
+// --- the tag's period -------------------------------------------------------------------------
+
+import { sessionInWindow, tagSessionDay, type TagWindow } from './tags-resolve'
+
+const repoSrc: TagSource[] = [{ type: 'repo', value: 'github.com/org/a' }]
+const inRepo = (day?: string) =>
+  s({ git_remote: 'github.com/org/a', ...(day ? { start_time: `${day}T12:00:00.000Z` } : {}) })
+
+test('sessionInWindow: absent or empty window accepts everything', () => {
+  expect(sessionInWindow(inRepo('2026-07-04'))).toBe(true)
+  expect(sessionInWindow(inRepo('2026-07-04'), {})).toBe(true)
+  // A session with no date passes only because there is no period to fail.
+  expect(sessionInWindow(inRepo())).toBe(true)
+})
+
+test('sessionInWindow: both ends are INCLUSIVE', () => {
+  const w: TagWindow = { start: '2026-07-04', end: '2026-07-18' }
+  expect(sessionInWindow(inRepo('2026-07-03'), w)).toBe(false)
+  expect(sessionInWindow(inRepo('2026-07-04'), w)).toBe(true)   // first day counts
+  expect(sessionInWindow(inRepo('2026-07-11'), w)).toBe(true)
+  expect(sessionInWindow(inRepo('2026-07-18'), w)).toBe(true)   // last day counts
+  expect(sessionInWindow(inRepo('2026-07-19'), w)).toBe(false)
+})
+
+test('sessionInWindow: each end is independently optional', () => {
+  expect(sessionInWindow(inRepo('2026-07-03'), { start: '2026-07-04' })).toBe(false)
+  expect(sessionInWindow(inRepo('2026-09-01'), { start: '2026-07-04' })).toBe(true)
+  expect(sessionInWindow(inRepo('2026-01-01'), { end: '2026-07-18' })).toBe(true)
+  expect(sessionInWindow(inRepo('2026-07-19'), { end: '2026-07-18' })).toBe(false)
+})
+
+test('sessionInWindow: an undated session belongs to NO period', () => {
+  // The alternative — admitting it — would place it in every window at once, so a frozen cost
+  // would silently include sessions nobody can date.
+  expect(sessionInWindow(inRepo(), { start: '2026-07-04' })).toBe(false)
+  expect(sessionInWindow(inRepo(), { end: '2026-07-18' })).toBe(false)
+  expect(sessionInWindow(s({ git_remote: 'x', start_time: 'garbage' }), { start: '2026-07-04' })).toBe(false)
+})
+
+test('tagSessionDay reads the leading day, matching tags-detail rather than the local clock', () => {
+  expect(tagSessionDay(s({ start_time: '2026-07-04T23:30:00.000Z' }))).toBe('2026-07-04')
+  expect(tagSessionDay(s({}))).toBeNull()
+  expect(tagSessionDay(s({ start_time: 'nope' }))).toBeNull()
+})
+
+test('the period is an AND over the source union, never a way to widen it', () => {
+  const w: TagWindow = { start: '2026-07-04', end: '2026-07-18' }
+  // Right source, wrong period.
+  expect(sessionMatchesTag(inRepo('2026-08-01'), repoSrc, noLookups, [], w)).toBe(false)
+  // Right period, wrong source — the window cannot pull in what the sources never covered.
+  expect(sessionMatchesTag(
+    s({ git_remote: 'github.com/org/other', start_time: '2026-07-10T00:00:00Z' }),
+    repoSrc, noLookups, [], w,
+  )).toBe(false)
+  expect(sessionMatchesTag(inRepo('2026-07-10'), repoSrc, noLookups, [], w)).toBe(true)
+})
+
+test('resolveTagSessions narrows to the period, and composes with filters', () => {
+  const sessions = [
+    s({ git_remote: 'github.com/org/a', project_path: '/keep', start_time: '2026-07-01T00:00:00Z' }),
+    s({ git_remote: 'github.com/org/a', project_path: '/keep', start_time: '2026-07-10T00:00:00Z' }),
+    s({ git_remote: 'github.com/org/a', project_path: '/drop', start_time: '2026-07-10T00:00:00Z' }),
+    s({ git_remote: 'github.com/org/a', project_path: '/keep', start_time: '2026-08-01T00:00:00Z' }),
+  ]
+  const w: TagWindow = { start: '2026-07-04', end: '2026-07-18' }
+  expect(resolveTagSessions(sessions, repoSrc, noLookups, [], w)).toHaveLength(2)
+  expect(resolveTagSessions(sessions, repoSrc, noLookups, [{ type: 'project', value: '/keep' }], w))
+    .toHaveLength(1)
+  // Without the period the same tag is the whole history — that is the number it must differ from.
+  expect(resolveTagSessions(sessions, repoSrc, noLookups)).toHaveLength(4)
+})

@@ -1589,7 +1589,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
           ? (pt ? 'Abrir painel' : 'Open panel')
           : (pt ? 'Chat com Nay' : 'Chat with Nay')}
         style={{
-          position: 'fixed', bottom: isMobile ? 68 : 24, right: 24, zIndex: 300,
+          // Sits above the mobile nav, whose height grows by the home-indicator inset in a PWA.
+          position: 'fixed', bottom: isMobile ? 'calc(12px + var(--mobile-nav-h))' : 24, right: 24, zIndex: 300,
           width: 46, height: 46, borderRadius: '50%',
           border: nayDetached
             ? '1.5px solid var(--border)'

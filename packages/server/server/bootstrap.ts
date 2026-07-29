@@ -6,6 +6,7 @@
  */
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto'
 import { getMongoDb } from './mongo'
+import { validatePasswordPolicy } from './password-policy'
 
 const COLLECTION = 'config'
 const DOC_ID = 'bootstrap'
@@ -52,7 +53,8 @@ export function validateOwnerInput(
   if (!token) return { ok: false, error: 'missing bootstrap token' }
   if (!name) return { ok: false, error: 'name is required' }
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { ok: false, error: 'valid email is required' }
-  if (password.length < 8) return { ok: false, error: 'password must be at least 8 characters' }
+  const policy = validatePasswordPolicy(password, { email, name })
+  if (!policy.ok) return { ok: false, error: policy.error }
   if (password !== confirm) return { ok: false, error: 'passwords do not match' }
   return { ok: true, value: { name, email, password, confirm, token } }
 }

@@ -1,0 +1,80 @@
+/**
+ * exposure.test.ts — unit tests for the pure profile/capability resolution.
+ * No filesystem, no env mutation: every case is a plain input object.
+ */
+import { describe, expect, it } from 'bun:test'
+import { resolveProfile, capabilitiesFor, type ExposureEnv } from './exposure'
+
+const base: ExposureEnv = { central: false, exposure: undefined, allowLocalShell: false, tls: false }
+
+describe('resolveProfile', () => {
+  it('defaults to local for a solo machine', () => {
+    expect(resolveProfile(base)).toBe('local')
+  })
+
+  it('defaults to lan for a central with no explicit setting', () => {
+    expect(resolveProfile({ ...base, central: true })).toBe('lan')
+  })
+
+  it('honours an explicit AGENTISTICS_EXPOSURE=public', () => {
+    expect(resolveProfile({ ...base, central: true, exposure: 'public' })).toBe('public')
+  })
+
+  it('honours an explicit local override on a central', () => {
+    expect(resolveProfile({ ...base, central: true, exposure: 'local' })).toBe('local')
+  })
+
+  it('rejects an unknown value by failing closed to public', () => {
+    expect(resolveProfile({ ...base, central: true, exposure: 'banana' })).toBe('public')
+  })
+
+  it('treats an empty string as unset', () => {
+    expect(resolveProfile({ ...base, exposure: '' })).toBe('local')
+  })
+})
+
+describe('capabilitiesFor', () => {
+  it('grants every local capability on a local profile', () => {
+    const caps = capabilitiesFor('local', base)
+    expect(caps.localShell).toBe(true)
+    expect(caps.localChat).toBe(true)
+    expect(caps.localTranscripts).toBe(true)
+    expect(caps.mcpAdmin).toBe(true)
+  })
+
+  it('revokes local shell, chat, transcripts and mcp admin on public', () => {
+    const caps = capabilitiesFor('public', { ...base, central: true, exposure: 'public' })
+    expect(caps.localShell).toBe(false)
+    expect(caps.localChat).toBe(false)
+    expect(caps.localTranscripts).toBe(false)
+    expect(caps.mcpAdmin).toBe(false)
+  })
+
+  it('never re-enables local shell on public even with the opt-in flag', () => {
+    const caps = capabilitiesFor('public', {
+      ...base,
+      central: true,
+      exposure: 'public',
+      allowLocalShell: true,
+    })
+    expect(caps.localShell).toBe(false)
+    expect(caps.localChat).toBe(false)
+  })
+
+  it('re-enables local shell on lan only with the explicit opt-in', () => {
+    expect(capabilitiesFor('lan', { ...base, central: true }).localShell).toBe(false)
+    expect(capabilitiesFor('lan', { ...base, central: true, allowLocalShell: true }).localShell).toBe(true)
+  })
+
+  it('requires owner MFA and secure cookies on public', () => {
+    const caps = capabilitiesFor('public', { ...base, central: true, exposure: 'public' })
+    expect(caps.requireMfaForOwner).toBe(true)
+    expect(caps.requireSecureCookies).toBe(true)
+  })
+
+  it('does not require MFA on lan, and ties secure cookies to TLS there', () => {
+    expect(capabilitiesFor('lan', { ...base, central: true }).requireMfaForOwner).toBe(false)
+    expect(capabilitiesFor('lan', { ...base, central: true }).requireSecureCookies).toBe(false)
+    expect(capabilitiesFor('lan', { ...base, central: true, tls: true }).requireSecureCookies).toBe(true)
+  })
+})
