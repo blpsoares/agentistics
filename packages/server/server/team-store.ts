@@ -1,5 +1,5 @@
 import type { SessionMeta, StatsCache, WorkflowRun } from '@agentistics/core'
-import { tagUser } from '@agentistics/core'
+import { tagUser, redactSessionText } from '@agentistics/core'
 
 /**
  * A team session as stored in Mongo: the SessionMeta plus identity fields and a stable _id.
@@ -49,7 +49,11 @@ export function teamDocId(org: string, memberId: string, harness: string, sessio
  * @param user - Display name cached in the doc; overridden at read time by getMemberNameMap().
  */
 export function toTeamDoc(session: SessionMeta, org: string, memberId: string, user: string): TeamSessionDoc {
-  const tagged = tagUser(session, user)
+  // Second line of defence. The member already scrubs before sending (team-uploader), but a
+  // central cannot assume its members run current code — and in a mixed-version fleet the one
+  // machine still on an old build is exactly the one that leaks. Redacting here means a
+  // credential never reaches the collection regardless of what the client sent.
+  const tagged = tagUser(redactSessionText(session), user)
   return {
     ...tagged,
     user,      // always string — overrides the optional user field from tagUser

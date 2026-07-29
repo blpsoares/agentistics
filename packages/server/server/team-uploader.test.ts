@@ -66,6 +66,31 @@ describe('sessionHash', () => {
   })
 })
 
+describe('selectDeltas — credential scrubbing before the wire', () => {
+  it('a secret pasted into first_prompt never reaches the outgoing payload', () => {
+    const s = { ...makeSession('s1'), first_prompt: 'MONGO_URL=mongodb+srv://appuser:s3cr3tP4ssw0rd@cluster.mongodb.net/db' }
+    const { toSend } = selectDeltas([s], {})
+    expect(toSend).toHaveLength(1)
+    expect(toSend[0]!.first_prompt).not.toContain('s3cr3tP4ssw0rd')
+    expect(toSend[0]!.first_prompt).toContain('[REDACTED]')
+  })
+
+  it('the input session is not mutated — the local store keeps the original text', () => {
+    const s = { ...makeSession('s1'), first_prompt: 'PASSWORD=sup3rS3cretValue' }
+    selectDeltas([s], {})
+    expect(s.first_prompt).toBe('PASSWORD=sup3rS3cretValue')
+  })
+
+  it('redaction does NOT cause an endless re-send loop', () => {
+    // The hash is taken over the redacted session, so a second run with the same input sees the
+    // same hash and sends nothing. Hashing the raw session instead would re-send it forever.
+    const s = { ...makeSession('s1'), first_prompt: 'MONGO_URL=mongodb+srv://u:pw12345678@h/db' }
+    const first = selectDeltas([s], {})
+    expect(first.toSend).toHaveLength(1)
+    expect(selectDeltas([s], first.nextSent).toSend).toHaveLength(0)
+  })
+})
+
 describe('selectDeltas', () => {
   it('sends all sessions when sent state is empty', () => {
     const sessions = [makeSession('a'), makeSession('b')]
