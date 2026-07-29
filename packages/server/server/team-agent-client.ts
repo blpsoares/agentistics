@@ -1,29 +1,88 @@
 // team-agent-client.ts — member-side WebSocket client for the reverse channel (Phase 7)
 //
-// Opens a persistent WebSocket from the member to the central's /api/team/agent
-// endpoint. On-demand chat retrieval (the former 'fetch-chat' request /
-// 'chat-result' reply) has been removed — the member never sends chat content
-// to the central over this channel.
+// Opens a PERSISTENT WEBSOCKET PER CONNECTION to each central's /api/team/agent endpoint. A
+// machine can belong to several centrals at once (`preferences.team.connections[]`, see
+// @agentistics/core's team.ts), and presence on the central is WS-authoritative — so a single
+// shared socket would mean whichever connection reconciled first "owns" it and every OTHER
+// central reads this machine as permanently offline while it is pushing fine. Every piece of
+// mutable state that used to be a module-level singleton (the socket itself, the backoff index,
+// the live-reporting timer) is therefore keyed by connection id.
 //
-// Reconnects with exponential backoff on close/error.
+// On-demand chat retrieval (the former 'fetch-chat' request / 'chat-result' reply) has been
+// removed — the member never sends chat content to the central over this channel.
+//
+// Reconnects with exponential backoff on close/error, per connection.
 // startAgentClient() is idempotent — safe to call multiple times.
 // Never throws; all errors are swallowed internally.
 
-import { readPreferences } from './preferences'
+import type { TeamConnection } from '@agentistics/core'
+import { readTeamConnections, normalizeTeamConfig } from '@agentistics/core'
+import { readPreferences, updateTeamConfig } from './preferences'
 
 // ---------------------------------------------------------------------------
-// Constants
+// Pure helpers (unit-tested in team-agent-client.test.ts)
 // ---------------------------------------------------------------------------
 
 /** Reconnect backoff delays in milliseconds. */
-const BACKOFF_MS: number[] = [1_000, 2_000, 5_000, 10_000, 30_000]
+export const BACKOFF_MS: number[] = [1_000, 2_000, 5_000, 10_000, 30_000]
+
+/**
+ * Build the reverse-channel WS URL for a central's HTTP(S) base endpoint. Pure.
+ *
+ * MUST trim a trailing slash first: `http://host/` naively maps to `ws://host//api/team/agent`,
+ * whose double slash misses the server's EXACT-MATCH upgrade route — the socket never connects,
+ * and (since presence is WS-authoritative) that central sees this machine as offline forever,
+ * silently, with no error surfaced anywhere.
+ */
+export function agentWsUrl(endpoint: string): string {
+  return endpoint.replace(/\/+$/, '').replace(/^https/, 'wss').replace(/^http/, 'ws') + '/api/team/agent'
+}
+
+/** Exponential backoff delay (ms) for the given attempt index (0-based, clamped both ends). Pure. */
+export function backoffDelay(idx: number): number {
+  const clamped = Math.min(Math.max(idx, 0), BACKOFF_MS.length - 1)
+  return BACKOFF_MS[clamped] ?? 30_000
+}
+
+/** Display label for a connection in notifications — a nickname if set, else the endpoint host.
+ *  NEVER the token. Deliberately duplicated (not imported) from team-uploader.ts's `hostOf`: that
+ *  module dynamically imports THIS one (see `removeConnection`'s reconcileNow nudge), so importing
+ *  it back statically would put both modules on the same load-order cycle for a 2-line helper. */
+function hostOf(endpoint: string): string {
+  try { return new URL(endpoint).host || endpoint } catch { return endpoint }
+}
+
+function labelOf(conn: TeamConnection): string {
+  return conn.label ?? hostOf(conn.endpoint)
+}
+
+/** A connection is eligible to hold a reverse-channel socket once it has an endpoint. Whether a
+ *  token is REQUIRED is the central's call, not this client's: an open/legacy central accepts a
+ *  token-less member (see `keepStoredTokens` in preferences.ts), so gating on a non-empty token
+ *  here would refuse to even try against one. This also drops the old `user` requirement — a
+ *  connection added while its central was briefly unreachable never got a first whoami and, under
+ *  the old gate, stayed unconnected forever with nothing left to retry it. */
+function hasCredentials(conn: TeamConnection): boolean {
+  return Boolean(conn.endpoint)
+}
+
+function fingerprintOf(conn: TeamConnection): string {
+  return `${conn.endpoint}\0${conn.token}`
+}
 
 // ---------------------------------------------------------------------------
-// Connection management
+// Per-connection state — every singleton from the single-central era is now a Map keyed by
+// connection id, so one central's socket lifecycle can never affect another's.
 // ---------------------------------------------------------------------------
 
-let activeWs: WebSocket | null = null
-let backoffIdx = 0
+const activeWs = new Map<string, WebSocket>()
+const backoffIdx = new Map<string, number>()
+/** The endpoint+token this connection's CURRENT socket was opened with, so reconcileConnection
+ *  can detect a rotated token / changed endpoint and force a fresh socket instead of leaving a
+ *  stale one authenticated as the old identity. */
+const credFingerprint = new Map<string, string>()
+/** Connection ids with a whoami resolution currently in flight — never overlap two for the same id. */
+const resolvingUser = new Set<string>()
 
 /**
  * How often the member reports its open assistants to the central. Must stay comfortably below
@@ -31,10 +90,10 @@ let backoffIdx = 0
  */
 const LIVE_REPORT_INTERVAL_MS = 8_000
 
-let liveTimer: ReturnType<typeof setInterval> | null = null
+const liveTimers = new Map<string, ReturnType<typeof setInterval>>()
 
 /**
- * Report this machine's live sessions to the central over the reverse channel.
+ * Report this machine's live sessions to ONE central over its reverse channel.
  *
  * The central detects open assistants by reading /proc, which only ever sees its OWN machine — so
  * without this a team dashboard could never show what members are working on right now. Metrics
@@ -42,10 +101,11 @@ let liveTimer: ReturnType<typeof setInterval> | null = null
  * matching the rule that members push computed data only.
  *
  * Best-effort throughout: a failed snapshot or a dead socket skips a beat rather than throwing
- * into the connection's event handlers.
+ * into the connection's event handlers. Keyed by connId so tearing down one connection's timer
+ * (`stopLiveReporting`) never touches another connection's.
  */
-function startLiveReporting(socket: WebSocket): void {
-  if (liveTimer) { clearInterval(liveTimer); liveTimer = null }
+function startLiveReporting(connId: string, socket: WebSocket): void {
+  stopLiveReporting(connId)
 
   const send = async (): Promise<void> => {
     if (socket.readyState !== WebSocket.OPEN) return
@@ -66,25 +126,93 @@ function startLiveReporting(socket: WebSocket): void {
   }
 
   void send()
-  liveTimer = setInterval(() => { void send() }, LIVE_REPORT_INTERVAL_MS)
-  liveTimer.unref?.()
+  const timer = setInterval(() => { void send() }, LIVE_REPORT_INTERVAL_MS)
+  timer.unref?.()
+  liveTimers.set(connId, timer)
 }
 
-function stopLiveReporting(): void {
-  if (liveTimer) { clearInterval(liveTimer); liveTimer = null }
+function stopLiveReporting(connId: string): void {
+  const timer = liveTimers.get(connId)
+  if (timer) {
+    clearInterval(timer)
+    liveTimers.delete(connId)
+  }
 }
 
-function scheduleReconnect(): void {
-  const delay = BACKOFF_MS[Math.min(backoffIdx, BACKOFF_MS.length - 1)] ?? 30_000
-  backoffIdx++
+/**
+ * Best-effort: this connection's `user` (the display name, resolved from GET /api/team/whoami)
+ * is still unresolved — try again. Fires on every reconcile cycle while `conn.user === ''`, so a
+ * connection added while its central was briefly down keeps retrying instead of pushing nothing
+ * forever with no path to a name. Never overlaps two in-flight calls for the same connection id.
+ * Never throws; updates preferences via `updateTeamConfig` so a concurrent writer (e.g. the
+ * uploader resolving the SAME connection, or the user editing Settings) cannot be clobbered.
+ */
+async function resolveMemberIdentity(conn: TeamConnection): Promise<void> {
+  if (resolvingUser.has(conn.id)) return
+  resolvingUser.add(conn.id)
+  try {
+    const endpoint = conn.endpoint.replace(/\/+$/, '')
+    const headers: Record<string, string> = {}
+    if (conn.token) headers['Authorization'] = `Bearer ${conn.token}`
+    const res = await fetch(`${endpoint}/api/team/whoami`, {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(5_000),
+    })
+    if (!res.ok) return
+    const json = await res.json() as { ok?: boolean; user?: string }
+    if (!json.ok || typeof json.user !== 'string' || !json.user) return
+    await persistConnectionUser(conn.id, json.user)
+  } catch {
+    // best-effort — retried on the next reconcile cycle
+  } finally {
+    resolvingUser.delete(conn.id)
+  }
+}
+
+/** Read-modify-write JUST this connection's `user`, inside preferences.ts's single write chain
+ *  (`updateTeamConfig`) so it can never race another writer (e.g. the connection being removed,
+ *  or Settings saving a label edit) into a stale array. No-op (no write) once the value already
+ *  matches, or once the connection is gone from preferences. */
+async function persistConnectionUser(connId: string, user: string): Promise<void> {
+  try {
+    await updateTeamConfig(current => {
+      const existing = current.connections ?? []
+      const idx = existing.findIndex(c => c.id === connId)
+      if (idx === -1) return undefined // removed meanwhile — nothing to update
+      if (existing[idx]!.user === user) return undefined // already current
+      const next = existing.slice()
+      next[idx] = { ...next[idx]!, user }
+      return normalizeTeamConfig({ ...current, connections: next })
+    })
+  } catch {
+    // best-effort — the display name still resolves on a later cycle
+  }
+}
+
+/**
+ * Reconnect ONE connection with exponential backoff. Re-reads THAT connection by id from
+ * preferences on every attempt (never captures a `conn` from the closure that scheduled it):
+ *   - a connection the user removed in the meantime is simply absent from the fresh read, so the
+ *     timer fires into a no-op instead of resurrecting a socket for a dead connection;
+ *   - a rotated token is picked up automatically, because the fresh read carries it — a captured
+ *     stale conn would keep authenticating with a revoked secret forever.
+ */
+function scheduleReconnect(connId: string): void {
+  const idx = backoffIdx.get(connId) ?? 0
+  const delay = backoffDelay(idx)
+  backoffIdx.set(connId, idx + 1)
   setTimeout(() => {
     void (async () => {
       try {
         const prefs = await readPreferences()
-        const team = prefs.team
-        // Stop reconnecting if mode changed or credentials were cleared
-        if (!team || team.mode !== 'member' || !team.endpoint || !team.user || !team.token) return
-        openConnection(team.endpoint, team.token)
+        const conn = readTeamConnections(prefs).find(c => c.id === connId)
+        if (!conn || !hasCredentials(conn)) return
+        // Something else (e.g. reconcileConnection's next poll) may have already opened a live
+        // socket for this id while this timer was pending — never open a second one.
+        const existing = activeWs.get(connId)
+        if (existing && existing.readyState <= WebSocket.OPEN) return
+        openConnection(conn)
       } catch {
         // Preferences unavailable — stop reconnecting silently
       }
@@ -92,55 +220,59 @@ function scheduleReconnect(): void {
   }, delay)
 }
 
-function openConnection(endpoint: string, token: string): void {
-  // Skip if there is already an open or connecting socket
-  if (activeWs && activeWs.readyState <= WebSocket.OPEN) return
+/** Open a socket for ONE connection. Self-guards against a duplicate open (an already
+ *  OPEN/CONNECTING socket for this id short-circuits). Never throws. */
+function openConnection(conn: TeamConnection): void {
+  const existing = activeWs.get(conn.id)
+  if (existing && existing.readyState <= WebSocket.OPEN) return
 
-  // Convert http(s) → ws(s) and append the agent endpoint. Trim any trailing slash first —
-  // otherwise `http://host/` yields `ws://host//api/team/agent`, whose double slash misses
-  // the server's exact-match upgrade route and the WS never connects.
-  const wsUrl =
-    endpoint.replace(/\/+$/, '').replace(/^https/, 'wss').replace(/^http/, 'ws') + '/api/team/agent'
+  const wsUrl = agentWsUrl(conn.endpoint)
 
   let socket: WebSocket
   try {
-    // Bun extends the standard WebSocket constructor to accept a headers option
-    // object as the second argument. The DOM lib type only allows string | string[],
-    // so we cast through unknown to satisfy the compiler while using Bun's extension.
-    socket = new WebSocket(
-      wsUrl,
-      { headers: { Authorization: `Bearer ${token}` } } as unknown as string,
-    )
+    // Bun extends the standard WebSocket constructor to accept a headers option object as the
+    // second argument. The DOM lib type only allows string | string[], so we cast through unknown
+    // to satisfy the compiler while using Bun's extension. A token-less connection (open/legacy
+    // central) omits the header entirely rather than sending `Bearer `.
+    socket = conn.token
+      ? new WebSocket(wsUrl, { headers: { Authorization: `Bearer ${conn.token}` } } as unknown as string)
+      : new WebSocket(wsUrl)
   } catch {
-    scheduleReconnect()
+    scheduleReconnect(conn.id)
     return
   }
-  activeWs = socket
+  activeWs.set(conn.id, socket)
+  credFingerprint.set(conn.id, fingerprintOf(conn))
 
   socket.addEventListener('open', () => {
-    backoffIdx = 0 // successful open — reset backoff
-    startLiveReporting(socket)
+    backoffIdx.set(conn.id, 0) // successful open — reset this connection's backoff
+    startLiveReporting(conn.id, socket)
   })
 
   // Inbound admin actions from the central: 'renamed' (the central renamed this machine) and
-  // 'reassigned' (its owner account changed). Both surface a local notification naming the actor,
-  // and 'reassigned' also nudges the dashboard to re-resolve its identity so the "Connected as"
-  // panel stops showing the previous account until the next handshake.
+  // 'reassigned' (its owner account changed). Both surface a local notification naming the actor
+  // AND the central that sent it (`meta.connectionId` / `meta.central`, never the token) — with
+  // several centrals an unattributed "you were renamed" is unactionable. 'renamed' also persists
+  // the new name into THIS connection's `user`, and 'reassigned' nudges the dashboard to
+  // re-resolve its identity so the "Connected as" panel stops showing the previous account.
   socket.addEventListener('message', (ev: MessageEvent) => {
     try {
       const raw = typeof ev.data === 'string' ? ev.data : ''
       if (!raw) return
       const data = JSON.parse(raw) as { type?: string; name?: string; actor?: string; account?: string | null }
+      const meta = { connectionId: conn.id, central: labelOf(conn) }
       if (data?.type === 'renamed') {
+        const newName = data.name ?? ''
         void import('./sse').then(m => m.broadcastNotification({
-          type: 'info', code: 'machine.renamed', meta: { name: data.name ?? '', actor: data.actor ?? '' },
+          type: 'info', code: 'machine.renamed', meta: { name: newName, actor: data.actor ?? '', ...meta },
         })).catch(() => { /* best-effort */ })
+        if (newName) void persistConnectionUser(conn.id, newName)
       }
       if (data?.type === 'reassigned') {
         void import('./sse').then(m => {
           m.broadcastNotification({
             type: 'info', code: 'machine.reassigned',
-            meta: { account: data.account ?? '', actor: data.actor ?? '' },
+            meta: { account: data.account ?? '', actor: data.actor ?? '', ...meta },
           })
           // Push a refresh to any open dashboard so the whoami-backed connection panel
           // re-resolves instead of showing the previous account.
@@ -151,15 +283,41 @@ function openConnection(endpoint: string, token: string): void {
   })
 
   socket.addEventListener('close', () => {
-    if (activeWs === socket) activeWs = null
-    stopLiveReporting()
-    scheduleReconnect()
+    if (activeWs.get(conn.id) === socket) {
+      activeWs.delete(conn.id)
+      credFingerprint.delete(conn.id)
+    }
+    stopLiveReporting(conn.id)
+    scheduleReconnect(conn.id)
   })
 
   socket.addEventListener('error', () => {
     // 'close' fires immediately after 'error'; reconnect is handled there.
-    if (activeWs === socket) activeWs = null
+    if (activeWs.get(conn.id) === socket) activeWs.delete(conn.id)
   })
+}
+
+/**
+ * Tear down ONE connection's socket + live-reporting timer right now (the caller —
+ * reconcileConnection — is retiring this id on purpose: it is gone from `connections[]` or its
+ * credentials changed). This still fires the socket's 'close' listener, which still calls
+ * `scheduleReconnect(connId)` — that is fine, not a bug: the reconnect timer re-reads THIS id
+ * from preferences when it fires, and either finds the connection gone (no-op — a removed
+ * connection is never resurrected) or finds the NEW credentials (a legitimate, faster reconnect
+ * than waiting for the next poll). Deleting the map entries here first is what matters: it stops
+ * `openConnection`'s duplicate-guard from seeing this retiring socket as "still live".
+ */
+function teardownSocket(connId: string): void {
+  const socket = activeWs.get(connId)
+  activeWs.delete(connId)
+  credFingerprint.delete(connId)
+  stopLiveReporting(connId)
+  if (!socket) return
+  try {
+    socket.close()
+  } catch {
+    // already closed — ignore
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -168,69 +326,73 @@ function openConnection(endpoint: string, token: string): void {
 
 let started = false
 
-/** How often the runtime poll re-checks preferences for member-mode changes. */
+/** How often the runtime poll re-checks preferences for connection changes. */
 const POLL_INTERVAL_MS = 5_000
 
 /**
- * Periodic reconciliation between current preferences and the socket state.
- * Runs every POLL_INTERVAL_MS so switching to member mode at runtime (adding a
- * central in Settings) (re)establishes the reverse-channel socket promptly,
- * instead of waiting for the next uploader push + dashboard poll (~30s).
+ * Periodic reconciliation between current preferences and the socket state, fanned out across
+ * every connection so one hanging endpoint can never stall another's. Runs every POLL_INTERVAL_MS
+ * so adding/removing a central at runtime (Settings) is reflected promptly, instead of waiting for
+ * the next uploader push + dashboard poll (~30s).
  *
- * - member mode with full credentials AND no active OPEN/CONNECTING socket → open one
+ * - every connection lacking a live (OPEN/CONNECTING) socket, that has an endpoint → open one
  *   (openConnection self-guards against duplicates via activeWs.readyState).
- * - switched back to solo (mode !== 'member') with an active socket → close it.
+ * - every socket whose connection id is no longer in `connections[]`, OR whose credentials
+ *   (endpoint/token) changed since its socket was opened → torn down (no stale-identity socket
+ *   survives a token rotation).
+ * - every connection with an unresolved `user` → a best-effort whoami retry, in place.
  *
- * Complements the close/error reconnect-with-backoff path, which only fires once
- * a connection has already been attempted.
+ * Complements the close/error reconnect-with-backoff path, which only fires once a connection has
+ * already been attempted.
  */
 async function reconcileConnection(): Promise<void> {
+  let connections: TeamConnection[]
   try {
     const prefs = await readPreferences()
-    const team = prefs.team
-    const isMember = Boolean(
-      team &&
-        team.mode === 'member' &&
-        team.endpoint &&
-        team.user &&
-        team.token,
-    )
-
-    if (isMember) {
-      // Open only when nothing is already open or in-flight.
-      const hasLiveSocket = activeWs != null && activeWs.readyState <= WebSocket.OPEN
-      if (!hasLiveSocket) {
-        openConnection(team!.endpoint ?? '', team!.token ?? '')
-      }
-    } else if (activeWs) {
-      // Switched back to solo (or credentials cleared) — tear down the socket.
-      const socket = activeWs
-      activeWs = null
-      stopLiveReporting()
-      try {
-        socket.close()
-      } catch {
-        // already closed — ignore
-      }
-    }
+    connections = readTeamConnections(prefs)
   } catch {
     // Preferences unavailable — leave current state untouched.
+    return
+  }
+
+  const byId = new Map(connections.map(c => [c.id, c]))
+
+  // Close and delete every socket whose connection is gone or whose credentials changed.
+  for (const connId of [...activeWs.keys()]) {
+    const conn = byId.get(connId)
+    if (!conn || !hasCredentials(conn) || credFingerprint.get(connId) !== fingerprintOf(conn)) {
+      teardownSocket(connId)
+    }
+  }
+
+  // Open a socket for every connection that lacks a live one, and retry identity resolution for
+  // any connection whose display name is still unknown. Each connection's work is independent —
+  // a `void` fire-and-forget so a slow whoami against one central never delays another's socket.
+  for (const conn of connections) {
+    if (!hasCredentials(conn)) continue
+    const live = activeWs.get(conn.id)
+    if (!live || live.readyState > WebSocket.OPEN) {
+      openConnection(conn)
+    }
+    if (!conn.user) {
+      void resolveMemberIdentity(conn)
+    }
   }
 }
 
 /**
  * Start the member-side agent client. Idempotent — subsequent calls are no-ops.
- * Reads team preferences; skips connecting if mode !== 'member' or endpoint/token
- * missing, but always starts a lightweight periodic reconciliation poll so a
- * central added at runtime connects promptly. Never throws.
+ * Reads team connections; skips connecting any that lack an endpoint, but always starts a
+ * lightweight periodic reconciliation poll so a central added at runtime connects promptly.
+ * Never throws.
  */
 export function startAgentClient(): void {
   if (started) return
   started = true
 
-  // Initial attempt + ongoing reconciliation. reconcileConnection covers both
-  // the "connect now if already in member mode" and "connect later once a central
-  // is added" cases, so a single poll handles startup and runtime changes.
+  // Initial attempt + ongoing reconciliation. reconcileConnection covers both the "connect now
+  // for every already-configured connection" and "connect later once one is added" cases, so a
+  // single poll handles startup and runtime changes for every connection at once.
   void reconcileConnection()
   const timer = setInterval(() => {
     void reconcileConnection()
@@ -240,11 +402,11 @@ export function startAgentClient(): void {
 }
 
 /**
- * Reconcile the reverse-channel socket against current preferences RIGHT NOW, instead of
- * waiting up to POLL_INTERVAL_MS. Call this the moment the team config changes at runtime
- * (e.g. the PUT /api/preferences handler when a member connects via the web) so the member
- * shows up as online on the central within ~a second rather than after the next poll. Never
- * throws. No-op if the client hasn't been started yet (startup already reconciles).
+ * Reconcile every reverse-channel socket against current preferences RIGHT NOW, instead of
+ * waiting up to POLL_INTERVAL_MS. Call this the moment the team config changes at runtime (e.g.
+ * the PUT /api/preferences handler, or `removeConnection` in team-uploader.ts) so a change is
+ * reflected within ~a second rather than after the next poll. Never throws. No-op if the client
+ * hasn't been started yet (startup already reconciles).
  */
 export function reconcileNow(): void {
   if (!started) return
