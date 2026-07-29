@@ -13,38 +13,10 @@ import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { PrecisionToggle } from './PrecisionToggle'
 import { useIsMobile } from '../hooks/useIsMobile'
 
-// splitInlinedHistory
-// Non-Claude harnesses sometimes concatenate a whole conversation into a single
-// user-turn (e.g. "User: hi\nAssistant: hello"). This helper splits such blocks
-// into individual bubbles so the transcript renders correctly.
-
-/** Pattern that matches a newline immediately followed by a conversation label. */
-const SPLIT_LABEL_RE = /\n(?=(?:User|Assistant|Gemini|Copilot):)/
-
-export function splitInlinedHistory(
-  role: 'user' | 'assistant',
-  content: string
-): { role: 'user' | 'assistant'; content: string }[] {
-  if (role !== 'user' || !SPLIT_LABEL_RE.test(content)) {
-    return [{ role, content }]
-  }
-  const segments = content.split(SPLIT_LABEL_RE).filter(Boolean)
-  const result: { role: 'user' | 'assistant'; content: string }[] = []
-  for (const seg of segments) {
-    const match = seg.match(/^(User|Assistant|Gemini|Copilot):\s*/)
-    if (match) {
-      const label = match[1]!
-      const text = seg.slice(match[0].length).trim()
-      if (!text) continue
-      result.push({ role: label === 'User' ? 'user' : 'assistant', content: text })
-    } else {
-      const text = seg.trim()
-      if (text) result.push({ role, content: text })
-    }
-  }
-  return result.length > 0 ? result : [{ role, content }]
-}
-
+// The pure splitter lives in lib/splitInlinedHistory.ts so its test never pulls React or
+// lucide-react into the module graph. Re-exported here for existing importers.
+export { splitInlinedHistory } from '../lib/splitInlinedHistory'
+import { splitInlinedHistory } from '../lib/splitInlinedHistory'
 
 interface Props {
   session: SessionMeta

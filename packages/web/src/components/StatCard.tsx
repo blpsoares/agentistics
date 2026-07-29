@@ -3,21 +3,10 @@ import { Info } from 'lucide-react'
 import { PrecisionToggle } from './PrecisionToggle'
 import { useIsMobile } from '../hooks/useIsMobile'
 
-/**
- * Headline font size for a KPI value, scaled so the number stays readable as it grows.
- *
- * The size is measured on the NUMBER ONLY — any leading currency prefix is stripped first.
- * Measuring the whole string made the same amount render two steps smaller in English than in
- * Portuguese: "USD 16,611.61" (13 chars) crossed a threshold that "R$84.362,05" (11) did not,
- * purely because "USD " is two characters longer than "R$".
- */
-export function valueFontSize(value: string | number): number {
-  const measured = String(value).replace(/^[^\d-]+/, '').trim()
-  if (measured.length > 11) return 15
-  if (measured.length > 8) return 19
-  if (measured.length > 5) return 22
-  return 26
-}
+// The pure size rule lives in lib/statCardSize.ts so its test never pulls React or
+// lucide-react into the module graph. Re-exported here for existing importers.
+export { valueFontSize } from '../lib/statCardSize'
+import { valueFontSize } from '../lib/statCardSize'
 
 interface StatCardProps {
   label: string
