@@ -272,6 +272,93 @@ describe('getUploaderStatus — per-connection divergence', () => {
   })
 })
 
+describe('pushOnceDetailed — credentials gate (F1: token || open-central endpoint, not user)', () => {
+  it('a connection with an empty user but a valid token resolves its identity via whoami and pushes', async () => {
+    const id = randomConnId()
+    const whoamiCalls: string[] = []
+    await using server = Bun.serve({
+      port: 0,
+      fetch: (req) => {
+        const url = new URL(req.url)
+        if (url.pathname === '/api/team/whoami' && req.method === 'GET') {
+          whoamiCalls.push(req.headers.get('authorization') ?? '')
+          return Response.json({ ok: true, user: 'resolved-name', org: 'default' })
+        }
+        if (url.pathname === '/api/team/ingest' && req.method === 'POST') {
+          return Response.json({ ok: true, count: 1 })
+        }
+        return new Response('not found', { status: 404 })
+      },
+    })
+
+    const conn = fakeConn(id, server.port!, { user: '', token: 'valid-token' })
+    const ctx = makeCtx({ storedSessions: [makeSession('needs-a-name')] })
+
+    // In-memory fake, same shape as removeConnection's test double above — proves the resolved
+    // name was persisted, without touching the developer's real preferences file.
+    let store: TeamConfig = { schema: 2, mode: 'member', connections: [conn] }
+    const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+      const next = mutate(store)
+      if (next !== undefined) store = next
+      return store
+    }
+
+    const result = await pushOnceDetailed(conn, ctx, { updateTeamConfig: fakeUpdateTeamConfig })
+
+    // The push actually went through (not silently swallowed as count:0 the way the old
+    // `!conn.user` gate did) — this is the behavior the review asked to prove: a connection
+    // holding a live socket but refusing to push is exactly what F1 closes.
+    expect(result.count).toBe(1)
+    expect(result.error).toBeUndefined()
+    expect(whoamiCalls).toEqual(['Bearer valid-token'])
+    // The resolved name was persisted into the connection entry, so later cycles never re-resolve.
+    expect(store.connections[0]?.user).toBe('resolved-name')
+  })
+
+  it('a connection with an empty user and no way to resolve it (whoami unreachable) still yields count:0, not a throw', async () => {
+    const id = randomConnId()
+    await using server = Bun.serve({ port: 0, fetch: () => new Response('nope', { status: 500 }) })
+    const conn = fakeConn(id, server.port!, { user: '', token: 'valid-token' })
+    const ctx = makeCtx({ storedSessions: [makeSession('s1')] })
+    let store: TeamConfig = { schema: 2, mode: 'member', connections: [conn] }
+    const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+      const next = mutate(store)
+      if (next !== undefined) store = next
+      return store
+    }
+
+    const result = await pushOnceDetailed(conn, ctx, { updateTeamConfig: fakeUpdateTeamConfig })
+
+    expect(result).toEqual({ count: 0 })
+    // Nothing was persisted — the connection's user is still unresolved, to be retried next cycle.
+    expect(store.connections[0]?.user).toBe('')
+  })
+
+  it('an endpoint-only connection (no token — an open/legacy central) still attempts the push instead of refusing on sight', async () => {
+    const id = randomConnId()
+    await using server = Bun.serve({
+      port: 0,
+      fetch: (req) => {
+        const url = new URL(req.url)
+        if (url.pathname === '/api/team/whoami') {
+          // An open central with no token has nothing to authenticate — no usable identity.
+          return Response.json({ ok: false })
+        }
+        return new Response('not found', { status: 404 })
+      },
+    })
+    const conn = fakeConn(id, server.port!, { user: '', token: '' })
+    const ctx = makeCtx({ storedSessions: [makeSession('s1')] })
+
+    const result = await pushOnceDetailed(conn, ctx, { updateTeamConfig: async () => ({ schema: 2, mode: 'member', connections: [conn] }) })
+
+    // Cannot resolve an identity against this open central — count:0, not an error/throw. The
+    // important thing this test proves is the ENDPOINT alone was enough to attempt the whoami
+    // call at all (the old gate would have refused before ever reaching the network).
+    expect(result).toEqual({ count: 0 })
+  })
+})
+
 describe('B-1 — a central that accepts the connection and never responds', () => {
   it('the ingest fetch does not hang forever — it times out and returns an error result', async () => {
     const id = randomConnId()

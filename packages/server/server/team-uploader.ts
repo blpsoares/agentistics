@@ -477,13 +477,77 @@ export interface PushOnceResult {
 }
 
 /**
- * Core push implementation for ONE connection against the SHARED cycle context.
- * No-op (count=0) when the connection has no endpoint or resolved user (not yet fully
- * connected). Never throws.
+ * Best-effort: this connection's `user` is unresolved (empty) — try to resolve it via whoami
+ * before giving up on the push. A separate, deliberately small implementation from
+ * `resolveMemberIdentity` in team-agent-client.ts (not imported — that module dynamically
+ * imports THIS one, see `removeConnection`'s `reconcileNow` nudge, so a static import back would
+ * put both on the same load-order cycle for one whoami call).
+ *
+ * Returns the resolved name, or '' when it could not be resolved this cycle (network error,
+ * non-2xx central, or a body that carries no usable `user`) — the caller treats that as "not
+ * ready yet", not an error, and retries on the next push cycle (or the WS client's own 5s
+ * reconcile poll resolves it first in practice). On success, persists the name into this
+ * connection's preferences entry so later cycles — and the WS client — pick it up too.
+ *
+ * `deps.updateTeamConfig` is injectable for tests — the default touches the developer's real
+ * ~/.agentistics/preferences.json, which a test must never do.
  */
-export async function pushOnceDetailed(conn: TeamConnection, ctx: PushCycleContext): Promise<PushOnceResult> {
-  if (!conn.endpoint || !conn.user) {
+async function resolveConnectionUser(
+  conn: TeamConnection,
+  deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
+): Promise<string> {
+  const _updateTeamConfig = deps.updateTeamConfig ?? updateTeamConfig
+  try {
+    const endpoint = conn.endpoint.replace(/\/+$/, '')
+    const headers: Record<string, string> = {}
+    if (conn.token) headers['Authorization'] = `Bearer ${conn.token}`
+    const res = await fetch(`${endpoint}/api/team/whoami`, {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(5_000),
+    })
+    if (!res.ok) return ''
+    const json = await res.json() as { ok?: boolean; user?: string }
+    if (!json.ok || typeof json.user !== 'string' || !json.user) return ''
+    const resolved = json.user
+    try {
+      await _updateTeamConfig((current: TeamConfig) => {
+        const existing = current.connections ?? []
+        const idx = existing.findIndex(c => c.id === conn.id)
+        if (idx === -1) return undefined // removed meanwhile — nothing to update
+        if (existing[idx]!.user === resolved) return undefined // already current
+        const next = existing.slice()
+        next[idx] = { ...next[idx]!, user: resolved }
+        return normalizeTeamConfig({ ...current, connections: next })
+      })
+    } catch {
+      // persisting failed — still return the resolved name so THIS push cycle uses it;
+      // the next cycle re-resolves and re-attempts the persist.
+    }
+    return resolved
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Core push implementation for ONE connection against the SHARED cycle context.
+ * No-op (count=0) when the connection has no endpoint, or (having a token or not — an
+ * open/legacy central accepts a token-less member, same as the WS client's gate) its `user`
+ * cannot be resolved even after a fresh whoami attempt this cycle. Never throws.
+ */
+export async function pushOnceDetailed(
+  conn: TeamConnection,
+  ctx: PushCycleContext,
+  deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
+): Promise<PushOnceResult> {
+  if (!conn.endpoint) {
     return { count: 0 }
+  }
+  let user = conn.user
+  if (!user) {
+    user = await resolveConnectionUser(conn, deps)
+    if (!user) return { count: 0 } // still unresolved this cycle — retried next time
   }
   const endpoint = conn.endpoint.replace(/\/+$/, '')
   const ingestTimeoutMs = ctx.ingestTimeoutMs ?? DEFAULT_INGEST_TIMEOUT_MS
@@ -512,7 +576,7 @@ export async function pushOnceDetailed(conn: TeamConnection, ctx: PushCycleConte
           const res = await fetch(`${endpoint}/api/team/ingest`, {
             method: 'POST',
             headers,
-            body: JSON.stringify({ org: conn.org, user: conn.user, sessions: [], statsCache, workflows }),
+            body: JSON.stringify({ org: conn.org, user, sessions: [], statsCache, workflows }),
             signal: AbortSignal.timeout(ingestTimeoutMs),
           })
           // A reachable central (even a non-2xx that isn't auth) counts as contact for the pill.
@@ -536,7 +600,7 @@ export async function pushOnceDetailed(conn: TeamConnection, ctx: PushCycleConte
           method: 'POST',
           headers,
           // Attach the statsCache/workflows to the first batch only (idempotent upsert on the central).
-          body: JSON.stringify({ org: conn.org, user: conn.user, sessions: batch, ...(i === 0 ? { statsCache, workflows } : {}) }),
+          body: JSON.stringify({ org: conn.org, user, sessions: batch, ...(i === 0 ? { statsCache, workflows } : {}) }),
           signal: AbortSignal.timeout(ingestTimeoutMs),
         })
       } catch (fetchErr) {

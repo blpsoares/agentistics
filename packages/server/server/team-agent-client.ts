@@ -66,8 +66,88 @@ function hasCredentials(conn: TeamConnection): boolean {
   return Boolean(conn.endpoint)
 }
 
-function fingerprintOf(conn: TeamConnection): string {
+export function fingerprintOf(conn: TeamConnection): string {
   return `${conn.endpoint}\0${conn.token}`
+}
+
+/**
+ * Whether the socket currently open under `storedFingerprint` (the endpoint+token it was opened
+ * with — `undefined` if none is open) should be torn down for this connection. Pure — no I/O, no
+ * map reads — so the fingerprint-triggered-rotation path (previously only reasoned through, not
+ * exercised) is a one-line unit test instead of a live socket + a rotated token on a mock server.
+ * True when: no socket is open for this id (nothing to tear down is harmless to report true —
+ * the caller no-ops on a missing socket), the connection is gone (`undefined`), it lost its
+ * endpoint, or its live fingerprint no longer matches (token rotated / endpoint changed).
+ */
+export function shouldTeardown(storedFingerprint: string | undefined, conn: TeamConnection | undefined): boolean {
+  if (!conn || !hasCredentials(conn)) return true
+  return storedFingerprint !== fingerprintOf(conn)
+}
+
+// ---------------------------------------------------------------------------
+// Inbound admin frames — 'renamed' / 'reassigned' — decoded as a pure decision
+// ---------------------------------------------------------------------------
+
+export interface AgentFrameDecision {
+  /** A notification to broadcast, or null for an unrecognized/malformed frame. */
+  notification: { type: 'info'; code: 'machine.renamed' | 'machine.reassigned'; meta: Record<string, unknown> } | null
+  /** New value to write into this connection's `user`, or null for "no change". Note that ''
+   *  (empty string) IS a valid update — it means "clear it", not "no change": a reassignment to
+   *  no owner does not tell us what the machine's display name falls back to, so the existing
+   *  empty-user whoami retry (`resolveMemberIdentity`) is the correct way to re-learn it, rather
+   *  than leaving the pre-reassignment name displayed indefinitely. */
+  userUpdate: string | null
+  /** Nudge open dashboards to refetch (reassigned only — the "Connected as" panel needs the
+   *  server round-trip regardless of what the local `user` becomes). */
+  refreshDashboard: boolean
+}
+
+/**
+ * Decode one inbound WebSocket frame from a central into a decision — pure, no I/O, so the
+ * message handler (previously only reasoned through) is a table of unit tests instead of a live
+ * socket sending crafted JSON.
+ *
+ * `meta` (connectionId + central label) is threaded in rather than looked up here — attribution
+ * data lives on the connection, not in the frame the central sent, so with N centrals a "you were
+ * renamed" notification names which one sent it.
+ */
+export function decodeAgentFrame(raw: string, meta: { connectionId: string; central: string }): AgentFrameDecision {
+  const none: AgentFrameDecision = { notification: null, userUpdate: null, refreshDashboard: false }
+  if (!raw) return none
+  let data: { type?: string; name?: string; actor?: string; account?: string | null }
+  try {
+    data = JSON.parse(raw) as typeof data
+  } catch {
+    return none
+  }
+  if (data?.type === 'renamed') {
+    const newName = data.name ?? ''
+    return {
+      notification: {
+        type: 'info', code: 'machine.renamed',
+        meta: { name: newName, actor: data.actor ?? '', ...meta },
+      },
+      userUpdate: newName || null,
+      refreshDashboard: false,
+    }
+  }
+  if (data?.type === 'reassigned') {
+    // A non-empty account is the machine's new display identity (whoami's `user` follows the
+    // owning account — see setMachineOwners in team-tokens.ts) and is persisted directly, same as
+    // a rename. `null`/absent means ownership was cleared and the resulting fallback name lives
+    // server-side only — cleared to '' here so the ordinary empty-user retry re-resolves it,
+    // rather than leaving the pre-reassignment name displayed forever.
+    const account = typeof data.account === 'string' && data.account ? data.account : ''
+    return {
+      notification: {
+        type: 'info', code: 'machine.reassigned',
+        meta: { account: data.account ?? '', actor: data.actor ?? '', ...meta },
+      },
+      userUpdate: account,
+      refreshDashboard: true,
+    }
+  }
+  return none
 }
 
 // ---------------------------------------------------------------------------
@@ -250,36 +330,20 @@ function openConnection(conn: TeamConnection): void {
   })
 
   // Inbound admin actions from the central: 'renamed' (the central renamed this machine) and
-  // 'reassigned' (its owner account changed). Both surface a local notification naming the actor
-  // AND the central that sent it (`meta.connectionId` / `meta.central`, never the token) — with
-  // several centrals an unattributed "you were renamed" is unactionable. 'renamed' also persists
-  // the new name into THIS connection's `user`, and 'reassigned' nudges the dashboard to
-  // re-resolve its identity so the "Connected as" panel stops showing the previous account.
+  // 'reassigned' (its owner account changed). decodeAgentFrame (pure) is the only place that
+  // interprets the raw frame; this listener just carries out its decision — notify, maybe
+  // persist `user`, maybe nudge open dashboards to refetch.
   socket.addEventListener('message', (ev: MessageEvent) => {
-    try {
-      const raw = typeof ev.data === 'string' ? ev.data : ''
-      if (!raw) return
-      const data = JSON.parse(raw) as { type?: string; name?: string; actor?: string; account?: string | null }
-      const meta = { connectionId: conn.id, central: labelOf(conn) }
-      if (data?.type === 'renamed') {
-        const newName = data.name ?? ''
-        void import('./sse').then(m => m.broadcastNotification({
-          type: 'info', code: 'machine.renamed', meta: { name: newName, actor: data.actor ?? '', ...meta },
-        })).catch(() => { /* best-effort */ })
-        if (newName) void persistConnectionUser(conn.id, newName)
-      }
-      if (data?.type === 'reassigned') {
-        void import('./sse').then(m => {
-          m.broadcastNotification({
-            type: 'info', code: 'machine.reassigned',
-            meta: { account: data.account ?? '', actor: data.actor ?? '', ...meta },
-          })
-          // Push a refresh to any open dashboard so the whoami-backed connection panel
-          // re-resolves instead of showing the previous account.
-          m.notifySseClients()
-        }).catch(() => { /* best-effort */ })
-      }
-    } catch { /* ignore malformed frames */ }
+    const raw = typeof ev.data === 'string' ? ev.data : ''
+    const decision = decodeAgentFrame(raw, { connectionId: conn.id, central: labelOf(conn) })
+    if (decision.notification) {
+      const notification = decision.notification
+      void import('./sse').then(m => {
+        m.broadcastNotification(notification)
+        if (decision.refreshDashboard) m.notifySseClients()
+      }).catch(() => { /* best-effort */ })
+    }
+    if (decision.userUpdate !== null) void persistConnectionUser(conn.id, decision.userUpdate)
   })
 
   socket.addEventListener('close', () => {
@@ -359,8 +423,7 @@ async function reconcileConnection(): Promise<void> {
 
   // Close and delete every socket whose connection is gone or whose credentials changed.
   for (const connId of [...activeWs.keys()]) {
-    const conn = byId.get(connId)
-    if (!conn || !hasCredentials(conn) || credFingerprint.get(connId) !== fingerprintOf(conn)) {
+    if (shouldTeardown(credFingerprint.get(connId), byId.get(connId))) {
       teardownSocket(connId)
     }
   }
