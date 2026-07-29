@@ -521,10 +521,17 @@ test('THE CLAMP IS EXACT, not merely non-negative', () => {
 test('a boundary of ‘’ means every day is decomposable', () => {
   const all = storeSessions()
   const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
-  const gapFilledOnly: StatsCache = { ...realCache(), lastComputedDate: '', dailyActivity: [realCache().dailyActivity[1]!], dailyModelTokens: [realCache().dailyModelTokens[1]!], totalSessions: 0, totalMessages: 0, hourCounts: {} }
-  const out = buildSplitStatsCache({ real: gapFilledOnly, allStored: all, shared, boundary: '', sealed: NO_SEAL })!
+  // gapFilledCache() is COHERENT: no watermark, so every rollup-only field is zero and every
+  // daily row reproduces the store exactly. (The old fixture here carried a 1510-token
+  // modelUsage against a 510-token store with an empty lastComputedDate — internally
+  // inconsistent input, so it could not catch a regression.)
+  const out = buildSplitStatsCache({ real: gapFilledCache(), allStored: all, shared, boundary: '', sealed: NO_SEAL })!
   expect(out.dailyActivity).toHaveLength(1)
   expect(out.dailyActivity[0]!.sessionCount).toBe(1)
+  expect(out.dailyActivity[0]!.messageCount).toBe(1)
+  expect(out.dailyModelTokens[0]!.tokensByModel['claude-opus-5']).toBe(10)
+  expect(out.modelUsage['claude-opus-5']!.inputTokens).toBe(10)
+  expect(JSON.stringify(out)).not.toContain('secret')
 })
 
 test('buildSplitStatsCache refuses rather than shipping an unsplit cache', () => {
@@ -629,4 +636,128 @@ test('REVIEW FIX 5: the merged dailyActivity and dailyModelTokens carry no dupli
   const tokenDates = out.dailyModelTokens.map(d => d.date)
   expect(new Set(activityDates).size).toBe(activityDates.length)
   expect(new Set(tokenDates).size).toBe(tokenDates.length)
+})
+
+// --- review round 2 fixes: partial store shrinkage, firstSessionDate at boundary '',
+//     unusable-boundary signalling, and the boundary-'' no-op invariant ---
+
+test('REVIEW FIX I1: a decomposable day the store has LOST makes the split refuse', () => {
+  // real reports 2026-06-25 (a day >= boundary) but the store no longer holds any session for
+  // it — the row would be dropped while real.modelUsage still carries its 510 tokens and the
+  // attributable term subtracts nothing, so a denied repo's volume would ride out.
+  const shrunk = storeSessions().filter(x => x.session_id === 'never-matches')
+  const stillHasAnotherDay = [...shrunk, s({ session_id: 'other', start_time: localAt('2026-06-28', 9), model: 'claude-opus-5', input_tokens: 1 })]
+  expect(buildSplitStatsCache({
+    real: realCache(), allStored: stillHasAnotherDay, shared: stillHasAnotherDay,
+    boundary: '2026-06-23', sealed: NO_SEAL,
+  })).toBeNull()
+})
+
+test('REVIEW FIX I1: a day missing only from dailyModelTokens is caught too', () => {
+  const all = storeSessions()
+  const extraTokenDay: StatsCache = {
+    ...realCache(),
+    dailyModelTokens: [
+      ...realCache().dailyModelTokens,
+      { date: '2026-06-27', tokensByModel: { 'claude-opus-5': 99 } }, // no session in the store
+    ],
+  }
+  expect(buildSplitStatsCache({ real: extraTokenDay, allStored: all, shared: all, boundary: '2026-06-23', sealed: NO_SEAL })).toBeNull()
+})
+
+test('REVIEW FIX I1: a PREHISTORY day absent from the store is fine — that is the normal case', () => {
+  const all = storeSessions() // holds nothing for 2026-02-06, which realCache() reports
+  expect(buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: NO_SEAL })).not.toBeNull()
+})
+
+/** A cache that is ENTIRELY session-derived: Claude has rolled up nothing, so every rollup-only
+ *  field is zero and every daily row reproduces the store exactly. */
+function gapFilledCache(): StatsCache {
+  return {
+    ...emptyStatsCache(),
+    version: 4,
+    lastComputedDate: '',
+    dailyActivity: [{ date: '2026-06-25', messageCount: 9, sessionCount: 2, toolCallCount: 4 }],
+    dailyModelTokens: [{ date: '2026-06-25', tokensByModel: { 'claude-opus-5': 510 } }],
+    modelUsage: {
+      'claude-opus-5': {
+        inputTokens: 510, outputTokens: 0, cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0,
+      },
+    },
+    totalSessions: 0, totalMessages: 0, hourCounts: {},
+    firstSessionDate: localAt('2026-06-25', 9),
+  }
+}
+
+test('THE HEADLINE INVARIANT AT boundary "": denying nothing is a deep-equal no-op', () => {
+  const all = storeSessions()
+  const out = buildSplitStatsCache({ real: gapFilledCache(), allStored: all, shared: all, boundary: '', sealed: NO_SEAL })!
+  expect(out).toEqual(gapFilledCache())
+})
+
+test('REVIEW FIX I2: at boundary "" firstSessionDate comes from the SHARED set, not from real', () => {
+  const all = storeSessions()
+  // The earliest session belongs to the denied repo: its exact ISO start must not ship.
+  const earlyDenied = s({ session_id: 'drop-early', start_time: localAt('2026-06-25', 1), model: 'claude-opus-5', input_tokens: 7, git_remote: 'github.com/o/secret' })
+  const withEarly = [earlyDenied, ...all]
+  const real: StatsCache = {
+    ...gapFilledCache(),
+    dailyActivity: [{ date: '2026-06-25', messageCount: 9, sessionCount: 3, toolCallCount: 4 }],
+    dailyModelTokens: [{ date: '2026-06-25', tokensByModel: { 'claude-opus-5': 517 } }],
+    firstSessionDate: earlyDenied.start_time,
+  }
+  const shared = filterShared(withEarly, normalizeDenied(['github.com/o/secret']))
+  const out = buildSplitStatsCache({ real, allStored: withEarly, shared, boundary: '', sealed: NO_SEAL })!
+  expect(out.firstSessionDate).toBe(localAt('2026-06-25', 9)) // the earliest SHARED session
+  expect(out.firstSessionDate).not.toBe(earlyDenied.start_time)
+})
+
+test('REVIEW FIX I2: with a rollup present firstSessionDate stays verbatim from real (it is prehistory)', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-06-23', sealed: NO_SEAL })!
+  expect(out.firstSessionDate).toBe('2026-02-06T00:53:42.012Z')
+})
+
+test('REVIEW FIX I2: totalSpeculationTimeSavedMs is copied verbatim — no per-session source to seal from', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const real: StatsCache = { ...realCache(), totalSpeculationTimeSavedMs: 123456 }
+  const out = buildSplitStatsCache({ real, allStored: all, shared, boundary: '2026-06-23', sealed: NO_SEAL })!
+  expect(out.totalSpeculationTimeSavedMs).toBe(123456)
+})
+
+test('prehistoryCount and deniedTouchesPrehistory signal an UNUSABLE boundary distinctly', () => {
+  const denied = normalizeDenied(['github.com/o/secret'])
+  const claudeOld = [s({ session_id: 'a', start_time: localAt('2026-02-06', 8), git_remote: 'github.com/o/secret' })]
+  // null (unparseable watermark) is not the same fact as '' (nothing rolled up).
+  expect(prehistoryCount(realCache(), null)).toBeNull()
+  expect(deniedTouchesPrehistory(claudeOld, denied, null)).toBeNull()
+  expect(prehistoryCount(realCache(), '')).toBe(0)
+  expect(deniedTouchesPrehistory(claudeOld, denied, '')).toBe(false)
+})
+
+test('hourCounts is bucketed on the LOCAL clock — discriminating under an explicit offset', () => {
+  // Restoring by DELETING process.env.TZ does not restore the ambient zone in this runtime —
+  // the mutated zone stays cached and leaks into every test file that runs afterwards (it broke
+  // antigravity-parse.test.ts, whose fixture assumes a UTC runtime). So capture the ambient
+  // OFFSET first and restore an explicit zone that reproduces it.
+  const tz = process.env.TZ
+  const ambientOffsetMin = new Date().getTimezoneOffset() // minutes BEHIND UTC
+  try {
+    process.env.TZ = 'America/Sao_Paulo' // UTC-3, no DST since 2019
+    const out = buildSharedStatsCache([s({ session_id: 'a', start_time: '2026-06-21T04:30:00Z' })])
+    expect(out.hourCounts['1']).toBe(1)   // 04:30Z is 01:30 local
+    expect(out.hourCounts['4']).toBeUndefined() // a getUTCHours() implementation fails here
+  } finally {
+    if (tz !== undefined) process.env.TZ = tz
+    else if (ambientOffsetMin === 0) process.env.TZ = 'UTC'
+    else {
+      // Etc/GMT signs are inverted: Etc/GMT+3 is UTC-3, which is what a +180 offset means.
+      const hours = ambientOffsetMin / 60
+      process.env.TZ = `Etc/GMT${hours > 0 ? '+' : '-'}${Math.abs(hours)}`
+    }
+  }
+  expect(new Date().getTimezoneOffset()).toBe(ambientOffsetMin) // the zone really is back
 })

@@ -198,6 +198,54 @@ export function denialSignature(denied: readonly string[] | null | undefined): s
   return createHash('sha256').update(keys.join('\n')).digest('hex')
 }
 
+// ---------------------------------------------------------------------------
+// The per-session gates, defined ONCE.
+//
+// `accumulateClaudeSessions`, `deniedDeltaByDay` and `sumUsage` must agree exactly: the terms
+// they produce are subtracted from one another. They used to carry three hand-written copies of
+// the same four checks under a comment claiming they "mirror exactly" — an edit to one copy is a
+// silent under-subtraction, which is the FAIL-OPEN direction (a denied repo's tokens ride out).
+// ---------------------------------------------------------------------------
+
+/** The day a session contributes to, or `null` when it contributes to nothing.
+ *  `claudeOnly` is false only for data.ts's supplement path, which runs before the harness
+ *  merge and therefore only ever sees Claude sessions anyway. */
+function sessionDay(s: Pick<SessionMeta, 'start_time' | 'harness'>, claudeOnly = true): string | null {
+  if (!s.start_time) return null
+  if (claudeOnly && (s.harness ?? 'claude') !== 'claude') return null
+  return s.start_time.slice(0, 10)
+}
+
+/** Session START hour on the LOCAL clock, like every adapter (reading a UTC timestamp as local
+ *  put the peak-usage chart hours off for four harnesses once already). `null` when unparseable. */
+function sessionHour(s: Pick<SessionMeta, 'start_time'>): number | null {
+  const hour = new Date(s.start_time).getHours()
+  return Number.isFinite(hour) ? hour : null
+}
+
+interface SessionTokens {
+  model: string
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  total: number
+}
+
+/** The token gate: only a `claude-` model id with a nonzero four-field sum contributes tokens.
+ *  `null` means "this session contributes activity but no tokens". */
+function sessionTokens(s: SessionMeta): SessionTokens | null {
+  const model = s.model
+  if (!model || !model.startsWith('claude-')) return null
+  const input = s.input_tokens ?? 0
+  const output = s.output_tokens ?? 0
+  const cacheRead = s.cache_read_input_tokens ?? 0
+  const cacheWrite = s.cache_creation_input_tokens ?? 0
+  const total = input + output + cacheRead + cacheWrite
+  if (total === 0) return null
+  return { model, input, output, cacheRead, cacheWrite, total }
+}
+
 export interface ClaudeAccumulator {
   dailyActivity: Map<string, { messageCount: number; sessionCount: number; toolCallCount: number }>
   dailyModel: Map<string, Map<string, number>>
@@ -232,9 +280,8 @@ export function accumulateClaudeSessions(
   }
 
   for (const s of sessions) {
-    if (!s.start_time) continue
-    if (claudeOnly && (s.harness ?? 'claude') !== 'claude') continue
-    const day = s.start_time.slice(0, 10)
+    const day = sessionDay(s, claudeOnly)
+    if (day === null) continue
     if (after && day <= after) continue
 
     const messages = (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
@@ -248,27 +295,19 @@ export function accumulateClaudeSessions(
     acc.totalMessages += messages
     if (!acc.firstStart || s.start_time < acc.firstStart) acc.firstStart = s.start_time
 
-    // Local clock, like every adapter. Reading a UTC timestamp as local put the peak-usage
-    // chart hours off for four harnesses once already.
-    const hour = new Date(s.start_time).getHours()
-    if (Number.isFinite(hour)) acc.hourCounts.set(hour, (acc.hourCounts.get(hour) ?? 0) + 1)
+    const hour = sessionHour(s)
+    if (hour !== null) acc.hourCounts.set(hour, (acc.hourCounts.get(hour) ?? 0) + 1)
 
-    const model = s.model
-    if (!model || !model.startsWith('claude-')) continue
-    const inp = s.input_tokens ?? 0
-    const out = s.output_tokens ?? 0
-    const cr = s.cache_read_input_tokens ?? 0
-    const cw = s.cache_creation_input_tokens ?? 0
-    const total = inp + out + cr + cw
-    if (total === 0) continue
+    const t = sessionTokens(s)
+    if (!t) continue
 
     const byModel = acc.dailyModel.get(day) ?? new Map<string, number>()
-    byModel.set(model, (byModel.get(model) ?? 0) + total)
+    byModel.set(t.model, (byModel.get(t.model) ?? 0) + t.total)
     acc.dailyModel.set(day, byModel)
 
-    const mt = acc.modelTotals.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-    mt.input += inp; mt.output += out; mt.cacheRead += cr; mt.cacheWrite += cw
-    acc.modelTotals.set(model, mt)
+    const mt = acc.modelTotals.get(t.model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    mt.input += t.input; mt.output += t.output; mt.cacheRead += t.cacheRead; mt.cacheWrite += t.cacheWrite
+    acc.modelTotals.set(t.model, mt)
   }
 
   return acc
@@ -393,9 +432,8 @@ export function deniedDeltaByDay(
   const keep = sharedSessionIds(shared)
   const out: DeniedLedger = {}
   for (const s of allStored) {
-    if (!s.start_time) continue
-    if ((s.harness ?? 'claude') !== 'claude') continue
-    const day = s.start_time.slice(0, 10)
+    const day = sessionDay(s)
+    if (day === null) continue
     if (boundary && day < boundary) continue
     if (!s.session_id || keep.has(s.session_id)) continue
 
@@ -406,22 +444,17 @@ export function deniedDeltaByDay(
     d.sessionCount += 1
     d.messageCount += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
     d.toolCallCount += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
-    const hour = new Date(s.start_time).getHours()
-    if (Number.isFinite(hour)) {
+    const hour = sessionHour(s)
+    if (hour !== null) {
       const k = String(hour)
       d.hourCounts[k] = (d.hourCounts[k] ?? 0) + 1
     }
 
-    const model = s.model
-    if (!model || !model.startsWith('claude-')) continue
-    const inp = s.input_tokens ?? 0
-    const outT = s.output_tokens ?? 0
-    const cr = s.cache_read_input_tokens ?? 0
-    const cw = s.cache_creation_input_tokens ?? 0
-    if (inp + outT + cr + cw === 0) continue
-    d.tokensByModel[model] = (d.tokensByModel[model] ?? 0) + inp + outT + cr + cw
-    const u = d.usageByModel[model] ?? (d.usageByModel[model] = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
-    u.input += inp; u.output += outT; u.cacheRead += cr; u.cacheWrite += cw
+    const t = sessionTokens(s)
+    if (!t) continue
+    d.tokensByModel[t.model] = (d.tokensByModel[t.model] ?? 0) + t.total
+    const u = d.usageByModel[t.model] ?? (d.usageByModel[t.model] = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
+    u.input += t.input; u.output += t.output; u.cacheRead += t.cacheRead; u.cacheWrite += t.cacheWrite
   }
   return out
 }
@@ -452,50 +485,61 @@ export function advanceSeal(
   return { sealed, pending: { ...fresh } }
 }
 
-/** Sessions Claude has already rolled up — the size of the block no rule can split. */
-export function prehistoryCount(real: StatsCache, boundary: string | null): number {
-  if (!boundary) return 0
+/**
+ * Sessions Claude has already rolled up — the size of the block no rule can split.
+ *
+ * `null` when the boundary is unusable (a present but unparseable watermark). That is a
+ * different fact from "nothing precedes the boundary", and it feeds a user-facing confirm
+ * dialog: reporting 0 there would tell the user no unfilterable block exists when the truth is
+ * that its size is unknown. `''` (Claude rolled up nothing) genuinely means 0.
+ */
+export function prehistoryCount(real: StatsCache, boundary: string | null): number | null {
+  if (boundary === null) return null
+  if (boundary === '') return 0
   return (real?.dailyActivity ?? [])
     .filter(d => d.date < boundary)
     .reduce((a, d) => a + d.sessionCount, 0)
 }
 
-/** Does any DENIED repo have a stored CLAUDE session inside the rollup window? Drives the specific
- *  variant of the confirm copy. A false answer is not proof of absence — the store holds only a
- *  subset of that window — which is why the generic copy is always shown too. */
+/**
+ * Does any DENIED repo have a stored CLAUDE session inside the rollup window? Drives the specific
+ * variant of the confirm copy. A false answer is not proof of absence — the store holds only a
+ * subset of that window — which is why the generic copy is always shown too.
+ *
+ * `null` when the boundary is unusable (present but unparseable watermark): the question cannot
+ * be answered at all, and answering `false` would put the reassuring copy in front of the user on
+ * no evidence. `''` (nothing rolled up) means there IS no rollup window, hence a real `false`.
+ */
 export function deniedTouchesPrehistory(
   allStored: readonly SessionMeta[],
   denied: ReadonlySet<RepoKey>,
   boundary: string | null,
   index?: PathRepoIndex,
-): boolean {
-  if (!boundary || denied.size === 0) return false
+): boolean | null {
+  if (boundary === null) return null
+  if (boundary === '' || denied.size === 0) return false
   for (const s of allStored) {
-    if (!s.start_time || s.start_time.slice(0, 10) >= boundary) continue
-    if ((s.harness ?? 'claude') !== 'claude') continue
+    const day = sessionDay(s)
+    if (day === null || day >= boundary) continue
     if (!sessionShared(s, denied, index)) return true
   }
   return false
 }
 
+/** Per-model token totals over the days `>= from`. No hour map: `hourCounts` describes the
+ *  rollup alone and never gains a term from the decomposable window (§4.3b). */
 function sumUsage(sessions: readonly SessionMeta[], from: string) {
   const totals = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>()
-  const hours = new Map<number, number>()
   for (const s of sessions) {
-    if (!s.start_time || s.start_time.slice(0, 10) < from) continue
-    if ((s.harness ?? 'claude') !== 'claude') continue
-    const hour = new Date(s.start_time).getHours()
-    if (Number.isFinite(hour)) hours.set(hour, (hours.get(hour) ?? 0) + 1)
-    const model = s.model
-    if (!model || !model.startsWith('claude-')) continue
-    const t = totals.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-    t.input += s.input_tokens ?? 0
-    t.output += s.output_tokens ?? 0
-    t.cacheRead += s.cache_read_input_tokens ?? 0
-    t.cacheWrite += s.cache_creation_input_tokens ?? 0
-    totals.set(model, t)
+    const day = sessionDay(s)
+    if (day === null || day < from) continue
+    const t = sessionTokens(s)
+    if (!t) continue
+    const acc = totals.get(t.model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    acc.input += t.input; acc.output += t.output; acc.cacheRead += t.cacheRead; acc.cacheWrite += t.cacheWrite
+    totals.set(t.model, acc)
   }
-  return { totals, hours }
+  return { totals }
 }
 
 /**
@@ -507,15 +551,16 @@ function sumUsage(sessions: readonly SessionMeta[], from: string) {
  * the seal and never gain a `kept` term. Every value is copied, summed or subtracted; nothing is
  * estimated, ratioed or prorated.
  *
- * PRECONDITION the caller must uphold: `real` was supplemented from the SAME session array passed
- * here as `allStored`. If the store has shrunk between the two reads (files pruned, a partial
- * store re-read), `dailyActivity`/`dailyModelTokens` lose a day's row while `real.modelUsage` still
- * carries that day's tokens — a fail-open for a denied repo that the cold-store guard below cannot
- * catch, because it only detects TOTAL loss (zero Claude sessions), not partial shrinkage.
+ * PRECONDITION: `real` was supplemented from the SAME session array passed here as `allStored`.
+ * It is CHECKED, not trusted — a store that has shrunk between the two reads (files pruned, a
+ * partial store re-read) is refused below, because the lost day's row would vanish from the
+ * output while `real.modelUsage` still carried its tokens: a fail-open for a denied repo.
  *
  * Returns null rather than an unsplit or inconsistent cache when:
  * - `real` is missing,
  * - the store yields no Claude session while `real` reports data (cold-store signature),
+ * - a decomposable day (`>= boundary`) present in `real` has no Claude session left in the store
+ *   (partial shrinkage — the precondition above),
  * - `boundary` is `null` — a watermark IS present but could not be parsed, which is a fact
  *   distinct from "nothing rolled up" and must not be treated as either extreme, or
  * - `real` is self-contradictory: no watermark (`lastComputedDate === ''`) yet it still reports a
@@ -549,12 +594,42 @@ export function buildSplitStatsCache(input: {
 
   // boundary '' means Claude rolled up nothing, so NO day is prehistory.
   const isPrehistory = (day: string) => boundary !== '' && day < boundary
-  const fromShared = buildSharedStatsCache(shared, { version: real.version })
+
+  // PARTIAL store shrinkage — the precondition above, made cheaply detectable here rather than
+  // trusted. Every decomposable day the cache reports must still have a Claude session in the
+  // store: the day is rebuilt from `fromShared` alone, so a day the store has lost loses its
+  // daily row entirely while `real.modelUsage` still carries its tokens and the `attributable`
+  // term subtracts nothing — a denied repo's volume rides out. The cold-store guard above only
+  // catches TOTAL loss. Refuse, like every other unsatisfiable case.
+  const storeDays = new Set<string>()
+  for (const s of allStored) {
+    const day = sessionDay(s)
+    if (day !== null && !isPrehistory(day)) storeDays.add(day)
+  }
+  for (const d of real.dailyActivity ?? []) {
+    if (!isPrehistory(d.date) && !storeDays.has(d.date)) return null
+  }
+  for (const d of real.dailyModelTokens ?? []) {
+    if (!isPrehistory(d.date) && !storeDays.has(d.date)) return null
+  }
+
+  const fromShared = buildSharedStatsCache(shared)
 
   const out = emptyStatsCache()
   out.version = real.version
   out.lastComputedDate = real.lastComputedDate
-  out.firstSessionDate = real.firstSessionDate
+  // firstSessionDate is an exact ISO timestamp of one session. When boundary === '' the whole
+  // cache is session-derived, so the shared set is the only honest source: taking `real`'s there
+  // would ship the exact start instant of the machine's earliest session even when that session
+  // belongs to a denied repo. With a rollup present the earliest session is prehistory by
+  // definition — nothing the rules can reach — and `real` is correct.
+  out.firstSessionDate = boundary === '' ? fromShared.firstSessionDate : real.firstSessionDate
+  // totalSpeculationTimeSavedMs is copied with NO seal term, deliberately. It is a single global
+  // scalar: Claude publishes no daily series for it and SessionMeta carries no per-session
+  // equivalent, so there is nothing to measure a denied delta FROM — any subtraction would be an
+  // estimate, and §4.3b forbids estimates in the split. It is also repo-blind in substance: a
+  // duration total carries no project path, model, name or count that could distinguish one
+  // repository from another, unlike the fields that do get sealed.
   out.totalSpeculationTimeSavedMs = real.totalSpeculationTimeSavedMs
 
   // --- longestSession names a single session; zero it when that session is one we withhold.
