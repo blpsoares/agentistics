@@ -1,66 +1,36 @@
 /**
- * cli-i18n.ts — English/Portuguese strings for the interactive `agentop start` launcher.
+ * cli-i18n.ts — English/Portuguese strings the HOST produces.
  *
  * The CLI is English by default. The language follows `preferences.lang` (shared with the web
- * toggle), an in-launcher toggle that persists there, or a `--lang en|pt` flag. These strings are
- * CLI-specific (the @agentistics/core i18n keys are web-focused), kept here so the launcher stays
- * self-contained and bundles cleanly into the binary.
+ * toggle), an in-app toggle that persists there, or a `--lang en|pt` flag. These strings are
+ * CLI-specific (the @agentistics/core i18n keys are web-focused), kept here so the control center
+ * stays self-contained and bundles cleanly into the binary.
+ *
+ * The division of labour: everything here is something `cli-start.ts` PRODUCES — a service label, a
+ * mode sentence, the outcome of an action, a line printed by a non-interactive subcommand. The
+ * words the control center's own screens are made of live in `tui/src/control/i18n.ts`, because the
+ * host hands the TUI a `ControlStatus`, not a string table.
+ *
+ * The flat arrow-key launcher this file was written for is gone, and with it forty entries that
+ * named its menu items and its "stop which?" submenus. They were deleted rather than left in place:
+ * a string table is documentation of what the program can say, and entries for a menu that no
+ * longer exists document a program that no longer exists.
  */
 
 export type CliLang = 'en' | 'pt'
 
 export interface CliStrings {
   tagline: string
-  configLabel: string
-  runningLabel: string
   configSolo: string
-  configMember: (endpoint: string) => string
+  /** The member sentence WITHOUT the endpoint, for surfaces that print the endpoint themselves. */
+  configMemberBare: string
   configCentral: string
-  runAgentistics: string
-  runCentral: string
-  runMachine: string
   nothingRunning: string
 
-  menuTitle: string
-  itemAgentistics: string
-  itemAgentisticsHint: string
-  itemCentral: string
-  itemCentralHint: string
-  itemConnect: string
-  itemConnectHint: string
-  itemDisconnect: string
-  itemDisconnectHint: string
-  itemStop: string
-  itemRestart: string
-  itemRestartHint: string
-  itemLanguage: string
-  quit: string
-  back: string
-
-  howTitle: string
-  foreground: string
-  foregroundHint: string
-  background: string
-  backgroundHint: string
-  docker: string
-  dockerHint: string
-  centralDockerHint: string
-
-  promptEndpoint: string
-  promptToken: string
-  promptOrg: string
-  confirmBoot: string
   confirmKill: string
   alreadyRunning: (url: string) => string
   leftRunning: string
   pauseMsg: string
-
-  stopWhich: string
-  stopLocal: string
-  stopCentral: string
-  stopMachine: string
-  stopEverything: string
-  cancel: string
 
   startedBg: string
   logsLabel: string
@@ -71,7 +41,6 @@ export interface CliStrings {
   stoppingLocal: string
   stoppingCentral: string
   stoppingMachine: string
-  restartWhich: string
   restartingLocal: string
   restartingCentral: string
   restartingMachine: string
@@ -86,6 +55,65 @@ export interface CliStrings {
   noComposeFrom: (dir: string) => string
   runFromRepo: string
   buildingMachine: string
+
+  // control center — service rows, action outcomes and the reasons a state is unknown.
+  // Everything the control center shows comes from the host already localized, so every sentence
+  // it can print has to exist here.
+  /** The browser-open outcome. */
+  urlOpened: (url: string) => string
+  urlOpenFailed: string
+
+  /** The two LOGICAL service names — one row each, whichever runtime they happen to be using. */
+  svcAgentistics: string
+  svcCentral: string
+  /**
+   * More than one runtime of the same logical service is up.
+   *
+   * Takes the runtime words so both are NAMED: the row is painted in the danger colour, and a
+   * colour on its own carries no meaning on a terminal that flattens it. It is the one service
+   * state the screen must never tidy away — the two copies share the port and the files.
+   *
+   * The word and both names come FIRST, before the advice. The sentence is drawn into the detail
+   * pane, which on a narrow terminal is under thirty columns wide and truncates from the right —
+   * so a sentence that reached its second runtime at column thirty was, at exactly the sizes where
+   * the services row can say least, a red line that named one runtime.
+   */
+  svcConflict: (runtimes: string[]) => string
+  /** A stop/restart named something that is not running. */
+  svcNotRunning: string
+  dockerMissing: string
+  dockerUnreachable: string
+  foregroundLater: string
+  useRestartInstead: string
+
+  /**
+   * The start options a service offers while it is down — the host composes them because only it
+   * knows what this box can run, and a running service offers NONE of them.
+   */
+  optForeground: string
+  optForegroundHint: string
+  optBackground: string
+  optBackgroundHint: string
+  optDocker: string
+  optDockerHint: string
+  optCentral: string
+  optCentralHint: string
+  /** `Stop (native)` / `Stop (docker)` — offered only to break a conflict. */
+  stopRuntime: (runtime: string) => string
+  archiveUnsetHint: string
+  dockerStartFailed: string
+  centralStarted: string
+  centralFailed: string
+  centralInitDone: string
+  centralInitFailed: string
+  connected: string
+  connectFailed: string
+  disconnectFailed: string
+  stoppedAll: string
+  stoppedDone: string
+  soloSet: string
+  archiveSet: (mode: string) => string
+  prefsWriteFailed: string
 
   // critical (unattended) update — printed by `agentop check-update`
   updateCriticalTitle: string
@@ -114,56 +142,15 @@ export interface CliStrings {
 
 const EN: CliStrings = {
   tagline: 'AI coding-assistant analytics · agentop',
-  configLabel: 'config',
-  runningLabel: 'running',
   configSolo: 'solo — nothing leaves this machine',
-  configMember: (e) => `member — sends metrics to a central at ${e}`,
+  configMemberBare: 'member — sends metrics to a central',
   configCentral: 'central — this machine hosts the team central',
-  runAgentistics: 'agentistics    (this machine)',
-  runCentral: 'agentistics central    (docker)',
-  runMachine: 'agentistics    (docker)',
   nothingRunning: 'nothing running',
 
-  menuTitle: 'What would you like to start?',
-  itemAgentistics: 'agentistics',
-  itemAgentisticsHint: 'this machine',
-  itemCentral: 'agentistics central',
-  itemCentralHint: 'team aggregator · :48080',
-  itemConnect: 'Connect to a central',
-  itemConnectHint: 'send my metrics (become a member)',
-  itemDisconnect: 'Disconnect from the central',
-  itemDisconnectHint: 'back to solo',
-  itemStop: 'Stop a running service…',
-  itemRestart: 'Restart a running service…',
-  itemRestartHint: 'one, or all',
-  itemLanguage: 'Switch to Português',
-  quit: 'Quit',
-  back: 'Back',
-
-  howTitle: 'How should it run?',
-  foreground: 'Foreground',
-  foregroundHint: 'this terminal',
-  background: 'Background',
-  backgroundHint: 'detached',
-  docker: 'Docker',
-  dockerHint: 'container',
-  centralDockerHint: 'bundles MongoDB · :48080',
-
-  promptEndpoint: 'Central endpoint URL (e.g. http://host:48080)',
-  promptToken: "Member token (from the central's Team Manager)",
-  promptOrg: 'Org',
-  confirmBoot: 'Also start it on every boot (systemd service)?',
   confirmKill: 'Kill it and start fresh?',
   alreadyRunning: (url) => `A server is already running on ${url}.`,
   leftRunning: 'left the running server as-is.',
   pauseMsg: 'Press Enter to go back',
-
-  stopWhich: 'Stop which?',
-  stopLocal: 'agentistics (local server)',
-  stopCentral: 'agentistics central (docker)',
-  stopMachine: 'agentistics (docker)',
-  stopEverything: 'Everything',
-  cancel: 'Cancel',
 
   startedBg: 'started in the background.',
   logsLabel: 'logs',
@@ -174,7 +161,6 @@ const EN: CliStrings = {
   stoppingLocal: 'stopping the local server…',
   stoppingCentral: 'stopping the central container…',
   stoppingMachine: 'stopping the machine container…',
-  restartWhich: 'Restart which?',
   restartingLocal: 'restarting the local server…',
   restartingCentral: 'restarting the central container…',
   restartingMachine: 'restarting the machine container…',
@@ -189,6 +175,42 @@ const EN: CliStrings = {
   noComposeFrom: (dir) => `couldn't find docker-compose.machine.yml in ${dir}.`,
   runFromRepo: 'Run agentop start from the agentistics repo to use Docker.',
   buildingMachine: 'building & starting the machine container…',
+
+  urlOpened: url => `opened ${url}`,
+  urlOpenFailed: 'could not open a browser from here',
+
+  svcAgentistics: 'agentistics',
+  svcCentral: 'agentistics central',
+  svcConflict: (runtimes) => `conflict: ${runtimes.join(' + ')} both running — stop one`,
+  svcNotRunning: 'that service is not running.',
+  dockerMissing: 'docker not installed',
+  dockerUnreachable: 'docker is installed but not answering',
+  foregroundLater: 'foreground starts once this screen closes.',
+  useRestartInstead: 'Use Restart to replace it.',
+
+  optForeground: 'Start (this terminal)',
+  optForegroundHint: 'runs here until you quit',
+  optBackground: 'Start (background)',
+  optBackgroundHint: 'detached — keeps running',
+  optDocker: 'Start (docker)',
+  optDockerHint: 'the same server, in a container',
+  optCentral: 'Start',
+  optCentralHint: 'the team central, in Docker',
+  stopRuntime: (runtime) => `Stop (${runtime})`,
+  archiveUnsetHint: 'history preservation is still unset — see the Setup tab',
+  dockerStartFailed: 'the machine container did not start.',
+  centralStarted: 'agentistics central is up.',
+  centralFailed: 'the central did not start.',
+  centralInitDone: 'central configured.',
+  centralInitFailed: 'central init did not complete.',
+  connected: 'connected — this machine is now a member.',
+  connectFailed: 'could not connect to the central.',
+  disconnectFailed: 'could not disconnect from the central.',
+  stoppedAll: 'stopped every running service.',
+  stoppedDone: 'service stopped.',
+  soloSet: 'solo mode set — nothing leaves this machine.',
+  archiveSet: (mode) => `history preservation set to ${mode}.`,
+  prefsWriteFailed: 'could not write preferences.',
 
   updateCriticalTitle: 'Critical update — installing automatically',
   updateCriticalInstalling: (v) => `v${v} is being installed in the background; your terminal is free.`,
@@ -215,56 +237,15 @@ const EN: CliStrings = {
 
 const PT: CliStrings = {
   tagline: 'Analytics de assistentes de código IA · agentop',
-  configLabel: 'config',
-  runningLabel: 'no ar',
   configSolo: 'solo — nada sai desta máquina',
-  configMember: (e) => `member — envia métricas para uma central em ${e}`,
+  configMemberBare: 'member — envia métricas para uma central',
   configCentral: 'central — esta máquina hospeda a central do time',
-  runAgentistics: 'agentistics    (esta máquina)',
-  runCentral: 'agentistics central    (docker)',
-  runMachine: 'agentistics    (docker)',
   nothingRunning: 'nada rodando',
 
-  menuTitle: 'O que você quer iniciar?',
-  itemAgentistics: 'agentistics',
-  itemAgentisticsHint: 'esta máquina',
-  itemCentral: 'agentistics central',
-  itemCentralHint: 'agregador do time · :48080',
-  itemConnect: 'Conectar a uma central',
-  itemConnectHint: 'enviar minhas métricas (virar member)',
-  itemDisconnect: 'Desconectar da central',
-  itemDisconnectHint: 'voltar para solo',
-  itemStop: 'Parar um serviço…',
-  itemRestart: 'Reiniciar um serviço…',
-  itemRestartHint: 'um, ou todos',
-  itemLanguage: 'Trocar para English',
-  quit: 'Sair',
-  back: 'Voltar',
-
-  howTitle: 'Como rodar?',
-  foreground: 'Foreground',
-  foregroundHint: 'neste terminal',
-  background: 'Background',
-  backgroundHint: 'destacado',
-  docker: 'Docker',
-  dockerHint: 'container',
-  centralDockerHint: 'embute o MongoDB · :48080',
-
-  promptEndpoint: 'URL da central (ex.: http://host:48080)',
-  promptToken: 'Token do member (no Team Manager da central)',
-  promptOrg: 'Org',
-  confirmBoot: 'Iniciar também no boot (serviço systemd)?',
   confirmKill: 'Matar e subir de novo?',
   alreadyRunning: (url) => `Já tem um server rodando em ${url}.`,
   leftRunning: 'mantive o server que já estava rodando.',
   pauseMsg: 'Pressione Enter para voltar',
-
-  stopWhich: 'Parar o quê?',
-  stopLocal: 'agentistics (server local)',
-  stopCentral: 'agentistics central (docker)',
-  stopMachine: 'agentistics (docker)',
-  stopEverything: 'Tudo',
-  cancel: 'Cancelar',
 
   startedBg: 'iniciado em background.',
   logsLabel: 'logs',
@@ -275,7 +256,6 @@ const PT: CliStrings = {
   stoppingLocal: 'parando o server local…',
   stoppingCentral: 'parando o container da central…',
   stoppingMachine: 'parando o container da máquina…',
-  restartWhich: 'Reiniciar o quê?',
   restartingLocal: 'reiniciando o server local…',
   restartingCentral: 'reiniciando o container da central…',
   restartingMachine: 'reiniciando o container da máquina…',
@@ -290,6 +270,42 @@ const PT: CliStrings = {
   noComposeFrom: (dir) => `não achei docker-compose.machine.yml em ${dir}.`,
   runFromRepo: 'Rode agentop start de dentro do repo agentistics para usar Docker.',
   buildingMachine: 'buildando & subindo o container da máquina…',
+
+  urlOpened: url => `abriu ${url}`,
+  urlOpenFailed: 'não foi possível abrir um navegador daqui',
+
+  svcAgentistics: 'agentistics',
+  svcCentral: 'agentistics central',
+  svcConflict: (runtimes) => `conflito: ${runtimes.join(' + ')} rodando juntos — pare um`,
+  svcNotRunning: 'esse serviço não está rodando.',
+  dockerMissing: 'docker não instalado',
+  dockerUnreachable: 'docker instalado, mas não responde',
+  foregroundLater: 'o foreground sobe assim que esta tela fechar.',
+  useRestartInstead: 'Use Reiniciar para trocar.',
+
+  optForeground: 'Iniciar (neste terminal)',
+  optForegroundHint: 'roda aqui até você sair',
+  optBackground: 'Iniciar (background)',
+  optBackgroundHint: 'destacado — continua rodando',
+  optDocker: 'Iniciar (docker)',
+  optDockerHint: 'o mesmo server, em um container',
+  optCentral: 'Iniciar',
+  optCentralHint: 'a central do time, em Docker',
+  stopRuntime: (runtime) => `Parar (${runtime})`,
+  archiveUnsetHint: 'a preservação do histórico ainda não foi definida — veja a aba Setup',
+  dockerStartFailed: 'o container da máquina não subiu.',
+  centralStarted: 'agentistics central está no ar.',
+  centralFailed: 'a central não subiu.',
+  centralInitDone: 'central configurada.',
+  centralInitFailed: 'o init da central não terminou.',
+  connected: 'conectado — esta máquina agora é member.',
+  connectFailed: 'não consegui conectar na central.',
+  disconnectFailed: 'não consegui desconectar da central.',
+  stoppedAll: 'todos os serviços no ar foram parados.',
+  stoppedDone: 'serviço parado.',
+  soloSet: 'modo solo definido — nada sai desta máquina.',
+  archiveSet: (mode) => `preservação do histórico definida como ${mode}.`,
+  prefsWriteFailed: 'não consegui gravar as preferências.',
 
   updateCriticalTitle: 'Atualização crítica — instalando automaticamente',
   updateCriticalInstalling: (v) => `a v${v} está sendo instalada em segundo plano; seu terminal está livre.`,

@@ -1,5 +1,6 @@
 export * from './types'
 export * from './format'
+export * from './streak'
 export * from './otel'
 export * from './chatUtils'
 export * from './i18n'

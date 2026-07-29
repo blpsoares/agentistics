@@ -1,0 +1,425 @@
+/**
+ * i18n.ts — the control center's own chrome strings (EN/PT).
+ *
+ * Division of labour with `server/cli-i18n.ts`: anything the HOST produces — service labels,
+ * mode sentences, action outcomes — is already localized by the time it reaches a component, and
+ * stays in `cli-i18n.ts`. What lives here is the chrome the TUI owns and the server knows nothing
+ * about: tab names, key hints, empty states, the words on this app's own screens.
+ */
+
+import type { CliLang } from './lang'
+import type { TabId } from './types'
+
+export interface ControlStrings {
+  tagline: string
+
+  tabs: Record<TabId, string>
+  /**
+   * The tab bar's names — lowercase, because the bar is chrome and the panes are what the eye
+   * should land on, and short because six of them share one row in two languages.
+   *
+   * They are also every pane title on the linear screens, so a screen is called the same thing in
+   * the bar and in the frame around it.
+   */
+  tabsShort: Record<TabId, string>
+
+  /** Footer key hints. */
+  keyTabs: string
+  keyPane: string
+  keyMove: string
+  keySelect: string
+  keyActions: string
+  keyActionMove: string
+  keyRun: string
+  keyStop: string
+  keyRestart: string
+  keyOpen: string
+  keyBack: string
+  keyQuit: string
+  keyScroll: string
+  /** `g`/`G` and Home/End — the ends of a document, named once for every screen that scrolls. */
+  keyEnds: string
+  keyRefresh: string
+  keyLogSource: string
+  /**
+   * The mouse's two hints, said only while there IS a mouse.
+   *
+   * `keyMouseCopy` is the important one and exists because tracking has a cost: with the terminal
+   * reporting buttons, a plain drag no longer selects text, and `shift` is what hands the gesture
+   * back to the terminal. It is stated only while tracking is on, because that is the only time it
+   * is true — a hint for a workaround that is not needed teaches the wrong thing just as surely as
+   * a hint for a key that does nothing.
+   */
+  keyMouse: string
+  keyMouseCopy: string
+
+  /** Pane titles. */
+  paneServices: string
+  paneConfig: string
+  /** The detail pane's title while nothing is selected; normally it wears the service's name. */
+  paneDetail: string
+
+  /**
+   * The detail pane's section rules.
+   *
+   * Uppercase, like every other section header in the app (small caps, which no terminal has), and
+   * plural because each heads a list of rows rather than one fact.
+   */
+  sectionRuntimes: string
+  sectionAddresses: string
+  sectionMachine: string
+
+  modeLabel: string
+  historyLabel: string
+  endpointLabel: string
+  languageLabel: string
+  /** The language currently in force, named in itself — `English` in EN, `Português` in PT. */
+  languageValue: string
+  setupLabel: string
+  /** The config pane's mouse row, and the two words it states. `on`/`off`, never a colour. */
+  mouseLabel: string
+  mouseOn: string
+  mouseOff: string
+
+  /** Detail pane. */
+  pidLabel: string
+  uptimeLabel: string
+  webLabel: string
+  apiLabel: string
+  noServices: string
+  /**
+   * The boot row: whether the service comes back after a reboot.
+   *
+   * There is no third word for "we could not tell" on purpose — an unknown draws NO row, because a
+   * service that says "will not restart" when nobody asked systemd is a fact a user acts on.
+   */
+  bootLabel: string
+  bootOn: string
+  bootOff: string
+
+  /**
+   * Actions on the focused service.
+   *
+   * There is no generic `Start` here any more: a start is a RUNTIME, and only the host knows which
+   * ones this box can perform — so it composes and labels them (`Start (docker)`), and this table
+   * carries only the verbs whose meaning is the same wherever they appear.
+   */
+  actStop: string
+  actRestart: string
+  actOpen: string
+  actStopAll: string
+  actRestartAll: string
+  actConnect: string
+  actDisconnect: string
+  actHistory: string
+  actLanguage: string
+  actMouse: string
+  /** Install the boot unit for the selected service — offered beside its start options. */
+  actBoot: string
+
+  stateUp: string
+  stateDown: string
+  stateUnknown: string
+  /**
+   * The services row's word for `ControlService.conflict`.
+   *
+   * The row has one cell for a state, and the host's conflict sentence is a sentence; this is what
+   * fits in the cell. It is a WORD beside the danger colour and a glyph, never the colour alone,
+   * and the sentence itself is right there in the detail pane.
+   */
+  stateConflict: string
+
+  working: string
+  yes: string
+  no: string
+
+  /** Services tab. */
+  killQuestion: string
+
+  /** Setup tab. */
+  setupIntro: string
+  setupSolo: string
+  setupSoloHint: string
+  setupCentral: string
+  setupCentralHint: string
+  setupMember: string
+  setupMemberHint: string
+  archiveUnset: string
+  archiveQuestion: string
+  archiveWhy: string
+  archiveConsolidate: string
+  archiveConsolidateHint: string
+  archiveFull: string
+  archiveFullHint: string
+  archiveOff: string
+  archiveOffHint: string
+  bootQuestion: string
+
+  /** Logs tab. */
+  logSource: string
+  logEmpty: string
+  logLoading: string
+  logFollow: string
+  logFollowing: string
+  logPaused: string
+
+  /** Static tabs. */
+  helpIntro: string
+  cheatIntro: string
+  contributeIntro: string
+  copyHint: string
+  /** The same reminder while the mouse reports, when a plain drag no longer selects. */
+  copyHintShift: string
+}
+
+const EN: ControlStrings = {
+  tagline: 'AI coding-assistant analytics',
+
+  tabs: {
+    services: 'Services',
+    setup: 'Setup',
+    logs: 'Logs',
+    cheatsheet: 'Cheat sheet',
+    help: 'Help',
+    contribute: 'Contribute',
+  },
+
+  tabsShort: {
+    services: 'services',
+    setup: 'setup',
+    logs: 'logs',
+    cheatsheet: 'commands',
+    help: 'help',
+    contribute: 'contribute',
+  },
+
+  keyTabs: '←→ screens',
+  keyPane: 'tab pane',
+  keyMove: '↑↓ move',
+  keySelect: 'enter select',
+  keyActions: 'enter actions',
+  keyActionMove: '←→ action',
+  keyRun: 'enter run',
+  keyStop: 's stop',
+  keyRestart: 'R restart',
+  keyOpen: 'o open',
+  keyBack: 'esc back',
+  keyQuit: 'q quit',
+  keyScroll: '↑↓/pg scroll',
+  keyEnds: 'g/G ends',
+  keyRefresh: 'r refresh',
+  keyLogSource: '[ ] source',
+  keyMouse: 'm mouse',
+  keyMouseCopy: 'shift+drag to copy',
+
+  paneServices: 'services',
+  paneConfig: 'config',
+  paneDetail: 'detail',
+
+  sectionRuntimes: 'RUNTIMES',
+  sectionAddresses: 'ADDRESSES',
+  sectionMachine: 'MACHINE',
+
+  // Lowercase, and the same case as the pane titles: these are row labels inside a pane, not
+  // section headers over one. SETUP stays uppercase because it still heads a section.
+  modeLabel: 'mode',
+  historyLabel: 'history',
+  endpointLabel: 'endpoint',
+  languageLabel: 'language',
+  languageValue: 'English',
+  setupLabel: 'SETUP',
+  mouseLabel: 'mouse',
+  mouseOn: 'on',
+  mouseOff: 'off',
+
+  pidLabel: 'pid',
+  uptimeLabel: 'up',
+  webLabel: 'web',
+  apiLabel: 'api',
+  noServices: 'nothing detected yet.',
+  bootLabel: 'boot',
+  bootOn: 'starts at boot',
+  bootOff: 'does not start at boot',
+
+  actStop: 'Stop',
+  actRestart: 'Restart',
+  actOpen: 'Open in browser',
+  actStopAll: 'Stop all',
+  actRestartAll: 'Restart all',
+  actConnect: 'Connect',
+  actDisconnect: 'Disconnect',
+  actHistory: 'Change',
+  actLanguage: 'Switch',
+  actMouse: 'Switch',
+  actBoot: 'Start at boot',
+
+  stateUp: 'up',
+  stateDown: 'stopped',
+  stateUnknown: 'unknown',
+  stateConflict: 'conflict',
+
+  working: 'working',
+  yes: 'Yes',
+  no: 'No',
+
+  killQuestion: 'A server is already running here — stop it and start a new one?',
+
+  setupIntro: 'How this machine tracks usage, and what leaves it.',
+  setupSolo: 'solo',
+  setupSoloHint: 'local only — nothing leaves this machine',
+  setupCentral: 'central',
+  setupCentralHint: 'host the team central (Docker) here',
+  setupMember: 'member',
+  setupMemberHint: 'everything solo does, plus push metrics (never chat) to a central',
+  archiveUnset: 'not chosen yet',
+  archiveQuestion: 'Preserve session history?',
+  archiveWhy: 'Claude deletes session transcripts older than 30 days.',
+  archiveConsolidate: 'consolidate',
+  archiveConsolidateHint: 'recommended — store computed per-session metrics (~KB each)',
+  archiveFull: 'full',
+  archiveFullHint: 'archivist — also mirror raw transcripts so you can re-read chats (heavy)',
+  archiveOff: 'off',
+  archiveOffHint: "do nothing — use Claude's default 30-day cleanup",
+  bootQuestion: 'Start it on every boot (systemd user service)?',
+
+  logSource: 'SOURCE',
+  logEmpty: 'nothing logged yet.',
+  logLoading: 'reading…',
+  logFollow: 'f follow',
+  logFollowing: 'following',
+  logPaused: 'paused',
+
+  helpIntro: 'Every command, with the flags that matter. `agentop --help` prints this plain.',
+  cheatIntro: 'The commands worth remembering.',
+  contributeIntro: 'Agentistics is open source — issues and pull requests welcome.',
+  copyHint: 'select with the mouse to copy',
+  copyHintShift: 'hold shift and drag to select and copy',
+}
+
+const PT: ControlStrings = {
+  tagline: 'Analytics de assistentes de código IA',
+
+  tabs: {
+    services: 'Serviços',
+    setup: 'Setup',
+    logs: 'Logs',
+    cheatsheet: 'Comandos',
+    help: 'Ajuda',
+    contribute: 'Contribuir',
+  },
+
+  tabsShort: {
+    services: 'serviços',
+    setup: 'setup',
+    logs: 'logs',
+    cheatsheet: 'comandos',
+    help: 'ajuda',
+    contribute: 'contribuir',
+  },
+
+  keyTabs: '←→ telas',
+  keyPane: 'tab painel',
+  keyMove: '↑↓ mover',
+  keySelect: 'enter escolher',
+  keyActions: 'enter ações',
+  keyActionMove: '←→ ação',
+  keyRun: 'enter executar',
+  keyStop: 's parar',
+  keyRestart: 'R reiniciar',
+  keyOpen: 'o abrir',
+  keyBack: 'esc voltar',
+  keyQuit: 'q sair',
+  keyScroll: '↑↓/pg rolar',
+  keyEnds: 'g/G extremos',
+  keyRefresh: 'r atualizar',
+  keyLogSource: '[ ] fonte',
+  keyMouse: 'm mouse',
+  keyMouseCopy: 'shift+arrastar copia',
+
+  paneServices: 'serviços',
+  paneConfig: 'config',
+  paneDetail: 'detalhe',
+
+  sectionRuntimes: 'RUNTIMES',
+  sectionAddresses: 'ENDEREÇOS',
+  sectionMachine: 'MÁQUINA',
+
+  modeLabel: 'modo',
+  historyLabel: 'histórico',
+  endpointLabel: 'endpoint',
+  languageLabel: 'idioma',
+  languageValue: 'Português',
+  setupLabel: 'SETUP',
+  mouseLabel: 'mouse',
+  mouseOn: 'ligado',
+  mouseOff: 'desligado',
+
+  pidLabel: 'pid',
+  uptimeLabel: 'no ar há',
+  webLabel: 'web',
+  apiLabel: 'api',
+  noServices: 'nada detectado ainda.',
+  bootLabel: 'boot',
+  bootOn: 'inicia no boot',
+  bootOff: 'não inicia no boot',
+
+  actStop: 'Parar',
+  actRestart: 'Reiniciar',
+  actOpen: 'Abrir no navegador',
+  actStopAll: 'Parar tudo',
+  actRestartAll: 'Reiniciar tudo',
+  actConnect: 'Conectar',
+  actDisconnect: 'Desconectar',
+  actHistory: 'Mudar',
+  actLanguage: 'Trocar',
+  actMouse: 'Trocar',
+  actBoot: 'Iniciar no boot',
+
+  stateUp: 'no ar',
+  stateDown: 'parado',
+  stateUnknown: 'desconhecido',
+  stateConflict: 'conflito',
+
+  working: 'trabalhando',
+  yes: 'Sim',
+  no: 'Não',
+
+  killQuestion: 'Já existe um servidor rodando aqui — parar e iniciar outro?',
+
+  setupIntro: 'Como esta máquina registra o uso, e o que sai dela.',
+  setupSolo: 'solo',
+  setupSoloHint: 'só local — nada sai desta máquina',
+  setupCentral: 'central',
+  setupCentralHint: 'hospedar a central do time (Docker) aqui',
+  setupMember: 'member',
+  setupMemberHint: 'tudo que o solo faz, e ainda envia métricas (nunca chat) para uma central',
+  archiveUnset: 'ainda não escolhido',
+  archiveQuestion: 'Preservar o histórico de sessões?',
+  archiveWhy: 'O Claude apaga transcrições de sessão com mais de 30 dias.',
+  archiveConsolidate: 'consolidate',
+  archiveConsolidateHint: 'recomendado — guarda as métricas por sessão já calculadas (~KB cada)',
+  archiveFull: 'full',
+  archiveFullHint: 'arquivista — também espelha as transcrições cruas para reler os chats (pesado)',
+  archiveOff: 'off',
+  archiveOffHint: 'não fazer nada — usar a limpeza padrão de 30 dias do Claude',
+  bootQuestion: 'Iniciar também no boot (serviço systemd de usuário)?',
+
+  logSource: 'FONTE',
+  logEmpty: 'nada registrado ainda.',
+  logLoading: 'lendo…',
+  logFollow: 'f acompanhar',
+  logFollowing: 'acompanhando',
+  logPaused: 'pausado',
+
+  helpIntro: 'Todos os comandos, com as flags que importam. `agentop --help` imprime isto puro.',
+  cheatIntro: 'Os comandos que vale a pena lembrar.',
+  contributeIntro: 'Agentistics é open source — issues e pull requests são bem-vindos.',
+  copyHint: 'selecione com o mouse para copiar',
+  copyHintShift: 'segure shift e arraste para selecionar e copiar',
+}
+
+const TABLE: Record<CliLang, ControlStrings> = { en: EN, pt: PT }
+
+export function controlStrings(lang: CliLang): ControlStrings {
+  return TABLE[lang] ?? EN
+}
