@@ -101,6 +101,11 @@ void (async () => {
   buildApiResponse().catch(err => console.warn('[startup] cache warm-up failed:', String(err)))
 })()
 
+// Once-per-install move of the legacy single-connection team state files into the
+// per-connection layout (see team-migrate.ts). Never call this from readPreferencesFrom.
+await import('./team-migrate').then(m => m.migrateTeamStateOnce()).catch(err =>
+  console.warn('[team-migrate] state migration failed (will retry next boot):', err instanceof Error ? err.message : String(err)))
+
 void setupFileWatcher()
 if (TEAM_CENTRAL) {
   import('./team-watch').then(m => m.startTeamWatch()).catch(err => console.error('[team-watch] failed to start:', err))

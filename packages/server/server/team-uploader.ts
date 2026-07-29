@@ -487,6 +487,8 @@ export function startUploader(): void {
   if (started) return
   started = true
 
+  let migrated = false
+
   const schedule = (delaySec: number) => {
     setTimeout(() => { void cycle() }, delaySec * 1_000)
   }
@@ -500,6 +502,13 @@ export function startUploader(): void {
     running = true
     let nextIntervalSec: number = PUSH_INTERVAL.DEFAULT_SEC
     try {
+      if (!migrated) {
+        migrated = true
+        // A machine that never boots the full server (member-only) still needs the once-per-
+        // install move to the per-connection state layout — run it before the first push.
+        await import('./team-migrate').then(m => m.migrateTeamStateOnce()).catch(err =>
+          console.warn('[team-migrate] state migration failed (will retry next boot):', err instanceof Error ? err.message : String(err)))
+      }
       nextIntervalSec = await pushCycleCore()
     } catch (err) {
       console.warn('[team-uploader] cycle error:', err instanceof Error ? err.message : String(err))
