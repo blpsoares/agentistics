@@ -7,8 +7,8 @@
  * exits cleanly and preferences are only written after all input is gathered.
  */
 
-import { DEFAULT_TEAM } from '@agentistics/core'
-import { readPreferences, writePreferences, resolveArchiveMode, type ArchiveMode } from './preferences'
+import { defaultTeam } from '@agentistics/core'
+import { readPreferencesOrExit, writePreferences, resolveArchiveMode, type ArchiveMode } from './preferences'
 import { enableAutostart } from './autostart'
 import { runCentral } from './cli-central'
 import { memberConnect } from './cli-member'
@@ -27,7 +27,7 @@ const D = `${ESC}[2m`
  */
 export async function ensureArchiveModeChosen(): Promise<void> {
   if (!process.stdin.isTTY) return
-  const prefs = await readPreferences()
+  const prefs = await readPreferencesOrExit()
   if (resolveArchiveMode(prefs) !== undefined) return // already chosen — never re-ask
   process.stdout.write(
     `\n  ${D}Claude deletes session transcripts older than 30 days. How should agentistics` +
@@ -68,7 +68,7 @@ export async function runSetup(): Promise<number> {
   })
 
   if (mode === 'solo') {
-    await writePreferences({ team: { ...DEFAULT_TEAM } })
+    await writePreferences({ team: defaultTeam() })
     await ensureArchiveModeChosen()
     process.stdout.write(`\n  ${D}solo mode set — you're all done.${R}\n`)
     return 0

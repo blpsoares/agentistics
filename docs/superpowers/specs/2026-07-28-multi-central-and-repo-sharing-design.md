@@ -237,26 +237,54 @@ export function buildSharedStatsCache(
 ): StatsCache
 
 /**
- * First local day (YYYY-MM-DD) from which the consolidate store is the authority on what
- * happened — the earliest `start_time` day across ALL stored Claude sessions, shared and
- * denied alike. Days before it cannot be attributed to any repository by anyone, including
- * this machine. `''` when the store holds no Claude session: nothing is attributable, and
- * §4.4 then refuses to push a cache at all.
+ * The first day (YYYY-MM-DD) whose cache rows are session-derived and therefore decomposable
+ * by repository — the day AFTER `real.lastComputedDate`. Days at or before Claude's watermark
+ * are its own rollup and cannot be decomposed by anyone, including this machine.
+ * `''` means Claude has rolled up nothing, so the whole cache is gap-filled and every day is
+ * decomposable — it is NOT a refusal signal (§4.3b).
  */
-export function attributionBoundary(allStored: readonly SessionMeta[]): string
+export function attributionBoundary(real: StatsCache): string
+
+/** What the denylist excluded from one day, measured while that day was still decomposable. */
+export interface DeniedDayDelta {
+  sessionCount: number
+  messageCount: number
+  toolCallCount: number
+  tokensByModel: Record<string, number>
+  usageByModel: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>
+  hourCounts: Record<string, number>
+}
+export type DeniedLedger = Record<string, DeniedDayDelta>
+
+/** Per-day denied contribution over the decomposable window (`day >= boundary`). Pure. */
+export function deniedDeltaByDay(
+  allStored: readonly SessionMeta[], shared: readonly SessionMeta[], boundary: string,
+): DeniedLedger
 
 /**
- * The cache a RESTRICTED connection pushes. Days `< boundary` are copied verbatim from
- * `real`; days `>= boundary` are rebuilt from `shared`. Date-less fields are recovered by
- * subtracting the attributable part from the real total and adding back the shared part —
- * both exact quantities, never an estimate. Returns `null` when the split cannot be made
- * faithfully (empty boundary, missing real cache), meaning "push no statsCache this cycle".
+ * Advance the seal as Claude's watermark moves. Days in `pending` that have fallen below the
+ * new boundary are sealed with the value last measured while they were decomposable; a day
+ * already sealed is never re-sealed. Returns the state to persist. Pure.
+ */
+export function advanceSeal(
+  prev: { sealed: DeniedLedger; pending: DeniedLedger },
+  fresh: DeniedLedger,
+  boundary: string,
+): { sealed: DeniedLedger; pending: DeniedLedger }
+
+/**
+ * The cache a RESTRICTED connection pushes. Days `>= boundary` are rebuilt from `shared`;
+ * earlier days are Claude's rollup minus their sealed delta, or verbatim when unsealed.
+ * Every term is copied, summed or subtracted — nothing is estimated, ratioed or prorated.
+ * Returns `null` when the split cannot be made faithfully (missing `real`, or a cold store
+ * against a populated cache), meaning "push no statsCache this cycle".
  */
 export function buildSplitStatsCache(input: {
   real: StatsCache
   allStored: readonly SessionMeta[]
   shared: readonly SessionMeta[]
   boundary: string
+  sealed: DeniedLedger
 }): StatsCache | null
 
 /** How many stored sessions fall before the boundary — the size of the unfilterable block.
@@ -330,50 +358,101 @@ Verified against a real `~/.claude/stats-cache.json` (version 4, 255 sessions), 
 
 `buildSharedStatsCache` starts from `emptyStatsCache()` and fills; it never mutates its input. **No field marks the cache as synthetic**, and no new field is added to `StatsCache` — see §4.4.
 
-### 4.3b The split — `buildSplitStatsCache`, field by field
+### 4.3b The split — the boundary is Claude's own watermark
 
-`boundary = attributionBoundary(allStored)`, clamped monotonically per connection (§5.5). Days
-strictly before it are **prehistory**: the transcripts are gone, so no repo rule can reach them.
-Days from it onward are **attributable** and are rebuilt from `shared` alone.
+**Measured on real data before this section was written** (255-session cache, 23-day store):
 
-| Field | Composition | Exactness |
-|---|---|---|
-| `dailyActivity[]` | rows with `date < boundary` copied from `real`; rows `>= boundary` from `buildSharedStatsCache(shared)`. Merged, sorted, one row per date | copy + sum |
-| `dailyModelTokens[]` | same split, same rule | copy + sum |
-| `modelUsage{}` | `real.modelUsage − usageOf(allStored, >= boundary) + usageOf(shared, >= boundary)`, per model per token kind | the cache has no date dimension here, so the prehistory term is recovered by subtracting the attributable total from the real total — a difference of two exactly-known quantities, not a proration |
-| `hourCounts{}` | `real.hourCounts − startHoursOf(allStored, >= boundary) + startHoursOf(shared, >= boundary)` | same |
-| `totalSessions`, `totalMessages` | `Σ` of the result's own `dailyActivity` | preserves the invariant asserted on the real file |
-| `firstSessionDate` | `real.firstSessionDate` verbatim | the prehistory is kept, so the real start date is the truth |
-| `lastComputedDate` | `''` | unchanged rationale — never claim a watermark, never let a consumer's `day <= lastComputed` guard drop gap-fill |
-| `longestSession` | `real.longestSession`, **zeroed** when its `sessionId` resolves in the store to a denied session | it names a session; a denied one must not travel. Nothing in `web/` reads it |
-| `version`, `totalSpeculationTimeSavedMs` | from `real` | |
+- `stats-cache.json` carries `lastComputedDate` — Claude's rollup watermark. On the reference
+  machine it is `2026-06-22`. **Every day after it is absent from the raw file** and is gap-filled
+  by `supplementStatsCache` from the consolidate store.
+- For days **at or before** the watermark, the store is a strict **subset** of Claude's rollup —
+  06-18 held 4 sessions in the store against 9 in the cache. Per-day reconciliation against the
+  cache succeeded on **0 of 23 days**, so any design that tries to verify coverage by comparing
+  the two makes the filter permanently inert.
+- `supplementStatsCache` gap-fills `dailyActivity`, `dailyModelTokens` and `modelUsage` **only**.
+  It never touches `hourCounts`, `totalSessions` or `totalMessages`, which therefore describe the
+  rollup alone. The supplemented cache is consequently **already internally inconsistent, and
+  already ships that way today**: `totalSessions` 255 against `Σ dailyActivity.sessionCount` 317,
+  and `Σ hourCounts` 255 — equal to `totalSessions`, not to the daily sum.
 
-**Every subtraction clamps at 0 per field**, and a clamp firing is *expected*, not an error: the real
-cache lags behind `lastComputedDate` and the supplemented cache gap-fills it, so the attributable
-term can momentarily exceed the real one. Clamping attributes the difference to the attributable
-half, where it is filtered — the safe direction. A clamp is never a reason to fall back to the real
-cache.
+So the boundary was never "where the store begins". It is **the day after
+`real.lastComputedDate`**:
 
-**The split is exact wherever it is asked to be, and its failure mode is more filtering, never
-less.** If the boundary sits later than the store's true coverage, sessions before it ride inside
-the prehistory block unfiltered — so the boundary is monotonic and may only ever move earlier
-(§5.5). If it sits earlier, days with no stored sessions rebuild as empty and the totals would
-*drop* — which is why `attributionBoundary` is derived from the store itself rather than from a
-date the user or the cache supplies.
+- **Days at or before the watermark** are Claude's own rollup. Nobody can decompose them by
+  repository — not the central, and not this machine.
+- **Days after the watermark** were computed by `supplementStatsCache` from the very session set
+  this module filters. Rebuilding them from `shared` is exact, and the date-less subtraction
+  reconciles **by construction**: the term being subtracted is the same accumulator over the same
+  store that produced the term it is subtracted from.
+
+That single change closes three defects the first draft had — a partially-covered boundary day, a
+post-boundary day the store lost, and a denied session whose `model` is absent or not a `claude-`
+id. None of them can arise once both sides of the subtraction come from one accumulator.
+
+#### The watermark advances — days are SEALED as they cross
+
+Claude rolls up more days over time, so a day that is decomposable today is part of the rollup
+tomorrow. Left alone, a blocked repository's volume for that day would silently start shipping the
+moment it crossed.
+
+So each cycle, while a day is still after the watermark, the machine records that day's **denied
+delta** — the sessions, messages, tool calls, per-model tokens and start-hours the denylist
+excluded. When the watermark passes the day, that value is **sealed** and kept. From then on the
+day is emitted as `Claude's rollup row − the sealed delta`. Nothing is estimated: the delta was
+measured while the day was fully session-derived.
+
+A day that was already at or before the watermark when the rules were created has no seal and never
+gets one — it is true prehistory (§4.4). On the reference machine that block is 2026-02-06 →
+2026-06-22.
+
+**Un-blocking does not un-seal.** A sealed day's excluded volume cannot be restored to a central,
+because the machine no longer has a decomposable row to add it back to. Re-sharing a repository
+restores it from the next decomposable day onward. Stated in the confirm modal.
+
+#### Field by field
+
+`B = attributionBoundary(real)`, `sealed` = the per-connection seal ledger, `pending` = the deltas
+for days `>= B` recomputed this cycle.
+
+| Field | Composition |
+|---|---|
+| `dailyActivity[]` | `date >= B` → rebuilt from `shared`. `date < B` with a seal → `real row − sealed delta`, clamped at 0 per field. `date < B` with no seal → `real` row **verbatim** |
+| `dailyModelTokens[]` | same three-way rule, per model |
+| `modelUsage{}` | `real − Σ(sealed usage) − usageOf(allStored, >= B) + usageOf(shared, >= B)`, per model per token kind, subtraction clamped at 0 |
+| `hourCounts{}` | `real − Σ(sealed hours)`, clamped at 0. **No `+ kept` term** — the rollup covers only days `<= watermark`, so the decomposable window contributes nothing to it |
+| `totalSessions`, `totalMessages` | `real − Σ(sealed sessionCount / messageCount)`, clamped at 0. Same reason: these describe the rollup, not the daily sum |
+| `lastComputedDate` | **verbatim from `real`** — the prehistory it describes is exactly Claude's rollup, so the watermark is accurate. (The first draft blanked it; that was a behaviour change against today's push for no benefit.) |
+| `firstSessionDate`, `longestSession`, `version`, `totalSpeculationTimeSavedMs` | verbatim from `real` |
+
+**The no-op invariant is now unconditional:** with an empty denylist every delta is zero and every
+sum term cancels, so `buildSplitStatsCache` returns a cache deep-equal to `real` — no field
+excepted. That is the anchor test.
+
+**Clamping is a safety net, not a mechanism.** Every clamp firing means `real` and the store
+disagree about a window they should agree on. The clamp keeps the output non-negative and errs
+toward the filtered side; it must never be the reason a value is right.
+
+**Refusal.** `buildSplitStatsCache` returns `null` — and the caller pushes no `statsCache` at all —
+when `real` is missing, or when the store yields zero Claude sessions while `real` plainly has data
+(the cold-store signature). Note that `B === ''` is **not** a refusal: an empty `lastComputedDate`
+means Claude has rolled up nothing, the whole cache is gap-filled, and therefore every day is
+decomposable.
 
 ### 4.4 What the prehistory can still carry, disclosed LOCALLY
 
 The split keeps the totals whole, and that is the point of it — but it does so by shipping a block
-the rules cannot reach. **If a blocked repository was active before the attribution boundary, its
-volume and cost remain inside that block**, and no future rule can remove them: there is no session,
-no `project_path`, no prompt and no model row to delete, only a daily token count with nothing
+the rules cannot reach: everything Claude has already rolled up into `stats-cache.json` and whose
+transcripts it has since deleted. **If a blocked repository was active in that period, its volume
+and cost remain inside the block**, and no future rule can remove them: there is no session, no
+`project_path`, no prompt and no model row to delete, only a daily token count with nothing
 attached. What the central gains is unattributed volume for a closed past period; what it cannot
 gain from that block is the existence, name or shape of any repository.
 
-The block is closed and shrinks in relative weight with every day of new, fully attributable
-activity. On the reference machine it is 2026-02-06 → 2026-06-11 (171 sessions); a machine that has
-run the consolidate store since day one has no such block at all, and its restricted cache is exact
-by construction.
+The block is closed and shrinks in relative weight with every day of new activity. On the reference
+machine it is 2026-02-06 → 2026-06-22 (Claude's watermark). Days that arrive later do **not** join
+it: as the watermark advances, each day's denied delta is sealed while it is still decomposable and
+subtracted from the rollup row forever after (§4.3b). Only the block that already existed when the
+rules were created is unreachable.
 
 The alternative — refusing the prehistory and accepting a truncated window on that central — was
 considered and **rejected**: it makes the same machine report irreconcilable totals to its own
@@ -385,7 +464,7 @@ An earlier draft threaded `partial: true` and `coverageFrom` into `IngestBody` s
 
 The disclosure instead happens **locally, before the user commits**, where it can still change the decision:
 
-- The **attribution boundary** and what precedes it are rendered in the confirm modal as `applyConfirmStats` — "days before {boundary} cannot be attributed to a repository and are sent whole ({n} sessions); everything from {boundary} on is filtered exactly" — before the commit, not as a footnote discovered after it.
+- The **attribution boundary** and what precedes it are rendered in the confirm modal as `applyConfirmStats` before the commit, not as a footnote discovered after it. The boundary is Claude's own rollup watermark, so the sentence names what the user can verify: days Claude has already summarised cannot be split by repository.
 - `GET /api/team/status` returns `boundary` and the prehistory session count per connection (local-only route, §5.9), and the card's persistent `statsNote` restates them.
 - When the blocked repo **has** stored sessions of its own before the boundary, that is a *provable* case of the block carrying its data, and the modal says so specifically instead of generically. When the store proves nothing either way, the modal says that too. Neither statement leaves the machine.
 
@@ -490,18 +569,22 @@ deniedIds   = deniedSessionIds(ctx.sessions, denied, ctx.index)
 forgetIds   = sent.hashes keys ∩ deniedIds
 forgetRuns  = sent.runIds ∖ sharedRunIds
 forget      = forgetIds.size > 0 || forgetRuns.length > 0
-boundary    = min(prev.boundary ?? '9999-99-99', attributionBoundary(ctx.sessions))
+boundary    = attributionBoundary(real)          // day after Claude's lastComputedDate
+seal        = advanceSeal(prev, deniedDeltaByDay(ctx.sessions, shared, boundary), boundary)
 ```
 
 `forgetIds` is not merely the trigger — it **is** the payload of §6.1's request, which is why the
 detector computes the exact set rather than a boolean. A `rulesHash` change with no `forgetIds` is
 a rule that only ever affects future pushes and needs no central call at all.
 
-**`boundary` is persisted and monotonic** — `min(persisted, computed)`. The store can only lose its
-oldest entries (a manual cleanup, a moved `AGENTISTICS_DATA_DIR`, an `archiveMode` switch), and a
-boundary allowed to move *later* would hand days that were previously filtered to the prehistory
-block, unfiltered and unremovable. Moving earlier only ever widens what is filtered, so it is
-always safe. The persisted value is written only after a successful push, alongside the rules hash.
+**`boundary` is derived from Claude's watermark and MOVES FORWARD** — it is not pinned. Pinning it
+would leave the days between the pin and the watermark rebuilt from a store that is a strict subset
+of Claude's rollup, which under-reports silently (measured: 4 stored sessions against 9 rolled up on
+one day). What travels with the connection instead is the **seal ledger**: `team-rules-<connId>.json`
+carries `{ rulesHash, sharedIds[], boundary, sealed, pending }`, and each cycle runs
+`advanceSeal(prev, deniedDeltaByDay(...), boundary)` so a day's denied delta is captured while it is
+still decomposable and kept forever after (§4.3b). The persisted value is written only after a
+successful push, alongside the rules hash.
 
 **The trigger is DENIAL, never ABSENCE.** An earlier draft used `stale = sent keys ∉ sharedIds`, which treats "the session is no longer in the store" as "the session became denied". `loadConsolidated()` is built on `safeReadJson`/`safeReadDir`, both of which swallow every error and return empty; `writeConsolidated` writes non-atomically, 20-way concurrent, from `buildApiResponse` in the **same process** as the uploader; `HOME_DIR` falls back to `''`; a container can start before its bind mount is ready. Any one of those makes a cycle read fewer sessions — or zero — and the machine would then ask the central to delete sessions that are perfectly valid, drop them from its own sent-state, and never push them again: silent, permanent, one-directional data loss, invisible on both ends. Defining the payload as `deniedSessionIds` makes that structurally impossible — an empty store yields an empty denied set and therefore an empty request. As a second belt, no forget runs while `ctx.sessions.length === 0`.
 
@@ -979,7 +1062,7 @@ Entries written as `{one, other}` are pluralized by `plural(key, n)`. `(s)`-styl
 | `applyImpact` | Removes {sessions} sessions (~{cost}) from this central. | Remove {sessions} sessões (~{cost}) desta central. |
 | `applyConfirmTitle` | Apply sharing rules? | Aplicar regras de compartilhamento? |
 | `applyConfirmBody` | The sessions you are blocking are deleted from this central right away. Anything already sent has been seen — whoever runs this central can tell that data was removed, and what it was. | As sessões que você está bloqueando são apagadas desta central imediatamente. O que já foi enviado já foi visto — quem opera a central consegue perceber que algo foi removido, e o quê. |
-| `applyConfirmStats` | Your totals stay whole. Days before {boundary} predate your saved session history, so they cannot be attributed to any repository and are sent as a single aggregate ({n} sessions) — if a blocked repository was active back then, that volume stays in it and no rule can remove it. Everything from {boundary} on is filtered exactly. | Seus totais continuam completos. Os dias anteriores a {boundary} são anteriores ao seu histórico de sessões salvo, então não podem ser atribuídos a nenhum repositório e vão como um agregado único ({n} sessões) — se um repositório bloqueado teve atividade naquele período, esse volume fica lá e nenhuma regra o remove. De {boundary} em diante o filtro é exato. |
+| `applyConfirmStats` | Your totals stay whole. Claude has already summarised everything up to {boundary} into a single aggregate ({n} sessions) that cannot be split by repository — if a blocked repository was active back then, that volume stays in it and no rule can remove it. Everything after {boundary} is filtered exactly, and stays filtered as Claude summarises it. | Seus totais continuam completos. O Claude já resumiu tudo até {boundary} num agregado único ({n} sessões) que não pode ser separado por repositório — se um repositório bloqueado teve atividade naquele período, esse volume fica lá e nenhuma regra o remove. Depois de {boundary} o filtro é exato, e continua valendo conforme o Claude vai resumindo. |
 | `applyConfirmStatsProven` | One or more repositories you are blocking have sessions before {boundary}. Their volume from that period stays in the aggregate and cannot be removed. | Um ou mais repositórios que você está bloqueando têm sessões anteriores a {boundary}. O volume daquele período fica no agregado e não pode ser removido. |
 | `applyConfirmBtn` | Apply and resend | Aplicar e reenviar |
 | `applyingForget` | Removing {done} of {total} sessions from the central… | Removendo {done} de {total} sessões da central… |
@@ -989,7 +1072,7 @@ Entries written as `{one, other}` are pluralized by `plural(key, n)`. `(s)`-styl
 | `applyOk` | {one: `Rules applied — 1 session re-sent`, other: `Rules applied — {n} sessions re-sent`} | {one: `Regras aplicadas — 1 sessão reenviada`, other: `Regras aplicadas — {n} sessões reenviadas`} |
 | `applyErr` | Could not apply the rules | Não foi possível aplicar as regras |
 | `applyQueued` | Rules saved. The central is unreachable — they will be applied on the next successful sync. | Regras salvas. A central está inacessível — elas serão aplicadas no próximo envio bem-sucedido. |
-| `statsNote` | Filtered exactly from {boundary} on. Earlier days ({n} sessions) predate your saved session history and are sent as one aggregate that no rule can filter. | Filtrado com exatidão de {boundary} em diante. Os dias anteriores ({n} sessões) são anteriores ao seu histórico de sessões salvo e vão como um agregado único que nenhuma regra filtra. |
+| `statsNote` | Filtered exactly after {boundary}. Earlier days ({n} sessions) were already summarised by Claude into one aggregate that no rule can split. | Filtrado com exatidão depois de {boundary}. Os dias anteriores ({n} sessões) já foram resumidos pelo Claude num agregado único que nenhuma regra separa. |
 | `ciNote` | This only covers sessions from this machine. If the repository also pushes from GitHub Actions, it stays visible on the central. | Isto cobre apenas as sessões desta máquina. Se o repositório também envia pelo GitHub Actions, ele continua visível na central. |
 | `otelWarn` | OpenTelemetry export is on. It sends unfiltered totals and is not covered by these rules. | A exportação OpenTelemetry está ligada. Ela envia totais sem filtro e não é coberta por estas regras. |
 | `centralTooOld` | This central cannot remove specific sessions on request. Upgrade it to use sharing rules. | Esta central não consegue remover sessões específicas sob demanda. Atualize-a para usar regras de compartilhamento. |
@@ -1074,7 +1157,7 @@ Ranked. Every mitigation is folded into the design above.
 | R30 | Sessions that cannot be attributed are "new repos" under D2 and ship `project_path`, `first_prompt`, `title` and cost | high | Unresolved ≠ new: `withUnresolvedDenied` writes `NO_REPO_KEY` into the list on the first restriction, visible and pre-blocked (§4.2) |
 | R31 | The rebuilt cache double-counts non-Claude sessions on the central (a naive extraction keeps `supplementStatsCache`'s all-harness `dailyActivity`) | high | `claudeOnly` on the accumulator, gated in `buildSharedStatsCache`, with a mixed-harness unit test (§4.2, §4.5) |
 | R31' | The split's subtraction terms disagree with the real cache (its `lastComputedDate` lag vs the supplemented gap-fill), producing a negative | high | Clamp at 0 per field; the residue lands in the attributable half, where it is filtered — the safe direction. A clamp is never a reason to fall back to the unsplit cache (§4.3b) |
-| R31'' | The attribution boundary moves **later** (store pruned, `AGENTISTICS_DATA_DIR` moved, `archiveMode` switched), handing previously-filtered days to the unfilterable prehistory block | high | `boundary` persisted per connection in `team-rules-<connId>.json` and applied as `min(persisted, computed)` — monotonic, may only ever move earlier (§5.5) |
+| R31'' | Claude's rollup watermark ADVANCES, so a day filtered today joins the undecomposable rollup tomorrow and the denied repo's volume for it silently starts shipping | high | The day's denied delta is measured while it is still decomposable and **sealed** as it crosses; the sealed value is subtracted from the rollup row forever after. Pinning the boundary instead would under-report those days from a store that is a strict subset of the rollup (§4.3b, §5.5) |
 | R32 | One WebSocket singleton → whichever connection reconciles first owns the socket, and the member reads as **hard offline** on every other central | medium-high | `Map<connId, WebSocket>` + per-connection reconcile and backoff (§5.10) |
 | R33 | A change event arriving while the push lock is held is **dropped**, not deferred — including the `backfillGitRemote` heal that most likely changed what is shared | medium-high | `pendingTrigger` per connection; never write the sync/rules files for a sequence during which an event was swallowed (§5.2, §6.1) |
 | R34 | `sessionHash` stores a full session copy per connection; O(batches²) I/O × N | medium-high | sha256 digest + versioned sent-state, with a lossless offline v1→v2 conversion so the upgrade costs zero re-pushes (§5.4, §3.3) |
@@ -1179,7 +1262,7 @@ Pure functions only, no filesystem mocks, per repo convention.
 36f. `firstSessionDate` is the real cache's, not the earliest shared session.
 36g. A real cache lagging behind the store (its `modelUsage` smaller than the attributable sum) clamps to 0 and never emits a negative.
 36h. `boundary === ''` → returns `null`; a missing real cache → returns `null`.
-36i. A boundary later than the store's earliest day leaves the intervening days unfiltered — the property that makes monotonicity necessary, pinned so a future change cannot silently relax it.
+36i. A day that crosses the watermark keeps its denied delta: seal it via `advanceSeal`, advance the boundary past it, and assert the emitted row is `real row − sealed delta` — not the raw rollup row, and not a rebuild from a now-partial store.
 36j. Output has no keys outside the `StatsCache` shape (the marker-field guard, again).
 
 **Accumulator extraction**
@@ -1234,7 +1317,7 @@ Pure functions only, no filesystem mocks, per repo convention.
 7a. **No window:** during a removal on a central with several machines, poll the central's machine filter for a *different* machine every 200 ms → its totals never change, and `machineStatsCaches` never loses B's entry.
 8. **Wiped central:** `down -v` on B, then a rules change on machine 1 while machine 2 is also connected as the same user → whoami fails, the apply aborts with `applyQueued`, and machine 2's data is untouched.
 9. **Old central:** point a connection at a central without `forget.sessions` → `centralTooOld`, the rules editor is disabled, **no full purge is attempted**, and no sent-state clearing loop occurs.
-9a. **Boundary monotonicity:** with rules active, delete the oldest files from the consolidate store → the persisted boundary does not move later and the previously-filtered days stay filtered.
+9a. **Watermark crossing:** with rules active, let a day cross `lastComputedDate` (or simulate it by advancing the cache's watermark) → the day's denied volume stays withheld on the central afterwards, and the machine's totals do not jump.
 10. **Offline apply:** stop B, change rules → `applyQueued`; start B → the rules apply on the next cycle and the pill goes green only after the resync completes.
 11. **Un-block:** re-share the repo → **no removal** occurs (assert via the central's logs), the sessions reappear by delta.
 12. **Retro reclassification:** run a session in a folder with no remote, push, then `git remote add`, let `backfillGitRemote` stamp it while the repo is denied → the shrink detector fires and the session disappears from the central.

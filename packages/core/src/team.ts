@@ -1,35 +1,208 @@
 import type { SessionMeta, HarnessId, StatsCache } from './types'
 import { HARNESS_ORDER } from './types'
 
+// NOTHING in this file may import `node:crypto`. It is re-exported by core's barrel and core is
+// bundled into packages/web by Vite, which replaces Node builtins with a shim that THROWS on
+// first use — so the first web component calling connectionId() or migrateTeamConfig() would
+// fail at runtime, in the code path that mints connection ids. The global `crypto` (Bun,
+// browsers, Node 18+) covers randomUUID; the legacy id needs no cryptography (see below).
+
 // ---------------------------------------------------------------------------
 // TeamConfig — shared member configuration (single source of truth)
 // ---------------------------------------------------------------------------
 
-export interface TeamConfig {
-  /** 'solo' = normal local-only behavior; 'member' = push metrics to a central */
-  mode: 'solo' | 'member'
-  /** Central base URL, e.g. "https://central.example:47291" (no trailing slash) */
+/** The sentinel repo key for sessions with no resolvable git remote. NEVER '' — an empty
+ *  string is eaten by any `.filter(Boolean)` in the UI or CLI path, which would turn
+ *  "block unattributed work" into "block nothing": a fail-open privacy bug. */
+export const NO_REPO_KEY = '__no_repo__'
+
+export interface TeamConnection {
+  /** Local, opaque, filesystem-safe handle. NEVER sent to a central. */
+  id: string
+  /** Central base URL, no trailing slash. The uniqueness key across connections[]. */
   endpoint: string
-  /** Org namespace used on the central server */
+  /** Org namespace used on the central. */
   org: string
-  /** This developer's identity (name or email) */
+  /** Display name resolved from GET /api/team/whoami — never user-typed. Per connection,
+   *  because each central mints its own token and resolves its own name. */
   user: string
-  /** Bearer token for the central ingest endpoint (never logged) */
+  /** Bearer secret (never logged). May be '' against an open/legacy central. */
   token: string
-  /**
-   * Member-side push interval preference in seconds. The effective interval
-   * is max(centralPushIntervalSec, pushIntervalSec ?? 0), then clamped.
-   * Absent or 0 means "use whatever central dictates".
-   */
+  /** DENYLIST of canonical repo keys, plus NO_REPO_KEY. [] = share everything. */
+  deniedRepos: string[]
+  /** Member-side mirror of the central's cadence; the central still owns the floor. */
+  pushIntervalSec?: number
+  /** Optional nickname for the card; falls back to the endpoint host. */
+  label?: string
+  /** ISO — deterministic card ordering. */
+  addedAt?: string
+}
+
+export interface TeamConfig {
+  /** Written by this version and above. Absent means an older client wrote it. */
+  schema?: 2
+  mode: 'solo' | 'member'
+  connections: TeamConnection[]
+  /** Legacy MIRROR of connections[0]. Still written for one release so an older binary or
+   *  a container sharing ~/.agentistics keeps working. Read by migrateTeamConfig. */
+  endpoint?: string
+  org?: string
+  user?: string
+  token?: string
   pushIntervalSec?: number
 }
 
-export const DEFAULT_TEAM: TeamConfig = {
-  mode: 'solo',
-  endpoint: '',
-  org: 'default',
-  user: '',
-  token: '',
+/** A FRESH default team config. Use this anywhere the value is about to be spread or mutated —
+ *  a module-level const's `connections: []` is aliased by every `{ ...DEFAULT_TEAM }`, so one
+ *  caller's `push()` would land in every other caller's array. */
+export function defaultTeam(): TeamConfig {
+  return { schema: 2, mode: 'solo', connections: [] }
+}
+
+/** Frozen (array included) so a stray mutation throws in strict mode instead of corrupting
+ *  shared state. Kept exported for compatibility; prefer `defaultTeam()`. */
+export const DEFAULT_TEAM: TeamConfig = Object.freeze({
+  schema: 2, mode: 'solo', connections: Object.freeze([]) as unknown as TeamConnection[],
+}) as TeamConfig
+
+const ID_RE = /^c_[a-f0-9]{12}$/
+
+/** A fresh random handle, minted once when a connection is added. The GLOBAL `crypto` — present
+ *  in Bun, in browsers and in Node 18+ — so core stays free of `node:crypto`. */
+export function connectionId(): string {
+  return 'c_' + crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+}
+
+/** FNV-1a, 32 bits, as an 8-char lowercase hex string. */
+function fnv1a(input: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i)
+    // h *= 16777619, in 32-bit arithmetic without overflowing the double mantissa.
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
+/**
+ * The handle used ONLY by the legacy migration. It must be deterministic: migrateTeamConfig
+ * runs in a read path, and a random id there would mint a different handle on every read
+ * until something persisted it — a new sent-state file, a full re-push and a new WebSocket
+ * every cycle, forever.
+ *
+ * A NON-CRYPTOGRAPHIC hash (FNV-1a, twice, for 12 hex chars) is deliberate and sufficient: the
+ * id is a LOCAL filesystem handle for `connections/team-sent-<id>.json`, it is never sent to a
+ * central, it guards nothing and reveals nothing (its inputs are already on this disk in clear),
+ * and uniqueness inside `connections[]` is checked at mint time. Using sha256 here would drag
+ * `node:crypto` into the browser bundle for no security gain. `denialSignature()` in
+ * share-rules.ts is a different question — it stays sha256 and stays server-side.
+ */
+export function legacyConnectionId(endpoint: string, token: string): string {
+  const seed = `${endpoint}\0${token}`
+  // Two rounds over differently-salted inputs: one FNV-1a is 32 bits wide, the id is 48.
+  return 'c_' + (fnv1a(seed) + fnv1a('id' + seed)).slice(0, 12)
+}
+
+function trimSlashes(url: string): string {
+  return url.replace(/\/+$/, '')
+}
+
+/** Force `mode` from connections.length, stamp the schema, and rebuild the legacy mirror.
+ *  Pure — returns a new object with a new array. */
+export function normalizeTeamConfig(cfg: TeamConfig): TeamConfig {
+  const connections = cfg.connections.map(c => ({ ...c, deniedRepos: [...c.deniedRepos] }))
+  const first = connections[0]
+  return {
+    schema: 2,
+    mode: connections.length > 0 ? 'member' : 'solo',
+    connections,
+    endpoint: first?.endpoint ?? '',
+    org: first?.org ?? 'default',
+    user: first?.user ?? '',
+    token: first?.token ?? '',
+    ...(first?.pushIntervalSec !== undefined ? { pushIntervalSec: first.pushIntervalSec } : {}),
+  }
+}
+
+/**
+ * Shape migration — pure, deterministic, idempotent, safe in a read path.
+ * MUST return a fresh object with a fresh array on every call: DEFAULT_PREFS.team is spread
+ * into every preferences read, and an aliased array becomes a live cross-caller bug.
+ */
+export function migrateTeamConfig(raw: unknown): TeamConfig {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return normalizeTeamConfig({ mode: 'solo', connections: [] })
+  const r = raw as Partial<TeamConfig> & Record<string, unknown>
+  const flatEndpoint = trimSlashes(typeof r.endpoint === 'string' ? r.endpoint : '')
+
+  // Already migrated → sanitize in place.
+  if (Array.isArray(r.connections)) {
+    const seenId = new Set<string>()
+    const seenEndpoint = new Set<string>()
+    const connections: TeamConnection[] = []
+    for (const entry of r.connections as Partial<TeamConnection>[]) {
+      if (!entry || typeof entry !== 'object') continue
+      const endpoint = trimSlashes(typeof entry.endpoint === 'string' ? entry.endpoint : '')
+      if (!endpoint) continue
+      if (seenEndpoint.has(endpoint)) continue
+      let id = typeof entry.id === 'string' && ID_RE.test(entry.id) ? entry.id : connectionId()
+      while (seenId.has(id)) id = connectionId()
+      seenId.add(id)
+      seenEndpoint.add(endpoint)
+      connections.push({
+        id,
+        endpoint,
+        org: typeof entry.org === 'string' && entry.org ? entry.org : 'default',
+        user: typeof entry.user === 'string' ? entry.user : '',
+        token: typeof entry.token === 'string' ? entry.token : '',
+        deniedRepos: Array.isArray(entry.deniedRepos) ? entry.deniedRepos.filter(x => typeof x === 'string') : [],
+        ...(typeof entry.pushIntervalSec === 'number' ? { pushIntervalSec: entry.pushIntervalSec } : {}),
+        ...(typeof entry.label === 'string' ? { label: entry.label } : {}),
+        ...(typeof entry.addedAt === 'string' ? { addedAt: entry.addedAt } : {}),
+      })
+    }
+    // An EMPTY sanitized array is NOT proof of "solo", and treating it as authoritative was a
+    // silent no-op for `agentop member connect` and the web "Connect to central" flow: both
+    // persist `{ ...defaultTeam(), mode: 'member', endpoint, token }` — an empty connections
+    // array ALONGSIDE the legacy flat fields — so the next read produced mode 'solo' with a
+    // blanked mirror. The uploader never pushed and no WebSocket ever opened, while the CLI
+    // printed "connected as <name>". When the array yields nothing but a flat endpoint IS
+    // present, the legacy branch below is the truthful reading.
+    if (connections.length > 0 || !flatEndpoint) {
+      return normalizeTeamConfig({ mode: 'solo', connections })
+    }
+  }
+
+  // Legacy flat config. Guard on `endpoint` ALONE — not on mode (cli-setup and the web solo
+  // path write a solo object that still carries empty-string endpoint/token, and fabricating
+  // a connection from those would start an uploader on a solo machine), and not on token
+  // (a token-less member against an open/legacy central is a live shape; requiring one would
+  // silently drop those members to solo and stop their pushes).
+  const endpoint = flatEndpoint
+  if (endpoint) {
+    const token = typeof r.token === 'string' ? r.token : ''
+    return normalizeTeamConfig({
+      mode: 'member',
+      connections: [{
+        id: legacyConnectionId(endpoint, token),
+        endpoint,
+        org: typeof r.org === 'string' && r.org ? r.org : 'default',
+        user: typeof r.user === 'string' ? r.user : '',
+        token,
+        deniedRepos: [],
+        ...(typeof r.pushIntervalSec === 'number' ? { pushIntervalSec: r.pushIntervalSec } : {}),
+      }],
+    })
+  }
+
+  return normalizeTeamConfig({ mode: 'solo', connections: [] })
+}
+
+/** Read connections off a preferences object without ever throwing. Exists so the three
+ *  web-local DEFAULT_TEAM_CONFIG duplicates can be deleted — leaving them would spread
+ *  `connections: undefined` over a loaded prefs object and `.map` would throw. */
+export function readTeamConnections(prefs: { team?: TeamConfig } | null | undefined): TeamConnection[] {
+  const list = prefs?.team?.connections
+  return Array.isArray(list) ? list : []
 }
 
 // ---------------------------------------------------------------------------

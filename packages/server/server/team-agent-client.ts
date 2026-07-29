@@ -149,7 +149,7 @@ async function reconcileConnection(): Promise<void> {
       // Open only when nothing is already open or in-flight.
       const hasLiveSocket = activeWs != null && activeWs.readyState <= WebSocket.OPEN
       if (!hasLiveSocket) {
-        openConnection(team!.endpoint, team!.token)
+        openConnection(team!.endpoint ?? '', team!.token ?? '')
       }
     } else if (activeWs) {
       // Switched back to solo (or credentials cleared) — tear down the socket.

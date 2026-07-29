@@ -141,3 +141,42 @@ export const ANTIGRAVITY_HISTORY_FILE = join(ANTIGRAVITY_DIR, 'history.jsonl')
 export const ANTIGRAVITY_CONVERSATIONS_DIR = join(ANTIGRAVITY_DIR, 'conversations')
 /** Optional enrichment (title / parent link). Frequently exists but with zero rows. */
 export const ANTIGRAVITY_SUMMARIES_DB = join(ANTIGRAVITY_DIR, 'conversation_summaries.db')
+
+// ---------------------------------------------------------------------------
+// Multi-central support. Per-connection state lives in its own directory so one
+// central's sent-state can never be handed to another by a positional accident.
+// ---------------------------------------------------------------------------
+/** Per-connection state lives in its own directory so one central's sent-state can never be
+ *  handed to another by a positional accident. */
+export const TEAM_CONN_DIR = process.env.AGENTISTICS_TEAM_CONN_DIR
+  ?? join(AGENTISTICS_DATA_DIR, 'connections')
+
+const CONN_ID_RE = /^c_[a-f0-9]{12}$/
+
+/** Connection ids arrive from HTTP bodies on the connection routes, so they are interpolated
+ *  into a path only after this check — `../` would escape ~/.agentistics. */
+export function safeConnId(id: string): string {
+  if (typeof id !== 'string' || !CONN_ID_RE.test(id)) {
+    throw new Error(`invalid connection id: ${JSON.stringify(id)}`)
+  }
+  return id
+}
+
+export function teamSentFile(connId: string): string {
+  return join(TEAM_CONN_DIR, `team-sent-${safeConnId(connId)}.json`)
+}
+/** { sig } — the central-identity fingerprint. */
+export function teamSyncFile(connId: string): string {
+  return join(TEAM_CONN_DIR, `team-sync-${safeConnId(connId)}.json`)
+}
+/** { rulesHash, sharedIds[], boundary } — deliberately SEPARATE from the sent-state and the
+ *  sync signature: the sig path clears the sent-state on a token rotation, and if the rules
+ *  hash lived there a rotation coinciding with a rules change would erase the evidence of the
+ *  change and the removal would never run. */
+export function teamRulesFile(connId: string): string {
+  return join(TEAM_CONN_DIR, `team-rules-${safeConnId(connId)}.json`)
+}
+/** { state, ids, runIds, rulesHash, startedAt } — the removal journal. */
+export function teamForgetFile(connId: string): string {
+  return join(TEAM_CONN_DIR, `team-forget-${safeConnId(connId)}.json`)
+}

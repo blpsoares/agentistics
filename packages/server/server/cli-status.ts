@@ -8,7 +8,7 @@
  */
 
 import { PORT, WEB_PORT } from './config'
-import { readPreferences } from './preferences'
+import { readPreferencesOrExit } from './preferences'
 
 // ANSI (same palette as cli-start.ts)
 const ESC = '\x1b'
@@ -78,13 +78,12 @@ const RULE = `  ${D}${R}`
 
 type Mode = 'solo' | 'central' | 'member'
 
+/** A corrupt preferences file must NOT be reported as `solo` — that is precisely the lie the
+ *  refusal in readJsonPrefs exists to prevent. `readPreferencesOrExit` names the file and
+ *  exits non-zero instead. */
 async function loadConfig(): Promise<{ mode: Mode; endpoint?: string }> {
-  try {
-    const prefs = await readPreferences()
-    return { mode: prefs.team?.mode ?? 'solo', endpoint: prefs.team?.endpoint }
-  } catch {
-    return { mode: 'solo' }
-  }
+  const prefs = await readPreferencesOrExit()
+  return { mode: prefs.team?.mode ?? 'solo', endpoint: prefs.team?.endpoint }
 }
 
 export async function runStatus(): Promise<number> {

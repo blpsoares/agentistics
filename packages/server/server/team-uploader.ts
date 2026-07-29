@@ -12,7 +12,7 @@
 import { createHash } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import type { SessionMeta, StatsCache, WorkflowRun } from '@agentistics/core'
-import { PUSH_INTERVAL, clampPushInterval, DEFAULT_TEAM } from '@agentistics/core'
+import { PUSH_INTERVAL, clampPushInterval, defaultTeam } from '@agentistics/core'
 import type { Preferences } from './preferences'
 import { TEAM_SENT_FILE, TEAM_SYNC_FILE, STATS_CACHE_FILE } from './config'
 import { loadConsolidated } from './consolidate'
@@ -136,7 +136,7 @@ async function autoResetOnRevoke(): Promise<void> {
   try {
     const prefs = await readPreferences()
     if (!prefs.team || prefs.team.mode !== 'member') return // already reset — don't spam
-    await writePreferences({ team: { ...DEFAULT_TEAM } })
+    await writePreferences({ team: defaultTeam() })
     await resetSyncState()
     _authErrStreak = 0
     _pushErrKind = null

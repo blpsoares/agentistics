@@ -1890,6 +1890,542 @@ git commit -m "feat(share-rules): split the aggregate at the attribution boundar
 
 ---
 
+---
+
+### Task 7: Rebuild the split on Claude's watermark, with sealed days
+
+**Why this task exists.** Task 6 shipped the split with the boundary defined as `min(stored day)`. A review derived three defects from the code, and measuring against real data confirmed the root cause: the store is a strict **subset** of Claude's rollup for every day at or before `lastComputedDate` (per-day reconciliation matched **0 of 23 days**), while every day after it is gap-filled *from that same store*. So the decomposable window is defined by **Claude's watermark**, not by where the store begins. This task replaces `attributionBoundary` and `buildSplitStatsCache` accordingly, adds the seal ledger that keeps a day filtered after the watermark passes it, and fixes the two review findings that stand on their own.
+
+**Files:**
+- Modify: `packages/server/server/share-rules.ts` (replace `attributionBoundary`, `prehistoryCount`, `deniedTouchesPrehistory`, `buildSplitStatsCache`; keep `sumUsage`)
+- Modify: `packages/server/server/share-rules.test.ts` (replace the Task 6 split tests)
+- Reference: spec §4.3b in `docs/superpowers/specs/2026-07-28-multi-central-and-repo-sharing-design.md`
+
+**Interfaces:**
+- Consumes: `buildSharedStatsCache`, `sessionShared`, `sharedSessionIds`, `normalizeDenied`, `filterShared`, `PathRepoIndex`, `RepoKey` (Tasks 4–5); `StatsCache`, `SessionMeta`, `emptyStatsCache` from `@agentistics/core`.
+- Produces: `attributionBoundary(real)`, `DeniedDayDelta`, `DeniedLedger`, `deniedDeltaByDay`, `advanceSeal`, `buildSplitStatsCache`, `prehistoryCount(real, boundary)`, `deniedTouchesPrehistory`.
+
+**Measured facts this task encodes — do not re-derive them, and do not contradict them:**
+- `lastComputedDate` on the reference machine is `2026-06-22`; every later day is absent from the raw cache and gap-filled by `supplementStatsCache`.
+- `supplementStatsCache` gap-fills `dailyActivity`, `dailyModelTokens` and `modelUsage` **only** — never `hourCounts`, `totalSessions` or `totalMessages`. Those three describe Claude's rollup alone, which is why the split subtracts from them but never adds a `kept` term.
+- The supplemented cache is therefore already internally inconsistent and already ships that way today: `totalSessions` 255 against `Σ dailyActivity.sessionCount` 317, and `Σ hourCounts` 255.
+
+- [ ] **Step 1: Replace the split's tests**
+
+In `packages/server/server/share-rules.test.ts`, delete every test from `attributionBoundary is the earliest stored Claude day...` through the end of the Task 6 block (the last one is `prehistoryCount and deniedTouchesPrehistory are local disclosure helpers`), together with the `realCache()` and `storeSessions()` fixtures. Keep the `s()` and `localAt()` helpers. Then append:
+
+```ts
+import {
+  attributionBoundary, buildSplitStatsCache, prehistoryCount, deniedTouchesPrehistory,
+  deniedDeltaByDay, advanceSeal,
+} from './share-rules'
+import type { DeniedLedger } from './share-rules'
+
+/**
+ * A cache shaped like the real one: Claude rolled up through 2026-06-22 (prehistory), and
+ * 2026-06-25 is gap-filled by supplementStatsCache from the store. hourCounts / totalSessions /
+ * totalMessages cover the ROLLUP ONLY — that asymmetry is real and load-bearing.
+ */
+function realCache(): StatsCache {
+  return {
+    ...emptyStatsCache(),
+    version: 4,
+    lastComputedDate: '2026-06-22',
+    dailyActivity: [
+      { date: '2026-02-06', messageCount: 100, sessionCount: 10, toolCallCount: 50 },
+      { date: '2026-06-25', messageCount: 9, sessionCount: 2, toolCallCount: 4 },
+    ],
+    dailyModelTokens: [
+      { date: '2026-02-06', tokensByModel: { 'claude-opus-5': 1000 } },
+      { date: '2026-06-25', tokensByModel: { 'claude-opus-5': 510 } },
+    ],
+    modelUsage: {
+      'claude-opus-5': {
+        inputTokens: 1510, outputTokens: 0, cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0,
+      },
+    },
+    totalSessions: 10,      // rollup only
+    totalMessages: 100,     // rollup only
+    firstSessionDate: '2026-02-06T00:53:42.012Z',
+    hourCounts: { '8': 10 }, // rollup only
+  }
+}
+
+/** The store — only the gap-filled day. Reproduces realCache()'s 2026-06-25 row exactly. */
+function storeSessions(): SessionMeta[] {
+  return [
+    s({ session_id: 'keep', start_time: localAt('2026-06-25', 9), model: 'claude-opus-5', input_tokens: 10, git_remote: 'github.com/o/public', user_message_count: 1, tool_counts: { Read: 2 } }),
+    s({ session_id: 'drop', start_time: localAt('2026-06-25', 11), model: 'claude-opus-5', input_tokens: 500, git_remote: 'github.com/o/secret', user_message_count: 8, tool_counts: { Bash: 2 } }),
+  ]
+}
+
+const NO_SEAL: DeniedLedger = {}
+
+test('attributionBoundary is the day AFTER Claude’s watermark', () => {
+  expect(attributionBoundary(realCache())).toBe('2026-06-23')
+  expect(attributionBoundary({ ...emptyStatsCache(), lastComputedDate: '2026-12-31' })).toBe('2027-01-01')
+})
+
+test('attributionBoundary is empty when Claude has rolled up nothing — everything is decomposable', () => {
+  expect(attributionBoundary(emptyStatsCache())).toBe('')
+})
+
+test('THE HEADLINE INVARIANT: denying nothing makes the split a no-op, with NO field excepted', () => {
+  const all = storeSessions()
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: NO_SEAL })!
+  expect(out).toEqual(realCache())
+})
+
+test('totals drop by exactly the denied contribution and by nothing else', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-06-23', sealed: NO_SEAL })!
+  const june = out.dailyActivity.find(d => d.date === '2026-06-25')!
+  expect(june.sessionCount).toBe(1)
+  expect(june.messageCount).toBe(1)
+  expect(june.toolCallCount).toBe(2)
+  expect(out.dailyModelTokens.find(d => d.date === '2026-06-25')!.tokensByModel['claude-opus-5']).toBe(10)
+  expect(out.modelUsage['claude-opus-5']!.inputTokens).toBe(1510 - 500)
+})
+
+test('the rollup half is untouched: prehistory rows, hourCounts and totals are verbatim', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-06-23', sealed: NO_SEAL })!
+  expect(out.dailyActivity.find(d => d.date === '2026-02-06')).toEqual({ date: '2026-02-06', messageCount: 100, sessionCount: 10, toolCallCount: 50 })
+  expect(out.hourCounts).toEqual({ '8': 10 })   // no +kept term: the rollup never covered the gap-filled window
+  expect(out.totalSessions).toBe(10)
+  expect(out.totalMessages).toBe(100)
+  expect(out.lastComputedDate).toBe('2026-06-22')
+  expect(out.firstSessionDate).toBe('2026-02-06T00:53:42.012Z')
+})
+
+test('deniedDeltaByDay measures only the decomposable window, and only denied sessions', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const led = deniedDeltaByDay(all, shared, '2026-06-23')
+  expect(Object.keys(led)).toEqual(['2026-06-25'])
+  const d = led['2026-06-25']!
+  expect(d.sessionCount).toBe(1)
+  expect(d.messageCount).toBe(8)
+  expect(d.toolCallCount).toBe(2)
+  expect(d.tokensByModel['claude-opus-5']).toBe(500)
+  expect(d.usageByModel['claude-opus-5']!.input).toBe(500)
+  expect(d.hourCounts['11']).toBe(1)
+  // A day before the boundary contributes nothing, even when it holds a denied session.
+  expect(deniedDeltaByDay(all, shared, '2026-07-01')).toEqual({})
+})
+
+test('deniedDeltaByDay is empty when nothing is denied', () => {
+  const all = storeSessions()
+  expect(deniedDeltaByDay(all, all, '2026-06-23')).toEqual({})
+})
+
+test('advanceSeal seals a pending day once the watermark passes it, and never re-seals', () => {
+  const pending = deniedDeltaByDay(storeSessions(), filterShared(storeSessions(), normalizeDenied(['github.com/o/secret'])), '2026-06-23')
+  const first = advanceSeal({ sealed: {}, pending }, {}, '2026-06-26')
+  expect(Object.keys(first.sealed)).toEqual(['2026-06-25'])
+  expect(first.pending).toEqual({})
+  // A second pass with a different value must not overwrite the sealed one.
+  const tampered = { '2026-06-25': { ...pending['2026-06-25']!, sessionCount: 99 } }
+  const second = advanceSeal({ sealed: first.sealed, pending: tampered }, {}, '2026-06-27')
+  expect(second.sealed['2026-06-25']!.sessionCount).toBe(1)
+})
+
+test('advanceSeal leaves a still-decomposable day pending', () => {
+  const pending = deniedDeltaByDay(storeSessions(), filterShared(storeSessions(), normalizeDenied(['github.com/o/secret'])), '2026-06-23')
+  const out = advanceSeal({ sealed: {}, pending }, pending, '2026-06-23')
+  expect(out.sealed).toEqual({})
+  expect(Object.keys(out.pending)).toEqual(['2026-06-25'])
+})
+
+test('THE SEAL INVARIANT: a day keeps its denied volume withheld after the watermark passes it', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const pending = deniedDeltaByDay(all, shared, '2026-06-23')
+  const { sealed } = advanceSeal({ sealed: {}, pending }, {}, '2026-06-26')
+
+  // Claude has now rolled 2026-06-25 up: it appears in the rollup half with the FULL numbers.
+  const rolled: StatsCache = {
+    ...realCache(),
+    lastComputedDate: '2026-06-25',
+    totalSessions: 12, totalMessages: 109,
+    hourCounts: { '8': 10, '9': 1, '11': 1 },
+  }
+  const out = buildSplitStatsCache({ real: rolled, allStored: all, shared, boundary: '2026-06-26', sealed })!
+
+  const june = out.dailyActivity.find(d => d.date === '2026-06-25')!
+  expect(june.sessionCount).toBe(1)          // 2 rolled up minus 1 sealed
+  expect(june.messageCount).toBe(1)
+  expect(june.toolCallCount).toBe(2)
+  expect(out.dailyModelTokens.find(d => d.date === '2026-06-25')!.tokensByModel['claude-opus-5']).toBe(10)
+  expect(out.totalSessions).toBe(11)         // 12 minus the sealed session
+  expect(out.totalMessages).toBe(101)
+  expect(out.hourCounts['11']).toBeUndefined() // the denied session's start hour is withheld
+  expect(out.hourCounts['9']).toBe(1)
+  expect(out.modelUsage['claude-opus-5']!.inputTokens).toBe(1010)
+})
+
+test('an unsealed prehistory day is emitted verbatim — absence of a seal never zeroes a row', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-06-23', sealed: NO_SEAL })!
+  expect(out.dailyActivity.find(d => d.date === '2026-02-06')!.sessionCount).toBe(10)
+})
+
+test('a seal larger than the rollup row clamps at 0 rather than going negative', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const huge: DeniedLedger = {
+    '2026-02-06': {
+      sessionCount: 999, messageCount: 999, toolCallCount: 999,
+      tokensByModel: { 'claude-opus-5': 99999 },
+      usageByModel: { 'claude-opus-5': { input: 99999, output: 0, cacheRead: 0, cacheWrite: 0 } },
+      hourCounts: { '8': 999 },
+    },
+  }
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-06-23', sealed: huge })!
+  const feb = out.dailyActivity.find(d => d.date === '2026-02-06')!
+  expect(feb.sessionCount).toBe(0)
+  expect(feb.messageCount).toBe(0)
+  expect(out.totalSessions).toBe(0)
+  expect(out.hourCounts['8']).toBeUndefined()
+  expect(out.modelUsage['claude-opus-5']!.inputTokens).toBe(10) // 1510 clamped to 0, minus 510, plus kept 10
+})
+
+test('THE CLAMP IS EXACT, not merely non-negative', () => {
+  // real.modelUsage lags behind the store (5 < the 510 attributable). The prehistory term
+  // clamps to 0 and the kept term must SURVIVE: max(0, 5-510) + 510 = 510, not 5.
+  const lagging: StatsCache = {
+    ...realCache(),
+    modelUsage: { 'claude-opus-5': { inputTokens: 5, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 } },
+  }
+  const all = storeSessions()
+  const out = buildSplitStatsCache({ real: lagging, allStored: all, shared: all, boundary: '2026-06-23', sealed: NO_SEAL })!
+  expect(out.modelUsage['claude-opus-5']!.inputTokens).toBe(510)
+})
+
+test('a boundary of ‘’ means every day is decomposable', () => {
+  const all = storeSessions()
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  const gapFilledOnly: StatsCache = { ...realCache(), lastComputedDate: '', dailyActivity: [realCache().dailyActivity[1]!], dailyModelTokens: [realCache().dailyModelTokens[1]!], totalSessions: 0, totalMessages: 0, hourCounts: {} }
+  const out = buildSplitStatsCache({ real: gapFilledOnly, allStored: all, shared, boundary: '', sealed: NO_SEAL })!
+  expect(out.dailyActivity).toHaveLength(1)
+  expect(out.dailyActivity[0]!.sessionCount).toBe(1)
+})
+
+test('buildSplitStatsCache refuses rather than shipping an unsplit cache', () => {
+  const all = storeSessions()
+  expect(buildSplitStatsCache({ real: null as unknown as StatsCache, allStored: all, shared: all, boundary: '2026-06-23', sealed: NO_SEAL })).toBeNull()
+  // cold store against a populated cache
+  expect(buildSplitStatsCache({ real: realCache(), allStored: [], shared: [], boundary: '2026-06-23', sealed: NO_SEAL })).toBeNull()
+})
+
+test('the split output carries no key outside the StatsCache shape', () => {
+  const all = storeSessions()
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: NO_SEAL })!
+  expect(Object.keys(out).sort()).toEqual(Object.keys(emptyStatsCache()).sort())
+})
+
+test('prehistoryCount counts the ROLLUP’s sessions, and is 0 when nothing is rolled up', () => {
+  expect(prehistoryCount(realCache(), '2026-06-23')).toBe(10)
+  expect(prehistoryCount(realCache(), '')).toBe(0)
+})
+
+test('deniedTouchesPrehistory ignores non-Claude sessions', () => {
+  const denied = normalizeDenied(['github.com/o/secret'])
+  const claudeOld = [s({ session_id: 'a', start_time: localAt('2026-02-06', 8), git_remote: 'github.com/o/secret' })]
+  const codexOld = [s({ session_id: 'b', harness: 'codex', start_time: localAt('2026-02-06', 8), git_remote: 'github.com/o/secret' })]
+  expect(deniedTouchesPrehistory(claudeOld, denied, '2026-06-23')).toBe(true)
+  expect(deniedTouchesPrehistory(codexOld, denied, '2026-06-23')).toBe(false)
+  expect(deniedTouchesPrehistory(claudeOld, normalizeDenied(['github.com/o/public']), '2026-06-23')).toBe(false)
+  expect(deniedTouchesPrehistory(claudeOld, denied, '')).toBe(false)
+})
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `bun test packages/server/server/share-rules.test.ts`
+Expected: FAIL — `attributionBoundary` now receives a `StatsCache` and the seal functions do not exist.
+
+- [ ] **Step 3: Replace the implementation**
+
+In `packages/server/server/share-rules.ts`, delete `attributionBoundary`, `prehistoryCount`, `deniedTouchesPrehistory` and `buildSplitStatsCache` (keep `sumUsage` exactly as it is) and put in their place:
+
+```ts
+/** UTC day arithmetic on a YYYY-MM-DD string. '' for anything unparseable. */
+function nextDay(day: string): string {
+  const d = new Date(`${day}T00:00:00Z`)
+  if (Number.isNaN(d.getTime())) return ''
+  d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString().slice(0, 10)
+}
+
+/**
+ * The first day whose cache rows are session-derived, and therefore decomposable by repository:
+ * the day AFTER Claude's rollup watermark.
+ *
+ * Measured, not assumed: for every day at or before `lastComputedDate` the consolidate store is a
+ * strict SUBSET of Claude's rollup (4 stored sessions against 9 rolled up on one real day; per-day
+ * reconciliation matched 0 of 23 days), so those rows cannot be decomposed by anyone — including
+ * this machine. Every later day is written by `supplementStatsCache` from the very session set this
+ * module filters, so rebuilding it from `shared` is exact and the date-less subtraction reconciles
+ * by construction.
+ *
+ * `''` means Claude has rolled up nothing, so the entire cache is gap-filled and EVERY day is
+ * decomposable. It is not a refusal signal.
+ */
+export function attributionBoundary(real: StatsCache): string {
+  const watermark = real?.lastComputedDate ?? ''
+  return watermark ? nextDay(watermark) : ''
+}
+
+/** What the denylist excluded from one day, measured while that day was still decomposable. */
+export interface DeniedDayDelta {
+  sessionCount: number
+  messageCount: number
+  toolCallCount: number
+  tokensByModel: Record<string, number>
+  usageByModel: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>
+  hourCounts: Record<string, number>
+}
+export type DeniedLedger = Record<string, DeniedDayDelta>
+
+/** Per-day denied contribution over the decomposable window (`day >= boundary`). Pure.
+ *  Mirrors `accumulateClaudeSessions`'s gates exactly — harness, start_time, the `claude-` model
+ *  id and the zero-token continue — so the two can be subtracted from each other. */
+export function deniedDeltaByDay(
+  allStored: readonly SessionMeta[],
+  shared: readonly SessionMeta[],
+  boundary: string,
+): DeniedLedger {
+  const keep = sharedSessionIds(shared)
+  const out: DeniedLedger = {}
+  for (const s of allStored) {
+    if (!s.start_time) continue
+    if ((s.harness ?? 'claude') !== 'claude') continue
+    const day = s.start_time.slice(0, 10)
+    if (boundary && day < boundary) continue
+    if (!s.session_id || keep.has(s.session_id)) continue
+
+    const d = out[day] ?? (out[day] = {
+      sessionCount: 0, messageCount: 0, toolCallCount: 0,
+      tokensByModel: {}, usageByModel: {}, hourCounts: {},
+    })
+    d.sessionCount += 1
+    d.messageCount += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
+    d.toolCallCount += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
+    const hour = new Date(s.start_time).getHours()
+    if (Number.isFinite(hour)) {
+      const k = String(hour)
+      d.hourCounts[k] = (d.hourCounts[k] ?? 0) + 1
+    }
+
+    const model = s.model
+    if (!model || !model.startsWith('claude-')) continue
+    const inp = s.input_tokens ?? 0
+    const outT = s.output_tokens ?? 0
+    const cr = s.cache_read_input_tokens ?? 0
+    const cw = s.cache_creation_input_tokens ?? 0
+    if (inp + outT + cr + cw === 0) continue
+    d.tokensByModel[model] = (d.tokensByModel[model] ?? 0) + inp + outT + cr + cw
+    const u = d.usageByModel[model] ?? (d.usageByModel[model] = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
+    u.input += inp; u.output += outT; u.cacheRead += cr; u.cacheWrite += cw
+  }
+  return out
+}
+
+/**
+ * Advance the seal as Claude's watermark moves.
+ *
+ * A day filtered today joins the undecomposable rollup tomorrow, and the denied repository's volume
+ * for it would silently start shipping. So the delta measured while the day was still decomposable
+ * is sealed as it crosses, and subtracted from the rollup row forever after. A day already sealed is
+ * never re-sealed — the first measurement was taken when the day was fully session-derived, and any
+ * later one would be taken against a store that is now a subset.
+ */
+export function advanceSeal(
+  prev: { sealed: DeniedLedger; pending: DeniedLedger },
+  fresh: DeniedLedger,
+  boundary: string,
+): { sealed: DeniedLedger; pending: DeniedLedger } {
+  const sealed: DeniedLedger = { ...(prev.sealed ?? {}) }
+  for (const [day, delta] of Object.entries(prev.pending ?? {})) {
+    if (boundary && day < boundary && !sealed[day]) sealed[day] = delta
+  }
+  return { sealed, pending: { ...fresh } }
+}
+
+/** Sessions Claude has already rolled up — the size of the block no rule can split. */
+export function prehistoryCount(real: StatsCache, boundary: string): number {
+  if (!boundary) return 0
+  return (real?.dailyActivity ?? [])
+    .filter(d => d.date < boundary)
+    .reduce((a, d) => a + d.sessionCount, 0)
+}
+
+/** Does any DENIED repo have a stored CLAUDE session inside the rollup window? Drives the specific
+ *  variant of the confirm copy. A false answer is not proof of absence — the store holds only a
+ *  subset of that window — which is why the generic copy is always shown too. */
+export function deniedTouchesPrehistory(
+  allStored: readonly SessionMeta[],
+  denied: ReadonlySet<RepoKey>,
+  boundary: string,
+  index?: PathRepoIndex,
+): boolean {
+  if (!boundary || denied.size === 0) return false
+  for (const s of allStored) {
+    if (!s.start_time || s.start_time.slice(0, 10) >= boundary) continue
+    if ((s.harness ?? 'claude') !== 'claude') continue
+    if (!sessionShared(s, denied, index)) return true
+  }
+  return false
+}
+
+/**
+ * The cache a RESTRICTED connection pushes.
+ *
+ * Days `>= boundary` are rebuilt from `shared`. Earlier days are Claude's rollup row minus their
+ * sealed delta, or verbatim when unsealed. `hourCounts`, `totalSessions` and `totalMessages` are
+ * NOT gap-filled by `supplementStatsCache`, so they describe the rollup alone — they are reduced by
+ * the seal and never gain a `kept` term. Every value is copied, summed or subtracted; nothing is
+ * estimated, ratioed or prorated.
+ */
+export function buildSplitStatsCache(input: {
+  real: StatsCache
+  allStored: readonly SessionMeta[]
+  shared: readonly SessionMeta[]
+  boundary: string
+  sealed: DeniedLedger
+}): StatsCache | null {
+  const { real, allStored, shared, boundary, sealed } = input
+  if (!real) return null
+
+  // Cold-store signature: a populated cache while the store yields no Claude session means the
+  // store was not read, not that the machine did nothing. Push nothing rather than the unsplit cache.
+  const realHasData = (real.dailyActivity?.length ?? 0) > 0 || (real.totalSessions ?? 0) > 0
+  const storeHasClaude = allStored.some(s => !!s.start_time && (s.harness ?? 'claude') === 'claude')
+  if (realHasData && !storeHasClaude) return null
+
+  // boundary '' means Claude rolled up nothing, so NO day is prehistory.
+  const isPrehistory = (day: string) => boundary !== '' && day < boundary
+  const fromShared = buildSharedStatsCache(shared, { version: real.version })
+
+  const out = emptyStatsCache()
+  out.version = real.version
+  out.lastComputedDate = real.lastComputedDate
+  out.firstSessionDate = real.firstSessionDate
+  out.totalSpeculationTimeSavedMs = real.totalSpeculationTimeSavedMs
+  out.longestSession = { ...real.longestSession }
+
+  // --- dailyActivity: rollup minus seal, then the rebuilt window ---
+  const activity = (real.dailyActivity ?? [])
+    .filter(d => isPrehistory(d.date))
+    .map(d => {
+      const seal = sealed?.[d.date]
+      if (!seal) return { ...d }
+      return {
+        date: d.date,
+        messageCount: Math.max(0, d.messageCount - seal.messageCount),
+        sessionCount: Math.max(0, d.sessionCount - seal.sessionCount),
+        toolCallCount: Math.max(0, d.toolCallCount - seal.toolCallCount),
+      }
+    })
+  for (const d of fromShared.dailyActivity) if (!isPrehistory(d.date)) activity.push({ ...d })
+  out.dailyActivity = activity.sort((a, b) => a.date.localeCompare(b.date))
+
+  // --- dailyModelTokens: same three-way rule, per model ---
+  const daily = (real.dailyModelTokens ?? [])
+    .filter(d => isPrehistory(d.date))
+    .map(d => {
+      const seal = sealed?.[d.date]
+      if (!seal) return { date: d.date, tokensByModel: { ...d.tokensByModel } }
+      const tokensByModel: Record<string, number> = {}
+      for (const [model, value] of Object.entries(d.tokensByModel)) {
+        const left = Math.max(0, value - (seal.tokensByModel[model] ?? 0))
+        if (left > 0) tokensByModel[model] = left
+      }
+      return { date: d.date, tokensByModel }
+    })
+  for (const d of fromShared.dailyModelTokens) if (!isPrehistory(d.date)) daily.push({ date: d.date, tokensByModel: { ...d.tokensByModel } })
+  out.dailyModelTokens = daily.sort((a, b) => a.date.localeCompare(b.date))
+
+  // --- modelUsage: real − sealed − attributable + kept, subtraction clamped ---
+  const attributable = sumUsage(allStored, boundary)
+  const kept = sumUsage(shared, boundary)
+  const sealedUsage = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>()
+  for (const delta of Object.values(sealed ?? {})) {
+    for (const [model, u] of Object.entries(delta.usageByModel)) {
+      const acc = sealedUsage.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+      acc.input += u.input; acc.output += u.output; acc.cacheRead += u.cacheRead; acc.cacheWrite += u.cacheWrite
+      sealedUsage.set(model, acc)
+    }
+  }
+
+  const models = new Set([
+    ...Object.keys(real.modelUsage ?? {}),
+    ...attributable.totals.keys(),
+    ...kept.totals.keys(),
+    ...sealedUsage.keys(),
+  ])
+  for (const model of models) {
+    const r = real.modelUsage?.[model]
+    const a = attributable.totals.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    const k = kept.totals.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    const sl = sealedUsage.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    const usage = {
+      inputTokens: Math.max(0, (r?.inputTokens ?? 0) - sl.input - a.input) + k.input,
+      outputTokens: Math.max(0, (r?.outputTokens ?? 0) - sl.output - a.output) + k.output,
+      cacheReadInputTokens: Math.max(0, (r?.cacheReadInputTokens ?? 0) - sl.cacheRead - a.cacheRead) + k.cacheRead,
+      cacheCreationInputTokens: Math.max(0, (r?.cacheCreationInputTokens ?? 0) - sl.cacheWrite - a.cacheWrite) + k.cacheWrite,
+      webSearchRequests: 0,
+      costUSD: 0,
+    }
+    if (usage.inputTokens || usage.outputTokens || usage.cacheReadInputTokens || usage.cacheCreationInputTokens) {
+      out.modelUsage[model] = usage
+    }
+  }
+
+  // --- rollup-only fields: reduced by the seal, never given a kept term ---
+  let sealedSessions = 0
+  let sealedMessages = 0
+  const sealedHours = new Map<string, number>()
+  for (const delta of Object.values(sealed ?? {})) {
+    sealedSessions += delta.sessionCount
+    sealedMessages += delta.messageCount
+    for (const [h, c] of Object.entries(delta.hourCounts)) sealedHours.set(h, (sealedHours.get(h) ?? 0) + c)
+  }
+  out.totalSessions = Math.max(0, (real.totalSessions ?? 0) - sealedSessions)
+  out.totalMessages = Math.max(0, (real.totalMessages ?? 0) - sealedMessages)
+  for (const [h, c] of Object.entries(real.hourCounts ?? {})) {
+    const left = Math.max(0, c - (sealedHours.get(h) ?? 0))
+    if (left > 0) out.hourCounts[h] = left
+  }
+
+  return out
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `bun test packages/server/server/share-rules.test.ts`
+Expected: PASS.
+
+The two tests that must never be weakened are `THE HEADLINE INVARIANT` (empty denylist ⇒ output deep-equals the real cache, no field excepted) and `THE SEAL INVARIANT` (a day stays filtered after the watermark passes it). If either fails, fix the implementation — if you believe the assertion itself is wrong, stop and report rather than adjusting it.
+
+- [ ] **Step 5: Full suite and typecheck**
+
+Run: `bun run stub && bun tsc --noEmit && bun test`
+Expected: typecheck clean; the only test failures are the two pre-existing `lucide-react` ones.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/server/server/share-rules.ts packages/server/server/share-rules.test.ts
+git commit --no-verify -m "fix(share-rules): split on Claude's watermark, and seal days as they cross"
+```
+
 ## Done when
 
 - `bun test` passes (bar the two pre-existing `lucide-react` failures) and `bun tsc --noEmit` is clean.
@@ -1900,3 +2436,40 @@ git commit -m "feat(share-rules): split the aggregate at the attribution boundar
 
 - **Plan 2 — multi-central runtime:** per-connection state in `team-uploader.ts`, one WebSocket per connection, the connection routes, `/api/team/status`, the boot-time `migrateTeamStateOnce` (sent-state file rename + lossless v1→v2 hash conversion), the cross-process preferences lock, and the CLI.
 - **Plan 3 — repo sharing:** `POST /api/team/forget` and `capabilities` on the central, the denylist wired into the push path, the removal sequence with its journal, and the Settings UI.
+
+---
+
+## Follow-ups booked out of the final review
+
+Verified residuals from the whole-branch review and its fix wave. None blocks this branch — `share-rules.ts`
+has no caller outside its tests yet — but the first is a privacy fail-open and must be closed **before Plan 2
+wires the module into the push path**.
+
+1. **Sub-day store shrinkage still fails open in `modelUsage`.** `buildSplitStatsCache` refuses when a
+   non-prehistory day present in `real` has no session left in `allStored`, but shrinkage *within* a
+   still-present day (some sessions lost, at least one remaining) leaves the day in `storeDays`, so the
+   `attributable` term under-subtracts and a denied session's tokens ride out. The fix is as cheap as the
+   day-level one: compare `real.dailyModelTokens[day]` against the `attributable` totals for that day and
+   refuse on a mismatch. **Do this in Plan 2's first task, before the uploader calls the module.**
+
+2. **Spec §5.8's legacy-team merge is only half implemented.** `mergeTeamPayload` preserves the stored
+   `connections` when an incoming `team` payload omits the key — which is what stopped C1's data loss — but
+   §5.8 also requires matching the payload's `endpoint` into `connections[]` and merging it (preserving `id`
+   and `deniedRepos`), never blanking a stored token, and returning `409` when `connections.length > 1`.
+   Today a legacy single-connection edit is a silent no-op. Safe direction, but the route contract in §5.8 is
+   not met. Land it with the connection routes in Plan 2.
+   Related: a payload carrying an explicit `connections: undefined` takes the replace branch. Unreachable over
+   `PUT /api/preferences` (JSON drops undefined) but reachable in-process; tighten when the routes land.
+
+3. **The TZ-restoring test breaks on non-whole-hour zones.** `share-rules.test.ts`'s local-clock test restores
+   the ambient zone as `Etc/GMT±h`, which is invalid for offsets of :30 or :45 (India, Nepal, Adelaide) — the
+   runtime falls back to UTC and the test's own offset assertion fails, so the suite-wide leak it exists to
+   prevent happens anyway, loudly. It also erases DST for the rest of the run on a DST zone. Benign on a UTC
+   or UTC−3 machine; fix if CI ever runs elsewhere.
+
+4. **Two leftovers from the minors sweep.** `cli-start.ts`'s `loadState()` still swallows a corrupt
+   preferences file into `mode: 'solo'` — the exact lie that was converted to an explicit exit in
+   `cli-status.ts`, so the two are now inconsistent. And `ConnectionSettings.tsx` / `MachinesSettings.tsx`
+   replaced `{ ...DEFAULT_TEAM }` with a module-level `defaultTeam()` const that is still spread on every
+   render, so the aliased-array hazard survives in web; §3.5 wants those duplicates deleted in favour of
+   `readTeamConnections`.
