@@ -46,8 +46,8 @@ test('update patches only the given fields and bumps updatedAt', async () => {
   expect(after!.name).toBe('B')
   expect(after!.color).toBe('#ef4444')
   expect(after!.sharedWith).toEqual(['acc1'])
-  expect(after!.createdAt).toBe(doc.createdAt)
-  expect(Date.parse(after!.updatedAt)).toBeGreaterThanOrEqual(Date.parse(doc.updatedAt))
+  expect(after!.createdAt.getTime()).toBe(doc.createdAt.getTime())
+  expect(after!.updatedAt.getTime()).toBeGreaterThanOrEqual(doc.updatedAt.getTime())
 })
 
 test('update of an unknown id reports false and changes nothing', async () => {

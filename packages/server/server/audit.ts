@@ -28,7 +28,10 @@ export interface AuditEvent {
   actorId?: string
   targetId?: string
   ip: string
-  at: string
+  /** BSON Date, NOT an ISO string. The retention index below is a TTL index, and MongoDB's TTL
+   *  monitor only expires documents whose indexed field is a Date — with a string here the index
+   *  is created happily, reports no error, and nothing is ever deleted. See mongo-dates.ts. */
+  at: Date
   meta?: Record<string, unknown>
 }
 
@@ -47,7 +50,7 @@ const REDACT = new Set([
 ])
 const MAX_VALUE_LENGTH = 512
 
-export function buildAuditEvent(input: AuditInput, nowIso: string): AuditEvent {
+export function buildAuditEvent(input: AuditInput, now: Date): AuditEvent {
   let meta: Record<string, unknown> | undefined
   if (input.meta) {
     meta = {}
@@ -61,7 +64,7 @@ export function buildAuditEvent(input: AuditInput, nowIso: string): AuditEvent {
     actorId: input.actorId,
     targetId: input.targetId,
     ip: input.ip,
-    at: nowIso,
+    at: now,
     meta,
   }
 }
@@ -70,7 +73,7 @@ export function buildAuditEvent(input: AuditInput, nowIso: string): AuditEvent {
 export async function writeAudit(input: AuditInput): Promise<void> {
   try {
     const db = await getMongoDb()
-    await db.collection<AuditEvent>('audit').insertOne(buildAuditEvent(input, new Date().toISOString()))
+    await db.collection<AuditEvent>('audit').insertOne(buildAuditEvent(input, new Date()))
   } catch {
     // Swallowed on purpose. A failing audit sink is an operational problem, not a reason to
     // deny a legitimate login.

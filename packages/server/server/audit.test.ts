@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { buildAuditEvent } from './audit'
 
-const now = '2026-07-25T12:00:00.000Z'
+const now = new Date('2026-07-25T12:00:00.000Z')
 
 describe('buildAuditEvent', () => {
   it('records the who/what/where/when', () => {

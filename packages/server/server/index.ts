@@ -150,6 +150,20 @@ if (TEAM_CENTRAL) {
       const { backfillTokenTeamIds, purgeUnknownTeamsFromMachines } = await import('./team-tokens')
       const { backfillRepoTeamIds } = await import('./team-repos')
       await ensureAccountIndexes()
+      // Convert any date still stored as a STRING into a BSON Date. Runs before everything that
+      // reads a timestamp, is idempotent (a migrated DB matches no documents), and never throws —
+      // a central must still boot when it cannot run. See mongo-dates.ts.
+      try {
+        const { migrateStringDatesToBson } = await import('./mongo-dates')
+        const { getMongoDb } = await import('./mongo')
+        const changed = await migrateStringDatesToBson(await getMongoDb(), { log: m => console.log(m) })
+        if (changed.length > 0) {
+          const total = changed.reduce((n, r) => n + r.converted, 0)
+          const stuck = changed.reduce((n, r) => n + r.unconvertible, 0)
+          console.log(`[mongo-dates] migrated ${total} string date(s) to BSON Date` +
+            (stuck > 0 ? ` — ${stuck} value(s) were not parseable and were left untouched for inspection` : ''))
+        }
+      } catch (e) { console.warn('[mongo-dates] migration skipped:', e instanceof Error ? e.message : e) }
       await ensureAuditIndexes()
       // No Default team is seeded — machines/accounts are loose until assigned to real teams.
       await backfillTokenTeamIds()
@@ -165,7 +179,7 @@ if (TEAM_CENTRAL) {
         const { getBootstrapDoc, generateBootstrapToken } = await import('./bootstrap')
         const existing = await getBootstrapDoc()
         if (!existing || existing.consumedAt || !existing.tokenHash) {
-          const token = await generateBootstrapToken(new Date().toISOString())
+          const token = await generateBootstrapToken(new Date())
           console.log(
             '\n' +
             '========================================================\n' +

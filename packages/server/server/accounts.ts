@@ -19,8 +19,9 @@ export interface NewAccount {
   mustChangePassword?: boolean
 }
 
-/** Pure doc builder — deterministic given id + nowIso. */
-export function makeAccountDoc(input: NewAccount, id: string, nowIso: string): AccountDoc {
+/** Pure doc builder — deterministic given id + now. `now` is a real Date: account timestamps
+ *  are stored as BSON dates, not ISO strings (see mongo-dates.ts). */
+export function makeAccountDoc(input: NewAccount, id: string, now: Date): AccountDoc {
   return {
     _id: id,
     name: input.name,
@@ -30,8 +31,8 @@ export function makeAccountDoc(input: NewAccount, id: string, nowIso: string): A
     role: input.role,
     memberships: input.memberships,
     sessionVersion: 0,
-    createdAt: nowIso,
-    updatedAt: nowIso,
+    createdAt: now,
+    updatedAt: now,
     createdBy: input.createdBy,
     lastLoginAt: null,
     mustChangePassword: input.mustChangePassword ?? false,
@@ -50,7 +51,7 @@ export async function ensureAccountIndexes(): Promise<void> {
 }
 
 export async function createAccount(input: NewAccount): Promise<AccountDoc> {
-  const doc = makeAccountDoc(input, randomBytes(12).toString('hex'), new Date().toISOString())
+  const doc = makeAccountDoc(input, randomBytes(12).toString('hex'), new Date())
   const col = await getAccountsCollection()
   await col.insertOne(doc)
   return doc
@@ -76,7 +77,7 @@ export async function updateAccount(
   patch: Partial<Pick<AccountDoc, 'name' | 'passwordHash' | 'role' | 'memberships' | 'lastLoginAt' | 'mustChangePassword'>>,
 ): Promise<void> {
   const col = await getAccountsCollection()
-  await col.updateOne({ _id: id }, { $set: { ...patch, updatedAt: new Date().toISOString() } })
+  await col.updateOne({ _id: id }, { $set: { ...patch, updatedAt: new Date() } })
 }
 
 export async function deleteAccount(id: string): Promise<void> {
@@ -87,7 +88,7 @@ export async function deleteAccount(id: string): Promise<void> {
 /** Invalidate every existing session for this account (logout-all / password change / revoke). */
 export async function bumpSessionVersion(id: string): Promise<void> {
   const col = await getAccountsCollection()
-  await col.updateOne({ _id: id }, { $inc: { sessionVersion: 1 }, $set: { updatedAt: new Date().toISOString() } })
+  await col.updateOne({ _id: id }, { $inc: { sessionVersion: 1 }, $set: { updatedAt: new Date() } })
 }
 
 export async function countAccounts(): Promise<number> {
@@ -104,7 +105,7 @@ export async function purgeUnknownTeamsFromAccounts(validTeamIds: string[]): Pro
   for (const a of docs) {
     const kept = a.memberships.filter(m => valid.has(m.teamId))
     if (kept.length === a.memberships.length) continue
-    await col.updateOne({ _id: a._id }, { $set: { memberships: kept, updatedAt: new Date().toISOString() } })
+    await col.updateOne({ _id: a._id }, { $set: { memberships: kept, updatedAt: new Date() } })
   }
 }
 

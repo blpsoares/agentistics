@@ -2,7 +2,7 @@
  * tags-store.ts — Mongo persistence for tags (B5).
  *
  * Collection: `tags`
- *   { _id, name, color?, sources[], filters[], window?, sharedWith[], createdBy, createdAt, updatedAt }
+ *   { _id, name, color?, sources[], filters[], window?, sharedWith[], createdBy, createdAt: Date, updatedAt: Date }
  *
  * Visibility is an explicit account list — never derived from teams. The creator and every owner
  * always see a tag; everyone else must be in `sharedWith`.
@@ -24,8 +24,9 @@ export interface TagDoc {
   /** accountIds granted read access. The creator and owners are implicit and not stored here. */
   sharedWith: string[]
   createdBy: string
-  createdAt: string
-  updatedAt: string
+  /** BSON Dates — see mongo-dates.ts. The /api/tags responses render them as ISO strings. */
+  createdAt: Date
+  updatedAt: Date
 }
 
 async function getTagsCollection(): Promise<Collection<TagDoc>> {
@@ -47,7 +48,7 @@ export async function createTag(input: {
   name: string; color?: string; sources: TagSource[]; filters?: TagSource[]; window?: TagWindow
   sharedWith: string[]; createdBy: string
 }): Promise<TagDoc> {
-  const now = new Date().toISOString()
+  const now = new Date()
   const doc: TagDoc = {
     _id: randomBytes(12).toString('hex'),
     name: input.name,
@@ -71,7 +72,7 @@ export async function updateTag(id: string, patch: {
   window?: TagWindow | null; sharedWith?: string[]
 }): Promise<boolean> {
   const col = await getTagsCollection()
-  const $set: Partial<TagDoc> = { updatedAt: new Date().toISOString() }
+  const $set: Partial<TagDoc> = { updatedAt: new Date() }
   if (patch.name !== undefined) $set.name = patch.name
   if (patch.color !== undefined) $set.color = patch.color
   if (patch.sources !== undefined) $set.sources = patch.sources

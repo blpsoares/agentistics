@@ -85,7 +85,7 @@ export async function handleBootstrap(req: Request): Promise<Response> {
   // real teams explicitly. Backfills only normalize legacy shapes.
   await backfillTokenTeamIds()
   await backfillRepoTeamIds()
-  await consumeBootstrapToken(new Date().toISOString())
+  await consumeBootstrapToken(new Date())
 
   const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion)
   return new Response(JSON.stringify({ ok: true }), {
@@ -146,7 +146,7 @@ export async function handleIamLogin(
     return json({ ok: false, mfaRequired: true, challenge }, 200)
   }
 
-  await updateAccount(account._id, { lastLoginAt: new Date().toISOString() })
+  await updateAccount(account._id, { lastLoginAt: new Date() })
   void writeAudit({ action: 'login.success', ip, actorId: account._id })
   const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion)
   return new Response(JSON.stringify({ ok: true, mustChangePassword: account.mustChangePassword ?? false }), { status: 200, headers: { ...JSON_CT, 'Set-Cookie': cookie } })
@@ -198,7 +198,7 @@ export async function handleIamLoginMfa(req: Request): Promise<Response> {
   if (usedRecovery) void writeAudit({ action: 'mfa.recovery_used', ip: 'unknown', actorId: parsed.accountId })
   void writeAudit({ action: 'login.success', ip: 'unknown', actorId: parsed.accountId, meta: { secondFactor: usedRecovery ? 'recovery' : 'totp' } })
 
-  await updateAccount(account._id, { lastLoginAt: new Date().toISOString() })
+  await updateAccount(account._id, { lastLoginAt: new Date() })
   const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion)
   return new Response(
     JSON.stringify({
