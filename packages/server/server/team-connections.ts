@@ -1,0 +1,363 @@
+/**
+ * team-connections.ts — HTTP handlers for the multi-central connection lifecycle: add/rotate,
+ * rename, delete, probe, and the aggregated status the browser polls.
+ *
+ * Pure decisions (`validateConnectionBody`, `validatePatchBody`, `decideConnectionUpsert`) are
+ * unit-tested directly in team-connections.test.ts. Everything else here is I/O glue: read/mutate
+ * preferences through `updateTeamConfig` (whose mutator runs INSIDE preferences.ts's single write
+ * chain — see its docstring; the two uniqueness decisions below are made from the array current
+ * AT WRITE TIME, never from a snapshot read outside the chain), talk to the central over HTTP,
+ * and nudge team-uploader/team-agent-client to react immediately instead of waiting out their own
+ * ~5s reconciliation poll.
+ *
+ * Never logs a token, a TeamConnection, or a whole preferences object.
+ */
+
+import type { TeamConnection, TeamConfig } from '@agentistics/core'
+import { connectionId, defaultTeam, normalizeTeamConfig } from '@agentistics/core'
+import { readPreferences, updateTeamConfig } from './preferences'
+import { safeConnId } from './config'
+import { readJsonLimited, LIMITS } from './limits'
+import { removeConnection, getUploaderStatus, reconcileUploaderNow } from './team-uploader'
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+}
+
+function trimSlashes(url: string): string {
+  return url.replace(/\/+$/, '')
+}
+
+// ---------------------------------------------------------------------------
+// Pure decisions — the substance of this module. Unit-tested.
+// ---------------------------------------------------------------------------
+
+export interface ConnectionBody {
+  endpoint: string
+  token: string
+  org?: string
+  label?: string
+}
+
+/** Validate + normalize the POST /api/team/connections body. Pure. */
+export function validateConnectionBody(raw: unknown): ConnectionBody | { error: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: 'invalid JSON body' }
+  const r = raw as Record<string, unknown>
+  const endpoint = trimSlashes(typeof r.endpoint === 'string' ? r.endpoint.trim() : '')
+  if (!endpoint) return { error: 'endpoint is required' }
+  try {
+    const u = new URL(endpoint)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: 'endpoint must be http(s)' }
+  } catch {
+    return { error: 'endpoint must be a valid URL' }
+  }
+  const token = typeof r.token === 'string' ? r.token : ''
+  const org = typeof r.org === 'string' && r.org.trim() ? r.org.trim() : undefined
+  const label = typeof r.label === 'string' && r.label.trim() ? r.label.trim() : undefined
+  return { endpoint, token, org, label }
+}
+
+export interface PatchBody {
+  label: string
+}
+
+/** Validate the PATCH /api/team/connections/:id body. Pure. An empty string is a legitimate
+ *  "clear the label" — the card then falls back to the endpoint host for display. */
+export function validatePatchBody(raw: unknown): PatchBody | { error: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: 'invalid JSON body' }
+  const r = raw as Record<string, unknown>
+  if (typeof r.label !== 'string') return { error: 'label must be a string' }
+  return { label: r.label.trim() }
+}
+
+export type ConnectionUpsertDecision =
+  | { action: 'insert' }
+  | { action: 'update'; existing: TeamConnection }
+  | { action: 'conflict'; existing: TeamConnection }
+
+/**
+ * The two uniqueness rules, decided together so a token rotation on a known endpoint is
+ * distinguished from a genuine token collision:
+ *  - a KNOWN normalized endpoint always updates in place, whatever the new token is — token
+ *    rotation is a documented admin action and is exactly when a user re-runs connect. Appending
+ *    a second connection there would double-count the machine on the central under two
+ *    `memberId`s, since the central keys members by `sha256(token)`.
+ *  - a token that already belongs to a DIFFERENT connection is refused — two connections sharing
+ *    one token collapse onto one `memberId` and would alternately `replaceOne` the same stats
+ *    document, flipping the machine's reported totals on every push.
+ * An empty token never triggers the conflict branch: it is the legitimate shape for a
+ * token-less member against an open/legacy central, and several such connections may coexist.
+ * The endpoint match is checked first and wins even when the new token happens to collide with
+ * some OTHER connection's token — that combination is still refused (see below): a token owned
+ * by a connection other than the one being updated is a conflict regardless of which branch found
+ * it first. Pure.
+ */
+export function decideConnectionUpsert(
+  connections: TeamConnection[],
+  endpoint: string,
+  token: string,
+): ConnectionUpsertDecision {
+  const norm = trimSlashes(endpoint)
+  const byEndpoint = connections.find(c => trimSlashes(c.endpoint) === norm)
+  const byToken = token ? connections.find(c => c.token === token) : undefined
+  if (byToken && (!byEndpoint || byToken.id !== byEndpoint.id)) {
+    return { action: 'conflict', existing: byToken }
+  }
+  if (byEndpoint) return { action: 'update', existing: byEndpoint }
+  return { action: 'insert' }
+}
+
+// ---------------------------------------------------------------------------
+// I/O glue
+// ---------------------------------------------------------------------------
+
+interface WhoamiResult {
+  ok: boolean
+  user?: string
+  org?: string
+  error?: string
+}
+
+/**
+ * whoami-verify a candidate endpoint/token pair. Deliberately asserts on the response BODY
+ * (`json.ok === true`), never on `res.ok` — this central answers HTTP 200 with `{ ok: false }`
+ * for a revoked or unknown token, which reading `res.ok` alone would misreport as success.
+ */
+async function whoamiVerify(endpoint: string, token: string): Promise<WhoamiResult> {
+  try {
+    const res = await fetch(`${endpoint}/api/team/whoami`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal: AbortSignal.timeout(8_000),
+    })
+    let body: unknown
+    try {
+      body = await res.json()
+    } catch {
+      return { ok: false, error: `central returned an invalid response (HTTP ${res.status})` }
+    }
+    const b = body as { ok?: unknown; user?: unknown; org?: unknown }
+    if (b && b.ok === true && typeof b.user === 'string') {
+      return { ok: true, user: b.user, org: typeof b.org === 'string' ? b.org : undefined }
+    }
+    return { ok: false, error: 'the central rejected this token' }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'network error' }
+  }
+}
+
+/** Best-effort — never throws, never delays the HTTP response on its result. Kicks the
+ *  uploader's supervisor and the reverse-channel client's reconciliation poll RIGHT NOW instead
+ *  of waiting out their own ~5s cadence, so a newly added/rotated connection starts pushing and
+ *  opens its socket promptly. */
+function nudgeReconcilers(): void {
+  void Promise.allSettled([
+    reconcileUploaderNow(),
+    import('./team-agent-client').then(m => m.reconcileNow()),
+  ])
+}
+
+/** Unambiguous wrapper around `readJsonLimited` — unlike stashing the error inside the parsed
+ *  value, this never collides with a legitimately-shaped body that happens to carry an `error`
+ *  key of its own. */
+async function readBody<T>(req: Request): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+  const parsed = await readJsonLimited<T>(req, LIMITS.bodyBytes)
+  if (!parsed.ok) return { ok: false, error: parsed.error === 'too_large' ? 'body too large' : 'invalid JSON body' }
+  return { ok: true, value: parsed.value }
+}
+
+/**
+ * POST /api/team/connections — { endpoint, token, org?, label? }.
+ * whoami-verifies BEFORE storing anything (see whoamiVerify). A known normalized endpoint
+ * updates in place (token/org/user refreshed; id and label preserved — label changes go through
+ * PATCH). A token already owned by another connection is refused with 409. Otherwise a fresh
+ * connection is minted and appended. Never returns a token.
+ */
+export async function handleAddConnection(req: Request): Promise<Response> {
+  const parsed = await readBody<unknown>(req)
+  if (!parsed.ok) return json({ error: parsed.error }, 400)
+  const body = validateConnectionBody(parsed.value)
+  if ('error' in body) return json({ error: body.error }, 400)
+
+  const who = await whoamiVerify(body.endpoint, body.token)
+  if (!who.ok) return json({ error: who.error ?? 'connection could not be verified' }, 400)
+
+  let outcome: { action: 'insert' | 'update' | 'conflict'; connId?: string } = { action: 'insert' }
+  await updateTeamConfig((current: TeamConfig) => {
+    const decision = decideConnectionUpsert(current.connections, body.endpoint, body.token)
+    if (decision.action === 'conflict') {
+      outcome = { action: 'conflict' }
+      return undefined
+    }
+    if (decision.action === 'update') {
+      const existing = decision.existing
+      const updated: TeamConnection = {
+        ...existing,
+        endpoint: body.endpoint,
+        token: body.token,
+        org: who.org ?? body.org ?? existing.org,
+        user: who.user ?? existing.user,
+        // id and label are preserved on an update — renaming goes through PATCH.
+      }
+      outcome = { action: 'update', connId: existing.id }
+      const connections = current.connections.map(c => (c.id === existing.id ? updated : c))
+      return normalizeTeamConfig({ ...defaultTeam(), mode: 'member', connections })
+    }
+    const id = connectionId()
+    const created: TeamConnection = {
+      id,
+      endpoint: body.endpoint,
+      token: body.token,
+      org: body.org ?? who.org ?? 'default',
+      user: who.user ?? '',
+      deniedRepos: [],
+      addedAt: new Date().toISOString(),
+      ...(body.label !== undefined ? { label: body.label } : {}),
+    }
+    outcome = { action: 'insert', connId: id }
+    return normalizeTeamConfig({ ...defaultTeam(), mode: 'member', connections: [...current.connections, created] })
+  })
+
+  if (outcome.action === 'conflict') {
+    return json({ error: 'this token is already used by another connection' }, 409)
+  }
+
+  nudgeReconcilers()
+  return json({ ok: true, id: outcome.connId, action: outcome.action })
+}
+
+/** PATCH /api/team/connections/:id — { label } — read-modify-write that entry only. */
+export async function handlePatchConnection(req: Request, rawId: string): Promise<Response> {
+  let id: string
+  try {
+    id = safeConnId(rawId)
+  } catch {
+    return json({ error: 'invalid connection id' }, 400)
+  }
+
+  const parsed = await readBody<unknown>(req)
+  if (!parsed.ok) return json({ error: parsed.error }, 400)
+  const body = validatePatchBody(parsed.value)
+  if ('error' in body) return json({ error: body.error }, 400)
+
+  let found = false
+  await updateTeamConfig((current: TeamConfig) => {
+    const existing = current.connections.find(c => c.id === id)
+    if (!existing) return undefined
+    found = true
+    const connections = current.connections.map(c =>
+      c.id === id ? { ...c, label: body.label || undefined } : c)
+    return normalizeTeamConfig({ ...defaultTeam(), mode: 'member', connections })
+  })
+
+  if (!found) return json({ error: 'unknown connection' }, 404)
+  return json({ ok: true })
+}
+
+/**
+ * DELETE /api/team/connections/:id — whoami is implicit (the stored token is used as-is): calls
+ * the central's POST /api/team/leave with that connection's token (best-effort — an offline or
+ * already-revoked central must not block local removal), then removes the entry and its state
+ * files via `removeConnection` (team-uploader.ts), which runs the removal inside the same
+ * preferences write chain and tears down this connection's timers/socket immediately.
+ */
+export async function handleDeleteConnection(_req: Request, rawId: string): Promise<Response> {
+  let id: string
+  try {
+    id = safeConnId(rawId)
+  } catch {
+    return json({ error: 'invalid connection id' }, 400)
+  }
+
+  const prefs = await readPreferences()
+  const conn = (prefs.team?.connections ?? []).find(c => c.id === id)
+  if (!conn) return json({ error: 'unknown connection' }, 404)
+
+  try {
+    const endpoint = trimSlashes(conn.endpoint)
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (conn.token) headers['Authorization'] = `Bearer ${conn.token}`
+    await fetch(`${endpoint}/api/team/leave`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ org: conn.org, user: conn.user }),
+      signal: AbortSignal.timeout(10_000),
+    })
+  } catch {
+    // Best-effort — the central may be offline or the token already revoked; the connection is
+    // still removed locally below.
+  }
+
+  await removeConnection(id, 'manual')
+  return json({ ok: true })
+}
+
+interface ProbeResult {
+  ok: boolean
+  latencyMs: number
+  user?: string
+  org?: string
+  error?: string
+}
+
+/** POST /api/team/connections/:id/probe — server-side identity/latency probe using the STORED
+ *  token (never one supplied by the caller). Never returns the token. */
+export async function handleProbeConnection(_req: Request, rawId: string): Promise<Response> {
+  let id: string
+  try {
+    id = safeConnId(rawId)
+  } catch {
+    return json({ error: 'invalid connection id' }, 400)
+  }
+
+  const prefs = await readPreferences()
+  const conn = (prefs.team?.connections ?? []).find(c => c.id === id)
+  if (!conn) return json({ error: 'unknown connection' }, 404)
+
+  const endpoint = trimSlashes(conn.endpoint)
+  const t0 = Date.now()
+  const who = await whoamiVerify(endpoint, conn.token)
+  const latencyMs = Date.now() - t0
+  const result: ProbeResult = who.ok
+    ? { ok: true, latencyMs, user: who.user, org: who.org }
+    : { ok: false, latencyMs, error: who.error }
+  return json(result)
+}
+
+export interface ConnectionStatusEntry {
+  id: string
+  endpoint: string
+  org: string
+  user: string
+  label?: string
+  lastSuccessAt: number | null
+  errKind: 'auth' | 'net' | null
+  latencyMs: number | null
+}
+
+/**
+ * GET /api/team/status — the per-connection shape (spec §9.5, minus `deniedCount`/`boundary`).
+ * Reads CACHED values only (`getUploaderStatus`, populated by the uploader's own push cycle,
+ * latency included) — never makes its own blocking network call. The previous single-connection
+ * handler did a fresh ~4s-timeout probe on every call while the frontend polls every 5s, which
+ * with two offline centrals alone exceeds its own poll interval. Never returns a token.
+ */
+export async function handleTeamStatus(_req: Request): Promise<Response> {
+  const prefs = await readPreferences()
+  const team = prefs.team
+  const connections = team?.connections ?? []
+  const byConn = getUploaderStatus()
+  const entries: ConnectionStatusEntry[] = connections.map(c => {
+    const st = byConn[c.id]
+    return {
+      id: c.id,
+      endpoint: c.endpoint,
+      org: c.org,
+      user: c.user,
+      ...(c.label ? { label: c.label } : {}),
+      lastSuccessAt: st?.lastSuccessAt ?? null,
+      errKind: st?.errKind ?? null,
+      latencyMs: st?.latencyMs ?? null,
+    }
+  })
+  return json({ mode: team?.mode ?? 'solo', connections: entries })
+}

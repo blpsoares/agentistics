@@ -1335,46 +1335,56 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       return new Response(res.body, { status: res.status, headers })
     }
 
-    // GET /api/team/status — member-side live connection status for the status pill.
-    // Reports this machine's last successful contact with the central + current error state.
+    // GET /api/team/status — member-side connection status for the settings panel + status
+    // pill, one entry per connection (see team-connections.ts). Reads cached values only — the
+    // uploader's own push cycle measures latency, so this route never blocks on the network.
     if (url.pathname === '/api/team/status' && req.method === 'GET') {
-      const [{ readPreferences }, { getUploaderStatus }] = await Promise.all([
-        import('./preferences'),
-        import('./team-uploader'),
-      ])
-      const team = (await readPreferences()).team
-      const byConn = getUploaderStatus()
-      // Best-effort round-trip latency to the central (member mode only) — a quick timed ping of
-      // the public policy endpoint. null when solo, offline, or the request fails.
-      let latencyMs: number | null = null
-      if (team?.mode === 'member' && team.endpoint) {
-        try {
-          const base = team.endpoint.replace(/\/+$/, '')
-          const t0 = Date.now()
-          const r = await fetch(`${base}/api/team/policy`, { signal: AbortSignal.timeout(4000) })
-          if (r.ok) latencyMs = Date.now() - t0
-        } catch { /* offline — leave null */ }
-      }
-      // The pill still shows a SINGLE status — aggregated across every connection until the
-      // multi-central UI lands (Task 4): the most recent successful contact of any connection,
-      // and the worst error kind currently in force ('auth' outranks 'net', since a revoked
-      // token is the more actionable state).
-      const statuses = Object.values(byConn)
-      const lastSuccessAt = statuses.reduce<number | null>((max, s) => (
-        s.lastSuccessAt != null && (max == null || s.lastSuccessAt > max) ? s.lastSuccessAt : max
-      ), null)
-      const errKind: 'auth' | 'net' | null =
-        statuses.some(s => s.errKind === 'auth') ? 'auth' :
-        statuses.some(s => s.errKind === 'net') ? 'net' :
-        null
-      return new Response(JSON.stringify({
-        mode: team?.mode ?? 'solo',
-        user: team?.user ?? '',
-        endpoint: team?.endpoint ?? '',
-        lastSuccessAt,
-        errKind,
-        latencyMs,
-      }), { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+      const { handleTeamStatus } = await import('./team-connections')
+      const res = await handleTeamStatus(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // Connection lifecycle — add/rotate, rename, delete, probe. See team-connections.ts for the
+    // uniqueness rules (known endpoint updates in place; a token owned by another connection is
+    // refused) and why DELETE calls the central's /api/team/leave before removing state.
+    if (url.pathname === '/api/team/connections' && req.method === 'POST') {
+      const { handleAddConnection } = await import('./team-connections')
+      const res = await handleAddConnection(req)
+      if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname.startsWith('/api/team/connections/') && req.method === 'PATCH') {
+      const id = url.pathname.slice('/api/team/connections/'.length)
+      const { handlePatchConnection } = await import('./team-connections')
+      const res = await handlePatchConnection(req, id)
+      if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname.startsWith('/api/team/connections/') && url.pathname.endsWith('/probe') && req.method === 'POST') {
+      const id = url.pathname.slice('/api/team/connections/'.length, -'/probe'.length)
+      const { handleProbeConnection } = await import('./team-connections')
+      const res = await handleProbeConnection(req, id)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname.startsWith('/api/team/connections/') && req.method === 'DELETE') {
+      const id = url.pathname.slice('/api/team/connections/'.length)
+      const { handleDeleteConnection } = await import('./team-connections')
+      const res = await handleDeleteConnection(req, id)
+      if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
     }
 
     // ---------------------------------------------------------------------------

@@ -25,6 +25,7 @@ import { loadWorkflowRuns } from './workflow-store'
 import { readPreferences, updateTeamConfig } from './preferences'
 import { safeReadJson } from './utils'
 import { migrateTeamStateOnce, convertSentStateV1, type SentStateV2 } from './team-migrate'
+import { readJsonLimited, LIMITS } from './limits'
 import type { ServerProject } from './data'
 
 /** This machine's local workflow runs (computed metrics only — no chat/prompt text). Fallback
@@ -54,6 +55,10 @@ const _pushErrKind = new Map<string, 'auth' | 'net'>()
 const _authErrStreak = new Map<string, number>()
 /** The interval (seconds) most recently learned from each central's policy. */
 const _centralIntervalSec = new Map<string, number>()
+/** ms round-trip of the most recent SUCCESSFUL policy fetch, per connection — the status route
+ *  reads this cached value instead of doing its own blocking probe (see GET /api/team/status in
+ *  team-connections.ts). Absent = never successfully measured. */
+const _latencyMs = new Map<string, number>()
 /** Connection ids with a push cycle currently in flight. */
 const _running = new Set<string>()
 /** Connection ids where a change arrived while `_running` — re-run instead of dropping it. */
@@ -113,11 +118,13 @@ export interface UploaderStatus {
   lastSuccessAt: number | null
   /** current error state: 'auth' (rejected), 'net' (unreachable), or null (ok). */
   errKind: 'auth' | 'net' | null
+  /** ms round-trip of the most recent successful policy fetch, or null if never measured. */
+  latencyMs: number | null
 }
 
 /** A fresh, empty status — what a connection reports before its first cycle ever runs. */
 export function emptyStatusFor(_connId: string): UploaderStatus {
-  return { lastSuccessAt: null, errKind: null }
+  return { lastSuccessAt: null, errKind: null, latencyMs: null }
 }
 
 /** A `lastSuccessAt` this stale relative to a connection's own known interval, with NO error
@@ -144,7 +151,7 @@ export function getUploaderStatus(): Record<string, UploaderStatus> {
       const staleAfterMs = Math.max(STALE_FLOOR_MS, intervalMs * STALE_INTERVAL_MULTIPLIER)
       if (now - lastSuccessAt > staleAfterMs) errKind = 'net'
     }
-    out[id] = { lastSuccessAt, errKind }
+    out[id] = { lastSuccessAt, errKind, latencyMs: _latencyMs.get(id) ?? null }
   }
   return out
 }
@@ -689,17 +696,19 @@ export async function acquireSlot(): Promise<() => void> {
  * Fetch the central policy: push interval + the central's data instanceId.
  * Falls back to the default interval / null id on any network or parse error.
  */
-async function fetchCentralPolicy(endpoint: string): Promise<{ intervalSec: number; instanceId: string | null }> {
+async function fetchCentralPolicy(endpoint: string): Promise<{ intervalSec: number; instanceId: string | null; latencyMs: number | null }> {
+  const t0 = Date.now()
   try {
     const res = await fetch(`${endpoint}/api/team/policy`, { signal: AbortSignal.timeout(5_000) })
-    if (!res.ok) return { intervalSec: PUSH_INTERVAL.DEFAULT_SEC, instanceId: null }
+    if (!res.ok) return { intervalSec: PUSH_INTERVAL.DEFAULT_SEC, instanceId: null, latencyMs: null }
+    const latencyMs = Date.now() - t0
     const json = await res.json() as { pushIntervalSec?: unknown; instanceId?: unknown }
     const sec = typeof json.pushIntervalSec === 'number' ? json.pushIntervalSec : PUSH_INTERVAL.DEFAULT_SEC
     const instanceId = typeof json.instanceId === 'string' ? json.instanceId : null
     // Honor express intervals (the central may dictate below the normal 15s floor).
-    return { intervalSec: clampPushInterval(sec, PUSH_INTERVAL.EXPRESS_MIN_SEC), instanceId }
+    return { intervalSec: clampPushInterval(sec, PUSH_INTERVAL.EXPRESS_MIN_SEC), instanceId, latencyMs }
   } catch {
-    return { intervalSec: PUSH_INTERVAL.DEFAULT_SEC, instanceId: null }
+    return { intervalSec: PUSH_INTERVAL.DEFAULT_SEC, instanceId: null, latencyMs: null }
   }
 }
 
@@ -730,15 +739,6 @@ async function reconcileSyncState(connId: string, endpoint: string, token: strin
     await writeFile(teamSyncFile(connId), JSON.stringify({ sig }), 'utf-8')
   } catch { /* best-effort — worst case we reconcile again next cycle */ }
   if (prev?.sig) console.info(`[team-uploader] ${connId} central sync signature changed — re-pushing full history`)
-}
-
-/** Fully reset one connection's local sync state (sent-state + signature). Called when leaving a
- *  central, so a later rejoin re-pushes the full history rather than trusting a now-deleted
- *  dataset. */
-async function resetSyncState(connId: string): Promise<void> {
-  await saveSentState(connId, {})
-  _lastSuccessAt.delete(connId)
-  try { await writeFile(teamSyncFile(connId), '{}', 'utf-8') } catch { /* best-effort */ }
 }
 
 // Push-on-change: coalesce a burst of local file changes into a single push per connection, and
@@ -773,6 +773,7 @@ function teardownConnection(connId: string): void {
   _authErrStreak.delete(connId)
   _netErrStreak.delete(connId)
   _centralIntervalSec.delete(connId)
+  _latencyMs.delete(connId)
 }
 
 function scheduleConnectionCycle(connId: string, delaySec: number): void {
@@ -803,6 +804,10 @@ async function runConnectionPushCycle(conn: TeamConnection, deps: RunPushCycleDe
     // express intervals below the normal 15s floor). No connection-side override.
     const nextIntervalSec = clampPushInterval(policy.intervalSec, PUSH_INTERVAL.EXPRESS_MIN_SEC)
     _centralIntervalSec.set(conn.id, nextIntervalSec)
+    // Cache the round-trip for GET /api/team/status (team-connections.ts), which must never do
+    // its own blocking probe. Only a SUCCESSFUL fetch updates it — a failed/timed-out attempt
+    // leaves the last known good value in place rather than overwriting it with noise.
+    if (policy.latencyMs != null) _latencyMs.set(conn.id, policy.latencyMs)
     // Auto-heal a sent-state that no longer matches this central BEFORE pushing, so this cycle
     // re-sends the full history when needed.
     await reconcileSyncState(conn.id, endpoint, conn.token ?? '', policy.instanceId)
@@ -904,6 +909,17 @@ async function supervisorTick(): Promise<void> {
   }
 }
 
+/**
+ * Reconcile the live timer map against `preferences.team.connections` RIGHT NOW, instead of
+ * waiting up to `SUPERVISOR_INTERVAL_MS`. Call this the moment a connection is added, rotated or
+ * renamed (team-connections.ts) so its push chain starts within about a second rather than after
+ * the next tick. Safe to call before `startUploader()` — `supervisorTick` only reads preferences
+ * and starts/stops per-connection chains; it does not depend on the `started` flag. Never throws.
+ */
+export async function reconcileUploaderNow(): Promise<void> {
+  await supervisorTick()
+}
+
 let started = false
 let _supervisorTimer: ReturnType<typeof setInterval> | null = null
 
@@ -974,9 +990,18 @@ export async function pushNow(connId?: string): Promise<void> {
 // push-now route handler
 // ---------------------------------------------------------------------------
 
+interface PushNowResult {
+  connectionId: string
+  count: number
+  error?: string
+}
+
 interface PushNowResponse {
   ok: boolean
-  count?: number
+  results: PushNowResult[]
+  /** Sum across `results` — kept for older clients that only read this field. */
+  count: number
+  /** The first error across `results`, if any — kept for older clients. */
   error?: string
 }
 
@@ -1010,42 +1035,51 @@ async function guardedManualPush(conn: TeamConnection, ctx: PushCycleContext): P
 }
 
 /**
- * Server-side handler for POST /api/team/push-now[?connId=...].
- * Reads current preferences, pushes every connection (or just `connId` when given) via
- * `guardedManualPush` against one shared context, and returns the summed { ok, count } or the
- * first error encountered. Always returns 200.
+ * Server-side handler for POST /api/team/push-now — body `{ connectionId? }` (also accepts the
+ * older `?connId=` query param). Reads current preferences, pushes every connection (or just the
+ * one named) via `guardedManualPush` against one shared context, and returns
+ * `{ ok, results: [{connectionId, count, error?}], count }` — `count` is the sum across
+ * `results`, kept for clients that only read that field. Always returns 200.
  */
 export async function handlePushNow(req: Request): Promise<Response> {
   const prefs = await readPreferences()
   const conns = prefs.team?.connections ?? []
 
   if (conns.length === 0) {
-    const result: PushNowResponse = { ok: false, error: 'Not in member mode' }
-    return jsonResponse(result)
+    return jsonResponse({ ok: false, results: [], count: 0, error: 'Not in member mode' } satisfies PushNowResponse)
   }
 
+  // The body is optional (an empty/absent body means "push every connection"), so a parse
+  // failure is not itself an error — only an explicitly-named, unknown connectionId is.
   let connId: string | undefined
-  try { connId = new URL(req.url).searchParams.get('connId') ?? undefined } catch { /* ignore */ }
+  const parsed = await readJsonLimited<{ connectionId?: unknown }>(req, LIMITS.bodyBytes)
+  if (parsed.ok && typeof parsed.value?.connectionId === 'string') connId = parsed.value.connectionId
+  if (!connId) {
+    try { connId = new URL(req.url).searchParams.get('connId') ?? undefined } catch { /* ignore */ }
+  }
   const targets = connId ? conns.filter(c => c.id === connId) : conns
   if (targets.length === 0) {
-    return jsonResponse({ ok: false, error: 'unknown connection' } satisfies PushNowResponse)
+    return jsonResponse({ ok: false, results: [], count: 0, error: 'unknown connection' } satisfies PushNowResponse)
   }
 
   const ctx = await getPushContext()
-  let totalCount = 0
-  let firstError: string | undefined
+  const results: PushNowResult[] = []
   // Sequential — this is an explicit, one-off user action (not the periodic cycle), so a plain
   // loop is simplest; `guardedManualPush` itself still applies the cap (and the running-guard)
   // per connection.
   for (const conn of targets) {
     const { count, error } = await guardedManualPush(conn, ctx)
-    totalCount += count
-    if (error && !firstError) firstError = error
+    results.push({ connectionId: conn.id, count, ...(error ? { error } : {}) })
   }
 
-  const result: PushNowResponse = firstError
-    ? { ok: false, count: totalCount, error: firstError }
-    : { ok: true, count: totalCount }
+  const count = results.reduce((sum, r) => sum + r.count, 0)
+  const firstError = results.find(r => r.error)?.error
+  const result: PushNowResponse = {
+    ok: !firstError,
+    results,
+    count,
+    ...(firstError ? { error: firstError } : {}),
+  }
   return jsonResponse(result)
 }
 
@@ -1173,12 +1207,15 @@ export async function handleTeamTestConnection(req: Request): Promise<Response> 
 }
 
 /**
- * Member-side proxy for POST /api/team/leave-central. Calls the central's
- * /api/team/leave with the given token so the central removes this member's data, then resets
- * the LOCAL sync state for the matching connection (looked up by endpoint/token, since the
- * request body — unchanged since the single-connection era — does not carry a connection id).
- * The web side resets the config to solo/removes the connection separately. Keeps the token
- * server-side; never throws.
+ * Member-side proxy for POST /api/team/leave-central, KEPT for an old cached SPA that still
+ * PUTs a full flat `team: solo` object after calling this (the current frontend removes a
+ * connection through DELETE /api/team/connections/:id instead — see team-connections.ts). The
+ * request body (`{ endpoint, token, ... }`, unchanged since the single-connection era) carries no
+ * connection id, so it is mapped to one here by matching endpoint or token. Calls the central's
+ * /api/team/leave with the given token so the central removes this member's data, then removes
+ * ONLY the matching connection (and its state files) via `removeConnection` — never a global
+ * reset, which with N connections would hand an UNRELATED central a spurious full re-push. Keeps
+ * the token server-side; never throws.
  */
 export async function handleLeaveCentral(req: Request): Promise<Response> {
   let body: { endpoint?: unknown; token?: unknown; org?: unknown; user?: unknown } = {}
@@ -1201,14 +1238,14 @@ export async function handleLeaveCentral(req: Request): Promise<Response> {
       signal: AbortSignal.timeout(10_000),
     })
     const data = (await res.json().catch(() => ({}))) as { deleted?: number; error?: string }
-    // Leaving deletes this member's data on the central. Reset the matching connection's local
-    // sync state so a future rejoin (even same token+central) re-pushes everything instead of
-    // assuming the central still has it.
+    // Leaving deletes this member's data on the central. Remove ONLY the matching connection
+    // locally, so a future rejoin (even same token+central) re-pushes everything instead of
+    // assuming the central still has it — and so an unrelated connection is never touched.
     try {
       const prefs = await readPreferences()
       const conn = (prefs.team?.connections ?? []).find(c =>
         c.endpoint.replace(/\/+$/, '') === endpoint || (token && c.token === token))
-      if (conn) await resetSyncState(conn.id)
+      if (conn) await removeConnection(conn.id, 'manual')
     } catch { /* best-effort — the connection may already be gone from preferences */ }
     return jsonResponse({ ok: res.ok, deleted: data.deleted, error: res.ok ? undefined : (data.error ?? `HTTP ${res.status}`) })
   } catch (err) {
