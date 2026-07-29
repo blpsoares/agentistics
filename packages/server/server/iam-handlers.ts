@@ -593,19 +593,6 @@ export async function handleTeams(req: Request): Promise<Response> {
   return json({ error: 'method not allowed' }, 405)
 }
 
-/** accountId → team ids, for `canManageMachine` / `effectiveMachineTeams`. Empty map on failure —
- *  which narrows visibility to the stored assignment, never widens it. */
-async function accountTeamsMap(): Promise<Record<string, string[]>> {
-  try {
-    const accounts = await listAccounts()
-    const map: Record<string, string[]> = {}
-    for (const a of accounts) map[a._id] = a.memberships.map(m => m.teamId)
-    return map
-  } catch {
-    return {}
-  }
-}
-
 /**
  * /api/iam/machines — GET list (scoped), POST add-to-account (gated). Self-guarding.
  * Owner sees/manages all; a manager only their team's machines.
