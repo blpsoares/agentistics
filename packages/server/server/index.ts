@@ -2,11 +2,12 @@
 
 import { readFile } from 'node:fs/promises'
 import { PORT, WEB_PORT, TEAM_CENTRAL, TEAM_PASSWORD, TEAM_ORG, INGEST_ONLY } from './config'
+import { sensitiveCorsHeaders } from './cors'
 import type { Server, ServerWebSocket } from 'bun'
 import { getRates } from './rates'
 import { getVersionInfo, startVersionRecheck } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
-import { readPreferences, writePreferences, type Preferences } from './preferences'
+import { readPreferences, writePreferences, type Preferences, redactPreferences } from './preferences'
 import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, type ChatMessage, type ChatModelId, type ChatAttachment } from './chat-tty'
 import { getChatDriver, chatHarnessStatus } from './chat-drivers/index'
 import { listMcpServers, removeMcpServer } from './mcp-list'
@@ -169,6 +170,28 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
 }
 
+/**
+ * Routes whose response carries secrets or this machine's private configuration. They never get
+ * the wildcard: the API binds to localhost, which feels private and is not, so any page the user
+ * visits could otherwise `fetch` them cross-origin and READ the answer — central tokens included.
+ * See cors.ts.
+ */
+function isSensitiveRoute(pathname: string): boolean {
+  return pathname === '/api/preferences'
+    || pathname === '/api/team/status'
+    || pathname.startsWith('/api/team/connections')
+}
+
+/** CORS headers for one request: the wildcard set for ordinary routes, an origin-echo restricted
+ *  to this server's own origins for the sensitive ones. */
+function corsFor(req: Request, pathname: string): Record<string, string> {
+  if (!isSensitiveRoute(pathname)) return CORS_HEADERS
+  return sensitiveCorsHeaders(req.headers.get('origin'), {
+    ports: [PORT, WEB_PORT],
+    host: req.headers.get('host'),
+  })
+}
+
 // Routes that are always public (no auth gate applied)
 const AUTH_PUBLIC = new Set([
   '/api/health',
@@ -240,7 +263,7 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     if (url.pathname.includes('//')) url.pathname = url.pathname.replace(/\/{2,}/g, '/')
 
     if (req.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: CORS_HEADERS })
+      return new Response(null, { status: 204, headers: corsFor(req, url.pathname) })
     }
 
     // ---------------------------------------------------------------------------
@@ -394,17 +417,20 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     }
 
     if (url.pathname === '/api/preferences' && req.method === 'GET') {
+      const cors = corsFor(req, url.pathname)
       try {
-        const prefs = await readPreferences()
+        // Secrets never leave the process: the UI adds a connection by POSTing a token and every
+        // other use (probe, leave, test) runs server-side, so nothing here needs one.
+        const prefs = redactPreferences(await readPreferences())
         return new Response(JSON.stringify(prefs), {
           status: 200,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          headers: { ...cors, 'Content-Type': 'application/json' },
         })
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         return new Response(JSON.stringify({ error: message }), {
           status: 500,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          headers: { ...cors, 'Content-Type': 'application/json' },
         })
       }
     }
@@ -433,16 +459,18 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           reconcileNow()
           import('./team-uploader').then(m => m.pushNow()).catch(() => {})
         }
-        const updated = await readPreferences()
+        // Redacted on the way out too — the response is the same document the GET returns,
+        // and the caller already knows whatever token it just sent.
+        const updated = redactPreferences(await readPreferences())
         return new Response(JSON.stringify(updated), {
           status: 200,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          headers: { ...corsFor(req, url.pathname), 'Content-Type': 'application/json' },
         })
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         return new Response(JSON.stringify({ error: message }), {
           status: 400,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          headers: { ...corsFor(req, url.pathname), 'Content-Type': 'application/json' },
         })
       }
     }
@@ -1087,7 +1115,7 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
         lastSuccessAt: st.lastSuccessAt,
         errKind: st.errKind,
         latencyMs,
-      }), { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+      }), { status: 200, headers: { ...corsFor(req, url.pathname), 'Content-Type': 'application/json' } })
     }
 
     // ---------------------------------------------------------------------------
@@ -1115,7 +1143,7 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       } catch {
         return new Response(JSON.stringify({ error: 'invalid JSON' }), {
           status: 400,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          headers: { ...corsFor(req, url.pathname), 'Content-Type': 'application/json' },
         })
       }
       const b = body as Record<string, unknown>

@@ -202,8 +202,34 @@ function enqueueWrite<T>(fn: () => Promise<T>): Promise<T> {
  * every connection and every denylist. When the payload carries `connections` explicitly it
  * replaces, exactly as before.
  */
+/**
+ * Spec §5.8: the GET response blanks every token, so the shape the UI holds cannot be written
+ * back verbatim without destroying the credentials. An EMPTY incoming token therefore means
+ * "unchanged", never "clear it": a stored non-empty token survives, matched by connection id and
+ * falling back to the normalized endpoint for a payload that predates ids.
+ *
+ * A genuinely new connection carries no stored counterpart, so its empty token stays empty —
+ * token-less members against an open central remain expressible.
+ */
+function keepStoredTokens(current: TeamConfig | undefined, incoming: TeamConfig): TeamConfig {
+  const stored = current?.connections ?? []
+  if (stored.length === 0) return incoming
+  const byId = new Map(stored.map(c => [c.id, c]))
+  const byEndpoint = new Map(stored.map(c => [c.endpoint.replace(/\/+$/, ''), c]))
+  return {
+    ...incoming,
+    connections: (incoming.connections ?? []).map(c => {
+      if (c.token) return c
+      const previous = byId.get(c.id) ?? byEndpoint.get((c.endpoint ?? '').replace(/\/+$/, ''))
+      return previous?.token ? { ...c, token: previous.token } : c
+    }),
+  }
+}
+
 function mergeTeamPayload(current: TeamConfig | undefined, incoming: TeamConfig): TeamConfig {
-  if (Object.prototype.hasOwnProperty.call(incoming, 'connections')) return incoming
+  if (Object.prototype.hasOwnProperty.call(incoming, 'connections')) {
+    return keepStoredTokens(current, incoming)
+  }
   const stored = current?.connections ?? []
   // With nothing stored there is no array to protect: run the payload through the migration so
   // a legacy flat edit that DOES name an endpoint still lands as a connection.
@@ -223,4 +249,24 @@ export async function writePreferencesTo(primary: string, legacy: string, prefs:
 
 export async function writePreferences(prefs: Preferences): Promise<void> {
   return writePreferencesTo(PREFERENCES_FILE, LEGACY_PREFERENCES_FILE, prefs)
+}
+
+/**
+ * Strip every secret from a preferences object before it leaves the process.
+ *
+ * `GET /api/preferences` is reachable from any page the user happens to visit (the port is
+ * local, not private), and nothing in the UI needs a token: adding a connection POSTs one,
+ * and probe/leave/test all run server-side. So the read-out blanks `team.connections[].token`
+ * and drops the legacy `team.token` mirror entirely.
+ *
+ * Pure — never mutates its input. Total: a solo config, an absent `team` and a malformed one
+ * all pass through without throwing.
+ */
+export function redactPreferences(prefs: Preferences): Preferences {
+  if (!prefs?.team) return { ...prefs }
+  const { token: _dropped, ...teamRest } = prefs.team
+  const connections = Array.isArray(prefs.team.connections)
+    ? prefs.team.connections.map(c => ({ ...c, token: '' }))
+    : prefs.team.connections
+  return { ...prefs, team: { ...teamRest, connections } as TeamConfig }
 }

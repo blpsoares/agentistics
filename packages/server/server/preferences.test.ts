@@ -267,3 +267,96 @@ test('a corrupt LEGACY file does not throw — the primary is authoritative and 
   expect(prefs.team?.connections).toEqual([])
   expect(prefs.customLayout).toEqual([])
 })
+
+// ---------------------------------------------------------------------------
+// Secret redaction on read-out (spec §5.8)
+// ---------------------------------------------------------------------------
+
+import { redactPreferences } from './preferences'
+import type { Preferences } from './preferences'
+
+function prefsWithTokens(): Preferences {
+  return {
+    theme: 'dark',
+    team: {
+      schema: 2,
+      mode: 'member',
+      connections: [
+        { id: 'c_0123456789ab', endpoint: 'http://a:48080', org: 'acme', user: 'lucas', token: 'SECRET-A', deniedRepos: ['github.com/o/r'] },
+        { id: 'c_ba9876543210', endpoint: 'http://b:48080', org: 'default', user: 'lucas', token: 'SECRET-B', deniedRepos: [] },
+      ],
+      endpoint: 'http://a:48080', org: 'acme', user: 'lucas', token: 'SECRET-A',
+    },
+  } as Preferences
+}
+
+test('redactPreferences blanks every connection token and drops the legacy mirror', () => {
+  const out = redactPreferences(prefsWithTokens())
+  expect(out.team!.connections.map(c => c.token)).toEqual(['', ''])
+  expect(out.team!.token).toBeUndefined()
+  expect(JSON.stringify(out)).not.toContain('SECRET-A')
+  expect(JSON.stringify(out)).not.toContain('SECRET-B')
+})
+
+test('redactPreferences keeps everything the UI actually needs', () => {
+  const out = redactPreferences(prefsWithTokens())
+  expect(out.theme).toBe('dark')
+  expect(out.team!.mode).toBe('member')
+  expect(out.team!.connections[0]!.endpoint).toBe('http://a:48080')
+  expect(out.team!.connections[0]!.user).toBe('lucas')
+  expect(out.team!.connections[0]!.deniedRepos).toEqual(['github.com/o/r'])
+  expect(out.team!.endpoint).toBe('http://a:48080')
+})
+
+test('redactPreferences never mutates its input', () => {
+  const input = prefsWithTokens()
+  redactPreferences(input)
+  expect(input.team!.connections[0]!.token).toBe('SECRET-A')
+  expect(input.team!.token).toBe('SECRET-A')
+})
+
+test('redactPreferences is total — solo, absent team and a missing array', () => {
+  expect(redactPreferences({} as Preferences).team).toBeUndefined()
+  const solo = redactPreferences({ team: { schema: 2, mode: 'solo', connections: [] } } as Preferences)
+  expect(solo.team!.connections).toEqual([])
+  expect(() => redactPreferences({ team: { mode: 'member' } } as unknown as Preferences)).not.toThrow()
+})
+
+test('a PUT of the REDACTED shape cannot blank a stored token', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  await writePreferencesTo(primary, legacy, prefsWithTokens())
+  const redacted = redactPreferences(await readPreferencesFrom(primary, legacy))
+
+  await writePreferencesTo(primary, legacy, { team: redacted.team })
+
+  const after = await readPreferencesFrom(primary, legacy)
+  expect(after.team!.connections.map(c => c.token)).toEqual(['SECRET-A', 'SECRET-B'])
+  expect(after.team!.connections).toHaveLength(2)
+})
+
+test('a genuine token change still lands — an empty token only ever means "unchanged"', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  await writePreferencesTo(primary, legacy, prefsWithTokens())
+  const team = (await readPreferencesFrom(primary, legacy)).team!
+  team.connections[0]!.token = 'ROTATED'
+  team.connections[1]!.token = ''
+
+  await writePreferencesTo(primary, legacy, { team })
+
+  const after = await readPreferencesFrom(primary, legacy)
+  expect(after.team!.connections[0]!.token).toBe('ROTATED')
+  expect(after.team!.connections[1]!.token).toBe('SECRET-B')
+})
+
+test('a brand-new connection with no token is still stored token-less', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  await writePreferencesTo(primary, legacy, prefsWithTokens())
+  const team = (await readPreferencesFrom(primary, legacy)).team!
+  team.connections.push({ id: 'c_ffffffffffff', endpoint: 'http://open:48080', org: 'default', user: 'lucas', token: '', deniedRepos: [] })
+
+  await writePreferencesTo(primary, legacy, { team })
+
+  const after = await readPreferencesFrom(primary, legacy)
+  expect(after.team!.connections).toHaveLength(3)
+  expect(after.team!.connections[2]!.token).toBe('')
+})
