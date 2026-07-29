@@ -252,6 +252,35 @@ export async function writePreferences(prefs: Preferences): Promise<void> {
 }
 
 /**
+ * Atomically read-modify-write JUST the team config, running `mutate` INSIDE the single write
+ * chain (`enqueueWrite`) instead of outside it.
+ *
+ * Why this exists: a plain `readPreferences()` followed by `writePreferences({ team })` reads the
+ * current `connections[]` OUTSIDE the chain, then writes a value computed from that stale read.
+ * With two callers racing (e.g. two connections both crossing their auth-error threshold in the
+ * same window, which the concurrency cap makes routine, not theoretical) both read `[A, B, C]`;
+ * A's removal writes `[B, C]`, then B's (computed from the SAME stale `[A, B, C]`) writes
+ * `[A, C]` — A is back in preferences with its state files already unlinked, B is gone. A
+ * mutator run inside the chain instead reads the CURRENT array at the moment it is its turn to
+ * write, so the second caller sees the first caller's result and can never resurrect it.
+ *
+ * `mutate` receives the current (already-migrated) team config and returns the new one, or
+ * `undefined` to signal "nothing to do" — no write happens in that case, so a caller like
+ * `removeConnection` can stay idempotent without an extra disk write on a repeat call.
+ */
+export async function updateTeamConfig(mutate: (current: TeamConfig) => TeamConfig | undefined): Promise<TeamConfig> {
+  return enqueueWrite(async () => {
+    const { prefs: current } = await readEffective(PREFERENCES_FILE, LEGACY_PREFERENCES_FILE)
+    const currentTeam = current.team ?? migrateTeamConfig(undefined)
+    const nextTeam = mutate(currentTeam)
+    if (nextTeam === undefined) return currentTeam
+    const merged = { ...current, team: mergeTeamPayload(current.team, nextTeam) }
+    await writeFileAtomic(PREFERENCES_FILE, JSON.stringify(merged, null, 2))
+    return merged.team as TeamConfig
+  })
+}
+
+/**
  * Strip every secret from a preferences object before it leaves the process.
  *
  * `GET /api/preferences` is reachable from any page the user happens to visit (the port is

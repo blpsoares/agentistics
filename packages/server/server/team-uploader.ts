@@ -17,12 +17,12 @@
 
 import { createHash } from 'node:crypto'
 import { writeFile, unlink } from 'node:fs/promises'
-import type { SessionMeta, StatsCache, WorkflowRun, TeamConnection } from '@agentistics/core'
+import type { SessionMeta, StatsCache, WorkflowRun, TeamConnection, TeamConfig } from '@agentistics/core'
 import { PUSH_INTERVAL, clampPushInterval, defaultTeam, normalizeTeamConfig, redactSessionText } from '@agentistics/core'
 import { teamSentFile, teamSyncFile, teamRulesFile, teamForgetFile } from './config'
 import { loadConsolidated } from './consolidate'
 import { loadWorkflowRuns } from './workflow-store'
-import { readPreferences, writePreferences } from './preferences'
+import { readPreferences, updateTeamConfig } from './preferences'
 import { safeReadJson } from './utils'
 import { migrateTeamStateOnce, convertSentStateV1, type SentStateV2 } from './team-migrate'
 import type { ServerProject } from './data'
@@ -73,6 +73,22 @@ function notifyMeta(conn: TeamConnection, extra?: Record<string, unknown>): Reco
   return { ...extra, connectionId: conn.id, central: labelOf(conn) }
 }
 
+type NotifyPayload = { type: 'error' | 'warning' | 'info' | 'success'; code?: string; meta?: Record<string, unknown> }
+type Notifier = (n: NotifyPayload) => void
+
+/** Every SSE broadcast in this module goes through this ONE indirection, so tests can swap it
+ *  for a no-op/recorder instead of writing a real entry into the developer's
+ *  `~/.agentistics/notifications.json` every time an error/recovery test scenario runs. */
+function realNotify(n: NotifyPayload): void {
+  void import('./sse').then(m => m.broadcastNotification(n)).catch(() => { /* best-effort */ })
+}
+let _notify: Notifier = realNotify
+
+/** Test-only override — never called from production code. */
+export function __setNotifierForTests(fn: Notifier | null): void {
+  _notify = fn ?? realNotify
+}
+
 function warnPushError(connId: string, msg: string): void {
   const n = (_netErrStreak.get(connId) ?? 0) + 1
   _netErrStreak.set(connId, n)
@@ -104,13 +120,31 @@ export function emptyStatusFor(_connId: string): UploaderStatus {
   return { lastSuccessAt: null, errKind: null }
 }
 
+/** A `lastSuccessAt` this stale relative to a connection's own known interval, with NO error
+ *  recorded, means something is silently blocking that a transition-based error would normally
+ *  catch — the defense-in-depth half of the B-1 fix (the fetch timeout is the primary fix; this
+ *  is what keeps the status pill honest if some other, not-yet-known hang ever slips past it).
+ *  Floored at 5 minutes even for express (5s) intervals, so a merely-slow-but-fine cycle never
+ *  flickers into "unreachable". */
+const STALE_INTERVAL_MULTIPLIER = 3
+const STALE_FLOOR_MS = 5 * 60_000
+
 /** Per-connection status snapshot, keyed by connection id. Only connections that have run at
  *  least one cycle (successful or not) appear — a connection with neither key present should be
- *  reported via `emptyStatusFor`. */
+ *  reported via `emptyStatusFor`. A `lastSuccessAt` far enough in the past is reported as `'net'`
+ *  even when no explicit error was ever recorded — see `STALE_INTERVAL_MULTIPLIER`. */
 export function getUploaderStatus(): Record<string, UploaderStatus> {
   const out: Record<string, UploaderStatus> = {}
+  const now = Date.now()
   for (const id of new Set([..._lastSuccessAt.keys(), ..._pushErrKind.keys()])) {
-    out[id] = { lastSuccessAt: _lastSuccessAt.get(id) ?? null, errKind: _pushErrKind.get(id) ?? null }
+    const lastSuccessAt = _lastSuccessAt.get(id) ?? null
+    let errKind = _pushErrKind.get(id) ?? null
+    if (errKind === null && lastSuccessAt !== null) {
+      const intervalMs = (_centralIntervalSec.get(id) ?? PUSH_INTERVAL.DEFAULT_SEC) * 1000
+      const staleAfterMs = Math.max(STALE_FLOOR_MS, intervalMs * STALE_INTERVAL_MULTIPLIER)
+      if (now - lastSuccessAt > staleAfterMs) errKind = 'net'
+    }
+    out[id] = { lastSuccessAt, errKind }
   }
   return out
 }
@@ -122,22 +156,16 @@ export function getUploaderStatus(): Record<string, UploaderStatus> {
 async function notifyPushError(conn: TeamConnection, kind: 'auth' | 'net', meta?: Record<string, unknown>): Promise<void> {
   if (_pushErrKind.get(conn.id) === kind) return
   _pushErrKind.set(conn.id, kind)
-  try {
-    const { broadcastNotification } = await import('./sse')
-    broadcastNotification({
-      type: kind === 'auth' ? 'error' : 'warning',
-      code: kind === 'auth' ? 'member.auth_rejected' : 'member.unreachable',
-      meta: notifyMeta(conn, meta),
-    })
-  } catch { /* best-effort */ }
+  _notify({
+    type: kind === 'auth' ? 'error' : 'warning',
+    code: kind === 'auth' ? 'member.auth_rejected' : 'member.unreachable',
+    meta: notifyMeta(conn, meta),
+  })
 }
 async function notifyPushRecovered(conn: TeamConnection): Promise<void> {
   if (!_pushErrKind.has(conn.id)) return
   _pushErrKind.delete(conn.id)
-  try {
-    const { broadcastNotification } = await import('./sse')
-    broadcastNotification({ type: 'success', code: 'member.reconnected', meta: notifyMeta(conn) })
-  } catch { /* best-effort */ }
+  _notify({ type: 'success', code: 'member.reconnected', meta: notifyMeta(conn) })
 }
 
 // A 401/403 means the central revoked/removed this connection's token. Count consecutive
@@ -161,34 +189,58 @@ async function handleAuthError(conn: TeamConnection, status: number): Promise<vo
   }
 }
 
+/** Fire-and-forget `handleAuthError`, WITH a `.catch()` — it reaches `removeConnection` →
+ *  `readPreferences()`/`updateTeamConfig()`, which throw by design on a corrupt preferences file
+ *  (see preferences.ts). Bare `void handleAuthError(...)` would turn that into an unhandled
+ *  rejection instead of the same best-effort warning every other failure path in this file logs. */
+function fireHandleAuthError(conn: TeamConnection, status: number): void {
+  void handleAuthError(conn, status).catch(err =>
+    console.warn(`[team-uploader] handleAuthError failed for ${conn.id}:`, err instanceof Error ? err.message : String(err)))
+}
+
 /**
  * The central revoked this connection's token (or it is being removed for another reason).
  * Splices ONLY this connection out of `connections[]` — never rewrites the whole team config —
  * so with N connections a single revoked token disconnects exactly one central:
  *   (i)   stop this connection's timers (chain + debounce) and clear its in-memory state,
- *   (ii)  read-modify-write `connections[]` to remove the entry,
+ *   (ii)  splice `connections[]` via `updateTeamConfig`, whose mutator runs INSIDE
+ *         preferences.ts's single write chain — the array it reads is the one current at ITS
+ *         turn to write, not a snapshot from before this call started. Without this, two
+ *         connections crossing `AUTH_ERR_RESET_THRESHOLD` in the same window (routine, not
+ *         theoretical, now that up to 2 run concurrently) could both read `[A, B, C]` and the
+ *         second write would resurrect the first removal.
  *   (iii) GC this connection's four state files (sent/sync/rules/forget) AFTER the write
  *         persists — never from the supervisor tick, which would race the add path,
  *   (iv)  best-effort nudge the reverse-channel client to re-reconcile its socket,
  *   (v)   emit a 'member.removed' notification naming this connection.
- * Idempotent — once the connection is gone from preferences, a second call is a no-op.
+ * Idempotent — once the connection is gone from preferences, a second call is a no-op (and,
+ * since the mutator returns `undefined` in that case, does not even re-write the file).
+ *
+ * `deps.updateTeamConfig` is injectable for tests — the default touches the developer's real
+ * ~/.agentistics/preferences.json, which a test must never do.
  */
-export async function removeConnection(connId: string, _reason: 'revoked' | 'manual' = 'revoked'): Promise<void> {
+export async function removeConnection(
+  connId: string,
+  _reason: 'revoked' | 'manual' = 'revoked',
+  deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
+): Promise<void> {
+  const _updateTeamConfig = deps.updateTeamConfig ?? updateTeamConfig
   teardownConnection(connId)
 
-  const prefs = await readPreferences()
-  const existing = prefs.team?.connections ?? []
-  const conn = existing.find(c => c.id === connId)
-  if (!conn) return // already removed — don't spam
-
-  const remaining = existing.filter(c => c.id !== connId)
-  const newTeam = normalizeTeamConfig({ ...defaultTeam(), connections: remaining })
+  let removedConn: TeamConnection | undefined
   try {
-    await writePreferences({ team: newTeam })
+    await _updateTeamConfig((current: TeamConfig) => {
+      const existing = current.connections ?? []
+      removedConn = existing.find(c => c.id === connId)
+      if (!removedConn) return undefined // already removed — don't spam, don't re-write
+      const remaining = existing.filter(c => c.id !== connId)
+      return normalizeTeamConfig({ ...defaultTeam(), connections: remaining })
+    })
   } catch (err) {
     console.warn(`[team-uploader] failed to persist removal of ${connId}:`, err instanceof Error ? err.message : String(err))
     return
   }
+  if (!removedConn) return
 
   // GC only after the config write above persisted — a timer-driven GC (e.g. from the
   // supervisor) could otherwise race a concurrent "add connection" write.
@@ -199,15 +251,12 @@ export async function removeConnection(connId: string, _reason: 'revoked' | 'man
     unlink(teamForgetFile(connId)),
   ])
 
-  console.warn(`[team-uploader] removed connection ${connId} (${hostOf(conn.endpoint)}) — central revoked this token or it was removed`)
+  console.warn(`[team-uploader] removed connection ${connId} (${hostOf(removedConn.endpoint)}) — central revoked this token or it was removed`)
   try {
     const { reconcileNow } = await import('./team-agent-client')
     reconcileNow()
   } catch { /* best-effort — the reverse-channel client is still single-socket; see report */ }
-  try {
-    const { broadcastNotification } = await import('./sse')
-    broadcastNotification({ type: 'warning', code: 'member.removed', meta: notifyMeta(conn) })
-  } catch { /* best-effort */ }
+  _notify({ type: 'warning', code: 'member.removed', meta: notifyMeta(removedConn) })
 }
 
 // ---------------------------------------------------------------------------
@@ -314,7 +363,20 @@ export interface PushCycleContext {
   projects: ServerProject[]
   workflows: WorkflowRun[]
   builtAt: number
+  /** Ingest fetch timeout override, in ms — injectable for tests so a "central that never
+   *  responds" regression test doesn't have to wait out the real production timeout. Production
+   *  code never sets this; `pushOnceDetailed` falls back to `DEFAULT_INGEST_TIMEOUT_MS`. */
+  ingestTimeoutMs?: number
 }
+
+/** Every fetch to a central's `/api/team/ingest` MUST carry a timeout. Without one, a wedged
+ *  reverse proxy or a suspended container can accept the TCP connection and simply never
+ *  respond — common, not exotic — and `runConnectionPushCycle` holds a concurrency-cap slot
+ *  across that fetch, so two such centrals permanently occupy both slots and every OTHER
+ *  connection blocks in `acquireSlot()` forever, with no error and a `lastSuccessAt` that is
+ *  only ever set, never aged out. 15s is generous enough for a legitimately slow link pushing a
+ *  full 200-session batch, while still guaranteeing the slot is released. */
+const DEFAULT_INGEST_TIMEOUT_MS = 15_000
 
 let _cachedContext: PushCycleContext | null = null
 let _contextPromise: Promise<PushCycleContext> | null = null
@@ -327,30 +389,50 @@ function minKnownIntervalSec(): number {
   return values.length ? Math.min(...values) : PUSH_INTERVAL.DEFAULT_SEC
 }
 
-async function buildPushContext(): Promise<PushCycleContext> {
+/** Injectable data sources for `buildPushContext` — production code never passes this; it exists
+ *  so tests can supply fakes and assert call ORDER (buildApiResponse before loadConsolidated)
+ *  and content, without touching the real `~/.claude`/`~/.agentistics` on the machine running the
+ *  test. */
+interface PushContextDeps {
+  buildApiResponse?: () => Promise<{ sessions: SessionMeta[]; statsCache: StatsCache | null; projects: ServerProject[]; workflows?: WorkflowRun[] }>
+  loadConsolidated?: () => Promise<Map<string, SessionMeta>>
+  readMemberWorkflows?: () => Promise<WorkflowRun[]>
+}
+
+export async function buildPushContext(deps: PushContextDeps = {}): Promise<PushCycleContext> {
   // buildApiResponse() FIRST — it is what WRITES the consolidate store. Loading the store
   // before this runs would read a cold or half-written one (see the class doc above).
-  const { buildApiResponse } = await import('./data')
-  let resp: Awaited<ReturnType<typeof buildApiResponse>> | null = null
+  const _buildApiResponse = deps.buildApiResponse ?? (await import('./data')).buildApiResponse
+  let resp: Awaited<ReturnType<typeof _buildApiResponse>> | null = null
   try {
-    resp = await buildApiResponse()
+    resp = await _buildApiResponse()
   } catch (err) {
     console.warn('[team-uploader] buildApiResponse failed while building the push context:', err instanceof Error ? err.message : String(err))
   }
   const liveSessions = resp?.sessions ?? []
+  // NOT falling back to the raw `~/.claude/stats-cache.json` here (unlike the pre-multi-central
+  // code, which read it via safeReadJson when buildApiResponse failed): that raw cache would be
+  // paired with `liveSessions: []` (buildApiResponse itself threw, so there IS no live array),
+  // which is exactly the same-array precondition this context exists to uphold — a later plan's
+  // `buildSplitStatsCache` call would either misattribute a cache to an empty session array or
+  // (if it re-validates, as it does) simply refuse the whole cycle. `null` here correctly means
+  // "no statsCache this cycle" and pushOnceDetailed already treats that as "nothing to push"
+  // rather than inventing paired data that isn't there.
   const realStatsCache = resp?.statsCache ?? null
   const projects = resp?.projects ?? []
 
   let storedSessions: SessionMeta[] = []
   try {
-    const consolidatedMap = await loadConsolidated()
+    const _loadConsolidated = deps.loadConsolidated ?? loadConsolidated
+    const consolidatedMap = await _loadConsolidated()
     storedSessions = Array.from(consolidatedMap.values())
   } catch { /* best-effort — an empty store just means nothing to push this cycle */ }
 
   // buildApiResponse already merges live-discovered + stored workflow runs (see data.ts); reuse
   // it rather than re-reading the store a second time. Fall back to the raw store only if the
   // build itself failed above.
-  const workflows = resp?.workflows ?? await readMemberWorkflows()
+  const _readMemberWorkflows = deps.readMemberWorkflows ?? readMemberWorkflows
+  const workflows = resp?.workflows ?? await _readMemberWorkflows()
 
   return { realStatsCache, liveSessions, storedSessions, projects, workflows, builtAt: Date.now() }
 }
@@ -360,11 +442,11 @@ async function buildPushContext(): Promise<PushCycleContext> {
  * Concurrent callers within that window await the SAME in-flight build instead of each starting
  * their own `buildApiResponse()` + full store scan.
  */
-async function getPushContext(): Promise<PushCycleContext> {
+export async function getPushContext(deps: PushContextDeps = {}): Promise<PushCycleContext> {
   const ttlMs = Math.max(1_000, (minKnownIntervalSec() * 1000) / 2)
   if (_cachedContext && Date.now() - _cachedContext.builtAt < ttlMs) return _cachedContext
   if (_contextPromise) return _contextPromise
-  _contextPromise = buildPushContext()
+  _contextPromise = buildPushContext(deps)
     .then(ctx => {
       _cachedContext = ctx
       _contextPromise = null
@@ -375,6 +457,14 @@ async function getPushContext(): Promise<PushCycleContext> {
       throw err
     })
   return _contextPromise
+}
+
+/** Drop the cached push-cycle context so the next `getPushContext()` rebuilds instead of serving
+ *  a pre-change snapshot. `notifyDataChanged()` calls this on every local data change (see its
+ *  docstring); exported so a test can also call it directly without needing `startUploader()`
+ *  (which would start the real 5s supervisor against the developer's real preferences file). */
+export function invalidatePushContext(): void {
+  _cachedContext = null
 }
 
 // ---------------------------------------------------------------------------
@@ -396,6 +486,7 @@ export async function pushOnceDetailed(conn: TeamConnection, ctx: PushCycleConte
     return { count: 0 }
   }
   const endpoint = conn.endpoint.replace(/\/+$/, '')
+  const ingestTimeoutMs = ctx.ingestTimeoutMs ?? DEFAULT_INGEST_TIMEOUT_MS
 
   try {
     const sent = await loadSentState(conn.id)
@@ -422,10 +513,11 @@ export async function pushOnceDetailed(conn: TeamConnection, ctx: PushCycleConte
             method: 'POST',
             headers,
             body: JSON.stringify({ org: conn.org, user: conn.user, sessions: [], statsCache, workflows }),
+            signal: AbortSignal.timeout(ingestTimeoutMs),
           })
           // A reachable central (even a non-2xx that isn't auth) counts as contact for the pill.
           if (res.ok) { markPushSuccess(conn.id); clearPushError(conn.id); void notifyPushRecovered(conn) }
-          else if (res.status === 401 || res.status === 403) void handleAuthError(conn, res.status)
+          else if (res.status === 401 || res.status === 403) fireHandleAuthError(conn, res.status)
         } catch (e) {
           warnPushError(conn.id, e instanceof Error ? e.message : String(e))
           void notifyPushError(conn, 'net')
@@ -445,6 +537,7 @@ export async function pushOnceDetailed(conn: TeamConnection, ctx: PushCycleConte
           headers,
           // Attach the statsCache/workflows to the first batch only (idempotent upsert on the central).
           body: JSON.stringify({ org: conn.org, user: conn.user, sessions: batch, ...(i === 0 ? { statsCache, workflows } : {}) }),
+          signal: AbortSignal.timeout(ingestTimeoutMs),
         })
       } catch (fetchErr) {
         const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
@@ -458,7 +551,7 @@ export async function pushOnceDetailed(conn: TeamConnection, ctx: PushCycleConte
         console.warn(`[team-uploader] ${conn.id} ${msg}; stopping push`)
         // 401/403 = the central rejected the token → actionable auth notification (and,
         // after repeated failures, this connection is auto-removed).
-        if (res.status === 401 || res.status === 403) void handleAuthError(conn, res.status)
+        if (res.status === 401 || res.status === 403) fireHandleAuthError(conn, res.status)
         return { count: pushed, error: msg }
       }
 
@@ -493,10 +586,16 @@ const MAX_CONCURRENT_PUSHES = 2
 let _activeSlots = 0
 const _slotWaiters: Array<() => void> = []
 
+/**
+ * Release a slot. If a waiter is queued, the slot is TRANSFERRED directly to it (the woken
+ * waiter's `acquireSlot()` does NOT increment `_activeSlots` again) rather than decremented and
+ * then re-incremented by the waiter — decrement-then-signal briefly counted 3 in flight against
+ * a cap of 2 whenever a synchronous arrival raced the woken waiter's own increment.
+ */
 function releaseSlot(): void {
-  _activeSlots--
   const next = _slotWaiters.shift()
-  if (next) next()
+  if (next) { next(); return } // ownership transferred — _activeSlots is unchanged
+  _activeSlots--
 }
 
 async function acquireSlot(): Promise<() => void> {
@@ -505,7 +604,7 @@ async function acquireSlot(): Promise<() => void> {
     return releaseSlot
   }
   await new Promise<void>(resolve => { _slotWaiters.push(resolve) })
-  _activeSlots++
+  // The slot was TRANSFERRED by releaseSlot above, not freed — no increment here.
   return releaseSlot
 }
 
@@ -636,13 +735,20 @@ async function runConnectionPushCycle(conn: TeamConnection): Promise<number> {
 
 let _migrated = false
 
+/** Injectable for tests — the defaults touch the developer's real preferences file and run the
+ *  real (marker-guarded, so normally cheap) state migration; a test must never do either. */
+interface RunCycleDeps {
+  readPreferences?: typeof readPreferences
+  migrateTeamStateOnce?: () => Promise<void>
+}
+
 /**
  * Run one connection's guarded cycle: skip (and remember) if a cycle is already running for
  * this connection — a mid-cycle trigger is DEFERRED via `_pendingTrigger`, never dropped. Always
  * reschedules itself while the chain is active, so this single function is both the periodic
- * timer body and the on-change trigger's target.
+ * timer body and the on-change trigger's target. Exported for tests (see `RunCycleDeps`).
  */
-async function runConnectionCycle(connId: string): Promise<void> {
+export async function runConnectionCycle(connId: string, deps: RunCycleDeps = {}): Promise<void> {
   if (_running.has(connId)) {
     _pendingTrigger.add(connId)
     return
@@ -654,10 +760,12 @@ async function runConnectionCycle(connId: string): Promise<void> {
       _migrated = true
       // A machine that never boots the full server (member-only) still needs the once-per-
       // install move to the per-connection state layout — run it before the first push.
-      await migrateTeamStateOnce().catch(err =>
+      const _migrateTeamStateOnce = deps.migrateTeamStateOnce ?? migrateTeamStateOnce
+      await _migrateTeamStateOnce().catch(err =>
         console.warn('[team-migrate] state migration failed (will retry next boot):', err instanceof Error ? err.message : String(err)))
     }
-    const prefs = await readPreferences()
+    const _readPreferences = deps.readPreferences ?? readPreferences
+    const prefs = await _readPreferences()
     const conn = (prefs.team?.connections ?? []).find(c => c.id === connId)
     if (!conn) {
       // Removed between scheduling and firing — the supervisor will also catch this, but stop
@@ -750,8 +858,18 @@ function scheduleOnChangeTrigger(connId: string): void {
  * EVERY connection with an active chain: coalesces a burst of file events into one push per
  * connection, and never pushes a given connection sooner than ITS OWN central's interval since
  * its last successful push. No-op until the uploader has started.
+ *
+ * ALSO invalidates the shared push-cycle context (`_cachedContext`). Without this, a change that
+ * lands while a cached context is still within its TTL window (up to `min(intervals)/2`, e.g.
+ * 15s by default) would be invisible to the very push this function schedules: `getPushContext`
+ * would keep serving the pre-change snapshot, `selectDeltas` would find no delta against it, and
+ * the change would silently wait for the NEXT full interval anyway — the same latency as the
+ * dropped-event bug this function's deferral (`_pendingTrigger`) exists to fix, reached by a
+ * different route. The single-flight promise in `getPushContext` already prevents the rebuild
+ * stampede the TTL exists to avoid, so invalidating on every change is safe.
  */
 export function notifyDataChanged(): void {
+  invalidatePushContext()
   if (!started) return
   for (const connId of _activeChains) scheduleOnChangeTrigger(connId)
 }
@@ -784,9 +902,34 @@ function jsonResponse(body: unknown): Response {
 }
 
 /**
+ * Push one connection against `ctx`, through the SAME `_running` guard and concurrency cap the
+ * periodic cycle uses — an explicit push-now (this function's only caller) must never race a
+ * periodic/on-change cycle already in flight for the same connection into a lost sent-state
+ * update (two concurrent `saveSentState` calls for the same connId, last write wins, dropping
+ * whichever batch's advance lost the race). If a cycle is already running for this connection,
+ * this defers (matching `runConnectionCycle`'s `_pendingTrigger`) and returns a zero result
+ * immediately rather than blocking the HTTP response — the already-running cycle picks up any
+ * newer data on its own.
+ */
+async function guardedManualPush(conn: TeamConnection, ctx: PushCycleContext): Promise<PushOnceResult> {
+  if (_running.has(conn.id)) {
+    _pendingTrigger.add(conn.id)
+    return { count: 0 }
+  }
+  _running.add(conn.id)
+  const release = await acquireSlot()
+  try {
+    return await pushOnceDetailed(conn, ctx)
+  } finally {
+    release()
+    _running.delete(conn.id)
+  }
+}
+
+/**
  * Server-side handler for POST /api/team/push-now[?connId=...].
  * Reads current preferences, pushes every connection (or just `connId` when given) via
- * `pushOnceDetailed` against one shared context, and returns the summed { ok, count } or the
+ * `guardedManualPush` against one shared context, and returns the summed { ok, count } or the
  * first error encountered. Always returns 200.
  */
 export async function handlePushNow(req: Request): Promise<Response> {
@@ -809,9 +952,10 @@ export async function handlePushNow(req: Request): Promise<Response> {
   let totalCount = 0
   let firstError: string | undefined
   // Sequential — this is an explicit, one-off user action (not the periodic cycle), so a plain
-  // loop is simplest and still never exceeds the connection count in flight at once.
+  // loop is simplest; `guardedManualPush` itself still applies the cap (and the running-guard)
+  // per connection.
   for (const conn of targets) {
-    const { count, error } = await pushOnceDetailed(conn, ctx)
+    const { count, error } = await guardedManualPush(conn, ctx)
     totalCount += count
     if (error && !firstError) firstError = error
   }
@@ -878,6 +1022,7 @@ export async function handleTeamTestConnection(req: Request): Promise<Response> 
       method: 'POST',
       headers,
       body: JSON.stringify({ org: 'default', user: '', sessions: [] }),
+      signal: AbortSignal.timeout(10_000),
     })
 
     if (res.ok) {
