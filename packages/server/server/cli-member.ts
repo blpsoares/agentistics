@@ -10,7 +10,7 @@
 import { defaultTeam, unpackConnectToken } from '@agentistics/core'
 import { PORT } from './config'
 import { readPreferencesOrExit, writePreferences, type Preferences } from './preferences'
-import { getUploaderStatus } from './team-uploader'
+import { getUploaderStatus, emptyStatusFor } from './team-uploader'
 
 /**
  * If a server is already running on this machine, nudge it to act on a just-changed team config
@@ -137,27 +137,34 @@ export async function memberLeave(): Promise<number> {
   return 0
 }
 
-/** Print the current team mode/endpoint/user and, if member, the uploader status. */
+/** Print the current team mode and, per connection, its endpoint/org/user + uploader status —
+ *  one independent block per central, so a member connected to several centrals sees each one's
+ *  own last-sync/state rather than a single shared line. */
 export async function memberStatus(): Promise<number> {
   const prefs = await readPreferencesOrExit()
   const team = prefs.team ?? defaultTeam()
 
-  process.stdout.write(`mode:     ${team.mode}\n`)
+  process.stdout.write(`mode: ${team.mode}\n`)
   if (team.mode === 'member') {
-    process.stdout.write(`endpoint: ${team.endpoint || '(none)'}\n`)
-    process.stdout.write(`org:      ${team.org || 'default'}\n`)
-    process.stdout.write(`user:     ${team.user || '(unknown)'}\n`)
-
-    const status = getUploaderStatus()
-    const last = status.lastSuccessAt
-      ? new Date(status.lastSuccessAt).toISOString()
-      : 'never'
-    const err =
-      status.errKind === 'auth' ? 'token rejected by central' :
-      status.errKind === 'net' ? 'central unreachable' :
-      'ok'
-    process.stdout.write(`last sync: ${last}\n`)
-    process.stdout.write(`state:     ${err}\n`)
+    const connections = team.connections ?? []
+    const allStatus = getUploaderStatus()
+    connections.forEach((conn, i) => {
+      if (i > 0) process.stdout.write('\n')
+      const status = allStatus[conn.id] ?? emptyStatusFor(conn.id)
+      const last = status.lastSuccessAt
+        ? new Date(status.lastSuccessAt).toISOString()
+        : 'never'
+      const err =
+        status.errKind === 'auth' ? 'token rejected by central' :
+        status.errKind === 'net' ? 'central unreachable' :
+        'ok'
+      process.stdout.write(`connection: ${conn.label ?? conn.id}\n`)
+      process.stdout.write(`endpoint:   ${conn.endpoint || '(none)'}\n`)
+      process.stdout.write(`org:        ${conn.org || 'default'}\n`)
+      process.stdout.write(`user:       ${conn.user || '(unknown)'}\n`)
+      process.stdout.write(`last sync:  ${last}\n`)
+      process.stdout.write(`state:      ${err}\n`)
+    })
   }
   return 0
 }

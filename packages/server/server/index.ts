@@ -1343,7 +1343,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         import('./team-uploader'),
       ])
       const team = (await readPreferences()).team
-      const st = getUploaderStatus()
+      const byConn = getUploaderStatus()
       // Best-effort round-trip latency to the central (member mode only) — a quick timed ping of
       // the public policy endpoint. null when solo, offline, or the request fails.
       let latencyMs: number | null = null
@@ -1355,12 +1355,24 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           if (r.ok) latencyMs = Date.now() - t0
         } catch { /* offline — leave null */ }
       }
+      // The pill still shows a SINGLE status — aggregated across every connection until the
+      // multi-central UI lands (Task 4): the most recent successful contact of any connection,
+      // and the worst error kind currently in force ('auth' outranks 'net', since a revoked
+      // token is the more actionable state).
+      const statuses = Object.values(byConn)
+      const lastSuccessAt = statuses.reduce<number | null>((max, s) => (
+        s.lastSuccessAt != null && (max == null || s.lastSuccessAt > max) ? s.lastSuccessAt : max
+      ), null)
+      const errKind: 'auth' | 'net' | null =
+        statuses.some(s => s.errKind === 'auth') ? 'auth' :
+        statuses.some(s => s.errKind === 'net') ? 'net' :
+        null
       return new Response(JSON.stringify({
         mode: team?.mode ?? 'solo',
         user: team?.user ?? '',
         endpoint: team?.endpoint ?? '',
-        lastSuccessAt: st.lastSuccessAt,
-        errKind: st.errKind,
+        lastSuccessAt,
+        errKind,
         latencyMs,
       }), { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
     }

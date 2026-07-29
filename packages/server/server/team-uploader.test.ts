@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'bun:test'
-import { sessionHash, selectDeltas } from './team-uploader'
+import { sessionHash, selectDeltas, emptyStatusFor } from './team-uploader'
 import type { SessionMeta } from '@agentistics/core'
 
 // Minimal SessionMeta factory — only the fields needed for hashing/keying
@@ -138,5 +138,28 @@ describe('selectDeltas', () => {
     const { toSend, nextSent } = selectDeltas([noId], {})
     expect(toSend).toHaveLength(0)
     expect(Object.keys(nextSent)).toHaveLength(0)
+  })
+})
+
+describe('selectDeltas — per-connection sent-state isolation', () => {
+  it('sent-state is per connection — one central advancing never marks another as sent', () => {
+    const s = (id: string) => ({ session_id: id }) as unknown as SessionMeta
+    const sessions = [s('a'), s('b')]
+    const a = selectDeltas(sessions, {})
+    expect(a.toSend).toHaveLength(2)
+    // A second connection starts from ITS OWN empty state, not from the first one's result.
+    const b = selectDeltas(sessions, {})
+    expect(b.toSend).toHaveLength(2)
+    // And a connection that already has one of them sends only the other.
+    const c = selectDeltas(sessions, { a: sessionHash(s('a')) })
+    expect(c.toSend.map(x => x.session_id)).toEqual(['b'])
+  })
+})
+
+describe('emptyStatusFor', () => {
+  it('a fresh connection reports no success and no error', () => {
+    const st = emptyStatusFor('c_0123456789ab')
+    expect(st.lastSuccessAt).toBeNull()
+    expect(st.errKind).toBeNull()
   })
 })
