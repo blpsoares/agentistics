@@ -17,7 +17,11 @@ COPY packages/core/package.json      ./packages/core/
 COPY packages/server/package.json    ./packages/server/
 COPY packages/web/package.json       ./packages/web/
 COPY packages/mcp/package.json       ./packages/mcp/
+COPY packages/tui/package.json       ./packages/tui/
 COPY packages/desktop/package.json   ./packages/desktop/
+# The tui depends on `file:./stubs/react-devtools-core` (see packages/tui — the stub is
+# load-bearing for the binary build), so bun must be able to link it during install.
+COPY packages/tui/stubs               ./packages/tui/stubs
 
 RUN bun install --frozen-lockfile
 
@@ -42,7 +46,11 @@ COPY packages/core/package.json      ./packages/core/
 COPY packages/server/package.json    ./packages/server/
 COPY packages/web/package.json       ./packages/web/
 COPY packages/mcp/package.json       ./packages/mcp/
+COPY packages/tui/package.json       ./packages/tui/
 COPY packages/desktop/package.json   ./packages/desktop/
+# The tui depends on `file:./stubs/react-devtools-core` (see packages/tui — the stub is
+# load-bearing for the binary build), so bun must be able to link it during install.
+COPY packages/tui/stubs               ./packages/tui/stubs
 
 # Production deps only (no devDependencies). --ignore-scripts skips the root
 # `prepare: husky` lifecycle (husky is a devDependency, absent in --production,
