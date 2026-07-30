@@ -27,6 +27,11 @@ import { safeReadJson } from './utils'
 import { migrateTeamStateOnce, convertSentStateV1, type SentStateV2 } from './team-migrate'
 import { readJsonLimited, LIMITS } from './limits'
 import type { ServerProject } from './data'
+import {
+  normalizeDenied, hasRestrictions, buildPathRepoIndex, filterShared, sharedSessionIds,
+  filterSharedWorkflows, attributionBoundary, buildSplitStatsCache,
+  type PathRepoIndex, type DeniedLedger,
+} from './share-rules'
 
 /** This machine's local workflow runs (computed metrics only — no chat/prompt text). Fallback
  *  source when `buildApiResponse` could not be run (see `buildPushContext`). Mirrors the
@@ -63,6 +68,14 @@ const _latencyMs = new Map<string, number>()
 const _running = new Set<string>()
 /** Connection ids where a change arrived while `_running` — re-run instead of dropping it. */
 const _pendingTrigger = new Set<string>()
+/** Whether each connection currently has a declared denylist — refreshed on every
+ *  `pushOnceDetailed` call. Read by `scheduleOnChangeTrigger`/`scheduleConnectionCycle`, which
+ *  only ever see a connId, so the activity-heartbeat defenses in §5.3.4 can reach them. */
+const _restrictedConn = new Map<string, boolean>()
+/** sha256 over `{statsCache, workflows}` of the last EMPTY-DELTA payload actually POSTed for a
+ *  restricted connection — the keep-alive dedup in §5.3.4. Only ever consulted/updated for
+ *  restricted connections; an unrestricted one keeps pushing its keep-alive every cycle. */
+const _lastRestrictedPushHash = new Map<string, string>()
 
 function hostOf(endpoint: string): string {
   try { return new URL(endpoint).host || endpoint } catch { return endpoint }
@@ -403,6 +416,11 @@ export interface PushCycleContext {
   storedSessions: SessionMeta[]
   projects: ServerProject[]
   workflows: WorkflowRun[]
+  /** path → repo key, learned from BOTH `liveSessions`/`storedSessions` and `projects` — see
+   *  `buildPathRepoIndex`'s doc comment for why the project seed is load-bearing. Used to resolve
+   *  the repo of a session whose own `git_remote` is empty (only the Copilot adapter sets it
+   *  among the non-Claude adapters). */
+  index: PathRepoIndex
   builtAt: number
   /** Ingest fetch timeout override, in ms — injectable for tests so a "central that never
    *  responds" regression test doesn't have to wait out the real production timeout. Production
@@ -475,7 +493,14 @@ export async function buildPushContext(deps: PushContextDeps = {}): Promise<Push
   const _readMemberWorkflows = deps.readMemberWorkflows ?? readMemberWorkflows
   const workflows = resp?.workflows ?? await _readMemberWorkflows()
 
-  return { realStatsCache, liveSessions, storedSessions, projects, workflows, builtAt: Date.now() }
+  // Learned from BOTH sources on purpose: only copilot.ts among the non-Claude adapters sets
+  // git_remote, and data.ts's backfill runs against the Claude-only array before the harness
+  // merge — so the store carries every Codex/Gemini/Kimi/agy session with no remote, permanently.
+  // A directory used exclusively by a non-Claude harness has no session to learn from; the
+  // project record does. Anything still unresolved lands in NO_REPO_KEY, which is fail-closed.
+  const index = buildPathRepoIndex([...liveSessions, ...storedSessions], projects)
+
+  return { realStatsCache, liveSessions, storedSessions, projects, workflows, index, builtAt: Date.now() }
 }
 
 /**
@@ -580,7 +605,7 @@ async function resolveConnectionUser(
 export async function pushOnceDetailed(
   conn: TeamConnection,
   ctx: PushCycleContext,
-  deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
+  deps: { updateTeamConfig?: typeof updateTeamConfig; sealed?: DeniedLedger } = {},
 ): Promise<PushOnceResult> {
   if (!conn.endpoint) {
     return { count: 0 }
@@ -594,15 +619,49 @@ export async function pushOnceDetailed(
   const ingestTimeoutMs = ctx.ingestTimeoutMs ?? DEFAULT_INGEST_TIMEOUT_MS
 
   try {
+    const denied = normalizeDenied(conn.deniedRepos)
+    const restricted = hasRestrictions(conn.deniedRepos)
+    // Tracked so the scheduling functions (scheduleOnChangeTrigger, scheduleConnectionCycle),
+    // which only ever see a connId, can also honor this connection's restriction (§5.3.4).
+    _restrictedConn.set(conn.id, restricted)
+
+    // BEFORE selectDeltas — see the class doc. A denied session that reached nextSent would be
+    // invisible to every later push, so un-blocking the repo would never send it.
+    const shared = restricted ? filterShared(ctx.storedSessions, denied, ctx.index) : ctx.storedSessions
     const sent = await loadSentState(conn.id)
-    const { toSend, nextSent } = selectDeltas(ctx.storedSessions, sent)
-    // The member's own statsCache (aggregated Claude history) is pushed so the central can
-    // reproduce exact totals; it changes as activity accrues even when no new sessions exist.
-    const statsCache = ctx.realStatsCache ?? undefined
-    // Local workflow runs (computed metrics only — no chat/prompt text, same privacy contract
-    // as sessions). Pushed as a full set each cycle; the central upserts idempotently by
-    // runId, so this never double-counts.
-    const workflows = ctx.workflows
+    const { toSend, nextSent } = selectDeltas(shared, sent)
+
+    // The DECLARED rule selects the cache, never a count comparison (R3): `filtered.length <
+    // all.length` is false on a cold or empty store and would push the real full-history cache
+    // with the denied repo's recent days in it.
+    let statsCache: StatsCache | undefined
+    if (!restricted) {
+      // The member's own statsCache (aggregated Claude history) is pushed so the central can
+      // reproduce exact totals; it changes as activity accrues even when no new sessions exist.
+      statsCache = ctx.realStatsCache ?? undefined
+    } else if (ctx.realStatsCache) {
+      const boundary = attributionBoundary(ctx.realStatsCache)
+      // `liveSessions`, not storedSessions: buildSplitStatsCache requires that `real` was
+      // supplemented from the SAME array passed as allStored. Passing the store makes the split
+      // refuse and the machine push no cache at all.
+      const split = buildSplitStatsCache({
+        real: ctx.realStatsCache,
+        allStored: ctx.liveSessions,
+        shared: filterShared(ctx.liveSessions, denied, ctx.index),
+        boundary,
+        sealed: deps.sealed ?? {},
+      })
+      // null = the split cannot be made faithfully. Push NO cache — never the unsplit one. A
+      // missing cache is recoverable; a leaked one is not (§4.4).
+      statsCache = split ?? undefined
+    }
+
+    // Fail closed: a run whose session is not in the shared set is dropped, INCLUDING one whose
+    // session is simply unknown locally. WorkflowRun carries name, phases, agents[].label and
+    // totals — task descriptions and cost from the blocked repo.
+    const workflows = restricted
+      ? filterSharedWorkflows(ctx.workflows, sharedSessionIds(shared))
+      : ctx.workflows
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
     if (conn.token) {
@@ -613,6 +672,20 @@ export async function pushOnceDetailed(
       // No session deltas — still push the statsCache/workflows on their own so totals
       // and workflow runs stay fresh.
       if (statsCache || workflows.length > 0) {
+        // A restricted connection with genuinely nothing new must not still POST every cycle:
+        // each request stamps `lastSeenAt` on the central at ~2s resolution, from which session
+        // boundaries, working hours and intensity of the HIDDEN work are reconstructable from
+        // request timing alone, even though no content ever crosses the wire (§5.3.4). Skip when
+        // this cycle's payload is byte-identical to the last one actually pushed for this
+        // connection. Unrestricted connections are unaffected — a steady keep-alive is not a
+        // privacy leak when nothing is hidden.
+        if (restricted) {
+          const digest = createHash('sha256').update(JSON.stringify({ statsCache, workflows })).digest('hex')
+          if (_lastRestrictedPushHash.get(conn.id) === digest) {
+            return { count: 0 }
+          }
+          _lastRestrictedPushHash.set(conn.id, digest)
+        }
         try {
           const res = await fetch(`${endpoint}/api/team/ingest`, {
             method: 'POST',
@@ -808,12 +881,20 @@ function teardownConnection(connId: string): void {
   _netErrStreak.delete(connId)
   _centralIntervalSec.delete(connId)
   _latencyMs.delete(connId)
+  _restrictedConn.delete(connId)
+  _lastRestrictedPushHash.delete(connId)
 }
 
 function scheduleConnectionCycle(connId: string, delaySec: number): void {
   const existing = _chainTimer.get(connId)
   if (existing) clearTimeout(existing)
-  const t = setTimeout(() => { void runConnectionCycle(connId) }, Math.max(0, delaySec) * 1_000)
+  // ±20% jitter on a restricted connection's periodic delay only: a perfectly regular cadence is
+  // itself a timing signal an observer could correlate with activity inside the hidden repo
+  // (§5.3.4). An unrestricted connection has nothing to hide and keeps its exact interval.
+  const jitteredSec = _restrictedConn.get(connId)
+    ? delaySec * (1 + (Math.random() * 0.4 - 0.2))
+    : delaySec
+  const t = setTimeout(() => { void runConnectionCycle(connId) }, Math.max(0, jitteredSec) * 1_000)
   t.unref?.()
   _chainTimer.set(connId, t)
 }
@@ -972,7 +1053,37 @@ export function startUploader(): void {
   _supervisorTimer.unref?.()
 }
 
-function scheduleOnChangeTrigger(connId: string): void {
+/** Test-only setter for `_restrictedConn` — lets a test exercise the scheduling defenses in
+ *  §5.3.4 (fan-out suppression, jitter) without running a full push cycle against a real
+ *  connection. Never called from production code. */
+export function __setRestrictedForTests(connId: string, restricted: boolean): void {
+  _restrictedConn.set(connId, restricted)
+}
+
+/** Test-only accessor — whether an on-change push is currently pending for this connection.
+ *  Never called from production code. */
+export function __hasPendingOnChangeForTests(connId: string): boolean {
+  return _onChangeTimer.has(connId)
+}
+
+/** Test-only cleanup — clears a pending on-change timer without letting it fire (which would
+ *  call `runConnectionCycle` against the real `readPreferences()`). Never called from production
+ *  code. */
+export function __clearOnChangeTimerForTests(connId: string): void {
+  const t = _onChangeTimer.get(connId)
+  if (t) { clearTimeout(t); _onChangeTimer.delete(connId) }
+}
+
+/** Exported so a test can exercise the fan-out-suppression rule directly (§5.3.4) without
+ *  driving the whole `started`/`_activeChains`/`notifyDataChanged` machinery, which would
+ *  otherwise require a real (or `startUploader`-spawned) supervisor. Every production call site
+ *  remains internal to this module (`notifyDataChanged`). */
+export function scheduleOnChangeTrigger(connId: string): void {
+  // A restricted connection does not fan out on a local change at all: doing so would turn work
+  // inside a denied repo into a ~2s-resolution timestamped heartbeat on the central the moment it
+  // happens, which is exactly the activity signal §5.3.4 exists to withhold. Its periodic cycle
+  // (jittered above) is the only thing that ever pushes for it.
+  if (_restrictedConn.get(connId)) return
   if (_onChangeTimer.has(connId)) return // already scheduled — coalesce a burst of file events
   const floorMs = (_centralIntervalSec.get(connId) ?? PUSH_INTERVAL.DEFAULT_SEC) * 1_000
   const lastSuccess = _lastSuccessAt.get(connId) ?? null

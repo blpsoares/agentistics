@@ -17,12 +17,17 @@ import {
   buildPushContext, getPushContext, invalidatePushContext,
   __setNotifierForTests, saveSentState,
   acquireSlot, MAX_CONCURRENT_PUSHES, __activeSlotsForTests, matchConnectionForLeave,
+  __setRestrictedForTests, __hasPendingOnChangeForTests, __clearOnChangeTimerForTests,
+  scheduleOnChangeTrigger, loadSentState,
   type PushCycleContext,
 } from './team-uploader'
 import { updateTeamConfigAt, type TeamConfigMutator, type Preferences } from './preferences'
 import { __setTeamConnDirForTests, TEAM_CONN_DIR, teamSentFile } from './config'
 import { convertSentStateV1 } from './team-migrate'
-import type { SessionMeta, TeamConnection, StatsCache, TeamConfig } from '@agentistics/core'
+import { buildPathRepoIndex, buildSharedStatsCache, type PathRepoIndex } from './share-rules'
+import type { SessionMeta, TeamConnection, StatsCache, TeamConfig, WorkflowRun } from '@agentistics/core'
+import type { ServerProject } from './data'
+import type { IngestBody } from './team-store'
 
 // Minimal SessionMeta factory — only the fields needed for hashing/keying
 function makeSession(id: string, extra?: Partial<SessionMeta>): SessionMeta {
@@ -217,6 +222,7 @@ function makeCtx(overrides?: Partial<PushCycleContext>): PushCycleContext {
     storedSessions: [],
     projects: [],
     workflows: [],
+    index: { resolved: new Map(), conflicts: new Map() },
     builtAt: Date.now(),
     ...overrides,
   }
@@ -814,5 +820,219 @@ describe('matchConnectionForLeave', () => {
     const tokenless: TeamConnection[] = [{ ...conns[0]!, token: '' }]
     expect(matchConnectionForLeave(tokenless, '', '')).toBeUndefined()
     expect(matchConnectionForLeave(conns, '', 'tok-a')?.id).toBe('c_0123456789ab')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// pushOnceDetailed with a denylist — the point of Task 3: filterShared/hasRestrictions/
+// buildSplitStatsCache/filterSharedWorkflows, all pure and already tested in share-rules.test.ts,
+// actually get CALLED on the push path, in the order that keeps a denied session out of the
+// sent-state forever (filterShared BEFORE selectDeltas).
+// ---------------------------------------------------------------------------
+
+/** A local ingest fixture, in the style the rest of this file already uses (real Bun.serve on
+ *  port 0, never a fetch monkey-patch): it records every body it receives so the assertions can
+ *  be made about what actually crossed the wire. */
+function ingestFixture(): { port: number; bodies: IngestBody[]; stop: () => void } {
+  const bodies: IngestBody[] = []
+  const server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      if (new URL(req.url).pathname === '/api/team/policy') {
+        return Response.json({ pushIntervalSec: 30, instanceId: 'inst-1', capabilities: ['forget.sessions'] })
+      }
+      bodies.push(await req.json() as IngestBody)
+      return Response.json({ ok: true, count: 0 })
+    },
+  })
+  return { port: server.port!, bodies, stop: () => server.stop(true) }
+}
+
+/**
+ * A `StatsCache` consistent with the sessions passed in, whose `lastComputedDate` precedes every
+ * one of their days — i.e. a cache `buildSplitStatsCache` treats as fully decomposable (no
+ * prehistory at all).
+ *
+ * Built as `buildSharedStatsCache(live)` — the SAME accumulation `buildSplitStatsCache` uses
+ * internally to verify its same-array precondition — with `lastComputedDate` stamped onto a fixed
+ * date safely before any test fixture's `start_time` (2026-01-01+). Leaving it `''` would instead
+ * hit `buildSplitStatsCache`'s "no watermark yet reports nonzero totalSessions" refusal, since
+ * `buildSharedStatsCache` always reports real totals for the sessions it was built from — refusing
+ * for the WRONG reason is exactly what the brief warns this helper must not do.
+ */
+function buildRealCacheFor(live: SessionMeta[]): StatsCache {
+  const cache = buildSharedStatsCache(live)
+  cache.lastComputedDate = '2020-01-01'
+  return cache
+}
+
+describe('pushOnceDetailed with a denylist', () => {
+  const claudeSession = (id: string, remote: string, path = `/p/${id}`) =>
+    makeSession(id, { git_remote: remote, project_path: path, harness: 'claude' })
+
+  // THE assertion of this task: a denied session must not reach the wire AND must not enter the
+  // sent-state. Had it entered, un-blocking the repo later would never re-push it — its hash
+  // would already be recorded as sent, and nothing re-derives that.
+  it('never sends a denied session and never records it as sent', async () => {
+    const fx = ingestFixture()
+    const id = randomConnId()
+    try {
+      const ctx = makeCtx({
+        storedSessions: [
+          claudeSession('keep', 'github.com/org/pub'),
+          claudeSession('hide', 'github.com/org/secret'),
+        ],
+      })
+      await pushOnceDetailed(fakeConn(id, fx.port, { deniedRepos: ['github.com/org/secret'] }), ctx)
+      const sentIds = fx.bodies.flatMap(b => b.sessions.map(s => s.session_id))
+      expect(sentIds).toEqual(['keep'])
+      expect(Object.keys(await loadSentState(id))).toEqual(['keep'])
+    } finally {
+      fx.stop()
+    }
+  })
+
+  it('pushes the real statsCache byte-for-byte when the denylist is empty', async () => {
+    const fx = ingestFixture()
+    const id = randomConnId()
+    try {
+      const real = { lastComputedDate: '2026-07-01', dailyActivity: [], totalSessions: 0, hourCounts: {} } as unknown as StatsCache
+      const ctx = makeCtx({ realStatsCache: real, storedSessions: [claudeSession('a', 'github.com/org/pub')] })
+      await pushOnceDetailed(fakeConn(id, fx.port), ctx)
+      expect(fx.bodies[0]!.statsCache).toEqual(real)
+    } finally {
+      fx.stop()
+    }
+  })
+
+  // hasRestrictions, not a count comparison (R3): a repo blocked before any session exists in it
+  // must switch the cache the moment the rule is declared, not when the first session lands.
+  // Nothing here is filtered, and the pushed cache must STILL be the split one.
+  it('pushes a split statsCache whenever restrictions are declared, even with nothing filtered', async () => {
+    const fx = ingestFixture()
+    const id = randomConnId()
+    try {
+      const live = [claudeSession('a', 'github.com/org/pub')]
+      const real = buildRealCacheFor(live) // helper: a cache consistent with `live`, watermark in the past
+      const ctx = makeCtx({ realStatsCache: real, liveSessions: live, storedSessions: live })
+      await pushOnceDetailed(fakeConn(id, fx.port, { deniedRepos: ['github.com/org/never-seen'] }), ctx)
+      // With nothing actually denied the split is a NO-OP, so it deep-equals `real` — that is the
+      // anchor invariant of buildSplitStatsCache, asserted here on the wire rather than assumed.
+      expect(fx.bodies[0]!.statsCache).toEqual(real)
+      // Prove the split is not merely refusing (undefined): a refusal would ALSO satisfy the
+      // previous assertion by omitting statsCache, which would be the wrong reason to pass.
+      expect(fx.bodies[0]!.statsCache).not.toBeUndefined()
+    } finally {
+      fx.stop()
+    }
+  })
+
+  // The refusal path. A missing cache is recoverable; a leaked one is not.
+  it('omits statsCache entirely when the split refuses', async () => {
+    const fx = ingestFixture()
+    const id = randomConnId()
+    try {
+      // Cold-store signature: a populated cache while the store yields no Claude session.
+      const real = { lastComputedDate: '2026-07-01', dailyActivity: [{ date: '2026-06-30', sessionCount: 9, messageCount: 20, toolCallCount: 3 }], totalSessions: 9, hourCounts: { '9': 9 } } as unknown as StatsCache
+      const ctx = makeCtx({ realStatsCache: real, liveSessions: [], storedSessions: [] })
+      await pushOnceDetailed(fakeConn(id, fx.port, { deniedRepos: ['github.com/org/secret'] }), ctx)
+      // Either nothing was pushed at all, or what was pushed carries NO statsCache — never the
+      // unsplit one.
+      for (const b of fx.bodies) expect(b.statsCache).toBeUndefined()
+    } finally {
+      fx.stop()
+    }
+  })
+
+  it('drops a workflow run whose session is denied, and one whose session is unknown locally', async () => {
+    const fx = ingestFixture()
+    const id = randomConnId()
+    try {
+      const ctx = makeCtx({
+        storedSessions: [claudeSession('keep', 'github.com/org/pub'), claudeSession('hide', 'github.com/org/secret')],
+        workflows: [
+          { runId: 'r1', sessionId: 'keep', name: 'ok' } as WorkflowRun,
+          { runId: 'r2', sessionId: 'hide', name: 'secret-work' } as WorkflowRun,
+          { runId: 'r3', sessionId: 'unknown-to-this-machine', name: 'orphan' } as WorkflowRun,
+        ],
+      })
+      await pushOnceDetailed(fakeConn(id, fx.port, { deniedRepos: ['github.com/org/secret'] }), ctx)
+      const runIds = fx.bodies.flatMap(b => (b.workflows ?? []).map(r => r.runId))
+      expect(runIds).toEqual(['r1'])
+    } finally {
+      fx.stop()
+    }
+  })
+
+  // The index is what covers non-Claude sessions: only copilot sets git_remote, so a Codex session
+  // in the blocked repo's own directory has no remote of its own to match on.
+  it('drops a remote-less session sitting in a denied repo directory', async () => {
+    const fx = ingestFixture()
+    const id = randomConnId()
+    try {
+      const ctx = makeCtx({
+        storedSessions: [
+          makeSession('claude-one', { git_remote: 'github.com/org/secret', project_path: '/work/secret', harness: 'claude' }),
+          makeSession('codex-one', { git_remote: '', project_path: '/work/secret', harness: 'codex' }),
+        ],
+        projects: [{ path: '/work/secret', gitRemote: 'github.com/org/secret' } as ServerProject],
+      })
+      ctx.index = buildPathRepoIndex(ctx.storedSessions, ctx.projects)
+      await pushOnceDetailed(fakeConn(id, fx.port, { deniedRepos: ['github.com/org/secret'] }), ctx)
+      expect(fx.bodies.flatMap(b => b.sessions.map(s => s.session_id))).toEqual([])
+    } finally {
+      fx.stop()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// §5.3.4 — suppress the activity heartbeat on a restricted connection. An empty-delta cycle plus
+// notifyDataChanged() would otherwise turn work inside a blocked repo into a ~2s-resolution
+// timestamped heartbeat on the central (every request stamps lastSeenAt), from which session
+// boundaries, working hours and intensity are reconstructable.
+// ---------------------------------------------------------------------------
+
+describe('restricted connections do not leak an activity heartbeat (§5.3.4)', () => {
+  it('does not fan out on a local change for a restricted connection', () => {
+    const id = randomConnId()
+    __setRestrictedForTests(id, true)
+    try {
+      scheduleOnChangeTrigger(id)
+      expect(__hasPendingOnChangeForTests(id)).toBe(false)
+    } finally {
+      __clearOnChangeTimerForTests(id)
+    }
+  })
+
+  it('DOES still fan out on a local change for an unrestricted connection (control case)', () => {
+    const id = randomConnId()
+    __setRestrictedForTests(id, false)
+    try {
+      scheduleOnChangeTrigger(id)
+      expect(__hasPendingOnChangeForTests(id)).toBe(true)
+    } finally {
+      // Clear the pending timer before it can fire and call runConnectionCycle against the real
+      // readPreferences() — this test only asserts that scheduling happened, not that the cycle
+      // it would trigger runs correctly (that is covered elsewhere in this file).
+      __clearOnChangeTimerForTests(id)
+    }
+  })
+
+  it('two consecutive unchanged cycles for a restricted connection produce exactly one POST', async () => {
+    const fx = ingestFixture()
+    const id = randomConnId()
+    try {
+      // Nothing to filter and nothing changing session-wise — the empty-delta keep-alive path,
+      // with a non-null (if empty) split statsCache so there IS a payload to dedup against.
+      const real = buildRealCacheFor([])
+      const conn = fakeConn(id, fx.port, { deniedRepos: ['github.com/org/secret'] })
+      const ctx = makeCtx({ realStatsCache: real, liveSessions: [], storedSessions: [], workflows: [] })
+      await pushOnceDetailed(conn, ctx)
+      await pushOnceDetailed(conn, ctx)
+      expect(fx.bodies.length).toBe(1)
+    } finally {
+      fx.stop()
+    }
   })
 })
