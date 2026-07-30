@@ -351,10 +351,16 @@ if (command === 'member') {
     const code = await memberLeave({ endpoint, all })
     process.exit(code)
   }
-  if (sub === 'status' || sub === 'list') {
+  if (sub === 'status') {
     const { memberStatus } = await import('../server/cli-member.ts')
     const endpoint = readFlag('--endpoint')
     const code = await memberStatus({ endpoint })
+    process.exit(code)
+  }
+  if (sub === 'list') {
+    const { memberList } = await import('../server/cli-member.ts')
+    const endpoint = readFlag('--endpoint')
+    const code = await memberList({ endpoint })
     process.exit(code)
   }
   console.error(`Invalid member action: ${sub ?? '(none)'}. Expected one of: connect, leave, status, list.\n`)

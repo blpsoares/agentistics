@@ -15,12 +15,19 @@
  * sequence itself (`addOrUpdateConnection`/`leaveConnectionById` from team-connections.ts) under
  * the Task 5 cross-process preferences lock, instead of writing a raw `team` block.
  *
+ * A server ANSWER (any HTTP status) is authoritative and must never be silently second-guessed by
+ * falling back to the direct sequence — only a genuine network failure (nothing listening, a
+ * timeout) falls back. Getting this backwards was review finding I1: a 404/409/500 from the
+ * server was being swallowed by a blanket try/catch and treated as "no server", so the CLI wrote
+ * preferences itself behind the running server's back — exactly the write-write race HTTP-first
+ * exists to prevent.
+ *
  * The bearer token is never logged.
  */
 
-import { defaultTeam, unpackConnectToken, type TeamConnection } from '@agentistics/core'
+import { defaultTeam, normalizeEndpointKey, unpackConnectToken, type TeamConnection } from '@agentistics/core'
 import { PORT } from './config'
-import { readPreferencesOrExit } from './preferences'
+import { readPreferencesOrExit, type Preferences } from './preferences'
 import { cliStrings, resolveLang } from './cli-i18n'
 
 // ---------------------------------------------------------------------------
@@ -36,11 +43,13 @@ export interface MemberConnectOptions {
 
 type ConnectResult =
   | { ok: true; action: 'insert' | 'update'; connId: string }
-  | { ok: false; error: string }
+  | { ok: false; reason: 'conflict' | 'other'; error: string }
 
-/** Try the local server's POST /api/team/connections first. A network failure (no server
- *  listening, or unreachable) is distinguished from the server ANSWERING with an error — the
- *  former falls back to the direct sequence below, the latter is a real failure to report. */
+/** Try the local server's POST /api/team/connections first. `null` = no server reachable (a
+ *  network failure, or a 404 — an OLDER local server binary that predates this route, which must
+ *  fall back exactly like "no server" rather than hard-failing on a route that will never exist
+ *  until the server itself is upgraded). Any OTHER answer (2xx or a real error status) is
+ *  authoritative and is returned as-is, never silently bypassed. */
 async function connectViaLocalServer(body: { endpoint: string; token: string; org?: string; label?: string }): Promise<ConnectResult | null> {
   try {
     const res = await fetch(`http://localhost:${PORT}/api/team/connections`, {
@@ -49,11 +58,12 @@ async function connectViaLocalServer(body: { endpoint: string; token: string; or
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(8_000),
     })
+    if (res.status === 404) return null // an older server binary without this route — fall back
     const json = await res.json().catch(() => null) as { ok?: boolean; id?: string; action?: string; error?: string } | null
     if (res.ok && json?.ok && typeof json.id === 'string') {
       return { ok: true, action: json.action === 'update' ? 'update' : 'insert', connId: json.id }
     }
-    return { ok: false, error: json?.error ?? `local server returned HTTP ${res.status}` }
+    return { ok: false, reason: res.status === 409 ? 'conflict' : 'other', error: json?.error ?? `local server returned HTTP ${res.status}` }
   } catch {
     return null // no local server reachable — caller falls back to the direct sequence
   }
@@ -65,9 +75,9 @@ async function connectViaLocalServer(body: { endpoint: string; token: string; or
 async function connectDirect(body: { endpoint: string; token: string; org?: string; label?: string }): Promise<ConnectResult> {
   const { validateConnectionBody, addOrUpdateConnection } = await import('./team-connections')
   const validated = validateConnectionBody(body)
-  if ('error' in validated) return { ok: false, error: validated.error }
+  if ('error' in validated) return { ok: false, reason: 'other', error: validated.error }
   const outcome = await addOrUpdateConnection(validated)
-  if (!outcome.ok) return { ok: false, error: outcome.error }
+  if (!outcome.ok) return { ok: false, reason: outcome.reason === 'conflict' ? 'conflict' : 'other', error: outcome.error }
   return { ok: true, action: outcome.action, connId: outcome.connId }
 }
 
@@ -85,6 +95,8 @@ export async function memberConnect(opts: MemberConnectOptions): Promise<number>
   const org = opts.org?.trim() || undefined
   const label = opts.label?.trim() || undefined
 
+  const s = cliStrings(await resolveLang())
+
   if (!token) {
     process.stderr.write('member connect needs --token <token>.\n')
     return 1
@@ -98,10 +110,9 @@ export async function memberConnect(opts: MemberConnectOptions): Promise<number>
   const viaServer = await connectViaLocalServer(body)
   const result = viaServer ?? await connectDirect(body)
 
-  const s = cliStrings(await resolveLang())
-
   if (!result.ok) {
-    process.stderr.write(`${result.error}\n`)
+    const message = result.reason === 'conflict' ? s.tokenInUse(endpoint) : result.error
+    process.stderr.write(`${message}\n`)
     return 1
   }
 
@@ -127,7 +138,11 @@ export interface MemberLeaveOptions {
 
 /** Pure decision for what `memberLeave` should do, given the current connections and the parsed
  *  options — extracted so the 0/1/N/`--endpoint`/`--all`/TTY branching (spec §8) is unit-tested
- *  directly instead of only through the impure, network-touching command. */
+ *  directly instead of only through the impure, network-touching command. `--endpoint` matches
+ *  via `normalizeEndpointKey` — the SAME identity rule `connect` uses (host lowercased, default
+ *  port folded) — a raw string compare here made `leave --endpoint https://Central.example.com`
+ *  report not-found for a connection stored as `https://central.example.com`, even though
+ *  `connect` with the identical argument correctly updates it in place (review finding I3). */
 export type LeaveDecision =
   | { type: 'none' }
   | { type: 'not-found' }
@@ -143,38 +158,109 @@ export function decideLeaveTarget(
   if (connections.length === 0) return { type: 'none' }
   if (opts.all) return { type: 'all' }
   if (opts.endpoint) {
-    const norm = opts.endpoint.trim().replace(/\/+$/, '')
-    const match = connections.find(c => c.endpoint.replace(/\/+$/, '') === norm)
+    const norm = normalizeEndpointKey(opts.endpoint)
+    const match = connections.find(c => normalizeEndpointKey(c.endpoint) === norm)
     return match ? { type: 'single', conn: match } : { type: 'not-found' }
   }
   if (connections.length === 1) return { type: 'single', conn: connections[0]! }
   return opts.isTTY ? { type: 'prompt' } : { type: 'ambiguous' }
 }
 
-/** Leave ONE connection: local server's DELETE route first, direct sequence as fallback —
- *  mirrors `connectViaLocalServer`/`connectDirect` above. Never throws. */
-async function leaveOne(conn: TeamConnection): Promise<void> {
+type LeaveResult = { ok: true } | { ok: false; error: string }
+
+/** Try the local server's DELETE route. `null` = unreachable (network failure) — falls back to
+ *  the direct sequence below. Any ANSWER from the server (2xx or an error status, e.g. 404 for an
+ *  already-gone connection) is authoritative and is returned as-is — see the module docstring
+ *  (review finding I1): silently falling back on an answered error is exactly what HTTP-first
+ *  exists to prevent, and printing success for a 404 asserts a removal that never happened. */
+async function leaveViaLocalServer(connId: string, port: number): Promise<LeaveResult | null> {
   try {
-    const res = await fetch(`http://localhost:${PORT}/api/team/connections/${encodeURIComponent(conn.id)}`, {
+    const res = await fetch(`http://localhost:${port}/api/team/connections/${encodeURIComponent(connId)}`, {
       method: 'DELETE',
       signal: AbortSignal.timeout(8_000),
     })
-    if (res.ok) return
-    throw new Error(`local server returned HTTP ${res.status}`)
+    if (res.ok) return { ok: true }
+    const json = await res.json().catch(() => null) as { error?: string } | null
+    return { ok: false, error: json?.error ?? `local server returned HTTP ${res.status}` }
   } catch {
-    const { leaveConnectionById } = await import('./team-connections')
-    await leaveConnectionById(conn.id)
+    return null
   }
 }
 
+/** No local server is running: perform the exact same sequence the route handler runs, under the
+ *  Task 5 cross-process preferences lock. The default (real) implementation — overridable via
+ *  `MemberLeaveDeps.leaveDirect` so a test can prove the local-server-vs-direct CHOICE without
+ *  ever touching a real preferences file (review finding I5). */
+async function leaveDirectDefault(connId: string): Promise<LeaveResult> {
+  const { leaveConnectionById } = await import('./team-connections')
+  const outcome = await leaveConnectionById(connId)
+  return outcome.ok ? { ok: true } : { ok: false, error: outcome.error }
+}
+
+async function leaveOne(
+  conn: TeamConnection,
+  deps: { port: number; leaveDirect: (connId: string) => Promise<LeaveResult> },
+): Promise<LeaveResult> {
+  const viaServer = await leaveViaLocalServer(conn.id, deps.port)
+  return viaServer ?? await deps.leaveDirect(conn.id)
+}
+
+/** Leave several connections without letting one failure abort the batch (review finding I2 — the
+ *  previous `Promise.all` meant one rejection lost `leftAll` entirely and could escape as an
+ *  unhandled rejection). `leaveOne` itself never throws, but `Promise.allSettled` is still used
+ *  defensively — a caller's injected `leaveDirect` in a test, or a future code path, might. */
+async function leaveMany(
+  connections: TeamConnection[],
+  deps: { port: number; leaveDirect: (connId: string) => Promise<LeaveResult> },
+): Promise<{ conn: TeamConnection; result: LeaveResult }[]> {
+  const settled = await Promise.allSettled(connections.map(c => leaveOne(c, deps)))
+  return connections.map((conn, i) => {
+    const outcome = settled[i]!
+    const result: LeaveResult = outcome.status === 'fulfilled'
+      ? outcome.value
+      : { ok: false, error: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason) }
+    return { conn, result }
+  })
+}
+
+/** Print one line per connection's real outcome — never a blanket "left all" when some failed. */
+function reportLeaveOutcomes(s: ReturnType<typeof cliStrings>, outcomes: { conn: TeamConnection; result: LeaveResult }[]): number {
+  const succeeded = outcomes.filter(o => o.result.ok)
+  const failed = outcomes.filter((o): o is { conn: TeamConnection; result: { ok: false; error: string } } => !o.result.ok)
+  for (const o of succeeded) process.stdout.write(`${s.leftOne(o.conn.endpoint)}\n`)
+  for (const o of failed) process.stderr.write(`${o.conn.endpoint}: ${o.result.error}\n`)
+  if (failed.length === 0 && succeeded.length > 0) {
+    process.stdout.write(`${s.leftAll(succeeded.length)}\n`)
+  }
+  return failed.length > 0 ? 1 : 0
+}
+
+/** Injectable for tests — see `leaveDirectDefault`'s docstring and review finding I5. `port`
+ *  points `leaveViaLocalServer` at a specific local server instead of the real `PORT`, so a test
+ *  can stand up a `Bun.serve` fixture on an ephemeral port. `readPreferences` overrides how the
+ *  current connection list is obtained, so a test never touches the developer's real preferences
+ *  file (the production default, `readPreferencesOrExit`, also prints a friendly message and
+ *  exits 1 on a corrupt file — a real CLI invocation must keep that safety net). */
+export interface MemberLeaveDeps {
+  readPreferences?: () => Promise<Preferences>
+  port?: number
+  leaveDirect?: (connId: string) => Promise<LeaveResult>
+}
+
 /**
- * Leave a central. See `decideLeaveTarget` for the exact branching. Always returns 0 for the
- * "nothing to leave" / a successful leave cases; 1 for an ambiguous non-TTY N-connection call or
- * an unmatched `--endpoint` (leaving locally must succeed even if the central itself is down —
- * only "I don't know WHICH connection you mean" is refused).
+ * Leave a central. See `decideLeaveTarget` for the exact branching. Returns 0 for the "nothing to
+ * leave" / a fully successful leave; 1 for an ambiguous non-TTY N-connection call, an unmatched
+ * `--endpoint`, or when leaving actually failed (a local-server error answer, or a failed direct
+ * write) — leaving must succeed even if the CENTRAL itself is down, but "I don't know which
+ * connection you mean" and "the removal did not actually happen" are both refused, not asserted.
  */
-export async function memberLeave(opts: MemberLeaveOptions = {}): Promise<number> {
-  const prefs = await readPreferencesOrExit()
+export async function memberLeave(opts: MemberLeaveOptions = {}, deps: MemberLeaveDeps = {}): Promise<number> {
+  const _readPreferences = deps.readPreferences ?? readPreferencesOrExit
+  const port = deps.port ?? PORT
+  const leaveDirect = deps.leaveDirect ?? leaveDirectDefault
+  const oneDeps = { port, leaveDirect }
+
+  const prefs = await _readPreferences()
   const connections = prefs.team?.connections ?? []
   const s = cliStrings(await resolveLang())
 
@@ -186,7 +272,7 @@ export async function memberLeave(opts: MemberLeaveOptions = {}): Promise<number
       return 0
 
     case 'not-found':
-      process.stderr.write(`no connection matches endpoint ${opts.endpoint}\n`)
+      process.stderr.write(`${s.noMatchEndpoint(opts.endpoint ?? '')}\n`)
       return 1
 
     case 'ambiguous':
@@ -194,14 +280,16 @@ export async function memberLeave(opts: MemberLeaveOptions = {}): Promise<number
       return 1
 
     case 'all': {
-      const n = connections.length
-      await Promise.all(connections.map(leaveOne))
-      process.stdout.write(`${s.leftAll(n)}\n`)
-      return 0
+      const outcomes = await leaveMany(connections, oneDeps)
+      return reportLeaveOutcomes(s, outcomes)
     }
 
     case 'single': {
-      await leaveOne(decision.conn)
+      const result = await leaveOne(decision.conn, oneDeps)
+      if (!result.ok) {
+        process.stderr.write(`${result.error}\n`)
+        return 1
+      }
       process.stdout.write(`${s.leftOne(decision.conn.endpoint)}\n`)
       const remaining = connections.length - 1
       if (remaining > 0) process.stdout.write(`${s.stillConnected(remaining)}\n`)
@@ -222,14 +310,16 @@ export async function memberLeave(opts: MemberLeaveOptions = {}): Promise<number
       const picked = await select<string>({ message: s.leaveWhich, choices })
       if (picked === CANCEL) return 0
       if (picked === ALL) {
-        const n = connections.length
-        await Promise.all(connections.map(leaveOne))
-        process.stdout.write(`${s.leftAll(n)}\n`)
-        return 0
+        const outcomes = await leaveMany(connections, oneDeps)
+        return reportLeaveOutcomes(s, outcomes)
       }
       const match = connections.find(c => c.id === picked)
       if (!match) return 0 // shouldn't happen — the picker only offers real ids
-      await leaveOne(match)
+      const result = await leaveOne(match, oneDeps)
+      if (!result.ok) {
+        process.stderr.write(`${result.error}\n`)
+        return 1
+      }
       process.stdout.write(`${s.leftOne(match.endpoint)}\n`)
       process.stdout.write(`${s.stillConnected(connections.length - 1)}\n`)
       return 0
@@ -255,25 +345,37 @@ interface RemoteStatusResponse {
   connections?: RemoteStatusEntry[]
 }
 
+interface LocalStatusResult {
+  /** False only on a genuine network failure (nothing listening, a timeout) — a server that
+   *  answered but with a non-2xx or unparseable body is still REACHABLE, just erroring, and must
+   *  not be reported as "not running" (review finding: those are different facts). */
+  reachable: boolean
+  connections: RemoteStatusEntry[]
+}
+
 /** Query the LOCAL SERVER's live push status — `getUploaderStatus()` lives IN the server process
  *  (populated by its own running uploader); calling it from the CLI's own short-lived process
  *  always returned "never synced" for every connection, which got worse (N wrong lines) as
- *  connections grew. Returns null when no local server is reachable. */
-async function fetchLocalStatus(): Promise<RemoteStatusResponse | null> {
+ *  connections grew. */
+async function fetchLocalStatus(): Promise<LocalStatusResult> {
   try {
     const res = await fetch(`http://localhost:${PORT}/api/team/status`, { signal: AbortSignal.timeout(5_000) })
-    if (!res.ok) return null
-    return await res.json() as RemoteStatusResponse
+    if (!res.ok) return { reachable: true, connections: [] } // server IS running, just answered badly
+    const json = await res.json().catch(() => null) as RemoteStatusResponse | null
+    return { reachable: true, connections: json?.connections ?? [] }
   } catch {
-    return null
+    return { reachable: false, connections: [] }
   }
 }
 
 /** Print the current team mode and, per connection, its endpoint/org/user + live push status —
- *  one independent block per central. `list` is an alias with the same implementation. */
+ *  one independent block per central. `--endpoint` matches via `normalizeEndpointKey`, the same
+ *  identity rule `connect`/`leave` use (review finding I3). `list` is an alias with the same
+ *  implementation. */
 export async function memberStatus(opts: MemberStatusOptions = {}): Promise<number> {
   const prefs = await readPreferencesOrExit()
   const team = prefs.team ?? defaultTeam()
+  const s = cliStrings(await resolveLang())
 
   process.stdout.write(`mode: ${team.mode}\n`)
   if (team.mode !== 'member') return 0
@@ -282,28 +384,27 @@ export async function memberStatus(opts: MemberStatusOptions = {}): Promise<numb
   if (connections.length === 0) return 0
 
   const targets = opts.endpoint
-    ? connections.filter(c => c.endpoint.replace(/\/+$/, '') === opts.endpoint!.trim().replace(/\/+$/, ''))
+    ? connections.filter(c => normalizeEndpointKey(c.endpoint) === normalizeEndpointKey(opts.endpoint!))
     : connections
 
   if (opts.endpoint && targets.length === 0) {
-    process.stderr.write(`no connection matches endpoint ${opts.endpoint}\n`)
+    process.stderr.write(`${s.noMatchEndpoint(opts.endpoint)}\n`)
     return 1
   }
 
   const remote = await fetchLocalStatus()
-  const byId = new Map((remote?.connections ?? []).map(c => [c.id, c]))
-  const localServerDown = remote === null
+  const byId = new Map(remote.connections.map(c => [c.id, c]))
 
   targets.forEach((conn, i) => {
     if (i > 0) process.stdout.write('\n')
     const st = byId.get(conn.id)
-    const last = localServerDown ? 'unknown (local server not running)'
+    const last = !remote.reachable ? s.localServerUnknown
       : st?.lastSuccessAt ? new Date(st.lastSuccessAt).toISOString()
-      : 'never'
-    const state = localServerDown ? 'unknown (local server not running)'
-      : st?.errKind === 'auth' ? 'token rejected by central'
-      : st?.errKind === 'net' ? 'central unreachable'
-      : 'ok'
+      : s.neverSynced
+    const state = !remote.reachable ? s.localServerUnknown
+      : st?.errKind === 'auth' ? s.stateAuthRejected
+      : st?.errKind === 'net' ? s.stateNetUnreachable
+      : s.stateOk
     process.stdout.write(`connection: ${conn.label ?? conn.id}\n`)
     process.stdout.write(`endpoint:   ${conn.endpoint || '(none)'}\n`)
     process.stdout.write(`org:        ${conn.org || 'default'}\n`)
@@ -314,8 +415,10 @@ export async function memberStatus(opts: MemberStatusOptions = {}): Promise<numb
   return 0
 }
 
-/** `agentop member list` — new alias for `status`, per spec §8 (kept as a distinct export rather
- *  than a bare re-assignment so a future divergence between the two has an obvious place to land). */
+/** `agentop member list` — an alias for `status` (spec §8), and now genuinely reachable: bin/cli.ts
+ *  routes `list` here specifically, rather than both `status` and `list` calling `memberStatus`
+ *  directly (which left this export unreachable). Kept as a distinct export rather than a bare
+ *  re-assignment so a future divergence between the two has an obvious place to land. */
 export async function memberList(opts: MemberStatusOptions = {}): Promise<number> {
   return memberStatus(opts)
 }

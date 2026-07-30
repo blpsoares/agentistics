@@ -10,6 +10,7 @@
 import type { TeamConnection } from '@agentistics/core'
 import { PORT, WEB_PORT } from './config'
 import { readPreferencesOrExit } from './preferences'
+import { cliStrings, resolveLang, type CliStrings } from './cli-i18n'
 
 // ANSI (same palette as cli-start.ts)
 const ESC = '\x1b'
@@ -90,21 +91,26 @@ async function loadConfig(): Promise<{ mode: Mode; connections: TeamConnection[]
 /** 0 → solo; 1 → today's exact single-line form, unchanged; N → `member → N centrals` plus one
  *  indented `↳ endpoint[ · k repo(s) blocked]` line per connection (spec §8.1) — collapsing to
  *  just the first connection would silently misreport every central but one. */
-function configLines(mode: Mode, connections: TeamConnection[]): string[] {
+function configLines(s: CliStrings, mode: Mode, connections: TeamConnection[]): string[] {
   if (mode === 'central') return [`${CY}central${R}`]
   if (mode !== 'member' || connections.length === 0) return [`${CY}solo${R}`]
   if (connections.length === 1) {
     return [`${CY}member${R} ${D}→${R} ${WH}${connections[0]!.endpoint ?? '(?)'}${R}`]
   }
   const header = `${CY}member${R} ${D}→${R} ${WH}${connections.length} centrals${R}`
+  // `s.deniedSuffix` is the SAME shared string cli-start.ts's launcher uses for the identical
+  // fact — a hand-copied literal here duplicated its English text instead of calling it, so a
+  // pt-BR user saw untranslated text in `agentop status` even though the launcher localizes it.
   const lines = connections.map(c => {
-    const suffix = c.deniedRepos.length > 0 ? ` ${D}· ${c.deniedRepos.length} repo(s) blocked${R}` : ''
+    const suffix = c.deniedRepos.length > 0 ? ` ${D}${s.deniedSuffix(c.deniedRepos.length)}${R}` : ''
     return `      ${D}↳${R} ${c.endpoint || '(?)'}${suffix}`
   })
   return [header, ...lines]
 }
 
 export async function runStatus(): Promise<number> {
+  const s = cliStrings(await resolveLang())
+
   // CONFIG
   const { mode, connections } = await loadConfig()
 
@@ -119,7 +125,7 @@ export async function runStatus(): Promise<number> {
   process.stdout.write(`  ${O}${B}agentop status${R}\n`)
   process.stdout.write(`${RULE}\n`)
   process.stdout.write(`  ${D}CONFIG${R}\n`)
-  const [firstLine, ...restLines] = configLines(mode, connections)
+  const [firstLine, ...restLines] = configLines(s, mode, connections)
   process.stdout.write(`    ${D}mode${R}      ${firstLine}\n`)
   for (const line of restLines) process.stdout.write(`${line}\n`)
   process.stdout.write(`${RULE}\n`)

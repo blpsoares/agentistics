@@ -32,6 +32,7 @@ export interface CliStrings {
   itemConnect: string
   itemConnectHint: string
   itemConnectMore: string
+  itemConnectMoreHint: string
   itemDisconnect: string
   itemDisconnectHint: string
   itemDisconnectMultiHint: string
@@ -54,6 +55,7 @@ export interface CliStrings {
   promptEndpoint: string
   promptToken: string
   promptOrg: string
+  promptLabel: string
   confirmBoot: string
   confirmKill: string
   alreadyRunning: (url: string) => string
@@ -87,7 +89,6 @@ export interface CliStrings {
   localRebuildFailed: string
   restartedAll: string
   restartedDone: string
-  disconnected: string
   noComposeFrom: (dir: string) => string
   runFromRepo: string
   buildingMachine: string
@@ -127,6 +128,12 @@ export interface CliStrings {
   connectedAs: (user: string, n: number) => string
   updatedExisting: (endpoint: string) => string
   tokenInUse: (endpoint: string) => string
+  noMatchEndpoint: (endpoint: string) => string
+  localServerUnknown: string
+  stateAuthRejected: string
+  stateNetUnreachable: string
+  stateOk: string
+  neverSynced: string
 }
 
 const EN: CliStrings = {
@@ -152,6 +159,7 @@ const EN: CliStrings = {
   itemConnect: 'Connect to a central',
   itemConnectHint: 'send my metrics (become a member)',
   itemConnectMore: 'Add another central',
+  itemConnectMoreHint: 'send metrics to one more central too',
   itemDisconnect: 'Disconnect from the central',
   itemDisconnectHint: 'back to solo',
   itemDisconnectMultiHint: 'pick a central to leave',
@@ -174,6 +182,7 @@ const EN: CliStrings = {
   promptEndpoint: 'Central endpoint URL (e.g. http://host:48080)',
   promptToken: "Member token (from the central's Team Manager)",
   promptOrg: 'Org',
+  promptLabel: 'Nickname for this central (optional, press Enter to skip)',
   confirmBoot: 'Also start it on every boot (systemd service)?',
   confirmKill: 'Kill it and start fresh?',
   alreadyRunning: (url) => `A server is already running on ${url}.`,
@@ -207,7 +216,6 @@ const EN: CliStrings = {
   localRebuildFailed: 'native rebuild failed — restarting the existing build.',
   restartedAll: 'restarted all running services.',
   restartedDone: 'service restarted.',
-  disconnected: 'disconnected — this machine is back to solo.',
   noComposeFrom: (dir) => `couldn't find docker-compose.machine.yml in ${dir}.`,
   runFromRepo: 'Run agentop start from the agentistics repo to use Docker.',
   buildingMachine: 'building & starting the machine container…',
@@ -237,13 +245,19 @@ const EN: CliStrings = {
   leaveWhich: 'Leave which central?',
   leaveAll: 'Leave all centrals',
   leftOne: (endpoint) => `left ${endpoint}`,
-  leftAll: (n) => `left all ${n} centrals — back to solo.`,
+  leftAll: (n) => `left all ${n} central${n === 1 ? '' : 's'} — back to solo.`,
   stillConnected: (n) => `still connected to ${n} central(s).`,
   noConnections: 'not connected to any central.',
   ambiguousLeave: (n) => `connected to ${n} centrals — pass --endpoint <url> or --all.`,
   connectedAs: (user, n) => `connected as ${user} — ${n} central(s) total.`,
   updatedExisting: (endpoint) => `updated the existing connection to ${endpoint}`,
   tokenInUse: (endpoint) => `that token already belongs to ${endpoint}`,
+  noMatchEndpoint: (endpoint) => `no connection matches endpoint ${endpoint}`,
+  localServerUnknown: 'unknown (local server not running)',
+  stateAuthRejected: 'token rejected by central',
+  stateNetUnreachable: 'central unreachable',
+  stateOk: 'ok',
+  neverSynced: 'never',
 }
 
 const PT: CliStrings = {
@@ -269,6 +283,7 @@ const PT: CliStrings = {
   itemConnect: 'Conectar a uma central',
   itemConnectHint: 'enviar minhas métricas (virar member)',
   itemConnectMore: 'Adicionar outra central',
+  itemConnectMoreHint: 'enviar métricas para mais uma central também',
   itemDisconnect: 'Desconectar da central',
   itemDisconnectHint: 'voltar para solo',
   itemDisconnectMultiHint: 'escolher de qual central sair',
@@ -291,6 +306,7 @@ const PT: CliStrings = {
   promptEndpoint: 'URL da central (ex.: http://host:48080)',
   promptToken: 'Token do member (no Team Manager da central)',
   promptOrg: 'Org',
+  promptLabel: 'Apelido para esta central (opcional, Enter para pular)',
   confirmBoot: 'Iniciar também no boot (serviço systemd)?',
   confirmKill: 'Matar e subir de novo?',
   alreadyRunning: (url) => `Já tem um server rodando em ${url}.`,
@@ -324,7 +340,6 @@ const PT: CliStrings = {
   localRebuildFailed: 'falha ao reconstruir o server nativo — reiniciando o build atual.',
   restartedAll: 'todos os serviços no ar foram reiniciados.',
   restartedDone: 'serviço reiniciado.',
-  disconnected: 'desconectado — esta máquina voltou para solo.',
   noComposeFrom: (dir) => `não achei docker-compose.machine.yml em ${dir}.`,
   runFromRepo: 'Rode agentop start de dentro do repo agentistics para usar Docker.',
   buildingMachine: 'buildando & subindo o container da máquina…',
@@ -354,13 +369,19 @@ const PT: CliStrings = {
   leaveWhich: 'Sair de qual central?',
   leaveAll: 'Sair de todas as centrais',
   leftOne: (endpoint) => `saiu de ${endpoint}`,
-  leftAll: (n) => `saiu de todas as ${n} centrais — de volta para solo.`,
+  leftAll: (n) => `saiu de todas as ${n} ${n === 1 ? 'central' : 'centrais'} — de volta para solo.`,
   stillConnected: (n) => `ainda conectado a ${n} central(is).`,
   noConnections: 'sem conexão com nenhuma central.',
   ambiguousLeave: (n) => `conectado a ${n} centrais — use --endpoint <url> ou --all.`,
   connectedAs: (user, n) => `conectado como ${user} — ${n} central(is) no total.`,
   updatedExisting: (endpoint) => `atualizou a conexão existente com ${endpoint}`,
   tokenInUse: (endpoint) => `esse token já pertence a ${endpoint}`,
+  noMatchEndpoint: (endpoint) => `nenhuma conexão corresponde ao endpoint ${endpoint}`,
+  localServerUnknown: 'desconhecido (o server local não está rodando)',
+  stateAuthRejected: 'token rejeitado pela central',
+  stateNetUnreachable: 'central inacessível',
+  stateOk: 'ok',
+  neverSynced: 'nunca',
 }
 
 const TABLE: Record<CliLang, CliStrings> = { en: EN, pt: PT }

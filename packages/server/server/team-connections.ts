@@ -344,8 +344,17 @@ export type LeaveConnectionOutcome =
  *
  * HTTP-agnostic for the same reason `addOrUpdateConnection` is — `cli-member.ts`'s no-server
  * fallback path calls this directly instead of duplicating it.
+ *
+ * `deps` is injectable for tests (mirrors `removeConnection`'s own `deps.updateTeamConfig` seam) —
+ * the defaults touch the developer's real preferences file, which a test must never do.
  */
-export async function leaveConnectionById(rawId: string): Promise<LeaveConnectionOutcome> {
+export async function leaveConnectionById(
+  rawId: string,
+  deps: { readPreferences?: typeof readPreferences; removeConnection?: typeof removeConnection } = {},
+): Promise<LeaveConnectionOutcome> {
+  const _readPreferences = deps.readPreferences ?? readPreferences
+  const _removeConnection = deps.removeConnection ?? removeConnection
+
   let id: string
   try {
     id = safeConnId(rawId)
@@ -353,7 +362,7 @@ export async function leaveConnectionById(rawId: string): Promise<LeaveConnectio
     return { ok: false, error: 'invalid connection id' }
   }
 
-  const prefs = await readPreferences()
+  const prefs = await _readPreferences()
   const conn = (prefs.team?.connections ?? []).find(c => c.id === id)
   if (!conn) return { ok: false, error: 'unknown connection' }
 
@@ -372,7 +381,10 @@ export async function leaveConnectionById(rawId: string): Promise<LeaveConnectio
     // still removed locally below.
   }
 
-  await removeConnection(id, 'manual')
+  // Check the actual removal result (I1) — a lock-timeout write failure must NOT be reported as
+  // a successful leave; the previous version ignored removeConnection's outcome entirely.
+  const result = await _removeConnection(id, 'manual')
+  if (!result.removed) return { ok: false, error: result.error }
   return { ok: true, endpoint: conn.endpoint }
 }
 

@@ -228,12 +228,19 @@ function fireHandleAuthError(conn: TeamConnection, status: number): void {
  *
  * `deps.updateTeamConfig` is injectable for tests — the default touches the developer's real
  * ~/.agentistics/preferences.json, which a test must never do.
+ *
+ * Returns `{removed: true}` once the postcondition (this id is not in `connections[]`) holds —
+ * whether THIS call did the removing or it was already gone — and `{removed: false, error}` only
+ * when the write itself failed (e.g. a preferences-lock timeout). Callers that report success to
+ * a user (`cli-member.ts`'s `member leave`, the DELETE route) MUST check this: the previous
+ * version warned-and-returned on a write failure with no way for either caller to tell, so a lock
+ * timeout printed "left <endpoint>" with the connection still on disk (review finding I1).
  */
 export async function removeConnection(
   connId: string,
   reason: 'revoked' | 'manual' = 'revoked',
   deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
-): Promise<void> {
+): Promise<{ removed: true } | { removed: false; error: string }> {
   const _updateTeamConfig = deps.updateTeamConfig ?? updateTeamConfig
   teardownConnection(connId)
 
@@ -247,10 +254,11 @@ export async function removeConnection(
       return normalizeTeamConfig({ ...defaultTeam(), connections: remaining })
     })
   } catch (err) {
-    console.warn(`[team-uploader] failed to persist removal of ${connId}:`, err instanceof Error ? err.message : String(err))
-    return
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(`[team-uploader] failed to persist removal of ${connId}:`, msg)
+    return { removed: false, error: msg }
   }
-  if (!removedConn) return
+  if (!removedConn) return { removed: true } // idempotent — the postcondition already held
 
   // GC only after the config write above persisted — a timer-driven GC (e.g. from the
   // supervisor) could otherwise race a concurrent "add connection" write.
@@ -273,6 +281,7 @@ export async function removeConnection(
   _notify(reason === 'manual'
     ? { type: 'info', code: 'member.disconnected', meta: notifyMeta(removedConn) }
     : { type: 'warning', code: 'member.removed', meta: notifyMeta(removedConn) })
+  return { removed: true }
 }
 
 // ---------------------------------------------------------------------------

@@ -230,7 +230,8 @@ async function connectFlow(s: CliStrings): Promise<void> {
   const endpoint = await input(s.promptEndpoint)
   const token = await input(s.promptToken)
   const org = await input(s.promptOrg, { default: 'default' })
-  await memberConnect({ endpoint, token, org: org || undefined })
+  const label = await input(s.promptLabel)
+  await memberConnect({ endpoint, token, org: org || undefined, label: label || undefined })
 }
 
 // `memberLeave` now prints its own outcome (left one / left all / still connected to N / nothing
@@ -238,7 +239,7 @@ async function connectFlow(s: CliStrings): Promise<void> {
 // top of it, which used to be true unconditionally but is wrong the moment N > 1 and only one
 // connection was left. Delegating the whole flow (including the N-connection picker) to
 // `memberLeave` is deliberate — see spec §8.1 — so the launcher and the CLI can never diverge.
-async function disconnectFlow(_s: CliStrings): Promise<void> {
+async function disconnectFlow(): Promise<void> {
   await memberLeave()
 }
 
@@ -407,7 +408,9 @@ export async function runStart(): Promise<StartResult> {
     choices.push({
       name: connections.length > 0 ? s.itemConnectMore : s.itemConnect,
       value: 'connect',
-      hint: s.itemConnectHint,
+      // The relabelled "add another central" item keeps its own hint, not the original
+      // "become a member" framing — the machine is already a member at that point.
+      hint: connections.length > 0 ? s.itemConnectMoreHint : s.itemConnectHint,
     })
     if (connections.length > 0) {
       choices.push({
@@ -442,7 +445,7 @@ export async function runStart(): Promise<StartResult> {
         acted = true
         break
       case 'disconnect':
-        await disconnectFlow(s)
+        await disconnectFlow()
         acted = true
         break
       case 'restart':
