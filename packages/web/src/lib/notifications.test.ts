@@ -224,3 +224,56 @@ describe('I3 — a per-connection notification names WHICH central it is about',
     expect(msg).toContain('(HTTP 401)')
   })
 })
+
+describe('Task 13 — the two resync notification codes (member.resync_started / _done)', () => {
+  const RESYNC = ['member.resync_started', 'member.resync_done'] as const
+
+  test('both codes resolve to non-empty EN and PT titles', async () => {
+    const s = await freshStore()
+    for (const code of RESYNC) {
+      for (const lang of ['pt', 'en'] as const) {
+        const { title } = s.resolveNotification(note('a', { code }), lang)
+        expect(title.length).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  test('both codes interpolate {central} and {count} from meta, in both languages', async () => {
+    const s = await freshStore()
+    for (const code of RESYNC) {
+      for (const lang of ['pt', 'en'] as const) {
+        const n = note('a', { code, meta: { connectionId: 'c_a', central: 'Acme HQ', count: 7 } })
+        const msg = s.resolveNotification(n, lang).message!
+        expect(msg).toContain('Acme HQ')
+        expect(msg).toContain('7')
+        expect(msg).not.toContain('{central}')
+        expect(msg).not.toContain('{count}')
+      }
+    }
+  })
+
+  // The dedupe key that decides whether two rows collapse into one lives server-side
+  // (`notifications-store.ts`'s `keyOf`, `c:${code}:${JSON.stringify(meta)}`) — the web bundle may
+  // never import `packages/server/*`, so this cannot cross-check that function directly the way
+  // `shareRepos.test.ts` cross-checks `canonicalRepoKey`. `meta` there already carries
+  // `connectionId` for EVERY per-connection notification (`notifyMeta` in `team-uploader.ts` always
+  // sets it), so two different connections' resync events already produce two different JSON blobs
+  // and therefore two different keys — this was already true before this task (Plan 2 fixed the
+  // dedupe key itself for the member.* family), so nothing changes here; this test only asserts,
+  // at the one boundary the web side can observe, that the two rows carry enough distinguishing
+  // information to never be mistaken for the same central.
+  test('two resync notifications with the same code and different connectionId do not collapse', async () => {
+    const s = await freshStore()
+    for (const code of RESYNC) {
+      const a = note('a', { code, meta: { connectionId: 'c_a', central: 'central-a.example.com', count: 3 } })
+      const b = note('b', { code, meta: { connectionId: 'c_b', central: 'work-central', count: 5 } })
+      for (const lang of ['pt', 'en'] as const) {
+        const ma = s.resolveNotification(a, lang).message!
+        const mb = s.resolveNotification(b, lang).message!
+        expect(ma).not.toBe(mb)
+        expect(ma).toContain('central-a.example.com')
+        expect(mb).toContain('work-central')
+      }
+    }
+  })
+})

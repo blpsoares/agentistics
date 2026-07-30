@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test'
 import {
-  buildShareTargets, countDenied, hostOf, plural,
-  type ShareTarget, type ServerProject,
+  buildShareTargets, countDenied, hostOf, plural, buildDeniedRepoLabels,
+  type ShareTarget, type ServerProject, type DeniedRepoSource,
 } from './shareRepos'
 import type { SessionMeta } from '@agentistics/core'
 import { NO_REPO_KEY } from '@agentistics/core'
@@ -225,4 +225,55 @@ test('buildShareTargets groups sessions using the same key the server denylist w
   const repoTargets = targets.filter(t => t.kind === 'repo')
   expect(repoTargets.length).toBe(1)
   expect(repoTargets[0]!.key).toBe(serverKey)
+})
+
+// --- buildDeniedRepoLabels (Task 13's hidden-repo badge) --------------------------------------
+
+function conn(over: Partial<DeniedRepoSource>): DeniedRepoSource {
+  return { deniedRepos: [], endpoint: 'https://central.example.com', ...over }
+}
+
+test('a repo denied by one connection maps to that connection\'s label', () => {
+  const map = buildDeniedRepoLabels([
+    conn({ deniedRepos: ['github.com/acme/api'], label: 'Work HQ' }),
+  ])
+  expect(map.get('github.com/acme/api')).toEqual(['Work HQ'])
+})
+
+test('a repo denied by two connections lists both labels', () => {
+  const map = buildDeniedRepoLabels([
+    conn({ deniedRepos: ['github.com/acme/api'], label: 'Work HQ' }),
+    conn({ deniedRepos: ['github.com/acme/api'], label: 'Side Project Central' }),
+  ])
+  expect(map.get('github.com/acme/api')).toEqual(['Work HQ', 'Side Project Central'])
+})
+
+test('a connection with no label falls back to the endpoint host', () => {
+  const map = buildDeniedRepoLabels([
+    conn({ deniedRepos: ['github.com/acme/api'], endpoint: 'https://hq.example.com' }),
+  ])
+  expect(map.get('github.com/acme/api')).toEqual(['hq.example.com'])
+})
+
+test('a different spelling of the same repo keys to the same canonical entry', () => {
+  const map = buildDeniedRepoLabels([
+    conn({ deniedRepos: ['git@ssh.github.com:Acme/API.git'], label: 'A' }),
+  ])
+  // Same canonical key buildShareTargets would produce for this remote family.
+  expect(map.get('github.com/acme/api')).toEqual(['A'])
+  expect(map.has('git@ssh.github.com:Acme/API.git')).toBe(false)
+})
+
+test('NO_REPO_KEY denials are preserved as their own bucket', () => {
+  const map = buildDeniedRepoLabels([conn({ deniedRepos: [NO_REPO_KEY], label: 'Work HQ' })])
+  expect(map.get(NO_REPO_KEY)).toEqual(['Work HQ'])
+})
+
+test('a connection sharing everything (empty deniedRepos) contributes nothing', () => {
+  const map = buildDeniedRepoLabels([conn({ deniedRepos: [] })])
+  expect(map.size).toBe(0)
+})
+
+test('no connections at all is an empty map, not a throw', () => {
+  expect(buildDeniedRepoLabels([]).size).toBe(0)
 })

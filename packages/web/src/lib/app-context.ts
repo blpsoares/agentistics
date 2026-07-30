@@ -119,4 +119,12 @@ export interface AppContext {
   teams: { id: string; name: string }[]
   /** Central-only: available machines for filter. Empty when not a central or no machines. */
   machines: { id: string; name: string; user: string; teamId?: string; teamIds?: string[] }[]
+
+  /** Task 13 — the hidden-repo badge: canonical repo key (or `NO_REPO_KEY`) → the labels of every
+   *  connection currently hiding it (`lib/shareRepos.ts`'s `buildDeniedRepoLabels`). OPTIONAL
+   *  (never a plain default) because `AppContext` is consumed by every page in the app — a new
+   *  required field would break every existing consumer/mock at once. Absent/undefined must be
+   *  treated exactly like an empty map (no hidden-repo badges), never as "not yet loaded" vs.
+   *  "definitely nothing hidden" — there is no meaningful distinction a badge needs to draw here. */
+  deniedRepoLabels?: Map<string, string[]>
 }

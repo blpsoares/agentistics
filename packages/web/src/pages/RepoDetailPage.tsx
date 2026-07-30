@@ -3,11 +3,14 @@ import { useOutletContext, useParams, useNavigate } from 'react-router-dom'
 import {
   GitBranch, ArrowLeft, ExternalLink, Link2Off, Users, Zap, Workflow as WorkflowIcon, GitCompare,
   Clock, GitCommit, ChevronDown, DollarSign, Cpu, Wrench, Bot, FileCode, MessageSquare, Database, AlertTriangle,
+  EyeOff,
 } from 'lucide-react'
 import type { AppContext, } from '../lib/app-context'
 import type { SessionMeta, MemberPresence, HarnessId, WorkflowRun, WorkflowAgent } from '@agentistics/core'
-import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost, sessionCostUSD, sessionLabel } from '@agentistics/core'
+import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost, sessionCostUSD, sessionLabel, NO_REPO_KEY } from '@agentistics/core'
 import { capable, HARNESS_LABELS, HARNESS_COLORS, DYNAMIC_WORKFLOWS_DOC } from '../lib/harness'
+import { canonicalRepoKey } from '../lib/shareRepos'
+import { PLURAL_COPY, interpolate, plural } from '../components/team/copy'
 import { DocLink } from '../components/DocLink'
 import { buildWorkflowSteps, groupRunsBySession } from '../lib/workflowSteps'
 import { useDerivedStats, computeMemberSummaries, type MemberSummary } from '../hooks/useData'
@@ -21,7 +24,7 @@ type Tab = 'overview' | 'members' | 'compare' | 'actions' | 'sessions' | 'workfl
 
 export default function RepoDetailPage() {
   const ctx = useOutletContext<AppContext>()
-  const { data, filters, currency, brlRate, lang, theme, isCentral, setSelectedSession } = ctx
+  const { data, filters, currency, brlRate, lang, theme, isCentral, setSelectedSession, deniedRepoLabels } = ctx
   const { id } = useParams()
   const navigate = useNavigate()
   const pt = lang === 'pt'
@@ -62,6 +65,11 @@ export default function RepoDetailPage() {
 
   const title = linked ? repoShortName(remote) : (folderPath.split('/').filter(Boolean).pop() || (pt ? 'Sem repositório' : 'No repository'))
   const host = linked ? remote.split('/')[0]! : ''
+  // Task 13 — the hidden-repo badge. Keyed by the CANONICAL repo key, same as RepositoriesList and
+  // the sharing picker — `remote` here is already `normalizeGitRemote`'d (see the routing comment
+  // above), so only the further canonicalization (case/ssh-alias folding) is needed.
+  const hiddenKey = linked ? canonicalRepoKey(remote) : NO_REPO_KEY
+  const hiddenLabels = deniedRepoLabels?.get(hiddenKey)
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode; show: boolean; badge?: number }[] = [
     { id: 'overview', label: pt ? 'Visão geral' : 'Overview', icon: <GitBranch size={13} />, show: true },
@@ -99,6 +107,24 @@ export default function RepoDetailPage() {
             }}>
               {remote} <ExternalLink size={11} />
             </a>
+          )}
+          {hiddenLabels && hiddenLabels.length > 0 && (
+            <span
+              role="button"
+              tabIndex={0}
+              title={hiddenLabels.join(', ')}
+              onClick={() => navigate('/settings/connection')}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/settings/connection') } }}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700,
+                color: 'var(--anthropic-orange)', background: 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
+                padding: '3px 8px', borderRadius: 6, cursor: 'pointer',
+              }}
+            >
+              <EyeOff size={11} />
+              {interpolate(plural(PLURAL_COPY.hiddenFromN[lang], hiddenLabels.length), { n: hiddenLabels.length })}
+              {' · '}{hiddenLabels.join(', ')}
+            </span>
           )}
         </div>
         {/* Full folder path subtitle — a machine-local detail, hidden on the central where a repo

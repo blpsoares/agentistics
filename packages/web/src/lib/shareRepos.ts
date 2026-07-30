@@ -195,6 +195,42 @@ export function countDenied(targets: ShareTarget[], denied: string[]): number {
   return targets.filter(t => set.has(t.key)).length
 }
 
+/** Just enough of a connection to build the hidden-repo reverse index below — structurally
+ *  compatible with `@agentistics/core`'s `TeamConnection`. */
+export interface DeniedRepoSource {
+  deniedRepos: string[]
+  label?: string
+  endpoint: string
+}
+
+/**
+ * Reverse index for Task 13's hidden-repo badge: canonical repo key (or `NO_REPO_KEY`) → the
+ * labels of every connection currently hiding it. `deniedRepos` never reaches a central, but this
+ * machine's own browser may read it freely (same-origin) — that's what lets a repository blocked
+ * weeks ago stay visible outside the Settings page that set the rule.
+ *
+ * Keyed by the SAME `canonicalRepoKey` the denylist and the picker use — keying by the raw
+ * `deniedRepos` entry as stored would still be correct here (rules are already written as
+ * canonical keys by `handleApplyRules`), but re-canonicalizing defends against a rule written by an
+ * older client that stored a differently-cased or aliased spelling.
+ */
+export function buildDeniedRepoLabels(connections: readonly DeniedRepoSource[]): Map<string, string[]> {
+  const map = new Map<string, string[]>()
+  for (const conn of connections) {
+    if (!conn.deniedRepos || conn.deniedRepos.length === 0) continue
+    const label = conn.label?.trim() || hostOf(conn.endpoint)
+    for (const raw of conn.deniedRepos) {
+      if (typeof raw !== 'string') continue
+      const key = raw === NO_REPO_KEY ? NO_REPO_KEY : canonicalRepoKey(normalizeGitRemote(raw))
+      if (!key) continue
+      const labels = map.get(key)
+      if (labels) labels.push(label)
+      else map.set(key, [label])
+    }
+  }
+  return map
+}
+
 /**
  * The host of a connection endpoint, for display. Called inside a `.map` during render, so it
  * must NEVER throw — one hand-edited endpoint that fails to parse would otherwise take down the
