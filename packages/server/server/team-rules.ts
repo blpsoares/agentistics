@@ -74,19 +74,34 @@ export async function loadRulesState(connId: string): Promise<RulesState> {
   }
 }
 
-/** Persist this connection's rules state. Best-effort like every sibling per-connection writer
- *  in this codebase (team-uploader.ts's saveSentState) — a failed write means the NEXT cycle
- *  re-derives the same plan from the same inputs, never a corrupted or half-written file read
- *  back as something else. */
+/** Persist this connection's rules state. Best-effort, like every sibling per-connection writer
+ *  in this codebase (team-uploader.ts's `saveSentState`, `reconcileSyncState`'s sync-file write):
+ *  the write is wrapped so an ENOENT/EACCES/ENOSPC on `TEAM_CONN_DIR` (only `migrateTeamStateOnce`
+ *  creates it, and ITS failure is already caught-and-warned) never propagates out of this
+ *  function. `reconcileRulesFor` in team-uploader.ts awaits this BEFORE `reconcileSyncState` and
+ *  `pushOnceDetailed` — an unguarded throw here would take the whole push down with it, turning a
+ *  bookkeeping failure into "this connection pushes nothing, every cycle, forever". A failed
+ *  write just means the NEXT cycle re-derives the same plan from the same inputs, never a
+ *  corrupted or half-written file read back as something else. */
 export async function saveRulesState(connId: string, state: RulesState): Promise<void> {
-  await writeFile(teamRulesFile(connId), JSON.stringify(state, null, 2), 'utf-8')
+  try {
+    await writeFile(teamRulesFile(connId), JSON.stringify(state, null, 2), 'utf-8')
+  } catch (err) {
+    console.warn(`[team-rules] failed to persist rules state for ${connId}:`, err instanceof Error ? err.message : String(err))
+  }
 }
 
 export interface RulesPlan {
   /** ids the central holds and may no longer have — the forget payload. Never "absent" ids. */
   forgetIds: string[]
+  /** run ids the central holds and may no longer have. NOT `sentRunIds ∖ sharedRunIds` (design
+   *  §5.5) — a run whose owning session is merely absent from `storedSessions` this cycle cannot
+   *  be known to be denied, so treating its absence as a trigger would repeat rule 1's exact
+   *  data-loss hazard for runs. This is a deliberate divergence from the spec text: the cost is
+   *  that a run whose owning session has fallen out of the store (not denied, just gone) is
+   *  never withdrawn by this mechanism. See the `forgetRuns` computation below. */
   forgetRuns: string[]
-  /** what to persist AFTER a successful push. */
+  /** what to persist once the plan's removal has been carried out by the caller. */
   next: RulesState
   /** true when the denylist changed since the last persisted state. */
   rulesChanged: boolean
@@ -115,7 +130,7 @@ export function planRulesReconcile(input: {
   real: StatsCache | null
   prev: RulesState
 }): RulesPlan {
-  const { deniedRepos, sentHashes, sentRunIds, storedSessions, index, real, prev } = input
+  const { deniedRepos, sentHashes, sentRunIds, storedSessions, liveSessions, index, real, prev } = input
 
   const rulesHash = denialSignature(deniedRepos)
   const prevHash = prev.rulesHash ? prev.rulesHash : denialSignature([])
@@ -134,17 +149,46 @@ export function planRulesReconcile(input: {
   // actually denied. A sent id that simply isn't in storedSessions this cycle is untouched.
   const forgetIds = Object.keys(sentHashes).filter(id => deniedIds.has(id))
 
+  // Same rule, applied to runs (see the divergence note on `RulesPlan.forgetRuns` above): a run
+  // is only forgotten when its OWNING SESSION is actively denied, never merely absent.
   const sentRunSet = new Set(sentRunIds)
   const forgetRuns = input.workflows
     .filter(r => sentRunSet.has(r.runId) && deniedIds.has(r.sessionId))
     .map(r => r.runId)
 
-  const shared = filterShared(storedSessions, denied, index)
-  const sharedIds = [...sharedSessionIds(shared)].sort()
+  // sharedIds (persisted in `next`) describes what THIS CONNECTION currently pushes as session
+  // documents, which is the store — `pushOnceDetailed` filters `ctx.storedSessions`, never
+  // `liveSessions`, for the session-document half of a push.
+  const sharedStored = filterShared(storedSessions, denied, index)
+  const sharedIds = [...sharedSessionIds(sharedStored)].sort()
 
   const boundary = real ? attributionBoundary(real) : null
-  const fresh = deniedDeltaByDay(storedSessions, shared, boundary)
-  const { sealed, pending } = advanceSeal(prev, fresh, boundary)
+
+  // The seal ledger's ONLY consumer is `buildSplitStatsCache`'s subtraction against `real`'s
+  // rollup rows, and `real` is supplemented from `liveSessions` — never from `storedSessions`
+  // (`pushOnceDetailed`, team-uploader.ts). The two arrays are NOT interchangeable: on a real
+  // machine the store can lag or lead the live array (buildSplitStatsCache's own precondition
+  // comment cites 5 stored sessions against 12 in the cache for one day), so measuring the delta
+  // over the store and subtracting it from a row built from the live array under- or
+  // over-subtracts. Under-subtraction lets a denied repo's volume ride out in the aggregate —
+  // the exact fail-open the split refuses everywhere else. Hence `liveSessions` here, matching
+  // the array `real`/`boundary` are actually about.
+  let sealed: DeniedLedger
+  let pending: DeniedLedger
+  if (real === null) {
+    // No real StatsCache this cycle means no watermark to test against — `boundary` is `null`,
+    // under which `deniedDeltaByDay`'s day filter never fires, so EVERY day (including a day that
+    // is genuine prehistory once a real cache later appears) would be measured into `pending`.
+    // That is a permanently wrong seal waiting to happen the first time a real cache shows up
+    // (a Codex/Gemini-only machine that later installs Claude). Carry the ledger forward
+    // untouched instead of measuring anything this cycle.
+    sealed = prev.sealed
+    pending = prev.pending
+  } else {
+    const sharedLive = filterShared(liveSessions, denied, index)
+    const fresh = deniedDeltaByDay(liveSessions, sharedLive, boundary)
+    ;({ sealed, pending } = advanceSeal(prev, fresh, boundary))
+  }
 
   const next: RulesState = { rulesHash, sharedIds, boundary, sealed, pending }
 

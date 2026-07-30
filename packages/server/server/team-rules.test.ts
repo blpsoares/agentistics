@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionMeta, WorkflowRun, StatsCache } from '@agentistics/core'
 import { planRulesReconcile, emptyRulesState, loadRulesState, saveRulesState } from './team-rules'
-import { denialSignature, deniedDeltaByDay, attributionBoundary } from './share-rules'
+import { denialSignature, deniedDeltaByDay, attributionBoundary, buildPathRepoIndex } from './share-rules'
 import { __setTeamConnDirForTests, TEAM_CONN_DIR } from './config'
 
 const s = (id: string, remote: string): SessionMeta => ({
@@ -140,6 +140,97 @@ describe('planRulesReconcile', () => {
     })
     expect(third.next.sealed['2026-07-20']?.sessionCount).toBe(1)
   })
+
+  // Important 1 (review fix): the seal ledger's only consumer is buildSplitStatsCache's
+  // subtraction against `real`, and `real` is supplemented from `liveSessions` — never from
+  // `storedSessions` (pushOnceDetailed, team-uploader.ts). Measuring the delta over the wrong
+  // array under/over-subtracts once the two genuinely disagree (buildSplitStatsCache's own
+  // precondition comment measured 5 stored sessions against 12 in the cache for one real day).
+  it('measures the seal ledger over liveSessions, never storedSessions', () => {
+    const pub = { ...s('pub', 'github.com/o/pub'), start_time: '2026-07-20T09:00:00.000Z' }
+    const liveOnlyDenied = { ...s('live-denied', 'github.com/o/secret'), start_time: '2026-07-20T10:00:00.000Z' }
+    const storeOnlyDenied = { ...s('store-denied', 'github.com/o/secret'), start_time: '2026-07-20T11:00:00.000Z' }
+
+    // Present in liveSessions but absent from storedSessions: DOES contribute to the delta.
+    const liveContributes = planRulesReconcile({
+      ...base, deniedRepos: ['github.com/o/secret'], sentHashes: {},
+      storedSessions: [pub], liveSessions: [pub, liveOnlyDenied],
+    })
+    expect(liveContributes.next.pending['2026-07-20']?.sessionCount).toBe(1)
+
+    // Present in storedSessions but absent from liveSessions: does NOT contribute — the ledger
+    // is measured against the array `real` was actually built from.
+    const storeOnlyExcluded = planRulesReconcile({
+      ...base, deniedRepos: ['github.com/o/secret'], sentHashes: {},
+      storedSessions: [pub, storeOnlyDenied], liveSessions: [pub],
+    })
+    expect(storeOnlyExcluded.next.pending['2026-07-20']).toBeUndefined()
+  })
+
+  // Important 3 (review fix): a null `real` means there is no watermark to test days against, so
+  // `boundary` is `null` and `deniedDeltaByDay`'s day filter never fires — measuring anything in
+  // that state would fold genuine prehistory (once a real cache later appears) into `pending`,
+  // producing a seal that is permanently wrong. The ledger must be carried forward untouched.
+  it('carries the seal ledger forward unchanged when real is null, never measuring into it', () => {
+    const denySession = { ...s('b', 'github.com/o/secret'), start_time: '2020-01-01T10:00:00.000Z' }
+    const sessions = [s('a', 'github.com/o/pub'), denySession]
+    const prevWithPending: ReturnType<typeof emptyRulesState> = {
+      ...emptyRulesState(),
+      pending: { '2019-12-31': { sessionCount: 5, messageCount: 0, toolCallCount: 0, tokensByModel: {}, usageByModel: {}, hourCounts: {} } },
+    }
+    const plan = planRulesReconcile({
+      ...base, real: null, deniedRepos: ['github.com/o/secret'], sentHashes: {},
+      storedSessions: sessions, liveSessions: sessions, prev: prevWithPending,
+    })
+    expect(plan.next.boundary).toBeNull()
+    expect(plan.next.pending).toEqual(prevWithPending.pending)
+    expect(plan.next.sealed).toEqual(prevWithPending.sealed)
+  })
+
+  // Controller item A: forgetRuns is a denial-only intersection, NOT `sentRunIds ∖ sharedRunIds`
+  // — a run in `sentRunIds` whose owning session is merely absent from the store must survive.
+  it('forgets a run only when its owning session is actively denied, never merely absent', () => {
+    const sessions = [s('a', 'github.com/o/pub'), s('b', 'github.com/o/secret')]
+    const workflows = [run('r1', 'b'), run('r2', 'gone')]
+    const plan = planRulesReconcile({
+      ...base, deniedRepos: ['github.com/o/secret'],
+      sentHashes: {}, sentRunIds: ['r1', 'r2'], workflows,
+      storedSessions: sessions, liveSessions: sessions,
+    })
+    // r1's session ('b') is present in the store AND denied -> forgotten.
+    expect(plan.forgetRuns).toContain('r1')
+    // r2's session ('gone') is simply absent from the store -> NOT forgotten, even though r2 is
+    // in sentRunIds -- absence is not denial.
+    expect(plan.forgetRuns).toEqual(['r1'])
+  })
+
+  // Controller item B (1/2): a session with no git_remote of its own is resolved through the
+  // PathRepoIndex, learned from a sibling session at the same project_path.
+  it('resolves a denied session with an empty git_remote through the PathRepoIndex', () => {
+    const seedSession = { ...s('seed', 'github.com/o/secret'), project_path: '/repo/secret' }
+    const target = { ...s('b', ''), project_path: '/repo/secret' }
+    const index = buildPathRepoIndex([seedSession])
+
+    const plan = planRulesReconcile({
+      ...base, deniedRepos: ['github.com/o/secret'], sentHashes: { b: 'h1' },
+      storedSessions: [target], liveSessions: [target], index,
+    })
+    expect(plan.forgetIds).toEqual(['b'])
+  })
+
+  // Controller item B (2/2): "growth never deletes" — a denylist growing to include a repository
+  // that was never sent changes rulesChanged (the hash differs) but must not produce a
+  // forgetIds entry for a session that was never actually denied.
+  it('a growing denylist reports rulesChanged=true with an empty forgetIds when nothing sent is actually denied', () => {
+    const sessions = [s('a', 'github.com/o/pub')]
+    const plan = planRulesReconcile({
+      ...base, deniedRepos: ['github.com/o/unrelated'],
+      sentHashes: { a: 'h1' }, storedSessions: sessions, liveSessions: sessions,
+      prev: { ...emptyRulesState(), rulesHash: denialSignature([]) },
+    })
+    expect(plan.rulesChanged).toBe(true)
+    expect(plan.forgetIds).toEqual([])
+  })
 })
 
 // Sanity cross-check against share-rules.ts's own primitives, so this module's seal test above
@@ -190,5 +281,31 @@ describe('loadRulesState / saveRulesState', () => {
     const { teamRulesFile } = await import('./config')
     await writeFile(teamRulesFile('c_111111111111'), 'not json{{', 'utf-8')
     expect(await loadRulesState('c_111111111111')).toEqual(emptyRulesState())
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Important 2 (review fix): saveRulesState must swallow a write failure rather than throw.
+// `reconcileRulesFor` in team-uploader.ts awaits this BEFORE reconcileSyncState/pushOnceDetailed
+// — an unguarded throw here would take the whole push down with it, persistently (the same write
+// fails every cycle), which is reachable whenever TEAM_CONN_DIR itself failed to be created.
+// ---------------------------------------------------------------------------
+
+describe('saveRulesState swallows a write failure', () => {
+  const original = TEAM_CONN_DIR
+
+  afterAll(() => {
+    __setTeamConnDirForTests(original)
+  })
+
+  it('does not throw when the connection directory does not exist', async () => {
+    const missingDir = join(tmpdir(), `agentistics-team-rules-missing-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    __setTeamConnDirForTests(missingDir)
+    // writeFile does not create missing intermediate directories, so this reproduces the
+    // ENOENT the review found reachable (only migrateTeamStateOnce creates TEAM_CONN_DIR, and
+    // its own failure is caught-and-warned rather than surfaced).
+    await expect(saveRulesState('c_333333333333', emptyRulesState())).resolves.toBeUndefined()
+    // And a subsequent load sees nothing was persisted — never a partial/corrupt file either.
+    expect(await loadRulesState('c_333333333333')).toEqual(emptyRulesState())
   })
 })
