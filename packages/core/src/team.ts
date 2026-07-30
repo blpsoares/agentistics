@@ -107,6 +107,29 @@ function trimSlashes(url: string): string {
   return url.replace(/\/+$/, '')
 }
 
+/**
+ * Normalize an endpoint into a STABLE identity key for comparison/dedup — never for storage or
+ * display, which keep the endpoint exactly as entered. Lower-cases the HOST only (path case can
+ * be meaningful, e.g. a case-sensitive route on a reverse proxy) and folds each scheme's default
+ * port, so `https://Central.example.com:443/` and `https://central.example.com` compare equal.
+ * Without this, `https://Central.example.com` re-added against a stored
+ * `https://central.example.com` reads as a brand-new endpoint and inserts a second connection —
+ * exactly the double-count-under-two-`memberId`s failure endpoint-uniqueness exists to prevent.
+ * Falls back to a trimmed-slash, lower-cased string for anything that does not parse as a URL, so
+ * a malformed value still compares consistently instead of throwing. Pure.
+ */
+export function normalizeEndpointKey(url: string): string {
+  const trimmed = trimSlashes((url ?? '').trim())
+  try {
+    const u = new URL(trimmed)
+    const defaultPort = u.protocol === 'https:' ? '443' : u.protocol === 'http:' ? '80' : ''
+    const port = u.port && u.port !== defaultPort ? `:${u.port}` : ''
+    return `${u.protocol}//${u.hostname.toLowerCase()}${port}${trimSlashes(u.pathname)}${u.search}`
+  } catch {
+    return trimmed.toLowerCase()
+  }
+}
+
 /** Force `mode` from connections.length, stamp the schema, and rebuild the legacy mirror.
  *  Pure — returns a new object with a new array. */
 export function normalizeTeamConfig(cfg: TeamConfig): TeamConfig {

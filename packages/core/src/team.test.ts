@@ -423,3 +423,57 @@ test('legacyConnectionId needs no node:crypto — deterministic, well-formed and
   const ids = new Set(Array.from({ length: 2000 }, (_, i) => legacyConnectionId(`http://c${i}:48080`, `tok${i}`)))
   expect(ids.size).toBe(2000)
 })
+
+// ---------------------------------------------------------------------------
+// normalizeEndpointKey — the SHARED endpoint identity rule (M3).
+//
+// Every endpoint comparison on the multi-central path funnels through this: the connection
+// upsert's endpoint-uniqueness check, the legacy leave-central mapping, and the Settings panel's
+// "which connection am I looking at". It had no direct test, so the exact contract is pinned here.
+// ---------------------------------------------------------------------------
+
+import { normalizeEndpointKey } from './team'
+
+test('normalizeEndpointKey: host case and trailing slashes never make one central look like two', () => {
+  const canonical = normalizeEndpointKey('https://central.example.com')
+  expect(normalizeEndpointKey('https://Central.Example.COM')).toBe(canonical)
+  expect(normalizeEndpointKey('https://central.example.com/')).toBe(canonical)
+  expect(normalizeEndpointKey('https://central.example.com///')).toBe(canonical)
+  expect(normalizeEndpointKey('  https://central.example.com  ')).toBe(canonical)
+})
+
+test('normalizeEndpointKey: a default port folds — WHATWG URL already drops it, so the explicit fold is belt-and-braces, not the mechanism', () => {
+  expect(normalizeEndpointKey('https://central.example.com:443')).toBe(normalizeEndpointKey('https://central.example.com'))
+  expect(normalizeEndpointKey('http://central.example.com:80')).toBe(normalizeEndpointKey('http://central.example.com'))
+  // The reason the fold is unreachable: the parser itself strips a default port before the
+  // function ever looks at it. Pinned so a future refactor that hand-rolls the parse knows.
+  expect(new URL('https://central.example.com:443').port).toBe('')
+  expect(new URL('http://central.example.com:80').port).toBe('')
+  // A NON-default port is part of the identity — two centrals on one host must stay distinct.
+  expect(normalizeEndpointKey('http://central.example.com:48080'))
+    .not.toBe(normalizeEndpointKey('http://central.example.com:48081'))
+})
+
+test('normalizeEndpointKey: scheme and path case are part of the identity, and the path keeps its case', () => {
+  // A reverse proxy may route case-sensitively, so the path is NOT lower-cased.
+  expect(normalizeEndpointKey('https://central.example.com/Team')).not.toBe(normalizeEndpointKey('https://central.example.com/team'))
+  expect(normalizeEndpointKey('https://central.example.com/Team')).toBe('https://central.example.com/Team')
+  // http and https are different endpoints (different port, different trust).
+  expect(normalizeEndpointKey('http://central.example.com')).not.toBe(normalizeEndpointKey('https://central.example.com'))
+})
+
+test('normalizeEndpointKey: the query string is KEPT and the fragment is DROPPED', () => {
+  // A query can carry routing information a proxy acts on, so it stays part of the identity.
+  expect(normalizeEndpointKey('https://central.example.com/?tenant=a')).toBe('https://central.example.com?tenant=a')
+  expect(normalizeEndpointKey('https://central.example.com/?tenant=a'))
+    .not.toBe(normalizeEndpointKey('https://central.example.com/?tenant=b'))
+  // A fragment is never sent to a server, so it cannot distinguish two centrals.
+  expect(normalizeEndpointKey('https://central.example.com#anything')).toBe(normalizeEndpointKey('https://central.example.com'))
+})
+
+test('normalizeEndpointKey: unparseable input still compares consistently instead of throwing', () => {
+  expect(normalizeEndpointKey('NOT a url/')).toBe('not a url')
+  expect(normalizeEndpointKey('')).toBe('')
+  expect(normalizeEndpointKey(undefined as unknown as string)).toBe('')
+  expect(normalizeEndpointKey(null as unknown as string)).toBe('')
+})

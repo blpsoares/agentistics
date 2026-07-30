@@ -24,6 +24,10 @@ export interface CliStrings {
   configSolo: string
   /** The member sentence WITHOUT the endpoint, for surfaces that print the endpoint themselves. */
   configMemberBare: string
+  configMember: (endpoint: string) => string
+  configMembers: (n: number) => string
+  configMemberLine: (endpoint: string, suffix: string) => string
+  deniedSuffix: (n: number) => string
   configCentral: string
   nothingRunning: string
 
@@ -51,7 +55,6 @@ export interface CliStrings {
   localRebuildFailed: string
   restartedAll: string
   restartedDone: string
-  disconnected: string
   noComposeFrom: (dir: string) => string
   runFromRepo: string
   buildingMachine: string
@@ -125,6 +128,8 @@ export interface CliStrings {
   centralInitFailed: string
   connected: string
   connectFailed: string
+  /** The one-line outcome of a disconnect that left the machine with no central at all. */
+  disconnected: string
   disconnectFailed: string
   stoppedAll: string
   stoppedDone: string
@@ -155,12 +160,35 @@ export interface CliStrings {
   upgradeBackupKept: (backup: string) => string
   upgradeRestartFailed: (version: string) => string
   upgradeRestartHint: string
+
+  // multi-central member commands (Task 6 — spec §8.2)
+  cancel: string
+  leaveWhich: string
+  leaveAll: string
+  leftOne: (endpoint: string) => string
+  leftAll: (n: number) => string
+  stillConnected: (n: number) => string
+  noConnections: string
+  ambiguousLeave: (n: number) => string
+  connectedAs: (user: string, n: number) => string
+  updatedExisting: (endpoint: string) => string
+  tokenInUse: (endpoint: string) => string
+  noMatchEndpoint: (endpoint: string) => string
+  localServerUnknown: string
+  stateAuthRejected: string
+  stateNetUnreachable: string
+  stateOk: string
+  neverSynced: string
 }
 
 const EN: CliStrings = {
   tagline: 'AI coding-assistant analytics · agentop',
   configSolo: 'solo — nothing leaves this machine',
   configMemberBare: 'member — sends metrics to a central',
+  configMember: (e) => `member — sends metrics to a central at ${e}`,
+  configMembers: (n) => `member — sends metrics to ${n} centrals`,
+  configMemberLine: (endpoint, suffix) => `  ↳ ${endpoint}${suffix}`,
+  deniedSuffix: (n) => ` · ${n} repo(s) blocked`,
   configCentral: 'central — this machine hosts the team central',
   nothingRunning: 'nothing running',
 
@@ -188,7 +216,6 @@ const EN: CliStrings = {
   localRebuildFailed: 'native rebuild failed — restarting the existing build.',
   restartedAll: 'restarted all running services.',
   restartedDone: 'service restarted.',
-  disconnected: 'disconnected — this machine is back to solo.',
   noComposeFrom: (dir) => `couldn't find docker-compose.machine.yml in ${dir}.`,
   runFromRepo: 'Run agentop start from the agentistics repo to use Docker.',
   buildingMachine: 'building & starting the machine container…',
@@ -228,6 +255,7 @@ const EN: CliStrings = {
   centralInitFailed: 'central init did not complete.',
   connected: 'connected — this machine is now a member.',
   connectFailed: 'could not connect to the central.',
+  disconnected: 'disconnected — this machine is back to solo.',
   disconnectFailed: 'could not disconnect from the central.',
   stoppedAll: 'stopped every running service.',
   stoppedDone: 'service stopped.',
@@ -256,12 +284,34 @@ const EN: CliStrings = {
   upgradeBackupKept: (backup) => `Previous binary kept at ${backup}.`,
   upgradeRestartFailed: (version) => `v${version} is installed, but some services were NOT restarted onto it:`,
   upgradeRestartHint: 'Restart them by hand (e.g. `agentop restart --all`) — they still run the old version.',
+
+  cancel: 'Cancel',
+  leaveWhich: 'Leave which central?',
+  leaveAll: 'Leave all centrals',
+  leftOne: (endpoint) => `left ${endpoint}`,
+  leftAll: (n) => `left all ${n} central${n === 1 ? '' : 's'} — back to solo.`,
+  stillConnected: (n) => `still connected to ${n} central(s).`,
+  noConnections: 'not connected to any central.',
+  ambiguousLeave: (n) => `connected to ${n} centrals — pass --endpoint <url> or --all.`,
+  connectedAs: (user, n) => `connected as ${user} — ${n} central(s) total.`,
+  updatedExisting: (endpoint) => `updated the existing connection to ${endpoint}`,
+  tokenInUse: (endpoint) => `that token already belongs to ${endpoint}`,
+  noMatchEndpoint: (endpoint) => `no connection matches endpoint ${endpoint}`,
+  localServerUnknown: 'unknown (local server not running)',
+  stateAuthRejected: 'token rejected by central',
+  stateNetUnreachable: 'central unreachable',
+  stateOk: 'ok',
+  neverSynced: 'never',
 }
 
 const PT: CliStrings = {
   tagline: 'Analytics de assistentes de código IA · agentop',
   configSolo: 'solo — nada sai desta máquina',
   configMemberBare: 'member — envia métricas para uma central',
+  configMember: (e) => `member — envia métricas para uma central em ${e}`,
+  configMembers: (n) => `member — envia métricas para ${n} centrais`,
+  configMemberLine: (endpoint, suffix) => `  ↳ ${endpoint}${suffix}`,
+  deniedSuffix: (n) => ` · ${n} repo(s) bloqueado(s)`,
   configCentral: 'central — esta máquina hospeda a central do time',
   nothingRunning: 'nada rodando',
 
@@ -289,7 +339,6 @@ const PT: CliStrings = {
   localRebuildFailed: 'falha ao reconstruir o server nativo — reiniciando o build atual.',
   restartedAll: 'todos os serviços no ar foram reiniciados.',
   restartedDone: 'serviço reiniciado.',
-  disconnected: 'desconectado — esta máquina voltou para solo.',
   noComposeFrom: (dir) => `não achei docker-compose.machine.yml em ${dir}.`,
   runFromRepo: 'Rode agentop start de dentro do repo agentistics para usar Docker.',
   buildingMachine: 'buildando & subindo o container da máquina…',
@@ -329,6 +378,7 @@ const PT: CliStrings = {
   centralInitFailed: 'o init da central não terminou.',
   connected: 'conectado — esta máquina agora é member.',
   connectFailed: 'não consegui conectar na central.',
+  disconnected: 'desconectado — esta máquina voltou para solo.',
   disconnectFailed: 'não consegui desconectar da central.',
   stoppedAll: 'todos os serviços no ar foram parados.',
   stoppedDone: 'serviço parado.',
@@ -357,10 +407,47 @@ const PT: CliStrings = {
   upgradeBackupKept: (backup) => `Binário anterior mantido em ${backup}.`,
   upgradeRestartFailed: (version) => `a v${version} foi instalada, mas alguns serviços NÃO foram reiniciados nela:`,
   upgradeRestartHint: 'Reinicie na mão (ex.: `agentop restart --all`) — eles ainda rodam a versão antiga.',
+
+  cancel: 'Cancelar',
+  leaveWhich: 'Sair de qual central?',
+  leaveAll: 'Sair de todas as centrais',
+  leftOne: (endpoint) => `saiu de ${endpoint}`,
+  leftAll: (n) => `saiu de todas as ${n} ${n === 1 ? 'central' : 'centrais'} — de volta para solo.`,
+  stillConnected: (n) => `ainda conectado a ${n} central(is).`,
+  noConnections: 'sem conexão com nenhuma central.',
+  ambiguousLeave: (n) => `conectado a ${n} centrais — use --endpoint <url> ou --all.`,
+  connectedAs: (user, n) => `conectado como ${user} — ${n} central(is) no total.`,
+  updatedExisting: (endpoint) => `atualizou a conexão existente com ${endpoint}`,
+  tokenInUse: (endpoint) => `esse token já pertence a ${endpoint}`,
+  noMatchEndpoint: (endpoint) => `nenhuma conexão corresponde ao endpoint ${endpoint}`,
+  localServerUnknown: 'desconhecido (o server local não está rodando)',
+  stateAuthRejected: 'token rejeitado pela central',
+  stateNetUnreachable: 'central inacessível',
+  stateOk: 'ok',
+  neverSynced: 'nunca',
 }
 
 const TABLE: Record<CliLang, CliStrings> = { en: EN, pt: PT }
 
 export function cliStrings(lang: CliLang): CliStrings {
   return TABLE[lang] ?? EN
+}
+
+/**
+ * Resolve the CLI language: `--lang en|pt` wins, else `preferences.lang` (shared with the web
+ * toggle), else English. Lives here (not in cli-start.ts, its original home) so cli-member.ts can
+ * share it without a circular import — cli-start.ts already imports memberConnect/memberLeave
+ * from cli-member.ts, so the reverse import would form a cycle.
+ */
+export async function resolveLang(): Promise<CliLang> {
+  const i = process.argv.indexOf('--lang')
+  const flag = i >= 0 ? process.argv[i + 1] : undefined
+  if (flag === 'pt' || flag === 'en') return flag
+  try {
+    const { readPreferences } = await import('./preferences')
+    const prefs = await readPreferences()
+    return prefs.lang === 'pt' ? 'pt' : 'en'
+  } catch {
+    return 'en'
+  }
 }

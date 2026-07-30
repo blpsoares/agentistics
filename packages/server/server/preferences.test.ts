@@ -1,7 +1,12 @@
 import { test, expect } from 'bun:test'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { readPreferencesFrom, writePreferencesTo } from './preferences'
+import { fileURLToPath } from 'node:url'
+import {
+  readPreferencesFrom, writePreferencesTo, updateTeamConfigAt,
+  LOCK_STALE_MS, LOCK_ACQUIRE_TIMEOUT_MS, __setTestOnlyDisableLock,
+  __setTestOnlyForceLockVanished, __setTestOnlyAcquireTimeoutMs, PreferencesLockTimeoutError,
+} from './preferences'
 
 // Regression: preferences were stored under CLAUDE_DIR, which in Docker (machine +
 // self-contributing central) is the host ~/.claude mounted READ-ONLY at /host-claude.
@@ -65,7 +70,7 @@ test('writePreferencesTo merges with legacy values on first write', async () => 
 // silently default over a corrupt primary file (which would present the machine as solo and
 // discard every connection, denylist, archiveMode and layout).
 
-import { mkdtemp, writeFile, readFile, readdir } from 'node:fs/promises'
+import { mkdtemp, writeFile, readFile, readdir, open, utimes } from 'node:fs/promises'
 import { tmpdir as osTmpdir } from 'node:os'
 import { dirname } from 'node:path'
 
@@ -348,6 +353,204 @@ test('a genuine token change still lands — an empty token only ever means "unc
   expect(after.team!.connections[1]!.token).toBe('SECRET-B')
 })
 
+// ---------------------------------------------------------------------------
+// Cross-process lock (Task 5) — `enqueueWrite` only serializes writes WITHIN one process; Bun
+// serves dashboard requests concurrently in the long-running server while a CLI subcommand
+// (`cli-member.ts` et al.) can write the SAME preferences.json from a SEPARATE `bun` process with
+// its own, independent write chain. This spawns a REAL second OS process (see
+// preferences.lock-test-child.ts) racing the SAME read-modify-write against the main test
+// process, proving the O_EXCL lock file — not just the in-process chain — is what prevents a lost
+// update across process boundaries.
+//
+// R5 (round-2 review): a `bun run <script>` child's own startup/import cost (~100ms+) dwarfs the
+// sub-millisecond time a handful of sequential fs writes take, so without synchronization the
+// MAIN process routinely finishes its entire loop before the child has even started — no overlap
+// ever happens, and the test would stay green whether or not the lock exists. `waitForFile` below
+// is a barrier: the child writes a ready-marker right after its own startup completes and right
+// before its write loop starts; the parent waits for that marker before starting its own loop, so
+// both loops actually run concurrently for their full duration instead of hoping for scheduling
+// luck.
+// ---------------------------------------------------------------------------
+
+const childScriptPath = join(
+  // `new URL(import.meta.url).pathname` yields a leading-slash path like `/C:/…` on Windows,
+  // which breaks the spawned `bun run` — `fileURLToPath` handles the platform difference.
+  dirname(fileURLToPath(import.meta.url)), '..', 'test', 'fixtures', 'preferences.lock-test-child.ts',
+)
+
+async function waitForFile(path: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!(await Bun.file(path).exists())) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${path} to appear`)
+    await new Promise(r => setTimeout(r, 5))
+  }
+}
+
+/** Outcome of `raceTwoProcesses`. With the lock disabled, EITHER side reading a torn write mid-race
+ *  can throw (not just the final read) — `readJsonPrefs` deliberately throws on unparseable JSON
+ *  rather than silently defaulting (see its own doc comment), so a torn write surfaces as an
+ *  exception from `updateTeamConfigAt` itself, not only as a bad final file. All of that is
+ *  evidence of the SAME underlying corruption, not a test bug, so it's captured here rather than
+ *  left to crash the test. */
+interface RaceResult {
+  ids: string[] | null
+  /** The final file failed to parse, OR either process's write loop threw (almost always because
+   *  it tried to read a torn file mid-race) OR the child exited non-zero. */
+  corrupted: boolean
+}
+
+/** Spawns the child fixture, waits for both sides to be ready, then races `COUNT` sequential
+ *  `updateTeamConfigAt` appends from THIS process against `COUNT` from the child — the real
+ *  production write path, from two real OS processes, synchronized to actually overlap.
+ *  `disableLock` plumbs `__setTestOnlyDisableLock` through to BOTH sides (it's a per-process
+ *  module-level flag, so the child needs its own `--disable-lock` flag; setting it only in the
+ *  parent would leave the child still locking and prove nothing). */
+async function raceTwoProcesses(opts: { primary: string; legacy: string; count: number; disableLock: boolean }): Promise<RaceResult> {
+  const { primary, legacy, count } = opts
+  const childReady = `${primary}.child-ready`
+  const childArgs = [childScriptPath, primary, legacy, 'bbbb', String(count), childReady]
+  if (opts.disableLock) childArgs.push('--disable-lock')
+  const child = Bun.spawn(['bun', 'run', ...childArgs], { stdout: 'pipe', stderr: 'pipe' })
+
+  if (opts.disableLock) __setTestOnlyDisableLock(true)
+  let mainCorrupted = false
+  try {
+    await waitForFile(childReady, 10_000) // barrier: don't start until the child is about to loop
+
+    const mainWrites = (async () => {
+      for (let i = 0; i < count; i++) {
+        await updateTeamConfigAt(primary, legacy, (current) => ({
+          ...current,
+          connections: [
+            ...current.connections,
+            {
+              id: `c_aaaa${i.toString(16).padStart(8, '0')}`,
+              // A distinct endpoint per entry: `connections[]`'s uniqueness key is the endpoint
+              // (see TeamConnection's doc comment in core/src/team.ts) — migrateTeamConfig
+              // legitimately dedupes same-endpoint entries, which would look exactly like a
+              // lost-update bug in the lock if every iteration reused one endpoint.
+              endpoint: `http://127.0.0.1:2/aaaa${i}`,
+              org: 'default',
+              user: '',
+              token: '',
+              deniedRepos: [],
+            },
+          ],
+        }))
+      }
+    })().catch(() => { mainCorrupted = true }) // a torn read mid-race throws — that IS the finding
+
+    const [exitCode] = await Promise.all([child.exited, mainWrites])
+    if (exitCode !== 0) mainCorrupted = true // the child hit the same class of failure
+  } finally {
+    if (opts.disableLock) __setTestOnlyDisableLock(false) // never leak into a later test
+  }
+
+  let text: string
+  try {
+    text = await readFile(primary, 'utf-8')
+    JSON.parse(text) // torn writes from two processes racing rename() fail to parse
+  } catch {
+    return { ids: null, corrupted: true }
+  }
+  if (mainCorrupted) return { ids: null, corrupted: true }
+  const final = await readPreferencesFrom(primary, legacy)
+  return { ids: final.team!.connections.map(c => c.id), corrupted: false }
+}
+
+test('two SEPARATE OS processes writing the same preferences file concurrently lose no updates', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  // Seed the file so both writers start from a real, parseable base rather than racing the
+  // very first mkdir/create.
+  await writePreferencesTo(primary, legacy, { team: { schema: 2, mode: 'member', connections: [] } })
+
+  const COUNT = 15
+  const { ids, corrupted } = await raceTwoProcesses({ primary, legacy, count: COUNT, disableLock: false })
+
+  expect(corrupted).toBe(false) // the file on disk is whole JSON, not a torn write, and neither side threw
+  // Every single one of the 2×COUNT appends survived — no lost update across the process
+  // boundary, which is exactly what a missing/ineffective cross-process lock would drop.
+  expect(ids).toHaveLength(2 * COUNT)
+  expect(new Set(ids).size).toBe(2 * COUNT) // no duplicate/corrupted id either
+  const mainIds = ids!.filter(id => id.startsWith('c_aaaa'))
+  const childIds = ids!.filter(id => id.startsWith('c_bbbb'))
+  expect(mainIds).toHaveLength(COUNT)
+  expect(childIds).toHaveLength(COUNT)
+}, 20_000)
+
+test('control: with the lock disabled via the test-only seam, the SAME synchronized race loses or corrupts data — proves the guard above is not vacuous on this hardware', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  await writePreferencesTo(primary, legacy, { team: { schema: 2, mode: 'member', connections: [] } })
+
+  // A much higher COUNT than the guard test above: each individual read-modify-write is a
+  // handful of fast fs syscalls, so even with synchronized starts the contention window per
+  // iteration is small — more iterations means more chances for the two processes' operations to
+  // actually interleave mid-cycle instead of happening to serialize by accident.
+  const COUNT = 200
+  const { ids, corrupted } = await raceTwoProcesses({ primary, legacy, count: COUNT, disableLock: true })
+
+  // With BOTH processes' lock acquisition short-circuited to a no-op (same synchronized-start
+  // race as the guard test above — same COUNT, same barrier, same production `updateTeamConfigAt`
+  // call), the read-modify-write MUST tear or lose an update: either the file fails to parse or a
+  // process throws reading a torn file mid-race (both captured as `corrupted`), or fewer than
+  // 2×COUNT ids survive. If this assertion ever starts failing, it means EITHER the hardware
+  // genuinely stopped reproducing the race (investigate before trusting the guard test's green as
+  // meaningful) OR something reintroduced accidental serialization outside the lock.
+  const lostOrTorn = corrupted || ids === null || ids.length < 2 * COUNT
+  expect(lostOrTorn).toBe(true)
+}, 20_000)
+
+// The exact bug R1/R2 fixed: LOCK_ACQUIRE_TIMEOUT_MS being <= LOCK_STALE_MS makes the stale-reclaim
+// path unreachable for ordinary contention (a waiter always gives up before a fresh-looking lock
+// could ever be judged stale) — this is a standing regression guard against that specific
+// inversion recurring, not just documentation of the current values.
+test('LOCK_ACQUIRE_TIMEOUT_MS is strictly greater than LOCK_STALE_MS — the waiter always gets a turn at reclaiming a stale lock', () => {
+  expect(LOCK_ACQUIRE_TIMEOUT_MS).toBeGreaterThan(LOCK_STALE_MS)
+})
+
+// ---------------------------------------------------------------------------
+// R2-regression bound (round-3 review): the fix that let a known-free retry bypass the deadline
+// check (so a stale reclaim landing right at the deadline isn't discarded, see R2 above) has to
+// stay BOUNDED — a waiter that keeps landing on `staleReclaimed`/`lockVanished` on every single
+// iteration must not spin past `LOCK_ACQUIRE_TIMEOUT_MS` forever. `__setTestOnlyForceLockVanished`
+// makes every contention iteration report "known free" without touching the real lock file (which
+// this test holds open and never releases, so `open('wx')` genuinely keeps failing EEXIST) —
+// reproducing sustained "known-free-but-still-contended" pressure deterministically, instead of
+// needing to win a real race against another process. `__setTestOnlyAcquireTimeoutMs` shortens the
+// bound so this doesn't take the real ~70s.
+// ---------------------------------------------------------------------------
+
+test('a waiter that keeps seeing the lock as free-but-uncontested is still bounded — it throws PreferencesLockTimeoutError instead of spinning forever', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  const lockPath = `${primary}.lock`
+
+  // A REAL lock file, held forever (never released) — every `open(lockPath, 'wx')` inside
+  // `acquireFileLock` genuinely fails EEXIST for the rest of this test.
+  const handle = await open(lockPath, 'wx')
+  await handle.writeFile('some-other-process-holds-this-forever', 'utf-8')
+  await handle.close()
+
+  __setTestOnlyAcquireTimeoutMs(300)
+  __setTestOnlyForceLockVanished(true)
+  try {
+    const start = Date.now()
+    await expect(writePreferencesTo(primary, legacy, { installDismissed: true }))
+      .rejects.toBeInstanceOf(PreferencesLockTimeoutError)
+    const elapsed = Date.now() - start
+    // Bounded near the shortened 300ms deadline (plus at most one grace retry's worth of
+    // overhead), not spinning for seconds — a regression here would mean the R2 fix's "retry
+    // without waiting" path became unbounded again.
+    expect(elapsed).toBeLessThan(2_000)
+  } finally {
+    __setTestOnlyForceLockVanished(false)
+    __setTestOnlyAcquireTimeoutMs(null)
+  }
+}, 3_000) // explicit timeout: bun's internal 5s default marks a hang FAILED but doesn't cancel
+// the still-spinning acquireFileLock promise, so `bun test` never exits on its own if this bound
+// ever regresses — it has to be killed externally (as verified in round 4). A short explicit
+// timeout, well above the shortened 300ms bound this test actually uses but well below the
+// default, turns a future regression into a fast, legible red instead of a hung pipeline.
+
 test('a brand-new connection with no token is still stored token-less', async () => {
   const { primary, legacy } = await tmpPaths2()
   await writePreferencesTo(primary, legacy, prefsWithTokens())
@@ -359,4 +562,112 @@ test('a brand-new connection with no token is still stored token-less', async ()
   const after = await readPreferencesFrom(primary, legacy)
   expect(after.team!.connections).toHaveLength(3)
   expect(after.team!.connections[2]!.token).toBe('')
+})
+
+// ---------------------------------------------------------------------------
+// Stale-lock reclaim (Task 5) — a process killed mid-write (SIGKILL, OOM, crash) leaves its
+// `<primary>.lock` file behind forever; without a staleness bound every later write on this
+// machine would fail/hang permanently, since nothing else ever deletes it. `acquireFileLock`
+// treats a lock file older than `LOCK_STALE_MS` (60s — see the comment on the constant in
+// preferences.ts) as abandoned and reclaims it. This test plants exactly that: a lock file with
+// an mtime far in the past, held by no real process.
+// ---------------------------------------------------------------------------
+
+test('a stale lock file (planted, mtime far in the past) is reclaimed — a write succeeds instead of hanging', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  await writePreferencesTo(primary, legacy, { team: { schema: 2, mode: 'member', connections: [] } })
+
+  // Plant an abandoned lock file next to primary, backdated well past LOCK_STALE_MS (60s). Its
+  // content deliberately does NOT match any real owner token — that's fine, `acquireFileLock`
+  // only checks content on RELEASE (to avoid deleting someone else's lock), never as a condition
+  // for reclaiming a stale one.
+  const lockPath = `${primary}.lock`
+  const handle = await open(lockPath, 'w')
+  await handle.close()
+  // Comfortably past LOCK_STALE_MS — 5x, not just barely over it, so the comparison can never
+  // flake on the few ms this test itself takes to reach the stat() call, and never silently goes
+  // stale itself if the threshold is retuned again later.
+  const longAgo = new Date(Date.now() - 5 * LOCK_STALE_MS)
+  await utimes(lockPath, longAgo, longAgo)
+
+  const start = Date.now()
+  const team = (await readPreferencesFrom(primary, legacy)).team!
+  team.connections.push({ id: 'c_deadbeef0001', endpoint: 'http://stale:1', org: 'default', user: '', token: '', deniedRepos: [] })
+  await writePreferencesTo(primary, legacy, { team })
+  const elapsed = Date.now() - start
+
+  // Reclaimed almost immediately — nowhere near LOCK_ACQUIRE_TIMEOUT_MS (70s), which is the
+  // bound for a LIVE lock that never frees, not a stale one. A missing staleness check would
+  // block here until that full timeout elapsed and then throw `PreferencesLockTimeoutError`.
+  expect(elapsed).toBeLessThan(2_000)
+
+  const after = await readPreferencesFrom(primary, legacy)
+  expect(after.team!.connections.map(c => c.id)).toContain('c_deadbeef0001')
+  // The reclaim left a fresh lock behind only transiently — writePreferencesTo released it.
+  const stillLocked = await Bun.file(lockPath).exists()
+  expect(stillLocked).toBe(false)
+})
+
+// ---------------------------------------------------------------------------
+// C1 — the PUT /api/preferences guard against an empty-connections wipe.
+//
+// Losing a connection loses its token, which is stored NOWHERE else on the machine and cannot be
+// recovered without re-minting it on the central. The web Disconnect button used to PUT a full flat
+// solo `team` object (an own `connections: []` key), which mergeTeamPayload honours as an explicit
+// replacement of the whole array — so disconnecting from one central deleted them all.
+// ---------------------------------------------------------------------------
+
+import { guardTeamConnectionsWipe } from './preferences'
+import type { TeamConfig } from '@agentistics/core'
+
+function guardConn(id: string, endpoint: string) {
+  return { id, endpoint, org: 'default', user: 'lucas', token: `tok-${id}`, deniedRepos: [] }
+}
+
+test('guardTeamConnectionsWipe strips an empty connections key while connections are stored', () => {
+  const payload = { schema: 2, mode: 'solo', connections: [], endpoint: '', org: 'default', user: '', token: '' } as unknown as TeamConfig
+  const out = guardTeamConnectionsWipe(payload, 3)
+  expect(out.guarded).toBe(true)
+  expect(Object.prototype.hasOwnProperty.call(out.team, 'connections')).toBe(false)
+  // The rest of the payload is untouched, and the input is never mutated.
+  expect(out.team.mode).toBe('solo')
+  expect(payload.connections).toEqual([])
+})
+
+test('guardTeamConnectionsWipe leaves a genuine payload alone: a non-empty array, no array at all, or nothing stored', () => {
+  const withArray = { schema: 2, mode: 'member', connections: [guardConn('c_0123456789ab', 'http://a:48080')] } as unknown as TeamConfig
+  expect(guardTeamConnectionsWipe(withArray, 2).guarded).toBe(false)
+  expect(guardTeamConnectionsWipe(withArray, 2).team).toBe(withArray)
+
+  const noArray = { schema: 2, mode: 'member', endpoint: 'http://a:48080' } as unknown as TeamConfig
+  expect(guardTeamConnectionsWipe(noArray, 2).guarded).toBe(false)
+  expect(guardTeamConnectionsWipe(noArray, 2).team).toBe(noArray)
+
+  // Nothing stored → an empty array is not a wipe; a fresh solo machine must stay writable.
+  const empty = { schema: 2, mode: 'solo', connections: [] } as unknown as TeamConfig
+  expect(guardTeamConnectionsWipe(empty, 0).guarded).toBe(false)
+  expect(guardTeamConnectionsWipe(empty, 0).team).toBe(empty)
+})
+
+test('C1 end to end: the guarded payload written through writePreferencesTo preserves every connection and token', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  const stored = [guardConn('c_0123456789ab', 'http://a:48080'), guardConn('c_ba9876543210', 'http://b:48080'), guardConn('c_ccccdddd0000', 'http://c:48080')]
+  await writeFile(primary, JSON.stringify({ team: { schema: 2, mode: 'member', connections: stored } }))
+
+  // Exactly what the old Disconnect button PUT: defaultTeam() plus a kept interval.
+  const soloPayload = { schema: 2, mode: 'solo', connections: [], endpoint: '', org: 'default', user: '', token: '', pushIntervalSec: 60 } as unknown as TeamConfig
+  const guarded = guardTeamConnectionsWipe(soloPayload, stored.length)
+  expect(guarded.guarded).toBe(true)
+  await writePreferencesTo(primary, legacy, { team: guarded.team })
+
+  const after = await readPreferencesFrom(primary, legacy)
+  expect(after.team!.connections.map(c => c.id)).toEqual(stored.map(c => c.id))
+  expect(after.team!.connections.map(c => c.token)).toEqual(stored.map(c => c.token))
+  expect(after.team!.mode).toBe('member')
+
+  // The unguarded payload is what the damage looks like — asserted so the guard's necessity is
+  // documented by a failing-without-it fact, not by a comment.
+  await writePreferencesTo(primary, legacy, { team: soloPayload })
+  const wiped = await readPreferencesFrom(primary, legacy)
+  expect(wiped.team!.connections).toEqual([])
 })

@@ -7,7 +7,7 @@ import type { LiveProcess } from '@agentistics/core'
 import { getRates } from './rates'
 import { getVersionInfo, startVersionRecheck } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
-import { readPreferences, writePreferences, redactPreferences, type Preferences } from './preferences'
+import { readPreferences, writePreferences, redactPreferences, guardTeamConnectionsWipe, PreferencesLockTimeoutError, type Preferences } from './preferences'
 import {
   readStoredNotifications, addStoredNotification, markStoredNotificationsRead,
   dismissStoredNotification, clearStoredNotifications, localViewer, type NotificationInput,
@@ -101,6 +101,11 @@ void (async () => {
   // also persist the consolidated per-session store as a side effect; 'off' just warms the cache.
   buildApiResponse().catch(err => console.warn('[startup] cache warm-up failed:', String(err)))
 })()
+
+// Once-per-install move of the legacy single-connection team state files into the
+// per-connection layout (see team-migrate.ts). Never call this from readPreferencesFrom.
+await import('./team-migrate').then(m => m.migrateTeamStateOnce()).catch(err =>
+  console.warn('[team-migrate] state migration failed (will retry next boot):', err instanceof Error ? err.message : String(err)))
 
 void setupFileWatcher()
 if (TEAM_CENTRAL) {
@@ -630,7 +635,22 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
 
     if (url.pathname === '/api/preferences' && req.method === 'PUT') {
       try {
-        const body = await req.json() as Preferences
+        let body = await req.json() as Preferences
+        // C1: never let a PUT wipe `connections[]`. An old cached tab still PUTs a full flat solo
+        // `team` object to disconnect (the current UI uses DELETE /api/team/connections/:id), and
+        // that payload carries `connections: []` — which mergeTeamPayload honours as an explicit
+        // replacement, deleting every OTHER central and its token in the process.
+        if (body.team !== undefined) {
+          const storedCount = (await readPreferences()).team?.connections?.length ?? 0
+          const guard = guardTeamConnectionsWipe(body.team, storedCount)
+          if (guard.guarded) {
+            console.warn(
+              `[preferences] PUT carried an empty connections array while ${storedCount} connection(s) are stored — ` +
+              'preserving them. Use DELETE /api/team/connections/:id to disconnect one.',
+            )
+            body = { ...body, team: guard.team }
+          }
+        }
         await writePreferences(body)
         // On an archive-mode change, refresh the cache and immediately persist:
         // 'full' also mirrors raw files; any non-off mode warms a build that
@@ -659,6 +679,15 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
+        // R4: a lock timeout is transient contention, not a bad request — a 400/500 tells the
+        // caller "this will never work", a 503+Retry-After tells it "try again shortly", which is
+        // the true state of the world (another process is mid-write).
+        if (err instanceof PreferencesLockTimeoutError) {
+          return new Response(JSON.stringify({ error: 'another process is writing preferences — retry shortly' }), {
+            status: 503,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '2' },
+          })
+        }
         const safe = safeError(err, { verbose: PROFILE === 'local' })
         console.error(safe.logLine)
         return new Response(JSON.stringify(safe.body), {
@@ -1368,34 +1397,56 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       return new Response(res.body, { status: res.status, headers })
     }
 
-    // GET /api/team/status — member-side live connection status for the status pill.
-    // Reports this machine's last successful contact with the central + current error state.
+    // GET /api/team/status — member-side connection status for the settings panel + status
+    // pill, one entry per connection (see team-connections.ts). Reads cached values only — the
+    // uploader's own push cycle measures latency, so this route never blocks on the network.
     if (url.pathname === '/api/team/status' && req.method === 'GET') {
-      const [{ readPreferences }, { getUploaderStatus }] = await Promise.all([
-        import('./preferences'),
-        import('./team-uploader'),
-      ])
-      const team = (await readPreferences()).team
-      const st = getUploaderStatus()
-      // Best-effort round-trip latency to the central (member mode only) — a quick timed ping of
-      // the public policy endpoint. null when solo, offline, or the request fails.
-      let latencyMs: number | null = null
-      if (team?.mode === 'member' && team.endpoint) {
-        try {
-          const base = team.endpoint.replace(/\/+$/, '')
-          const t0 = Date.now()
-          const r = await fetch(`${base}/api/team/policy`, { signal: AbortSignal.timeout(4000) })
-          if (r.ok) latencyMs = Date.now() - t0
-        } catch { /* offline — leave null */ }
-      }
-      return new Response(JSON.stringify({
-        mode: team?.mode ?? 'solo',
-        user: team?.user ?? '',
-        endpoint: team?.endpoint ?? '',
-        lastSuccessAt: st.lastSuccessAt,
-        errKind: st.errKind,
-        latencyMs,
-      }), { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+      const { handleTeamStatus } = await import('./team-connections')
+      const res = await handleTeamStatus(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // Connection lifecycle — add/rotate, rename, delete, probe. See team-connections.ts for the
+    // uniqueness rules (known endpoint updates in place; a token owned by another connection is
+    // refused) and why DELETE calls the central's /api/team/leave before removing state.
+    if (url.pathname === '/api/team/connections' && req.method === 'POST') {
+      const { handleAddConnection } = await import('./team-connections')
+      const res = await handleAddConnection(req)
+      if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname.startsWith('/api/team/connections/') && req.method === 'PATCH') {
+      const id = url.pathname.slice('/api/team/connections/'.length)
+      const { handlePatchConnection } = await import('./team-connections')
+      const res = await handlePatchConnection(req, id)
+      if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname.startsWith('/api/team/connections/') && url.pathname.endsWith('/probe') && req.method === 'POST') {
+      const id = url.pathname.slice('/api/team/connections/'.length, -'/probe'.length)
+      const { handleProbeConnection } = await import('./team-connections')
+      const res = await handleProbeConnection(req, id)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname.startsWith('/api/team/connections/') && req.method === 'DELETE') {
+      const id = url.pathname.slice('/api/team/connections/'.length)
+      const { handleDeleteConnection } = await import('./team-connections')
+      const res = await handleDeleteConnection(req, id)
+      if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
     }
 
     // ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@
  */
 
 import { defaultTeam } from '@agentistics/core'
-import { readPreferencesOrExit, writePreferences, resolveArchiveMode, type ArchiveMode } from './preferences'
+import { readPreferences, readPreferencesOrExit, writePreferences, resolveArchiveMode, type ArchiveMode } from './preferences'
 import { enableAutostart } from './autostart'
 import { runCentral } from './cli-central'
 import { memberConnect } from './cli-member'
@@ -68,6 +68,23 @@ export async function runSetup(): Promise<number> {
   })
 
   if (mode === 'solo') {
+    // `agentop setup` is reachable on an ALREADY-configured machine (re-run manually, or the
+    // "Reconfigure mode" action in `agentop start`), and `writePreferences({ team: defaultTeam() })`
+    // is a `connections` key present in the payload — mergeTeamPayload treats that as an explicit
+    // REPLACEMENT of the whole array (spec §5.8), wiping every connection and denylist silently.
+    // Confirm first whenever there is something real to lose.
+    const existing = (await readPreferences()).team?.connections ?? []
+    if (existing.length > 0) {
+      const noun = existing.length === 1 ? 'central' : 'centrals'
+      const ok = await confirm(
+        `This machine is connected to ${existing.length} ${noun}. Switching to solo disconnects from all of them locally (their data on the central is untouched). Continue?`,
+        false,
+      )
+      if (!ok) {
+        process.stdout.write(`\n  ${D}left unchanged.${R}\n`)
+        return 0
+      }
+    }
     await writePreferences({ team: defaultTeam() })
     await ensureArchiveModeChosen()
     process.stdout.write(`\n  ${D}solo mode set — you're all done.${R}\n`)

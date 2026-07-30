@@ -1,5 +1,5 @@
 import { join, dirname } from 'path'
-import { mkdir, rename, writeFile } from 'node:fs/promises'
+import { mkdir, rename, writeFile, open, unlink, stat, readFile, utimes } from 'node:fs/promises'
 import { AGENTISTICS_DATA_DIR, CLAUDE_DIR } from './config'
 import type { TeamConfig } from '@agentistics/core'
 import { migrateTeamConfig } from '@agentistics/core'
@@ -119,14 +119,32 @@ export async function readPreferencesFrom(primary: string, legacy: string): Prom
   // independently and could interleave/clobber each other. Safe against reentrancy —
   // readPreferencesFrom is never called from inside an enqueueWrite callback; see there.
   return enqueueWrite(async () => {
-    // Re-check under the chain: primary may have been created (by our own read above racing
-    // another queued write, or by that write itself) since we decided to migrate.
-    const p2 = await readJsonPrefs(primary)
-    if (p2) return withMigratedTeam(p2)
-    // The legacy dir may be read-only (Docker), so a failed migration write is expected and
-    // ignored — the caller still gets the migrated-in-memory result.
-    try { await writeFileAtomic(primary, JSON.stringify(prefs, null, 2)) } catch { /* read-only legacy dir */ }
-    return prefs
+    // This whole branch is a BEST-EFFORT opportunistic persist of the migrated shape, so the
+    // NEXT read hits the writable primary directly — it is never the caller's only chance to get
+    // a usable result (that's `prefs`, already computed above). Acquiring the cross-process lock
+    // can fail for reasons that have nothing to do with contention (EACCES/EROFS on a read-only
+    // data dir, `PreferencesLockTimeoutError` under sustained contention) and none of those may
+    // turn a READ into a throw — `readPreferencesOrExit` would exit the whole CLI over what was
+    // always a skippable write. See B-4.
+    let release: (() => Promise<void>) | null = null
+    try {
+      release = await acquireFileLock(primary)
+    } catch {
+      return prefs
+    }
+    try {
+      // Re-check under the chain (and now the cross-process lock): primary may have been
+      // created — by our own read above racing another queued write, by that write itself, or
+      // by a SEPARATE PROCESS that migrated first — since we decided to migrate.
+      const p2 = await readJsonPrefs(primary)
+      if (p2) return withMigratedTeam(p2)
+      // The legacy dir may be read-only (Docker), so a failed migration write is expected and
+      // ignored — the caller still gets the migrated-in-memory result.
+      try { await writeFileAtomic(primary, JSON.stringify(prefs, null, 2)) } catch { /* read-only legacy dir */ }
+      return prefs
+    } finally {
+      await release()
+    }
   })
 }
 
@@ -176,18 +194,286 @@ async function writeFileAtomic(path: string, text: string): Promise<void> {
   await rename(tmp, path)
 }
 
+// ---------------------------------------------------------------------------
+// Cross-process lock — `enqueueWrite` only serializes writes WITHIN this process. Bun serves
+// dashboard requests concurrently in the long-running server process while `cli-member.ts` (and
+// any other CLI subcommand that falls back to a direct write — see cli-member.ts's docstring)
+// writes the SAME preferences.json from a SEPARATE `bun` process with its own, independent
+// `_writeChain`. Two processes racing a read-merge-write on the same file is the exact "two
+// connections read [A,B,C], one writes [B,C], the other writes [A,C] from a stale read" hazard
+// `updateTeamConfig` closes WITHIN a process — an O_EXCL lock FILE closes it ACROSS processes,
+// since the filesystem is the only thing both processes can see.
+// ---------------------------------------------------------------------------
+
+/**
+ * A lock older than this is presumed abandoned by a crashed/killed process holding it, and is
+ * reclaimed rather than blocking every future write on this machine forever.
+ *
+ * 60s, not a bound on the write itself: the critical section runs `await`s inside the SAME
+ * single-threaded event loop as `buildApiResponse` (thousands of JSONL files, git subprocesses)
+ * in the long-running server process, so the loop can stall between the lock's read and its
+ * rename for a lot longer than the syscalls alone take — a big-history machine, a CPU-quota'd
+ * container, or a WSL2 `/mnt` path are all within a couple times of a much smaller bound. Getting
+ * this wrong is not symmetric: too short and a legitimately slow holder gets its lock stolen out
+ * from under it (see B-2's owner check for why that's now merely wasteful instead of unsafe);
+ * too long only delays how quickly a genuinely crashed holder's lock is reclaimed. The mtime
+ * heartbeat below (`LOCK_HEARTBEAT_MS`) is the holder's own defense — it refreshes well inside
+ * this window so a slow-but-alive holder is never mistaken for a dead one.
+ */
+// Exported so tests can plant a lock file backdated relative to the REAL threshold instead of a
+// hardcoded guess that silently goes stale itself the next time this constant is tuned (see
+// preferences.test.ts's stale-lock-reclaim test, which broke exactly this way when this moved
+// 10s → 60s during review — a hardcoded "60s ago" test input became "not old enough" overnight).
+export const LOCK_STALE_MS = 60_000
+/** How often a lock HOLDER refreshes the lock file's mtime while inside the critical section, so
+ *  a legitimately slow write defends itself against being judged stale by a contending process.
+ *  Comfortably below `LOCK_STALE_MS` so at least a few refreshes land before staleness could ever
+ *  apply, even if one tick is itself delayed by a slow event loop. */
+const LOCK_HEARTBEAT_MS = 15_000
+/**
+ * Total time a WAITER spends trying to acquire before giving up and throwing
+ * `PreferencesLockTimeoutError`. This is intentionally `LOCK_STALE_MS` PLUS a margin — waiting
+ * for anything less than `LOCK_STALE_MS` would let a waiter give up before a fresh-looking lock
+ * could ever be judged stale, making the reclaim path unreachable for ordinary contention (the
+ * bug the code review caught: the old bound was 5s against a 10s staleness window). The margin
+ * covers the reclaim-and-retry round trip itself, not a second full staleness window.
+ */
+export const LOCK_ACQUIRE_TIMEOUT_MS = LOCK_STALE_MS + 10_000
+const LOCK_POLL_MS = 100
+
+function lockPathFor(primary: string): string {
+  return `${primary}.lock`
+}
+
+/** Thrown when `acquireFileLock` cannot get the lock within `LOCK_ACQUIRE_TIMEOUT_MS`. A caller
+ *  that reaches this must NOT proceed unlocked — that was the B-1 finding: doing so silently
+ *  drops whichever side loses the resulting race, including a connection's token that exists
+ *  nowhere else. Surfacing this as a typed error lets a CLI command print an actionable message
+ *  ("another agentop process is writing preferences, retry") and exit non-zero instead. */
+export class PreferencesLockTimeoutError extends Error {
+  constructor(lockPath: string) {
+    super(`timed out waiting for the preferences write lock at ${lockPath} — another agentop process appears to be writing preferences`)
+    this.name = 'PreferencesLockTimeoutError'
+  }
+}
+
+/**
+ * TEST-ONLY seam (R5 in the round-2 review): `preferences.test.ts` is the only file allowed to
+ * call this. It exists because the alternative — proving the cross-process test actually catches
+ * a missing lock — was previously done by hand-editing `acquireFileLock` to a no-op with `sed`,
+ * running the suite, and reverting. That is not a repeatable regression guard, and per the
+ * review, "unproven on this hardware" is exactly the state a probabilistic guard can rot in
+ * silently. With this flag, `preferences.test.ts` has a committed, permanent control test that
+ * disables the lock through a real code path (not a source edit) and asserts the SAME race that
+ * the main guard test protects against reliably loses or corrupts data — proving the guard is not
+ * vacuous, on every CI run, not just the one time a reviewer's finding forced a manual check.
+ * Never read by any production code path; defaults to (and must always default to) `false`.
+ */
+let _testOnlyDisableLock = false
+export function __setTestOnlyDisableLock(disabled: boolean): void {
+  _testOnlyDisableLock = disabled
+}
+
+/**
+ * TEST-ONLY seam (round-3 review, the R2-regression bound test): forces every contention
+ * iteration inside `acquireFileLock` to treat the lock as "known free right now"
+ * (`lockVanished = true`) WITHOUT actually checking or touching the file on disk — simulating a
+ * waiter that keeps landing on that signal on every single iteration, which is exactly the
+ * scenario that could spin past `LOCK_ACQUIRE_TIMEOUT_MS` before the round-3 fix bounded it to
+ * one grace retry past the deadline. Combined with a REAL, permanently-held lock file (so `open`
+ * genuinely keeps failing `EEXIST`) this reproduces sustained "known-free-but-still-contended"
+ * pressure deterministically, instead of needing an adversarial second process racing real
+ * timing. Never read by any production code path; defaults to (and must always default to)
+ * `false`. */
+let _testOnlyForceLockVanished = false
+export function __setTestOnlyForceLockVanished(force: boolean): void {
+  _testOnlyForceLockVanished = force
+}
+
+/**
+ * TEST-ONLY seam (round-3 review): overrides `LOCK_ACQUIRE_TIMEOUT_MS` for a single test run, so
+ * the bound test above does not have to wait out the real ~70s timeout. `null` (the default)
+ * means "use the real constant" — never read by any production code path. */
+let _testOnlyAcquireTimeoutMsOverride: number | null = null
+export function __setTestOnlyAcquireTimeoutMs(ms: number | null): void {
+  _testOnlyAcquireTimeoutMsOverride = ms
+}
+
+/**
+ * Acquire an O_EXCL lock file next to `primary`. `open(path, 'wx')` fails with EEXIST if the
+ * file already exists — the same primitive `mkdir -p` style tools use for a filesystem mutex,
+ * portable across the platforms this ships on (no `flock` dependency).
+ *
+ * The lock file's CONTENT is an owner token unique to this acquisition (pid + timestamp + random
+ * suffix), not empty — B-2's fix. Without an owner, a reclaim-then-steal race is possible: A
+ * holds the lock legitimately but slowly, B judges it stale and unlinks it, B creates its own
+ * lock, A finishes its (legitimate) critical section and unconditionally unlinks — deleting B's
+ * lock, not its own — and C can then acquire while B is still inside. `release()` here only
+ * unlinks when the file on disk still holds ITS OWN owner token, so a holder can only ever delete
+ * a lock it still owns.
+ *
+ * Returns a release function; the caller MUST call it in a `finally` (see
+ * `writePreferencesTo`/`updateTeamConfigAt` below) or a crash mid-critical-section leaves a lock
+ * for the NEXT writer to reclaim once it goes stale — never a permanent deadlock, but a real wait
+ * for `LOCK_STALE_MS`.
+ */
+async function acquireFileLock(primary: string): Promise<() => Promise<void>> {
+  if (_testOnlyDisableLock) return async () => {}
+  const lockPath = lockPathFor(primary)
+  await mkdir(dirname(lockPath), { recursive: true })
+  const owner = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  const deadline = Date.now() + (_testOnlyAcquireTimeoutMsOverride ?? LOCK_ACQUIRE_TIMEOUT_MS)
+  // R2-regression guard: a waiter that keeps landing on `staleReclaimed`/`lockVanished` on EVERY
+  // iteration (plausible under sustained multi-process contention — repeatedly racing another
+  // process's own create/release cycle) must still be bounded. This is spent EXACTLY ONCE: the
+  // first time the deadline has already passed AND the lock looks free right now, this call gets
+  // one final zero-delay retry instead of discarding a lock it may be entitled to (the original
+  // R2 finding) — but if that retry doesn't land (still contended), every SUBSEQUENT free-looking
+  // iteration past the deadline throws immediately rather than looping forever.
+  let usedFinalFreeRetryPastDeadline = false
+  while (true) {
+    let created = false
+    try {
+      const handle = await open(lockPath, 'wx')
+      created = true // R1: the lock file now exists — any failure from here on must unlink it,
+      // or a transient ENOSPC/EIO on the write/close leaves a lock nobody holds and no writer on
+      // this machine can proceed again until LOCK_STALE_MS (60s) elapses.
+      try {
+        await handle.writeFile(owner, 'utf-8')
+        await handle.close()
+      } catch (writeErr) {
+        // Close the handle before unlinking: `writeFile` throwing leaves the fd OPEN, and this
+        // path is retried on every contended write, so a repeating ENOSPC/EIO leaks one descriptor
+        // per failure until the process hits its fd limit. `close()` on an already-closed handle
+        // throws, hence the inner try — the write error is the one worth propagating.
+        try { await handle.close() } catch { /* already closed, or closing failed too */ }
+        try { await unlink(lockPath) } catch { /* best-effort — see the outer catch below too */ }
+        throw writeErr
+      }
+      // Defend this lock against a contending process's staleness check while we're still
+      // legitimately inside the critical section (B-2's second half) — a `setInterval` refresh
+      // of the mtime, unref'd so it can never keep this process alive on its own. R3: re-reads
+      // the file's OWNER before each refresh (not just its own remembered `owner` var) and stops
+      // itself the moment it no longer matches — otherwise a heartbeat that fired blind would
+      // keep refreshing WHOEVER'S lock now occupies this path after a stale-reclaim stole it out
+      // from under this holder, making that stolen lock look perpetually fresh to everyone else.
+      const heartbeat = setInterval(() => {
+        void (async () => {
+          try {
+            const current = await readFile(lockPath, 'utf-8')
+            if (current !== owner) {
+              clearInterval(heartbeat)
+              return
+            }
+            const now = new Date()
+            await utimes(lockPath, now, now)
+          } catch {
+            // The lock is gone, unreadable, or the filesystem is misbehaving — nothing this
+            // timer can fix; it will simply try again next tick (or the section will end and
+            // clear it via `releaseFileLock`).
+          }
+        })()
+      }, LOCK_HEARTBEAT_MS)
+      heartbeat.unref?.()
+      return () => releaseFileLock(lockPath, owner, heartbeat)
+    } catch (err) {
+      if (created) throw err // R1: NOT an EEXIST contention case — a real failure after we
+      // already created the file, already unlinked above; propagate as-is, never re-enter the
+      // contention/retry loop with a lock we just gave up on.
+      if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err
+      // Someone else holds it (or held it and crashed) — decide whether we have POSITIVE
+      // evidence the lock is free right now (staleReclaimed / lockVanished), which is the only
+      // case allowed to retry `open()` without waiting. Every other path — including a failed
+      // reclaim attempt (EPERM/EBUSY on Windows, EACCES/EROFS elsewhere) and a `stat` failure
+      // that is NOT "the file is gone" — must fall through to the shared timeout check and poll
+      // sleep below. B-3's finding: the previous version `continue`d straight from BOTH the
+      // reclaim-attempt catch and the stat catch, so a lock this process can see but cannot
+      // remove (or a permission error masquerading as "vanished") busy-spun at 100% CPU forever,
+      // never reaching either the deadline check or the sleep.
+      let staleReclaimed = false
+      let lockVanished = false
+      if (_testOnlyForceLockVanished) {
+        // TEST-ONLY: skip the real stat/unlink dance entirely and just claim "free right now" —
+        // see the seam's doc comment. The lock file on disk is untouched (still held by whatever
+        // actually created it), so the next `open()` genuinely fails EEXIST again, reproducing
+        // sustained known-free-but-still-contended pressure on every iteration.
+        lockVanished = true
+      } else {
+        try {
+          const st = await stat(lockPath)
+          if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+            try {
+              await unlink(lockPath)
+              staleReclaimed = true
+            } catch {
+              // Could not remove it — another reclaimer may have won the race, or the filesystem
+              // refused (EPERM/EBUSY/EACCES/EROFS). Either way this is NOT "known free now"; fall
+              // through to the timeout+sleep tail like ordinary contention.
+            }
+          }
+        } catch (statErr) {
+          if ((statErr as NodeJS.ErrnoException)?.code === 'ENOENT') lockVanished = true
+          // Any OTHER stat failure (EACCES/EIO/...) is not proof the lock vanished — treated as
+          // ordinary contention below, never as a reason to retry immediately.
+        }
+      }
+      // R2/round-3: a stale reclaim (or a lock that simply vanished) that lands AT OR AFTER the
+      // deadline just freed the lock this call is entitled to take — throwing immediately would
+      // discard a lock we are about to be able to acquire, for no reason but bad luck in when the
+      // clock was read. But that "known-free retry bypasses the deadline" exception must itself
+      // be bounded, or a waiter that keeps landing on ENOENT/a successful reclaim every single
+      // iteration (repeatedly racing another process's create/release cycle) spins past
+      // LOCK_ACQUIRE_TIMEOUT_MS forever — silently reintroducing the unbounded hang R4 exists to
+      // prevent, and worse than the bug it replaced (that one at least threw). So: past the
+      // deadline, a known-free signal is honored EXACTLY ONCE per `acquireFileLock` call (one
+      // more zero-delay `open()` attempt); if the lock is still contended on the very next
+      // iteration, it throws instead of granting another free pass.
+      if (staleReclaimed || lockVanished) {
+        if (Date.now() <= deadline) continue // still within budget — always retry, no cost to bound
+        if (!usedFinalFreeRetryPastDeadline) {
+          usedFinalFreeRetryPastDeadline = true
+          continue // the ONE grace retry past the deadline
+        }
+        // Already spent the grace retry AND still seeing the lock as free-but-uncontested is a
+        // contradiction in practice (the immediately-preceding `open()` should have succeeded) —
+        // but if it somehow recurs, this is exactly the "keeps landing on known-free" case R2's
+        // regression targets, so fall through to the throw below rather than looping again.
+      }
+      if (Date.now() > deadline) throw new PreferencesLockTimeoutError(lockPath)
+      await new Promise(resolve => setTimeout(resolve, LOCK_POLL_MS))
+    }
+  }
+}
+
+/** Release a lock this process owns: only unlinks the file if its content still matches the
+ *  owner token minted at acquisition (see the doc comment on `acquireFileLock`) — otherwise this
+ *  is no longer OUR lock (we were reclaimed as stale while finishing up) and deleting it would
+ *  steal mutual exclusion from whoever holds it now. Always clears the heartbeat first so it can
+ *  never fire after release believes the section is over. */
+async function releaseFileLock(lockPath: string, owner: string, heartbeat: ReturnType<typeof setInterval>): Promise<void> {
+  clearInterval(heartbeat)
+  try {
+    const content = await readFile(lockPath, 'utf-8')
+    if (content === owner) await unlink(lockPath)
+  } catch {
+    // Already gone, or unreadable — nothing more this process can safely do.
+  }
+}
+
 /** Single write chain for the WHOLE module: every enqueued function awaits the previous one,
  *  so a read-merge-write can never interleave with another queued write and lose the
- *  connections array. Both `writePreferencesTo` and `readPreferencesFrom`'s legacy-migration
- *  branch enqueue onto this SAME chain, so the two can never interleave/clobber each other
- *  either.
+ *  connections array. `writePreferencesTo`, `readPreferencesFrom`'s legacy-migration branch, and
+ *  `updateTeamConfig` all enqueue onto this SAME chain, so none of the three can interleave or
+ *  clobber another.
  *
- *  Deadlock-freedom: `enqueueWrite` is called only from `writePreferencesTo` and from
- *  `readPreferencesFrom` (never from inside a callback already running as part of this chain).
- *  The callbacks queued here call `readEffective` (a plain, non-enqueuing read) and
- *  `writeFileAtomic` (plain fs I/O) — neither calls back into `enqueueWrite`. So no queued
- *  callback ever awaits a promise that is itself waiting on that same callback to finish; the
- *  chain is a straight FIFO with no cycle. */
+ *  Deadlock-freedom: `enqueueWrite` is called only from those three call sites (never from inside
+ *  a callback already running as part of this chain). The callbacks queued here call
+ *  `readEffective` (a plain, non-enqueuing read) and `writeFileAtomic` (plain fs I/O) — neither
+ *  calls back into `enqueueWrite`. `updateTeamConfig`'s `mutate` callback is synchronous and pure
+ *  by contract (it must never itself call `readPreferences`/`writePreferences`/
+ *  `updateTeamConfig`), so it cannot reintroduce a cycle either. No queued callback ever awaits a
+ *  promise that is itself waiting on that same callback to finish; the chain is a straight FIFO
+ *  with no cycle. */
 let _writeChain: Promise<unknown> = Promise.resolve()
 
 function enqueueWrite<T>(fn: () => Promise<T>): Promise<T> {
@@ -241,18 +527,93 @@ function mergeTeamPayload(current: TeamConfig | undefined, incoming: TeamConfig)
   return migrateTeamConfig({ ...incoming, connections: stored })
 }
 
+/**
+ * C1 guard for `PUT /api/preferences` ONLY — a `team` payload whose `connections` array is present
+ * and EMPTY while connections are stored is almost certainly a stale client wiping the fleet, not
+ * an intentional disconnect-all. It strips the `connections` key so `mergeTeamPayload`'s legacy
+ * branch preserves the stored array (and therefore the tokens, which exist nowhere else on this
+ * machine and cannot be recovered without re-minting them on each central).
+ *
+ * Why it is NOT inside `mergeTeamPayload`, where `current` would be atomically available: two
+ * legitimate in-process callers write exactly this shape on purpose — `removeConnection` splicing
+ * the LAST connection, and `cli-setup`'s solo branch (which confirms first). Guarding at the merge
+ * would resurrect a connection the user just removed. The route is the untrusted boundary, so the
+ * route is where the guard belongs; a real disconnect goes through
+ * `DELETE /api/team/connections/:id`.
+ *
+ * Pure. Returns the payload unchanged (same object) when there is nothing to guard.
+ */
+export function guardTeamConnectionsWipe(
+  team: TeamConfig,
+  storedCount: number,
+): { team: TeamConfig; guarded: boolean } {
+  if (!Object.prototype.hasOwnProperty.call(team, 'connections')) return { team, guarded: false }
+  if ((team.connections?.length ?? 0) > 0 || storedCount === 0) return { team, guarded: false }
+  const { connections: _dropped, ...rest } = team
+  return { team: rest as TeamConfig, guarded: true }
+}
+
 /** Merge `prefs` over the current preferences and persist to `primary`. Exported for tests. */
 export async function writePreferencesTo(primary: string, legacy: string, prefs: Preferences): Promise<void> {
   return enqueueWrite(async () => {
-    const { prefs: current } = await readEffective(primary, legacy)
-    const merged = { ...current, ...prefs }
-    if (prefs.team) merged.team = mergeTeamPayload(current.team, prefs.team)
-    await writeFileAtomic(primary, JSON.stringify(merged, null, 2))
+    const release = await acquireFileLock(primary)
+    try {
+      const { prefs: current } = await readEffective(primary, legacy)
+      const merged = { ...current, ...prefs }
+      if (prefs.team) merged.team = mergeTeamPayload(current.team, prefs.team)
+      await writeFileAtomic(primary, JSON.stringify(merged, null, 2))
+    } finally {
+      await release()
+    }
   })
 }
 
 export async function writePreferences(prefs: Preferences): Promise<void> {
   return writePreferencesTo(PREFERENCES_FILE, LEGACY_PREFERENCES_FILE, prefs)
+}
+
+/**
+ * Atomically read-modify-write JUST the team config, running `mutate` INSIDE the single write
+ * chain (`enqueueWrite`) instead of outside it.
+ *
+ * Why this exists: a plain `readPreferences()` followed by `writePreferences({ team })` reads the
+ * current `connections[]` OUTSIDE the chain, then writes a value computed from that stale read.
+ * With two callers racing (e.g. two connections both crossing their auth-error threshold in the
+ * same window, which the concurrency cap makes routine, not theoretical) both read `[A, B, C]`;
+ * A's removal writes `[B, C]`, then B's (computed from the SAME stale `[A, B, C]`) writes
+ * `[A, C]` — A is back in preferences with its state files already unlinked, B is gone. A
+ * mutator run inside the chain instead reads the CURRENT array at the moment it is its turn to
+ * write, so the second caller sees the first caller's result and can never resurrect it.
+ *
+ * `mutate` receives the current (already-migrated) team config and returns the new one, or
+ * `undefined` to signal "nothing to do" — no write happens in that case, so a caller like
+ * `removeConnection` can stay idempotent without an extra disk write on a repeat call.
+ */
+export type TeamConfigMutator = (current: TeamConfig) => TeamConfig | undefined
+
+/** Path-parameterized implementation — exported for tests (mirrors `writePreferencesTo`'s split
+ *  from `writePreferences`), so the atomicity `updateTeamConfig` provides can be exercised
+ *  against real tmp files and the REAL `enqueueWrite` chain, without ever touching the
+ *  developer's actual `~/.agentistics/preferences.json`. */
+export async function updateTeamConfigAt(primary: string, legacy: string, mutate: TeamConfigMutator): Promise<TeamConfig> {
+  return enqueueWrite(async () => {
+    const release = await acquireFileLock(primary)
+    try {
+      const { prefs: current } = await readEffective(primary, legacy)
+      const currentTeam = current.team ?? migrateTeamConfig(undefined)
+      const nextTeam = mutate(currentTeam)
+      if (nextTeam === undefined) return currentTeam
+      const merged = { ...current, team: mergeTeamPayload(current.team, nextTeam) }
+      await writeFileAtomic(primary, JSON.stringify(merged, null, 2))
+      return merged.team as TeamConfig
+    } finally {
+      await release()
+    }
+  })
+}
+
+export async function updateTeamConfig(mutate: TeamConfigMutator): Promise<TeamConfig> {
+  return updateTeamConfigAt(PREFERENCES_FILE, LEGACY_PREFERENCES_FILE, mutate)
 }
 
 /**

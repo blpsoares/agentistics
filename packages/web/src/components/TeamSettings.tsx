@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Loader2, CheckCircle, XCircle, Users, User, Server, LogOut } from 'lucide-react'
 import { TeamMembers } from './TeamMembers'
-import { PUSH_INTERVAL, type TeamConfig, type MemberPresence, unpackConnectToken, defaultTeam } from '@agentistics/core'
+import { PUSH_INTERVAL, type TeamConfig, type TeamConnection, type MemberPresence, unpackConnectToken, defaultTeam } from '@agentistics/core'
 import { pushNotification } from '../lib/notifications'
 import { MemberConnectionStatus } from './MemberConnectionStatus'
+import { findPanelConnection } from '../lib/teamConnections'
 
 // Types
 
@@ -480,17 +481,40 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
       })
       // Store the endpoint WITHOUT a trailing slash — otherwise URL builds produce `//api/...`
       // which misses the central's exact-match routes (pushes hit static, WS won't upgrade).
-      const teamWithIdentity: typeof team = { ...team, mode: 'member', user: resolvedUser, org: resolvedOrg, endpoint: (team.endpoint ?? '').replace(/\/+$/, '') }
+      const endpoint = (team.endpoint ?? '').replace(/\/+$/, '')
 
-      // (b) Persist preferences with the central-resolved identity
-      const putRes = await fetch('/api/preferences', {
-        method: 'PUT',
+      // (b) Persist through POST /api/team/connections — the connection route, NOT a whole-`team`
+      // PUT. The old code PUT `{ ...team }`, and `team` is the array as it stood when this page
+      // rendered: with a tab left open while `agentop member connect` ran in a terminal, Save
+      // silently deleted the connection added meanwhile (and its token, which is stored nowhere
+      // else). The route instead read-modify-writes ONE entry inside the preferences write chain:
+      // a known endpoint is updated in place (this is also the token-rotation path), an unknown one
+      // is appended, and it whoami-verifies before storing anything.
+      //
+      // KNOWN LIMITATION, deliberately not papered over here: editing the endpoint of an existing
+      // connection and saving is refused with 409 rather than moving it, because the unchanged
+      // token still belongs to the old entry (`decideConnectionUpsert`'s token-uniqueness rule).
+      // An explicit error beats what this did before the change — `migrateTeamConfig` ignores the
+      // legacy flat mirror whenever `connections` is non-empty, so the edit was a SILENT no-op.
+      // Moving a connection is remove-then-add; the per-connection UI (Plan 3) is where that
+      // belongs.
+      const postRes = await fetch('/api/team/connections', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ team: teamWithIdentity }),
+        body: JSON.stringify({ endpoint, token: team.token, org: resolvedOrg }),
       })
-      if (!putRes.ok) {
-        setSaveResult({ ok: false, error: `Save failed (${putRes.status})` })
+      const postData = (await postRes.json().catch(() => ({}))) as { ok?: boolean; error?: string }
+      if (!postRes.ok || postData.ok !== true) {
+        setSaveResult({ ok: false, error: postData.error ?? `Save failed (${postRes.status})` })
         return
+      }
+      // Local mirror only — the SERVER owns `connections[]` now, so re-read it instead of keeping
+      // the array this render started with (that staleness is the bug above). The token the user
+      // just typed stays in local state: `GET /api/preferences` redacts every token, and blanking
+      // the field here would break the read-only identity panel and re-open the form.
+      const teamWithIdentity: typeof team = {
+        ...team, mode: 'member', user: resolvedUser, org: resolvedOrg, endpoint,
+        connections: (await fetchStoredConnections()) ?? team.connections,
       }
       onChange(teamWithIdentity)
 
@@ -509,28 +533,80 @@ export function TeamSettings({ team, onChange, lang, central, presence }: Props)
     }
   }
 
+  /** The stored connections, re-read from the server (tokens are redacted out of this response).
+   *  `null` when the read failed — callers then keep whatever they had rather than inventing an
+   *  empty array, which is the shape that causes damage when written back. */
+  async function fetchStoredConnections(): Promise<TeamConnection[] | null> {
+    try {
+      const r = await fetch('/api/preferences')
+      if (!r.ok) return null
+      const prefs = (await r.json()) as { team?: TeamConfig }
+      return Array.isArray(prefs.team?.connections) ? prefs.team.connections : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Disconnect from exactly ONE central.
+   *
+   * `DELETE /api/team/connections/:id` is the whole fix: it POSTs the central's /api/team/leave
+   * with that connection's stored token and then removes that entry plus its four state files,
+   * inside the preferences write chain. What this used to do was call leave-central and then PUT
+   * `{ team: { ...defaultTeam(), pushIntervalSec } }` — a payload that carries an own
+   * `connections: []` key, which `mergeTeamPayload` honours as an explicit replacement of the whole
+   * array (spec §5.8). On a machine connected to three centrals, Disconnect deleted all three and
+   * every token with them; tokens live nowhere else on the machine, so recovery means re-minting
+   * one on each central. `agentop setup`'s solo branch guards the identical hazard with a confirm;
+   * this button never did.
+   *
+   * No payload sent from here contains a `connections` key at all any more.
+   */
   async function handleLeave() {
     if (leaving) return
     setConfirmLeave(false)
     setLeaving(true)
     setSaveResult(null)
     try {
-      // (a) Ask the central to drop this member's data (best-effort — proxied so the token
-      // stays server-side). A failure here still lets us reset the local machine.
-      await fetch('/api/team/leave-central', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ endpoint: team.endpoint, token: team.token, org: team.org || 'default', user: team.user }),
-      }).catch(() => { /* non-fatal */ })
+      const target = findPanelConnection(team, team.endpoint ?? '')
+      if (target) {
+        const res = await fetch(`/api/team/connections/${encodeURIComponent(target.id)}`, { method: 'DELETE' })
+        if (!res.ok) {
+          const data = (await res.json().catch(() => ({}))) as { error?: string }
+          setSaveResult({ ok: false, error: data.error ?? `Disconnect failed (${res.status})` })
+          return
+        }
+      } else if ((team.connections ?? []).length === 0) {
+        // No stored connection at all (a legacy preferences file holding only the flat mirror).
+        // The compatibility route maps endpoint → connection server-side and removes only that one.
+        await fetch('/api/team/leave-central', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint: team.endpoint, token: team.token, org: team.org || 'default', user: team.user }),
+        }).catch(() => { /* non-fatal */ })
+      } else {
+        // Several connections and none matches what this panel shows — refuse instead of guessing
+        // `connections[0]`, which would disconnect a central the user is not looking at.
+        setSaveResult({
+          ok: false,
+          error: pt
+            ? 'Não foi possível identificar qual central desconectar. Use `agentop member leave --endpoint <url>`.'
+            : 'Couldn’t tell which central to disconnect. Use `agentop member leave --endpoint <url>`.',
+        })
+        return
+      }
 
-      // (b) Reset the local config to solo and persist it (stops pushing).
-      const solo: TeamConfig = { ...defaultTeam(), pushIntervalSec: team.pushIntervalSec }
-      await fetch('/api/preferences', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ team: solo }),
-      })
-      onChange(solo)
+      // Other centrals may remain — this panel then re-renders against the next one's mirror
+      // (which is what `normalizeTeamConfig` stores server-side too), NOT a solo config.
+      const remaining = await fetchStoredConnections()
+      const first = remaining?.[0]
+      const next: TeamConfig = first
+        ? {
+            ...team, mode: 'member', connections: remaining!,
+            endpoint: first.endpoint, org: first.org, user: first.user, token: '',
+          }
+        : { ...defaultTeam(), pushIntervalSec: team.pushIntervalSec }
+      onChange(next)
       editingInitialized.current = false
       setEditing(true)
       // The mode visibly flips to Solo — that is the confirmation; clear any prior result.

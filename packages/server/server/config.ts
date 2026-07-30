@@ -172,9 +172,21 @@ export const ANTIGRAVITY_SUMMARIES_DB = join(ANTIGRAVITY_DIR, 'conversation_summ
 // central's sent-state can never be handed to another by a positional accident.
 // ---------------------------------------------------------------------------
 /** Per-connection state lives in its own directory so one central's sent-state can never be
- *  handed to another by a positional accident. */
-export const TEAM_CONN_DIR = process.env.AGENTISTICS_TEAM_CONN_DIR
+ *  handed to another by a positional accident. `export let` (mirroring
+ *  `TEAM_SESSION_SECRET`/`setResolvedSessionSecret` above) gives importers a live binding, so
+ *  `__setTeamConnDirForTests` below can redirect it. */
+export let TEAM_CONN_DIR = process.env.AGENTISTICS_TEAM_CONN_DIR
   ?? join(AGENTISTICS_DATA_DIR, 'connections')
+
+/** Test-only override. `TEAM_CONN_DIR` is computed once at module load from the environment, so
+ *  a test can't reliably set `AGENTISTICS_TEAM_CONN_DIR` beforehand — by the time any given test
+ *  file runs, `config.ts` has typically already been imported (and evaluated) by another file
+ *  earlier in the same `bun test` process. This lets team-uploader.test.ts point per-connection
+ *  state files at a tmp directory instead of the developer's real `~/.agentistics/connections`.
+ *  Never called from production code. */
+export function __setTeamConnDirForTests(dir: string): void {
+  TEAM_CONN_DIR = dir
+}
 
 const CONN_ID_RE = /^c_[a-f0-9]{12}$/
 

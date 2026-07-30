@@ -22,21 +22,30 @@ type Localized = { title: string; message?: string }
 /** Localized copy for server- and client-emitted notification codes. Resolved at
  *  render time by resolveNotification so switching the language re-translates. */
 export const NOTIFICATION_TEXT: Record<string, { pt: Localized; en: Localized }> = {
+  // The five member.* codes below name the central they are about via `{central}` (the
+  // connection's label, else its endpoint host — never a token). With several centrals connected,
+  // an unattributed "can't reach the central" is unactionable: the bell showed two byte-identical
+  // rows while only one central was down. `meta.central` is missing on rows persisted by an older
+  // build, so the placeholder falls back to a generic noun — see resolveNotification.
   'member.auth_rejected': {
-    pt: { title: 'Central rejeitou esta máquina', message: 'A central respondeu não autorizado — o token pode ser inválido ou revogado. Gere um novo no Team Manager da central.' },
-    en: { title: 'Central rejected this machine', message: 'The central returned unauthorized — the token may be invalid or revoked. Mint a new one in the central’s Team Manager.' },
+    pt: { title: 'Central rejeitou esta máquina', message: 'Não autorizado por {central} — o token pode ser inválido ou revogado. Gere um novo no Team Manager dessa central.' },
+    en: { title: 'Central rejected this machine', message: 'Unauthorized from {central} — the token may be invalid or revoked. Mint a new one in that central’s Team Manager.' },
   },
   'member.unreachable': {
-    pt: { title: 'Sem conexão com a central', message: 'Não foi possível alcançar a central; tentando novamente em segundo plano.' },
-    en: { title: 'Can’t reach the central', message: 'Couldn’t reach the central; retrying in the background.' },
+    pt: { title: 'Sem conexão com a central', message: 'Não foi possível alcançar {central}; tentando novamente em segundo plano.' },
+    en: { title: 'Can’t reach the central', message: 'Couldn’t reach {central}; retrying in the background.' },
   },
   'member.reconnected': {
-    pt: { title: 'Conectado à central', message: 'Os envios voltaram a funcionar.' },
-    en: { title: 'Connected to the central', message: 'Pushes are working again.' },
+    pt: { title: 'Conectado à central', message: 'Os envios para {central} voltaram a funcionar.' },
+    en: { title: 'Connected to the central', message: 'Pushes to {central} are working again.' },
   },
   'member.removed': {
-    pt: { title: 'Removido da central', message: 'A central revogou o acesso desta máquina. O modo de time foi redefinido para individual — gere um novo token na central para reconectar.' },
-    en: { title: 'Removed from the central', message: 'The central revoked this machine’s access. Team mode was reset to solo — mint a new token on the central to reconnect.' },
+    pt: { title: 'Removido da central', message: 'O acesso desta máquina a {central} foi revogado. A conexão foi removida — gere um novo token nessa central para reconectar.' },
+    en: { title: 'Removed from the central', message: 'Access to {central} was revoked for this machine. The connection was removed — mint a new token there to reconnect.' },
+  },
+  'member.disconnected': {
+    pt: { title: 'Desconectado da central', message: 'A conexão com {central} foi removida.' },
+    en: { title: 'Disconnected from the central', message: 'The connection to {central} was removed.' },
   },
   'central.connect_failed': {
     pt: { title: 'Falha ao conectar na central', message: 'Não foi possível conectar na central. Verifique o endereço e o token.' },
@@ -78,6 +87,14 @@ export function resolveNotification(n: AppNotification, lang: 'pt' | 'en'): Loca
   // Interpolate {version} from meta (e.g. "A new version ({version}) is available").
   if (message && n.meta?.version) {
     message = message.replace('{version}', `v${String(n.meta.version).replace(/^v/, '')}`)
+  }
+  // Interpolate {central} from meta — the connection's label or endpoint host, set by every
+  // per-connection notification the uploader and the WS client raise (`meta.central`). Rows
+  // persisted before this field existed have no `central`, so the placeholder degrades to a
+  // generic noun instead of rendering a literal "{central}" in the bell's history.
+  if (message && message.includes('{central}')) {
+    const central = String(n.meta?.central ?? '').trim()
+    message = message.replace(/\{central\}/g, central || (lang === 'pt' ? 'a central' : 'the central'))
   }
   // Interpolate {name}/{actor} from meta (e.g. machine.renamed).
   if (message && n.meta?.name) message = message.replace('{name}', String(n.meta.name))
