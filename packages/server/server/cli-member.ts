@@ -233,9 +233,14 @@ async function leaveViaLocalServer(connId: string, port: number): Promise<LeaveR
  *  Task 5 cross-process preferences lock. The default (real) implementation — overridable via
  *  `MemberLeaveDeps.leaveDirect` so a test can prove the local-server-vs-direct CHOICE without
  *  ever touching a real preferences file (review finding I5). */
+/** Silences `removeConnection`'s own `[team-uploader] removed connection ...` line — `member
+ *  leave` already prints its own "left <endpoint>" / error line for this exact event, so the
+ *  default `console` logger would double it up in the user's terminal. */
+const SILENT_LOG = { info: () => {}, warn: () => {} }
+
 async function leaveDirectDefault(connId: string): Promise<LeaveResult> {
   const { leaveConnectionById } = await import('./team-connections')
-  const outcome = await leaveConnectionById(connId)
+  const outcome = await leaveConnectionById(connId, { log: SILENT_LOG })
   return outcome.ok ? { ok: true } : { ok: false, error: outcome.error }
 }
 

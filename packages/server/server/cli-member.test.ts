@@ -188,6 +188,32 @@ test('memberLeave: local server unreachable — falls back to the injected direc
   expect(stdout).toContain('left http://a:1')
 })
 
+// Review finding N3 residual: the local-server-404 test above proves memberLeave doesn't print
+// success on an ANSWERED failure, but every leaveDirect stub elsewhere in this file returns
+// {ok:true} — the no-server (direct/fallback) failure path itself was never asserted through
+// memberLeave, only inferred by analogy. This is that missing case: the local server is
+// unreachable (so the fallback IS taken), and the injected leaveDirect reports a failure (e.g.
+// what a real removeConnection write failure — a lock timeout — would surface as, per I1/N3).
+test('memberLeave: the direct fallback reporting failure is never printed as success', async () => {
+  const probe = Bun.serve({ port: 0, fetch: () => new Response('ok') })
+  const deadPort = probe.port!
+  probe.stop(true)
+
+  const a = conn('c_aaaaaaaaaaaa', 'http://a:1')
+  const { code, stdout, stderr } = await captureOutput(() => memberLeave(
+    {},
+    {
+      ...TTY_OFF,
+      readPreferences: fakePrefs([a]),
+      port: deadPort,
+      leaveDirect: async () => ({ ok: false, error: 'preferences write lock timed out' }),
+    },
+  ))
+  expect(code).toBe(1)
+  expect(stdout).not.toContain('left ')
+  expect(stderr).toContain('preferences write lock timed out')
+})
+
 test('memberLeave: local server IS reachable — the direct fallback is never invoked (the other half of the CHOICE)', async () => {
   await using server = Bun.serve({ port: 0, fetch: () => new Response(JSON.stringify({ ok: true })) })
   const a = conn('c_aaaaaaaaaaaa', 'http://a:1')
