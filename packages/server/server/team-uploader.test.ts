@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import {
   sessionHash, selectDeltas, emptyStatusFor, getUploaderStatus,
@@ -26,7 +26,7 @@ import {
 } from './team-uploader'
 import { updateTeamConfigAt, type TeamConfigMutator, type Preferences } from './preferences'
 import { __setTeamConnDirForTests, TEAM_CONN_DIR, teamSentFile, teamSyncFile, teamForgetFile } from './config'
-import { loadRulesState, emptyRulesState } from './team-rules'
+import { loadRulesState } from './team-rules'
 import { convertSentStateV1 } from './team-migrate'
 import { buildPathRepoIndex, buildSharedStatsCache, type PathRepoIndex } from './share-rules'
 import type { SessionMeta, TeamConnection, StatsCache, TeamConfig, WorkflowRun } from '@agentistics/core'
@@ -1114,6 +1114,12 @@ describe('a freshly-declared denylist is honored before any push has happened', 
 // The retroactive removal sequence, driven through a real cycle (§6.1 / §5.5b).
 // ---------------------------------------------------------------------------
 
+/** A minimal real StatsCache: `lastComputedDate` is all `attributionBoundary` reads, and the
+ *  boundary is the day AFTER it. */
+function fakeStatsCache(lastComputedDate: string): StatsCache {
+  return { lastComputedDate, dailyActivity: [], totalSessions: 0, hourCounts: {} } as unknown as StatsCache
+}
+
 /** A mock central that answers policy/whoami/forget/ingest and records, for every forget POST,
  *  the sent-state and sync-file state AT THAT MOMENT — which is what makes the ordering
  *  assertions below real rather than end-state guesses. */
@@ -1227,8 +1233,12 @@ describe('runConnectionCycle — the retroactive removal sequence', () => {
     try {
       const conn = fakeConn(connId, server.port!, { deniedRepos: ['github.com/o/secret'] })
       const pub = makeSession('pub-2', { git_remote: 'github.com/o/pub' })
-      const denied = makeSession('denied-2', { git_remote: 'github.com/o/secret' })
-      const ctx = makeCtx({ storedSessions: [pub, denied], liveSessions: [pub, denied], index: buildPathRepoIndex([pub, denied]) })
+      const denied = makeSession('denied-2', { git_remote: 'github.com/o/secret', start_time: '2026-07-20T10:00:00.000Z' })
+      const ctx = makeCtx({
+        storedSessions: [pub, denied], liveSessions: [pub, denied],
+        index: buildPathRepoIndex([pub, denied]),
+        realStatsCache: fakeStatsCache('2026-07-01'),
+      })
       await saveSentState(connId, { 'denied-2': 'h-denied' })
       const deps = { readPreferences: fakeReadPreferences(conn), migrateTeamStateOnce: async () => {}, ctx }
 
@@ -1238,7 +1248,12 @@ describe('runConnectionCycle — the retroactive removal sequence', () => {
       // the hash is what suppresses re-detection, so writing it here would make the machine stop
       // asking while the central still holds the session.
       expect(Object.keys(await loadSentState(connId))).toContain('denied-2')
-      expect(await loadRulesState(connId)).toEqual(emptyRulesState())
+      const afterFailure = await loadRulesState(connId)
+      expect(afterFailure.rulesHash).toBe('')
+      // …but the SEAL LEDGER did advance: it is not re-derivable (advanceSeal seals out of the
+      // PERSISTED `prev.pending`), so a cycle whose removal failed must still have written it.
+      expect(afterFailure.pending['2026-07-20']?.sessionCount).toBe(1)
+      expect(afterFailure.boundary).toBe('2026-07-02')
       // The connection still pushed this cycle: an unreachable/failing forget must not stop it.
       expect(existsSync(teamForgetFile(connId))).toBe(true) // journal kept open for the retry
 
@@ -1316,6 +1331,115 @@ describe('runConnectionCycle — the retroactive removal sequence', () => {
       // And the connection still pushed its shared session this cycle.
       expect(central.ingests.flatMap(b => (b.sessions ?? []).map(s => s.session_id))).toEqual(['pub-4'])
     } finally {
+      __teardownConnectionForTests(connId)
+      await central.stop()
+    }
+  }, 10_000)
+})
+
+// ---------------------------------------------------------------------------
+// Critical 1: the seal ledger is NOT re-derivable. `advanceSeal` seals out of the PERSISTED
+// `prev.pending`, and its CALLER CONTRACT (share-rules.ts) is that it runs on every push cycle
+// without skipping one — a skipped cycle whose window spans both the day entering `pending` AND
+// the boundary crossing it loses that day's seal forever, and the denied repository's volume for
+// that day then ships inside the undecomposable rollup. Deferring the whole RulesState write until
+// a removal succeeded made every failing cycle exactly such a skip, in the common case (a central
+// that is down, rejecting, or — as here — too old to forget, where it never succeeds at all).
+// ---------------------------------------------------------------------------
+
+describe('the seal ledger advances on every cycle even while the removal never completes', () => {
+  it('seals a day that crosses the boundary between two failing cycles, with the rules hash still unwritten', async () => {
+    const connId = randomConnId()
+    const central = mockCentral({ canForget: false }) // never succeeds — needsForget stays true forever
+    central.watch(connId)
+    try {
+      const conn = fakeConn(connId, central.server.port!, { deniedRepos: ['github.com/o/secret'] })
+      const pub = makeSession('pub-5', { git_remote: 'github.com/o/pub', start_time: '2026-07-20T09:00:00.000Z' })
+      const denied = makeSession('denied-5', { git_remote: 'github.com/o/secret', start_time: '2026-07-20T10:00:00.000Z' })
+      const sessions = [pub, denied]
+      const index = buildPathRepoIndex(sessions)
+      await saveSentState(connId, { 'denied-5': 'h-denied' })
+
+      // Cycle 1 — Claude's watermark is 2026-07-01, so the boundary is 07-02 and 07-20 is still
+      // decomposable: the day is MEASURED into `pending`.
+      await runConnectionCycle(connId, {
+        readPreferences: fakeReadPreferences(conn),
+        migrateTeamStateOnce: async () => {},
+        ctx: makeCtx({ storedSessions: sessions, liveSessions: sessions, index, realStatsCache: fakeStatsCache('2026-07-01') }),
+      })
+      const afterFirst = await loadRulesState(connId)
+      expect(afterFirst.pending['2026-07-20']?.sessionCount).toBe(1)
+      expect(afterFirst.sealed['2026-07-20']).toBeUndefined()
+      expect(afterFirst.rulesHash).toBe('') // the removal did not happen — the hash stays unwritten
+
+      // Cycle 2 — the watermark has advanced past 07-20, so the day crosses into prehistory. It
+      // can only be SEALED from the pending value cycle 1 persisted; had that write been skipped,
+      // this seal would be lost forever and the denied volume would ship in the rollup.
+      await runConnectionCycle(connId, {
+        readPreferences: fakeReadPreferences(conn),
+        migrateTeamStateOnce: async () => {},
+        ctx: makeCtx({ storedSessions: sessions, liveSessions: sessions, index, realStatsCache: fakeStatsCache('2026-07-21') }),
+      })
+      const afterSecond = await loadRulesState(connId)
+      expect(afterSecond.sealed['2026-07-20']?.sessionCount).toBe(1)
+      // Still no removal, so still no hash — the two halves of the state are genuinely independent.
+      expect(afterSecond.rulesHash).toBe('')
+      expect(central.forgetBodies).toEqual([])
+    } finally {
+      __teardownConnectionForTests(connId)
+      await central.stop()
+    }
+  }, 10_000)
+})
+
+// ---------------------------------------------------------------------------
+// Important 2: a plan naming only workflow runs cannot delete anything (the wire carries
+// `sessionIds`, and the central deletes runs by session), so it must not report success.
+// ---------------------------------------------------------------------------
+
+describe('a runs-only plan never reports success', () => {
+  it('issues no forget, emits no resync_done, does not persist the hash and keeps the runs named', async () => {
+    const connId = randomConnId()
+    const central = mockCentral()
+    central.watch(connId)
+    const codes: string[] = []
+    __setNotifierForTests(n => { if (n.code) codes.push(n.code) })
+    try {
+      const conn = fakeConn(connId, central.server.port!, { deniedRepos: ['github.com/o/secret'] })
+      const pub = makeSession('pub-6', { git_remote: 'github.com/o/pub' })
+      // Denied and present in the store, but NEVER pushed as a session — so `forgetIds` is empty
+      // while its already-pushed workflow run is in `forgetRuns`.
+      const denied = makeSession('denied-6', { git_remote: 'github.com/o/secret' })
+      const run: WorkflowRun = {
+        runId: 'r-6', name: 'audit', sessionId: 'denied-6', status: 'completed',
+        startedAt: '2026-07-20T10:00:00.000Z', durationMs: 0, phases: [], agents: [],
+        totals: { agentCount: 0, tokensIn: 0, tokensOut: 0, costUSD: 0, durationMs: 0, toolUses: 0 },
+      }
+      const sessions = [pub, denied]
+      await writeFile(teamSentFile(connId), JSON.stringify({ version: 2, hashes: {}, runIds: ['r-6'] }), 'utf-8')
+
+      await runConnectionCycle(connId, {
+        readPreferences: fakeReadPreferences(conn),
+        migrateTeamStateOnce: async () => {},
+        ctx: makeCtx({
+          storedSessions: sessions, liveSessions: sessions, workflows: [run],
+          index: buildPathRepoIndex(sessions),
+        }),
+      })
+
+      // Nothing was asked of the central…
+      expect(central.forgetBodies).toEqual([])
+      // …nothing was announced as done (and nothing was announced as started either, since the
+      // removal could never have been performed)…
+      expect(codes).not.toContain('member.resync_done')
+      expect(codes).not.toContain('member.resync_started')
+      // …the hash is unwritten, so the machine keeps asking…
+      expect((await loadRulesState(connId)).rulesHash).toBe('')
+      // …and the run is still NAMED locally, which is the only thing that can ever withdraw it.
+      const raw = JSON.parse(readFileSync(teamSentFile(connId), 'utf-8')) as { runIds: string[] }
+      expect(raw.runIds).toEqual(['r-6'])
+    } finally {
+      __setNotifierForTests(() => {})
       __teardownConnectionForTests(connId)
       await central.stop()
     }

@@ -310,6 +310,32 @@ describe('runForgetSequence', () => {
     expect((await readSentState(connId)).hashes['a']).toBe('hash-of-a')
   })
 
+  // The wire carries only `sessionIds` and the central deletes runs BY SESSION, so a plan naming
+  // only runs cannot delete anything. Reporting success would drop those run ids from the
+  // sent-state (the machine's only record of what it pushed) and let the caller persist the rules
+  // hash — denied runs left on the central, unnameable, with the machine no longer asking.
+  it('refuses a plan that names only workflow runs, and keeps them named', async () => {
+    const connId = randomConnId()
+    await seedSentState(connId, ['kept'], ['r1', 'r2'])
+    let calls = 0
+    const out = await runForgetSequence(
+      fakeConn(connId),
+      { forgetIds: [], forgetRuns: ['r1', 'r2'], rulesHash: 'h1' },
+      baseDeps({ fetch: async () => { calls++; return new Response('{}') } }),
+    )
+    expect(out.ok).toBe(false)
+    expect(out.pendingRules).toBe(true)
+    expect(out.deleted).toBe(0)
+    // No whoami, no forget, no journal — there is nothing this sequence could have asked for.
+    expect(calls).toBe(0)
+    expect(existsSync(teamForgetFile(connId))).toBe(false)
+    // The run ids are STILL named, so the next cycle can re-plan them the moment their session
+    // becomes nameable.
+    const sent = await readSentState(connId)
+    expect(sent.runIds).toEqual(['r1', 'r2'])
+    expect(sent.hashes['kept']).toBe('hash-of-kept')
+  })
+
   it('is a no-op with no ids and no run ids — no whoami, no journal, no POST', async () => {
     const connId = randomConnId()
     let calls = 0

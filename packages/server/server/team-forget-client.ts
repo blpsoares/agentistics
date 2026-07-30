@@ -235,6 +235,22 @@ export async function runForgetSequence(
   const runIds = dedupe(plan.forgetRuns)
   if (ids.length === 0 && runIds.length === 0) return { ok: true, deleted: 0 }
 
+  // A plan naming ONLY workflow runs cannot be carried out, and must never look as if it was. The
+  // wire carries `sessionIds` and the central deletes runs BY SESSION, so with no session id there
+  // is no request that withdraws anything. Reporting `ok` here would drop those run ids from the
+  // sent-state — the machine's only record of what it pushed — leaving denied runs on the central
+  // with nothing left able to name them, while the caller persisted the rules hash and stopped
+  // asking: exactly the outcome this feature exists to prevent. So: keep them named, make no
+  // request, and stay `pendingRules` so the UI says the rules are not enforced yet.
+  if (ids.length === 0) {
+    return {
+      ok: false,
+      deleted: 0,
+      pendingRules: true,
+      error: 'workflow runs can only be withdrawn together with their session, and none was named',
+    }
+  }
+
   const _fetch = deps.fetch ?? fetch
   const _load = deps.loadSentState ?? defaultLoadSentState
   const _save = deps.saveSentState ?? defaultSaveSentState
@@ -349,7 +365,10 @@ export async function runForgetSequence(
 
   // Every batch acked → the central deleted those sessions AND their workflow runs, so the run
   // ids may finally leave the sent-state. Done only here: a partial sequence must leave them
-  // named, or the next cycle's plan could no longer ask for them.
+  // named, or the next cycle's plan could no longer ask for them. (Task 4's `forgetRuns` is
+  // already denial-scoped, and the runs-only case is refused above; what remains is a run whose
+  // owning session was denied but never itself pushed, which no request can name — it rides on
+  // the sessions that WERE named, or waits for its session to be pushed and denied.)
   if (runIds.length > 0) {
     const sent = await _load(conn.id)
     const drop = new Set(runIds)

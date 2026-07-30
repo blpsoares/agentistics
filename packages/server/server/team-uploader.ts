@@ -905,13 +905,24 @@ async function reconcileSyncState(connId: string, endpoint: string, token: strin
  * `runForgetSequence` (team-forget-client.ts) is what actually performs the removal against
  * `rulesPlan.forgetIds`/`forgetRuns`; this function only computes the plan and logs it.
  *
- * It deliberately does NOT persist `rulesPlan.next` — `runConnectionPushCycle` does, and only
- * once the removal it implies has actually happened. The rules hash is what suppresses
- * re-detection, so persisting a state that claims a removal completed when it did not would make
- * the machine stop asking, with the data still on the central and nothing left to notice it. The
- * computation itself still runs on EVERY cycle (`advanceSeal`'s CALLER CONTRACT in
- * share-rules.ts); what is deferred is the write, and a deferred write only means the next cycle
- * re-derives the same state from the same inputs.
+ * `RulesState` holds two things with OPPOSITE persistence rules, and they are split here:
+ *
+ * - **The seal ledger (`sealed`/`pending`/`boundary`) is written on EVERY cycle**, unconditionally
+ *   and best-effort, exactly as it always was. It is NOT re-derivable: `advanceSeal` seals out of
+ *   `prev.pending` — the PERSISTED value, not the freshly measured one — and its CALLER CONTRACT
+ *   (share-rules.ts) is that it must run on every push cycle without skipping one, because a day
+ *   only seals while it is still in `prev.pending` and the boundary has just passed it. Computing
+ *   the ledger in memory and discarding it IS a skipped cycle from the ledger's point of view, and
+ *   the case where that happens is the COMMON one: a central that is down, rejecting, or too old
+ *   to forget keeps the removal failing for hours. The day would enter `pending` only in memory,
+ *   the boundary would cross it, and once its sessions age out of the store the seal is
+ *   unrecoverable — the blocked repository's volume for that day then ships inside the
+ *   undecomposable rollup.
+ * - **The rules hash (and the `sharedIds` snapshot paired with it) is written only once the
+ *   removal it implies has actually happened** — `runConnectionPushCycle` does that. The hash is
+ *   what suppresses re-detection, so persisting it after a failed removal would make the machine
+ *   stop asking with the data still on the central. Unlike the ledger, it IS re-derivable: the
+ *   next cycle recomputes the same hash from the same denylist.
  */
 async function reconcileRulesFor(conn: TeamConnection, ctx: PushCycleContext) {
   const prevRules = await loadRulesState(conn.id)
@@ -933,6 +944,15 @@ async function reconcileRulesFor(conn: TeamConnection, ctx: PushCycleContext) {
       `session(s) and ${rulesPlan.forgetRuns.length} workflow run(s) the central may still hold`,
     )
   }
+  // The ledger half, now — before anything that can fail, and regardless of what the removal does
+  // next. `prevRules.rulesHash`/`sharedIds` are carried through UNCHANGED so this write can never
+  // claim a removal happened; only the success path below replaces them.
+  await saveRulesState(conn.id, {
+    ...prevRules,
+    boundary: rulesPlan.next.boundary,
+    sealed: rulesPlan.next.sealed,
+    pending: rulesPlan.next.pending,
+  })
   return rulesPlan
 }
 
@@ -1102,7 +1122,10 @@ async function runConnectionPushCycle(conn: TeamConnection, deps: RunPushCycleDe
       // The whole sequence runs under this connection's push lock (`_running`, taken by
       // `runConnectionCycle`) with `_pendingTrigger` deferral, so a debounced push cannot land
       // after the delete and re-insert exactly what was removed (R27).
-      if (connectionCanForget(conn.id) && !_resyncNotified.has(conn.id)) {
+      // Gated on `forgetIds`, not on `needsForget`: a plan naming only workflow runs cannot be
+      // carried out at all (see `runForgetSequence`), so announcing a removal for it would promise
+      // something that is about to be refused.
+      if (forgetIds.length > 0 && connectionCanForget(conn.id) && !_resyncNotified.has(conn.id)) {
         _resyncNotified.add(conn.id)
         _notify({ type: 'info', code: 'member.resync_started', meta: notifyMeta(conn, { count: forgetIds.length }) })
       }
