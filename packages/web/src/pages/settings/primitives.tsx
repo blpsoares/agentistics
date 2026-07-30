@@ -376,6 +376,11 @@ export function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) 
   return (
     <button
       onClick={onToggle}
+      // `.ag-switch` opts this control OUT of the `.ag-settings button { min-height: 44px }`
+      // mobile rule (index.css). That rule exists for real buttons that were 22-33px tall on
+      // mobile; applied here it stretched this 20px-tall pill to 44px and left its knob (top: 3)
+      // pinned to the top third of a control three times its own height.
+      className="ag-switch"
       style={{
         position: 'relative', width: 34, height: 20, borderRadius: 10,
         border: 'none', background: on ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
@@ -388,6 +393,164 @@ export function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) 
         transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
       }} />
     </button>
+  )
+}
+
+/**
+ * The whole row is the control — one `<button>`, never a nested `<button>`.
+ *
+ * `.ag-settings button { min-height: 44px }` (index.css) already deforms `Toggle` on mobile (see
+ * its own comment above); putting a `Toggle` INSIDE a row-sized button would additionally nest a
+ * `<button>` inside a `<button>`, which is invalid HTML and behaves unpredictably (focus order,
+ * double activation on some browsers/AT). So the whole row is one real button — `role="switch"` +
+ * `aria-checked` carry the semantics — and the switch pill is a plain `<span aria-hidden>` drawn
+ * inside it, purely visual. Follows `Checkbox` above: same problem ("the entire row is the
+ * control"), same reason a `<label>` wrapper doesn't work here either (a label only forwards
+ * clicks to a real form control, never to an element carrying an ARIA role).
+ */
+export function RowSwitch({ on, onToggle, label, sub, icon, disabled, dimmed }: {
+  on: boolean
+  onToggle: () => void
+  label: string
+  sub?: string
+  icon?: React.ReactNode
+  disabled?: boolean
+  /** Renders the row de-emphasized with a struck-through label — the picker's "blocked
+   *  repository" state. Deliberately not colour-only: a reader who cannot distinguish the
+   *  on/off pill colour still sees the strikethrough and the lower opacity. */
+  dimmed?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onToggle}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        minHeight: 48, width: '100%', boxSizing: 'border-box',
+        padding: '0 2px',
+        border: 'none', background: 'transparent', textAlign: 'left',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        fontFamily: 'inherit',
+      }}
+    >
+      {icon && <span style={{ display: 'flex', flexShrink: 0, color: 'var(--text-tertiary)' }}>{icon}</span>}
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <div style={{
+          fontSize: 13, fontWeight: 500, color: 'var(--text-primary)',
+          textDecoration: dimmed ? 'line-through' : 'none',
+          opacity: dimmed ? 0.55 : 1,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{label}</div>
+        {sub && (
+          <div style={{
+            fontSize: 11, color: 'var(--text-tertiary)', marginTop: 1,
+            opacity: dimmed ? 0.55 : 1,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{sub}</div>
+        )}
+      </span>
+      <span
+        aria-hidden
+        style={{
+          // A plain `<span>`, not a `<button>` — never a nested control (see the doc comment
+          // above) — so the `.ag-settings button` 44px rule cannot reach it and it needs no
+          // `.ag-switch` opt-out of its own.
+          position: 'relative', width: 34, height: 20, borderRadius: 10, flexShrink: 0,
+          background: on ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+          transition: 'background 0.2s',
+        }}
+      >
+        <span style={{
+          position: 'absolute', top: 3, left: on ? 17 : 3,
+          width: 14, height: 14, borderRadius: '50%', background: '#fff',
+          transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+        }} />
+      </span>
+    </button>
+  )
+}
+
+/**
+ * A small coloured dot for connection/health state. Never the ONLY carrier of meaning — every
+ * card that renders one also states the status in words next to it, so this is decorative,
+ * not the label. Colours map to the app's existing status vocabulary (index.css): green for ok,
+ * the orange accent for warn (the same colour `ScopeNote`'s `AlertTriangle` uses), red for error,
+ * and the tertiary text colour for unknown — never an invented hex.
+ */
+export function StatusDot({ state, size = 8 }: {
+  state: 'ok' | 'warn' | 'error' | 'unknown'
+  size?: number
+}) {
+  const color = {
+    ok: 'var(--accent-green)',
+    warn: 'var(--anthropic-orange)',
+    error: 'var(--accent-red)',
+    unknown: 'var(--text-tertiary)',
+  }[state]
+  return (
+    <span
+      aria-hidden
+      style={{
+        display: 'inline-block', width: size, height: size, borderRadius: '50%',
+        background: color, flexShrink: 0,
+      }}
+    />
+  )
+}
+
+/**
+ * A labeled text/password field. Moved verbatim from `TeamSettings.tsx` (which declared it
+ * privately) so every settings page can share one implementation.
+ *
+ * Deliberately has NO inline mobile `fontSize` override. `index.css` already carries a global
+ * iOS-zoom guard (`@media (max-width: 767px) { input:not([type=checkbox])..., textarea, select {
+ * font-size: 16px !important } }`) that covers every text/password `<input>` in the app, this one
+ * included — adding an inline 16px here would be dead code that reads like a live requirement.
+ */
+export function FieldInput({
+  label, sub, value, onChange, type = 'text', placeholder, disabled,
+}: {
+  label: string
+  sub?: string
+  value: string
+  onChange: (v: string) => void
+  type?: 'text' | 'password'
+  placeholder?: string
+  disabled?: boolean
+}) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 2 }}>{label}</div>
+      {sub && <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 5 }}>{sub}</div>}
+      <input
+        type={type}
+        value={value}
+        placeholder={placeholder}
+        onChange={e => onChange(e.target.value)}
+        disabled={disabled}
+        readOnly={disabled}
+        style={{
+          width: '100%', boxSizing: 'border-box',
+          padding: '7px 10px',
+          background: 'var(--bg-elevated)',
+          border: '1px solid var(--border)',
+          borderRadius: 7,
+          fontSize: 13,
+          fontFamily: type === 'password' ? 'inherit' : 'inherit',
+          color: 'var(--text-primary)',
+          outline: 'none',
+          transition: 'border-color 0.15s',
+          ...(disabled ? { opacity: 0.6, cursor: 'not-allowed' } : {}),
+        }}
+        onFocus={e => { if (!disabled) e.currentTarget.style.borderColor = 'var(--anthropic-orange)' }}
+        onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
+      />
+    </div>
   )
 }
 

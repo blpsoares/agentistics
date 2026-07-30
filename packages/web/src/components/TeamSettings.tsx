@@ -5,6 +5,7 @@ import { PUSH_INTERVAL, type TeamConfig, type TeamConnection, type MemberPresenc
 import { pushNotification } from '../lib/notifications'
 import { MemberConnectionStatus } from './MemberConnectionStatus'
 import { findPanelConnection } from '../lib/teamConnections'
+import { FieldInput } from '../pages/settings/primitives'
 
 // Types
 
@@ -166,48 +167,6 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
         transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
       }} />
     </button>
-  )
-}
-
-function FieldInput({
-  label, sub, value, onChange, type = 'text', placeholder, disabled,
-}: {
-  label: string
-  sub?: string
-  value: string
-  onChange: (v: string) => void
-  type?: 'text' | 'password'
-  placeholder?: string
-  disabled?: boolean
-}) {
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 2 }}>{label}</div>
-      {sub && <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 5 }}>{sub}</div>}
-      <input
-        type={type}
-        value={value}
-        placeholder={placeholder}
-        onChange={e => onChange(e.target.value)}
-        disabled={disabled}
-        readOnly={disabled}
-        style={{
-          width: '100%', boxSizing: 'border-box',
-          padding: '7px 10px',
-          background: 'var(--bg-elevated)',
-          border: '1px solid var(--border)',
-          borderRadius: 7,
-          fontSize: 13,
-          fontFamily: type === 'password' ? 'inherit' : 'inherit',
-          color: 'var(--text-primary)',
-          outline: 'none',
-          transition: 'border-color 0.15s',
-          ...(disabled ? { opacity: 0.6, cursor: 'not-allowed' } : {}),
-        }}
-        onFocus={e => { if (!disabled) e.currentTarget.style.borderColor = 'var(--anthropic-orange)' }}
-        onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
-      />
-    </div>
   )
 }
 

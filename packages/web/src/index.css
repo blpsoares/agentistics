@@ -260,6 +260,12 @@ html, body {
   .ag-settings button {
     min-height: 44px;
   }
+  /* `Toggle` / `RowSwitch`'s switch pill is 20px tall by design (a knob at `top: 3` inside a
+     34x20 track) — the 44px rule above stretched it and left the knob pinned to the top third.
+     `.ag-switch` opts these two controls out; nothing else uses the class. */
+  .ag-settings button.ag-switch {
+    min-height: 0;
+  }
 }
 
 /* iOS zoom guard.
