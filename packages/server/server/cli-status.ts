@@ -91,11 +91,14 @@ async function loadConfig(): Promise<{ mode: Mode; connections: TeamConnection[]
 /** 0 → solo; 1 → today's exact single-line form, unchanged; N → `member → N centrals` plus one
  *  indented `↳ endpoint[ · k repo(s) blocked]` line per connection (spec §8.1) — collapsing to
  *  just the first connection would silently misreport every central but one. */
-function configLines(s: CliStrings, mode: Mode, connections: TeamConnection[]): string[] {
+export function configLines(s: CliStrings, mode: Mode, connections: TeamConnection[]): string[] {
   if (mode === 'central') return [`${CY}central${R}`]
   if (mode !== 'member' || connections.length === 0) return [`${CY}solo${R}`]
   if (connections.length === 1) {
-    return [`${CY}member${R} ${D}→${R} ${WH}${connections[0]!.endpoint ?? '(?)'}${R}`]
+    // `||`, not `??` — `endpoint` is a non-optional string, so a connection whose endpoint is ''
+    // (a shape `migrateTeamConfig` can produce) printed a blank line under `??`. The N-connection
+    // branch below and cli-start.ts both use `||`; this was the one place out of step.
+    return [`${CY}member${R} ${D}→${R} ${WH}${connections[0]!.endpoint || '(?)'}${R}`]
   }
   const header = `${CY}member${R} ${D}→${R} ${WH}${connections.length} centrals${R}`
   // `s.deniedSuffix` is the SAME shared string cli-start.ts's launcher uses for the identical

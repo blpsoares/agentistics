@@ -160,3 +160,67 @@ describe('localization', () => {
     expect(s.resolveNotification(n, 'en').title).toBe('Connected to the central')
   })
 })
+
+describe('I3 — a per-connection notification names WHICH central it is about', () => {
+  const PER_CONNECTION = [
+    'member.unreachable',
+    'member.auth_rejected',
+    'member.reconnected',
+    'member.removed',
+    'member.disconnected',
+  ] as const
+
+  test('every member.* code carries a {central} placeholder in BOTH languages', async () => {
+    const s = await freshStore()
+    for (const code of PER_CONNECTION) {
+      for (const lang of ['pt', 'en'] as const) {
+        expect(s.NOTIFICATION_TEXT[code]![lang].message).toContain('{central}')
+      }
+    }
+  })
+
+  test('two centrals produce two DISTINCT rows instead of two identical ones', async () => {
+    const s = await freshStore()
+    // The dedupe key already includes meta.connectionId, so both rows survive; before this fix the
+    // bell showed two byte-identical messages and the user could not tell which central was down.
+    const a = note('a', { code: 'member.unreachable', meta: { connectionId: 'c_a', central: 'central-a.example.com' } })
+    const b = note('b', { code: 'member.unreachable', meta: { connectionId: 'c_b', central: 'work-central' } })
+    for (const lang of ['pt', 'en'] as const) {
+      const ma = s.resolveNotification(a, lang).message!
+      const mb = s.resolveNotification(b, lang).message!
+      expect(ma).toContain('central-a.example.com')
+      expect(mb).toContain('work-central')
+      expect(ma).not.toBe(mb)
+      expect(ma).not.toContain('{central}')
+    }
+  })
+
+  test('a label is used verbatim when the connection has one (the server sends label ?? host)', async () => {
+    const s = await freshStore()
+    const n = note('a', { code: 'member.removed', meta: { connectionId: 'c_a', central: 'Acme HQ' } })
+    expect(s.resolveNotification(n, 'en').message).toContain('Acme HQ')
+    expect(s.resolveNotification(n, 'pt').message).toContain('Acme HQ')
+  })
+
+  test('a row persisted before meta.central existed degrades to a generic noun, never a literal {central}', async () => {
+    const s = await freshStore()
+    for (const code of PER_CONNECTION) {
+      const legacy = note('a', { code, meta: { connectionId: 'c_a' } })
+      expect(s.resolveNotification(legacy, 'en').message).toContain('the central')
+      expect(s.resolveNotification(legacy, 'pt').message).toContain('a central')
+      expect(s.resolveNotification(legacy, 'en').message).not.toContain('{central}')
+      expect(s.resolveNotification(legacy, 'pt').message).not.toContain('{central}')
+      // An empty string is treated the same as missing.
+      const blank = note('a', { code, meta: { connectionId: 'c_a', central: '  ' } })
+      expect(s.resolveNotification(blank, 'en').message).not.toContain('{central}')
+    }
+  })
+
+  test('the auth-rejected HTTP status still appends, on top of the interpolated central', async () => {
+    const s = await freshStore()
+    const n = note('a', { code: 'member.auth_rejected', meta: { connectionId: 'c_a', central: 'hq', status: 401 } })
+    const msg = s.resolveNotification(n, 'en').message!
+    expect(msg).toContain('hq')
+    expect(msg).toContain('(HTTP 401)')
+  })
+})

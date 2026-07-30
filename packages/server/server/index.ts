@@ -6,7 +6,7 @@ import type { Server, ServerWebSocket } from 'bun'
 import { getRates } from './rates'
 import { getVersionInfo, startVersionRecheck } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
-import { readPreferences, writePreferences, redactPreferences, PreferencesLockTimeoutError, type Preferences } from './preferences'
+import { readPreferences, writePreferences, redactPreferences, guardTeamConnectionsWipe, PreferencesLockTimeoutError, type Preferences } from './preferences'
 import {
   readStoredNotifications, addStoredNotification, markStoredNotificationsRead,
   dismissStoredNotification, clearStoredNotifications, localViewer, type NotificationInput,
@@ -634,7 +634,22 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
 
     if (url.pathname === '/api/preferences' && req.method === 'PUT') {
       try {
-        const body = await req.json() as Preferences
+        let body = await req.json() as Preferences
+        // C1: never let a PUT wipe `connections[]`. An old cached tab still PUTs a full flat solo
+        // `team` object to disconnect (the current UI uses DELETE /api/team/connections/:id), and
+        // that payload carries `connections: []` — which mergeTeamPayload honours as an explicit
+        // replacement, deleting every OTHER central and its token in the process.
+        if (body.team !== undefined) {
+          const storedCount = (await readPreferences()).team?.connections?.length ?? 0
+          const guard = guardTeamConnectionsWipe(body.team, storedCount)
+          if (guard.guarded) {
+            console.warn(
+              `[preferences] PUT carried an empty connections array while ${storedCount} connection(s) are stored — ` +
+              'preserving them. Use DELETE /api/team/connections/:id to disconnect one.',
+            )
+            body = { ...body, team: guard.team }
+          }
+        }
         await writePreferences(body)
         // On an archive-mode change, refresh the cache and immediately persist:
         // 'full' also mirrors raw files; any non-off mode warms a build that

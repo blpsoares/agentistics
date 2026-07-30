@@ -607,3 +607,67 @@ test('a stale lock file (planted, mtime far in the past) is reclaimed — a writ
   const stillLocked = await Bun.file(lockPath).exists()
   expect(stillLocked).toBe(false)
 })
+
+// ---------------------------------------------------------------------------
+// C1 — the PUT /api/preferences guard against an empty-connections wipe.
+//
+// Losing a connection loses its token, which is stored NOWHERE else on the machine and cannot be
+// recovered without re-minting it on the central. The web Disconnect button used to PUT a full flat
+// solo `team` object (an own `connections: []` key), which mergeTeamPayload honours as an explicit
+// replacement of the whole array — so disconnecting from one central deleted them all.
+// ---------------------------------------------------------------------------
+
+import { guardTeamConnectionsWipe } from './preferences'
+import type { TeamConfig } from '@agentistics/core'
+
+function guardConn(id: string, endpoint: string) {
+  return { id, endpoint, org: 'default', user: 'lucas', token: `tok-${id}`, deniedRepos: [] }
+}
+
+test('guardTeamConnectionsWipe strips an empty connections key while connections are stored', () => {
+  const payload = { schema: 2, mode: 'solo', connections: [], endpoint: '', org: 'default', user: '', token: '' } as unknown as TeamConfig
+  const out = guardTeamConnectionsWipe(payload, 3)
+  expect(out.guarded).toBe(true)
+  expect(Object.prototype.hasOwnProperty.call(out.team, 'connections')).toBe(false)
+  // The rest of the payload is untouched, and the input is never mutated.
+  expect(out.team.mode).toBe('solo')
+  expect(payload.connections).toEqual([])
+})
+
+test('guardTeamConnectionsWipe leaves a genuine payload alone: a non-empty array, no array at all, or nothing stored', () => {
+  const withArray = { schema: 2, mode: 'member', connections: [guardConn('c_0123456789ab', 'http://a:48080')] } as unknown as TeamConfig
+  expect(guardTeamConnectionsWipe(withArray, 2).guarded).toBe(false)
+  expect(guardTeamConnectionsWipe(withArray, 2).team).toBe(withArray)
+
+  const noArray = { schema: 2, mode: 'member', endpoint: 'http://a:48080' } as unknown as TeamConfig
+  expect(guardTeamConnectionsWipe(noArray, 2).guarded).toBe(false)
+  expect(guardTeamConnectionsWipe(noArray, 2).team).toBe(noArray)
+
+  // Nothing stored → an empty array is not a wipe; a fresh solo machine must stay writable.
+  const empty = { schema: 2, mode: 'solo', connections: [] } as unknown as TeamConfig
+  expect(guardTeamConnectionsWipe(empty, 0).guarded).toBe(false)
+  expect(guardTeamConnectionsWipe(empty, 0).team).toBe(empty)
+})
+
+test('C1 end to end: the guarded payload written through writePreferencesTo preserves every connection and token', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  const stored = [guardConn('c_0123456789ab', 'http://a:48080'), guardConn('c_ba9876543210', 'http://b:48080'), guardConn('c_ccccdddd0000', 'http://c:48080')]
+  await writeFile(primary, JSON.stringify({ team: { schema: 2, mode: 'member', connections: stored } }))
+
+  // Exactly what the old Disconnect button PUT: defaultTeam() plus a kept interval.
+  const soloPayload = { schema: 2, mode: 'solo', connections: [], endpoint: '', org: 'default', user: '', token: '', pushIntervalSec: 60 } as unknown as TeamConfig
+  const guarded = guardTeamConnectionsWipe(soloPayload, stored.length)
+  expect(guarded.guarded).toBe(true)
+  await writePreferencesTo(primary, legacy, { team: guarded.team })
+
+  const after = await readPreferencesFrom(primary, legacy)
+  expect(after.team!.connections.map(c => c.id)).toEqual(stored.map(c => c.id))
+  expect(after.team!.connections.map(c => c.token)).toEqual(stored.map(c => c.token))
+  expect(after.team!.mode).toBe('member')
+
+  // The unguarded payload is what the damage looks like — asserted so the guard's necessity is
+  // documented by a failing-without-it fact, not by a comment.
+  await writePreferencesTo(primary, legacy, { team: soloPayload })
+  const wiped = await readPreferencesFrom(primary, legacy)
+  expect(wiped.team!.connections).toEqual([])
+})

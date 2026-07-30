@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto'
 import { writeFile, unlink } from 'node:fs/promises'
 import type { SessionMeta, StatsCache, WorkflowRun, TeamConnection, TeamConfig } from '@agentistics/core'
-import { PUSH_INTERVAL, clampPushInterval, defaultTeam, normalizeTeamConfig, redactSessionText } from '@agentistics/core'
+import { PUSH_INTERVAL, clampPushInterval, defaultTeam, normalizeEndpointKey, normalizeTeamConfig, redactSessionText } from '@agentistics/core'
 import { teamSentFile, teamSyncFile, teamRulesFile, teamForgetFile } from './config'
 import { loadConsolidated } from './consolidate'
 import { loadWorkflowRuns } from './workflow-store'
@@ -1242,6 +1242,27 @@ export async function handleTeamTestConnection(req: Request): Promise<Response> 
  * reset, which with N connections would hand an UNRELATED central a spurious full re-push. Keeps
  * the token server-side; never throws.
  */
+/**
+ * Map the legacy `{ endpoint, token }` leave body onto ONE stored connection. Pure.
+ *
+ * The endpoint half goes through `normalizeEndpointKey` — the shared identity rule every other
+ * comparison on this branch already uses — never a raw string compare. This route exists purely for
+ * a CACHED SPA, and a cached tab posting `https://Central.example.com` against a stored
+ * `https://central.example.com` matched nothing; the token half could not save it either, because
+ * `redactPreferences` blanks `team.token` on the way out, so such a tab has no token to send. The
+ * route then answered success while removing nothing locally, leaving the connection happily
+ * pushing to a central that had just deleted its data.
+ */
+export function matchConnectionForLeave(
+  connections: readonly TeamConnection[],
+  endpoint: string,
+  token: string,
+): TeamConnection | undefined {
+  const wanted = normalizeEndpointKey(endpoint)
+  return connections.find(c =>
+    (wanted !== '' && normalizeEndpointKey(c.endpoint) === wanted) || (token !== '' && c.token === token))
+}
+
 export async function handleLeaveCentral(req: Request): Promise<Response> {
   let body: { endpoint?: unknown; token?: unknown; org?: unknown; user?: unknown } = {}
   try { body = (await req.json()) as typeof body } catch { /* empty ok */ }
@@ -1268,8 +1289,7 @@ export async function handleLeaveCentral(req: Request): Promise<Response> {
     // assuming the central still has it — and so an unrelated connection is never touched.
     try {
       const prefs = await readPreferences()
-      const conn = (prefs.team?.connections ?? []).find(c =>
-        c.endpoint.replace(/\/+$/, '') === endpoint || (token && c.token === token))
+      const conn = matchConnectionForLeave(prefs.team?.connections ?? [], endpoint, token)
       if (conn) await removeConnection(conn.id, 'manual')
     } catch { /* best-effort — the connection may already be gone from preferences */ }
     return jsonResponse({ ok: res.ok, deleted: data.deleted, error: res.ok ? undefined : (data.error ?? `HTTP ${res.status}`) })

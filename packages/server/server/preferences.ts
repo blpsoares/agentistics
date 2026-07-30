@@ -338,6 +338,11 @@ async function acquireFileLock(primary: string): Promise<() => Promise<void>> {
         await handle.writeFile(owner, 'utf-8')
         await handle.close()
       } catch (writeErr) {
+        // Close the handle before unlinking: `writeFile` throwing leaves the fd OPEN, and this
+        // path is retried on every contended write, so a repeating ENOSPC/EIO leaks one descriptor
+        // per failure until the process hits its fd limit. `close()` on an already-closed handle
+        // throws, hence the inner try — the write error is the one worth propagating.
+        try { await handle.close() } catch { /* already closed, or closing failed too */ }
         try { await unlink(lockPath) } catch { /* best-effort — see the outer catch below too */ }
         throw writeErr
       }
@@ -516,6 +521,32 @@ function mergeTeamPayload(current: TeamConfig | undefined, incoming: TeamConfig)
   // a legacy flat edit that DOES name an endpoint still lands as a connection.
   if (stored.length === 0) return migrateTeamConfig(incoming)
   return migrateTeamConfig({ ...incoming, connections: stored })
+}
+
+/**
+ * C1 guard for `PUT /api/preferences` ONLY — a `team` payload whose `connections` array is present
+ * and EMPTY while connections are stored is almost certainly a stale client wiping the fleet, not
+ * an intentional disconnect-all. It strips the `connections` key so `mergeTeamPayload`'s legacy
+ * branch preserves the stored array (and therefore the tokens, which exist nowhere else on this
+ * machine and cannot be recovered without re-minting them on each central).
+ *
+ * Why it is NOT inside `mergeTeamPayload`, where `current` would be atomically available: two
+ * legitimate in-process callers write exactly this shape on purpose — `removeConnection` splicing
+ * the LAST connection, and `cli-setup`'s solo branch (which confirms first). Guarding at the merge
+ * would resurrect a connection the user just removed. The route is the untrusted boundary, so the
+ * route is where the guard belongs; a real disconnect goes through
+ * `DELETE /api/team/connections/:id`.
+ *
+ * Pure. Returns the payload unchanged (same object) when there is nothing to guard.
+ */
+export function guardTeamConnectionsWipe(
+  team: TeamConfig,
+  storedCount: number,
+): { team: TeamConfig; guarded: boolean } {
+  if (!Object.prototype.hasOwnProperty.call(team, 'connections')) return { team, guarded: false }
+  if ((team.connections?.length ?? 0) > 0 || storedCount === 0) return { team, guarded: false }
+  const { connections: _dropped, ...rest } = team
+  return { team: rest as TeamConfig, guarded: true }
 }
 
 /** Merge `prefs` over the current preferences and persist to `primary`. Exported for tests. */

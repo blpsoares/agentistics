@@ -346,14 +346,7 @@ function openConnection(conn: TeamConnection): void {
     if (decision.userUpdate !== null) void persistConnectionUser(conn.id, decision.userUpdate)
   })
 
-  socket.addEventListener('close', () => {
-    if (activeWs.get(conn.id) === socket) {
-      activeWs.delete(conn.id)
-      credFingerprint.delete(conn.id)
-    }
-    stopLiveReporting(conn.id)
-    scheduleReconnect(conn.id)
-  })
+  socket.addEventListener('close', () => { handleSocketClose(conn.id, socket) })
 
   socket.addEventListener('error', () => {
     // 'close' fires immediately after 'error'; reconnect is handled there.
@@ -362,19 +355,45 @@ function openConnection(conn: TeamConnection): void {
 }
 
 /**
+ * What a socket's 'close' event does — ALL of it inside the ownership guard, deliberately.
+ *
+ * A token rotation tears the old socket down and `reconcileConnection` opens the replacement
+ * synchronously in the same pass, so by the time this runs `activeWs` may already hold the NEW
+ * socket for this id. Only the two map deletes used to be guarded: `stopLiveReporting(connId)`
+ * ran unconditionally and cleared the *replacement* socket's reporting timer, which nothing
+ * re-arms (`startLiveReporting` runs only on 'open') — that central's "what is this machine
+ * working on now" panel went permanently blank while pushes and presence looked healthy.
+ * `scheduleReconnect` outside the guard is the same class of mistake: a superseded socket must not
+ * drive the surviving one's reconnect schedule.
+ */
+function handleSocketClose(connId: string, socket: WebSocket): void {
+  if (activeWs.get(connId) !== socket) return
+  activeWs.delete(connId)
+  credFingerprint.delete(connId)
+  stopLiveReporting(connId)
+  scheduleReconnect(connId)
+}
+
+/**
  * Tear down ONE connection's socket + live-reporting timer right now (the caller —
  * reconcileConnection — is retiring this id on purpose: it is gone from `connections[]` or its
- * credentials changed). This still fires the socket's 'close' listener, which still calls
- * `scheduleReconnect(connId)` — that is fine, not a bug: the reconnect timer re-reads THIS id
- * from preferences when it fires, and either finds the connection gone (no-op — a removed
- * connection is never resurrected) or finds the NEW credentials (a legitimate, faster reconnect
- * than waiting for the next poll). Deleting the map entries here first is what matters: it stops
- * `openConnection`'s duplicate-guard from seeing this retiring socket as "still live".
+ * credentials changed). Deleting the map entries here first is what matters twice over: it stops
+ * `openConnection`'s duplicate-guard from seeing this retiring socket as "still live", and it makes
+ * the retiring socket's own 'close' listener a no-op (that listener does all its work inside an
+ * `activeWs.get(id) === socket` ownership guard), so a teardown can neither clear the replacement
+ * socket's live-reporting timer nor queue a reconnect against it. The replacement is opened by
+ * `reconcileConnection`'s very next loop in the same pass; a connection that is simply GONE needs
+ * no reconnect at all.
+ *
+ * `backoffIdx` is cleared too: a rotated connection would otherwise inherit the retired socket's
+ * backoff index (up to the 30s cap) on its first failure, and an id removed for good would leave
+ * an entry in the map forever.
  */
 function teardownSocket(connId: string): void {
   const socket = activeWs.get(connId)
   activeWs.delete(connId)
   credFingerprint.delete(connId)
+  backoffIdx.delete(connId)
   stopLiveReporting(connId)
   if (!socket) return
   try {
@@ -475,3 +494,15 @@ export function reconcileNow(): void {
   if (!started) return
   void reconcileConnection()
 }
+
+/**
+ * Test-only window onto the per-connection socket state. The socket lifecycle is otherwise
+ * module-private (deliberately — nothing in production may reach into these maps), but the
+ * ownership guard in `handleSocketClose` and the `backoffIdx` cleanup in `teardownSocket` are
+ * exactly the kind of bookkeeping that regresses silently, so they get a real test.
+ *
+ * Only paths that touch NO filesystem and schedule NO timer are exercised through this: a
+ * non-owning close returns immediately, and `teardownSocket` never reconnects. `scheduleReconnect`
+ * deliberately stays out of reach — its timer would read the developer's real preferences.
+ */
+export const __socketStateForTests = { activeWs, backoffIdx, credFingerprint, handleSocketClose, teardownSocket }

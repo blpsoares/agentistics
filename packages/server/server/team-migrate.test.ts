@@ -24,3 +24,31 @@ test('junk and unconvertible shapes yield null, never a half file', () => {
 test('an empty v1 file converts to an empty v2 file', () => {
   expect(convertSentStateV1({})).toEqual({ version: 2, hashes: {}, runIds: [] })
 })
+
+// ---------------------------------------------------------------------------
+// M4 — the marker path must be resolved per call, not frozen at module load.
+//
+// `TEAM_CONN_DIR` is a LIVE binding (`__setTeamConnDirForTests` reassigns it); a `const MARKER`
+// captured at import time kept pointing at the developer's real ~/.agentistics/connections, so the
+// first test ever written for `migrateTeamStateOnce` would have written its marker there while
+// every other path it touches went to a tmp dir. Reads/writes nothing itself.
+// ---------------------------------------------------------------------------
+
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { markerFile } from './team-migrate'
+import { TEAM_CONN_DIR, __setTeamConnDirForTests } from './config'
+
+test('markerFile() follows TEAM_CONN_DIR at call time', () => {
+  const original = TEAM_CONN_DIR
+  try {
+    const redirected = join(tmpdir(), 'agentistics-marker-path-check')
+    __setTeamConnDirForTests(redirected)
+    expect(markerFile()).toBe(join(redirected, '.migrated-v2'))
+  } finally {
+    // Restored immediately, in the same synchronous test body, so no other test file can observe
+    // the redirection (this suite shares one process).
+    __setTeamConnDirForTests(original)
+  }
+  expect(markerFile()).toBe(join(original, '.migrated-v2'))
+})

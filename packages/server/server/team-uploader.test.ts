@@ -16,7 +16,7 @@ import {
   pushOnceDetailed, removeConnection, runConnectionCycle,
   buildPushContext, getPushContext, invalidatePushContext,
   __setNotifierForTests, saveSentState,
-  acquireSlot, MAX_CONCURRENT_PUSHES, __activeSlotsForTests,
+  acquireSlot, MAX_CONCURRENT_PUSHES, __activeSlotsForTests, matchConnectionForLeave,
   type PushCycleContext,
 } from './team-uploader'
 import { updateTeamConfigAt, type TeamConfigMutator, type Preferences } from './preferences'
@@ -270,6 +270,19 @@ describe('getUploaderStatus — per-connection divergence', () => {
     // this is exactly what the pre-decomposition singletons could not express.
     expect(status[idOk]?.errKind).not.toBe(status[idBad]?.errKind)
   })
+
+  it('emptyStatusFor is shape-compatible with a real cycle status — the fallback handleTeamStatus serves for a connection that never ran', async () => {
+    // M1: `emptyStatusFor` had no production caller and a test that asserted the literal it
+    // returns. It is now what `handleTeamStatus` falls back to for a connection with no entry in
+    // `getUploaderStatus()`, so the property worth pinning is PARITY with a real entry: a missing
+    // field here would silently drop `latencyMs` (or a future field) from that response.
+    const id = randomConnId()
+    await using server = Bun.serve({ port: 0, fetch: () => Response.json({ ok: true }) })
+    await pushOnceDetailed(fakeConn(id, server.port!), makeCtx({ realStatsCache: { totalCostUSD: 0 } as unknown as StatsCache }))
+    const real = getUploaderStatus()[id]
+    expect(real).toBeDefined()
+    expect(Object.keys(emptyStatusFor(id)).sort()).toEqual(Object.keys(real!).sort())
+  })
 })
 
 describe('pushOnceDetailed — credentials gate (F1: token || open-central endpoint, not user)', () => {
@@ -336,11 +349,17 @@ describe('pushOnceDetailed — credentials gate (F1: token || open-central endpo
 
   it('an endpoint-only connection (no token — an open/legacy central) still attempts the push instead of refusing on sight', async () => {
     const id = randomConnId()
+    // M2: the whoami hits are RECORDED, because `{ count: 0 }` alone cannot tell this apart from
+    // the very failure the test claims to rule out — a connection refused on sight, before any
+    // network call, returns the identical value. The assertion that matters is that the request
+    // happened at all, exactly once.
+    const whoamiCalls: string[] = []
     await using server = Bun.serve({
       port: 0,
       fetch: (req) => {
         const url = new URL(req.url)
         if (url.pathname === '/api/team/whoami') {
+          whoamiCalls.push(req.headers.get('authorization') ?? '')
           // An open central with no token has nothing to authenticate — no usable identity.
           return Response.json({ ok: false })
         }
@@ -356,6 +375,8 @@ describe('pushOnceDetailed — credentials gate (F1: token || open-central endpo
     // important thing this test proves is the ENDPOINT alone was enough to attempt the whoami
     // call at all (the old gate would have refused before ever reaching the network).
     expect(result).toEqual({ count: 0 })
+    // Exactly one attempt, and with NO Authorization header (there is no token to send).
+    expect(whoamiCalls).toEqual([''])
   })
 })
 
@@ -748,5 +769,41 @@ describe('removeConnection — splices one entry, GCs only its own files (B-2)',
 
     expect(result).toEqual({ removed: true })
     expect(logged.some(l => l.startsWith('info:') && l.includes('removed connection'))).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// I2 — POST /api/team/leave-central's endpoint→connection mapping.
+//
+// This route exists ONLY for an old cached SPA, and that caller cannot send a token
+// (`redactPreferences` blanks it), so the endpoint comparison is the whole mechanism. It was the
+// last comparison on the branch still using a raw `replace(/\/+$/,'')` string compare while every
+// other one uses `normalizeEndpointKey`.
+// ---------------------------------------------------------------------------
+
+describe('matchConnectionForLeave', () => {
+  const conns: TeamConnection[] = [
+    { id: 'c_0123456789ab', endpoint: 'https://central.example.com', org: 'default', user: 'lucas', token: 'tok-a', deniedRepos: [] },
+    { id: 'c_ba9876543210', endpoint: 'http://other.example.com:48080', org: 'default', user: 'lucas', token: 'tok-b', deniedRepos: [] },
+  ]
+
+  it('matches a differently-cased host — the exact case the raw string compare missed', () => {
+    // A cached tab posting the host as the user once typed it must still find the connection.
+    expect(matchConnectionForLeave(conns, 'https://Central.Example.com', '')?.id).toBe('c_0123456789ab')
+    expect(matchConnectionForLeave(conns, 'https://central.example.com/', '')?.id).toBe('c_0123456789ab')
+    expect(matchConnectionForLeave(conns, 'https://central.example.com:443', '')?.id).toBe('c_0123456789ab')
+  })
+
+  it('still matches by token when one is supplied, and matches nothing for an unknown central', () => {
+    expect(matchConnectionForLeave(conns, 'https://elsewhere.example.com', 'tok-b')?.id).toBe('c_ba9876543210')
+    expect(matchConnectionForLeave(conns, 'https://elsewhere.example.com', '')).toBeUndefined()
+  })
+
+  it('never matches on an empty endpoint or an empty token', () => {
+    // A token-less connection would otherwise be matched by ANY empty-token request, disconnecting
+    // an unrelated central.
+    const tokenless: TeamConnection[] = [{ ...conns[0]!, token: '' }]
+    expect(matchConnectionForLeave(tokenless, '', '')).toBeUndefined()
+    expect(matchConnectionForLeave(conns, '', 'tok-a')?.id).toBe('c_0123456789ab')
   })
 })

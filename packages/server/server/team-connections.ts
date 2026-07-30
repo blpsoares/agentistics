@@ -18,7 +18,7 @@ import { connectionId, defaultTeam, normalizeTeamConfig, normalizeEndpointKey } 
 import { readPreferences, updateTeamConfig, PreferencesLockTimeoutError } from './preferences'
 import { safeConnId } from './config'
 import { readJsonLimited, LIMITS } from './limits'
-import { removeConnection, getUploaderStatus, reconcileUploaderNow, pushNow } from './team-uploader'
+import { removeConnection, getUploaderStatus, emptyStatusFor, reconcileUploaderNow, pushNow } from './team-uploader'
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -506,16 +506,20 @@ export async function handleTeamStatus(_req: Request): Promise<Response> {
   const connections = team?.connections ?? []
   const byConn = getUploaderStatus()
   const entries: ConnectionStatusEntry[] = connections.map(c => {
-    const st = byConn[c.id]
+    // A connection that has not run a single cycle yet has no entry at all in
+    // `getUploaderStatus()` (it only reports ids that pushed or failed) — `emptyStatusFor` is the
+    // one definition of what that state looks like, so the shape can never drift between the
+    // "never ran" and "ran" branches of this response.
+    const st = byConn[c.id] ?? emptyStatusFor(c.id)
     return {
       id: c.id,
       endpoint: c.endpoint,
       org: c.org,
       user: c.user,
       ...(c.label ? { label: c.label } : {}),
-      lastSuccessAt: st?.lastSuccessAt ?? null,
-      errKind: st?.errKind ?? null,
-      latencyMs: st?.latencyMs ?? null,
+      lastSuccessAt: st.lastSuccessAt,
+      errKind: st.errKind,
+      latencyMs: st.latencyMs,
     }
   })
   const aggregated = aggregateConnectionStatuses(entries)

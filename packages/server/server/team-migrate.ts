@@ -47,14 +47,22 @@ export function convertSentStateV1(raw: unknown): SentStateV2 | null {
   return { version: 2, hashes, runIds: [] }
 }
 
-const MARKER = join(TEAM_CONN_DIR, '.migrated-v2')
+/**
+ * The marker path is resolved on every call, NEVER frozen at module load: `TEAM_CONN_DIR` is a
+ * live binding that `__setTeamConnDirForTests` reassigns, and a constant captured at import time
+ * would keep pointing at the developer's real `~/.agentistics/connections` — so a future test of
+ * this function would write there while every other path it touches went to the tmp dir.
+ */
+export function markerFile(): string {
+  return join(TEAM_CONN_DIR, '.migrated-v2')
+}
 let inflight: Promise<void> | null = null
 
 /** Idempotent, single-flight, marker-guarded. Safe to call from boot and from startUploader. */
 export async function migrateTeamStateOnce(): Promise<void> {
   if (inflight) return inflight
   inflight = (async () => {
-    if (await Bun.file(MARKER).exists()) return
+    if (await Bun.file(markerFile()).exists()) return
     await mkdir(TEAM_CONN_DIR, { recursive: true })
 
     // Persisting the migrated config makes the stored id authoritative, so no later read ever
@@ -83,7 +91,7 @@ export async function migrateTeamStateOnce(): Promise<void> {
         'utf-8',
       )
     }
-    await writeFile(MARKER, new Date().toISOString(), 'utf-8')
+    await writeFile(markerFile(), new Date().toISOString(), 'utf-8')
   })()
   return inflight
 }
