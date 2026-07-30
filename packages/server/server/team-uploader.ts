@@ -32,6 +32,8 @@ import {
   filterSharedWorkflows, attributionBoundary, buildSplitStatsCache,
   type PathRepoIndex, type DeniedLedger,
 } from './share-rules'
+import { parseCapabilities, centralCanForget } from './team-capabilities'
+import { planRulesReconcile, loadRulesState, saveRulesState } from './team-rules'
 
 /** This machine's local workflow runs (computed metrics only — no chat/prompt text). Fallback
  *  source when `buildApiResponse` could not be run (see `buildPushContext`). Mirrors the
@@ -64,6 +66,11 @@ const _centralIntervalSec = new Map<string, number>()
  *  reads this cached value instead of doing its own blocking probe (see GET /api/team/status in
  *  team-connections.ts). Absent = never successfully measured. */
 const _latencyMs = new Map<string, number>()
+/** The capabilities most recently learned from each central's `/api/team/policy`, per connection.
+ *  Same rule as `_latencyMs`: only a SUCCESSFUL fetch updates this — a network flap or a central
+ *  that momentarily 404s must not erase a previously learned `forget.sessions`, or one blip would
+ *  disable the user's rules editor. Absent = never successfully learned. */
+const _centralCapabilities = new Map<string, string[]>()
 /** Connection ids with a push cycle currently in flight. */
 const _running = new Set<string>()
 /** Connection ids where a change arrived while `_running` — re-run instead of dropping it. */
@@ -138,6 +145,15 @@ export interface UploaderStatus {
 /** A fresh, empty status — what a connection reports before its first cycle ever runs. */
 export function emptyStatusFor(_connId: string): UploaderStatus {
   return { lastSuccessAt: null, errKind: null, latencyMs: null }
+}
+
+/** Whether this connection's central has ever advertised `forget.sessions` — Task 6's status
+ *  route reads this to report `canForget`. `false` before any successful policy fetch, exactly
+ *  like `emptyStatusFor`'s `latencyMs: null` — absence is not a negative capability, just an
+ *  unmeasured one, but the rules editor treats "unmeasured" and "no" identically (fail closed:
+ *  it must never offer a control the central may not be able to honor). */
+export function connectionCanForget(connId: string): boolean {
+  return centralCanForget(_centralCapabilities.get(connId) ?? [])
 }
 
 /** A `lastSuccessAt` this stale relative to a connection's own known interval, with NO error
@@ -807,22 +823,27 @@ export async function acquireSlot(): Promise<() => void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch the central policy: push interval + the central's data instanceId.
- * Falls back to the default interval / null id on any network or parse error.
+ * Fetch the central policy: push interval + the central's data instanceId + its advertised
+ * capabilities (Task 2's `parseCapabilities`, so Task 6's status route can report `canForget`).
+ * Falls back to the default interval / null id / empty capabilities on any network or parse
+ * error — the CALLER is responsible for not clobbering a previously learned capability list with
+ * this empty fallback (same rule the latency cache already follows), because a plain fetch
+ * failure must not disable the rules editor over one flap.
  */
-async function fetchCentralPolicy(endpoint: string): Promise<{ intervalSec: number; instanceId: string | null; latencyMs: number | null }> {
+async function fetchCentralPolicy(endpoint: string): Promise<{ intervalSec: number; instanceId: string | null; latencyMs: number | null; capabilities: string[] }> {
   const t0 = Date.now()
   try {
     const res = await fetch(`${endpoint}/api/team/policy`, { signal: AbortSignal.timeout(5_000) })
-    if (!res.ok) return { intervalSec: PUSH_INTERVAL.DEFAULT_SEC, instanceId: null, latencyMs: null }
+    if (!res.ok) return { intervalSec: PUSH_INTERVAL.DEFAULT_SEC, instanceId: null, latencyMs: null, capabilities: [] }
     const latencyMs = Date.now() - t0
-    const json = await res.json() as { pushIntervalSec?: unknown; instanceId?: unknown }
+    const json = await res.json() as { pushIntervalSec?: unknown; instanceId?: unknown; capabilities?: unknown }
     const sec = typeof json.pushIntervalSec === 'number' ? json.pushIntervalSec : PUSH_INTERVAL.DEFAULT_SEC
     const instanceId = typeof json.instanceId === 'string' ? json.instanceId : null
+    const capabilities = parseCapabilities(json.capabilities)
     // Honor express intervals (the central may dictate below the normal 15s floor).
-    return { intervalSec: clampPushInterval(sec, PUSH_INTERVAL.EXPRESS_MIN_SEC), instanceId, latencyMs }
+    return { intervalSec: clampPushInterval(sec, PUSH_INTERVAL.EXPRESS_MIN_SEC), instanceId, latencyMs, capabilities }
   } catch {
-    return { intervalSec: PUSH_INTERVAL.DEFAULT_SEC, instanceId: null, latencyMs: null }
+    return { intervalSec: PUSH_INTERVAL.DEFAULT_SEC, instanceId: null, latencyMs: null, capabilities: [] }
   }
 }
 
@@ -853,6 +874,43 @@ async function reconcileSyncState(connId: string, endpoint: string, token: strin
     await writeFile(teamSyncFile(connId), JSON.stringify({ sig }), 'utf-8')
   } catch { /* best-effort — worst case we reconcile again next cycle */ }
   if (prev?.sig) console.info(`[team-uploader] ${connId} central sync signature changed — re-pushing full history`)
+}
+
+/**
+ * Compute this connection's rules plan (the denial-based shrink detector + the seal ledger) and
+ * persist the resulting state. PURE decision, impure shell: `planRulesReconcile` (team-rules.ts)
+ * does the whole computation; this function only gathers its inputs from the shared push-cycle
+ * context and this connection's own sent-state/rules-state files, then writes the result back.
+ *
+ * Task 5 is what actually performs the removal (the journal, the batched
+ * `POST /api/team/forget`, the crash replay) against `rulesPlan.forgetIds`/`forgetRuns`; this
+ * task only computes the plan, logs it when there is something to remove, and persists the seal
+ * so the ledger stays exact once a denied day crosses into Claude's rollup — see `advanceSeal`'s
+ * CALLER CONTRACT in share-rules.ts: it must run on EVERY cycle, never skipped.
+ */
+async function reconcileRulesFor(conn: TeamConnection, ctx: PushCycleContext) {
+  const prevRules = await loadRulesState(conn.id)
+  const rawSent = await loadRawSentState(conn.id)
+  const rulesPlan = planRulesReconcile({
+    deniedRepos: conn.deniedRepos,
+    sentHashes: rawSent.hashes,
+    sentRunIds: rawSent.runIds,
+    storedSessions: ctx.storedSessions,
+    liveSessions: ctx.liveSessions,
+    workflows: ctx.workflows,
+    index: ctx.index,
+    real: ctx.realStatsCache,
+    prev: prevRules,
+  })
+  if (rulesPlan.forgetIds.length > 0 || rulesPlan.forgetRuns.length > 0) {
+    console.info(
+      `[team-uploader] ${conn.id} denylist excludes ${rulesPlan.forgetIds.length} previously-sent ` +
+      `session(s) and ${rulesPlan.forgetRuns.length} workflow run(s) the central may still hold ` +
+      `(removal lands in a later task)`,
+    )
+  }
+  await saveRulesState(conn.id, rulesPlan.next)
+  return rulesPlan
 }
 
 // Push-on-change: coalesce a burst of local file changes into a single push per connection, and
@@ -888,6 +946,7 @@ function teardownConnection(connId: string): void {
   _netErrStreak.delete(connId)
   _centralIntervalSec.delete(connId)
   _latencyMs.delete(connId)
+  _centralCapabilities.delete(connId)
   _restrictedConn.delete(connId)
   _lastRestrictedPushHash.delete(connId)
 }
@@ -928,12 +987,27 @@ async function runConnectionPushCycle(conn: TeamConnection, deps: RunPushCycleDe
     _centralIntervalSec.set(conn.id, nextIntervalSec)
     // Cache the round-trip for GET /api/team/status (team-connections.ts), which must never do
     // its own blocking probe. Only a SUCCESSFUL fetch updates it — a failed/timed-out attempt
-    // leaves the last known good value in place rather than overwriting it with noise.
-    if (policy.latencyMs != null) _latencyMs.set(conn.id, policy.latencyMs)
+    // leaves the last known good value in place rather than overwriting it with noise. The
+    // capability list follows the exact same rule (policy.latencyMs is non-null iff the fetch
+    // actually succeeded) — a flaky/old central must not erase a previously learned
+    // `forget.sessions` and disable the rules editor over one network blip.
+    if (policy.latencyMs != null) {
+      _latencyMs.set(conn.id, policy.latencyMs)
+      _centralCapabilities.set(conn.id, policy.capabilities)
+    }
+    const ctx = deps.ctx ?? await getPushContext()
+    // Rules and shrink are LOCAL facts and are evaluated unconditionally, before anything that
+    // depends on the central's identity. `reconcileSyncState` opens with `if (!instanceId) return`
+    // and `fetchCentralPolicy` reports a null instanceId for every non-OK response, parse failure,
+    // timeout and every AGENTISTICS_INGEST_ONLY central (which 404s /api/team/policy by
+    // construction) — so putting the rules check behind that guard would let a user on an older or
+    // flaky central block a repo, see a green pill, and have the removal never run (R18).
+    // The plan itself (forgetIds/forgetRuns) is consumed by Task 5's removal; this task computes
+    // it, logs it, and persists the seal so the sequence is observable before its implementation.
+    await reconcileRulesFor(conn, ctx)
     // Auto-heal a sent-state that no longer matches this central BEFORE pushing, so this cycle
     // re-sends the full history when needed.
     await reconcileSyncState(conn.id, endpoint, conn.token ?? '', policy.instanceId)
-    const ctx = deps.ctx ?? await getPushContext()
     await pushOnceDetailed({ ...conn, endpoint }, ctx)
     return nextIntervalSec
   } finally {
