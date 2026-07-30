@@ -18,7 +18,8 @@ import {
   __setNotifierForTests, saveSentState,
   acquireSlot, MAX_CONCURRENT_PUSHES, __activeSlotsForTests, matchConnectionForLeave,
   __setRestrictedForTests, __hasPendingOnChangeForTests, __clearOnChangeTimerForTests,
-  scheduleOnChangeTrigger, loadSentState,
+  __teardownConnectionForTests,
+  scheduleOnChangeTrigger, loadSentState, reconcileUploaderNow,
   type PushCycleContext,
 } from './team-uploader'
 import { updateTeamConfigAt, type TeamConfigMutator, type Preferences } from './preferences'
@@ -934,11 +935,20 @@ describe('pushOnceDetailed with a denylist', () => {
     try {
       // Cold-store signature: a populated cache while the store yields no Claude session.
       const real = { lastComputedDate: '2026-07-01', dailyActivity: [{ date: '2026-06-30', sessionCount: 9, messageCount: 20, toolCallCount: 3 }], totalSessions: 9, hourCounts: { '9': 9 } } as unknown as StatsCache
-      const ctx = makeCtx({ realStatsCache: real, liveSessions: [], storedSessions: [] })
+      // A shared (non-denied) session guarantees there IS a delta to push, so this test actually
+      // forces a POST rather than potentially asserting over an empty `fx.bodies` (a vacuous pass
+      // a focused run of the ORIGINAL version of this test exposed: `1 pass` with NO
+      // `expect() calls` recorded). This is the refusal path — a leak here is unrecoverable — so
+      // it must be genuinely exercised, not merely reachable.
+      const ctx = makeCtx({
+        realStatsCache: real,
+        liveSessions: [],
+        storedSessions: [claudeSession('kept', 'github.com/org/pub')],
+      })
       await pushOnceDetailed(fakeConn(id, fx.port, { deniedRepos: ['github.com/org/secret'] }), ctx)
-      // Either nothing was pushed at all, or what was pushed carries NO statsCache — never the
-      // unsplit one.
-      for (const b of fx.bodies) expect(b.statsCache).toBeUndefined()
+      expect(fx.bodies.length).toBe(1)
+      // What was pushed carries NO statsCache — never the unsplit one.
+      expect(fx.bodies[0]!.statsCache).toBeUndefined()
     } finally {
       fx.stop()
     }
@@ -1033,6 +1043,66 @@ describe('restricted connections do not leak an activity heartbeat (§5.3.4)', (
       expect(fx.bodies.length).toBe(1)
     } finally {
       fx.stop()
+    }
+  })
+
+  // Important 1 from review: the dedup digest must be memoized only AFTER the central actually
+  // accepts the POST. Recording it beforehand (or on a failed attempt) would permanently swallow
+  // a payload whose first attempt failed — every later cycle with the same unchanged content
+  // would match the memoized digest and never retry, silently losing that statsCache/workflow
+  // update until unrelated content happens to change.
+  it('retries an unchanged restricted keep-alive after its first POST failed', async () => {
+    let attempts = 0
+    const bodies: IngestBody[] = []
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        if (new URL(req.url).pathname === '/api/team/policy') {
+          return Response.json({ pushIntervalSec: 30, instanceId: 'inst-1', capabilities: ['forget.sessions'] })
+        }
+        attempts++
+        bodies.push(await req.json() as IngestBody)
+        // First attempt fails (central rejects/errors); every later one succeeds.
+        if (attempts === 1) return new Response('boom', { status: 500 })
+        return Response.json({ ok: true, count: 0 })
+      },
+    })
+    const id = randomConnId()
+    try {
+      const real = buildRealCacheFor([])
+      const conn = fakeConn(id, server.port!, { deniedRepos: ['github.com/org/secret'] })
+      const ctx = makeCtx({ realStatsCache: real, liveSessions: [], storedSessions: [], workflows: [] })
+      await pushOnceDetailed(conn, ctx) // fails (500) — must NOT be memoized as delivered
+      await pushOnceDetailed(conn, ctx) // identical payload — must retry, not be skipped as already-sent
+      expect(bodies.length).toBe(2)
+    } finally {
+      server.stop(true)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Controller addition — close the fan-out window on a newly-declared denylist. `_restrictedConn`
+// must be seeded from CONFIG (supervisorTick/reconcileUploaderNow), not only from a completed
+// push, or the window between a denylist being declared and this connection's first push would
+// still fan out on every local change and use an unjittered cadence — exactly the moment a user
+// has just blocked a repo, which is when the timing leak matters most.
+// ---------------------------------------------------------------------------
+
+describe('a freshly-declared denylist is honored before any push has happened', () => {
+  it('does not fan out on change once reconcileUploaderNow has seen the restriction in config', async () => {
+    const id = randomConnId()
+    const conn = fakeConn(id, 1, { deniedRepos: ['github.com/org/secret'] }) // port unused — no push happens
+    try {
+      // Sanity: nothing scheduled yet for this brand-new id.
+      expect(__hasPendingOnChangeForTests(id)).toBe(false)
+      await reconcileUploaderNow({ readPreferences: fakeReadPreferences(conn) })
+      scheduleOnChangeTrigger(id)
+      expect(__hasPendingOnChangeForTests(id)).toBe(false)
+    } finally {
+      // Clears the chain reconcileUploaderNow started (including its periodic timer) before it
+      // could ever fire against the real readPreferences().
+      __teardownConnectionForTests(id)
     }
   })
 })

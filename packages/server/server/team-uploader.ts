@@ -679,12 +679,12 @@ export async function pushOnceDetailed(
         // this cycle's payload is byte-identical to the last one actually pushed for this
         // connection. Unrestricted connections are unaffected — a steady keep-alive is not a
         // privacy leak when nothing is hidden.
+        let digest: string | undefined
         if (restricted) {
-          const digest = createHash('sha256').update(JSON.stringify({ statsCache, workflows })).digest('hex')
+          digest = createHash('sha256').update(JSON.stringify({ statsCache, workflows })).digest('hex')
           if (_lastRestrictedPushHash.get(conn.id) === digest) {
             return { count: 0 }
           }
-          _lastRestrictedPushHash.set(conn.id, digest)
         }
         try {
           const res = await fetch(`${endpoint}/api/team/ingest`, {
@@ -694,8 +694,15 @@ export async function pushOnceDetailed(
             signal: AbortSignal.timeout(ingestTimeoutMs),
           })
           // A reachable central (even a non-2xx that isn't auth) counts as contact for the pill.
-          if (res.ok) { markPushSuccess(conn.id); clearPushError(conn.id); void notifyPushRecovered(conn) }
-          else if (res.status === 401 || res.status === 403) fireHandleAuthError(conn, res.status)
+          if (res.ok) {
+            markPushSuccess(conn.id); clearPushError(conn.id); void notifyPushRecovered(conn)
+            // Only memoize the digest once the central actually accepted it — recording it
+            // BEFORE a known-successful POST would permanently swallow a payload whose first
+            // attempt failed (network error or non-2xx): every later cycle with the same
+            // unchanged content would then match the memoized digest and never retry, silently
+            // losing that statsCache/workflow update until unrelated content happens to change.
+            if (digest !== undefined) _lastRestrictedPushHash.set(conn.id, digest)
+          } else if (res.status === 401 || res.status === 403) fireHandleAuthError(conn, res.status)
         } catch (e) {
           warnPushError(conn.id, e instanceof Error ? e.message : String(e))
           void notifyPushError(conn, 'net')
@@ -1007,13 +1014,20 @@ function startConnectionChain(conn: TeamConnection): void {
  * `removeConnection`'s serialized preferences write, never from a timer, or a GC here could race
  * a concurrent "add connection" write that reintroduces the same id.
  */
-async function supervisorTick(): Promise<void> {
+async function supervisorTick(deps: { readPreferences?: typeof readPreferences } = {}): Promise<void> {
   try {
-    const prefs = await readPreferences()
+    const _readPreferences = deps.readPreferences ?? readPreferences
+    const prefs = await _readPreferences()
     const conns = prefs.team?.connections ?? []
     const liveIds = new Set(conns.map(c => c.id))
 
     for (const c of conns) {
+      // Seeded from CONFIG, not only from a completed push: the gap between a denylist being
+      // declared (or the process starting) and this connection's first push would otherwise
+      // still fan out on every local change and use an unjittered cadence — exactly the moment a
+      // user has just blocked a repo, which is when the timing leak in §5.3.4 matters most. This
+      // tick runs every ~5s, so a freshly-declared restriction is honored well before any push.
+      _restrictedConn.set(c.id, hasRestrictions(c.deniedRepos))
       if (!_activeChains.has(c.id)) startConnectionChain(c)
     }
     for (const id of Array.from(_activeChains)) {
@@ -1030,9 +1044,12 @@ async function supervisorTick(): Promise<void> {
  * renamed (team-connections.ts) so its push chain starts within about a second rather than after
  * the next tick. Safe to call before `startUploader()` — `supervisorTick` only reads preferences
  * and starts/stops per-connection chains; it does not depend on the `started` flag. Never throws.
+ *
+ * `deps.readPreferences` is injectable for tests — the default touches the developer's real
+ * ~/.agentistics/preferences.json, which a test must never do.
  */
-export async function reconcileUploaderNow(): Promise<void> {
-  await supervisorTick()
+export async function reconcileUploaderNow(deps: { readPreferences?: typeof readPreferences } = {}): Promise<void> {
+  await supervisorTick(deps)
 }
 
 let started = false
@@ -1072,6 +1089,15 @@ export function __hasPendingOnChangeForTests(connId: string): boolean {
 export function __clearOnChangeTimerForTests(connId: string): void {
   const t = _onChangeTimer.get(connId)
   if (t) { clearTimeout(t); _onChangeTimer.delete(connId) }
+}
+
+/** Test-only cleanup — clears ALL in-memory state (chains, timers, status/error maps) for a
+ *  connection, same as `teardownConnection` (no disk IO). Lets a test that started a chain via
+ *  `reconcileUploaderNow`/`supervisorTick` (which also schedules a real periodic timer) clean up
+ *  before that timer could ever fire against a fake/nonexistent connection. Never called from
+ *  production code. */
+export function __teardownConnectionForTests(connId: string): void {
+  teardownConnection(connId)
 }
 
 /** Exported so a test can exercise the fan-out-suppression rule directly (§5.3.4) without
