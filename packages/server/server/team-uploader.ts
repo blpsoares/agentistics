@@ -295,9 +295,18 @@ export async function removeConnection(
 // Pure helpers (unit-tested)
 // ---------------------------------------------------------------------------
 
-/** Deterministic content fingerprint of a session (stable JSON). */
+/**
+ * The sent-state key for one session.
+ *
+ * A real digest, not the serialized session: the v1 format stored `JSON.stringify(session)` as its
+ * value, which made `team-sent.json` roughly the size of the consolidate store and re-parsed it
+ * inside the batch loop — N copies on disk with N connections. `createHash` over that exact same
+ * string is what lets `convertSentStateV1` upgrade an existing file offline and EXACTLY, so the
+ * migration costs zero re-pushes (§5.4). Do not change what is fed to the hash without changing
+ * that converter: they are two halves of one identity.
+ */
 export function sessionHash(s: SessionMeta): string {
-  return JSON.stringify(s)
+  return createHash('sha256').update(JSON.stringify(s)).digest('hex')
 }
 
 export interface SentState {

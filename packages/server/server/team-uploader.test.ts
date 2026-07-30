@@ -21,6 +21,7 @@ import {
 } from './team-uploader'
 import { updateTeamConfigAt, type TeamConfigMutator, type Preferences } from './preferences'
 import { __setTeamConnDirForTests, TEAM_CONN_DIR, teamSentFile } from './config'
+import { convertSentStateV1 } from './team-migrate'
 import type { SessionMeta, TeamConnection, StatsCache, TeamConfig } from '@agentistics/core'
 
 // Minimal SessionMeta factory — only the fields needed for hashing/keying
@@ -63,20 +64,28 @@ function makeSession(id: string, extra?: Partial<SessionMeta>): SessionMeta {
 }
 
 describe('sessionHash', () => {
-  it('returns the JSON.stringify of the session', () => {
-    const s = makeSession('abc')
-    expect(sessionHash(s)).toBe(JSON.stringify(s))
+  const s = (over: Partial<SessionMeta> = {}): SessionMeta => ({
+    session_id: 's1', project_path: '/p', start_time: '2026-07-01T10:00:00.000Z',
+    ...over,
+  } as SessionMeta)
+
+  it('is a 64-char lowercase hex digest', () => {
+    expect(sessionHash(s())).toMatch(/^[a-f0-9]{64}$/)
   })
 
-  it('differs when content differs', () => {
-    const s1 = makeSession('x', { input_tokens: 100 })
-    const s2 = makeSession('x', { input_tokens: 200 })
-    expect(sessionHash(s1)).not.toBe(sessionHash(s2))
+  it('is stable for equal inputs and differs for a changed field', () => {
+    expect(sessionHash(s())).toBe(sessionHash(s()))
+    expect(sessionHash(s({ project_path: '/q' }))).not.toBe(sessionHash(s()))
   })
 
-  it('is stable for the same content', () => {
-    const s = makeSession('stable')
-    expect(sessionHash(s)).toBe(sessionHash({ ...s }))
+  // THE property the v1->v2 migration depends on: the v1 stored value IS JSON.stringify(session),
+  // so sha256 of that value must equal the new digest of the same session. Without this, every
+  // migrated member re-pushes its whole history on the first boot after upgrading.
+  it('equals sha256 of the v1 stored value for the same session', () => {
+    const session = s()
+    const v1 = { s1: JSON.stringify(session) }
+    const converted = convertSentStateV1(v1)
+    expect(converted?.hashes.s1).toBe(sessionHash(session))
   })
 })
 
