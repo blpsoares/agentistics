@@ -18,7 +18,16 @@ import { connectionId, defaultTeam, normalizeTeamConfig, normalizeEndpointKey } 
 import { readPreferences, updateTeamConfig, PreferencesLockTimeoutError } from './preferences'
 import { safeConnId } from './config'
 import { readJsonLimited, LIMITS } from './limits'
-import { removeConnection, getUploaderStatus, emptyStatusFor, reconcileUploaderNow, pushNow } from './team-uploader'
+import {
+  removeConnection, getUploaderStatus, emptyStatusFor, reconcileUploaderNow, pushNow,
+  getResyncProgress, connectionCanForget, getPushContext, type UploaderStatus,
+} from './team-uploader'
+import type { ForgetProgress } from './team-forget-client'
+import { loadRulesState } from './team-rules'
+import {
+  normalizeDenied, hasRestrictions, withUnresolvedDenied, denialSignature,
+  attributionBoundary, prehistoryCount,
+} from './share-rules'
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -47,6 +56,15 @@ export interface ConnectionBody {
   token: string
   org?: string
   label?: string
+  deniedRepos?: string[]
+}
+
+/** Pure: is `v` an array of strings? Used to validate `deniedRepos` on both bodies below —
+ *  junk (a bare string, a number, an object, a mixed-type array) is rejected outright rather than
+ *  filtered down to whatever happened to be a string, which would silently accept a malformed
+ *  request instead of 400ing it. */
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every(x => typeof x === 'string')
 }
 
 /** Validate + normalize the POST /api/team/connections body. Pure. */
@@ -64,20 +82,53 @@ export function validateConnectionBody(raw: unknown): ConnectionBody | { error: 
   const token = typeof r.token === 'string' ? r.token : ''
   const org = typeof r.org === 'string' && r.org.trim() ? r.org.trim() : undefined
   const label = typeof r.label === 'string' && r.label.trim() ? r.label.trim() : undefined
-  return { endpoint, token, org, label }
+  let deniedRepos: string[] | undefined
+  if ('deniedRepos' in r && r.deniedRepos !== undefined) {
+    if (!isStringArray(r.deniedRepos)) return { error: 'deniedRepos must be an array of strings' }
+    deniedRepos = r.deniedRepos
+  }
+  return { endpoint, token, org, label, deniedRepos }
 }
 
 export interface PatchBody {
-  label: string
+  label?: string
+  deniedRepos?: string[]
 }
 
-/** Validate the PATCH /api/team/connections/:id body. Pure. An empty string is a legitimate
- *  "clear the label" — the card then falls back to the endpoint host for display. */
+/** Validate the PATCH /api/team/connections/:id body. Pure. An empty string label is a
+ *  legitimate "clear the label" — the card then falls back to the endpoint host for display. An
+ *  empty `deniedRepos` array is likewise legitimate — the explicit "un-block everything" shape.
+ *  At least one of the two fields must be present, or there is nothing to update. */
 export function validatePatchBody(raw: unknown): PatchBody | { error: string } {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: 'invalid JSON body' }
   const r = raw as Record<string, unknown>
-  if (typeof r.label !== 'string') return { error: 'label must be a string' }
-  return { label: r.label.trim() }
+  const out: PatchBody = {}
+  if ('label' in r) {
+    if (typeof r.label !== 'string') return { error: 'label must be a string' }
+    out.label = r.label.trim()
+  }
+  if ('deniedRepos' in r && r.deniedRepos !== undefined) {
+    if (!isStringArray(r.deniedRepos)) return { error: 'deniedRepos must be an array of strings' }
+    out.deniedRepos = r.deniedRepos
+  }
+  if (out.label === undefined && out.deniedRepos === undefined) {
+    return { error: 'nothing to update — provide label and/or deniedRepos' }
+  }
+  return out
+}
+
+/**
+ * The zero→non-zero transition rule (§4.2), applied HERE and nowhere else — the result is what
+ * gets PERSISTED, so `NO_REPO_KEY` lands in the stored list and the picker renders it pre-blocked;
+ * only an explicit later edit removes it. An already-restricted connection's edit is honoured
+ * AS-IS (no forced re-add of the sentinel), which is also what makes repeated application from the
+ * same starting point idempotent: `previous` reflects what is already persisted, so applying the
+ * rule twice against an unchanged `previous` yields the same `requested` handling both times.
+ */
+export function resolveDeniedRepos(previous: readonly string[] | undefined, requested: readonly string[]): string[] {
+  const wasRestricted = hasRestrictions(previous)
+  if (!wasRestricted && hasRestrictions(requested)) return withUnresolvedDenied(requested)
+  return [...requested]
 }
 
 export type ConnectionUpsertDecision =
@@ -247,7 +298,10 @@ export async function addOrUpdateConnection(body: ConnectionBody): Promise<AddCo
           // never be silently overridden by whoami on every reconnect.
           org: body.org ?? who.org ?? existing.org,
           user: who.user ?? existing.user,
-          // id and label are preserved on an update — renaming goes through PATCH.
+          // id, label AND deniedRepos are preserved on an update (a reconnect/token-rotation),
+          // never overwritten from the body — the rules editor is the only writer of an EXISTING
+          // connection's denylist (PATCH), so a body.deniedRepos here is silently ignored rather
+          // than reset to it.
         }
         outcome = { action: 'update', connId: existing.id }
         const connections = current.connections.map(c => (c.id === existing.id ? updated : c))
@@ -260,7 +314,12 @@ export async function addOrUpdateConnection(body: ConnectionBody): Promise<AddCo
         token: body.token,
         org: body.org ?? who.org ?? 'default',
         user: who.user ?? '',
-        deniedRepos: [],
+        // R10: deniedRepos travels in the SAME create as the rest of the connection, committed
+        // inside this one updateTeamConfig transaction — nudgeAfterInsert() below only runs once
+        // it resolves, so the uploader can never see this connection before its rules exist and
+        // push the entire unfiltered history first. The zero→non-zero transition (§4.2) applies
+        // here too: `previous` is undefined (a brand-new connection has no prior state).
+        deniedRepos: resolveDeniedRepos(undefined, body.deniedRepos ?? []),
         addedAt: new Date().toISOString(),
         ...(body.label !== undefined ? { label: body.label } : {}),
       }
@@ -310,7 +369,22 @@ export async function handleAddConnection(req: Request): Promise<Response> {
   return json({ ok: true, id: result.connId, action: result.action })
 }
 
-/** PATCH /api/team/connections/:id — { label } — read-modify-write that entry only. */
+/** Best-effort nudge after a rules change (§6.1): the route only PERSISTS the new denylist and
+ *  kicks this connection's next cycle off immediately (instead of waiting out its own interval).
+ *  Everything past that — the shrink detector, the journal, the batched forget, the rebuilt cache
+ *  push — runs SERVER-SIDE inside `runConnectionCycle`. Never orchestrated from the browser: a tab
+ *  closing mid-sequence must not leave the journal open with no client left to resume it. Never
+ *  throws, never delays the response. */
+function nudgeAfterRulesChange(connId: string): void {
+  void pushNow(connId).catch(() => { /* best-effort */ })
+}
+
+/** PATCH /api/team/connections/:id — { label?, deniedRepos? } — read-modify-write that entry
+ *  only. A `deniedRepos` change applies `resolveDeniedRepos`'s zero→non-zero transition against
+ *  the entry's OWN previous list (never a global default) and, once persisted, triggers the §6.1
+ *  reconcile cycle for this connection. Returns `{ ok, queued: true }` when a rules change was
+ *  accepted, so the caller knows the removal (if any) is now running server-side rather than
+ *  applied synchronously. */
 export async function handlePatchConnection(req: Request, rawId: string): Promise<Response> {
   let id: string
   try {
@@ -325,13 +399,20 @@ export async function handlePatchConnection(req: Request, rawId: string): Promis
   if ('error' in body) return json({ error: body.error }, 400)
 
   let found = false
+  let rulesChanged = false
   try {
     await updateTeamConfig((current: TeamConfig) => {
       const existing = current.connections.find(c => c.id === id)
       if (!existing) return undefined
       found = true
-      const connections = current.connections.map(c =>
-        c.id === id ? { ...c, label: body.label || undefined } : c)
+      let deniedRepos = existing.deniedRepos
+      if (body.deniedRepos !== undefined) {
+        deniedRepos = resolveDeniedRepos(existing.deniedRepos, body.deniedRepos)
+        rulesChanged = true
+      }
+      const connections = current.connections.map(c => c.id === id
+        ? { ...c, ...(body.label !== undefined ? { label: body.label || undefined } : {}), deniedRepos }
+        : c)
       return normalizeTeamConfig({ ...defaultTeam(), mode: 'member', connections })
     })
   } catch (err) {
@@ -340,6 +421,10 @@ export async function handlePatchConnection(req: Request, rawId: string): Promis
   }
 
   if (!found) return json({ error: 'unknown connection' }, 404)
+  if (rulesChanged) {
+    nudgeAfterRulesChange(id)
+    return json({ ok: true, queued: true })
+  }
   return json({ ok: true })
 }
 
@@ -456,6 +541,85 @@ export interface ConnectionStatusEntry {
   lastSuccessAt: number | null
   errKind: 'auth' | 'net' | null
   latencyMs: number | null
+  /** Size of the stored denylist (including NO_REPO_KEY). NEVER the list itself — see the class
+   *  docstring above `handleTeamStatus`: the full list is same-origin-only, via /api/preferences. */
+  deniedCount: number
+  /** From the STORED list (`hasRestrictions`), never from uploader/push-cycle state — a
+   *  connection whose rules were just saved is restricted immediately, even before its first
+   *  cycle has run. */
+  restricted: boolean
+  /** The day after Claude's own rollup watermark — the local honesty marker from §4.4/§5.9.
+   *  Shared across every connection (it describes THIS machine's stats-cache, not a connection),
+   *  and lives on this route only: never sent to a central. `null` = unknowable this cycle
+   *  (no context could be built), NOT the same fact as `''` (nothing rolled up yet). */
+  boundary: string | null
+  /** How many stored sessions fall before `boundary` — the size of the block no rule can split.
+   *  `null` = unknowable, distinct from a real `0`. Never coerce one into the other. */
+  prehistorySessions: number | null
+  /** Whether this connection's central has ever advertised `forget.sessions`. Absence reads as
+   *  `false` (fail closed) — a network flap must never flip a previously-learned `true`. */
+  canForget: boolean
+  /** The complement of `canForget` — kept as its own field (rather than inferred client-side) so
+   *  the UI never has to invert the polarity itself. */
+  centralTooOld: boolean
+  /** Live progress of an in-flight retroactive removal for this connection, or `null` when none
+   *  is running. */
+  resync: ForgetProgress | null
+  /** True while this connection's declared rules are not yet enforced on its central — a forget
+   *  sequence has not completed successfully since the denylist last changed. The UI must never
+   *  report success while this is true. */
+  pendingRules: boolean
+}
+
+/** The local facts `buildConnectionStatusEntry` cannot derive from `conn`/`uploaderStatus` alone —
+ *  gathered once per status build (boundary/prehistorySessions are shared across every
+ *  connection) and threaded in, so the entry-building itself stays pure and unit-testable without
+ *  touching the filesystem or the uploader's module-level state. */
+export interface ConnectionLocalFacts {
+  boundary: string | null
+  prehistorySessions: number | null
+  canForget: boolean
+  resync: ForgetProgress | null
+  /** This connection's persisted `RulesState.rulesHash` (team-rules.ts) — `''` when no rules
+   *  cycle has ever run for it, which reads as `denialSignature([])` (never as "changed"), the
+   *  same rule `planRulesReconcile` itself follows. */
+  rulesHash: string
+}
+
+/**
+ * Build one connection's `/api/team/status` entry from already-resolved local facts. PURE — the
+ * whole point of the split is that "restricted comes from the stored list, not uploader state"
+ * (and the rest of §5.9's honesty markers) can be asserted directly, without `readPreferences()`,
+ * `getPushContext()` or any of `team-uploader.ts`'s per-connection singletons in the test.
+ *
+ * Never includes `token` or the denylist's contents — only `deniedCount`. See the class docstring
+ * above `handleTeamStatus`.
+ */
+export function buildConnectionStatusEntry(
+  conn: TeamConnection,
+  uploaderStatus: UploaderStatus,
+  local: ConnectionLocalFacts,
+): ConnectionStatusEntry {
+  const prevHash = local.rulesHash ? local.rulesHash : denialSignature([])
+  const pendingRules = denialSignature(conn.deniedRepos) !== prevHash
+  return {
+    id: conn.id,
+    endpoint: conn.endpoint,
+    org: conn.org,
+    user: conn.user,
+    ...(conn.label ? { label: conn.label } : {}),
+    lastSuccessAt: uploaderStatus.lastSuccessAt,
+    errKind: uploaderStatus.errKind,
+    latencyMs: uploaderStatus.latencyMs,
+    deniedCount: normalizeDenied(conn.deniedRepos).size,
+    restricted: hasRestrictions(conn.deniedRepos),
+    boundary: local.boundary,
+    prehistorySessions: local.prehistorySessions,
+    canForget: local.canForget,
+    centralTooOld: !local.canForget,
+    resync: local.resync,
+    pendingRules,
+  }
 }
 
 export interface AggregatedConnectionStatus {
@@ -492,36 +656,55 @@ export function aggregateConnectionStatuses(entries: ConnectionStatusEntry[]): A
 }
 
 /**
- * GET /api/team/status — the per-connection shape (spec §9.5, minus `deniedCount`/`boundary`)
- * PLUS the aggregated `{lastSuccessAt, errKind, latencyMs}` at the top level, for
- * `MemberConnectionStatus.tsx` (the status pill), which does not yet read `connections[]`. Reads
- * CACHED values only (`getUploaderStatus`, populated by the uploader's own push cycle, latency
- * included) — never makes its own blocking network call. The previous single-connection handler
- * did a fresh ~4s-timeout probe on every call while the frontend polls every 5s, which with two
- * offline centrals alone exceeds its own poll interval. Never returns a token.
+ * GET /api/team/status — the per-connection shape (spec §9.5) PLUS the aggregated
+ * `{lastSuccessAt, errKind, latencyMs}` at the top level, for `MemberConnectionStatus.tsx` (the
+ * status pill), which does not yet read `connections[]`. Reads CACHED values only
+ * (`getUploaderStatus`, populated by the uploader's own push cycle, latency included) — never
+ * makes its own blocking network call. The previous single-connection handler did a fresh
+ * ~4s-timeout probe on every call while the frontend polls every 5s, which with two offline
+ * centrals alone exceeds its own poll interval. Never returns a token, and never the contents of
+ * `deniedRepos` — only `deniedCount` (§6.4: the full list is same-origin-only, via
+ * `GET /api/preferences`). `boundary`/`prehistorySessions` are local honesty markers (§4.4) that
+ * exist on this route and nowhere on the wire to a central.
  */
 export async function handleTeamStatus(_req: Request): Promise<Response> {
   const prefs = await readPreferences()
   const team = prefs.team
   const connections = team?.connections ?? []
   const byConn = getUploaderStatus()
-  const entries: ConnectionStatusEntry[] = connections.map(c => {
+
+  // The local honesty markers (§4.4/§5.9) describe THIS MACHINE's own Claude rollup — the same
+  // fact for every connection — so they are computed ONCE from the shared push-cycle context
+  // (already cached/TTL'd by getPushContext for the real push cycle) and reused per entry, never
+  // derived per connection and never put on the wire to any central. Best-effort: a context that
+  // cannot be built reports "unknowable" (null), never a guessed 0.
+  let boundary: string | null = null
+  let prehistorySessions: number | null = null
+  if (connections.length > 0) {
+    try {
+      const ctx = await getPushContext()
+      boundary = ctx.realStatsCache ? attributionBoundary(ctx.realStatsCache) : null
+      prehistorySessions = ctx.realStatsCache ? prehistoryCount(ctx.realStatsCache, boundary) : null
+    } catch {
+      // best-effort — leave both null
+    }
+  }
+
+  const entries: ConnectionStatusEntry[] = await Promise.all(connections.map(async c => {
     // A connection that has not run a single cycle yet has no entry at all in
     // `getUploaderStatus()` (it only reports ids that pushed or failed) — `emptyStatusFor` is the
     // one definition of what that state looks like, so the shape can never drift between the
     // "never ran" and "ran" branches of this response.
-    const st = byConn[c.id] ?? emptyStatusFor(c.id)
-    return {
-      id: c.id,
-      endpoint: c.endpoint,
-      org: c.org,
-      user: c.user,
-      ...(c.label ? { label: c.label } : {}),
-      lastSuccessAt: st.lastSuccessAt,
-      errKind: st.errKind,
-      latencyMs: st.latencyMs,
-    }
-  })
+    const uploaderStatus = byConn[c.id] ?? emptyStatusFor(c.id)
+    const rules = await loadRulesState(c.id)
+    return buildConnectionStatusEntry(c, uploaderStatus, {
+      boundary,
+      prehistorySessions,
+      canForget: connectionCanForget(c.id),
+      resync: getResyncProgress(c.id),
+      rulesHash: rules.rulesHash,
+    })
+  }))
   const aggregated = aggregateConnectionStatuses(entries)
   return json({ mode: team?.mode ?? 'solo', ...aggregated, connections: entries })
 }
