@@ -109,6 +109,30 @@ const _resumeForget = new Map<string, ForgetJournal>()
  */
 const _lastPushedPayloadHash = new Map<string, string>()
 
+/**
+ * Consecutive suppressed (unchanged, restricted, empty-delta) cycles for a connection. Bounds how
+ * long the §5.3.4 dedup may go without actually contacting the central — a suppressed cycle sends
+ * no request at all, so a revoked token, a wiped central, or a central that is simply down would
+ * otherwise never be detected for as long as a quiet blocked repo's payload stays unchanged (the
+ * pill reads healthy forever, because nothing is ever sent that could disprove it). At
+ * `MAX_SUPPRESSED_STREAK + 1` the cycle forces a real push regardless of the unchanged payload,
+ * whose actual response drives `markPushSuccess`/auth handling exactly like any other push.
+ *
+ * This does NOT reopen the correlation leak the dedup exists to close: that leak is a push's
+ * TIMING correlating with the user's LOCAL activity (a push firing within ~2s of a file write
+ * reveals session boundaries and working hours). A forced push that fires once every N cycles
+ * regardless of what happened locally carries none of that — its timing is a function of the
+ * wall clock (plus the connection's existing ±20% cadence jitter), never of the user's activity.
+ * What must never happen is making the forced push conditional on anything local.
+ */
+const _suppressedStreak = new Map<string, number>()
+
+/** N in "suppress at most N in a row" above. At the median 30s push interval this forces a real
+ *  contact roughly every 30s * 40 = 1200s = 20 minutes — long enough that a legitimately quiet
+ *  blocked repo still mostly stays quiet, short enough that a revoked token or dead central is
+ *  caught well within the same working session rather than surviving indefinitely. */
+export const MAX_SUPPRESSED_STREAK = 40
+
 function hostOf(endpoint: string): string {
   try { return new URL(endpoint).host || endpoint } catch { return endpoint }
 }
@@ -734,14 +758,34 @@ export async function pushOnceDetailed(
         // connection (by either this branch or the batch path below). Unrestricted connections
         // are unaffected — a steady keep-alive is not a privacy leak when nothing is hidden.
         if (restricted && _lastPushedPayloadHash.get(conn.id) === payloadDigest) {
-          // The cycle still completed successfully — nothing was wrong, there was simply nothing
-          // new to say. Mark success so a legitimately quiet restricted connection's status pill
-          // does not drift into "unreachable" purely from the passage of time (see
-          // `getUploaderStatus`'s STALE_INTERVAL_MULTIPLIER): this IS the intended behavior
-          // §5.3.4 asks for, not a degraded one.
-          markPushSuccess(conn.id); clearPushError(conn.id); void notifyPushRecovered(conn)
-          return { count: 0 }
+          const streak = (_suppressedStreak.get(conn.id) ?? 0) + 1
+          if (streak <= MAX_SUPPRESSED_STREAK) {
+            // Suppressed, NOT marked as success: we never contacted the central this cycle, so
+            // claiming success here would let a revoked token, a wiped central, or a central that
+            // is simply down go undetected for as long as the payload stays unchanged — exactly
+            // the quiet-blocked-repo case this dedup exists to keep quiet. `markPushSuccess` is
+            // only earned by an actual response (see the forced push below and every other path
+            // in this function).
+            _suppressedStreak.set(conn.id, streak)
+            return { count: 0 }
+          }
+          // The bound elapsed: force a real push even though nothing changed, purely to re-verify
+          // liveness. This does NOT reopen the §5.3.4 correlation leak that dedup exists to close
+          // — that leak is about a push's TIMING correlating with the user's local activity (a
+          // push firing within ~2s of a file write reveals session boundaries and working hours).
+          // A push that fires once every MAX_SUPPRESSED_STREAK cycles regardless of what happened
+          // locally carries no such correlation: its timing is a function of the wall clock (plus
+          // the existing ±20% jitter on the connection's cadence), never of the user's activity.
+          // Falls through to the normal fetch below, whose real response drives
+          // markPushSuccess/auth handling exactly like any other push.
         }
+        // Reached whenever a real push is about to be attempted: unrestricted, a restricted
+        // connection whose payload actually changed, or a restricted connection whose suppression
+        // bound just elapsed. Reset the streak NOW, before the network call — an ATTEMPT is what
+        // resets it, not a successful one: a failed forced push must not leave the streak pinned
+        // past the bound, or every later cycle would force another attempt instead of going back
+        // to suppressing for up to MAX_SUPPRESSED_STREAK cycles.
+        if (restricted) _suppressedStreak.set(conn.id, 0)
         try {
           const res = await fetch(`${endpoint}/api/team/ingest`, {
             method: 'POST',
@@ -1074,6 +1118,7 @@ function teardownConnection(connId: string): void {
   _centralCapabilities.delete(connId)
   _restrictedConn.delete(connId)
   _lastPushedPayloadHash.delete(connId)
+  _suppressedStreak.delete(connId)
   _resyncProgress.delete(connId)
   _resyncNotified.delete(connId)
   _resumeForget.delete(connId)

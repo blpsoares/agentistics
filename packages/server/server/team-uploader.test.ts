@@ -20,7 +20,7 @@ import {
   acquireSlot, MAX_CONCURRENT_PUSHES, __activeSlotsForTests, matchConnectionForLeave,
   __setRestrictedForTests, __hasPendingOnChangeForTests, __clearOnChangeTimerForTests,
   __teardownConnectionForTests,
-  scheduleOnChangeTrigger, loadSentState, reconcileUploaderNow,
+  scheduleOnChangeTrigger, loadSentState, reconcileUploaderNow, MAX_SUPPRESSED_STREAK,
   replayForgetJournals, getResyncProgress,
   type PushCycleContext,
 } from './team-uploader'
@@ -1173,6 +1173,111 @@ describe('restricted connections do not leak an activity heartbeat (§5.3.4)', (
     } finally {
       fx.stop()
     }
+  })
+
+  // Review round 3 — the third deferred Minor turned into an Important once it was pinned down:
+  // `markPushSuccess` on a suppressed cycle claimed contact that never happened, so a revoked
+  // token, a wiped central, or a dead central was invisible for as long as a quiet blocked repo's
+  // payload stayed unchanged. The fix bounds the suppression instead: at most
+  // MAX_SUPPRESSED_STREAK in a row, then a real (unconditional) push re-verifies liveness. Its
+  // timing is a function of the cycle count alone, never of local activity, so it does not reopen
+  // the §5.3.4 correlation leak.
+  describe('the suppression bound re-verifies liveness instead of claiming success forever', () => {
+    it('the bound: N consecutive unchanged restricted cycles produce exactly one POST at the boundary — not N, not zero', async () => {
+      const fx = ingestFixture()
+      const id = randomConnId()
+      try {
+        const real = buildRealCacheFor([])
+        const conn = fakeConn(id, fx.port, { deniedRepos: ['github.com/org/secret'] })
+        const ctx = makeCtx({ realStatsCache: real, liveSessions: [], storedSessions: [], workflows: [] })
+
+        await pushOnceDetailed(conn, ctx) // baseline — establishes the memo
+        expect(fx.bodies.length).toBe(1)
+
+        for (let i = 0; i < MAX_SUPPRESSED_STREAK; i++) {
+          await pushOnceDetailed(conn, ctx)
+        }
+        // Exactly MAX_SUPPRESSED_STREAK suppressed cycles — zero additional POSTs (not N of them).
+        expect(fx.bodies.length).toBe(1)
+
+        await pushOnceDetailed(conn, ctx) // the (N+1)th — the bound elapses
+        // Exactly one more POST (not zero — the bound must actually fire).
+        expect(fx.bodies.length).toBe(2)
+      } finally {
+        fx.stop()
+      }
+    })
+
+    it('after the bound elapses, a request IS attempted and an unreachable central is reported rather than staying healthy', async () => {
+      const fx = ingestFixture()
+      const id = randomConnId()
+      const real = buildRealCacheFor([])
+      const conn = fakeConn(id, fx.port, { deniedRepos: ['github.com/org/secret'] })
+      const ctx = makeCtx({
+        realStatsCache: real, liveSessions: [], storedSessions: [], workflows: [],
+        ingestTimeoutMs: 500, // fail fast against the now-dead server, don't wait out the default
+      })
+
+      await pushOnceDetailed(conn, ctx) // baseline succeeds — establishes the memo
+      expect(fx.bodies.length).toBe(1)
+      expect(getUploaderStatus()[id]?.errKind ?? null).toBe(null)
+      fx.stop() // the central becomes unreachable
+
+      for (let i = 0; i < MAX_SUPPRESSED_STREAK; i++) {
+        const r = await pushOnceDetailed(conn, ctx)
+        expect(r.count).toBe(0)
+        // Suppressed cycles must not claim success — no request was ever attempted against the
+        // now-dead server, so the pill must not read healthy on the strength of nothing.
+        expect(getUploaderStatus()[id]?.errKind ?? null).toBe(null)
+      }
+
+      // The (N+1)th cycle forces a real request against the dead server — it must fail and be
+      // REPORTED, not silently re-suppressed.
+      await pushOnceDetailed(conn, ctx)
+      expect(getUploaderStatus()[id]?.errKind).toBe('net')
+    })
+
+    it('after the bound elapses, a 401 reaches the auth-error path instead of being invisible forever', async () => {
+      let calls = 0
+      const server = Bun.serve({
+        port: 0,
+        async fetch(req) {
+          if (new URL(req.url).pathname === '/api/team/policy') {
+            return Response.json({ pushIntervalSec: 30, instanceId: 'inst-1', capabilities: [] })
+          }
+          calls++
+          await req.json()
+          // First contact (the baseline) succeeds; the central revokes the token after that.
+          if (calls === 1) return Response.json({ ok: true, count: 0 })
+          return new Response('token revoked', { status: 401 })
+        },
+      })
+      const id = randomConnId()
+      try {
+        const real = buildRealCacheFor([])
+        const conn = fakeConn(id, server.port!, { deniedRepos: ['github.com/org/secret'] })
+        const ctx = makeCtx({ realStatsCache: real, liveSessions: [], storedSessions: [], workflows: [] })
+
+        await pushOnceDetailed(conn, ctx) // baseline — establishes the memo
+        expect(calls).toBe(1)
+
+        for (let i = 0; i < MAX_SUPPRESSED_STREAK; i++) {
+          await pushOnceDetailed(conn, ctx)
+        }
+        // Still suppressed — no network reached the central yet, so no 401 could have been seen.
+        expect(calls).toBe(1)
+
+        // The (N+1)th cycle forces the real request, which the central answers with a 401.
+        await pushOnceDetailed(conn, ctx)
+        expect(calls).toBe(2)
+        // fireHandleAuthError's synchronous portion (notifyPushError's _pushErrKind write) runs
+        // before any awaited step, but yield one tick to be robust against microtask ordering.
+        await new Promise(resolve => setTimeout(resolve, 0))
+        expect(getUploaderStatus()[id]?.errKind).toBe('auth')
+      } finally {
+        server.stop(true)
+      }
+    })
   })
 })
 
