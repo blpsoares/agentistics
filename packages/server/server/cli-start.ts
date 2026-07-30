@@ -32,7 +32,7 @@ import { spawn } from 'node:child_process'
 import { writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, platform } from 'node:os'
-import { DEFAULT_TEAM } from '@agentistics/core'
+import { DEFAULT_TEAM, type TeamConnection } from '@agentistics/core'
 import type {
   ActionResult,
   ActionTarget,
@@ -110,15 +110,27 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 // state + detection
 type Mode = 'solo' | 'central' | 'member'
 
-async function loadState(): Promise<{ mode: Mode; endpoint?: string; mouse: boolean }> {
+/**
+ * `connections` is the authority; `endpoint` is only the legacy MIRROR of `connections[0]` that
+ * `normalizeTeamConfig` keeps writing for downgrades. Every member-mode decision below reads the
+ * array, because the mirror cannot answer "how many centrals" — and a control center that answers
+ * that question with one endpoint out of three is the same misreport `agentop status` was fixed
+ * for.
+ */
+async function loadState(): Promise<{ mode: Mode; endpoint?: string; connections: TeamConnection[]; mouse: boolean }> {
   try {
     const prefs = await readPreferences()
     // Mouse ON unless the preference says otherwise — the default the control center assumes, and
     // the one an unreadable preferences file falls back to below. It is the reachable-by-default
     // half of the setting; `m` in the app is how it is turned off, and it is written back here.
-    return { mode: prefs.team?.mode ?? 'solo', endpoint: prefs.team?.endpoint, mouse: prefs.mouse !== false }
+    return {
+      mode: prefs.team?.mode ?? 'solo',
+      endpoint: prefs.team?.endpoint,
+      connections: prefs.team?.connections ?? [],
+      mouse: prefs.mouse !== false,
+    }
   } catch {
-    return { mode: 'solo', mouse: true }
+    return { mode: 'solo', connections: [], mouse: true }
   }
 }
 
@@ -1041,21 +1053,30 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
     return logRuntime(source, up)
   }
 
-  const modeSentence = (s: CliStrings, mode: Mode): string =>
+  const modeSentence = (s: CliStrings, mode: Mode, connections: number): string =>
     // The endpoint travels in its own field and the header prints it separately; embedding it
-    // here too would render it twice.
-    mode === 'member' ? s.configMemberBare : mode === 'central' ? s.configCentral : s.configSolo
+    // here too would render it twice. With MORE than one central the count is the fact the
+    // endpoint field cannot carry on its own, so the sentence names it.
+    mode === 'member' ? (connections > 1 ? s.configMembers(connections) : s.configMemberBare)
+    : mode === 'central' ? s.configCentral
+    : s.configSolo
 
   return {
     get lang() { return lang },
 
     async refresh(): Promise<ControlStatus> {
       const s = S()
-      const [{ mode, endpoint, mouse }, services] = await Promise.all([loadState(), serviceRows()])
+      const [{ mode, endpoint, connections, mouse }, services] = await Promise.all([loadState(), serviceRows()])
       return {
         mode,
-        modeLabel: modeSentence(s, mode),
-        endpoint: mode === 'member' ? endpoint : undefined,
+        modeLabel: modeSentence(s, mode, connections.length),
+        // Every endpoint, not the mirror's first one: the detail pane is where the user checks
+        // WHICH centrals this machine feeds, and naming one of three there reads as a machine that
+        // is connected to one. `fitValue` degrades the joined list the same way it degrades a
+        // single URL.
+        endpoint: mode !== 'member' ? undefined
+          : connections.length > 1 ? connections.map(c => c.endpoint).join(' · ')
+          : (connections[0]?.endpoint ?? endpoint),
         services,
         version: CURRENT_VERSION,
         latestVersion,
@@ -1123,11 +1144,26 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       return { ok: false, message: lastLine(text) || s.connectFailed }
     },
 
+    /**
+     * Leave a central — and with several connected, WHICH one is a question.
+     *
+     * `memberLeave()` handles 0/1/N itself and refuses to guess `connections[0]`; its N-connection
+     * branch opens a picker, so that case goes through `suspend` (a question needs the real tty —
+     * a prompt captured into the status line is one nobody can answer, and Ink still owns the
+     * keyboard). One connection asks nothing and stays captured, which is the common path.
+     *
+     * The message is derived from what is LEFT afterwards rather than asserted: "back to solo" was
+     * simply false when a machine that fed three centrals left one.
+     */
     async disconnect(): Promise<ActionResult> {
       const s = S()
-      const { value: code, text } = await captureOutput(() => memberLeave())
-      if (code === 0) return { ok: true, message: s.disconnected }
-      return { ok: false, message: lastLine(text) || s.disconnectFailed }
+      const before = (await loadState()).connections.length
+      const { code, text } = before > 1
+        ? { code: await suspend(() => memberLeave()), text: '' }
+        : await captureOutput(() => memberLeave()).then(r => ({ code: r.value, text: r.text }))
+      if (code !== 0) return { ok: false, message: lastLine(text) || s.disconnectFailed }
+      const after = (await loadState()).connections.length
+      return { ok: true, message: after > 0 ? s.stillConnected(after) : s.disconnected }
     },
 
     /**
@@ -1172,6 +1208,22 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
     // both need a real action to succeed first (`initCentral`, `connect`), which writes it.
     async setMode(): Promise<ActionResult> {
       const s = S()
+      /**
+       * Going solo with centrals attached is a LEAVE, not a preference write.
+       *
+       * `{ ...DEFAULT_TEAM }` carries an explicit `connections: []`, which `mergeTeamPayload`
+       * honours as a replacement of the whole array — so this used to drop every connection AND
+       * every token in one write. A member token is minted on the central and stored nowhere else
+       * on this machine, so that is unrecoverable without re-minting one per central; worse, each
+       * central kept serving this machine's data while the machine had no way left to ask it to
+       * stop. `--all` asks nothing, so it stays captured, and a leave that FAILED aborts the write
+       * instead of orphaning the tokens it could not surrender.
+       */
+      const { connections } = await loadState()
+      if (connections.length > 0) {
+        const { value: code, text } = await captureOutput(() => memberLeave({ all: true }))
+        if (code !== 0) return { ok: false, message: lastLine(text) || s.disconnectFailed }
+      }
       try {
         await writePreferences({ team: { ...DEFAULT_TEAM } })
         return { ok: true, message: s.soloSet }
