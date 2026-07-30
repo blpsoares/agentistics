@@ -11,6 +11,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'bun:test'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mkdir, rm } from 'node:fs/promises'
+import { existsSync, readFileSync } from 'node:fs'
 import {
   sessionHash, selectDeltas, emptyStatusFor, getUploaderStatus,
   pushOnceDetailed, removeConnection, runConnectionCycle,
@@ -20,10 +21,12 @@ import {
   __setRestrictedForTests, __hasPendingOnChangeForTests, __clearOnChangeTimerForTests,
   __teardownConnectionForTests,
   scheduleOnChangeTrigger, loadSentState, reconcileUploaderNow,
+  replayForgetJournals, getResyncProgress,
   type PushCycleContext,
 } from './team-uploader'
 import { updateTeamConfigAt, type TeamConfigMutator, type Preferences } from './preferences'
-import { __setTeamConnDirForTests, TEAM_CONN_DIR, teamSentFile } from './config'
+import { __setTeamConnDirForTests, TEAM_CONN_DIR, teamSentFile, teamSyncFile, teamForgetFile } from './config'
+import { loadRulesState, emptyRulesState } from './team-rules'
 import { convertSentStateV1 } from './team-migrate'
 import { buildPathRepoIndex, buildSharedStatsCache, type PathRepoIndex } from './share-rules'
 import type { SessionMeta, TeamConnection, StatsCache, TeamConfig, WorkflowRun } from '@agentistics/core'
@@ -1105,4 +1108,216 @@ describe('a freshly-declared denylist is honored before any push has happened', 
       __teardownConnectionForTests(id)
     }
   })
+})
+
+// ---------------------------------------------------------------------------
+// The retroactive removal sequence, driven through a real cycle (§6.1 / §5.5b).
+// ---------------------------------------------------------------------------
+
+/** A mock central that answers policy/whoami/forget/ingest and records, for every forget POST,
+ *  the sent-state and sync-file state AT THAT MOMENT — which is what makes the ordering
+ *  assertions below real rather than end-state guesses. */
+function mockCentral(opts: { canForget?: boolean; instanceId?: string } = {}) {
+  const forgetBodies: string[][] = []
+  const sentAtForget: string[][] = []
+  const syncFileAtForget: boolean[] = []
+  const ingests: IngestBody[] = []
+  let connId = ''
+  const server = Bun.serve({
+    port: 0,
+    fetch: async (req) => {
+      const url = new URL(req.url)
+      if (url.pathname === '/api/team/policy') {
+        return Response.json({
+          pushIntervalSec: 30,
+          instanceId: opts.instanceId ?? 'inst-1',
+          capabilities: opts.canForget === false ? ['leave'] : ['leave', 'forget.sessions'],
+        })
+      }
+      if (url.pathname === '/api/team/whoami') return Response.json({ ok: true, user: 'test-user' })
+      if (url.pathname === '/api/team/forget') {
+        const body = await req.json() as { sessionIds: string[] }
+        forgetBodies.push(body.sessionIds)
+        const raw = readFileSync(teamSentFile(connId), 'utf-8')
+        sentAtForget.push(Object.keys((JSON.parse(raw) as { hashes: Record<string, string> }).hashes))
+        syncFileAtForget.push(existsSync(teamSyncFile(connId)))
+        return Response.json({ ok: true, deleted: body.sessionIds.length, deletedRuns: 0 })
+      }
+      ingests.push(await req.json() as IngestBody)
+      return Response.json({ ok: true })
+    },
+  })
+  return {
+    server, forgetBodies, sentAtForget, syncFileAtForget, ingests,
+    watch(id: string) { connId = id },
+    stop() { return server.stop(true) },
+  }
+}
+
+describe('runConnectionCycle — the retroactive removal sequence', () => {
+  it('a sig mismatch on a RESTRICTED connection forgets BEFORE the sent-state is cleared (§5.5b)', async () => {
+    const connId = randomConnId()
+    const central = mockCentral()
+    central.watch(connId)
+    try {
+      const conn = fakeConn(connId, central.server.port!, { deniedRepos: ['github.com/o/secret'] })
+      const pub = makeSession('pub-1', { git_remote: 'github.com/o/pub' })
+      const denied = makeSession('denied-1', { git_remote: 'github.com/o/secret' })
+      const ctx = makeCtx({
+        storedSessions: [pub, denied],
+        liveSessions: [pub, denied],
+        index: buildPathRepoIndex([pub, denied]),
+      })
+      // Both sessions were already pushed to this central. No sync file exists for this brand-new
+      // connection id, so the signature differs — the exact rotation/wipe case §5.5b is about.
+      await saveSentState(connId, { 'pub-1': 'h-pub', 'denied-1': 'h-denied' })
+      expect(existsSync(teamSyncFile(connId))).toBe(false)
+
+      await runConnectionCycle(connId, {
+        readPreferences: fakeReadPreferences(conn),
+        migrateTeamStateOnce: async () => {},
+        ctx,
+      })
+
+      // The forget named exactly the denied session…
+      expect(central.forgetBodies).toEqual([['denied-1']])
+      // …and it was issued while the sent-state STILL held it, before reconcileSyncState cleared
+      // it. Clearing first would have stranded that session on the central with no way to name it.
+      expect(central.sentAtForget[0]?.sort()).toEqual(['denied-1', 'pub-1'])
+      expect(central.syncFileAtForget[0]).toBe(false)
+
+      // Afterwards: the sig was reconciled (the sync file now exists), the shared session was
+      // re-pushed and the denied one is gone from the sent-state for good.
+      expect(existsSync(teamSyncFile(connId))).toBe(true)
+      const finalSent = await loadSentState(connId)
+      expect(Object.keys(finalSent)).toEqual(['pub-1'])
+      // The rebuilt payload the central received names only the shared session.
+      expect(central.ingests.flatMap(b => (b.sessions ?? []).map(s => s.session_id))).toEqual(['pub-1'])
+      // No removal is in flight any more.
+      expect(getResyncProgress(connId)).toBeNull()
+    } finally {
+      __teardownConnectionForTests(connId)
+      await central.stop()
+    }
+  }, 10_000)
+
+  it('does not persist the rules hash when the removal did not complete, and re-tries next cycle', async () => {
+    const connId = randomConnId()
+    // A central that is reachable for policy/whoami/ingest but rejects the forget with a 500 —
+    // the "rules declared, central still holds the data" case.
+    let forgetCalls = 0
+    let failForget = true
+    await using server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url)
+        if (url.pathname === '/api/team/policy') {
+          return Response.json({ pushIntervalSec: 30, instanceId: 'inst-1', capabilities: ['forget.sessions'] })
+        }
+        if (url.pathname === '/api/team/whoami') return Response.json({ ok: true, user: 'test-user' })
+        if (url.pathname === '/api/team/forget') {
+          forgetCalls++
+          const body = await req.json() as { sessionIds: string[] }
+          if (failForget) return new Response(JSON.stringify({ error: 'boom' }), { status: 500 })
+          return Response.json({ ok: true, deleted: body.sessionIds.length, deletedRuns: 0 })
+        }
+        return Response.json({ ok: true })
+      },
+    })
+    try {
+      const conn = fakeConn(connId, server.port!, { deniedRepos: ['github.com/o/secret'] })
+      const pub = makeSession('pub-2', { git_remote: 'github.com/o/pub' })
+      const denied = makeSession('denied-2', { git_remote: 'github.com/o/secret' })
+      const ctx = makeCtx({ storedSessions: [pub, denied], liveSessions: [pub, denied], index: buildPathRepoIndex([pub, denied]) })
+      await saveSentState(connId, { 'denied-2': 'h-denied' })
+      const deps = { readPreferences: fakeReadPreferences(conn), migrateTeamStateOnce: async () => {}, ctx }
+
+      await runConnectionCycle(connId, deps)
+      expect(forgetCalls).toBe(1)
+      // The id is still named locally (nothing was acked) and the rules state was NOT persisted —
+      // the hash is what suppresses re-detection, so writing it here would make the machine stop
+      // asking while the central still holds the session.
+      expect(Object.keys(await loadSentState(connId))).toContain('denied-2')
+      expect(await loadRulesState(connId)).toEqual(emptyRulesState())
+      // The connection still pushed this cycle: an unreachable/failing forget must not stop it.
+      expect(existsSync(teamForgetFile(connId))).toBe(true) // journal kept open for the retry
+
+      // Next cycle, with the central healthy: the same plan is re-derived and the removal lands.
+      failForget = false
+      await runConnectionCycle(connId, deps)
+      expect(forgetCalls).toBe(2)
+      expect(Object.keys(await loadSentState(connId))).not.toContain('denied-2')
+      expect(existsSync(teamForgetFile(connId))).toBe(false)
+      // Only now is the rules hash persisted.
+      expect((await loadRulesState(connId)).rulesHash).not.toBe('')
+    } finally {
+      __teardownConnectionForTests(connId)
+    }
+  }, 10_000)
+
+  it('replays a journal found at boot, then stops replaying it once it completes', async () => {
+    const connId = randomConnId()
+    const central = mockCentral()
+    central.watch(connId)
+    try {
+      // No denylist at all: the ONLY reason a forget happens is the journal a killed process left
+      // behind. (Its ids are already out of the sent-state — the crash is assumed to have happened
+      // after the ack and before the journal was closed, which is exactly the case nothing else
+      // would ever notice.)
+      const conn = fakeConn(connId, central.server.port!)
+      const ctx = makeCtx({ storedSessions: [makeSession('pub-3')], liveSessions: [makeSession('pub-3')] })
+      await saveSentState(connId, { 'pub-3': 'h-pub' })
+
+      const queued = await replayForgetJournals({
+        readPreferences: fakeReadPreferences(conn),
+        loadForgetJournal: async () => ({
+          state: 'forgetting', ids: ['crashed-1'], runIds: [], rulesHash: 'h-old',
+          startedAt: '2026-07-30T10:00:00.000Z',
+        }),
+      })
+      expect(queued).toBe(1)
+
+      const deps = { readPreferences: fakeReadPreferences(conn), migrateTeamStateOnce: async () => {}, ctx }
+      await runConnectionCycle(connId, deps)
+      // Re-named to the central even though the local plan asks for nothing: replaying an
+      // already-deleted id is a no-op there (`deleted: 0`), which is what makes this safe.
+      expect(central.forgetBodies).toEqual([['crashed-1']])
+
+      // Consumed: a second cycle does not replay it again.
+      await runConnectionCycle(connId, deps)
+      expect(central.forgetBodies).toEqual([['crashed-1']])
+    } finally {
+      __teardownConnectionForTests(connId)
+      await central.stop()
+    }
+  }, 10_000)
+
+  it('keeps pushing when the central is too old to forget, and never issues the request', async () => {
+    const connId = randomConnId()
+    const central = mockCentral({ canForget: false })
+    central.watch(connId)
+    try {
+      const conn = fakeConn(connId, central.server.port!, { deniedRepos: ['github.com/o/secret'] })
+      const pub = makeSession('pub-4', { git_remote: 'github.com/o/pub' })
+      const denied = makeSession('denied-4', { git_remote: 'github.com/o/secret' })
+      const ctx = makeCtx({ storedSessions: [pub, denied], liveSessions: [pub, denied], index: buildPathRepoIndex([pub, denied]) })
+      await saveSentState(connId, { 'denied-4': 'h-denied' })
+
+      await runConnectionCycle(connId, {
+        readPreferences: fakeReadPreferences(conn),
+        migrateTeamStateOnce: async () => {},
+        ctx,
+      })
+
+      // No forget request at all — there is no fallback to a broader primitive.
+      expect(central.forgetBodies).toEqual([])
+      // The denied id stays named locally, so a later upgrade of the central can still remove it.
+      expect(Object.keys(await loadSentState(connId))).toContain('denied-4')
+      // And the connection still pushed its shared session this cycle.
+      expect(central.ingests.flatMap(b => (b.sessions ?? []).map(s => s.session_id))).toEqual(['pub-4'])
+    } finally {
+      __teardownConnectionForTests(connId)
+      await central.stop()
+    }
+  }, 10_000)
 })

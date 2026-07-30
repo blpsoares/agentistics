@@ -34,6 +34,7 @@ import {
 } from './share-rules'
 import { parseCapabilities, centralCanForget } from './team-capabilities'
 import { planRulesReconcile, loadRulesState, saveRulesState } from './team-rules'
+import { runForgetSequence, loadForgetJournal, type ForgetJournal, type ForgetProgress } from './team-forget-client'
 
 /** This machine's local workflow runs (computed metrics only — no chat/prompt text). Fallback
  *  source when `buildApiResponse` could not be run (see `buildPushContext`). Mirrors the
@@ -79,6 +80,18 @@ const _pendingTrigger = new Set<string>()
  *  `pushOnceDetailed` call. Read by `scheduleOnChangeTrigger`/`scheduleConnectionCycle`, which
  *  only ever see a connId, so the activity-heartbeat defenses in §5.3.4 can reach them. */
 const _restrictedConn = new Map<string, boolean>()
+/** Live progress of a connection's retroactive removal, for Task 6's status route (and the
+ *  Settings progress strip). Present only WHILE a sequence runs — absence means "not resyncing",
+ *  never "finished with 0". */
+const _resyncProgress = new Map<string, ForgetProgress>()
+/** Connections whose `member.resync_started` notification has fired and whose `member.resync_done`
+ *  has not. The transition guard matters: without it a central that is down (or too old) would
+ *  raise a "removing…" toast on EVERY cycle, forever, for the same removal. */
+const _resyncNotified = new Set<string>()
+/** Journals found open at boot (`replayForgetJournals`), keyed by connection: what a killed
+ *  process already promised a central. Consumed by the next cycle, cleared once the removal
+ *  completes. */
+const _resumeForget = new Map<string, ForgetJournal>()
 /** sha256 over `{statsCache, workflows}` of the last EMPTY-DELTA payload actually POSTed for a
  *  restricted connection — the keep-alive dedup in §5.3.4. Only ever consulted/updated for
  *  restricted connections; an unrestricted one keeps pushing its keep-alive every cycle. */
@@ -154,6 +167,13 @@ export function emptyStatusFor(_connId: string): UploaderStatus {
  *  it must never offer a control the central may not be able to honor). */
 export function connectionCanForget(connId: string): boolean {
   return centralCanForget(_centralCapabilities.get(connId) ?? [])
+}
+
+/** How far this connection's retroactive removal has got, or `null` when none is running. The
+ *  phase is `'forget'` while batches are being acked and `'push'` while the rebuilt statsCache is
+ *  being delivered — the two halves of §6.1 the user can actually be told apart. */
+export function getResyncProgress(connId: string): ForgetProgress | null {
+  return _resyncProgress.get(connId) ?? null
 }
 
 /** A `lastSuccessAt` this stale relative to a connection's own known interval, with NO error
@@ -882,11 +902,16 @@ async function reconcileSyncState(connId: string, endpoint: string, token: strin
  * does the whole computation; this function only gathers its inputs from the shared push-cycle
  * context and this connection's own sent-state/rules-state files, then writes the result back.
  *
- * Task 5 is what actually performs the removal (the journal, the batched
- * `POST /api/team/forget`, the crash replay) against `rulesPlan.forgetIds`/`forgetRuns`; this
- * task only computes the plan, logs it when there is something to remove, and persists the seal
- * so the ledger stays exact once a denied day crosses into Claude's rollup — see `advanceSeal`'s
- * CALLER CONTRACT in share-rules.ts: it must run on EVERY cycle, never skipped.
+ * `runForgetSequence` (team-forget-client.ts) is what actually performs the removal against
+ * `rulesPlan.forgetIds`/`forgetRuns`; this function only computes the plan and logs it.
+ *
+ * It deliberately does NOT persist `rulesPlan.next` — `runConnectionPushCycle` does, and only
+ * once the removal it implies has actually happened. The rules hash is what suppresses
+ * re-detection, so persisting a state that claims a removal completed when it did not would make
+ * the machine stop asking, with the data still on the central and nothing left to notice it. The
+ * computation itself still runs on EVERY cycle (`advanceSeal`'s CALLER CONTRACT in
+ * share-rules.ts); what is deferred is the write, and a deferred write only means the next cycle
+ * re-derives the same state from the same inputs.
  */
 async function reconcileRulesFor(conn: TeamConnection, ctx: PushCycleContext) {
   const prevRules = await loadRulesState(conn.id)
@@ -905,12 +930,60 @@ async function reconcileRulesFor(conn: TeamConnection, ctx: PushCycleContext) {
   if (rulesPlan.forgetIds.length > 0 || rulesPlan.forgetRuns.length > 0) {
     console.info(
       `[team-uploader] ${conn.id} denylist excludes ${rulesPlan.forgetIds.length} previously-sent ` +
-      `session(s) and ${rulesPlan.forgetRuns.length} workflow run(s) the central may still hold ` +
-      `(removal lands in a later task)`,
+      `session(s) and ${rulesPlan.forgetRuns.length} workflow run(s) the central may still hold`,
     )
   }
-  await saveRulesState(conn.id, rulesPlan.next)
   return rulesPlan
+}
+
+/** Union of two id lists, order-preserving and deduped. */
+function unionIds(a: readonly string[], b: readonly string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const id of [...a, ...b]) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+/**
+ * Boot replay (§6.1 step d). A journal left open by a killed process names exactly what a central
+ * was already promised, and nothing else would ever notice it: the sync signature did not change,
+ * so `reconcileSyncState` triggers no re-push, and the sent-state advance for the unacked half may
+ * itself have been lost. Read each connection's journal here and hand it to that connection's next
+ * cycle, which runs the sequence under the push lock like any other.
+ *
+ * A replay is idempotent — deleting an already-deleted id returns `deleted: 0` (team-forget.ts is
+ * explicit about this) — so re-naming an id the central already removed costs one request and
+ * nothing else. Do NOT "optimize" the replay away on that basis: being a no-op in the common case
+ * is what makes it safe, not what makes it pointless.
+ *
+ * `deps` is injectable so a test never reads the developer's real preferences file. Never throws.
+ */
+export async function replayForgetJournals(
+  deps: { readPreferences?: typeof readPreferences; loadForgetJournal?: typeof loadForgetJournal } = {},
+): Promise<number> {
+  try {
+    const prefs = await (deps.readPreferences ?? readPreferences)()
+    const _loadForgetJournal = deps.loadForgetJournal ?? loadForgetJournal
+    let queued = 0
+    for (const conn of prefs.team?.connections ?? []) {
+      const journal = await _loadForgetJournal(conn.id)
+      if (!journal) continue
+      _resumeForget.set(conn.id, journal)
+      queued++
+      console.info(
+        `[team-uploader] ${conn.id} found an open removal journal (started ${journal.startedAt}) — ` +
+        `${journal.ids.length} session(s) will be re-named on the next cycle`,
+      )
+    }
+    return queued
+  } catch (err) {
+    console.warn('[team-uploader] could not replay removal journals:', err instanceof Error ? err.message : String(err))
+    return 0
+  }
 }
 
 // Push-on-change: coalesce a burst of local file changes into a single push per connection, and
@@ -949,6 +1022,9 @@ function teardownConnection(connId: string): void {
   _centralCapabilities.delete(connId)
   _restrictedConn.delete(connId)
   _lastRestrictedPushHash.delete(connId)
+  _resyncProgress.delete(connId)
+  _resyncNotified.delete(connId)
+  _resumeForget.delete(connId)
 }
 
 function scheduleConnectionCycle(connId: string, delaySec: number): void {
@@ -1002,13 +1078,76 @@ async function runConnectionPushCycle(conn: TeamConnection, deps: RunPushCycleDe
     // timeout and every AGENTISTICS_INGEST_ONLY central (which 404s /api/team/policy by
     // construction) — so putting the rules check behind that guard would let a user on an older or
     // flaky central block a repo, see a green pill, and have the removal never run (R18).
-    // The plan itself (forgetIds/forgetRuns) is consumed by Task 5's removal; this task computes
-    // it, logs it, and persists the seal so the sequence is observable before its implementation.
-    await reconcileRulesFor(conn, ctx)
-    // Auto-heal a sent-state that no longer matches this central BEFORE pushing, so this cycle
-    // re-sends the full history when needed.
-    await reconcileSyncState(conn.id, endpoint, conn.token ?? '', policy.instanceId)
-    await pushOnceDetailed({ ...conn, endpoint }, ctx)
+    const rulesPlan = await reconcileRulesFor(conn, ctx)
+
+    // A journal left open by a killed process is unioned into this cycle's plan — see
+    // `replayForgetJournals`. The union can only ever ADD ids the central was already promised.
+    const resume = _resumeForget.get(conn.id)
+    const forgetIds = resume ? unionIds(rulesPlan.forgetIds, resume.ids) : rulesPlan.forgetIds
+    const forgetRuns = resume ? unionIds(rulesPlan.forgetRuns, resume.runIds) : rulesPlan.forgetRuns
+    const needsForget = forgetIds.length > 0 || forgetRuns.length > 0
+
+    // Step 4 of §6.1: the sig reconcile plus the push that replaces the aggregate the delete just
+    // invalidated, run INSIDE the sequence so `memberStats` is never absent (§6.2) and so the
+    // journal can stay open until the cache actually lands (§6.3).
+    let didPush = false
+    const syncAndPush = async (): Promise<boolean> => {
+      didPush = true
+      await reconcileSyncState(conn.id, endpoint, conn.token ?? '', policy.instanceId)
+      const res = await pushOnceDetailed({ ...conn, endpoint }, ctx)
+      return !res.error
+    }
+
+    if (needsForget) {
+      // The whole sequence runs under this connection's push lock (`_running`, taken by
+      // `runConnectionCycle`) with `_pendingTrigger` deferral, so a debounced push cannot land
+      // after the delete and re-insert exactly what was removed (R27).
+      if (connectionCanForget(conn.id) && !_resyncNotified.has(conn.id)) {
+        _resyncNotified.add(conn.id)
+        _notify({ type: 'info', code: 'member.resync_started', meta: notifyMeta(conn, { count: forgetIds.length }) })
+      }
+      _resyncProgress.set(conn.id, { phase: 'forget', done: 0, total: forgetIds.length })
+      const outcome = await runForgetSequence(
+        { ...conn, endpoint },
+        { forgetIds, forgetRuns, rulesHash: rulesPlan.next.rulesHash },
+        {
+          canForget: connectionCanForget,
+          onRevoked: async (id, reason) => { await removeConnection(id, reason) },
+          onProgress: p => { _resyncProgress.set(conn.id, p) },
+          pushRebuiltCache: syncAndPush,
+        },
+      )
+      _resyncProgress.delete(conn.id)
+      if (outcome.ok) {
+        _resumeForget.delete(conn.id)
+        // ONLY now: the rules hash is what suppresses re-detection, so persisting it after a
+        // failed removal would make the machine stop asking while the central still holds the
+        // data. A failed cycle simply re-derives the same plan from the same inputs next time.
+        await saveRulesState(conn.id, rulesPlan.next)
+        if (_resyncNotified.delete(conn.id)) {
+          _notify({ type: 'success', code: 'member.resync_done', meta: notifyMeta(conn, { count: forgetIds.length }) })
+        }
+      } else {
+        console.warn(`[team-uploader] ${conn.id} retroactive removal incomplete: ${outcome.error ?? 'unknown error'}`)
+      }
+    } else {
+      await saveRulesState(conn.id, rulesPlan.next)
+    }
+
+    if (!didPush) {
+      // §5.5b: `reconcileSyncState` CLEARS the sent-state on a signature change, and the
+      // sent-state is the only record of what this connection pushed. Running it after a removal
+      // that did not complete would strand every already-pushed denied session on the central
+      // with no way left to name it — a token rotation changes the sig without deleting anything
+      // there. Skipping it only defers a full re-push, which is recoverable; the removal is
+      // retried (and the reconcile allowed) on the next cycle.
+      if (!needsForget) {
+        await reconcileSyncState(conn.id, endpoint, conn.token ?? '', policy.instanceId)
+      }
+      // The push itself always runs: a central too old to forget, or one that is momentarily
+      // down, must not stop this connection pushing altogether.
+      await pushOnceDetailed({ ...conn, endpoint }, ctx)
+    }
     return nextIntervalSec
   } finally {
     release()
@@ -1139,6 +1278,9 @@ let _supervisorTimer: ReturnType<typeof setInterval> | null = null
 export function startUploader(): void {
   if (started) return
   started = true
+  // Before anything pushes: a removal journal left open by a killed process is loaded and handed
+  // to the owning connection's first cycle (§6.1 step d, R5).
+  void replayForgetJournals()
   void supervisorTick() // start any already-configured connections immediately, not after 5s
   _supervisorTimer = setInterval(() => { void supervisorTick() }, SUPERVISOR_INTERVAL_MS)
   _supervisorTimer.unref?.()
