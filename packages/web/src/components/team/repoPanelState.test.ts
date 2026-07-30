@@ -5,6 +5,7 @@ import {
   buildInitialDraft, toggleTarget, shareAllDraft, blockAllDraft, synthesizeMissingDenied,
   buildRows, groupRows, diffDraft, isDirty, keepVisibleKeys, computeApplyImpact,
   hasProvenPrehistory, resolveConfirmVariant, statsCopyVars, isLocked,
+  isApplyBusy, canEditRepos,
   type DraftDiff,
 } from './repoPanelState'
 
@@ -241,4 +242,26 @@ test('statsCopyVars omits the clause (returns null) whenever boundary or prehist
   expect(statsCopyVars('2026-06-01', 5)).toEqual({ boundary: '2026-06-01', n: 5 })
   // A real 0 is a legitimate, renderable value — it must never be treated as unknowable.
   expect(statsCopyVars('2026-06-01', 0)).toEqual({ boundary: '2026-06-01', n: 0 })
+})
+
+// --- review fix (Important 2): the write guard covers the FULL apply duration, not just resync ---
+
+test('isApplyBusy is true for both submitting and waiting, and false for idle/done/error', () => {
+  expect(isApplyBusy('submitting')).toBe(true)
+  expect(isApplyBusy('waiting')).toBe(true)
+  expect(isApplyBusy('idle')).toBe(false)
+  expect(isApplyBusy('done')).toBe(false)
+  expect(isApplyBusy('error')).toBe(false)
+})
+
+test('canEditRepos is false while resyncing (server-reported) AND for the whole submitting/waiting apply window', () => {
+  // The server has not yet reported a resync, but the apply is mid-flight — Edit must still be blocked.
+  expect(canEditRepos('connected', 'submitting')).toBe(false)
+  expect(canEditRepos('connected', 'waiting')).toBe(false)
+  // A live server-reported resync blocks it regardless of local phase.
+  expect(canEditRepos('resyncing', 'idle')).toBe(false)
+  // Neither condition holds — Edit is available.
+  expect(canEditRepos('connected', 'idle')).toBe(true)
+  expect(canEditRepos('offline', 'done')).toBe(true)
+  expect(canEditRepos('offline', 'error')).toBe(true)
 })

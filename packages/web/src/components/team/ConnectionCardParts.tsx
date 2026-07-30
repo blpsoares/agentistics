@@ -88,7 +88,10 @@ export function ResyncStrip({ resync, lang }: { resync: ResyncProgress; lang: 'p
  * per-repository denylist editor (Task 11). `editable` covers BOTH `connected` and `offline` —
  * rules are local and must stay changeable while this central is unreachable.
  */
-export function RepoPanelSlot({ connId, deniedRepos, state, status, archiveMode, shareTargets, sessions, modelUsage, lang, onApplyRules }: {
+export function RepoPanelSlot({
+  connId, deniedRepos, state, status, archiveMode, shareTargets, sessions, modelUsage, otelEnabled,
+  lang, onApplyRules, onBusyChange,
+}: {
   connId: string
   deniedRepos: string[]
   state: CardState
@@ -97,8 +100,12 @@ export function RepoPanelSlot({ connId, deniedRepos, state, status, archiveMode,
   shareTargets: ShareTarget[]
   sessions: SessionMeta[]
   modelUsage: Record<string, ModelUsage>
+  otelEnabled: boolean
   lang: 'pt' | 'en'
   onApplyRules: (connId: string, deniedRepos: string[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
+  /** Reported true for the whole apply (PATCH round-trip AND the wait for the server's resync to
+   *  first become visible), so the card can disable Disconnect/Sync now for its real duration. */
+  onBusyChange: (busy: boolean) => void
 }) {
   const mode = resolveRepoPanelMode(state, status?.centralTooOld ?? false, archiveMode)
   if (mode === 'hidden') return null // nothing can be removed until the token works
@@ -119,8 +126,10 @@ export function RepoPanelSlot({ connId, deniedRepos, state, status, archiveMode,
       shareTargets={shareTargets}
       sessions={sessions}
       modelUsage={modelUsage}
+      otelEnabled={otelEnabled}
       lang={lang}
       onApply={onApplyRules}
+      onBusyChange={onBusyChange}
     />
   )
 }

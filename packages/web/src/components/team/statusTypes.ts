@@ -42,5 +42,9 @@ export interface TeamStatusResponse {
   lastSuccessAt: number | null
   errKind: 'auth' | 'net' | null
   latencyMs: number | null
+  /** Machine-wide, never per-connection — OTel export (`OTEL_EXPORTER_OTLP_ENDPOINT`) sends this
+   *  machine's unfiltered totals regardless of which central a session belongs to. Mirrors
+   *  `otelExportEnabled()` in `team-connections.ts`. */
+  otelExportEnabled: boolean
   connections: ConnectionStatusEntry[]
 }

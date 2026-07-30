@@ -11,11 +11,11 @@
  * finding N3) — specifically the previously-uncovered half of I1, where a lock-timeout write
  * failure inside `removeConnection` must surface as `{ok: false}`, never asserted success.
  */
-import { describe, it, expect } from 'bun:test'
+import { describe, it, expect, afterEach } from 'bun:test'
 import {
   validateConnectionBody, validatePatchBody, decideConnectionUpsert,
   aggregateConnectionStatuses, leaveConnectionById, resolveDeniedRepos,
-  buildConnectionStatusEntry, type ConnectionStatusEntry,
+  buildConnectionStatusEntry, otelExportEnabled, type ConnectionStatusEntry,
 } from './team-connections'
 import type { TeamConnection } from '@agentistics/core'
 import { NO_REPO_KEY } from '@agentistics/core'
@@ -447,5 +447,32 @@ describe('leaveConnectionById', () => {
       log: myLog,
     })
     expect(receivedLog).toBe(myLog)
+  })
+})
+
+describe('otelExportEnabled — the machine-wide OTel export signal (§ otelWarn)', () => {
+  const KEY = 'OTEL_EXPORTER_OTLP_ENDPOINT'
+  const original = process.env[KEY]
+
+  afterEach(() => {
+    if (original === undefined) delete process.env[KEY]
+    else process.env[KEY] = original
+  })
+
+  it('is false when the env var is unset', () => {
+    delete process.env[KEY]
+    expect(otelExportEnabled()).toBe(false)
+  })
+
+  it('is false when the env var is set but empty or whitespace-only', () => {
+    process.env[KEY] = ''
+    expect(otelExportEnabled()).toBe(false)
+    process.env[KEY] = '   '
+    expect(otelExportEnabled()).toBe(false)
+  })
+
+  it('is true when the env var names a real endpoint', () => {
+    process.env[KEY] = 'http://localhost:4318'
+    expect(otelExportEnabled()).toBe(true)
   })
 })

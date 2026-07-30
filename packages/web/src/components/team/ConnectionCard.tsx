@@ -25,6 +25,9 @@ export interface ConnectionCardProps {
    *  "proven prehistory" check. */
   sessions: SessionMeta[]
   modelUsage: Record<string, ModelUsage>
+  /** Machine-wide (never per-connection) — whether OTel metrics export is currently configured,
+   *  from the top-level `otelExportEnabled` on `GET /api/team/status`. */
+  otelEnabled: boolean
   /** True when another connection on this panel resolves to the same host — promotes the user
    *  name into the primary label (`acme:48080 · lucas`), the only thing that tells them apart. */
   duplicateHost: boolean
@@ -36,7 +39,7 @@ export interface ConnectionCardProps {
 }
 
 export function ConnectionCard({
-  conn, status, archiveMode, shareTargets, sessions, modelUsage, duplicateHost, lang,
+  conn, status, archiveMode, shareTargets, sessions, modelUsage, otelEnabled, duplicateHost, lang,
   onRename, onDisconnect, onSyncNow, onApplyRules,
 }: ConnectionCardProps) {
   const isMobile = useIsMobile()
@@ -47,6 +50,12 @@ export function ConnectionCard({
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
+  // Mirrors the repository picker's own submitting/waiting phase (§ "the one way to genuinely
+  // lose data here") — Disconnect and Sync now must stay disabled for the WHOLE apply, not just
+  // the PATCH round-trip: the gap between the PATCH returning and the server's resync first
+  // becoming visible to this card's poll is exactly when a second write would race the server's
+  // own forget/push sequence.
+  const [applyBusy, setApplyBusy] = useState(false)
 
   const state = resolveCardState(status)
   const brokenEndpoint = isBrokenEndpoint(conn.endpoint)
@@ -99,7 +108,7 @@ export function ConnectionCard({
   }
 
   const deniedCount = status?.deniedCount ?? 0
-  const disableWrites = state === 'resyncing' || syncing || disconnecting
+  const disableWrites = state === 'resyncing' || syncing || disconnecting || applyBusy
 
   return (
     <div style={{
@@ -198,8 +207,10 @@ export function ConnectionCard({
             shareTargets={shareTargets}
             sessions={sessions}
             modelUsage={modelUsage}
+            otelEnabled={otelEnabled}
             lang={lang}
             onApplyRules={onApplyRules}
+            onBusyChange={setApplyBusy}
           />
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', flexDirection: isMobile ? 'column' : 'row' }}>

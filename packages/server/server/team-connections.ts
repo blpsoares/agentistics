@@ -656,6 +656,20 @@ export function aggregateConnectionStatuses(entries: ConnectionStatusEntry[]): A
 }
 
 /**
+ * Whether OTel metrics export is configured on THIS machine — the same gate `otel-watcher.ts`
+ * uses for its own exporter (`OTLP_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? ''`,
+ * exporting only when non-empty). Read directly here, as a plain env check, rather than importing
+ * `otel-watcher.ts` — that module runs its OWN watcher (chokidar + `setInterval` + `process.on`
+ * signal handlers) as an IMPORT-TIME side effect (its trailing `main().catch(...)` call), so
+ * pulling it into a request-handling module would start a second, unwanted watcher on every
+ * `/api/team/status` request. Machine-wide, not per-connection — OTel export sends the whole
+ * machine's unfiltered totals regardless of which central a session belongs to.
+ */
+export function otelExportEnabled(): boolean {
+  return Boolean((process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? '').trim())
+}
+
+/**
  * GET /api/team/status — the per-connection shape (spec §9.5) PLUS the aggregated
  * `{lastSuccessAt, errKind, latencyMs}` at the top level, for `MemberConnectionStatus.tsx` (the
  * status pill), which does not yet read `connections[]`. Reads CACHED values only
@@ -665,7 +679,9 @@ export function aggregateConnectionStatuses(entries: ConnectionStatusEntry[]): A
  * centrals alone exceeds its own poll interval. Never returns a token, and never the contents of
  * `deniedRepos` — only `deniedCount` (§6.4: the full list is same-origin-only, via
  * `GET /api/preferences`). `boundary`/`prehistorySessions` are local honesty markers (§4.4) that
- * exist on this route and nowhere on the wire to a central.
+ * exist on this route and nowhere on the wire to a central. `otelExportEnabled` is likewise
+ * local-only and machine-wide (never per-connection) — the repository picker's `otelWarn` reads
+ * it to say the rule does not cover OTel's unfiltered export.
  *
  * `deps` is injectable for tests — the default reads the developer's real preferences file.
  */
@@ -710,5 +726,5 @@ export async function handleTeamStatus(
     })
   }))
   const aggregated = aggregateConnectionStatuses(entries)
-  return json({ mode: team?.mode ?? 'solo', ...aggregated, connections: entries })
+  return json({ mode: team?.mode ?? 'solo', ...aggregated, otelExportEnabled: otelExportEnabled(), connections: entries })
 }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import type { SessionMeta, ModelUsage } from '@agentistics/core'
-import { NO_REPO_KEY } from '@agentistics/core'
+import { NO_REPO_KEY, fmtCost } from '@agentistics/core'
 import type { ShareTarget } from '../../lib/shareRepos'
 import { plural } from '../../lib/shareRepos'
 import { blendedCostPerToken } from '../../hooks/useData'
@@ -12,8 +12,8 @@ import type { CardState } from './cardState'
 import type { ConnectionStatusEntry } from './statusTypes'
 import { EditView } from './SharedReposEditView'
 import {
-  buildInitialDraft, computeApplyImpact, diffDraft, hasProvenPrehistory,
-  isDirty, normalizeDenied, resolveApplyBanner, resolveConfirmVariant,
+  buildInitialDraft, canEditRepos, computeApplyImpact, diffDraft, hasProvenPrehistory,
+  isApplyBusy, isDirty, normalizeDenied, resolveApplyBanner, resolveConfirmVariant,
   shareAllDraft, blockAllDraft, statsCopyVars, synthesizeMissingDenied, toggleTarget,
   type ApplyPhase,
 } from './repoPanelState'
@@ -36,18 +36,25 @@ export interface SharedReposPanelProps {
    *  "proven prehistory" check. */
   sessions: SessionMeta[]
   modelUsage: Record<string, ModelUsage>
-  /** Absent/false when this machine cannot tell whether OTel export is currently active — there is
-   *  no signal for it today, so `otelWarn` simply never renders rather than guessing. */
-  otelEnabled?: boolean
+  /** Machine-wide — whether OTel metrics export is currently configured (mirrors the top-level
+   *  `otelExportEnabled` on `GET /api/team/status`, computed from `OTEL_EXPORTER_OTLP_ENDPOINT`). */
+  otelEnabled: boolean
   lang: 'pt' | 'en'
   /** The ONE write this panel performs. Resolves to whether the server queued a resync (something
    *  actually changed) so the panel knows whether to wait for `status.resync` at all. Throws (or
    *  resolves false) on failure — the caller decides what "failed" means for its own transport. */
   onApply: (connId: string, deniedRepos: string[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
+  /** Reported true for the WHOLE apply — the PATCH round-trip and the wait for the server's
+   *  resync to first become visible on the next poll — so the CARD (which owns Disconnect/Sync
+   *  now) can disable them for the real duration, not only while `state === 'resyncing'` (a
+   *  server-reported fact the client only learns on the next poll tick, which misses both the
+   *  round-trip itself and the gap before the resync becomes visible). */
+  onBusyChange: (busy: boolean) => void
 }
 
 export function SharedReposPanel({
-  connId, deniedRepos, cardState, status, shareTargets, sessions, modelUsage, otelEnabled, lang, onApply,
+  connId, deniedRepos, cardState, status, shareTargets, sessions, modelUsage, otelEnabled, lang,
+  onApply, onBusyChange,
 }: SharedReposPanelProps) {
   const isMobile = useIsMobile()
   const noRepoLabel = COPY.noRepoTitle[lang]
@@ -96,6 +103,15 @@ export function SharedReposPanel({
     return () => clearTimeout(t)
   }, [phase])
 
+  // Reports "busy" for the whole apply — 'submitting' (the PATCH itself) AND 'waiting' (PATCH
+  // returned, resync not yet confirmed) — never only one of the two, and resets on unmount so a
+  // collapsed card never leaves the parent believing an apply is still running.
+  useEffect(() => {
+    onBusyChange(isApplyBusy(phase))
+    return () => onBusyChange(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase])
+
   function startEdit() {
     setDraft(buildInitialDraft(targets, deniedRepos))
     setSearch('')
@@ -133,7 +149,7 @@ export function SharedReposPanel({
         onEdit={startEdit}
         onCancel={cancelEdit}
         onSave={() => { if (isDirty(diff)) setConfirmOpen(true) }}
-        canEdit={cardState !== 'resyncing' && phase !== 'submitting'}
+        canEdit={canEditRepos(cardState, phase)}
         labels={{ edit: COPY.editRules[lang], save: COPY.saveRules[lang], cancel: COPY.cancel[lang] }}
         editChildren={
           <EditView
@@ -165,7 +181,7 @@ export function SharedReposPanel({
       <ConfirmModal
         open={confirmOpen}
         title={COPY.applyConfirmTitle[lang]}
-        message={buildConfirmMessage(variant, stats, lang)}
+        message={buildConfirmMessage(variant, stats, impact, lang)}
         confirmLabel={COPY.applyConfirmBtn[lang]}
         cancelLabel={COPY.cancel[lang]}
         onConfirm={() => { setPhase('submitting'); void confirmApply() }}
@@ -175,11 +191,26 @@ export function SharedReposPanel({
   )
 }
 
-function buildConfirmMessage(variant: 'generic' | 'proven', stats: { boundary: string; n: number } | null, lang: 'pt' | 'en'): string {
+/**
+ * The confirm message MUST state the impact — "the only number the user actually cares about"
+ * (the brief) — because the edit view's own `applyImpact` line sits behind the modal's blur the
+ * moment it opens; a user confirming without it would be committing a hard-to-reverse action
+ * (Important 1 review fix) blind to what it removes. `ConfirmModal.message` is a plain string
+ * (not JSX), so every applicable sentence is joined into one paragraph.
+ */
+export function buildConfirmMessage(
+  variant: 'generic' | 'proven',
+  stats: { boundary: string; n: number } | null,
+  impact: { sessions: number; costUSD: number },
+  lang: 'pt' | 'en',
+): string {
   const parts = [COPY.applyConfirmBody[lang]]
   if (stats) {
     parts.push(interpolate(COPY.applyConfirmStats[lang], { boundary: stats.boundary, n: stats.n }))
     if (variant === 'proven') parts.push(interpolate(COPY.applyConfirmStatsProven[lang], { boundary: stats.boundary }))
+  }
+  if (impact.sessions > 0) {
+    parts.push(interpolate(COPY.applyImpact[lang], { sessions: impact.sessions, cost: fmtCost(impact.costUSD) }))
   }
   return parts.join(' ')
 }
@@ -191,7 +222,7 @@ function ReadView({ targets, storedDenied, sharedCount, total, status, lang, ote
   total: number
   status: ConnectionStatusEntry | undefined
   lang: 'pt' | 'en'
-  otelEnabled?: boolean
+  otelEnabled: boolean
 }) {
   const stats = statsCopyVars(status?.boundary ?? null, status?.prehistorySessions ?? null)
   const chips = [...storedDenied].map(key => {

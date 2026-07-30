@@ -2,6 +2,7 @@ import type { SessionMeta } from '@agentistics/core'
 import { NO_REPO_KEY, normalizeGitRemote, repoShortName } from '@agentistics/core'
 import { canonicalRepoKey, type ShareTarget } from '../../lib/shareRepos'
 import type { ConnectionStatusEntry } from './statusTypes'
+import type { CardState } from './cardState'
 
 /**
  * repoPanelState.ts — the pure decisions behind `SharedReposPanel.tsx` (Task 11, design doc §9.8).
@@ -302,4 +303,25 @@ export function resolveApplyBanner(phase: ApplyPhase, status: ConnectionStatusEn
   if (status?.resync != null) return 'progress'
   if (status?.pendingRules) return 'queued'
   return 'done'
+}
+
+// --- the write guard: the FULL duration of an apply, not just the server-reported half ----------
+
+/**
+ * True for the WHOLE apply — the PATCH round-trip (`'submitting'`) AND the gap between the PATCH
+ * returning and the server's resync first becoming visible on the next poll (`'waiting'`). Review
+ * fix (Important 2): `state === 'resyncing'` alone is a SERVER-reported fact the client only
+ * learns about on its next poll tick — it misses both windows above, during which a second write
+ * (a re-opened Edit, a Disconnect, a Sync now that races the server's own forget/push sequence) is
+ * exactly the double-apply this feature exists to prevent.
+ */
+export function isApplyBusy(phase: ApplyPhase): boolean {
+  return phase === 'submitting' || phase === 'waiting'
+}
+
+/** Whether the panel's own Edit may open — excludes a live server resync (`cardState ===
+ *  'resyncing'`) AND the full apply window above. A card-level write guard (Disconnect/Sync now)
+ *  must derive from `isApplyBusy` too — see `SharedReposPanel.tsx`'s `onBusyChange`. */
+export function canEditRepos(cardState: CardState, phase: ApplyPhase): boolean {
+  return cardState !== 'resyncing' && !isApplyBusy(phase)
 }

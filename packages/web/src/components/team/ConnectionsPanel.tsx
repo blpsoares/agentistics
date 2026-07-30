@@ -216,6 +216,7 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang }: Conne
               shareTargets={shareTargets}
               sessions={sessions}
               modelUsage={modelUsage}
+              otelEnabled={statusResp?.otelExportEnabled ?? false}
               duplicateHost={(duplicateHosts.get(hostOf(conn.endpoint)) ?? 0) > 1}
               lang={lang}
               onRename={(id, label) => { void handleRename(id, label) }}
