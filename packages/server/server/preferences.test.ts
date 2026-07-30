@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { readPreferencesFrom, writePreferencesTo } from './preferences'
+import { readPreferencesFrom, writePreferencesTo, updateTeamConfigAt } from './preferences'
 
 // Regression: preferences were stored under CLAUDE_DIR, which in Docker (machine +
 // self-contributing central) is the host ~/.claude mounted READ-ONLY at /host-claude.
@@ -65,7 +65,7 @@ test('writePreferencesTo merges with legacy values on first write', async () => 
 // silently default over a corrupt primary file (which would present the machine as solo and
 // discard every connection, denylist, archiveMode and layout).
 
-import { mkdtemp, writeFile, readFile, readdir } from 'node:fs/promises'
+import { mkdtemp, writeFile, readFile, readdir, open, utimes } from 'node:fs/promises'
 import { tmpdir as osTmpdir } from 'node:os'
 import { dirname } from 'node:path'
 
@@ -348,6 +348,76 @@ test('a genuine token change still lands — an empty token only ever means "unc
   expect(after.team!.connections[1]!.token).toBe('SECRET-B')
 })
 
+// ---------------------------------------------------------------------------
+// Cross-process lock (Task 5) — `enqueueWrite` only serializes writes WITHIN one process; Bun
+// serves dashboard requests concurrently in the long-running server while a CLI subcommand
+// (`cli-member.ts` et al.) can write the SAME preferences.json from a SEPARATE `bun` process with
+// its own, independent write chain. This spawns a REAL second OS process (see
+// preferences.lock-test-child.ts) racing the SAME read-modify-write against the main test
+// process, proving the O_EXCL lock file — not just the in-process chain — is what prevents a lost
+// update across process boundaries.
+// ---------------------------------------------------------------------------
+
+test('two SEPARATE OS processes writing the same preferences file concurrently lose no updates', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  // Seed the file so both writers start from a real, parseable base rather than racing the
+  // very first mkdir/create.
+  await writePreferencesTo(primary, legacy, { team: { schema: 2, mode: 'member', connections: [] } })
+
+  const COUNT = 15
+  const childScript = join(dirname(new URL(import.meta.url).pathname), 'preferences.lock-test-child.ts')
+  const child = Bun.spawn(['bun', 'run', childScript, primary, legacy, 'bbbb', String(COUNT)], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+
+  // The MAIN test process races the child with the SAME kind of sequential read-modify-write,
+  // through the SAME exported `updateTeamConfigAt` — this is not a hand-rolled stand-in for the
+  // production write path, it IS the production write path, called from two OS processes.
+  const mainWrites = (async () => {
+    for (let i = 0; i < COUNT; i++) {
+      await updateTeamConfigAt(primary, legacy, (current) => ({
+        ...current,
+        connections: [
+          ...current.connections,
+          {
+            id: `c_aaaa${i.toString(16).padStart(8, '0')}`,
+            // A distinct endpoint per entry: `connections[]`'s uniqueness key is the endpoint
+            // (see TeamConnection's doc comment in core/src/team.ts) — migrateTeamConfig
+            // legitimately dedupes same-endpoint entries, which would look exactly like a
+            // lost-update bug in the lock if every iteration reused one endpoint.
+            endpoint: `http://127.0.0.1:2/aaaa${i}`,
+            org: 'default',
+            user: '',
+            token: '',
+            deniedRepos: [],
+          },
+        ],
+      }))
+    }
+  })()
+
+  const [exitCode] = await Promise.all([child.exited, mainWrites])
+  if (exitCode !== 0) {
+    const stderr = await new Response(child.stderr).text()
+    throw new Error(`child process exited ${exitCode}: ${stderr}`)
+  }
+
+  const final = await readPreferencesFrom(primary, legacy)
+  const ids = final.team!.connections.map(c => c.id)
+  // Every single one of the 2×COUNT appends survived — no lost update across the process
+  // boundary, which is exactly what a missing/ineffective cross-process lock would drop.
+  expect(ids).toHaveLength(2 * COUNT)
+  expect(new Set(ids).size).toBe(2 * COUNT) // no duplicate/corrupted id either
+  const mainIds = ids.filter(id => id.startsWith('c_aaaa'))
+  const childIds = ids.filter(id => id.startsWith('c_bbbb'))
+  expect(mainIds).toHaveLength(COUNT)
+  expect(childIds).toHaveLength(COUNT)
+  // The file on disk is whole JSON, not a torn write from two processes racing rename().
+  const text = await readFile(primary, 'utf-8')
+  expect(() => JSON.parse(text)).not.toThrow()
+}, 20_000)
+
 test('a brand-new connection with no token is still stored token-less', async () => {
   const { primary, legacy } = await tmpPaths2()
   await writePreferencesTo(primary, legacy, prefsWithTokens())
@@ -359,4 +429,42 @@ test('a brand-new connection with no token is still stored token-less', async ()
   const after = await readPreferencesFrom(primary, legacy)
   expect(after.team!.connections).toHaveLength(3)
   expect(after.team!.connections[2]!.token).toBe('')
+})
+
+// ---------------------------------------------------------------------------
+// Stale-lock reclaim (Task 5) — a process killed mid-write (SIGKILL, OOM, crash) leaves its
+// `<primary>.lock` file behind forever; without a staleness bound every later write on this
+// machine would fail/hang permanently, since nothing else ever deletes it. `acquireFileLock`
+// treats a lock file older than `LOCK_STALE_MS` (10s — see the comment on the constant in
+// preferences.ts) as abandoned and reclaims it. This test plants exactly that: a lock file with
+// an mtime far in the past, held by no real process.
+// ---------------------------------------------------------------------------
+
+test('a stale lock file (planted, mtime far in the past) is reclaimed — a write succeeds instead of hanging', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  await writePreferencesTo(primary, legacy, { team: { schema: 2, mode: 'member', connections: [] } })
+
+  // Plant an abandoned lock file next to primary, backdated well past LOCK_STALE_MS (10s).
+  const lockPath = `${primary}.lock`
+  const handle = await open(lockPath, 'w')
+  await handle.close()
+  const longAgo = new Date(Date.now() - 60_000)
+  await utimes(lockPath, longAgo, longAgo)
+
+  const start = Date.now()
+  const team = (await readPreferencesFrom(primary, legacy)).team!
+  team.connections.push({ id: 'c_deadbeef0001', endpoint: 'http://stale:1', org: 'default', user: '', token: '', deniedRepos: [] })
+  await writePreferencesTo(primary, legacy, { team })
+  const elapsed = Date.now() - start
+
+  // Reclaimed almost immediately — nowhere near LOCK_WAIT_TIMEOUT_MS (5s), which is the bound
+  // for a LIVE lock, not a stale one. A missing staleness check would hang here for 5s (the
+  // give-up-and-proceed-anyway fallback) or block forever if that fallback were absent.
+  expect(elapsed).toBeLessThan(2_000)
+
+  const after = await readPreferencesFrom(primary, legacy)
+  expect(after.team!.connections.map(c => c.id)).toContain('c_deadbeef0001')
+  // The reclaim left a fresh lock behind only transiently — writePreferencesTo released it.
+  const stillLocked = await Bun.file(lockPath).exists()
+  expect(stillLocked).toBe(false)
 })

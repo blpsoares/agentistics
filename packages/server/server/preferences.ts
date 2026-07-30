@@ -1,5 +1,5 @@
 import { join, dirname } from 'path'
-import { mkdir, rename, writeFile } from 'node:fs/promises'
+import { mkdir, rename, writeFile, open, unlink, stat } from 'node:fs/promises'
 import { AGENTISTICS_DATA_DIR, CLAUDE_DIR } from './config'
 import type { TeamConfig } from '@agentistics/core'
 import { migrateTeamConfig } from '@agentistics/core'
@@ -115,14 +115,20 @@ export async function readPreferencesFrom(primary: string, legacy: string): Prom
   // independently and could interleave/clobber each other. Safe against reentrancy —
   // readPreferencesFrom is never called from inside an enqueueWrite callback; see there.
   return enqueueWrite(async () => {
-    // Re-check under the chain: primary may have been created (by our own read above racing
-    // another queued write, or by that write itself) since we decided to migrate.
-    const p2 = await readJsonPrefs(primary)
-    if (p2) return withMigratedTeam(p2)
-    // The legacy dir may be read-only (Docker), so a failed migration write is expected and
-    // ignored — the caller still gets the migrated-in-memory result.
-    try { await writeFileAtomic(primary, JSON.stringify(prefs, null, 2)) } catch { /* read-only legacy dir */ }
-    return prefs
+    const release = await acquireFileLock(primary)
+    try {
+      // Re-check under the chain (and now the cross-process lock): primary may have been
+      // created — by our own read above racing another queued write, by that write itself, or
+      // by a SEPARATE PROCESS that migrated first — since we decided to migrate.
+      const p2 = await readJsonPrefs(primary)
+      if (p2) return withMigratedTeam(p2)
+      // The legacy dir may be read-only (Docker), so a failed migration write is expected and
+      // ignored — the caller still gets the migrated-in-memory result.
+      try { await writeFileAtomic(primary, JSON.stringify(prefs, null, 2)) } catch { /* read-only legacy dir */ }
+      return prefs
+    } finally {
+      await release()
+    }
   })
 }
 
@@ -170,6 +176,70 @@ async function writeFileAtomic(path: string, text: string): Promise<void> {
   const tmp = `${path}.tmp-${process.pid}-${++_tmpSeq}-${Math.random().toString(36).slice(2, 8)}`
   await writeFile(tmp, text, 'utf-8')
   await rename(tmp, path)
+}
+
+// ---------------------------------------------------------------------------
+// Cross-process lock — `enqueueWrite` only serializes writes WITHIN this process. Bun serves
+// dashboard requests concurrently in the long-running server process while `cli-member.ts` (and
+// any other CLI subcommand that falls back to a direct write — see cli-member.ts's docstring)
+// writes the SAME preferences.json from a SEPARATE `bun` process with its own, independent
+// `_writeChain`. Two processes racing a read-merge-write on the same file is the exact "two
+// connections read [A,B,C], one writes [B,C], the other writes [A,C] from a stale read" hazard
+// `updateTeamConfig` closes WITHIN a process — an O_EXCL lock FILE closes it ACROSS processes,
+// since the filesystem is the only thing both processes can see.
+// ---------------------------------------------------------------------------
+
+/** A lock older than this is presumed abandoned by a crashed/killed process holding it, and is
+ *  reclaimed rather than blocking every future write on this machine forever. Comfortably above
+ *  how long a single read-merge-write-atomic-rename cycle could plausibly take. */
+const LOCK_STALE_MS = 10_000
+/** How long to wait on a LIVE lock (one whose mtime is still fresh) before giving up and
+ *  proceeding WITHOUT it. A preferences write must never simply stop working because another
+ *  process is slow — that would turn lock contention into an outage. The warning this logs is
+ *  the visible signal that atomicity was not guaranteed for that one write. */
+const LOCK_WAIT_TIMEOUT_MS = 5_000
+const LOCK_POLL_MS = 40
+
+function lockPathFor(primary: string): string {
+  return `${primary}.lock`
+}
+
+/**
+ * Acquire an O_EXCL lock file next to `primary`. `open(path, 'wx')` fails with EEXIST if the
+ * file already exists — the same primitive `mkdir -p` style tools use for a filesystem mutex,
+ * portable across the platforms this ships on (no `flock` dependency). Returns a release
+ * function; the caller MUST call it in a `finally` (see `writePreferencesTo`/`updateTeamConfigAt`
+ * below) or a crash mid-critical-section leaves a lock for the NEXT writer to reclaim once it
+ * goes stale — never a permanent deadlock, but a real wait for `LOCK_STALE_MS`.
+ */
+async function acquireFileLock(primary: string): Promise<() => Promise<void>> {
+  const lockPath = lockPathFor(primary)
+  await mkdir(dirname(lockPath), { recursive: true })
+  const start = Date.now()
+  while (true) {
+    try {
+      const handle = await open(lockPath, 'wx')
+      await handle.close()
+      return async () => { try { await unlink(lockPath) } catch { /* already gone — fine */ } }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err
+      // Someone else holds it (or held it and crashed) — decide whether to reclaim or wait.
+      try {
+        const st = await stat(lockPath)
+        if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+          try { await unlink(lockPath) } catch { /* another reclaimer won the race — loop and retry open */ }
+          continue
+        }
+      } catch {
+        continue // the lock vanished between our failed open() and this stat() — retry immediately
+      }
+      if (Date.now() - start > LOCK_WAIT_TIMEOUT_MS) {
+        console.warn(`[preferences] lock at ${lockPath} held past ${LOCK_WAIT_TIMEOUT_MS}ms by another process — proceeding without it`)
+        return async () => {}
+      }
+      await new Promise(resolve => setTimeout(resolve, LOCK_POLL_MS))
+    }
+  }
 }
 
 /** Single write chain for the WHOLE module: every enqueued function awaits the previous one,
@@ -242,10 +312,15 @@ function mergeTeamPayload(current: TeamConfig | undefined, incoming: TeamConfig)
 /** Merge `prefs` over the current preferences and persist to `primary`. Exported for tests. */
 export async function writePreferencesTo(primary: string, legacy: string, prefs: Preferences): Promise<void> {
   return enqueueWrite(async () => {
-    const { prefs: current } = await readEffective(primary, legacy)
-    const merged = { ...current, ...prefs }
-    if (prefs.team) merged.team = mergeTeamPayload(current.team, prefs.team)
-    await writeFileAtomic(primary, JSON.stringify(merged, null, 2))
+    const release = await acquireFileLock(primary)
+    try {
+      const { prefs: current } = await readEffective(primary, legacy)
+      const merged = { ...current, ...prefs }
+      if (prefs.team) merged.team = mergeTeamPayload(current.team, prefs.team)
+      await writeFileAtomic(primary, JSON.stringify(merged, null, 2))
+    } finally {
+      await release()
+    }
   })
 }
 
@@ -278,13 +353,18 @@ export type TeamConfigMutator = (current: TeamConfig) => TeamConfig | undefined
  *  developer's actual `~/.agentistics/preferences.json`. */
 export async function updateTeamConfigAt(primary: string, legacy: string, mutate: TeamConfigMutator): Promise<TeamConfig> {
   return enqueueWrite(async () => {
-    const { prefs: current } = await readEffective(primary, legacy)
-    const currentTeam = current.team ?? migrateTeamConfig(undefined)
-    const nextTeam = mutate(currentTeam)
-    if (nextTeam === undefined) return currentTeam
-    const merged = { ...current, team: mergeTeamPayload(current.team, nextTeam) }
-    await writeFileAtomic(primary, JSON.stringify(merged, null, 2))
-    return merged.team as TeamConfig
+    const release = await acquireFileLock(primary)
+    try {
+      const { prefs: current } = await readEffective(primary, legacy)
+      const currentTeam = current.team ?? migrateTeamConfig(undefined)
+      const nextTeam = mutate(currentTeam)
+      if (nextTeam === undefined) return currentTeam
+      const merged = { ...current, team: mergeTeamPayload(current.team, nextTeam) }
+      await writeFileAtomic(primary, JSON.stringify(merged, null, 2))
+      return merged.team as TeamConfig
+    } finally {
+      await release()
+    }
   })
 }
 
