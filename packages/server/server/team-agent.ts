@@ -15,6 +15,10 @@ import type { ServerWebSocket } from 'bun'
 /** Data attached to each server-side WebSocket via server.upgrade(req, { data }) */
 export interface AgentSocketData {
   user: string
+  /** The MACHINE behind this socket (token hash). Presence is per person — a member is online while
+   *  any of their machines is — but a live-session snapshot describes one machine's processes, so
+   *  `team-live` keys by this and never by `user`. */
+  memberId: string
   isAgent?: boolean
 }
 
@@ -115,16 +119,20 @@ export function registerAgent(ws: ServerWebSocket<AgentSocketData>): void {
 }
 
 export function unregisterAgent(ws: ServerWebSocket<AgentSocketData>): void {
-  const { user } = ws.data
+  const { user, memberId } = ws.data
   sockState.delete(ws)
   const sockets = agentSockets.get(user)
   if (!sockets) { if (sockState.size === 0) stopPingLoop(); return }
   sockets.delete(ws)
+  // A clean disconnect means nothing on THAT MACHINE is open any more — drop its live report now
+  // instead of leaving stale rows on the dashboard until the TTL expires. Scoped to the machine,
+  // not the person: one laptop going to sleep must not blank out the desktop still working.
+  const machineGone = ![...sockets].some(s => s.data.memberId === memberId)
+  if (machineGone) {
+    void import('./team-live').then(m => m.clearMemberLive(memberId)).catch(() => { /* best-effort */ })
+  }
   if (sockets.size === 0) {
     agentSockets.delete(user)
-    // A clean disconnect means nothing of theirs is open any more — drop the live report now
-    // instead of leaving stale rows on the dashboard until the TTL expires.
-    void import('./team-live').then(m => m.clearMemberLive(user)).catch(() => { /* best-effort */ })
     // Record the drop; after the grace, the member counts as offline. Fire a presence update
     // AT grace-expiry so the dashboard flips without waiting for its next poll.
     lastDropAt.set(user, Date.now())
@@ -212,9 +220,9 @@ export function onAgentMessage(
           !!p && typeof p === 'object' && typeof (p as { cwd?: unknown }).cwd === 'string')
       : []
     void import('./team-live').then(m => {
-      // The member NEVER names itself — the display name is taken from the authenticated socket,
-      // so a member cannot report live sessions on someone else's behalf.
-      m.recordMemberLive(ws.data.user, sessionIds, processes as never)
+      // The member NEVER names itself — the machine id and display name are taken from the
+      // authenticated socket, so a member cannot report live sessions on someone else's behalf.
+      m.recordMemberLive(ws.data.memberId, ws.data.user, sessionIds, processes as never)
       onPresenceChange?.()
     }).catch(() => { /* best-effort */ })
   } catch { /* ignore malformed frames */ }
