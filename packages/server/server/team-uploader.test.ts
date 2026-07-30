@@ -21,9 +21,10 @@ import {
   __setRestrictedForTests, __hasPendingOnChangeForTests, __clearOnChangeTimerForTests,
   __teardownConnectionForTests,
   scheduleOnChangeTrigger, loadSentState, reconcileUploaderNow, MAX_SUPPRESSED_STREAK,
-  replayForgetJournals, getResyncProgress, guardedManualPush,
+  replayForgetJournals, getResyncProgress, guardedManualPush, peekPushContext,
   type PushCycleContext,
 } from './team-uploader'
+import { handleTeamStatus } from './team-connections'
 import { updateTeamConfigAt, type TeamConfigMutator, type Preferences } from './preferences'
 import { __setTeamConnDirForTests, TEAM_CONN_DIR, teamSentFile, teamSyncFile, teamForgetFile } from './config'
 import { loadRulesState, saveRulesState, emptyRulesState } from './team-rules'
@@ -1847,4 +1848,68 @@ describe('pushed workflow runs are recorded in the sent-state', () => {
       await central.stop()
     }
   }, 10_000)
+})
+
+// ---------------------------------------------------------------------------
+// Important 4: GET /api/team/status must not force a full context rebuild. The browser polls it
+// every 5s and `notifyDataChanged()` invalidates the context unconditionally, so during active
+// coding the TTL protects nothing: every poll ran `buildApiResponse()` (which also WRITES the
+// consolidate store) plus `loadConsolidated()`. `boundary`/`prehistorySessions` are display-only
+// honesty markers — serve them from the last-built context, and report `null` (never 0, which
+// means something else on that route) when there is none.
+//
+// This lives here rather than in team-connections.test.ts because the route reads per-connection
+// rules state, and this file is the one that redirects TEAM_CONN_DIR away from ~/.agentistics.
+// ---------------------------------------------------------------------------
+
+describe('GET /api/team/status does not build a push context', () => {
+  it('reports the markers as unknowable and leaves the context uncached', async () => {
+    const connId = randomConnId()
+    try {
+      invalidatePushContext()
+      expect(peekPushContext()).toBeNull()
+
+      const conn = fakeConn(connId, 1)
+      const res = await handleTeamStatus(new Request('http://127.0.0.1/api/team/status'), {
+        readPreferences: fakeReadPreferences(conn),
+      })
+      const body = await res.json() as { connections: Array<{ boundary: string | null; prehistorySessions: number | null }> }
+      expect(body.connections).toHaveLength(1)
+      // `null` means "unknowable", which is a different fact from `0` — never coerced.
+      expect(body.connections[0]!.boundary).toBeNull()
+      expect(body.connections[0]!.prehistorySessions).toBeNull()
+      // The proof: had the route built one, it would now be sitting in the module cache.
+      expect(peekPushContext()).toBeNull()
+    } finally {
+      __teardownConnectionForTests(connId)
+    }
+  })
+
+  it('serves the markers from an already-built context when one exists', async () => {
+    const connId = randomConnId()
+    try {
+      const sessions = [makeSession('pub-11', { start_time: '2026-07-20T09:00:00.000Z' })]
+      invalidatePushContext()
+      // `getPushContext` is what the PUSH cycle calls; it caches, which is the state the route is
+      // supposed to read from without ever building one itself.
+      await getPushContext({
+        buildApiResponse: async () => ({
+          sessions, statsCache: realCacheFrom(sessions, '2026-07-21'), projects: [], workflows: [],
+        }),
+        loadConsolidated: async () => new Map(),
+        readMemberWorkflows: async () => [],
+      })
+
+      const conn = fakeConn(connId, 1)
+      const res = await handleTeamStatus(new Request('http://127.0.0.1/api/team/status'), {
+        readPreferences: fakeReadPreferences(conn),
+      })
+      const body = await res.json() as { connections: Array<{ boundary: string | null; prehistorySessions: number | null }> }
+      expect(body.connections[0]!.boundary).toBe('2026-07-22')
+      expect(body.connections[0]!.prehistorySessions).toBe(1)
+    } finally {
+      invalidatePushContext()
+      __teardownConnectionForTests(connId)
+    }
+  })
 })

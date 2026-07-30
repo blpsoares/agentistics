@@ -20,7 +20,7 @@ import { safeConnId } from './config'
 import { readJsonLimited, LIMITS } from './limits'
 import {
   removeConnection, getUploaderStatus, emptyStatusFor, reconcileUploaderNow, pushNow,
-  getResyncProgress, connectionCanForget, getPushContext, type UploaderStatus,
+  getResyncProgress, connectionCanForget, peekPushContext, type UploaderStatus,
 } from './team-uploader'
 import type { ForgetProgress } from './team-forget-client'
 import { loadRulesState } from './team-rules'
@@ -666,29 +666,33 @@ export function aggregateConnectionStatuses(entries: ConnectionStatusEntry[]): A
  * `deniedRepos` — only `deniedCount` (§6.4: the full list is same-origin-only, via
  * `GET /api/preferences`). `boundary`/`prehistorySessions` are local honesty markers (§4.4) that
  * exist on this route and nowhere on the wire to a central.
+ *
+ * `deps` is injectable for tests — the default reads the developer's real preferences file.
  */
-export async function handleTeamStatus(_req: Request): Promise<Response> {
-  const prefs = await readPreferences()
+export async function handleTeamStatus(
+  _req: Request,
+  deps: { readPreferences?: typeof readPreferences } = {},
+): Promise<Response> {
+  const prefs = await (deps.readPreferences ?? readPreferences)()
   const team = prefs.team
   const connections = team?.connections ?? []
   const byConn = getUploaderStatus()
 
   // The local honesty markers (§4.4/§5.9) describe THIS MACHINE's own Claude rollup — the same
-  // fact for every connection — so they are computed ONCE from the shared push-cycle context
-  // (already cached/TTL'd by getPushContext for the real push cycle) and reused per entry, never
-  // derived per connection and never put on the wire to any central. Best-effort: a context that
-  // cannot be built reports "unknowable" (null), never a guessed 0.
-  let boundary: string | null = null
-  let prehistorySessions: number | null = null
-  if (connections.length > 0) {
-    try {
-      const ctx = await getPushContext()
-      boundary = ctx.realStatsCache ? attributionBoundary(ctx.realStatsCache) : null
-      prehistorySessions = ctx.realStatsCache ? prehistoryCount(ctx.realStatsCache, boundary) : null
-    } catch {
-      // best-effort — leave both null
-    }
-  }
+  // fact for every connection — so they are computed ONCE and reused per entry, never derived per
+  // connection and never put on the wire to any central.
+  //
+  // Read from the LAST-BUILT push context (`peekPushContext`, stale-tolerant), never
+  // `getPushContext()`, which BUILDS one. The browser polls this route every ~5s while
+  // `notifyDataChanged()` invalidates the context on every local file change, so during active
+  // coding the TTL protects nothing and building here ran `buildApiResponse()` — which also
+  // WRITES the consolidate store — plus `loadConsolidated()` at the poll cadence instead of the
+  // connection's push interval. These two fields are display-only: serving them one push cycle
+  // stale is correct, and `null` ("unknowable", already distinct from `0` on this route and in
+  // the UI) is correct before the first cycle has run. Never coerce it to 0.
+  const ctx = connections.length > 0 ? peekPushContext() : null
+  const boundary = ctx?.realStatsCache ? attributionBoundary(ctx.realStatsCache) : null
+  const prehistorySessions = ctx?.realStatsCache ? prehistoryCount(ctx.realStatsCache, boundary) : null
 
   const entries: ConnectionStatusEntry[] = await Promise.all(connections.map(async c => {
     // A connection that has not run a single cycle yet has no entry at all in
