@@ -100,6 +100,23 @@ export interface CliStrings {
   optCentralHint: string
   /** `Stop (native)` / `Stop (docker)` — offered only to break a conflict. */
   stopRuntime: (runtime: string) => string
+
+  /**
+   * The restarts a RUNNING service offers — composed here for the same reason the starts are: only
+   * this side knows whether a rebuild has what it needs on this box.
+   *
+   * The rebuild is a second verb rather than a flag on the first because the two do different
+   * amounts of work and the difference is the whole point of offering it: a bounce serves the build
+   * that is already there, a rebuild makes a new one first.
+   */
+  optRestart: string
+  optRestartHint: string
+  optRebuild: string
+  /** `Rebuild & restart (native)` — the conflict case, where each copy is rebuilt on its own. */
+  optRebuildRuntime: (runtime: string) => string
+  /** What a rebuild MEANS, per runtime: recompile the binary, or rebuild the image. */
+  optRebuildNativeHint: string
+  optRebuildDockerHint: string
   archiveUnsetHint: string
   dockerStartFailed: string
   centralStarted: string
@@ -197,6 +214,12 @@ const EN: CliStrings = {
   optCentral: 'Start',
   optCentralHint: 'the team central, in Docker',
   stopRuntime: (runtime) => `Stop (${runtime})`,
+  optRestart: 'Restart',
+  optRestartHint: 'bounce it — same build',
+  optRebuild: 'Rebuild & restart',
+  optRebuildRuntime: (runtime) => `Rebuild & restart (${runtime})`,
+  optRebuildNativeHint: 'recompile the binary first (bun run bin), then restart',
+  optRebuildDockerHint: 'rebuild the image and recreate the container',
   archiveUnsetHint: 'history preservation is still unset — see the Setup tab',
   dockerStartFailed: 'the machine container did not start.',
   centralStarted: 'agentistics central is up.',
@@ -292,6 +315,12 @@ const PT: CliStrings = {
   optCentral: 'Iniciar',
   optCentralHint: 'a central do time, em Docker',
   stopRuntime: (runtime) => `Parar (${runtime})`,
+  optRestart: 'Reiniciar',
+  optRestartHint: 'só reinicia — mesmo build',
+  optRebuild: 'Reconstruir & reiniciar',
+  optRebuildRuntime: (runtime) => `Reconstruir & reiniciar (${runtime})`,
+  optRebuildNativeHint: 'recompila o binário (bun run bin) e depois reinicia',
+  optRebuildDockerHint: 'reconstrói a imagem e recria o container',
   archiveUnsetHint: 'a preservação do histórico ainda não foi definida — veja a aba Setup',
   dockerStartFailed: 'o container da máquina não subiu.',
   centralStarted: 'agentistics central está no ar.',

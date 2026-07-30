@@ -36,6 +36,13 @@ export interface ControlStrings {
   keyOpen: string
   keyBack: string
   keyQuit: string
+  /**
+   * The way out of the output pane a running task owns.
+   *
+   * `dismiss` rather than `back`: the pane is not a place you navigated into, it is a thing that
+   * appeared over the facts, and esc puts the facts back.
+   */
+  keyTaskClose: string
   keyScroll: string
   /** `g`/`G` and Home/End — the ends of a document, named once for every screen that scrolls. */
   keyEnds: string
@@ -58,6 +65,14 @@ export interface ControlStrings {
   paneConfig: string
   /** The detail pane's title while nothing is selected; normally it wears the service's name. */
   paneDetail: string
+  /**
+   * The output pane's title when the action that opened it was not named.
+   *
+   * Normally it wears the VERB the user pressed — "Rebuild & restart", "Start (docker)" — because
+   * that is what makes a wall of build output attributable. This is the fallback, so output can
+   * never arrive with nowhere to go.
+   */
+  paneOutput: string
 
   /**
    * The detail pane's section rules.
@@ -100,12 +115,13 @@ export interface ControlStrings {
   /**
    * Actions on the focused service.
    *
-   * There is no generic `Start` here any more: a start is a RUNTIME, and only the host knows which
-   * ones this box can perform — so it composes and labels them (`Start (docker)`), and this table
-   * carries only the verbs whose meaning is the same wherever they appear.
+   * There is no generic `Start` here any more, and no generic `Restart` either: both are per
+   * RUNTIME, and only the host knows which ones this box can perform — so it composes and labels
+   * them (`Start (docker)`, `Rebuild & restart`), and this table carries only the verbs whose
+   * meaning is the same wherever they appear. `Restart all` survives because "all" is the one
+   * target the selection cannot name.
    */
   actStop: string
-  actRestart: string
   actOpen: string
   actStopAll: string
   actRestartAll: string
@@ -205,6 +221,7 @@ const EN: ControlStrings = {
   keyOpen: 'o open',
   keyBack: 'esc back',
   keyQuit: 'q quit',
+  keyTaskClose: 'esc dismiss',
   keyScroll: '↑↓/pg scroll',
   keyEnds: 'g/G ends',
   keyRefresh: 'r refresh',
@@ -215,6 +232,7 @@ const EN: ControlStrings = {
   paneServices: 'services',
   paneConfig: 'config',
   paneDetail: 'detail',
+  paneOutput: 'output',
 
   sectionRuntimes: 'RUNTIMES',
   sectionAddresses: 'ADDRESSES',
@@ -242,7 +260,6 @@ const EN: ControlStrings = {
   bootOff: 'does not start at boot',
 
   actStop: 'Stop',
-  actRestart: 'Restart',
   actOpen: 'Open in browser',
   actStopAll: 'Stop all',
   actRestartAll: 'Restart all',
@@ -329,6 +346,7 @@ const PT: ControlStrings = {
   keyOpen: 'o abrir',
   keyBack: 'esc voltar',
   keyQuit: 'q sair',
+  keyTaskClose: 'esc fechar',
   keyScroll: '↑↓/pg rolar',
   keyEnds: 'g/G extremos',
   keyRefresh: 'r atualizar',
@@ -339,6 +357,7 @@ const PT: ControlStrings = {
   paneServices: 'serviços',
   paneConfig: 'config',
   paneDetail: 'detalhe',
+  paneOutput: 'saída',
 
   sectionRuntimes: 'RUNTIMES',
   sectionAddresses: 'ENDEREÇOS',
@@ -364,7 +383,6 @@ const PT: ControlStrings = {
   bootOff: 'não inicia no boot',
 
   actStop: 'Parar',
-  actRestart: 'Reiniciar',
   actOpen: 'Abrir no navegador',
   actStopAll: 'Parar tudo',
   actRestartAll: 'Reiniciar tudo',

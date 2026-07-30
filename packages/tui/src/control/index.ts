@@ -9,7 +9,7 @@
 import React from 'react'
 import { render } from 'ink'
 import { ControlCenter } from './ControlCenter'
-import { altScreen, enterAltScreenGuarded, onAltScreenSignal } from './altScreen'
+import { altScreen, enterAltScreenGuarded, onAltScreenSignal, writeFrame } from './altScreen'
 import { createMouseInput } from './mouseStdin'
 import { createPointerBus, type MouseChannel } from './pointer'
 import { strings } from '../i18n'
@@ -22,6 +22,34 @@ export interface ControlCenterOptions {
   host: ControlHost
   /** Which tab to open on. Defaults to Services. */
   tab?: TabId
+}
+
+/**
+ * The stdout Ink draws through: `process.stdout` in every respect except its `write`, which is
+ * `altScreen.writeFrame`.
+ *
+ * The host swaps `process.stdout.write` out while an action runs — to collect what it printed
+ * (`captureOutput`) or to turn it into lines for the output pane (`streamOutput`) — and Ink resolves
+ * `stdout.write` on every repaint. Left alone it would draw THROUGH whatever is patched over the
+ * stream, and each diversion is wrong in its own way: the capturing one swallows the frame, so the
+ * screen freezes for the length of the action, spinner included; the streaming one feeds the frame
+ * into the pane that is drawing it, which is a loop whose output is a pane full of its own borders —
+ * exactly what the first pty recording of this feature caught. `writeFrame` also keeps the OTHER
+ * half of the old arrangement, dropping frames while a command is suspended.
+ *
+ * A Proxy rather than a copy: Ink reads `columns` / `rows` and subscribes to `resize`, so the object
+ * has to remain the real stream apart from that one method.
+ */
+function inkStdout(): NodeJS.WriteStream {
+  return new Proxy(process.stdout, {
+    get(target, prop) {
+      if (prop === 'write') return writeFrame
+      // Read against the TARGET so a getter (`columns`) sees the real stream as `this`, and bind
+      // methods for the same reason — `on('resize', …)` must register on the stream, not the proxy.
+      const value = Reflect.get(target, prop, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
 }
 
 export async function runControlCenter(opts: ControlCenterOptions): Promise<ControlExit> {
@@ -78,6 +106,8 @@ export async function runControlCenter(opts: ControlCenterOptions): Promise<Cont
     React.createElement(ControlCenter, { host, lang, initial: { tab }, onExit, mouse }),
     {
       stdin: input.stdin,
+      // THE FRAME MUST NOT GO THROUGH `process.stdout.write` — see `inkStdout`.
+      stdout: inkStdout(),
       // Ctrl-C routes through onExit like every other way out, so the alternate screen is always
       // left the same way and the exit code is decided in one place.
       exitOnCtrlC: false,
@@ -117,6 +147,8 @@ export type {
   ActionResult,
   ActionTarget,
   BootState,
+  RestartOption,
+  RestartRequest,
   ControlExit,
   ControlHost,
   ControlService,

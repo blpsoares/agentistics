@@ -159,6 +159,34 @@ export interface StopOption {
   label: string
 }
 
+/** What `ControlHost.restart` needs: what to bounce, and whether to rebuild it on the way. */
+export interface RestartRequest {
+  target: ActionTarget
+  /**
+   * Rebuild before restarting instead of just bouncing what is already built.
+   *
+   * What that MEANS is per runtime and is the host's business: the native server recompiles the
+   * binary (`bun run bin`), a container rebuilds its image and is recreated, the central goes
+   * through its own `up`. The UI hands the flag back and learns none of it.
+   */
+  rebuild?: boolean
+}
+
+/**
+ * A restart the host is offering, ready to be drawn and handed straight back to `restart()`.
+ *
+ * Composed by the host for the same reason `StartOption` is: whether a rebuild can work here is a
+ * fact about this box, not about this screen. The native rebuild needs the repo checkout and the
+ * machine's needs its compose file, so on a box without them the option is ABSENT rather than
+ * present and failing — a verb that cannot work is worse than a missing one.
+ */
+export interface RestartOption extends RestartRequest {
+  /** Already-localized verb, e.g. "Restart" / "Rebuild & restart (docker)". */
+  label: string
+  /** Already-localized one-line explanation, for surfaces that show hints. */
+  hint?: string
+}
+
 /**
  * One logical service, as the host currently sees it.
  *
@@ -203,6 +231,14 @@ export interface ControlService {
   boot?: BootState
   /** The starts this box can perform right now. ALWAYS EMPTY while the service is up. */
   startOptions: StartOption[]
+  /**
+   * The restarts this box can perform right now — the plain bounce, plus a rebuild wherever the
+   * pieces a rebuild needs are actually here. ALWAYS EMPTY while the service is down.
+   *
+   * The mirror image of `startOptions`, and for the same reason: there is nothing to restart until
+   * something is running, and nothing to start while something is.
+   */
+  restartOptions: RestartOption[]
   /** Per-runtime stops, populated only while more than one runtime is up. */
   stopOptions: StopOption[]
 }
@@ -268,8 +304,11 @@ export interface ControlHost {
    * Bounce / stop what a target names. A LOGICAL target acts on whichever runtimes of it are
    * actually up (both, when they are in conflict); a runtime target acts on exactly that one.
    * Naming something that is not running is answered, not silently reported as done.
+   *
+   * `rebuild` is a `RestartOption` handed straight back — the flag is the host's to interpret, and
+   * it is only ever true for an option the host offered in the first place.
    */
-  restart(target: ActionTarget): Promise<ActionResult>
+  restart(target: ActionTarget, rebuild?: boolean): Promise<ActionResult>
   stop(target: ActionTarget): Promise<ActionResult>
 
   /** Persist a team mode from the Setup tab. `member` also needs `connect`. */
@@ -308,6 +347,21 @@ export interface ControlHost {
    * hand it to.
    */
   openUrl?(url: string): Promise<ActionResult>
+
+  /**
+   * Watch what the CURRENT action is saying, line by line. Returns an unsubscribe.
+   *
+   * ONE channel rather than a callback threaded through every action signature: the commands worth
+   * watching are the long ones — `docker compose up --build`, `central.sh up`, `bun run bin` — and
+   * which of them a given call ends up running is the host's business. The UI subscribes once,
+   * around whatever it is performing, and renders what arrives.
+   *
+   * The lines are already sanitised (see `control/stream.ts`): no escape sequences, no carriage
+   * returns, no tabs, nothing whose rendered width differs from its length. That is not politeness
+   * — a raw cursor-up sequence inside a pane moves the real cursor and corrupts every row Ink draws
+   * after it, which is exactly why these children are PIPED now instead of inheriting the terminal.
+   */
+  onOutput(handler: (line: string) => void): () => void
 
   /**
    * Newest-last lines of a log, or an empty array when there is nothing to show.

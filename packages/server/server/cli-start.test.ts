@@ -286,6 +286,65 @@ test('the conflict names the word and BOTH runtimes before it can be cut', () =>
   }
 })
 
+// -- the restarts, and the rebuild that must not be offered where it cannot work ----------------
+
+test('a stopped service offers no restart at all — the mirror of a running one offering no start', () => {
+  const svc = buildService('agentistics', EN.svcAgentistics, [NATIVE_DOWN, MACHINE_DOWN], EN, {
+    // Everything a rebuild needs is here; there is simply nothing running to restart.
+    rebuild: { local: true, machine: true },
+  })
+  expect(svc.restartOptions).toEqual([])
+})
+
+test('a running service offers the plain bounce and, where possible, a rebuild', () => {
+  const svc = buildService('agentistics', EN.svcAgentistics, [NATIVE_UP, MACHINE_DOWN], EN, {
+    rebuild: { local: true },
+  })
+  expect(svc.restartOptions).toEqual([
+    { target: 'agentistics', rebuild: false, label: EN.optRestart, hint: EN.optRestartHint },
+    { target: 'agentistics', rebuild: true, label: EN.optRebuild, hint: EN.optRebuildNativeHint },
+  ])
+})
+
+// The rule this exists for: `bun run bin` needs the repo checkout and the machine's rebuild needs
+// its compose file. Offering a verb that fails on principle is worse than not offering it, because
+// the user pressed it on the screen's word.
+test('without the pieces a rebuild needs, the rebuild is ABSENT rather than offered and failing', () => {
+  const svc = buildService('agentistics', EN.svcAgentistics, [NATIVE_UP, MACHINE_DOWN], EN)
+  expect(svc.restartOptions.map(o => o.rebuild)).toEqual([false])
+  expect(svc.restartOptions.map(o => o.label)).toEqual([EN.optRestart])
+})
+
+// A rebuild is only offered for what is RUNNING: the machine container can be rebuilt on this box,
+// but rebuilding a container that is down is a start, and the start options are where that lives.
+test('a rebuild is offered per RUNNING runtime, not per runtime that could rebuild', () => {
+  const svc = buildService('agentistics', EN.svcAgentistics, [NATIVE_UP, MACHINE_DOWN], EN, {
+    rebuild: { local: false, machine: true },
+  })
+  expect(svc.restartOptions.map(o => o.rebuild)).toEqual([false])
+})
+
+// "Rebuild it" has no single meaning while the same program is running twice — and rebuilding both
+// would leave the conflict exactly where it was. Same shape as the per-runtime stops beside them.
+test('a conflict names the runtime each rebuild acts on', () => {
+  const svc = buildService('agentistics', EN.svcAgentistics, [NATIVE_UP, MACHINE_UP], EN, {
+    rebuild: { local: true, machine: true },
+  })
+  expect(svc.restartOptions).toEqual([
+    { target: 'agentistics', rebuild: false, label: EN.optRestart, hint: EN.optRestartHint },
+    { target: 'local', rebuild: true, label: 'Rebuild & restart (native)', hint: EN.optRebuildNativeHint },
+    { target: 'machine', rebuild: true, label: 'Rebuild & restart (docker)', hint: EN.optRebuildDockerHint },
+  ])
+})
+
+test('the restarts are localized, and a container says what a rebuild means for a container', () => {
+  const svc = buildService('central', PT.svcCentral, [runtime({ id: 'central', state: 'up' })], PT, {
+    rebuild: { central: true },
+  })
+  expect(svc.restartOptions.map(o => o.label)).toEqual(['Reiniciar', 'Reconstruir & reiniciar'])
+  expect(svc.restartOptions[1]!.hint).toBe(PT.optRebuildDockerHint)
+})
+
 test('a conflict offers a stop per runtime, so it can be broken without guessing', () => {
   const svc = buildService('agentistics', EN.svcAgentistics, [NATIVE_UP, MACHINE_UP], EN)
   expect(svc.stopOptions).toEqual([

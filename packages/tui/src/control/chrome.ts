@@ -421,11 +421,13 @@ export interface CockpitLayout {
 
 export interface CockpitOptions {
   /**
-   * A question owns the detail region instead of the detail pane.
+   * Something OTHER than the detail pane owns the detail region — a question, or the output of a
+   * task that is streaming into it.
    *
-   * The region is then reserved `QUESTION_ROWS` before the band gets its own, because a question's
-   * height comes from the sentence it asks and the answers it offers rather than from the service
-   * it is about — `cockpitLayout` cannot see either, so it reserves the tallest of them.
+   * The region is then reserved `QUESTION_ROWS` before the band gets its own, because neither one's
+   * height comes from the service it is about: a question's comes from the sentence it asks and the
+   * answers it offers, and a build's output is as long as the build. `cockpitLayout` can see none of
+   * that, so it reserves the tallest thing that can land there.
    */
   question?: boolean
 }
@@ -1155,6 +1157,14 @@ export interface HintContext {
   /** The selection is up and publishes a dashboard the host can open. */
   canOpen: boolean
   /**
+   * A streamed task owns the detail region and the keyboard.
+   *
+   * Optional because it is a state of the SHELL rather than of the selection — every other field
+   * here is a fact about the service under the cursor. Absent means no task, which is the case on
+   * every frame that is not watching a build.
+   */
+  task?: boolean
+  /**
    * How many panes the layout actually drew.
    *
    * A short terminal keeps the services pane and nothing else, and `tab` there cycles a list of
@@ -1174,6 +1184,12 @@ export interface HintContext {
  * screen has, and a hint for a key that does nothing here teaches the wrong thing twice.
  */
 export function cockpitHints(focus: PaneId, s: ControlStrings, ctx: HintContext): string[] {
+  // A task's output pane answers for the whole screen while it is up: the services underneath it are
+  // not selectable, nothing can be started or stopped, and the tab keys stand down with the rest of
+  // the global keys. So the row names exactly the three keys that work — read it, and put the facts
+  // back — rather than a focus that is currently unreachable.
+  if (ctx.task) return [s.keyTaskClose, s.keyScroll, s.logFollow]
+
   // With one pane on screen `tab` has nowhere to go, so it is not named. Everything else on the
   // row is conditional on the pane already; this is the same rule applied to the pane count.
   const pane = ctx.panes > 1 ? [s.keyPane] : []

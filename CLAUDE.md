@@ -56,6 +56,7 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── autostart.ts         → systemd user service + loginctl linger + ~/.bashrc + ~/.zshrc update-check hook
   ├── cli-setup.ts / cli-central.ts / cli-member.ts → the agentop setup/central/member command handlers
   ├── cli-start.ts         → the control center's HOST (`ControlHost`): service detection, start/stop/restart, connect/disconnect, boot service, archive consent, language — every action returns an already-localized `ActionResult` instead of printing
+  ├── cli-stream.ts        → the control center's OUTPUT CHANNEL: subscribers + `streamCommand` (both pipes captured, never `inherit`) → lines via the pure `@agentistics/tui/control/stream`
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
   ├── cli-i18n.ts          → EN/PT strings the HOST produces (CLI is English by default; language follows --lang / preferences.lang / the in-app toggle). The control center's own chrome strings live in tui/src/control/i18n.ts
   ├── team-tokens.ts       → mint / rotate / revoke / validate tokens (stored as sha256 hashes only)
@@ -586,7 +587,10 @@ packages/tui/src/
   control/           the control center — the `agentop` front door
     index.ts         runControlCenter({ lang, host, tab }) → ControlExit; the ONLY server import
     types.ts         ControlHost / ControlStatus / TabId — the presentation ↔ logic contract
-    altScreen.ts     the alternate buffer + `suspend` + the signal guard
+    altScreen.ts     the alternate buffer + `suspend` + `writeFrame` (the gate Ink draws through)
+                     + the signal guard
+    stream.ts        PURE: a command's raw bytes → pane-safe lines (\r progress collapsed, ANSI
+                     stripped, chunk/escape boundaries buffered, ring-bounded); tested
     ControlCenter.tsx  the one mounted component: screen router, global keys, shared chrome state
     nav.ts chrome.ts  PURE key/focus/scroll reducers and PURE layout arithmetic — `headerLayout`
                      (block art vs the compact mark), the tab bar and its underline, the header tag,
@@ -599,10 +603,12 @@ packages/tui/src/
     i18n.ts lang.ts content.ts  EN/PT chrome strings; the CliLang type; the Help / Cheat sheet / Contribute copy
     Pane.tsx         the ONE containment style: rounded frame, title in the border, accent when focused
     Chrome.tsx Surface.tsx Menu.tsx Prompt.tsx ArchiveChoice.tsx   shared primitives (cockpit / linear / questions)
+    Output.tsx       the pane a streaming task owns — the detail region, auto-following its tail
     tabs/            Services (the cockpit), Setup, Logs, Static (Help / Cheat sheet / Contribute)
   stubs/react-devtools-core/   REQUIRED for the binary build — see below
 packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to stdout at a chosen
                                    size/lang/mode, with `--keys` to drive it into a question first
+                                   and `--task running|done` to stream a fake build into the pane
 ```
 (`stubs/` sits at the package root, `packages/tui/stubs/`, not under `src/`.)
 
@@ -624,9 +630,19 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   every action behind the `ControlHost` interface; `packages/tui/src/control` renders and reports
   intents. `cli-ui.ts` stays as the non-TTY fallback — do not delete it.
 - **Nothing may print while the alternate buffer is live.** An Ink frame erases the lines above
-  itself, so a stray `process.stdout.write` lands in a buffer Ink is repainting. Host actions
-  either run under `captureOutput` (their output becomes the status-line message) or under
-  `suspend` (they get the real tty and the screen is handed back). The same ordering rule applies
+  itself, so a stray `process.stdout.write` lands in a buffer Ink is repainting. Host actions run
+  under one of three wrappers, chosen by what the action SAYS: `captureOutput` (it prints a
+  sentence — the last line becomes the status-line message), `streamOutput` (its output is the
+  point — the child is spawned with BOTH pipes captured and every line is published on
+  `ControlHost.onOutput`, which the cockpit draws into the detail region), or `suspend` (it asks a
+  QUESTION, so it needs the real tty; `central.sh init` is the whole of that list). A child on a
+  streamed path also gets NO stdin — Ink owns the keyboard — and the streamed paths carry no
+  `tty()` / `pauseForEnter` call. Ink itself draws through `altScreen.writeFrame`, NOT
+  `process.stdout.write`: a frame written through a capture vanishes (the screen freezes for the
+  length of the action) and a frame written through the streaming diversion is fed into the pane
+  that is drawing it — a pane full of its own borders. `writeFrame` is also what drops frames while
+  a command is suspended, and it must stay a faithful `write`: Ink's teardown passes a callback and
+  waits for it, so a gate that swallowed the callback turned `q` into a hang. The same ordering rule applies
   to teardown: **unmount Ink BEFORE leaving the buffer**. Restore first and Ink's own exit handler
   repaints the whole frame onto the primary screen, prefixed with a clear-scrollback — which is
   why signals route through `onAltScreenSignal` instead of `process.exit`.
@@ -644,11 +660,15 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   `agentistics` run natively and the same program in a container are `RuntimeId`s of ONE
   `ServiceId`, never two rows — listing them separately is what made the screen offer to start a
   Docker copy of a server that was already running. A running service therefore offers NO start at
-  all (the host hands over an empty `startOptions`; the offer is unreachable rather than refused),
-  a stopped one keeps its row DIMMED and its action row becomes exactly the starts this box can
-  perform, and a service running under BOTH runtimes says so — `ControlService.conflict`, named on
+  all (the host hands over an empty `startOptions`; the offer is unreachable rather than refused)
+  and offers instead the `restartOptions` it composed — the plain bounce, plus a `Rebuild & restart`
+  for each running runtime whose rebuild could actually work here (a repo checkout for `bun run
+  bin`, a compose file for the machine image); a rebuild that cannot work is ABSENT, never present
+  and failing. A stopped one keeps its row DIMMED, has no restart at all, and its action row becomes
+  exactly the starts this box can perform. A service running under BOTH runtimes says so — `ControlService.conflict`, named on
   the row in `COLORS.danger` with a glyph and a word, spelled out in the detail pane, with
-  per-runtime `Stop (native)` / `Stop (docker)` verbs. Never normalise a conflict away by showing
+  per-runtime `Stop (native)` / `Stop (docker)` and `Rebuild & restart (native|docker)` verbs —
+  "rebuild it" has no single meaning while the same program is running twice. Never normalise a conflict away by showing
   one of the two: they read the same files and fight over the same port. Under width pressure
   `serviceCells` gives up the NAME first, then the runtime cell, and the state WORD last — the word
   is the cell nothing else repeats, while the runtimes are said again by the detail pane's badge and
@@ -660,6 +680,15 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   with the config pane focused they are the config ones. There are three focusable panes
   (`PANE_ORDER`: services → config → actions) and **no log pane**: logs belong to the Logs screen,
   and a tailing viewer squeezed into six rows was a worse copy of a full screen one keypress away.
+- **A long action's output goes into the DETAIL region, and nothing else moves.** `docker compose up
+  --build`, `central.sh up` and `bun run bin` stream into a pane titled with the VERB the user
+  pressed, while the services list and the config pane stay standing beside it — the output is a view
+  of what you acted on, so it has to be readable next to WHAT you acted on. It opens on the first
+  line (a stop says one sentence and never takes the region), auto-follows the tail through
+  `windowOffset` — slicing from zero would leave a build's live edge below the fold — keeps the
+  output with its outcome when it finishes, and `esc` puts the facts back. While it is up it reports
+  `capture`, exactly as a question does: the global keys stand down (a keypress must not act on a
+  service the user cannot see), and `cockpitHints` names the only three keys that work.
 - **The detail pane earns the height it has.** It states every RUNTIME the service could run under
   and the state of each — with the localized reason when one cannot be run here at all, which is
   the answer to "why does this offer me nothing" — the pid and uptime of the one that is serving,

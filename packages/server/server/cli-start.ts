@@ -7,11 +7,18 @@
  * already-localized `ActionResult` instead of printing.
  *
  * Nothing here may write to stdout while the alternate screen is live: a stray line lands in a
- * buffer Ink is repainting and corrupts the frame. Actions therefore either run under
- * `captureOutput` (their prints are swallowed and the last line becomes the failure message) or,
- * when their output is the point — `docker compose up --build`, `central.sh init` — under
- * `suspend`, which steps out of the alternate screen, gives the child the real tty and pauses so
- * the output can be read.
+ * buffer Ink is repainting and corrupts the frame. There are three ways an action obeys that, and
+ * which one it takes is a judgement about what the action SAYS:
+ *
+ *  - `captureOutput` — it prints a sentence. The prints are swallowed and the last line becomes the
+ *    failure message in the status line.
+ *  - `streamOutput` — its output is the point and there is nothing to ask. `docker compose up
+ *    --build`, `central.sh up`, `bun run bin`: the child is spawned with BOTH pipes captured (never
+ *    `inherit`, never a tty of its own) and every line it produces is published on the output
+ *    channel, which the control center draws into a pane. This is what replaced leaving the screen.
+ *  - `suspend` — it asks a QUESTION, so it needs the real terminal. `central.sh init` is the whole
+ *    of that list: it refuses outright without a tty, and a prompt streamed into a pane is a
+ *    question nobody can answer.
  *
  * Language follows `--lang en|pt`, else `preferences.lang` (shared with the web), else English;
  * the in-app toggle persists to that same preference.
@@ -34,6 +41,7 @@ import type {
   ControlService,
   ControlStatus,
   LogSource,
+  RestartOption,
   RuntimeId,
   ServiceId,
   ServiceRef,
@@ -44,7 +52,11 @@ import type {
 } from '@agentistics/tui/control'
 import { PORT, WEB_PORT } from './config'
 import { readPreferences, writePreferences, resolveArchiveMode, type ArchiveMode } from './preferences'
-import { runCentral } from './cli-central'
+import { centralStartPlan, runCentral } from './cli-central'
+import { onOutputLine, publishLines, streamCommand } from './cli-stream'
+// The pure line decoder, by its own subpath: `@agentistics/tui/control` pulls in Ink and React, and
+// this module is loaded by every `agentop` subcommand.
+import { createLineDecoder } from '@agentistics/tui/control/stream'
 import { ensureArchiveModeChosen } from './cli-setup'
 import { memberConnect, memberLeave } from './cli-member'
 import { enableAutostart } from './autostart'
@@ -212,6 +224,49 @@ function startOptionsFor(runtime: RuntimeId, s: CliStrings): StartOption[] {
 }
 
 /**
+ * Which runtimes this box could REBUILD, keyed by runtime.
+ *
+ * Absent or false means the pieces are not here — no repo checkout for `bun run bin`, no compose
+ * file for the machine image — and the option is then not offered at all. A rebuild that could not
+ * work is worse than a missing one: it is a verb that fails on principle, and the user pressed it
+ * because the screen said they could.
+ */
+export type RebuildAbility = Partial<Record<RuntimeId, boolean>>
+
+/**
+ * The restarts a RUNNING service offers: the plain bounce, plus a rebuild per runtime that can.
+ *
+ * PURE, and the mirror of `startOptionsFor` — including the reason it is here rather than in the
+ * screen: what a rebuild MEANS is per runtime (recompile the binary, rebuild the image, go through
+ * the central's own `up`) and whether it can happen at all is a fact about this box.
+ *
+ * In a CONFLICT each copy is rebuilt on its own, exactly as it is stopped on its own: "rebuild it"
+ * has no single meaning while the same program is running twice, and rebuilding both would leave
+ * the conflict standing.
+ */
+function restartOptionsFor(
+  id: ServiceId,
+  up: readonly ServiceRuntimeState[],
+  s: CliStrings,
+  can: RebuildAbility,
+): RestartOption[] {
+  const out: RestartOption[] = [
+    { target: id, rebuild: false, label: s.optRestart, hint: s.optRestartHint },
+  ]
+  const named = up.length > 1
+  for (const runtime of up) {
+    if (!can[runtime.id]) continue
+    out.push({
+      target: named ? runtime.id : id,
+      rebuild: true,
+      label: named ? s.optRebuildRuntime(runtime.kind) : s.optRebuild,
+      hint: runtime.kind === 'native' ? s.optRebuildNativeHint : s.optRebuildDockerHint,
+    })
+  }
+  return out
+}
+
+/**
  * One logical service, assembled from the runtimes it could be running under.
  *
  * PURE — states and strings in, the value the screen draws out — because every judgement worth
@@ -226,11 +281,11 @@ export function buildService(
   runtimes: ServiceRuntimeState[],
   s: CliStrings,
   /**
-   * What only an OS probe can answer. Optional and absent by default, so a caller that cannot ask
-   * — or a platform with no user systemd — produces a service that says nothing about boot rather
-   * than one that says "no".
+   * What only a probe of this box can answer. Optional and absent by default, so a caller that
+   * cannot ask — or a platform with no user systemd — produces a service that says nothing about
+   * boot rather than one that says "no", and offers no rebuild rather than one that cannot work.
    */
-  facts: { boot?: BootState } = {},
+  facts: { boot?: BootState; rebuild?: RebuildAbility } = {},
 ): ControlService {
   const up = runtimes.filter(r => r.state === 'up')
   const { state, reason } = aggregateState(runtimes)
@@ -249,6 +304,8 @@ export function buildService(
     startOptions: up.length > 0
       ? []
       : runtimes.filter(r => r.available).flatMap(r => startOptionsFor(r.id, s)),
+    // …and its mirror: nothing to restart until something is running.
+    restartOptions: up.length > 0 ? restartOptionsFor(id, up, s, facts.rebuild ?? {}) : [],
     stopOptions: up.length > 1
       ? up.map(r => ({ runtime: r.id, label: s.stopRuntime(r.kind) }))
       : [],
@@ -489,19 +546,32 @@ function startBackground(): string {
   return SERVER_LOG
 }
 
-/** Build + start the machine container. Writes to the tty, so it only ever runs suspended — hence
- *  `tty()` rather than stdout for the lines that must survive the mute a suspension installs. */
+/** The machine container's compose file, which only exists inside a repo checkout. */
+function machineComposePath(): string {
+  return join(process.cwd(), 'docker-compose.machine.yml')
+}
+
+/**
+ * Build + start the machine container, STREAMED into the control center's pane.
+ *
+ * It used to run suspended, with the child inheriting the real tty and `tty()` writing the lines
+ * around it past the mute a suspension installs. Now the child is piped and these lines are plain
+ * `process.stdout` writes: the caller runs this inside `streamOutput`, which diverts them onto the
+ * output channel, so the whole thing — the notice, the build, the addresses — arrives as pane lines
+ * in the order they were said, and the screen never has to be given up.
+ */
 async function startDocker(s: CliStrings): Promise<number> {
-  const compose = join(process.cwd(), 'docker-compose.machine.yml')
+  const compose = machineComposePath()
   if (!(await Bun.file(compose).exists())) {
-    process.stderr.write(`\n  ${YE}${s.noComposeFrom(process.cwd())}${R}\n  ${s.runFromRepo}\n`)
+    // Diverted like everything else here, so the REASON lands in the pane rather than in a status
+    // line that has room for one sentence.
+    process.stderr.write(`  ${YE}${s.noComposeFrom(process.cwd())}${R}\n  ${s.runFromRepo}\n`)
     return 1
   }
-  tty(`\n  ${D}${s.buildingMachine}${R}\n\n`)
-  const child = spawn('docker', ['compose', '-f', compose, 'up', '-d', '--build'], { stdio: 'inherit' })
-  const code = await new Promise<number>((resolve) => child.on('exit', (c) => resolve(c ?? 1)))
+  process.stdout.write(`  ${D}${s.buildingMachine}${R}\n`)
+  const code = await streamCommand(['docker', 'compose', '-f', compose, 'up', '-d', '--build'])
   if (code === 0) {
-    tty(
+    process.stdout.write(
       `\n  ${GR}${s.containerUp}${R}\n` +
       `  ${D}${s.webLabel}:${R}  ${CY}http://localhost:${WEB_PORT}${R}\n` +
       `  ${D}${s.bootLabel}:${R} ${s.bootNote}\n`,
@@ -529,23 +599,50 @@ async function clearPortOrAbort(s: CliStrings, localRunning: boolean): Promise<b
 }
 
 // restart (per-service helpers)
-// `rebuild` (from `--rebuild`) recreates Docker images/containers instead of just bouncing them.
+// `rebuild` (from `--rebuild`, or from a `RestartOption` the control center offered) makes a NEW
+// build before bouncing: the native binary is recompiled, a Docker image is rebuilt and recreated.
+/**
+ * Is this a repo checkout? The one thing the native rebuild cannot do without.
+ *
+ * Asked in two places — before OFFERING the rebuild (`RebuildAbility`) and before running it — and
+ * they have to agree, so there is one function rather than two copies of the same path.
+ */
+export async function inRepoCheckout(): Promise<boolean> {
+  return Bun.file(join(process.cwd(), 'packages/server/bin/cli.ts')).exists()
+}
+
+/** How a rebuild is allowed to talk: the user's terminal, or the control center's output channel. */
+export interface RunMode {
+  /** Pipe every child and publish its output as pane lines instead of inheriting the terminal. */
+  stream?: boolean
+}
+
 /** Rebuild + reinstall the native binary from the repo (`bun run bin`: web build → embed assets →
  *  compile → install to ~/.local/bin/agentop). Returns 'not-repo' when not run from a checkout. */
-export async function rebuildNativeBinary(): Promise<'built' | 'not-repo' | 'failed'> {
-  const inRepo = await Bun.file(join(process.cwd(), 'packages/server/bin/cli.ts')).exists()
-  if (!inRepo) return 'not-repo'
-  const child = spawn('bun', ['run', 'bin'], { cwd: process.cwd(), stdio: 'inherit' })
-  const code = await new Promise<number>(resolve => child.on('exit', c => resolve(c ?? 1)))
+export async function rebuildNativeBinary(mode: RunMode = {}): Promise<'built' | 'not-repo' | 'failed'> {
+  if (!(await inRepoCheckout())) return 'not-repo'
+  // Inside the control center the build is watched in a pane, so its output is piped; from the
+  // plain `agentop restart --rebuild` it belongs on the terminal the user is looking at.
+  const code = mode.stream
+    ? await streamCommand(['bun', 'run', 'bin'], { cwd: process.cwd() })
+    : await new Promise<number>(resolve => {
+        const child = spawn('bun', ['run', 'bin'], { cwd: process.cwd(), stdio: 'inherit' })
+        child.on('exit', c => resolve(c ?? 1))
+      })
   return code === 0 ? 'built' : 'failed'
 }
 
-async function restartLocalSvc(s: CliStrings, rebuild = false): Promise<void> {
-  // With --rebuild, actually rebuild the native binary (web + embedded assets) so the restart
+/** What a restart is doing, and how it is allowed to talk. */
+interface RestartMode extends RunMode {
+  rebuild?: boolean
+}
+
+async function restartLocalSvc(s: CliStrings, mode: RestartMode = {}): Promise<void> {
+  // With a rebuild, actually rebuild the native binary (web + embedded assets) so the restart
   // serves the new frontend/code — not just bounce the old build. Needs the repo checkout.
-  if (rebuild) {
+  if (mode.rebuild) {
     process.stdout.write(`  ${D}${s.rebuildingLocal}${R}\n`)
-    const r = await rebuildNativeBinary()
+    const r = await rebuildNativeBinary(mode)
     if (r === 'not-repo') process.stderr.write(`  ${YE}${s.localRebuildHint}${R}\n`)
     else if (r === 'failed') process.stderr.write(`  ${YE}${s.localRebuildFailed}${R}\n`)
   }
@@ -562,18 +659,24 @@ async function restartLocalSvc(s: CliStrings, rebuild = false): Promise<void> {
     `  ${D}${s.logsLabel}:${R} ${log}\n`,
   )
 }
-async function restartCentralSvc(s: CliStrings, rebuild = false): Promise<void> {
-  process.stdout.write(`  ${D}${rebuild ? s.rebuildingCentral : s.restartingCentral}${R}\n`)
+async function restartCentralSvc(s: CliStrings, mode: RestartMode = {}): Promise<void> {
+  process.stdout.write(`  ${D}${mode.rebuild ? s.rebuildingCentral : s.restartingCentral}${R}\n`)
   // `up` rebuilds/pulls the image and recreates; `restart` just bounces the running container.
-  await runCentral(rebuild ? 'up' : 'restart', [])
+  // Neither asks anything on a central that is already RUNNING — which is the only way to get
+  // here — so both are safe to stream: central.env exists, so `central.sh up` skips its question.
+  await runCentral(mode.rebuild ? 'up' : 'restart', [], { streamed: mode.stream })
 }
-async function restartMachineSvc(s: CliStrings, rebuild = false): Promise<void> {
-  process.stdout.write(`  ${D}${rebuild ? s.rebuildingMachine : s.restartingMachine}${R}\n`)
-  if (rebuild) {
-    const compose = join(process.cwd(), 'docker-compose.machine.yml')
+async function restartMachineSvc(s: CliStrings, mode: RestartMode = {}): Promise<void> {
+  process.stdout.write(`  ${D}${mode.rebuild ? s.rebuildingMachine : s.restartingMachine}${R}\n`)
+  if (mode.rebuild) {
+    const compose = machineComposePath()
     if (await Bun.file(compose).exists()) {
-      const child = spawn('docker', ['compose', '-f', compose, 'up', '-d', '--build'], { stdio: 'inherit' })
-      await new Promise<void>((resolve) => child.on('exit', () => resolve()))
+      const cmd = ['docker', 'compose', '-f', compose, 'up', '-d', '--build']
+      if (mode.stream) await streamCommand(cmd)
+      else await new Promise<void>(resolve => {
+        const child = spawn(cmd[0]!, cmd.slice(1), { stdio: 'inherit' })
+        child.on('exit', () => resolve())
+      })
       return
     }
     process.stderr.write(`  ${YE}${s.noComposeFrom(process.cwd())}${R}\n`)
@@ -583,11 +686,15 @@ async function restartMachineSvc(s: CliStrings, rebuild = false): Promise<void> 
   if (ids.length) await sh(['docker', 'restart', ...ids])
 }
 
-/** Bounce exactly these runtimes. `rebuild` recreates Docker images (central + machine). */
-async function restartRuntimes(s: CliStrings, targets: readonly RuntimeId[], rebuild = false): Promise<void> {
-  if (targets.includes('local')) await restartLocalSvc(s, rebuild)
-  if (targets.includes('central')) await restartCentralSvc(s, rebuild)
-  if (targets.includes('machine')) await restartMachineSvc(s, rebuild)
+/** Bounce exactly these runtimes. `rebuild` makes a new build first; `stream` pipes every child. */
+async function restartRuntimes(
+  s: CliStrings,
+  targets: readonly RuntimeId[],
+  mode: RestartMode = {},
+): Promise<void> {
+  if (targets.includes('local')) await restartLocalSvc(s, mode)
+  if (targets.includes('central')) await restartCentralSvc(s, mode)
+  if (targets.includes('machine')) await restartMachineSvc(s, mode)
 }
 
 /** Non-interactive `agentop restart --all [--rebuild]`: bounce (or rebuild) every running
@@ -599,7 +706,8 @@ export async function restartAllServices(rebuild = false): Promise<number> {
     process.stdout.write(`  ${D}○ ${s.nothingRunning}${R}\n`)
     return 0
   }
-  await restartRuntimes(s, targets, rebuild)
+  // No stream: this is a plain command on the user's own terminal, and inherited output is right.
+  await restartRuntimes(s, targets, { rebuild })
   process.stdout.write(`\n  ${GR}${s.restartedAll}${R}\n`)
   return 0
 }
@@ -607,6 +715,34 @@ export async function restartAllServices(rebuild = false): Promise<number> {
 // ---------------------------------------------------------------------------
 // Talking to the terminal while Ink owns it
 // ---------------------------------------------------------------------------
+
+/**
+ * Run `fn` with process stdout/stderr handed to `sink` instead of the terminal.
+ *
+ * The one mechanism behind both of the ways an action's prints are dealt with: `captureOutput`
+ * collects them into a string, `streamOutput` turns them into pane lines. Both streams go to the
+ * same sink — the action modules interleave them (a note on stdout, a warning on stderr) and reading
+ * them apart would reorder the story.
+ *
+ * Always restored, including when `fn` throws: a process left with a patched stdout is a process
+ * that has gone silent.
+ */
+async function divertOutput<T>(sink: (chunk: string) => void, fn: () => Promise<T>): Promise<T> {
+  const realOut = process.stdout.write.bind(process.stdout)
+  const realErr = process.stderr.write.bind(process.stderr)
+  const patched = ((chunk: unknown) => {
+    sink(typeof chunk === 'string' ? chunk : String(chunk))
+    return true
+  }) as typeof process.stdout.write
+  process.stdout.write = patched
+  process.stderr.write = patched
+  try {
+    return await fn()
+  } finally {
+    process.stdout.write = realOut
+    process.stderr.write = realErr
+  }
+}
 
 /**
  * Run `fn` with stdout/stderr diverted into a string.
@@ -618,19 +754,26 @@ export async function restartAllServices(rebuild = false): Promise<number> {
  */
 async function captureOutput<T>(fn: () => Promise<T>): Promise<{ value: T; text: string }> {
   const chunks: string[] = []
-  const realOut = process.stdout.write.bind(process.stdout)
-  const realErr = process.stderr.write.bind(process.stderr)
-  const sink = ((chunk: unknown) => {
-    chunks.push(typeof chunk === 'string' ? chunk : String(chunk))
-    return true
-  }) as typeof process.stdout.write
-  process.stdout.write = sink
-  process.stderr.write = sink
+  const value = await divertOutput(chunk => { chunks.push(chunk) }, fn)
+  return { value, text: chunks.join('') }
+}
+
+/**
+ * Run `fn` with everything it and its children print flowing into the OUTPUT CHANNEL as lines.
+ *
+ * This is what replaced leaving the alternate screen. Two halves meet here: the children are piped
+ * by `streamCommand` / `runCentral({ streamed })` and publish themselves, and the host's own prints
+ * — "building & starting the machine container…", the addresses afterwards, a warning about a
+ * missing compose file — are diverted through the same decoder, so the pane reads as one story in
+ * the order it was told. The decoder is per-scope and flushed at the end, so a note written without
+ * a trailing newline still arrives.
+ */
+async function streamOutput<T>(fn: () => Promise<T>): Promise<T> {
+  const decoder = createLineDecoder()
   try {
-    return { value: await fn(), text: chunks.join('') }
+    return await divertOutput(chunk => publishLines(decoder.push(chunk)), fn)
   } finally {
-    process.stdout.write = realOut
-    process.stderr.write = realErr
+    publishLines(decoder.flush())
   }
 }
 
@@ -693,6 +836,12 @@ function pauseForEnter(message: string): Promise<void> {
 
 /**
  * Hand the real terminal to `fn`, then pause so its output can be read.
+ *
+ * RESERVED FOR COMMANDS THAT ASK SOMETHING. Everything whose output was merely worth watching now
+ * streams into a pane instead (`streamOutput`), which is the whole point of the change: leaving the
+ * alternate screen costs the user their place, and coming back costs them a keypress. What is left
+ * on this path is `central.sh init`, which reads answers from the tty and refuses without one — and
+ * a prompt streamed into a pane is a question nobody can answer.
  *
  * Leaving the alternate screen is only half of it: Ink is still mounted and still listening on
  * stdin in raw mode, so without detaching its `data` handlers a `q` typed at the paused prompt
@@ -802,7 +951,7 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
    */
   const serviceRows = async (): Promise<ControlService[]> => {
     const s = S()
-    const [local, central, machine, bootAgentistics, bootCentral] = await Promise.all([
+    const [local, central, machine, bootAgentistics, bootCentral, repo, machineCompose] = await Promise.all([
       isServerRunning(),
       dockerState(CENTRAL_FILTER, s),
       dockerState(MACHINE_FILTER, s),
@@ -810,6 +959,11 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // rather than throwing — and both skipped outright off Linux.
       bootState('agentistics'),
       bootState('central'),
+      // What a REBUILD would need, asked before it is offered: the native one recompiles this repo,
+      // the machine one needs its compose file. Two `stat`s, and the answer is what keeps a verb
+      // that cannot work off the action row.
+      inRepoCheckout(),
+      Bun.file(machineComposePath()).exists(),
     ])
     const [nativeFacts, centralFacts, machineFacts] = await Promise.all([
       local ? nativeServerFacts() : Promise.resolve<ProcessFacts>({}),
@@ -856,8 +1010,17 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
     }
 
     return [
-      buildService('agentistics', s.svcAgentistics, [nativeRuntime, machineRuntime], s, { boot: bootAgentistics }),
-      buildService('central', s.svcCentral, [centralRuntime], s, { boot: bootCentral }),
+      buildService('agentistics', s.svcAgentistics, [nativeRuntime, machineRuntime], s, {
+        boot: bootAgentistics,
+        rebuild: { local: repo, machine: machineCompose },
+      }),
+      // The central's rebuild always works: `central.sh up` inside a checkout, and the published
+      // image outside one — `cli-central.ts` picks between them, and a central that is RUNNING
+      // (the only state that offers a restart) has already proved whichever path it took.
+      buildService('central', s.svcCentral, [centralRuntime], s, {
+        boot: bootCentral,
+        rebuild: { central: true },
+      }),
     ]
   }
 
@@ -914,14 +1077,22 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const s = S()
 
       if (req.runtime === 'central') {
-        const code = await suspend(() => runCentral('up', []))
+        // Asked BEFORE it is run, because the answer decides who gets the terminal. A first-ever
+        // central (`init`) has questions and one with an external database becomes a foreground
+        // server that never exits — both need the real tty. Everything else is docker compose with
+        // nothing to answer, which is what the pane is for.
+        const plan = await centralStartPlan()
+        const streamable = plan === 'script' || plan === 'image'
+        const code = streamable
+          ? await streamOutput(() => runCentral('up', [], { streamed: true }))
+          : await suspend(() => runCentral('up', []))
         return code === 0
           ? { ok: true, message: s.centralStarted }
           : { ok: false, message: s.centralFailed }
       }
 
       if (req.runtime === 'machine') {
-        const code = await suspend(() => startDocker(s))
+        const code = await streamOutput(() => startDocker(s))
         return code === 0
           ? { ok: true, message: s.containerUp }
           : { ok: false, message: s.dockerStartFailed }
@@ -967,14 +1138,20 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
      * they are in conflict, which is the only honest reading of "restart it". Naming something that
      * is not running is answered plainly instead of reported as a restart that never happened.
      */
-    async restart(target: ActionTarget): Promise<ActionResult> {
+    async restart(target: ActionTarget, rebuild = false): Promise<ActionResult> {
       const s = S()
       const targets = targetRuntimes(target, await runningRuntimes())
       if (targets.length === 0) return { ok: false, message: s.svcNotRunning }
-      const work = () => restartRuntimes(s, targets)
-      // A central bounce goes through central.sh / docker compose with inherited stdio, which
-      // writes past any capture we install — it has to have the terminal to itself.
-      if (targets.includes('central')) await suspend(work)
+      /**
+       * Streamed when there is something to WATCH: a rebuild, or anything going through docker
+       * compose. A native bounce says three lines and its outcome is the status line, so it stays
+       * captured — the output pane must not take over the detail region for the most common action
+       * on this screen. The central used to be suspended here for the opposite reason (its child
+       * inherited the terminal and wrote past any capture); piping it is what removed that.
+       */
+      const watchable = rebuild || targets.includes('central') || targets.includes('machine')
+      const work = () => restartRuntimes(s, targets, { rebuild, stream: watchable })
+      if (watchable) await streamOutput(work)
       else await captureOutput(work)
       return { ok: true, message: target === 'all' ? s.restartedAll : s.restartedDone }
     },
@@ -1005,7 +1182,9 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
 
     async initCentral(): Promise<ActionResult> {
       const s = S()
-      // `central.sh init` asks its own questions; it needs the real terminal, not a captured one.
+      // The ONE action still suspended, and the reason is not its output but its INPUT: `init` reads
+      // the port, the org and the secrets from the terminal — central.sh exits rather than run
+      // without a tty. Streaming it would put the questions in a pane and leave the answers nowhere.
       const code = await suspend(() => runCentral('init', []))
       return code === 0
         ? { ok: true, message: s.centralInitDone }
@@ -1089,6 +1268,17 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
     // asks us to remember it.
     async setMouse(on: boolean): Promise<void> {
       try { await writePreferences({ mouse: on }) } catch { /* best-effort */ }
+    },
+
+    /**
+     * The output channel, straight from `cli-stream.ts`.
+     *
+     * A pass-through rather than a second registry: the streaming helpers are module-level (one
+     * control center per process), and a host that kept its own subscriber set would be a second
+     * place for a line to get lost.
+     */
+    onOutput(handler: (line: string) => void): () => void {
+      return onOutputLine(handler)
     },
 
     async readLog(source: LogSource, maxLines: number): Promise<string[]> {
