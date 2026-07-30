@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { buildCentralEnv, STANDALONE_COMPOSE, isCentralAction, CENTRAL_ACTIONS, isBundledMongo, looksLikeMongoUri, BUNDLED_MONGO_URL } from './cli-central'
+import { buildCentralEnv, STANDALONE_COMPOSE, isCentralAction, CENTRAL_ACTIONS, isBundledMongo, looksLikeMongoUri, BUNDLED_MONGO_URL, planCentralStart } from './cli-central'
 
 /** Parse the `KEY=value` lines of a central.env blob into a map (ignores comments/blanks). */
 function parseEnv(blob: string): Record<string, string> {
@@ -119,5 +119,34 @@ describe('external database (Atlas) support', () => {
     expect(looksLikeMongoUri('http://nope')).toBe(false)
     expect(looksLikeMongoUri('mongodb://')).toBe(false)
     expect(looksLikeMongoUri('')).toBe(false)
+  })
+})
+
+/**
+ * Which shape a `central up` takes — asked BEFORE it runs, because the answer decides who gets the
+ * terminal. The control center streams a build into a pane, and it may only do that for a run with
+ * no question in it and an end.
+ */
+describe('planCentralStart', () => {
+  test('no env file is a QUESTION, on either path — it is generated interactively on first run', () => {
+    expect(planCentralStart({ script: true, envFile: false, mongoUrl: '' })).toBe('init')
+    expect(planCentralStart({ script: false, envFile: false, mongoUrl: '' })).toBe('init')
+  })
+
+  test('central.sh drives compose whatever the database is, so it can be watched', () => {
+    expect(planCentralStart({ script: true, envFile: true, mongoUrl: BUNDLED_MONGO_URL })).toBe('script')
+    // An external cluster only means central.sh leaves the bundled Mongo out of the compose.
+    expect(planCentralStart({ script: true, envFile: true, mongoUrl: 'mongodb+srv://a@b.net/' })).toBe('script')
+  })
+
+  test('without a checkout, the bundled database is the published image — also just compose', () => {
+    expect(planCentralStart({ script: false, envFile: true, mongoUrl: BUNDLED_MONGO_URL })).toBe('image')
+  })
+
+  // The one that must NOT be streamed: with an external database the standalone path runs the binary
+  // itself, in the foreground, forever. A pane would show a banner and then wait for an exit that
+  // never comes, so this keeps the terminal handover.
+  test('without a checkout, an external database runs NATIVELY and needs the terminal', () => {
+    expect(planCentralStart({ script: false, envFile: true, mongoUrl: 'mongodb+srv://user:pw@c.mongodb.net/' })).toBe('native')
   })
 })

@@ -41,6 +41,9 @@ import { truncate } from '../../components/Primitives'
 import { COLORS } from '../../theme'
 import { ActionRow, ConfigLine, CONFLICT_GLYPH, ServiceLine, STATE_GLYPH, stateWord } from '../Chrome'
 import { SectionHeader } from '../Surface'
+// The same position label the log viewer wears, from the same pure helper: two screens showing a
+// window into a longer list must not describe it differently.
+import { windowLabel } from '../surface.ts'
 import { Pane, paneBody, paneRows } from '../Pane'
 import {
   actionAtColumn,
@@ -67,28 +70,32 @@ import {
   clampFocus,
   resolveFocusKey,
   resolveListKey,
+  resolveTailKey,
   scrollBy,
+  scrollTailBy,
   windowOffset,
   type NavKey,
   type PaneId,
+  type TailState,
 } from '../nav'
 import { Menu } from '../Menu'
+import { OutputView } from '../Output'
 import { ArchiveChoice } from '../ArchiveChoice'
 import { ConfirmPrompt, TextPrompt } from '../Prompt'
 import type { ControlStrings } from '../i18n'
 import type { CliLang } from '../lang'
 import type {
-  ActionResult,
   ActionTarget,
   ArchiveMode,
   ControlExit,
   ControlHost,
   ControlService,
   ControlStatus,
+  RestartOption,
   ServiceId,
   StartOption,
 } from '../types'
-import type { TabChrome } from '../ControlCenter'
+import type { RunAction, TabChrome, TaskView } from '../ControlCenter'
 
 /**
  * The words the Services and Setup screens need that `control/i18n.ts` does not carry.
@@ -170,6 +177,19 @@ type View =
   | { kind: 'disconnect' }
   | { kind: 'boot'; service: ServiceId }
 
+/**
+ * What the detail region is showing instead of the facts: a question, or a task's output.
+ *
+ * One shape for both, because the seam treats them the same — a title for the frame, an optional
+ * badge, and a node for the inside. The badge exists for the output pane, which has a scroll
+ * position and a follow state to state; the questions leave it empty.
+ */
+interface Overlay {
+  title: string
+  badge?: string
+  node: React.ReactNode
+}
+
 /** One verb on the detail pane's action row, or on a config row. */
 interface Action {
   label: string
@@ -208,7 +228,18 @@ export interface ServicesProps {
   width: number
   height: number
   isActive: boolean
-  run: (fn: () => Promise<ActionResult>) => Promise<ActionResult>
+  /** The shell's funnel. The second argument is the VERB, which becomes the output pane's title. */
+  run: RunAction
+  /**
+   * What the last action said, streamed in while it ran, or `null` once it has been dismissed.
+   *
+   * The cockpit draws it into the DETAIL region — the big pane under the band — because that is
+   * where the eye already is: the region is a view OF what you acted on, and while a task is running
+   * what it is saying IS that view. The services list and the config pane stay standing beside it,
+   * so it is never a mystery which service the output belongs to.
+   */
+  task: TaskView | null
+  onDismissTask: () => void
   onChrome: (chrome: TabChrome) => void
   onExit: (exit: ControlExit) => void
   onLang: (lang: CliLang) => void
@@ -219,8 +250,8 @@ export interface ServicesProps {
 }
 
 export function Services({
-  host, status, strings: s, lang, width, height, isActive, run, onChrome, onExit, onLang,
-  mouseOn, onMouse,
+  host, status, strings: s, lang, width, height, isActive, run, task, onDismissTask,
+  onChrome, onExit, onLang, mouseOn, onMouse,
 }: ServicesProps) {
   const l = launcherStrings(lang)
 
@@ -232,6 +263,29 @@ export function Services({
 
   /** Re-read on every tick so the uptime moves with the clock rather than with `refresh()`. */
   const [now, setNow] = useState(() => Date.now())
+
+  /**
+   * The output pane's viewport, in the same shape the Logs screen uses.
+   *
+   * `follow` pinned is the normal state and the reason the pane is worth watching: the newest line is
+   * what a build is DOING. Any scroll unpins it — a reader who went back and is yanked to the tail a
+   * second later has been shown that this pane cannot be read — and `f` pins it again.
+   */
+  const [outputView, setOutputView] = useState<TailState>({ index: 0, follow: true })
+
+  /**
+   * A task owns the detail region as soon as it has said something.
+   *
+   * On the FIRST LINE rather than on the action, so the pane belongs to the commands whose output is
+   * the point: a stop says one sentence through the status line and never takes the region, while a
+   * `docker compose up --build` fills it for as long as it runs. Once it is finished the pane stays,
+   * with its outcome in the status line under it, until `esc` puts the facts back.
+   */
+  const taskLines = task?.lines ?? []
+  const taskOpen = taskLines.length > 0
+
+  // A new task starts at the tail — its own tail, not the previous one's.
+  useEffect(() => { setOutputView({ index: 0, follow: true }) }, [task?.id])
 
   const services = status?.services ?? []
   const running = useMemo(() => services.filter(v => v.state === 'up'), [services])
@@ -261,7 +315,11 @@ export function Services({
    * how Docker restarts containers, held in the layer that draws boxes.
    */
   const startNow = useCallback((option: StartOption) => {
-    void run(() => host.start(option)).then(res => {
+    // Back to the panes BEFORE the start runs, not after it resolves. A container start is a build:
+    // it can take minutes, and leaving the question that led to it on screen for the duration would
+    // both hide the output streaming into the detail region and leave a menu that answers keys.
+    setView({ kind: 'cockpit' })
+    void run(() => host.start(option), option.label).then(res => {
       setView(res.ok && option.offersBoot
         ? { kind: 'boot', service: option.runtime === 'central' ? 'central' : 'agentistics' }
         : { kind: 'cockpit' })
@@ -318,15 +376,27 @@ export function Services({
       })
   }, [host, onExit, archiveThen, services])
 
-  const target = useCallback((id: ActionTarget, action: 'stop' | 'restart') => {
-    void run(() => (action === 'stop' ? host.stop(id) : host.restart(id))).then(back)
+  const target = useCallback((id: ActionTarget, action: 'stop' | 'restart', label: string) => {
+    void run(() => (action === 'stop' ? host.stop(id) : host.restart(id)), label).then(back)
+  }, [host, run, back])
+
+  /**
+   * One restart the host offered, taken.
+   *
+   * The option goes straight back to `host.restart()` — the target it names and its rebuild flag
+   * were both composed there, so nothing on this side decides what a rebuild MEANS or whether one is
+   * possible here. That is the same contract `startNow` has with `StartOption`, and it is why the
+   * screen no longer has a `Restart` verb of its own to label.
+   */
+  const restartNow = useCallback((option: RestartOption) => {
+    void run(() => host.restart(option.target, option.rebuild), option.label).then(back)
   }, [host, run, back])
 
   const open = useCallback((url: string) => {
     const openUrl = host.openUrl
     if (!openUrl) return
-    void run(() => openUrl.call(host, url)).then(back)
-  }, [host, run, back])
+    void run(() => openUrl.call(host, url), s.actOpen).then(back)
+  }, [host, run, back, s.actOpen])
 
   /**
    * What a DOUBLE click on a service row does.
@@ -349,11 +419,16 @@ export function Services({
   /**
    * The verbs for the selected service — derived from its state, never branched on its id.
    *
-   * Up: restart, stop, open. There is no start among them and no rule here saying so; the host
+   * Up: the restarts, stop, open. There is no start among them and no rule here saying so; the host
    * hands over an empty `startOptions` while anything is running, so the offer that produced the
    * complaint cannot be drawn at all. Down: exactly the starts this box can perform, each one
    * already labelled by the host, plus the boot unit for the machines that should come back by
    * themselves.
+   *
+   * The RESTARTS are a list for the same reason the starts are: a plain bounce and a rebuild are
+   * different amounts of work, and whether a rebuild can happen here at all — a repo checkout for
+   * the native binary, a compose file for the container — is a fact about this box that the host is
+   * the only side able to state.
    *
    * In a CONFLICT the plain `Stop` is replaced by the per-runtime stops, because "stop it" has no
    * single meaning when the same program is running twice — naming one is the only stop that
@@ -364,13 +439,15 @@ export function Services({
     const out: Action[] = []
 
     if (selected.state === 'up') {
-      out.push({ label: s.actRestart, run: () => target(selected.id, 'restart') })
+      for (const option of selected.restartOptions) {
+        out.push({ label: option.label, run: () => restartNow(option) })
+      }
       if (selected.stopOptions.length > 0) {
         for (const option of selected.stopOptions) {
-          out.push({ label: option.label, run: () => target(option.runtime, 'stop') })
+          out.push({ label: option.label, run: () => target(option.runtime, 'stop', option.label) })
         }
       } else {
-        out.push({ label: s.actStop, run: () => target(selected.id, 'stop') })
+        out.push({ label: s.actStop, run: () => target(selected.id, 'stop', s.actStop) })
       }
       const url = selected.active?.webUrl
       if (host.openUrl && url) out.push({ label: s.actOpen, run: () => open(url) })
@@ -389,11 +466,11 @@ export function Services({
     // The submenu's `Everything`, kept as an explicit verb. Only worth offering when there is more
     // than one thing to stop — with a single service up it is the same command under a bigger name.
     if (running.length > 1) {
-      out.push({ label: s.actStopAll, run: () => target('all', 'stop') })
-      out.push({ label: s.actRestartAll, run: () => target('all', 'restart') })
+      out.push({ label: s.actStopAll, run: () => target('all', 'stop', s.actStopAll) })
+      out.push({ label: s.actRestartAll, run: () => target('all', 'restart', s.actRestartAll) })
     }
     return out
-  }, [selected, s, host, running.length, target, open, onStart])
+  }, [selected, s, host, running.length, target, restartNow, open, onStart])
 
   // -------------------------------------------------------------------------
   // the config pane
@@ -541,12 +618,12 @@ export function Services({
     }
   }, [serviceLabels, configRows, configLabelWidth, actions.length, detail, services.length])
 
-  // A question owns the detail region, which is everything under the band — so the band gives up
-  // rows to it only when the body is too short to hold both. It used to be handed the whole body,
-  // which left the config pane a fourteen-row frame around three facts.
+  // A question — or a task's output — owns the detail region, which is everything under the band, so
+  // the band gives up rows to it only when the body is too short to hold both. It used to be handed
+  // the whole body, which left the config pane a fourteen-row frame around three facts.
   const layout = useMemo(
-    () => cockpitLayout(width, height, content, { question: view.kind !== 'cockpit' }),
-    [width, height, content, view.kind],
+    () => cockpitLayout(width, height, content, { question: view.kind !== 'cockpit' || taskOpen }),
+    [width, height, content, view.kind, taskOpen],
   )
   const { heights } = layout
 
@@ -599,6 +676,29 @@ export function Services({
   /** The action row's row: `detailPlan` pins it to the pane's floor, so it is the last one. */
   const actionRowY = paneRows(heights.detail) - 1
 
+  /**
+   * The detail region's width: FULL WIDTH under the band — see `cockpitLayout`. It is the pane whose
+   * usefulness scales without bound in both directions, and the width is what stops it truncating
+   * the URLs, the reasons and the build output it exists to state.
+   */
+  const detailWidthPx = layout.kind === 'columns' ? layout.leftWidth + layout.rightWidth : width
+
+  /**
+   * The output pane's window, from the region it owns — the detail pane, or the whole body when the
+   * cockpit has stacked and there is no band to keep.
+   *
+   * The anchor is DERIVED rather than stored: while following, it has to track a list that is growing
+   * under it, and a stored index would lag one burst of build output behind the newest line. The
+   * offset then comes from `windowOffset`, which is what keeps the newest line ON SCREEN — slicing
+   * from zero would leave a build's live edge below the fold, which is the whole reason to watch it.
+   */
+  const outputRows = paneRows(layout.kind === 'columns' ? heights.detail : height)
+  const outputLen = taskLines.length
+  const outputAnchor = outputView.follow
+    ? Math.max(0, outputLen - 1)
+    : Math.min(outputView.index, Math.max(0, outputLen - 1))
+  const outputOffset = windowOffset(outputAnchor, outputLen, outputRows)
+
   useEffect(() => {
     // The clock, and nothing else — this screen fetches nothing on an interval any more. It stops
     // while the screen is not on top, and it keeps ticking under a question, because a service
@@ -612,19 +712,29 @@ export function Services({
   // keys
   // -------------------------------------------------------------------------
 
-  const capturing = view.kind !== 'cockpit'
+  /**
+   * Something other than the cockpit is answering keys.
+   *
+   * A question, or a task's output pane. Both are reported to the shell as `capture`, which stands
+   * the global keys down — otherwise `q` would quit the app out from under a running build, and every
+   * key meant for the pane would also act on the service list underneath it.
+   */
+  const capturing = view.kind !== 'cockpit' || taskOpen
 
   // Both refuse a conflicted selection, and the footer stops naming them for exactly as long as
   // that is true: `s` would stop both copies at once — the verb the action row deliberately does
   // not offer — and `R` would bounce both and leave the conflict standing. `enter` reaches the
   // per-runtime stops, which are the only stops that resolve anything.
   const stopSelected = useCallback(() => {
-    if (selected && selected.state === 'up' && !conflicted) target(selected.id, 'stop')
-  }, [selected, conflicted, target])
+    if (selected && selected.state === 'up' && !conflicted) target(selected.id, 'stop', s.actStop)
+  }, [selected, conflicted, target, s.actStop])
 
+  /** `R` is the PLAIN bounce — the option the host always offers, never a rebuild by accident. */
   const restartSelected = useCallback(() => {
-    if (selected && selected.state === 'up' && !conflicted) target(selected.id, 'restart')
-  }, [selected, conflicted, target])
+    if (!selected || selected.state !== 'up' || conflicted) return
+    const plain = selected.restartOptions.find(o => !o.rebuild)
+    if (plain) restartNow(plain)
+  }, [selected, conflicted, restartNow])
 
   const openSelected = useCallback(() => {
     const url = selected?.active?.webUrl
@@ -682,6 +792,34 @@ export function Services({
   }, { isActive: isActive && !capturing })
 
   /**
+   * The output pane's keys, and only these three.
+   *
+   * While a task owns the region the services underneath it are not selectable — the shell has been
+   * told `capture`, so even `q` stands down — and that is deliberate: a keypress that acted on a
+   * service while its own build was streaming would be acting on a screen the user cannot see. So
+   * this reads the output (`↑↓`, page, `g`/`G`, `f` to re-follow) and dismisses it, which is exactly
+   * what the footer says. Ctrl-C remains live in the shell, as it is in every capturing state.
+   */
+  useInput((input, key) => {
+    if (key.escape) return onDismissTask()
+    const next = resolveTailKey(
+      {
+        input,
+        upArrow: key.upArrow,
+        downArrow: key.downArrow,
+        pageUp: key.pageUp,
+        pageDown: key.pageDown,
+        home: key.home,
+        end: key.end,
+      },
+      { index: outputAnchor, follow: outputView.follow },
+      outputLen,
+      outputRows,
+    )
+    if (next) setOutputView(next)
+  }, { isActive: isActive && taskOpen })
+
+  /**
    * The cockpit's pointer, in BODY coordinates — the frame this screen lays itself out in.
    *
    * Two rules run through all of it, and they are the same two the keyboard already follows:
@@ -695,6 +833,16 @@ export function Services({
    *    because a verb is not something you select, and its label is what you aimed at.
    */
   usePointer(p => {
+    // The output pane scrolls with the wheel, on the same reducer the keys use — including the rule
+    // that any movement unpins the tail. Nothing else on the frame is live while it is up.
+    if (taskOpen) {
+      const notch = wheelDelta(p.button)
+      if (notch === 0) return
+      const next = scrollTailBy({ index: outputAnchor, follow: outputView.follow }, notch, outputLen)
+      if (next) setOutputView(next)
+      return
+    }
+
     // A question owns the detail region and answers for itself (its `Menu` is listening too); the
     // panes behind it stand but are not live, exactly as they are to the keyboard.
     if (capturing) return
@@ -770,7 +918,10 @@ export function Services({
       // footer stops saying `←→ screens` for exactly as long as that is true. A hint for a key that
       // does nothing in the current focus is the bug this pairing exists to prevent.
       claimArrows: !capturing && focus === 'actions',
-      hints: capturing
+      // A question's three keys are its own — it is a `Menu` or a `Prompt`, and the shell cannot see
+      // which. Everything else, INCLUDING the output pane, goes through `cockpitHints`, which is the
+      // one place that decides what the footer may claim works.
+      hints: view.kind !== 'cockpit' && !taskOpen
         ? [s.keyBack, s.keyMove, s.keySelect]
         : cockpitHints(focus, s, {
             canAct: actions.length > 0,
@@ -778,15 +929,28 @@ export function Services({
             canOpen: Boolean(host.openUrl && selected?.active?.webUrl && selected.state === 'up'),
             // A short terminal keeps the services pane alone, and `tab` there cycles a list of one.
             panes: panes.length,
+            task: taskOpen,
           }),
     })
-  }, [isActive, capturing, focus, s, selected, conflicted, host, actions.length, panes.length, onChrome])
+  }, [
+    isActive, capturing, focus, s, selected, conflicted, host,
+    actions.length, panes.length, onChrome, view.kind, taskOpen,
+  ])
 
   // -------------------------------------------------------------------------
   // drawing
   // -------------------------------------------------------------------------
 
-  const overlay = overlayFor()
+  /**
+   * What occupies the detail region: a task's output, a question, or nothing (the facts).
+   *
+   * The OUTPUT WINS. A start goes through the archive gate and a kill question, and both of those
+   * are still technically open for the tick it takes their `run` to settle — so a build streaming
+   * into the region while the question that led to it is still drawn over it would hide the very
+   * thing the user asked to watch. It is also why `capturing` is true either way and why the
+   * questions are handed `isActive={questionsLive}`: exactly one thing on this frame answers keys.
+   */
+  const overlay = taskOverlay() ?? overlayFor()
 
   const servicesPane = (
     <Pane
@@ -835,10 +999,6 @@ export function Services({
     </Pane>
   ) : null
 
-  // FULL WIDTH, under the band — see `cockpitLayout`. It is the pane whose usefulness scales
-  // without bound in both directions, and the width is what stops it truncating the URLs and the
-  // reasons it exists to state.
-  const detailWidthPx = layout.kind === 'columns' ? layout.leftWidth + layout.rightWidth : width
   const detailPane = heights.detail > 0 ? (
     <Pane
       title={selected?.label ?? s.paneDetail}
@@ -868,7 +1028,7 @@ export function Services({
   if (overlay && layout.kind === 'stacked') {
     return (
       <Box flexDirection="column" width={width} height={height} flexShrink={0}>
-        <Pane title={overlay.title} focused width={width} height={height}>
+        <Pane title={overlay.title} badge={overlay.badge} focused width={width} height={height}>
           {overlay.node}
         </Pane>
       </Box>
@@ -900,7 +1060,7 @@ export function Services({
       </Box>
       {overlay
         ? (
-          <Pane title={overlay.title} focused width={width} height={heights.detail}>
+          <Pane title={overlay.title} badge={overlay.badge} focused width={width} height={heights.detail}>
             {overlay.node}
           </Pane>
         )
@@ -909,13 +1069,41 @@ export function Services({
   )
 
   /**
+   * The task's output, as the same shape a question takes.
+   *
+   * It goes through the overlay seam rather than beside it because it is the same THING: something
+   * that owns the detail region for a while and hands it back. The pane wears the verb the user
+   * pressed, and its badge is the window position plus — while the tail is unpinned — the word that
+   * says so, because a pane showing history while a build runs must not look like a stalled one.
+   */
+  function taskOverlay(): Overlay | null {
+    if (!task || !taskOpen) return null
+    const position = windowLabel(outputOffset, Math.min(outputRows, outputLen), outputLen)
+    return {
+      title: task.title,
+      badge: outputView.follow ? position : `${position}  ${s.logPaused}`,
+      node: (
+        <OutputView
+          lines={taskLines}
+          offset={outputOffset}
+          rows={outputRows}
+          width={paneBody(layout.kind === 'columns' ? detailWidthPx : width)}
+        />
+      ),
+    }
+  }
+
+  /**
    * The seam, in one function: `View` in, something drawn out.
    *
    * Every branch returns a title for the pane frame and a node for its inside, and reports its
    * outcome through the callbacks above — no branch performs anything itself. Declared last, and
    * as a closure, because it needs the flow callbacks and nothing needs it.
    */
-  function overlayFor(): { title: string; node: React.ReactNode } | null {
+  function overlayFor(): Overlay | null {
+    // While a task owns the region its output is drawn over the question, so the question must not
+    // go on answering keys from behind it: `esc` there belongs to the pane the user can see.
+    const questionsLive = isActive && !taskOpen
     const body = paneBody(width)
     const rows = paneRows(layout.kind === 'columns' ? heights.detail : height)
     // Where the overlay's pane puts its first content cell, in body coordinates — the two places it
@@ -942,7 +1130,7 @@ export function Services({
               onAnswer={yes => onKill(yes, view.option)}
               onCancel={back}
               width={body}
-              isActive={isActive}
+              isActive={questionsLive}
               origin={origin}
             />
           ),
@@ -959,7 +1147,7 @@ export function Services({
               onCancel={back}
               width={body}
               height={rows}
-              isActive={isActive}
+              isActive={questionsLive}
               origin={origin}
             />
           ),
@@ -976,7 +1164,7 @@ export function Services({
               onAnswer={yes => (yes ? void run(() => host.disconnect()).then(back) : back())}
               onCancel={back}
               width={body}
-              isActive={isActive}
+              isActive={questionsLive}
               origin={origin}
             />
           ),
@@ -1001,7 +1189,7 @@ export function Services({
                 return back()
               }}
               width={body}
-              isActive={isActive}
+              isActive={questionsLive}
             />
           ),
         }
@@ -1017,7 +1205,7 @@ export function Services({
               onAnswer={yes => onBoot(view.service, yes)}
               onCancel={back}
               width={body}
-              isActive={isActive}
+              isActive={questionsLive}
               origin={origin}
             />
           ),

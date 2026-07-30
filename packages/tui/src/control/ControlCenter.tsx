@@ -26,6 +26,7 @@ import { paneHit, shellHit } from './hit'
 import { isActivation, trackClick, wheelDelta, type ClickTrack, type MouseReport, type Pointer } from './mouse'
 import { createPointerBus, PointerProvider, type MouseChannel } from './pointer'
 import { TAB_ORDER, type ActionResult, type ControlExit, type ControlHost, type ControlStatus, type TabId } from './types'
+import { appendLines } from './stream'
 import type { CliLang } from './lang'
 import { controlStrings } from './i18n'
 import { Footer, Header, Spinner, StatusLine, TabBar, tabBarTabs } from './Chrome'
@@ -61,6 +62,38 @@ export interface ScreenChrome {
 
 /** Kept under the old name too: the screens import it, and both readings are accurate. */
 export type TabChrome = ScreenChrome
+
+/**
+ * A task the shell is performing, and what it has said so far.
+ *
+ * The output of the long commands — `docker compose up --build`, `central.sh up`, `bun run bin` — no
+ * longer goes to the terminal: the app stays in the alternate screen and the lines arrive on
+ * `ControlHost.onOutput`, which `run` subscribes to around every action. They are accumulated HERE,
+ * in the shell, for the same reason the status line lives here: `run` is the single funnel every
+ * screen performs through, so subscribing anywhere else would mean subscribing in several places.
+ *
+ * `id` exists so a second run of the SAME verb is a different task: the screen resets its viewport
+ * when this changes, and two consecutive `Rebuild & restart`es would otherwise share a scroll
+ * position and a title that never changed.
+ */
+export interface TaskView {
+  id: number
+  /** The verb the user pressed, so a wall of build output is always attributable. */
+  title: string
+  /** Newest LAST, bounded by the ring in `control/stream.ts`. */
+  lines: string[]
+  /** `null` while it is still running; the outcome once it is done. */
+  result: ActionResult | null
+}
+
+/**
+ * What a screen performs through, and how the output pane gets its title.
+ *
+ * The label is the VERB the user pressed. It is optional because most actions say nothing worth
+ * watching, and it is passed rather than derived because only the screen knows which control was
+ * activated — `run` sees a function.
+ */
+export type RunAction = (fn: () => Promise<ActionResult>, label?: string) => Promise<ActionResult>
 
 /** Screens whose only state is a scroll position, which the shell holds for them. */
 type StaticTabId = 'help' | 'cheatsheet' | 'contribute'
@@ -113,15 +146,46 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
   useEffect(() => { void refresh() }, [refresh])
 
   /**
+   * The task the last action started, or `null` when nothing has been performed yet.
+   *
+   * Held by the shell rather than by the screen that started it because `run` is the only place an
+   * action happens, and because the same output could be shown by a second screen tomorrow without
+   * moving the subscription.
+   */
+  const [task, setTask] = useState<TaskView | null>(null)
+  const taskId = useRef(0)
+
+  /** Put the facts back. `esc` on the output pane, and nothing else. */
+  const dismissTask = useCallback(() => setTask(null), [])
+
+  /**
    * The single path through which a screen performs anything.
    *
-   * It keeps the spinner, the status line and the post-action refresh in one place, so a screen can
-   * never forget one of the three. The result is returned as well as displayed because some flows
-   * branch on it (offering the boot question only after a start that actually worked).
+   * It keeps the spinner, the status line, the streamed output and the post-action refresh in one
+   * place, so a screen can never forget one of the four. The result is returned as well as displayed
+   * because some flows branch on it (offering the boot question only after a start that worked).
+   *
+   * The subscription is opened BEFORE `fn` and closed after it, and the buffer is cleared at the
+   * START of every action — one task's output appearing under the next one's title would be a pane
+   * lying about what it is showing.
    */
-  const run = useCallback(async (fn: () => Promise<ActionResult>): Promise<ActionResult> => {
+  const run = useCallback(async (fn: () => Promise<ActionResult>, label?: string): Promise<ActionResult> => {
     setBusy(true)
     setResult(null)
+
+    const id = ++taskId.current
+    // A plain local variable rather than a piece of state read back: lines arrive in bursts (a
+    // build prints dozens in one tick) and `setTask(prev => …)` cannot be trusted to have run
+    // before the next one lands.
+    let lines: string[] = []
+    setTask({ id, title: label ?? s.paneOutput, lines, result: null })
+    const unsubscribe = host.onOutput(line => {
+      lines = appendLines(lines, [line])
+      // A NEW array each time, so React sees the change; the ring is what bounds how big it gets.
+      // Guarded on the id so a late line from a previous action cannot repaint the current one.
+      setTask(prev => (prev && prev.id === id ? { ...prev, lines } : prev))
+    })
+
     let res: ActionResult
     try {
       res = await fn()
@@ -129,8 +193,12 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
       // The host localizes its own outcomes; a thrown error has no localized form, so its own
       // message is the most truthful thing we can show.
       res = { ok: false, message: err instanceof Error ? err.message : String(err) }
+    } finally {
+      unsubscribe()
     }
     setResult(res)
+    // The pane keeps what it showed and gains the outcome; `esc` is what puts the facts back.
+    setTask(prev => (prev && prev.id === id ? { ...prev, result: res } : prev))
     try {
       setStatus(await host.refresh())
     } catch {
@@ -138,7 +206,7 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
     }
     setBusy(false)
     return res
-  }, [host])
+  }, [host, s.paneOutput])
 
   // Screens report on every state change of their own, which happens far more often than the value
   // actually changes; re-setting an equal object would re-render the whole shell each keystroke.
@@ -402,6 +470,10 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
             height={height}
             isActive={tab === 'services'}
             run={run}
+            // The output of whatever was last performed, and the way back to the facts. The cockpit
+            // draws it into the detail region — the big pane the user pointed at.
+            task={task}
+            onDismissTask={dismissTask}
             onChrome={reportChrome}
             onExit={onExit}
             onLang={switchLang}

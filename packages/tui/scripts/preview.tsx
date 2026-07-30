@@ -15,8 +15,12 @@
  * The host is a FAKE. It answers instantly, performs nothing, and is deliberately stocked with the
  * awkward cases rather than the happy one: a native server with a pid and an uptime, a service that
  * is down, a runtime whose state could not be detected at all, both runtimes of one service up at
- * once (the CONFLICT), and a member endpoint long enough to have wrecked the header once already.
- * `--mode` picks which of those arrangements you get.
+ * once (the CONFLICT), a box with no repo checkout (so no rebuild is offered), and a member endpoint
+ * long enough to have wrecked the header once already. `--mode` picks which arrangement you get.
+ *
+ * `--task` is the other half: it makes the fake host STREAM a realistic build into the output channel
+ * — raw bytes, carriage returns and colour included, through the real decoder — so the pane a task
+ * owns can be looked at both while it runs and once it has finished.
  *
  * The service rows themselves are built by the host's OWN `buildService` — the pure half of
  * `cli-start.ts` — rather than assembled here by hand. A preview that composed its own rows could
@@ -44,6 +48,9 @@ import type { CliLang } from '../src/control/lang'
 // it from a dev script does not give the TUI a runtime dependency on the server.
 import { cliStrings, type CliStrings } from '../../server/server/cli-i18n'
 import { buildService } from '../../server/server/cli-start'
+// The REAL sanitiser, fed the raw bytes a build produces: a preview that emitted clean lines would
+// be previewing a pane nobody's docker ever fills.
+import { createLineDecoder } from '../src/control/stream'
 
 // ---------------------------------------------------------------------------
 // arguments
@@ -56,9 +63,18 @@ import { buildService } from '../../server/server/cli-start'
  * therefore the ones most likely to ship wrong — a box running the server natively AND in a
  * container, and a box with no docker at all.
  */
-type Case = 'solo' | 'central' | 'member' | 'conflict' | 'nodocker'
+type Case = 'solo' | 'central' | 'member' | 'conflict' | 'nodocker' | 'norepo'
 
-const CASES: readonly Case[] = ['solo', 'central', 'member', 'conflict', 'nodocker'] as const
+const CASES: readonly Case[] = ['solo', 'central', 'member', 'conflict', 'nodocker', 'norepo'] as const
+
+/**
+ * What a previewed task is doing when the frame is captured.
+ *
+ * `running` never resolves, which is exactly what a two-minute build looks like from here: the
+ * spinner is still turning and the pane is following the newest line. `done` resolves, so the pane
+ * keeps its output and the status line carries the outcome.
+ */
+type TaskState = 'off' | 'running' | 'done'
 
 interface Options {
   cols: number
@@ -68,6 +84,8 @@ interface Options {
   mode: Case
   /** Keys pressed before the frame is captured — how a question gets on screen. */
   keys: string[]
+  /** Stream a build into the output channel: `running` (unfinished) or `done`. */
+  task: TaskState
   /**
    * Pretend the history consent has never been answered.
    *
@@ -86,16 +104,22 @@ const USAGE = `
     --screen ${TAB_ORDER.join('|')}
     --mode   ${CASES.join('|')}
                             which fake machine to show (default solo)
-                            conflict = native AND docker up; nodocker = no docker installed
+                            conflict = native AND docker up; nodocker = no docker installed;
+                            norepo = no checkout here, so no rebuild is offered
     --keys   k,k,…          press these first, e.g. enter,down,enter
                             names: enter esc tab shift-tab up down left right
                             pgup pgdn space; anything else is typed literally
+    --task   running|done   the next start/restart streams a build into the output pane
+                            and either never finishes (running) or does (done);
+                            reach it with --keys enter,enter
     --pending               history consent still unanswered, so a start opens the
                             gate: --pending --keys enter,right,enter
 `
 
 function parseArgs(argv: string[]): Options {
-  const opts: Options = { cols: 100, rows: 34, lang: 'en', screen: 'services', mode: 'solo', keys: [], pending: false }
+  const opts: Options = {
+    cols: 100, rows: 34, lang: 'en', screen: 'services', mode: 'solo', keys: [], task: 'off', pending: false,
+  }
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]
     const value = argv[i + 1] ?? ''
@@ -105,6 +129,10 @@ function parseArgs(argv: string[]): Options {
       case '--lang': opts.lang = value === 'pt' ? 'pt' : 'en'; i++; break
       case '--keys': opts.keys = value.split(',').filter(Boolean); i++; break
       case '--pending': opts.pending = true; break
+      case '--task':
+        opts.task = value === 'done' ? 'done' : 'running'
+        i++
+        break
       case '--mode':
         opts.mode = CASES.find(c => c === value) ?? 'solo'
         i++
@@ -135,6 +163,9 @@ function parseArgs(argv: string[]): Options {
 // ---------------------------------------------------------------------------
 // the fake host
 // ---------------------------------------------------------------------------
+
+/** Written as a code point rather than typed, so this file stays plain text. */
+const ESC = String.fromCharCode(27)
 
 const MINUTES = 60_000
 
@@ -184,12 +215,20 @@ function services(mode: Case, s: CliStrings): ControlService[] {
       : {}),
   }
 
+  // What a REBUILD needs, which is a fact about the box rather than about the service: a repo
+  // checkout for the native binary, a compose file for the container. `norepo` is the box that has
+  // neither, and the restart row there is the plain bounce alone.
+  const canRebuild = mode !== 'norepo'
+
   return [
     // `boot` is what only an OS probe can answer, so the preview states BOTH shapes at once: the
     // native server is registered with systemd, and the central's boot state could not be
     // determined — which must render as no boot row at all rather than as "no".
-    buildService('agentistics', s.svcAgentistics, [native, machine], s, { boot: 'on' }),
-    buildService('central', s.svcCentral, [central], s),
+    buildService('agentistics', s.svcAgentistics, [native, machine], s, {
+      boot: 'on',
+      rebuild: { local: canRebuild, machine: canRebuild },
+    }),
+    buildService('central', s.svcCentral, [central], s, { rebuild: { central: true } }),
   ]
 }
 
@@ -235,14 +274,53 @@ const LOG: Record<string, string[]> = {
   ],
 }
 
+/**
+ * The raw bytes of a `docker compose up --build`, in the shapes that break a naive reader.
+ *
+ * A hidden cursor, a step table redrawn in place with carriage returns, colour around a step name, a
+ * chunk that ends mid-line, a blank separator the build actually printed, and an error on the way
+ * out. Fed through the real decoder, so what the pane shows here is what it will show there.
+ */
+const BUILD_CHUNKS: string[] = [
+  `${ESC}[?25l#1 [internal] load build definition from Dockerfile\n`,
+  '#1 transferring dockerfile: 1.4s\r#1 transferring dockerfile: 2.7s\r#1 DONE 2.7s\n\n',
+  `#2 [internal] load metadata for docker.io/oven/bun:1${ESC}[0m\n#2 DONE 0.9s\n`,
+  '#3 [builder 2/8] COPY package.json bun.lock ./\n#3 CACHED\n',
+  '#4 [builder 3/8] RUN bun install --frozen-lockfile\n',
+  '#4 1.882 bun install v1.3.14\n#4 12.40 + 412 packages installed [11.9s]\n#4 DONE 12.9s\n',
+  '#5 [builder 6/8] RUN bun run build:binary\n#5 24.11   dist/index.html   0.53 kB\n#5 41.06 ',
+  `  compiled ./release/agentop\n#5 DONE 41.3s\n\n#6 exporting to image\n#6 DONE 3.1s\n${ESC}[?25h`,
+]
+
 function fakeHost(opts: Options): ControlHost {
   const done = async () => ({ ok: true, message: 'preview — nothing was performed' })
+
+  // The output channel, in the shape `cli-stream.ts` implements for real.
+  const watchers = new Set<(line: string) => void>()
+  const publish = (line: string) => { for (const w of [...watchers]) w(line) }
+
+  /**
+   * A streamed action: publish the build, then either finish or never.
+   *
+   * Deliberately NOT resolved for `running` — that is what a build in flight is, and it is the only
+   * way to capture the frame where the pane is following a task that has not finished.
+   */
+  const streamed = async () => {
+    const decoder = createLineDecoder()
+    for (const chunk of BUILD_CHUNKS) for (const line of decoder.push(chunk)) publish(line)
+    for (const line of decoder.flush()) publish(line)
+    if (opts.task === 'running') return new Promise<never>(() => {})
+    return { ok: true, message: 'preview — nothing was performed' }
+  }
+
+  const act = opts.task === 'off' ? done : streamed
+
   return {
     refresh: async () => fakeStatus(opts),
-    start: done,
+    start: act,
     connect: done,
     disconnect: done,
-    restart: done,
+    restart: act,
     stop: done,
     setMode: done,
     initCentral: done,
@@ -257,6 +335,10 @@ function fakeHost(opts: Options): ControlHost {
     // Present so the preview shows the cockpit's full action row. `openUrl` is optional on the
     // host, and a host without it makes the action, the `o` key and its footer hint all disappear.
     openUrl: done,
+    onOutput: handler => {
+      watchers.add(handler)
+      return () => { watchers.delete(handler) }
+    },
     readLog: async (source, maxLines) => (LOG[source] ?? []).slice(-maxLines),
   }
 }
@@ -300,9 +382,6 @@ function ruler(cols: number): string[] {
  * unpreviewable: they exist only after a keypress, which is exactly the state a screenshot cannot
  * reach and therefore the state that shipped wrong twice.
  */
-/** Written as a code point rather than typed, so this file stays plain text. */
-const ESC = String.fromCharCode(27)
-
 const KEYS: Record<string, string> = {
   enter: '\r',
   esc: ESC,

@@ -709,6 +709,7 @@ describe('detailContent', () => {
       running: up.map(r => r.id),
       active: up[0],
       startOptions: [],
+      restartOptions: [],
       stopOptions: [],
       ...over,
     }
@@ -1027,6 +1028,26 @@ describe('cockpitHints', () => {
       expect(hints).not.toContain(s.logFollow)
       expect(hints).not.toContain(s.keyLogSource)
     }
+  })
+
+  /**
+   * A task streaming into the detail region owns the whole screen: the services underneath it are not
+   * selectable, and the shell's global keys have stood down (`capture`), so a row naming any of them
+   * would be advertising a key that does nothing — the exact bug this function exists to prevent.
+   */
+  test('a running task names its three keys, whatever the focus was, and nothing else', () => {
+    for (const focus of PANE_ORDER) {
+      const hints = cockpitHints(focus, s, { ...full, task: true })
+      expect(hints).toEqual([s.keyTaskClose, s.keyScroll, s.logFollow])
+      // Not the screen keys, not quit, and nothing about the selection underneath.
+      expect(hints).not.toContain(s.keyTabs)
+      expect(hints).not.toContain(s.keyQuit)
+      expect(hints).not.toContain(s.keyStop)
+    }
+  })
+
+  test('the way out of the output pane leads, because it is the way back to everything else', () => {
+    expect(cockpitHints('services', s, { ...full, task: true })[0]).toBe(s.keyTaskClose)
   })
 })
 

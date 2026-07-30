@@ -70,6 +70,14 @@ export interface AltScreen {
   disableMouse(): void
   readonly mouseOn: boolean
   /**
+   * True while `suspend` is running its command — the window in which the user's own screen is back.
+   *
+   * Exposed because it is the one fact a FRAME has to consult: `writeFrame` drops what Ink draws for
+   * as long as this is true, and an Ink frame erases the lines above itself before it draws, so one
+   * arriving now would take the user's scrollback with it.
+   */
+  readonly suspended: boolean
+  /**
    * Leave the alternate buffer, run `fn` against the real terminal, then re-enter.
    *
    * Used for commands whose output the user must actually see and that write to the tty
@@ -89,6 +97,7 @@ export interface AltScreen {
 export function createAltScreen(io: AltScreenIo): AltScreen {
   let active = false
   let mouseOn = false
+  let handedOver = false
 
   const enter = () => {
     if (active) return
@@ -126,14 +135,19 @@ export function createAltScreen(io: AltScreenIo): AltScreen {
     disableMouse,
     get active() { return active },
     get mouseOn() { return mouseOn },
+    get suspended() { return handedOver },
     async suspend<T>(fn: () => Promise<T>): Promise<T> {
       const wasActive = active
       const wasMouse = mouseOn
       disableMouse()
       if (wasActive) leave()
+      // Set AFTER the buffer is given up and cleared BEFORE it is taken back, so the gate is open
+      // for exactly the window in which the terminal is not ours.
+      handedOver = true
       try {
         return await fn()
       } finally {
+        handedOver = false
         if (wasActive) enter()
         if (wasMouse) enableMouse()
       }
@@ -141,10 +155,59 @@ export function createAltScreen(io: AltScreenIo): AltScreen {
   }
 }
 
-/** The process-wide alternate screen, bound to stdout. */
+/**
+ * The process-wide alternate screen, bound to stdout — and bound EARLY, on purpose.
+ *
+ * `process.stdout.write` is swapped out while an action runs (the host collects what it printed, or
+ * streams it into a pane), and a mode-setting escape is not text: sent through a diversion it would
+ * either vanish — stranding the terminal in a buffer, or leaving mouse tracking on after exit, which
+ * is damage outside this process — or be rendered as characters inside a pane. Capturing the real
+ * `write` at module load is what keeps these sequences reaching the terminal no matter what is
+ * patched over the stream when they are sent.
+ */
+const realStdoutWrite = process.stdout.write.bind(process.stdout)
+
 export const altScreen: AltScreen = createAltScreen({
-  write: chunk => { process.stdout.write(chunk) },
+  write: chunk => { realStdoutWrite(chunk) },
 })
+
+/**
+ * The write Ink draws through — see `inkStdout` in `index.ts`, which hands it over.
+ *
+ * TWO GUARANTEES IN ONE FUNCTION, and both were learned the hard way:
+ *
+ *  - It bypasses `process.stdout.write`, which the host swaps out while an action runs. A frame
+ *    written through a capture is a frame that vanishes (the screen freezes for the length of the
+ *    action); a frame written through the STREAMING diversion is fed into the pane that is drawing
+ *    it, and the pane fills with its own borders.
+ *  - It DROPS the frame while a command is suspended. An Ink frame is not just text — it erases the
+ *    lines above itself first — so a frame arriving while the user's real screen is back would take
+ *    their scrollback with it. That protection used to come from the host muting
+ *    `process.stdout.write`, which the bypass above would otherwise have quietly removed.
+ */
+export function createFrameWriter(
+  write: (...args: unknown[]) => boolean,
+  suspended: () => boolean,
+): NodeJS.WriteStream['write'] {
+  return ((...args: unknown[]): boolean => {
+    // A faithful `write`, not a one-argument stand-in. Node's signature is
+    // `write(chunk, encoding?, callback?)` and Ink's TEARDOWN uses the callback form: a callback that
+    // never fires is a promise that never settles, which is how the first version of this gate turned
+    // `q` into a hang — the app unmounted and the process sat there with the buffer still swapped in.
+    const done = args.find(arg => typeof arg === 'function') as ((err?: Error | null) => void) | undefined
+    if (suspended()) {
+      // The frame is dropped; the writer waiting on it is not.
+      if (done) queueMicrotask(() => done())
+      return true
+    }
+    return write(...args)
+  }) as NodeJS.WriteStream['write']
+}
+
+export const writeFrame = createFrameWriter(
+  (...args) => (realStdoutWrite as (...a: unknown[]) => boolean)(...args),
+  () => altScreen.suspended,
+)
 
 let guardsInstalled = false
 

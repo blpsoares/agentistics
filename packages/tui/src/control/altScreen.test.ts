@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 
-import { createAltScreen } from './altScreen'
+import { createAltScreen, createFrameWriter } from './altScreen'
 
 const ENTER = '\x1b[?1049h\x1b[H'
 const LEAVE = '\x1b[?1049l'
@@ -75,6 +75,28 @@ describe('createAltScreen', () => {
 
     expect(io.writes).toEqual([SHOW_CURSOR + LEAVE, '<fn>', ENTER + HIDE_CURSOR])
     expect(alt.active).toBe(true)
+  })
+
+  /**
+   * The window a FRAME may not be drawn in. `writeFrame` (what Ink is given) drops what it is handed
+   * while this is true, because an Ink frame erases the lines above itself before it draws — and
+   * while a command is suspended, those lines are the user's own scrollback.
+   */
+  it('reports itself suspended only while fn is running', async () => {
+    const alt = createAltScreen(fakeIo())
+    alt.enter()
+    expect(alt.suspended).toBe(false)
+
+    await alt.suspend(async () => { expect(alt.suspended).toBe(true) })
+    expect(alt.suspended).toBe(false)
+  })
+
+  it('stops reporting itself suspended when fn throws', async () => {
+    const alt = createAltScreen(fakeIo())
+    alt.enter()
+
+    await expect(alt.suspend(async () => { throw new Error('compose failed') })).rejects.toThrow()
+    expect(alt.suspended).toBe(false)
   })
 
   it('resolves with the value fn returns', async () => {
@@ -229,5 +251,56 @@ describe('createAltScreen — mouse tracking', () => {
 
     expect(io.writes).toEqual([SHOW_CURSOR + LEAVE, '<fn>', ENTER + HIDE_CURSOR])
     expect(alt.mouseOn).toBe(false)
+  })
+})
+
+/**
+ * The gate Ink's own frames go through — `inkStdout` in `index.ts` hands Ink `writeFrame`, which is
+ * this factory bound to the real stdout and the real alternate screen.
+ */
+describe('createFrameWriter', () => {
+  const spy = () => {
+    const chunks: unknown[][] = []
+    return { chunks, write: (...args: unknown[]) => { chunks.push(args); return true } }
+  }
+
+  it('writes the frame through when the terminal is ours', () => {
+    const out = spy()
+    const write = createFrameWriter(out.write, () => false)
+    write('frame')
+    expect(out.chunks).toEqual([['frame']])
+  })
+
+  /**
+   * An Ink frame erases the lines above itself before it draws. While a command is suspended those
+   * lines are the user's own scrollback, so the frame is dropped rather than drawn.
+   */
+  it('drops the frame while a command is suspended', () => {
+    const out = spy()
+    let suspended = true
+    const write = createFrameWriter(out.write, () => suspended)
+    write('frame during a build')
+    expect(out.chunks).toEqual([])
+    suspended = false
+    write('frame after it')
+    expect(out.chunks).toEqual([['frame after it']])
+  })
+
+  // THE REGRESSION THIS EXISTS FOR: Ink's teardown writes with a callback and waits for it. A gate
+  // that dropped the frame AND the callback turned `q` into a hang — the app unmounted, the promise
+  // never settled, and the terminal was left in the alternate buffer with no prompt.
+  it('always fires the callback, dropped frame or not', async () => {
+    const out = spy()
+    const write = createFrameWriter(out.write, () => true)
+    await new Promise<void>(resolve => { write('dropped', () => resolve()) })
+    expect(out.chunks).toEqual([])
+  })
+
+  it('passes the encoding and the callback through when it does write', () => {
+    const out = spy()
+    const write = createFrameWriter(out.write, () => false)
+    const cb = () => {}
+    write('frame', 'utf8', cb)
+    expect(out.chunks).toEqual([['frame', 'utf8', cb]])
   })
 })
