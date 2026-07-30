@@ -154,7 +154,14 @@ function RowGroup({ label, rows, lang, onToggleRow }: {
             ? COPY.noRepoSub[lang]
             : `${interpolate(plural(PLURAL_COPY.sessionsN[lang], t.sessions), { n: t.sessions })}${t.lastActive ? ` · ${interpolate(COPY.lastActiveT[lang], { t: relTime(t.lastActive, pt) })}` : ''}`
         return (
-          <div key={t.key} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          // `flexWrap: 'wrap'` — the row div is a block-level flex container (width = its parent's,
+          // not shrink-to-fit), and `RowSwitch`'s button already claims the full row via its own
+          // `width: '100%'`. Without wrap, a host badge next to a very long repo name (the >=60
+          // char remote the mobile gate exercises) has nowhere to go but past the row's right edge —
+          // `overflow-x: clip` on `#root` then hides it entirely rather than causing a real
+          // horizontal scrollbar, so the badge silently vanishes instead of wrapping onto its own
+          // line beneath the switch.
+          <div key={t.key} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             <RowSwitch
               on={!r.denied}
               onToggle={() => onToggleRow(t, r.denied)}
