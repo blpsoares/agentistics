@@ -14,7 +14,7 @@
 // reusing one endpoint here would look exactly like a lost-update bug in the lock, when it is
 // actually this fixture violating the schema's own invariant.
 
-import { updateTeamConfigAt } from './preferences'
+import { updateTeamConfigAt } from '../../server/preferences'
 
 async function main(): Promise<void> {
   const [primary, legacy, prefix, countStr] = process.argv.slice(2)

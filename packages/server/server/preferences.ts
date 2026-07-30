@@ -1,5 +1,5 @@
 import { join, dirname } from 'path'
-import { mkdir, rename, writeFile, open, unlink, stat } from 'node:fs/promises'
+import { mkdir, rename, writeFile, open, unlink, stat, readFile, utimes } from 'node:fs/promises'
 import { AGENTISTICS_DATA_DIR, CLAUDE_DIR } from './config'
 import type { TeamConfig } from '@agentistics/core'
 import { migrateTeamConfig } from '@agentistics/core'
@@ -115,7 +115,19 @@ export async function readPreferencesFrom(primary: string, legacy: string): Prom
   // independently and could interleave/clobber each other. Safe against reentrancy —
   // readPreferencesFrom is never called from inside an enqueueWrite callback; see there.
   return enqueueWrite(async () => {
-    const release = await acquireFileLock(primary)
+    // This whole branch is a BEST-EFFORT opportunistic persist of the migrated shape, so the
+    // NEXT read hits the writable primary directly — it is never the caller's only chance to get
+    // a usable result (that's `prefs`, already computed above). Acquiring the cross-process lock
+    // can fail for reasons that have nothing to do with contention (EACCES/EROFS on a read-only
+    // data dir, `PreferencesLockTimeoutError` under sustained contention) and none of those may
+    // turn a READ into a throw — `readPreferencesOrExit` would exit the whole CLI over what was
+    // always a skippable write. See B-4.
+    let release: (() => Promise<void>) | null = null
+    try {
+      release = await acquireFileLock(primary)
+    } catch {
+      return prefs
+    }
     try {
       // Re-check under the chain (and now the cross-process lock): primary may have been
       // created — by our own read above racing another queued write, by that write itself, or
@@ -189,56 +201,147 @@ async function writeFileAtomic(path: string, text: string): Promise<void> {
 // since the filesystem is the only thing both processes can see.
 // ---------------------------------------------------------------------------
 
-/** A lock older than this is presumed abandoned by a crashed/killed process holding it, and is
- *  reclaimed rather than blocking every future write on this machine forever. Comfortably above
- *  how long a single read-merge-write-atomic-rename cycle could plausibly take. */
-const LOCK_STALE_MS = 10_000
-/** How long to wait on a LIVE lock (one whose mtime is still fresh) before giving up and
- *  proceeding WITHOUT it. A preferences write must never simply stop working because another
- *  process is slow — that would turn lock contention into an outage. The warning this logs is
- *  the visible signal that atomicity was not guaranteed for that one write. */
-const LOCK_WAIT_TIMEOUT_MS = 5_000
-const LOCK_POLL_MS = 40
+/**
+ * A lock older than this is presumed abandoned by a crashed/killed process holding it, and is
+ * reclaimed rather than blocking every future write on this machine forever.
+ *
+ * 60s, not a bound on the write itself: the critical section runs `await`s inside the SAME
+ * single-threaded event loop as `buildApiResponse` (thousands of JSONL files, git subprocesses)
+ * in the long-running server process, so the loop can stall between the lock's read and its
+ * rename for a lot longer than the syscalls alone take — a big-history machine, a CPU-quota'd
+ * container, or a WSL2 `/mnt` path are all within a couple times of a much smaller bound. Getting
+ * this wrong is not symmetric: too short and a legitimately slow holder gets its lock stolen out
+ * from under it (see B-2's owner check for why that's now merely wasteful instead of unsafe);
+ * too long only delays how quickly a genuinely crashed holder's lock is reclaimed. The mtime
+ * heartbeat below (`LOCK_HEARTBEAT_MS`) is the holder's own defense — it refreshes well inside
+ * this window so a slow-but-alive holder is never mistaken for a dead one.
+ */
+// Exported so tests can plant a lock file backdated relative to the REAL threshold instead of a
+// hardcoded guess that silently goes stale itself the next time this constant is tuned (see
+// preferences.test.ts's stale-lock-reclaim test, which broke exactly this way when this moved
+// 10s → 60s during review — a hardcoded "60s ago" test input became "not old enough" overnight).
+export const LOCK_STALE_MS = 60_000
+/** How often a lock HOLDER refreshes the lock file's mtime while inside the critical section, so
+ *  a legitimately slow write defends itself against being judged stale by a contending process.
+ *  Comfortably below `LOCK_STALE_MS` so at least a few refreshes land before staleness could ever
+ *  apply, even if one tick is itself delayed by a slow event loop. */
+const LOCK_HEARTBEAT_MS = 15_000
+/**
+ * Total time a WAITER spends trying to acquire before giving up and throwing
+ * `PreferencesLockTimeoutError`. This is intentionally `LOCK_STALE_MS` PLUS a margin — waiting
+ * for anything less than `LOCK_STALE_MS` would let a waiter give up before a fresh-looking lock
+ * could ever be judged stale, making the reclaim path unreachable for ordinary contention (the
+ * bug the code review caught: the old bound was 5s against a 10s staleness window). The margin
+ * covers the reclaim-and-retry round trip itself, not a second full staleness window.
+ */
+export const LOCK_ACQUIRE_TIMEOUT_MS = LOCK_STALE_MS + 10_000
+const LOCK_POLL_MS = 100
 
 function lockPathFor(primary: string): string {
   return `${primary}.lock`
 }
 
+/** Thrown when `acquireFileLock` cannot get the lock within `LOCK_ACQUIRE_TIMEOUT_MS`. A caller
+ *  that reaches this must NOT proceed unlocked — that was the B-1 finding: doing so silently
+ *  drops whichever side loses the resulting race, including a connection's token that exists
+ *  nowhere else. Surfacing this as a typed error lets a CLI command print an actionable message
+ *  ("another agentop process is writing preferences, retry") and exit non-zero instead. */
+export class PreferencesLockTimeoutError extends Error {
+  constructor(lockPath: string) {
+    super(`timed out waiting for the preferences write lock at ${lockPath} — another agentop process appears to be writing preferences`)
+    this.name = 'PreferencesLockTimeoutError'
+  }
+}
+
 /**
  * Acquire an O_EXCL lock file next to `primary`. `open(path, 'wx')` fails with EEXIST if the
  * file already exists — the same primitive `mkdir -p` style tools use for a filesystem mutex,
- * portable across the platforms this ships on (no `flock` dependency). Returns a release
- * function; the caller MUST call it in a `finally` (see `writePreferencesTo`/`updateTeamConfigAt`
- * below) or a crash mid-critical-section leaves a lock for the NEXT writer to reclaim once it
- * goes stale — never a permanent deadlock, but a real wait for `LOCK_STALE_MS`.
+ * portable across the platforms this ships on (no `flock` dependency).
+ *
+ * The lock file's CONTENT is an owner token unique to this acquisition (pid + timestamp + random
+ * suffix), not empty — B-2's fix. Without an owner, a reclaim-then-steal race is possible: A
+ * holds the lock legitimately but slowly, B judges it stale and unlinks it, B creates its own
+ * lock, A finishes its (legitimate) critical section and unconditionally unlinks — deleting B's
+ * lock, not its own — and C can then acquire while B is still inside. `release()` here only
+ * unlinks when the file on disk still holds ITS OWN owner token, so a holder can only ever delete
+ * a lock it still owns.
+ *
+ * Returns a release function; the caller MUST call it in a `finally` (see
+ * `writePreferencesTo`/`updateTeamConfigAt` below) or a crash mid-critical-section leaves a lock
+ * for the NEXT writer to reclaim once it goes stale — never a permanent deadlock, but a real wait
+ * for `LOCK_STALE_MS`.
  */
 async function acquireFileLock(primary: string): Promise<() => Promise<void>> {
   const lockPath = lockPathFor(primary)
   await mkdir(dirname(lockPath), { recursive: true })
-  const start = Date.now()
+  const owner = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  const deadline = Date.now() + LOCK_ACQUIRE_TIMEOUT_MS
   while (true) {
     try {
       const handle = await open(lockPath, 'wx')
+      await handle.writeFile(owner, 'utf-8')
       await handle.close()
-      return async () => { try { await unlink(lockPath) } catch { /* already gone — fine */ } }
+      // Defend this lock against a contending process's staleness check while we're still
+      // legitimately inside the critical section (B-2's second half) — a `setInterval` refresh
+      // of the mtime, unref'd so it can never keep this process alive on its own.
+      const heartbeat = setInterval(() => {
+        const now = new Date()
+        void utimes(lockPath, now, now).catch(() => {
+          // Best-effort: if this fails the lock is either already gone (nothing left to defend)
+          // or the filesystem is misbehaving, neither of which this timer can fix.
+        })
+      }, LOCK_HEARTBEAT_MS)
+      heartbeat.unref?.()
+      return () => releaseFileLock(lockPath, owner, heartbeat)
     } catch (err) {
       if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err
-      // Someone else holds it (or held it and crashed) — decide whether to reclaim or wait.
+      // Someone else holds it (or held it and crashed) — decide whether we have POSITIVE
+      // evidence the lock is free right now (staleReclaimed / lockVanished), which is the only
+      // case allowed to retry `open()` without waiting. Every other path — including a failed
+      // reclaim attempt (EPERM/EBUSY on Windows, EACCES/EROFS elsewhere) and a `stat` failure
+      // that is NOT "the file is gone" — must fall through to the shared timeout check and poll
+      // sleep below. B-3's finding: the previous version `continue`d straight from BOTH the
+      // reclaim-attempt catch and the stat catch, so a lock this process can see but cannot
+      // remove (or a permission error masquerading as "vanished") busy-spun at 100% CPU forever,
+      // never reaching either the deadline check or the sleep.
+      let staleReclaimed = false
+      let lockVanished = false
       try {
         const st = await stat(lockPath)
         if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
-          try { await unlink(lockPath) } catch { /* another reclaimer won the race — loop and retry open */ }
-          continue
+          try {
+            await unlink(lockPath)
+            staleReclaimed = true
+          } catch {
+            // Could not remove it — another reclaimer may have won the race, or the filesystem
+            // refused (EPERM/EBUSY/EACCES/EROFS). Either way this is NOT "known free now"; fall
+            // through to the timeout+sleep tail like ordinary contention.
+          }
         }
-      } catch {
-        continue // the lock vanished between our failed open() and this stat() — retry immediately
+      } catch (statErr) {
+        if ((statErr as NodeJS.ErrnoException)?.code === 'ENOENT') lockVanished = true
+        // Any OTHER stat failure (EACCES/EIO/...) is not proof the lock vanished — treated as
+        // ordinary contention below, never as a reason to retry immediately.
       }
-      if (Date.now() - start > LOCK_WAIT_TIMEOUT_MS) {
-        console.warn(`[preferences] lock at ${lockPath} held past ${LOCK_WAIT_TIMEOUT_MS}ms by another process — proceeding without it`)
-        return async () => {}
-      }
+      if (Date.now() > deadline) throw new PreferencesLockTimeoutError(lockPath)
+      if (staleReclaimed || lockVanished) continue // known-free right now — retry without waiting
       await new Promise(resolve => setTimeout(resolve, LOCK_POLL_MS))
     }
+  }
+}
+
+/** Release a lock this process owns: only unlinks the file if its content still matches the
+ *  owner token minted at acquisition (see the doc comment on `acquireFileLock`) — otherwise this
+ *  is no longer OUR lock (we were reclaimed as stale while finishing up) and deleting it would
+ *  steal mutual exclusion from whoever holds it now. Always clears the heartbeat first so it can
+ *  never fire after release believes the section is over. */
+async function releaseFileLock(lockPath: string, owner: string, heartbeat: ReturnType<typeof setInterval>): Promise<void> {
+  clearInterval(heartbeat)
+  try {
+    const content = await readFile(lockPath, 'utf-8')
+    if (content === owner) await unlink(lockPath)
+  } catch {
+    // Already gone, or unreadable — nothing more this process can safely do.
   }
 }
 

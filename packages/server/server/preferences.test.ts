@@ -1,7 +1,8 @@
 import { test, expect } from 'bun:test'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { readPreferencesFrom, writePreferencesTo, updateTeamConfigAt } from './preferences'
+import { fileURLToPath } from 'node:url'
+import { readPreferencesFrom, writePreferencesTo, updateTeamConfigAt, LOCK_STALE_MS } from './preferences'
 
 // Regression: preferences were stored under CLAUDE_DIR, which in Docker (machine +
 // self-contributing central) is the host ~/.claude mounted READ-ONLY at /host-claude.
@@ -365,7 +366,9 @@ test('two SEPARATE OS processes writing the same preferences file concurrently l
   await writePreferencesTo(primary, legacy, { team: { schema: 2, mode: 'member', connections: [] } })
 
   const COUNT = 15
-  const childScript = join(dirname(new URL(import.meta.url).pathname), 'preferences.lock-test-child.ts')
+  // `new URL(import.meta.url).pathname` yields a leading-slash path like `/C:/…` on Windows,
+  // which breaks the spawned `bun run` — `fileURLToPath` handles the platform difference.
+  const childScript = join(dirname(fileURLToPath(import.meta.url)), '..', 'test', 'fixtures', 'preferences.lock-test-child.ts')
   const child = Bun.spawn(['bun', 'run', childScript, primary, legacy, 'bbbb', String(COUNT)], {
     stdout: 'pipe',
     stderr: 'pipe',
@@ -435,7 +438,7 @@ test('a brand-new connection with no token is still stored token-less', async ()
 // Stale-lock reclaim (Task 5) — a process killed mid-write (SIGKILL, OOM, crash) leaves its
 // `<primary>.lock` file behind forever; without a staleness bound every later write on this
 // machine would fail/hang permanently, since nothing else ever deletes it. `acquireFileLock`
-// treats a lock file older than `LOCK_STALE_MS` (10s — see the comment on the constant in
+// treats a lock file older than `LOCK_STALE_MS` (60s — see the comment on the constant in
 // preferences.ts) as abandoned and reclaims it. This test plants exactly that: a lock file with
 // an mtime far in the past, held by no real process.
 // ---------------------------------------------------------------------------
@@ -444,11 +447,17 @@ test('a stale lock file (planted, mtime far in the past) is reclaimed — a writ
   const { primary, legacy } = await tmpPaths2()
   await writePreferencesTo(primary, legacy, { team: { schema: 2, mode: 'member', connections: [] } })
 
-  // Plant an abandoned lock file next to primary, backdated well past LOCK_STALE_MS (10s).
+  // Plant an abandoned lock file next to primary, backdated well past LOCK_STALE_MS (60s). Its
+  // content deliberately does NOT match any real owner token — that's fine, `acquireFileLock`
+  // only checks content on RELEASE (to avoid deleting someone else's lock), never as a condition
+  // for reclaiming a stale one.
   const lockPath = `${primary}.lock`
   const handle = await open(lockPath, 'w')
   await handle.close()
-  const longAgo = new Date(Date.now() - 60_000)
+  // Comfortably past LOCK_STALE_MS — 5x, not just barely over it, so the comparison can never
+  // flake on the few ms this test itself takes to reach the stat() call, and never silently goes
+  // stale itself if the threshold is retuned again later.
+  const longAgo = new Date(Date.now() - 5 * LOCK_STALE_MS)
   await utimes(lockPath, longAgo, longAgo)
 
   const start = Date.now()
@@ -457,9 +466,9 @@ test('a stale lock file (planted, mtime far in the past) is reclaimed — a writ
   await writePreferencesTo(primary, legacy, { team })
   const elapsed = Date.now() - start
 
-  // Reclaimed almost immediately — nowhere near LOCK_WAIT_TIMEOUT_MS (5s), which is the bound
-  // for a LIVE lock, not a stale one. A missing staleness check would hang here for 5s (the
-  // give-up-and-proceed-anyway fallback) or block forever if that fallback were absent.
+  // Reclaimed almost immediately — nowhere near LOCK_ACQUIRE_TIMEOUT_MS (70s), which is the
+  // bound for a LIVE lock that never frees, not a stale one. A missing staleness check would
+  // block here until that full timeout elapsed and then throw `PreferencesLockTimeoutError`.
   expect(elapsed).toBeLessThan(2_000)
 
   const after = await readPreferencesFrom(primary, legacy)
