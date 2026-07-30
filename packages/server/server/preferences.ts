@@ -271,6 +271,31 @@ export function __setTestOnlyDisableLock(disabled: boolean): void {
 }
 
 /**
+ * TEST-ONLY seam (round-3 review, the R2-regression bound test): forces every contention
+ * iteration inside `acquireFileLock` to treat the lock as "known free right now"
+ * (`lockVanished = true`) WITHOUT actually checking or touching the file on disk — simulating a
+ * waiter that keeps landing on that signal on every single iteration, which is exactly the
+ * scenario that could spin past `LOCK_ACQUIRE_TIMEOUT_MS` before the round-3 fix bounded it to
+ * one grace retry past the deadline. Combined with a REAL, permanently-held lock file (so `open`
+ * genuinely keeps failing `EEXIST`) this reproduces sustained "known-free-but-still-contended"
+ * pressure deterministically, instead of needing an adversarial second process racing real
+ * timing. Never read by any production code path; defaults to (and must always default to)
+ * `false`. */
+let _testOnlyForceLockVanished = false
+export function __setTestOnlyForceLockVanished(force: boolean): void {
+  _testOnlyForceLockVanished = force
+}
+
+/**
+ * TEST-ONLY seam (round-3 review): overrides `LOCK_ACQUIRE_TIMEOUT_MS` for a single test run, so
+ * the bound test above does not have to wait out the real ~70s timeout. `null` (the default)
+ * means "use the real constant" — never read by any production code path. */
+let _testOnlyAcquireTimeoutMsOverride: number | null = null
+export function __setTestOnlyAcquireTimeoutMs(ms: number | null): void {
+  _testOnlyAcquireTimeoutMsOverride = ms
+}
+
+/**
  * Acquire an O_EXCL lock file next to `primary`. `open(path, 'wx')` fails with EEXIST if the
  * file already exists — the same primitive `mkdir -p` style tools use for a filesystem mutex,
  * portable across the platforms this ships on (no `flock` dependency).
@@ -293,7 +318,15 @@ async function acquireFileLock(primary: string): Promise<() => Promise<void>> {
   const lockPath = lockPathFor(primary)
   await mkdir(dirname(lockPath), { recursive: true })
   const owner = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-  const deadline = Date.now() + LOCK_ACQUIRE_TIMEOUT_MS
+  const deadline = Date.now() + (_testOnlyAcquireTimeoutMsOverride ?? LOCK_ACQUIRE_TIMEOUT_MS)
+  // R2-regression guard: a waiter that keeps landing on `staleReclaimed`/`lockVanished` on EVERY
+  // iteration (plausible under sustained multi-process contention — repeatedly racing another
+  // process's own create/release cycle) must still be bounded. This is spent EXACTLY ONCE: the
+  // first time the deadline has already passed AND the lock looks free right now, this call gets
+  // one final zero-delay retry instead of discarding a lock it may be entitled to (the original
+  // R2 finding) — but if that retry doesn't land (still contended), every SUBSEQUENT free-looking
+  // iteration past the deadline throws immediately rather than looping forever.
+  let usedFinalFreeRetryPastDeadline = false
   while (true) {
     let created = false
     try {
@@ -350,28 +383,53 @@ async function acquireFileLock(primary: string): Promise<() => Promise<void>> {
       // never reaching either the deadline check or the sleep.
       let staleReclaimed = false
       let lockVanished = false
-      try {
-        const st = await stat(lockPath)
-        if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
-          try {
-            await unlink(lockPath)
-            staleReclaimed = true
-          } catch {
-            // Could not remove it — another reclaimer may have won the race, or the filesystem
-            // refused (EPERM/EBUSY/EACCES/EROFS). Either way this is NOT "known free now"; fall
-            // through to the timeout+sleep tail like ordinary contention.
+      if (_testOnlyForceLockVanished) {
+        // TEST-ONLY: skip the real stat/unlink dance entirely and just claim "free right now" —
+        // see the seam's doc comment. The lock file on disk is untouched (still held by whatever
+        // actually created it), so the next `open()` genuinely fails EEXIST again, reproducing
+        // sustained known-free-but-still-contended pressure on every iteration.
+        lockVanished = true
+      } else {
+        try {
+          const st = await stat(lockPath)
+          if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+            try {
+              await unlink(lockPath)
+              staleReclaimed = true
+            } catch {
+              // Could not remove it — another reclaimer may have won the race, or the filesystem
+              // refused (EPERM/EBUSY/EACCES/EROFS). Either way this is NOT "known free now"; fall
+              // through to the timeout+sleep tail like ordinary contention.
+            }
           }
+        } catch (statErr) {
+          if ((statErr as NodeJS.ErrnoException)?.code === 'ENOENT') lockVanished = true
+          // Any OTHER stat failure (EACCES/EIO/...) is not proof the lock vanished — treated as
+          // ordinary contention below, never as a reason to retry immediately.
         }
-      } catch (statErr) {
-        if ((statErr as NodeJS.ErrnoException)?.code === 'ENOENT') lockVanished = true
-        // Any OTHER stat failure (EACCES/EIO/...) is not proof the lock vanished — treated as
-        // ordinary contention below, never as a reason to retry immediately.
       }
-      // R2: check the known-free retry BEFORE the deadline. A stale reclaim (or a lock that
-      // simply vanished) that lands AT OR AFTER the deadline just freed the lock this call is
-      // entitled to take — throwing here instead would discard a lock we are about to be able to
-      // acquire, for no reason but bad luck in when the clock was read.
-      if (staleReclaimed || lockVanished) continue // known-free right now — retry without waiting
+      // R2/round-3: a stale reclaim (or a lock that simply vanished) that lands AT OR AFTER the
+      // deadline just freed the lock this call is entitled to take — throwing immediately would
+      // discard a lock we are about to be able to acquire, for no reason but bad luck in when the
+      // clock was read. But that "known-free retry bypasses the deadline" exception must itself
+      // be bounded, or a waiter that keeps landing on ENOENT/a successful reclaim every single
+      // iteration (repeatedly racing another process's create/release cycle) spins past
+      // LOCK_ACQUIRE_TIMEOUT_MS forever — silently reintroducing the unbounded hang R4 exists to
+      // prevent, and worse than the bug it replaced (that one at least threw). So: past the
+      // deadline, a known-free signal is honored EXACTLY ONCE per `acquireFileLock` call (one
+      // more zero-delay `open()` attempt); if the lock is still contended on the very next
+      // iteration, it throws instead of granting another free pass.
+      if (staleReclaimed || lockVanished) {
+        if (Date.now() <= deadline) continue // still within budget — always retry, no cost to bound
+        if (!usedFinalFreeRetryPastDeadline) {
+          usedFinalFreeRetryPastDeadline = true
+          continue // the ONE grace retry past the deadline
+        }
+        // Already spent the grace retry AND still seeing the lock as free-but-uncontested is a
+        // contradiction in practice (the immediately-preceding `open()` should have succeeded) —
+        // but if it somehow recurs, this is exactly the "keeps landing on known-free" case R2's
+        // regression targets, so fall through to the throw below rather than looping again.
+      }
       if (Date.now() > deadline) throw new PreferencesLockTimeoutError(lockPath)
       await new Promise(resolve => setTimeout(resolve, LOCK_POLL_MS))
     }

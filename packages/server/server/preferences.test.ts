@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import {
   readPreferencesFrom, writePreferencesTo, updateTeamConfigAt,
   LOCK_STALE_MS, LOCK_ACQUIRE_TIMEOUT_MS, __setTestOnlyDisableLock,
+  __setTestOnlyForceLockVanished, __setTestOnlyAcquireTimeoutMs, PreferencesLockTimeoutError,
 } from './preferences'
 
 // Regression: preferences were stored under CLAUDE_DIR, which in Docker (machine +
@@ -505,6 +506,45 @@ test('control: with the lock disabled via the test-only seam, the SAME synchroni
 // inversion recurring, not just documentation of the current values.
 test('LOCK_ACQUIRE_TIMEOUT_MS is strictly greater than LOCK_STALE_MS — the waiter always gets a turn at reclaiming a stale lock', () => {
   expect(LOCK_ACQUIRE_TIMEOUT_MS).toBeGreaterThan(LOCK_STALE_MS)
+})
+
+// ---------------------------------------------------------------------------
+// R2-regression bound (round-3 review): the fix that let a known-free retry bypass the deadline
+// check (so a stale reclaim landing right at the deadline isn't discarded, see R2 above) has to
+// stay BOUNDED — a waiter that keeps landing on `staleReclaimed`/`lockVanished` on every single
+// iteration must not spin past `LOCK_ACQUIRE_TIMEOUT_MS` forever. `__setTestOnlyForceLockVanished`
+// makes every contention iteration report "known free" without touching the real lock file (which
+// this test holds open and never releases, so `open('wx')` genuinely keeps failing EEXIST) —
+// reproducing sustained "known-free-but-still-contended" pressure deterministically, instead of
+// needing to win a real race against another process. `__setTestOnlyAcquireTimeoutMs` shortens the
+// bound so this doesn't take the real ~70s.
+// ---------------------------------------------------------------------------
+
+test('a waiter that keeps seeing the lock as free-but-uncontested is still bounded — it throws PreferencesLockTimeoutError instead of spinning forever', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  const lockPath = `${primary}.lock`
+
+  // A REAL lock file, held forever (never released) — every `open(lockPath, 'wx')` inside
+  // `acquireFileLock` genuinely fails EEXIST for the rest of this test.
+  const handle = await open(lockPath, 'wx')
+  await handle.writeFile('some-other-process-holds-this-forever', 'utf-8')
+  await handle.close()
+
+  __setTestOnlyAcquireTimeoutMs(300)
+  __setTestOnlyForceLockVanished(true)
+  try {
+    const start = Date.now()
+    await expect(writePreferencesTo(primary, legacy, { installDismissed: true }))
+      .rejects.toBeInstanceOf(PreferencesLockTimeoutError)
+    const elapsed = Date.now() - start
+    // Bounded near the shortened 300ms deadline (plus at most one grace retry's worth of
+    // overhead), not spinning for seconds — a regression here would mean the R2 fix's "retry
+    // without waiting" path became unbounded again.
+    expect(elapsed).toBeLessThan(2_000)
+  } finally {
+    __setTestOnlyForceLockVanished(false)
+    __setTestOnlyAcquireTimeoutMs(null)
+  }
 })
 
 test('a brand-new connection with no token is still stored token-less', async () => {
