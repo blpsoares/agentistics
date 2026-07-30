@@ -92,10 +92,22 @@ const _resyncNotified = new Set<string>()
  *  process already promised a central. Consumed by the next cycle, cleared once the removal
  *  completes. */
 const _resumeForget = new Map<string, ForgetJournal>()
-/** sha256 over `{statsCache, workflows}` of the last EMPTY-DELTA payload actually POSTed for a
- *  restricted connection — the keep-alive dedup in §5.3.4. Only ever consulted/updated for
- *  restricted connections; an unrestricted one keeps pushing its keep-alive every cycle. */
-const _lastRestrictedPushHash = new Map<string, string>()
+/**
+ * sha256 over `{statsCache, workflows}` of the last payload the CENTRAL ACTUALLY ACCEPTED for this
+ * connection — recorded on every successful push that carries one (both the empty-delta keep-alive
+ * path AND batch 0 of the batch path, restricted or not), so this always reflects what the central
+ * holds. Only ever CONSULTED for a restricted connection (the keep-alive dedup in §5.3.4); an
+ * unrestricted one keeps pushing its keep-alive every cycle regardless of what is recorded here.
+ *
+ * MUST be updated on every writer, not only the restricted empty-delta branch: a member that goes
+ * restricted → unrestricted → restricted again pushes an unsplit cache in between (the batch path,
+ * because un-blocking creates session deltas). If that unsplit push does not update this map, the
+ * SECOND restricted cycle's split cache can come out byte-identical to what was memoized from
+ * BEFORE the unsplit push and get wrongly suppressed — stranding the denied repo's volume in the
+ * cache the central already holds, permanently (reproduced end-to-end against a live central; see
+ * the Task 3 fix report).
+ */
+const _lastPushedPayloadHash = new Map<string, string>()
 
 function hostOf(endpoint: string): string {
   try { return new URL(endpoint).host || endpoint } catch { return endpoint }
@@ -704,6 +716,12 @@ export async function pushOnceDetailed(
       headers['Authorization'] = `Bearer ${conn.token}`
     }
 
+    // sha256 over what this cycle WOULD attach as the cache payload, regardless of which path
+    // ends up sending it — the batch path (below) attaches the identical `{statsCache, workflows}`
+    // pair to batch 0, and both writers must agree on exactly this formula or the memo they share
+    // desynchronizes (see `_lastPushedPayloadHash`'s doc comment).
+    const payloadDigest = createHash('sha256').update(JSON.stringify({ statsCache, workflows })).digest('hex')
+
     if (toSend.length === 0) {
       // No session deltas — still push the statsCache/workflows on their own so totals
       // and workflow runs stay fresh.
@@ -712,15 +730,17 @@ export async function pushOnceDetailed(
         // each request stamps `lastSeenAt` on the central at ~2s resolution, from which session
         // boundaries, working hours and intensity of the HIDDEN work are reconstructable from
         // request timing alone, even though no content ever crosses the wire (§5.3.4). Skip when
-        // this cycle's payload is byte-identical to the last one actually pushed for this
-        // connection. Unrestricted connections are unaffected — a steady keep-alive is not a
-        // privacy leak when nothing is hidden.
-        let digest: string | undefined
-        if (restricted) {
-          digest = createHash('sha256').update(JSON.stringify({ statsCache, workflows })).digest('hex')
-          if (_lastRestrictedPushHash.get(conn.id) === digest) {
-            return { count: 0 }
-          }
+        // this cycle's payload is byte-identical to the last one actually ACCEPTED for this
+        // connection (by either this branch or the batch path below). Unrestricted connections
+        // are unaffected — a steady keep-alive is not a privacy leak when nothing is hidden.
+        if (restricted && _lastPushedPayloadHash.get(conn.id) === payloadDigest) {
+          // The cycle still completed successfully — nothing was wrong, there was simply nothing
+          // new to say. Mark success so a legitimately quiet restricted connection's status pill
+          // does not drift into "unreachable" purely from the passage of time (see
+          // `getUploaderStatus`'s STALE_INTERVAL_MULTIPLIER): this IS the intended behavior
+          // §5.3.4 asks for, not a degraded one.
+          markPushSuccess(conn.id); clearPushError(conn.id); void notifyPushRecovered(conn)
+          return { count: 0 }
         }
         try {
           const res = await fetch(`${endpoint}/api/team/ingest`, {
@@ -732,12 +752,12 @@ export async function pushOnceDetailed(
           // A reachable central (even a non-2xx that isn't auth) counts as contact for the pill.
           if (res.ok) {
             markPushSuccess(conn.id); clearPushError(conn.id); void notifyPushRecovered(conn)
-            // Only memoize the digest once the central actually accepted it — recording it
-            // BEFORE a known-successful POST would permanently swallow a payload whose first
-            // attempt failed (network error or non-2xx): every later cycle with the same
-            // unchanged content would then match the memoized digest and never retry, silently
-            // losing that statsCache/workflow update until unrelated content happens to change.
-            if (digest !== undefined) _lastRestrictedPushHash.set(conn.id, digest)
+            // Only memoize once the central actually accepted it — recording it BEFORE a
+            // known-successful POST would permanently swallow a payload whose first attempt
+            // failed (network error or non-2xx): every later cycle with the same unchanged
+            // content would then match the memoized digest and never retry, silently losing that
+            // statsCache/workflow update until unrelated content happens to change.
+            _lastPushedPayloadHash.set(conn.id, payloadDigest)
           } else if (res.status === 401 || res.status === 403) fireHandleAuthError(conn, res.status)
         } catch (e) {
           warnPushError(conn.id, e instanceof Error ? e.message : String(e))
@@ -787,6 +807,18 @@ export async function pushOnceDetailed(
       markPushSuccess(conn.id)
       clearPushError(conn.id)
       void notifyPushRecovered(conn)
+      if (i === 0) {
+        // Batch 0 carried the SAME `{statsCache, workflows}` pair the empty-delta branch above
+        // would have attached — and the central just accepted it. Recording it here (restricted
+        // OR not) is what keeps the memo meaning "what the central last accepted" rather than
+        // "the last payload the OTHER branch happened to send": without this, a restricted →
+        // unrestricted → restricted transition pushes its unsplit cache through THIS path, the
+        // memo is never updated, and a later restricted cycle whose split cache happens to match
+        // what was memoized from BEFORE this unsplit push gets wrongly suppressed — stranding the
+        // denied repo's volume in the cache the central already holds (reproduced end-to-end
+        // against a live central).
+        _lastPushedPayloadHash.set(conn.id, payloadDigest)
+      }
     }
 
     return { count: pushed }
@@ -1041,7 +1073,7 @@ function teardownConnection(connId: string): void {
   _latencyMs.delete(connId)
   _centralCapabilities.delete(connId)
   _restrictedConn.delete(connId)
-  _lastRestrictedPushHash.delete(connId)
+  _lastPushedPayloadHash.delete(connId)
   _resyncProgress.delete(connId)
   _resyncNotified.delete(connId)
   _resumeForget.delete(connId)

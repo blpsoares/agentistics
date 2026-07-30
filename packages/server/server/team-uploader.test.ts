@@ -1082,6 +1082,98 @@ describe('restricted connections do not leak an activity heartbeat (§5.3.4)', (
       server.stop(true)
     }
   })
+
+  // Review round 2 — a genuine leak found end-to-end against a live central: the memo
+  // (`_lastPushedPayloadHash`) was only ever WRITTEN from the restricted empty-delta branch, so a
+  // batch push (which attaches the SAME `{statsCache, workflows}` pair to batch 0 whenever there
+  // are session deltas) never updated it. A restricted → unrestricted → restricted transition
+  // pushes its unsplit cache through the batch path in the middle step; if that never touches the
+  // memo, the second restricted push's split cache — byte-identical to the first, since nothing
+  // about the underlying data changed — matches the STALE memo from the first push and gets
+  // wrongly suppressed, stranding the denied repository's per-day volume in the cache the central
+  // already holds from the middle (unrestricted) push. Nothing recovers this until unrelated
+  // content happens to change.
+  const repoSession = (sid: string, remote: string) =>
+    makeSession(sid, { git_remote: remote, project_path: `/p/${sid}`, harness: 'claude' })
+
+  it('a restricted -> unrestricted (batch) -> restricted transition does not wrongly suppress the repeated split payload', async () => {
+    const fx = ingestFixture()
+    const id = randomConnId()
+    try {
+      const pub1 = repoSession('pub-1', 'github.com/org/public')
+      const pub2 = repoSession('pub-2', 'github.com/org/public')
+      const secret1 = repoSession('secret-1', 'github.com/org/secret')
+      const secret2 = repoSession('secret-2', 'github.com/org/secret')
+      const allLive = [pub1, pub2, secret1, secret2]
+      const real = buildRealCacheFor(allLive)
+      const ctx = makeCtx({ realStatsCache: real, liveSessions: allLive, storedSessions: allLive })
+
+      // Prime the sent-state as if the two PUBLIC sessions were already delivered before this test
+      // begins. The secret ones are deliberately NOT primed — filterShared keeps a denied session
+      // out of the sent-state, which is this task's own invariant (the first test in the file
+      // above pins it directly).
+      await saveSentState(id, { 'pub-1': sessionHash(pub1), 'pub-2': sessionHash(pub2) })
+
+      // Step 1 — restricted, empty session delta (both public sessions already match the primed
+      // sent-state; the secret ones are filtered out before selectDeltas ever sees them). The
+      // split cache is computed fresh and accepted.
+      const connBlocked = fakeConn(id, fx.port, { deniedRepos: ['github.com/org/secret'] })
+      await pushOnceDetailed(connBlocked, ctx)
+      expect(fx.bodies.length).toBe(1)
+      const splitFromStep1 = fx.bodies[0]!.statsCache
+      expect(splitFromStep1).not.toEqual(real) // must actually be split, not the raw cache
+
+      // Step 2 — unblocked: the two secret sessions are now genuine NEW deltas (never primed into
+      // sent-state above), so this takes the BATCH path, carrying the UNSPLIT real cache on
+      // batch 0. This is the writer the review found never touched the memo.
+      const connUnblocked = fakeConn(id, fx.port, { deniedRepos: [] })
+      await pushOnceDetailed(connUnblocked, ctx)
+      expect(fx.bodies.length).toBe(2)
+      expect(fx.bodies[1]!.statsCache).toEqual(real)
+
+      // Step 3 — blocked again: identical fixtures to step 1, so the split cache recomputes to the
+      // EXACT same bytes. The memo must have moved on at step 2, or this gets wrongly matched
+      // against step 1's now-stale memo and silently suppressed.
+      await pushOnceDetailed(connBlocked, ctx)
+      expect(fx.bodies.length).toBe(3)
+      expect(fx.bodies[2]!.statsCache).toEqual(splitFromStep1)
+    } finally {
+      fx.stop()
+    }
+  })
+
+  // The other half of the same fix: a batch push that itself carries a (split) statsCache must
+  // still correctly prime the dedup for the very next unchanged restricted cycle — proving the fix
+  // is "the memo tracks every writer", not "never suppress" (which would reopen §5.3.4's leak).
+  it('a batch push carrying a split statsCache correctly primes the dedup for the immediately-following unchanged cycle', async () => {
+    const fx = ingestFixture()
+    const id = randomConnId()
+    try {
+      const pub1 = repoSession('pub-1', 'github.com/org/public')
+      const secret1 = repoSession('secret-1', 'github.com/org/secret')
+      const allLive = [pub1, secret1]
+      const real = buildRealCacheFor(allLive)
+      const conn = fakeConn(id, fx.port, { deniedRepos: ['github.com/org/secret'] })
+      const ctx = makeCtx({ realStatsCache: real, liveSessions: allLive, storedSessions: allLive })
+
+      // First cycle: nothing primed in sent-state. `secret1` is filtered by filterShared before
+      // selectDeltas ever sees it, so only `pub1` is a genuine new delta — the BATCH path, carrying
+      // the split cache on batch 0.
+      await pushOnceDetailed(conn, ctx)
+      expect(fx.bodies.length).toBe(1)
+      expect(fx.bodies[0]!.statsCache).not.toEqual(real)
+
+      // Second cycle: identical ctx, nothing changed — pub1's hash already matches what the batch
+      // path just wrote to the sent-state, so this is the empty-delta path. The memo the batch
+      // write just set must match, and the POST must be suppressed exactly once: not zero (the
+      // dedup would be broken), not sent again (a fix that never suppresses reopens the leak
+      // §5.3.4 exists to close).
+      await pushOnceDetailed(conn, ctx)
+      expect(fx.bodies.length).toBe(1)
+    } finally {
+      fx.stop()
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
