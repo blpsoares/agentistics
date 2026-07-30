@@ -10,8 +10,13 @@
  * true only for the next few seconds, so this is deliberately in-memory and expires on its own —
  * a member that dies stops reporting and its rows vanish without any cleanup path to get wrong.
  *
- * Reports are keyed by the member's resolved display name, exactly like presence, so the caller can
- * scope them to the members a principal may actually see.
+ * Reports are keyed by MACHINE (the token hash, i.e. `memberId`), never by display name. A snapshot
+ * is a complete statement of what is open ON THE MACHINE THAT SENT IT, so two machines belonging to
+ * the same person are two independent statements: keying by name made the second one overwrite the
+ * first, and an idle laptop reporting `[]` every 8s erased the desktop's open sessions — the panel
+ * read "no sessions open right now" while work was visibly in progress. The display name still
+ * travels on the value, because SCOPING is per person (`visibleUsers`) even though the snapshot is
+ * per machine.
  */
 
 import type { LiveProcess } from '@agentistics/core'
@@ -24,30 +29,34 @@ import type { LiveProcess } from '@agentistics/core'
 export const LIVE_REPORT_TTL_MS = 25_000
 
 export interface MemberLiveReport {
+  /** Display name of the machine's owner — the scoping key, and what each process is stamped with. */
+  user: string
   sessionIds: string[]
   processes: LiveProcess[]
   /** Epoch ms the report arrived. */
   at: number
 }
 
-/** user (display name) → their most recent report. */
+/** machineId (token hash) → that machine's most recent report. */
 const reports = new Map<string, MemberLiveReport>()
 
-/** Record a member's live snapshot. Later reports replace earlier ones outright — a snapshot is a
- *  complete statement of what is open, so merging would resurrect closed sessions. */
+/** Record ONE MACHINE's live snapshot. A later report from the SAME machine replaces the earlier
+ *  one outright (a snapshot is complete, so merging would resurrect closed sessions); a report from
+ *  a DIFFERENT machine of the same person is additive, because it describes different processes. */
 export function recordMemberLive(
+  machineId: string,
   user: string,
   sessionIds: string[],
   processes: LiveProcess[],
   now: number = Date.now(),
 ): void {
-  reports.set(user, { sessionIds, processes, at: now })
+  reports.set(machineId, { user, sessionIds, processes, at: now })
 }
 
-/** Drop a member's report immediately — used when its socket closes, so the panel does not wait
- *  out the TTL after a clean disconnect. */
-export function clearMemberLive(user: string): void {
-  reports.delete(user)
+/** Drop ONE MACHINE's report immediately — used when its socket closes, so the panel does not wait
+ *  out the TTL after a clean disconnect. The person's other machines keep reporting. */
+export function clearMemberLive(machineId: string): void {
+  reports.delete(machineId)
 }
 
 /**
@@ -63,11 +72,11 @@ export function collectMemberLive(
 ): { liveSessionIds: string[]; liveProcesses: LiveProcess[] } {
   const ids = new Set<string>()
   const processes: LiveProcess[] = []
-  for (const [user, r] of reports) {
+  for (const r of reports.values()) {
     if (now - r.at > LIVE_REPORT_TTL_MS) continue
-    if (visibleUsers && !visibleUsers.has(user)) continue
+    if (visibleUsers && !visibleUsers.has(r.user)) continue
     for (const id of r.sessionIds) ids.add(id)
-    for (const p of r.processes) processes.push({ ...p, user })
+    for (const p of r.processes) processes.push({ ...p, user: r.user })
   }
   return { liveSessionIds: [...ids], liveProcesses: processes }
 }

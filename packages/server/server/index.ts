@@ -233,7 +233,7 @@ ensureClaudeChat().catch(err => console.error('[claude-chat] failed to initializ
 // Bun HTTP server
 // ---------------------------------------------------------------------------
 
-type WSData = { user: string; isAgent?: boolean }
+type WSData = { user: string; memberId: string; isAgent?: boolean }
 
 // Shared WS + request handlers, so the binary can bind the SAME logic to two ports below:
 // PORT (47291 = api + mcp) and WEB_PORT (47292 = the web dashboard you open).
@@ -1829,7 +1829,11 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
-      const upgraded = server.upgrade(req, { data: { user: tokenResult.user, isAgent: true as const } })
+      // memberId (the token hash) identifies the MACHINE, and travels so the live-session registry
+      // can key snapshots per machine — a person with two machines sends two independent snapshots.
+      const upgraded = server.upgrade(req, {
+        data: { user: tokenResult.user, memberId: tokenResult.memberId, isAgent: true as const },
+      })
       if (upgraded) return // WebSocket handshake handed off to the websocket: {} handler
       return new Response(JSON.stringify({ error: 'upgrade failed' }), {
         status: 500,
