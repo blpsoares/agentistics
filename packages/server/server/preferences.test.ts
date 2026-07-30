@@ -545,7 +545,11 @@ test('a waiter that keeps seeing the lock as free-but-uncontested is still bound
     __setTestOnlyForceLockVanished(false)
     __setTestOnlyAcquireTimeoutMs(null)
   }
-})
+}, 3_000) // explicit timeout: bun's internal 5s default marks a hang FAILED but doesn't cancel
+// the still-spinning acquireFileLock promise, so `bun test` never exits on its own if this bound
+// ever regresses — it has to be killed externally (as verified in round 4). A short explicit
+// timeout, well above the shortened 300ms bound this test actually uses but well below the
+// default, turns a future regression into a fast, legible red instead of a hung pipeline.
 
 test('a brand-new connection with no token is still stored token-less', async () => {
   const { primary, legacy } = await tmpPaths2()
