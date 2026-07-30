@@ -14,10 +14,13 @@
 import { describe, it, expect } from 'bun:test'
 import {
   validateConnectionBody, validatePatchBody, decideConnectionUpsert,
-  aggregateConnectionStatuses, leaveConnectionById, type ConnectionStatusEntry,
+  aggregateConnectionStatuses, leaveConnectionById, resolveDeniedRepos,
+  buildConnectionStatusEntry, type ConnectionStatusEntry,
 } from './team-connections'
 import type { TeamConnection } from '@agentistics/core'
+import { NO_REPO_KEY } from '@agentistics/core'
 import type { Preferences } from './preferences'
+import type { UploaderStatus } from './team-uploader'
 
 function conn(id: string, extra?: Partial<TeamConnection>): TeamConnection {
   return {
@@ -86,6 +89,24 @@ describe('validateConnectionBody', () => {
     expect('error' in out).toBe(false)
     if (!('error' in out)) expect(out.token).toBe(' sekrit ')
   })
+
+  it('accepts an omitted deniedRepos as absent', () => {
+    const out = validateConnectionBody({ endpoint: 'https://central.example.com', token: 't' })
+    expect('error' in out).toBe(false)
+    if (!('error' in out)) expect(out.deniedRepos).toBeUndefined()
+  })
+
+  it('accepts an array-of-strings deniedRepos', () => {
+    const out = validateConnectionBody({ endpoint: 'https://central.example.com', token: 't', deniedRepos: ['github.com/o/r'] })
+    expect('error' in out).toBe(false)
+    if (!('error' in out)) expect(out.deniedRepos).toEqual(['github.com/o/r'])
+  })
+
+  it('rejects a non-array or mixed-type deniedRepos as 400, without throwing', () => {
+    for (const junk of ['github.com/o/r', 42, { repo: 'x' }, ['ok', 42], [null], [{}]]) {
+      expect('error' in validateConnectionBody({ endpoint: 'https://central.example.com', token: 't', deniedRepos: junk })).toBe(true)
+    }
+  })
 })
 
 describe('validatePatchBody', () => {
@@ -107,6 +128,68 @@ describe('validatePatchBody', () => {
     for (const junk of [null, undefined, 'nope', [], 7]) {
       expect('error' in validatePatchBody(junk)).toBe(true)
     }
+  })
+
+  it('rejects a body with neither label nor deniedRepos — nothing to update', () => {
+    expect('error' in validatePatchBody({})).toBe(true)
+  })
+
+  it('accepts a deniedRepos-only body, with no label', () => {
+    const out = validatePatchBody({ deniedRepos: ['github.com/o/r'] })
+    expect(out).toEqual({ deniedRepos: ['github.com/o/r'] })
+  })
+
+  it('accepts an empty deniedRepos array — the explicit "clear all rules" shape', () => {
+    expect(validatePatchBody({ deniedRepos: [] })).toEqual({ deniedRepos: [] })
+  })
+
+  it('accepts label and deniedRepos together', () => {
+    const out = validatePatchBody({ label: 'Prod', deniedRepos: [NO_REPO_KEY] })
+    expect(out).toEqual({ label: 'Prod', deniedRepos: [NO_REPO_KEY] })
+  })
+
+  it('rejects a non-array or mixed-type deniedRepos as 400, without throwing', () => {
+    for (const junk of ['x', 42, { repo: 'x' }, ['ok', 42], [null]]) {
+      expect('error' in validatePatchBody({ deniedRepos: junk })).toBe(true)
+    }
+  })
+})
+
+describe('resolveDeniedRepos — the zero→non-zero transition rule (§4.2)', () => {
+  it('a brand-new (undefined) denylist gaining its first entries gets NO_REPO_KEY appended', () => {
+    const out = resolveDeniedRepos(undefined, ['github.com/o/r'])
+    expect(out).toEqual(['github.com/o/r', NO_REPO_KEY])
+  })
+
+  it('an empty denylist gaining its first entries gets NO_REPO_KEY appended', () => {
+    const out = resolveDeniedRepos([], ['github.com/o/r'])
+    expect(out).toEqual(['github.com/o/r', NO_REPO_KEY])
+  })
+
+  it('an empty→empty edit stays empty — no restriction is ever created from nothing', () => {
+    expect(resolveDeniedRepos(undefined, [])).toEqual([])
+    expect(resolveDeniedRepos([], [])).toEqual([])
+  })
+
+  it('applying the transition twice from the same starting point is idempotent', () => {
+    const first = resolveDeniedRepos([], ['github.com/o/r'])
+    const second = resolveDeniedRepos([], ['github.com/o/r'])
+    expect(first).toEqual(second)
+  })
+
+  it('an already-restricted connection editing its list WITHOUT NO_REPO_KEY is honoured as-is — no forced re-add', () => {
+    const out = resolveDeniedRepos(['github.com/o/old', NO_REPO_KEY], ['github.com/o/new'])
+    expect(out).toEqual(['github.com/o/new'])
+  })
+
+  it('an already-restricted connection keeping NO_REPO_KEY explicitly is honoured as-is, not duplicated', () => {
+    const out = resolveDeniedRepos(['github.com/o/r', NO_REPO_KEY], ['github.com/o/r', NO_REPO_KEY])
+    expect(out).toEqual(['github.com/o/r', NO_REPO_KEY])
+  })
+
+  it('an already-restricted connection un-blocking everything is honoured as-is (no re-add of NO_REPO_KEY)', () => {
+    const out = resolveDeniedRepos(['github.com/o/r', NO_REPO_KEY], [])
+    expect(out).toEqual([])
   })
 })
 
@@ -182,9 +265,91 @@ function statusEntry(id: string, extra?: Partial<ConnectionStatusEntry>): Connec
   return {
     id, endpoint: `https://${id}.example.com`, org: 'default', user: 'alice',
     lastSuccessAt: null, errKind: null, latencyMs: null,
+    deniedCount: 0, restricted: false, boundary: null, prehistorySessions: null,
+    canForget: false, centralTooOld: true, resync: null, pendingRules: false,
     ...extra,
   }
 }
+
+const NEVER_RAN: UploaderStatus = { lastSuccessAt: null, errKind: null, latencyMs: null }
+
+describe('buildConnectionStatusEntry — the per-connection status shape (§5.9)', () => {
+  it('restricted comes from the STORED denylist, never from uploader state — a connection with no cycle yet is still restricted', () => {
+    const c = conn('c_a', { deniedRepos: ['github.com/o/r', NO_REPO_KEY] })
+    const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
+      boundary: null, prehistorySessions: null, canForget: false, resync: null, rulesHash: '',
+    })
+    expect(entry.restricted).toBe(true)
+    expect(entry.deniedCount).toBe(2)
+  })
+
+  it('an unrestricted connection reports restricted:false and deniedCount:0', () => {
+    const c = conn('c_a', { deniedRepos: [] })
+    const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
+      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '',
+    })
+    expect(entry.restricted).toBe(false)
+    expect(entry.deniedCount).toBe(0)
+  })
+
+  it('never leaks the denylist itself — only the count', () => {
+    const c = conn('c_a', { deniedRepos: ['github.com/secret/repo', NO_REPO_KEY] })
+    const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
+      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '',
+    })
+    expect(JSON.stringify(entry)).not.toContain('secret')
+    expect((entry as unknown as Record<string, unknown>).deniedRepos).toBeUndefined()
+  })
+
+  it('never leaks the token', () => {
+    const c = conn('c_a', { token: 'super-secret-token' })
+    const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
+      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '',
+    })
+    expect(JSON.stringify(entry)).not.toContain('super-secret-token')
+  })
+
+  it('centralTooOld is the complement of canForget, and a network flap cannot flip it — it is passed in verbatim', () => {
+    const c = conn('c_a')
+    expect(buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: false, resync: null, rulesHash: '' }).centralTooOld).toBe(true)
+    expect(buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '' }).centralTooOld).toBe(false)
+  })
+
+  it('boundary and prehistorySessions pass through the local honesty markers verbatim, including null (unknowable) vs 0', () => {
+    const c = conn('c_a')
+    const withUnknown = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '' })
+    expect(withUnknown.boundary).toBeNull()
+    expect(withUnknown.prehistorySessions).toBeNull()
+    const withZero = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: '', prehistorySessions: 0, canForget: true, resync: null, rulesHash: '' })
+    expect(withZero.boundary).toBe('')
+    expect(withZero.prehistorySessions).toBe(0)
+  })
+
+  it('resync passes through the live progress verbatim', () => {
+    const c = conn('c_a')
+    const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
+      boundary: null, prehistorySessions: null, canForget: true,
+      resync: { phase: 'forget', done: 40, total: 120 }, rulesHash: '',
+    })
+    expect(entry.resync).toEqual({ phase: 'forget', done: 40, total: 120 })
+  })
+
+  it('pendingRules is true when the denylist changed since the last persisted rulesHash', () => {
+    const c = conn('c_a', { deniedRepos: ['github.com/o/r', NO_REPO_KEY] })
+    // rulesHash '' reads as denialSignature([]) (team-rules.ts rule 2) — the persisted state has
+    // never seen ANY denylist, so the current one (non-empty) is a pending change.
+    const entry = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '' })
+    expect(entry.pendingRules).toBe(true)
+  })
+
+  it('pendingRules is false once the persisted rulesHash matches the current denylist', () => {
+    const c = conn('c_a', { deniedRepos: [] })
+    // An empty denylist matches the '' sentinel (both read as denialSignature([])) — nothing
+    // pending for a connection that was never restricted.
+    const entry = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '' })
+    expect(entry.pendingRules).toBe(false)
+  })
+})
 
 describe('aggregateConnectionStatuses — the top-level status the pill reads', () => {
   it('no connections aggregates to a fresh/unknown status', () => {

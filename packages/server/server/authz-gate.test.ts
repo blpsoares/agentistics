@@ -28,6 +28,7 @@ describe('public route allowlist', () => {
       '/api/iam/me',
       '/api/iam/status',
       '/api/team/agent',
+      '/api/team/forget',
       '/api/team/ingest',
       '/api/team/leave',
       '/api/team/login',

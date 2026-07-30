@@ -27,6 +27,14 @@ import { safeReadJson } from './utils'
 import { migrateTeamStateOnce, convertSentStateV1, type SentStateV2 } from './team-migrate'
 import { readJsonLimited, LIMITS } from './limits'
 import type { ServerProject } from './data'
+import {
+  normalizeDenied, hasRestrictions, buildPathRepoIndex, filterShared, sharedSessionIds,
+  filterSharedWorkflows, attributionBoundary, buildSplitStatsCache,
+  type PathRepoIndex, type DeniedLedger,
+} from './share-rules'
+import { parseCapabilities, centralCanForget } from './team-capabilities'
+import { planRulesReconcile, computeLedger, loadRulesState, saveRulesState } from './team-rules'
+import { runForgetSequence, loadForgetJournal, type ForgetJournal, type ForgetProgress } from './team-forget-client'
 
 /** This machine's local workflow runs (computed metrics only — no chat/prompt text). Fallback
  *  source when `buildApiResponse` could not be run (see `buildPushContext`). Mirrors the
@@ -59,10 +67,71 @@ const _centralIntervalSec = new Map<string, number>()
  *  reads this cached value instead of doing its own blocking probe (see GET /api/team/status in
  *  team-connections.ts). Absent = never successfully measured. */
 const _latencyMs = new Map<string, number>()
+/** The capabilities most recently learned from each central's `/api/team/policy`, per connection.
+ *  Same rule as `_latencyMs`: only a SUCCESSFUL fetch updates this — a network flap or a central
+ *  that momentarily 404s must not erase a previously learned `forget.sessions`, or one blip would
+ *  disable the user's rules editor. Absent = never successfully learned. */
+const _centralCapabilities = new Map<string, string[]>()
 /** Connection ids with a push cycle currently in flight. */
 const _running = new Set<string>()
 /** Connection ids where a change arrived while `_running` — re-run instead of dropping it. */
 const _pendingTrigger = new Set<string>()
+/** Whether each connection currently has a declared denylist — refreshed on every
+ *  `pushOnceDetailed` call. Read by `scheduleOnChangeTrigger`/`scheduleConnectionCycle`, which
+ *  only ever see a connId, so the activity-heartbeat defenses in §5.3.4 can reach them. */
+const _restrictedConn = new Map<string, boolean>()
+/** Live progress of a connection's retroactive removal, for Task 6's status route (and the
+ *  Settings progress strip). Present only WHILE a sequence runs — absence means "not resyncing",
+ *  never "finished with 0". */
+const _resyncProgress = new Map<string, ForgetProgress>()
+/** Connections whose `member.resync_started` notification has fired and whose `member.resync_done`
+ *  has not. The transition guard matters: without it a central that is down (or too old) would
+ *  raise a "removing…" toast on EVERY cycle, forever, for the same removal. */
+const _resyncNotified = new Set<string>()
+/** Journals found open at boot (`replayForgetJournals`), keyed by connection: what a killed
+ *  process already promised a central. Consumed by the next cycle, cleared once the removal
+ *  completes. */
+const _resumeForget = new Map<string, ForgetJournal>()
+/**
+ * sha256 over `{statsCache, workflows}` of the last payload the CENTRAL ACTUALLY ACCEPTED for this
+ * connection — recorded on every successful push that carries one (both the empty-delta keep-alive
+ * path AND batch 0 of the batch path, restricted or not), so this always reflects what the central
+ * holds. Only ever CONSULTED for a restricted connection (the keep-alive dedup in §5.3.4); an
+ * unrestricted one keeps pushing its keep-alive every cycle regardless of what is recorded here.
+ *
+ * MUST be updated on every writer, not only the restricted empty-delta branch: a member that goes
+ * restricted → unrestricted → restricted again pushes an unsplit cache in between (the batch path,
+ * because un-blocking creates session deltas). If that unsplit push does not update this map, the
+ * SECOND restricted cycle's split cache can come out byte-identical to what was memoized from
+ * BEFORE the unsplit push and get wrongly suppressed — stranding the denied repo's volume in the
+ * cache the central already holds, permanently (reproduced end-to-end against a live central; see
+ * the Task 3 fix report).
+ */
+const _lastPushedPayloadHash = new Map<string, string>()
+
+/**
+ * Consecutive suppressed (unchanged, restricted, empty-delta) cycles for a connection. Bounds how
+ * long the §5.3.4 dedup may go without actually contacting the central — a suppressed cycle sends
+ * no request at all, so a revoked token, a wiped central, or a central that is simply down would
+ * otherwise never be detected for as long as a quiet blocked repo's payload stays unchanged (the
+ * pill reads healthy forever, because nothing is ever sent that could disprove it). At
+ * `MAX_SUPPRESSED_STREAK + 1` the cycle forces a real push regardless of the unchanged payload,
+ * whose actual response drives `markPushSuccess`/auth handling exactly like any other push.
+ *
+ * This does NOT reopen the correlation leak the dedup exists to close: that leak is a push's
+ * TIMING correlating with the user's LOCAL activity (a push firing within ~2s of a file write
+ * reveals session boundaries and working hours). A forced push that fires once every N cycles
+ * regardless of what happened locally carries none of that — its timing is a function of the
+ * wall clock (plus the connection's existing ±20% cadence jitter), never of the user's activity.
+ * What must never happen is making the forced push conditional on anything local.
+ */
+const _suppressedStreak = new Map<string, number>()
+
+/** N in "suppress at most N in a row" above. At the median 30s push interval this forces a real
+ *  contact roughly every 30s * 40 = 1200s = 20 minutes — long enough that a legitimately quiet
+ *  blocked repo still mostly stays quiet, short enough that a revoked token or dead central is
+ *  caught well within the same working session rather than surviving indefinitely. */
+export const MAX_SUPPRESSED_STREAK = 40
 
 function hostOf(endpoint: string): string {
   try { return new URL(endpoint).host || endpoint } catch { return endpoint }
@@ -125,6 +194,22 @@ export interface UploaderStatus {
 /** A fresh, empty status — what a connection reports before its first cycle ever runs. */
 export function emptyStatusFor(_connId: string): UploaderStatus {
   return { lastSuccessAt: null, errKind: null, latencyMs: null }
+}
+
+/** Whether this connection's central has ever advertised `forget.sessions` — Task 6's status
+ *  route reads this to report `canForget`. `false` before any successful policy fetch, exactly
+ *  like `emptyStatusFor`'s `latencyMs: null` — absence is not a negative capability, just an
+ *  unmeasured one, but the rules editor treats "unmeasured" and "no" identically (fail closed:
+ *  it must never offer a control the central may not be able to honor). */
+export function connectionCanForget(connId: string): boolean {
+  return centralCanForget(_centralCapabilities.get(connId) ?? [])
+}
+
+/** How far this connection's retroactive removal has got, or `null` when none is running. The
+ *  phase is `'forget'` while batches are being acked and `'push'` while the rebuilt statsCache is
+ *  being delivered — the two halves of §6.1 the user can actually be told apart. */
+export function getResyncProgress(connId: string): ForgetProgress | null {
+  return _resyncProgress.get(connId) ?? null
 }
 
 /** A `lastSuccessAt` this stale relative to a connection's own known interval, with NO error
@@ -295,9 +380,18 @@ export async function removeConnection(
 // Pure helpers (unit-tested)
 // ---------------------------------------------------------------------------
 
-/** Deterministic content fingerprint of a session (stable JSON). */
+/**
+ * The sent-state key for one session.
+ *
+ * A real digest, not the serialized session: the v1 format stored `JSON.stringify(session)` as its
+ * value, which made `team-sent.json` roughly the size of the consolidate store and re-parsed it
+ * inside the batch loop — N copies on disk with N connections. `createHash` over that exact same
+ * string is what lets `convertSentStateV1` upgrade an existing file offline and EXACTLY, so the
+ * migration costs zero re-pushes (§5.4). Do not change what is fed to the hash without changing
+ * that converter: they are two halves of one identity.
+ */
 export function sessionHash(s: SessionMeta): string {
-  return JSON.stringify(s)
+  return createHash('sha256').update(JSON.stringify(s)).digest('hex')
 }
 
 export interface SentState {
@@ -365,6 +459,38 @@ export async function saveSentState(connId: string, state: SentState): Promise<v
   await writeFile(teamSentFile(connId), JSON.stringify(next, null, 2), 'utf-8')
 }
 
+/**
+ * Record workflow run ids the central has ACCEPTED into this connection's sent-state.
+ *
+ * `sent.runIds` is what `planRulesReconcile` reads as `sentRunIds`, and it is the only thing that
+ * can ever name a run for withdrawal. Without this writer the list stayed `[]` forever, so
+ * `forgetRuns` was always empty and the whole run-withdrawal path — the plan field, the journal's
+ * `runIds`, the runs-only refusal and the per-ack drop in team-forget-client.ts — was dead code.
+ * The bounded consequence is narrow but real: the central deletes runs by session, so a denied
+ * session named in `forgetIds` takes its runs with it, but a run pushed for a session that was
+ * never pushed as a session document (an `archiveMode: 'off'` machine ships workflows with zero
+ * session docs) is unwithdrawable and nothing would ever notice.
+ *
+ * Called only AFTER a response the central accepted — the same rule `_lastPushedPayloadHash`
+ * follows. Recording a run before the POST succeeded would name it as "the central holds this"
+ * when it does not, and the withdrawal that later drops it would be the only correction.
+ *
+ * Merges rather than replaces: a run stays named until a completed forget sequence drops it.
+ * Best-effort — a failed write just means the next accepted push records it again.
+ */
+async function recordSentRunIds(connId: string, runs: readonly WorkflowRun[]): Promise<void> {
+  const ids = runs.map(r => r.runId).filter(Boolean)
+  if (ids.length === 0) return
+  try {
+    const current = await loadRawSentState(connId)
+    const merged = unionIds(current.runIds, ids)
+    if (merged.length === current.runIds.length) return // nothing new
+    await writeFile(teamSentFile(connId), JSON.stringify({ version: 2, hashes: current.hashes, runIds: merged }, null, 2), 'utf-8')
+  } catch (err) {
+    console.warn(`[team-uploader] could not record pushed run ids for ${connId}:`, err instanceof Error ? err.message : String(err))
+  }
+}
+
 const BATCH_SIZE = 200
 
 // ---------------------------------------------------------------------------
@@ -394,6 +520,11 @@ export interface PushCycleContext {
   storedSessions: SessionMeta[]
   projects: ServerProject[]
   workflows: WorkflowRun[]
+  /** path → repo key, learned from BOTH `liveSessions`/`storedSessions` and `projects` — see
+   *  `buildPathRepoIndex`'s doc comment for why the project seed is load-bearing. Used to resolve
+   *  the repo of a session whose own `git_remote` is empty (only the Copilot adapter sets it
+   *  among the non-Claude adapters). */
+  index: PathRepoIndex
   builtAt: number
   /** Ingest fetch timeout override, in ms — injectable for tests so a "central that never
    *  responds" regression test doesn't have to wait out the real production timeout. Production
@@ -466,7 +597,14 @@ export async function buildPushContext(deps: PushContextDeps = {}): Promise<Push
   const _readMemberWorkflows = deps.readMemberWorkflows ?? readMemberWorkflows
   const workflows = resp?.workflows ?? await _readMemberWorkflows()
 
-  return { realStatsCache, liveSessions, storedSessions, projects, workflows, builtAt: Date.now() }
+  // Learned from BOTH sources on purpose: only copilot.ts among the non-Claude adapters sets
+  // git_remote, and data.ts's backfill runs against the Claude-only array before the harness
+  // merge — so the store carries every Codex/Gemini/Kimi/agy session with no remote, permanently.
+  // A directory used exclusively by a non-Claude harness has no session to learn from; the
+  // project record does. Anything still unresolved lands in NO_REPO_KEY, which is fail-closed.
+  const index = buildPathRepoIndex([...liveSessions, ...storedSessions], projects)
+
+  return { realStatsCache, liveSessions, storedSessions, projects, workflows, index, builtAt: Date.now() }
 }
 
 /**
@@ -497,6 +635,22 @@ export async function getPushContext(deps: PushContextDeps = {}): Promise<PushCy
  *  (which would start the real 5s supervisor against the developer's real preferences file). */
 export function invalidatePushContext(): void {
   _cachedContext = null
+}
+
+/**
+ * The last-built push-cycle context, or `null` when none has been built (or it was invalidated).
+ * NEVER builds one, and deliberately ignores the TTL — this is for read-only, display-only
+ * consumers that want whatever the push cycle last computed and can honestly say "unknowable"
+ * otherwise.
+ *
+ * Its reason to exist: `GET /api/team/status` is polled by the browser every ~5s, while
+ * `notifyDataChanged()` calls `invalidatePushContext()` on EVERY local file change. During active
+ * coding the TTL therefore protects nothing, and a status handler calling `getPushContext()` runs
+ * a full `buildApiResponse()` — which also WRITES the consolidate store — plus
+ * `loadConsolidated()` at the browser's poll cadence instead of the connection's push interval.
+ */
+export function peekPushContext(): PushCycleContext | null {
+  return _cachedContext
 }
 
 // ---------------------------------------------------------------------------
@@ -571,7 +725,7 @@ async function resolveConnectionUser(
 export async function pushOnceDetailed(
   conn: TeamConnection,
   ctx: PushCycleContext,
-  deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
+  deps: { updateTeamConfig?: typeof updateTeamConfig; sealed?: DeniedLedger } = {},
 ): Promise<PushOnceResult> {
   if (!conn.endpoint) {
     return { count: 0 }
@@ -585,25 +739,101 @@ export async function pushOnceDetailed(
   const ingestTimeoutMs = ctx.ingestTimeoutMs ?? DEFAULT_INGEST_TIMEOUT_MS
 
   try {
+    const denied = normalizeDenied(conn.deniedRepos)
+    const restricted = hasRestrictions(conn.deniedRepos)
+    // Tracked so the scheduling functions (scheduleOnChangeTrigger, scheduleConnectionCycle),
+    // which only ever see a connId, can also honor this connection's restriction (§5.3.4).
+    _restrictedConn.set(conn.id, restricted)
+
+    // BEFORE selectDeltas — see the class doc. A denied session that reached nextSent would be
+    // invisible to every later push, so un-blocking the repo would never send it.
+    const shared = restricted ? filterShared(ctx.storedSessions, denied, ctx.index) : ctx.storedSessions
     const sent = await loadSentState(conn.id)
-    const { toSend, nextSent } = selectDeltas(ctx.storedSessions, sent)
-    // The member's own statsCache (aggregated Claude history) is pushed so the central can
-    // reproduce exact totals; it changes as activity accrues even when no new sessions exist.
-    const statsCache = ctx.realStatsCache ?? undefined
-    // Local workflow runs (computed metrics only — no chat/prompt text, same privacy contract
-    // as sessions). Pushed as a full set each cycle; the central upserts idempotently by
-    // runId, so this never double-counts.
-    const workflows = ctx.workflows
+    const { toSend, nextSent } = selectDeltas(shared, sent)
+
+    // The DECLARED rule selects the cache, never a count comparison (R3): `filtered.length <
+    // all.length` is false on a cold or empty store and would push the real full-history cache
+    // with the denied repo's recent days in it.
+    let statsCache: StatsCache | undefined
+    if (!restricted) {
+      // The member's own statsCache (aggregated Claude history) is pushed so the central can
+      // reproduce exact totals; it changes as activity accrues even when no new sessions exist.
+      statsCache = ctx.realStatsCache ?? undefined
+    } else if (ctx.realStatsCache) {
+      const boundary = attributionBoundary(ctx.realStatsCache)
+      // `liveSessions`, not storedSessions: buildSplitStatsCache requires that `real` was
+      // supplemented from the SAME array passed as allStored. Passing the store makes the split
+      // refuse and the machine push no cache at all.
+      const split = buildSplitStatsCache({
+        real: ctx.realStatsCache,
+        allStored: ctx.liveSessions,
+        shared: filterShared(ctx.liveSessions, denied, ctx.index),
+        boundary,
+        sealed: deps.sealed ?? {},
+      })
+      // null = the split cannot be made faithfully. Push NO cache — never the unsplit one. A
+      // missing cache is recoverable; a leaked one is not (§4.4).
+      statsCache = split ?? undefined
+    }
+
+    // Fail closed: a run whose session is not in the shared set is dropped, INCLUDING one whose
+    // session is simply unknown locally. WorkflowRun carries name, phases, agents[].label and
+    // totals — task descriptions and cost from the blocked repo.
+    const workflows = restricted
+      ? filterSharedWorkflows(ctx.workflows, sharedSessionIds(shared))
+      : ctx.workflows
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
     if (conn.token) {
       headers['Authorization'] = `Bearer ${conn.token}`
     }
 
+    // sha256 over what this cycle WOULD attach as the cache payload, regardless of which path
+    // ends up sending it — the batch path (below) attaches the identical `{statsCache, workflows}`
+    // pair to batch 0, and both writers must agree on exactly this formula or the memo they share
+    // desynchronizes (see `_lastPushedPayloadHash`'s doc comment).
+    const payloadDigest = createHash('sha256').update(JSON.stringify({ statsCache, workflows })).digest('hex')
+
     if (toSend.length === 0) {
       // No session deltas — still push the statsCache/workflows on their own so totals
       // and workflow runs stay fresh.
       if (statsCache || workflows.length > 0) {
+        // A restricted connection with genuinely nothing new must not still POST every cycle:
+        // each request stamps `lastSeenAt` on the central at ~2s resolution, from which session
+        // boundaries, working hours and intensity of the HIDDEN work are reconstructable from
+        // request timing alone, even though no content ever crosses the wire (§5.3.4). Skip when
+        // this cycle's payload is byte-identical to the last one actually ACCEPTED for this
+        // connection (by either this branch or the batch path below). Unrestricted connections
+        // are unaffected — a steady keep-alive is not a privacy leak when nothing is hidden.
+        if (restricted && _lastPushedPayloadHash.get(conn.id) === payloadDigest) {
+          const streak = (_suppressedStreak.get(conn.id) ?? 0) + 1
+          if (streak <= MAX_SUPPRESSED_STREAK) {
+            // Suppressed, NOT marked as success: we never contacted the central this cycle, so
+            // claiming success here would let a revoked token, a wiped central, or a central that
+            // is simply down go undetected for as long as the payload stays unchanged — exactly
+            // the quiet-blocked-repo case this dedup exists to keep quiet. `markPushSuccess` is
+            // only earned by an actual response (see the forced push below and every other path
+            // in this function).
+            _suppressedStreak.set(conn.id, streak)
+            return { count: 0 }
+          }
+          // The bound elapsed: force a real push even though nothing changed, purely to re-verify
+          // liveness. This does NOT reopen the §5.3.4 correlation leak that dedup exists to close
+          // — that leak is about a push's TIMING correlating with the user's local activity (a
+          // push firing within ~2s of a file write reveals session boundaries and working hours).
+          // A push that fires once every MAX_SUPPRESSED_STREAK cycles regardless of what happened
+          // locally carries no such correlation: its timing is a function of the wall clock (plus
+          // the existing ±20% jitter on the connection's cadence), never of the user's activity.
+          // Falls through to the normal fetch below, whose real response drives
+          // markPushSuccess/auth handling exactly like any other push.
+        }
+        // Reached whenever a real push is about to be attempted: unrestricted, a restricted
+        // connection whose payload actually changed, or a restricted connection whose suppression
+        // bound just elapsed. Reset the streak NOW, before the network call — an ATTEMPT is what
+        // resets it, not a successful one: a failed forced push must not leave the streak pinned
+        // past the bound, or every later cycle would force another attempt instead of going back
+        // to suppressing for up to MAX_SUPPRESSED_STREAK cycles.
+        if (restricted) _suppressedStreak.set(conn.id, 0)
         try {
           const res = await fetch(`${endpoint}/api/team/ingest`, {
             method: 'POST',
@@ -612,8 +842,18 @@ export async function pushOnceDetailed(
             signal: AbortSignal.timeout(ingestTimeoutMs),
           })
           // A reachable central (even a non-2xx that isn't auth) counts as contact for the pill.
-          if (res.ok) { markPushSuccess(conn.id); clearPushError(conn.id); void notifyPushRecovered(conn) }
-          else if (res.status === 401 || res.status === 403) fireHandleAuthError(conn, res.status)
+          if (res.ok) {
+            markPushSuccess(conn.id); clearPushError(conn.id); void notifyPushRecovered(conn)
+            // Only memoize once the central actually accepted it — recording it BEFORE a
+            // known-successful POST would permanently swallow a payload whose first attempt
+            // failed (network error or non-2xx): every later cycle with the same unchanged
+            // content would then match the memoized digest and never retry, silently losing that
+            // statsCache/workflow update until unrelated content happens to change.
+            _lastPushedPayloadHash.set(conn.id, payloadDigest)
+            // Same rule, same moment: the runs this payload carried are now held by the central,
+            // so they become withdrawable.
+            await recordSentRunIds(conn.id, workflows)
+          } else if (res.status === 401 || res.status === 403) fireHandleAuthError(conn, res.status)
         } catch (e) {
           warnPushError(conn.id, e instanceof Error ? e.message : String(e))
           void notifyPushError(conn, 'net')
@@ -662,6 +902,22 @@ export async function pushOnceDetailed(
       markPushSuccess(conn.id)
       clearPushError(conn.id)
       void notifyPushRecovered(conn)
+      if (i === 0) {
+        // Batch 0 carried the SAME `{statsCache, workflows}` pair the empty-delta branch above
+        // would have attached — and the central just accepted it. Recording it here (restricted
+        // OR not) is what keeps the memo meaning "what the central last accepted" rather than
+        // "the last payload the OTHER branch happened to send": without this, a restricted →
+        // unrestricted → restricted transition pushes its unsplit cache through THIS path, the
+        // memo is never updated, and a later restricted cycle whose split cache happens to match
+        // what was memoized from BEFORE this unsplit push gets wrongly suppressed — stranding the
+        // denied repo's volume in the cache the central already holds (reproduced end-to-end
+        // against a live central).
+        _lastPushedPayloadHash.set(conn.id, payloadDigest)
+        // Batch 0 is also the batch that carried `workflows` — the central accepted it, so those
+        // runs are now withdrawable. Recorded here rather than after the loop for the same reason
+        // the memo is: only an accepted response earns it.
+        await recordSentRunIds(conn.id, workflows)
+      }
     }
 
     return { count: pushed }
@@ -718,22 +974,27 @@ export async function acquireSlot(): Promise<() => void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch the central policy: push interval + the central's data instanceId.
- * Falls back to the default interval / null id on any network or parse error.
+ * Fetch the central policy: push interval + the central's data instanceId + its advertised
+ * capabilities (Task 2's `parseCapabilities`, so Task 6's status route can report `canForget`).
+ * Falls back to the default interval / null id / empty capabilities on any network or parse
+ * error — the CALLER is responsible for not clobbering a previously learned capability list with
+ * this empty fallback (same rule the latency cache already follows), because a plain fetch
+ * failure must not disable the rules editor over one flap.
  */
-async function fetchCentralPolicy(endpoint: string): Promise<{ intervalSec: number; instanceId: string | null; latencyMs: number | null }> {
+async function fetchCentralPolicy(endpoint: string): Promise<{ intervalSec: number; instanceId: string | null; latencyMs: number | null; capabilities: string[] }> {
   const t0 = Date.now()
   try {
     const res = await fetch(`${endpoint}/api/team/policy`, { signal: AbortSignal.timeout(5_000) })
-    if (!res.ok) return { intervalSec: PUSH_INTERVAL.DEFAULT_SEC, instanceId: null, latencyMs: null }
+    if (!res.ok) return { intervalSec: PUSH_INTERVAL.DEFAULT_SEC, instanceId: null, latencyMs: null, capabilities: [] }
     const latencyMs = Date.now() - t0
-    const json = await res.json() as { pushIntervalSec?: unknown; instanceId?: unknown }
+    const json = await res.json() as { pushIntervalSec?: unknown; instanceId?: unknown; capabilities?: unknown }
     const sec = typeof json.pushIntervalSec === 'number' ? json.pushIntervalSec : PUSH_INTERVAL.DEFAULT_SEC
     const instanceId = typeof json.instanceId === 'string' ? json.instanceId : null
+    const capabilities = parseCapabilities(json.capabilities)
     // Honor express intervals (the central may dictate below the normal 15s floor).
-    return { intervalSec: clampPushInterval(sec, PUSH_INTERVAL.EXPRESS_MIN_SEC), instanceId, latencyMs }
+    return { intervalSec: clampPushInterval(sec, PUSH_INTERVAL.EXPRESS_MIN_SEC), instanceId, latencyMs, capabilities }
   } catch {
-    return { intervalSec: PUSH_INTERVAL.DEFAULT_SEC, instanceId: null, latencyMs: null }
+    return { intervalSec: PUSH_INTERVAL.DEFAULT_SEC, instanceId: null, latencyMs: null, capabilities: [] }
   }
 }
 
@@ -764,6 +1025,116 @@ async function reconcileSyncState(connId: string, endpoint: string, token: strin
     await writeFile(teamSyncFile(connId), JSON.stringify({ sig }), 'utf-8')
   } catch { /* best-effort — worst case we reconcile again next cycle */ }
   if (prev?.sig) console.info(`[team-uploader] ${connId} central sync signature changed — re-pushing full history`)
+}
+
+/**
+ * Compute this connection's rules plan (the denial-based shrink detector + the seal ledger) and
+ * persist the resulting state. PURE decision, impure shell: `planRulesReconcile` (team-rules.ts)
+ * does the whole computation; this function only gathers its inputs from the shared push-cycle
+ * context and this connection's own sent-state/rules-state files, then writes the result back.
+ *
+ * `runForgetSequence` (team-forget-client.ts) is what actually performs the removal against
+ * `rulesPlan.forgetIds`/`forgetRuns`; this function only computes the plan and logs it.
+ *
+ * `RulesState` holds two things with OPPOSITE persistence rules, and they are split here:
+ *
+ * - **The seal ledger (`sealed`/`pending`/`boundary`) is written on EVERY cycle**, unconditionally
+ *   and best-effort, exactly as it always was. It is NOT re-derivable: `advanceSeal` seals out of
+ *   `prev.pending` — the PERSISTED value, not the freshly measured one — and its CALLER CONTRACT
+ *   (share-rules.ts) is that it must run on every push cycle without skipping one, because a day
+ *   only seals while it is still in `prev.pending` and the boundary has just passed it. Computing
+ *   the ledger in memory and discarding it IS a skipped cycle from the ledger's point of view, and
+ *   the case where that happens is the COMMON one: a central that is down, rejecting, or too old
+ *   to forget keeps the removal failing for hours. The day would enter `pending` only in memory,
+ *   the boundary would cross it, and once its sessions age out of the store the seal is
+ *   unrecoverable — the blocked repository's volume for that day then ships inside the
+ *   undecomposable rollup.
+ * - **The rules hash (and the `sharedIds` snapshot paired with it) is written only once the
+ *   removal it implies has actually happened** — `runConnectionPushCycle` does that. The hash is
+ *   what suppresses re-detection, so persisting it after a failed removal would make the machine
+ *   stop asking with the data still on the central. Unlike the ledger, it IS re-derivable: the
+ *   next cycle recomputes the same hash from the same denylist.
+ */
+async function reconcileRulesFor(conn: TeamConnection, ctx: PushCycleContext) {
+  const prevRules = await loadRulesState(conn.id)
+  const rawSent = await loadRawSentState(conn.id)
+  const rulesPlan = planRulesReconcile({
+    deniedRepos: conn.deniedRepos,
+    sentHashes: rawSent.hashes,
+    sentRunIds: rawSent.runIds,
+    storedSessions: ctx.storedSessions,
+    liveSessions: ctx.liveSessions,
+    workflows: ctx.workflows,
+    index: ctx.index,
+    real: ctx.realStatsCache,
+    prev: prevRules,
+  })
+  if (rulesPlan.forgetIds.length > 0 || rulesPlan.forgetRuns.length > 0) {
+    console.info(
+      `[team-uploader] ${conn.id} denylist excludes ${rulesPlan.forgetIds.length} previously-sent ` +
+      `session(s) and ${rulesPlan.forgetRuns.length} workflow run(s) the central may still hold`,
+    )
+  }
+  // The ledger half, now — before anything that can fail, and regardless of what the removal does
+  // next. `prevRules.rulesHash`/`sharedIds` are carried through UNCHANGED so this write can never
+  // claim a removal happened; only the success path below replaces them.
+  await saveRulesState(conn.id, {
+    ...prevRules,
+    boundary: rulesPlan.next.boundary,
+    sealed: rulesPlan.next.sealed,
+    pending: rulesPlan.next.pending,
+  })
+  return rulesPlan
+}
+
+/** Union of two id lists, order-preserving and deduped. */
+function unionIds(a: readonly string[], b: readonly string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const id of [...a, ...b]) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+/**
+ * Boot replay (§6.1 step d). A journal left open by a killed process names exactly what a central
+ * was already promised, and nothing else would ever notice it: the sync signature did not change,
+ * so `reconcileSyncState` triggers no re-push, and the sent-state advance for the unacked half may
+ * itself have been lost. Read each connection's journal here and hand it to that connection's next
+ * cycle, which runs the sequence under the push lock like any other.
+ *
+ * A replay is idempotent — deleting an already-deleted id returns `deleted: 0` (team-forget.ts is
+ * explicit about this) — so re-naming an id the central already removed costs one request and
+ * nothing else. Do NOT "optimize" the replay away on that basis: being a no-op in the common case
+ * is what makes it safe, not what makes it pointless.
+ *
+ * `deps` is injectable so a test never reads the developer's real preferences file. Never throws.
+ */
+export async function replayForgetJournals(
+  deps: { readPreferences?: typeof readPreferences; loadForgetJournal?: typeof loadForgetJournal } = {},
+): Promise<number> {
+  try {
+    const prefs = await (deps.readPreferences ?? readPreferences)()
+    const _loadForgetJournal = deps.loadForgetJournal ?? loadForgetJournal
+    let queued = 0
+    for (const conn of prefs.team?.connections ?? []) {
+      const journal = await _loadForgetJournal(conn.id)
+      if (!journal) continue
+      _resumeForget.set(conn.id, journal)
+      queued++
+      console.info(
+        `[team-uploader] ${conn.id} found an open removal journal (started ${journal.startedAt}) — ` +
+        `${journal.ids.length} session(s) will be re-named on the next cycle`,
+      )
+    }
+    return queued
+  } catch (err) {
+    console.warn('[team-uploader] could not replay removal journals:', err instanceof Error ? err.message : String(err))
+    return 0
+  }
 }
 
 // Push-on-change: coalesce a burst of local file changes into a single push per connection, and
@@ -799,12 +1170,25 @@ function teardownConnection(connId: string): void {
   _netErrStreak.delete(connId)
   _centralIntervalSec.delete(connId)
   _latencyMs.delete(connId)
+  _centralCapabilities.delete(connId)
+  _restrictedConn.delete(connId)
+  _lastPushedPayloadHash.delete(connId)
+  _suppressedStreak.delete(connId)
+  _resyncProgress.delete(connId)
+  _resyncNotified.delete(connId)
+  _resumeForget.delete(connId)
 }
 
 function scheduleConnectionCycle(connId: string, delaySec: number): void {
   const existing = _chainTimer.get(connId)
   if (existing) clearTimeout(existing)
-  const t = setTimeout(() => { void runConnectionCycle(connId) }, Math.max(0, delaySec) * 1_000)
+  // ±20% jitter on a restricted connection's periodic delay only: a perfectly regular cadence is
+  // itself a timing signal an observer could correlate with activity inside the hidden repo
+  // (§5.3.4). An unrestricted connection has nothing to hide and keeps its exact interval.
+  const jitteredSec = _restrictedConn.get(connId)
+    ? delaySec * (1 + (Math.random() * 0.4 - 0.2))
+    : delaySec
+  const t = setTimeout(() => { void runConnectionCycle(connId) }, Math.max(0, jitteredSec) * 1_000)
   t.unref?.()
   _chainTimer.set(connId, t)
 }
@@ -831,13 +1215,100 @@ async function runConnectionPushCycle(conn: TeamConnection, deps: RunPushCycleDe
     _centralIntervalSec.set(conn.id, nextIntervalSec)
     // Cache the round-trip for GET /api/team/status (team-connections.ts), which must never do
     // its own blocking probe. Only a SUCCESSFUL fetch updates it — a failed/timed-out attempt
-    // leaves the last known good value in place rather than overwriting it with noise.
-    if (policy.latencyMs != null) _latencyMs.set(conn.id, policy.latencyMs)
-    // Auto-heal a sent-state that no longer matches this central BEFORE pushing, so this cycle
-    // re-sends the full history when needed.
-    await reconcileSyncState(conn.id, endpoint, conn.token ?? '', policy.instanceId)
+    // leaves the last known good value in place rather than overwriting it with noise. The
+    // capability list follows the exact same rule (policy.latencyMs is non-null iff the fetch
+    // actually succeeded) — a flaky/old central must not erase a previously learned
+    // `forget.sessions` and disable the rules editor over one network blip.
+    if (policy.latencyMs != null) {
+      _latencyMs.set(conn.id, policy.latencyMs)
+      _centralCapabilities.set(conn.id, policy.capabilities)
+    }
     const ctx = deps.ctx ?? await getPushContext()
-    await pushOnceDetailed({ ...conn, endpoint }, ctx)
+    // Rules and shrink are LOCAL facts and are evaluated unconditionally, before anything that
+    // depends on the central's identity. `reconcileSyncState` opens with `if (!instanceId) return`
+    // and `fetchCentralPolicy` reports a null instanceId for every non-OK response, parse failure,
+    // timeout and every AGENTISTICS_INGEST_ONLY central (which 404s /api/team/policy by
+    // construction) — so putting the rules check behind that guard would let a user on an older or
+    // flaky central block a repo, see a green pill, and have the removal never run (R18).
+    const rulesPlan = await reconcileRulesFor(conn, ctx)
+
+    // A journal left open by a killed process is unioned into this cycle's plan — see
+    // `replayForgetJournals`. The union can only ever ADD ids the central was already promised.
+    const resume = _resumeForget.get(conn.id)
+    const forgetIds = resume ? unionIds(rulesPlan.forgetIds, resume.ids) : rulesPlan.forgetIds
+    const forgetRuns = resume ? unionIds(rulesPlan.forgetRuns, resume.runIds) : rulesPlan.forgetRuns
+    const needsForget = forgetIds.length > 0 || forgetRuns.length > 0
+
+    // Step 4 of §6.1: the sig reconcile plus the push that replaces the aggregate the delete just
+    // invalidated, run INSIDE the sequence so `memberStats` is never absent (§6.2) and so the
+    // journal can stay open until the cache actually lands (§6.3).
+    let didPush = false
+    const syncAndPush = async (): Promise<boolean> => {
+      didPush = true
+      await reconcileSyncState(conn.id, endpoint, conn.token ?? '', policy.instanceId)
+      // `rulesPlan.next.sealed`, never `{}`: the ledger's ONLY consumer is the split cache's
+      // subtraction against `real`'s rollup rows. A push built with an empty ledger emits a
+      // sealed day's row VERBATIM — the blocked repository's sessions, messages, tokens and hour
+      // buckets — and a sealed day cannot be re-derived once its sessions age out of the store.
+      const res = await pushOnceDetailed({ ...conn, endpoint }, ctx, { sealed: rulesPlan.next.sealed })
+      return !res.error
+    }
+
+    if (needsForget) {
+      // The whole sequence runs under this connection's push lock (`_running`, taken by
+      // `runConnectionCycle`) with `_pendingTrigger` deferral, so a debounced push cannot land
+      // after the delete and re-insert exactly what was removed (R27).
+      // Gated on `forgetIds`, not on `needsForget`: a plan naming only workflow runs cannot be
+      // carried out at all (see `runForgetSequence`), so announcing a removal for it would promise
+      // something that is about to be refused.
+      if (forgetIds.length > 0 && connectionCanForget(conn.id) && !_resyncNotified.has(conn.id)) {
+        _resyncNotified.add(conn.id)
+        _notify({ type: 'info', code: 'member.resync_started', meta: notifyMeta(conn, { count: forgetIds.length }) })
+      }
+      _resyncProgress.set(conn.id, { phase: 'forget', done: 0, total: forgetIds.length })
+      const outcome = await runForgetSequence(
+        { ...conn, endpoint },
+        { forgetIds, forgetRuns, rulesHash: rulesPlan.next.rulesHash },
+        {
+          canForget: connectionCanForget,
+          onRevoked: async (id, reason) => { await removeConnection(id, reason) },
+          onProgress: p => { _resyncProgress.set(conn.id, p) },
+          pushRebuiltCache: syncAndPush,
+        },
+      )
+      _resyncProgress.delete(conn.id)
+      if (outcome.ok) {
+        _resumeForget.delete(conn.id)
+        // ONLY now: the rules hash is what suppresses re-detection, so persisting it after a
+        // failed removal would make the machine stop asking while the central still holds the
+        // data. A failed cycle simply re-derives the same plan from the same inputs next time.
+        await saveRulesState(conn.id, rulesPlan.next)
+        if (_resyncNotified.delete(conn.id)) {
+          _notify({ type: 'success', code: 'member.resync_done', meta: notifyMeta(conn, { count: forgetIds.length }) })
+        }
+      } else {
+        console.warn(`[team-uploader] ${conn.id} retroactive removal incomplete: ${outcome.error ?? 'unknown error'}`)
+      }
+    } else {
+      await saveRulesState(conn.id, rulesPlan.next)
+    }
+
+    if (!didPush) {
+      // §5.5b: `reconcileSyncState` CLEARS the sent-state on a signature change, and the
+      // sent-state is the only record of what this connection pushed. Running it after a removal
+      // that did not complete would strand every already-pushed denied session on the central
+      // with no way left to name it — a token rotation changes the sig without deleting anything
+      // there. Skipping it only defers a full re-push, which is recoverable; the removal is
+      // retried (and the reconcile allowed) on the next cycle.
+      if (!needsForget) {
+        await reconcileSyncState(conn.id, endpoint, conn.token ?? '', policy.instanceId)
+      }
+      // The push itself always runs: a central too old to forget, or one that is momentarily
+      // down, must not stop this connection pushing altogether. Same ledger as the sequence's own
+      // push above — this is the branch a machine with nothing to forget takes EVERY cycle, so an
+      // empty ledger here is the common case of the leak, not the rare one.
+      await pushOnceDetailed({ ...conn, endpoint }, ctx, { sealed: rulesPlan.next.sealed })
+    }
     return nextIntervalSec
   } finally {
     release()
@@ -917,13 +1388,20 @@ function startConnectionChain(conn: TeamConnection): void {
  * `removeConnection`'s serialized preferences write, never from a timer, or a GC here could race
  * a concurrent "add connection" write that reintroduces the same id.
  */
-async function supervisorTick(): Promise<void> {
+async function supervisorTick(deps: { readPreferences?: typeof readPreferences } = {}): Promise<void> {
   try {
-    const prefs = await readPreferences()
+    const _readPreferences = deps.readPreferences ?? readPreferences
+    const prefs = await _readPreferences()
     const conns = prefs.team?.connections ?? []
     const liveIds = new Set(conns.map(c => c.id))
 
     for (const c of conns) {
+      // Seeded from CONFIG, not only from a completed push: the gap between a denylist being
+      // declared (or the process starting) and this connection's first push would otherwise
+      // still fan out on every local change and use an unjittered cadence — exactly the moment a
+      // user has just blocked a repo, which is when the timing leak in §5.3.4 matters most. This
+      // tick runs every ~5s, so a freshly-declared restriction is honored well before any push.
+      _restrictedConn.set(c.id, hasRestrictions(c.deniedRepos))
       if (!_activeChains.has(c.id)) startConnectionChain(c)
     }
     for (const id of Array.from(_activeChains)) {
@@ -940,9 +1418,12 @@ async function supervisorTick(): Promise<void> {
  * renamed (team-connections.ts) so its push chain starts within about a second rather than after
  * the next tick. Safe to call before `startUploader()` — `supervisorTick` only reads preferences
  * and starts/stops per-connection chains; it does not depend on the `started` flag. Never throws.
+ *
+ * `deps.readPreferences` is injectable for tests — the default touches the developer's real
+ * ~/.agentistics/preferences.json, which a test must never do.
  */
-export async function reconcileUploaderNow(): Promise<void> {
-  await supervisorTick()
+export async function reconcileUploaderNow(deps: { readPreferences?: typeof readPreferences } = {}): Promise<void> {
+  await supervisorTick(deps)
 }
 
 let started = false
@@ -958,12 +1439,54 @@ let _supervisorTimer: ReturnType<typeof setInterval> | null = null
 export function startUploader(): void {
   if (started) return
   started = true
+  // Before anything pushes: a removal journal left open by a killed process is loaded and handed
+  // to the owning connection's first cycle (§6.1 step d, R5).
+  void replayForgetJournals()
   void supervisorTick() // start any already-configured connections immediately, not after 5s
   _supervisorTimer = setInterval(() => { void supervisorTick() }, SUPERVISOR_INTERVAL_MS)
   _supervisorTimer.unref?.()
 }
 
-function scheduleOnChangeTrigger(connId: string): void {
+/** Test-only setter for `_restrictedConn` — lets a test exercise the scheduling defenses in
+ *  §5.3.4 (fan-out suppression, jitter) without running a full push cycle against a real
+ *  connection. Never called from production code. */
+export function __setRestrictedForTests(connId: string, restricted: boolean): void {
+  _restrictedConn.set(connId, restricted)
+}
+
+/** Test-only accessor — whether an on-change push is currently pending for this connection.
+ *  Never called from production code. */
+export function __hasPendingOnChangeForTests(connId: string): boolean {
+  return _onChangeTimer.has(connId)
+}
+
+/** Test-only cleanup — clears a pending on-change timer without letting it fire (which would
+ *  call `runConnectionCycle` against the real `readPreferences()`). Never called from production
+ *  code. */
+export function __clearOnChangeTimerForTests(connId: string): void {
+  const t = _onChangeTimer.get(connId)
+  if (t) { clearTimeout(t); _onChangeTimer.delete(connId) }
+}
+
+/** Test-only cleanup — clears ALL in-memory state (chains, timers, status/error maps) for a
+ *  connection, same as `teardownConnection` (no disk IO). Lets a test that started a chain via
+ *  `reconcileUploaderNow`/`supervisorTick` (which also schedules a real periodic timer) clean up
+ *  before that timer could ever fire against a fake/nonexistent connection. Never called from
+ *  production code. */
+export function __teardownConnectionForTests(connId: string): void {
+  teardownConnection(connId)
+}
+
+/** Exported so a test can exercise the fan-out-suppression rule directly (§5.3.4) without
+ *  driving the whole `started`/`_activeChains`/`notifyDataChanged` machinery, which would
+ *  otherwise require a real (or `startUploader`-spawned) supervisor. Every production call site
+ *  remains internal to this module (`notifyDataChanged`). */
+export function scheduleOnChangeTrigger(connId: string): void {
+  // A restricted connection does not fan out on a local change at all: doing so would turn work
+  // inside a denied repo into a ~2s-resolution timestamped heartbeat on the central the moment it
+  // happens, which is exactly the activity signal §5.3.4 exists to withhold. Its periodic cycle
+  // (jittered above) is the only thing that ever pushes for it.
+  if (_restrictedConn.get(connId)) return
   if (_onChangeTimer.has(connId)) return // already scheduled — coalesce a burst of file events
   const floorMs = (_centralIntervalSec.get(connId) ?? PUSH_INTERVAL.DEFAULT_SEC) * 1_000
   const lastSuccess = _lastSuccessAt.get(connId) ?? null
@@ -1043,8 +1566,26 @@ function jsonResponse(body: unknown): Response {
  * this defers (matching `runConnectionCycle`'s `_pendingTrigger`) and returns a zero result
  * immediately rather than blocking the HTTP response — the already-running cycle picks up any
  * newer data on its own.
+ *
+ * The seal is DERIVED here and deliberately NOT persisted — the one asymmetry between this path
+ * and the periodic cycle.
+ *
+ * Why derived and not simply loaded: the persisted `sealed` only covers days that had already
+ * crossed Claude's watermark by the last periodic cycle. A day that crossed since then is still
+ * sitting in `pending`, so a "Push now" landing in that window would emit that day's rollup row
+ * unreduced — the blocked repository's volume, on the wire. It is bounded by one push interval,
+ * but it is a leak in a privacy control, and `computeLedger` closes it for the cost of one pure
+ * call over data the context already holds.
+ *
+ * Why NOT persisted: `advanceSeal` seals out of `prev.pending` and its caller contract belongs to
+ * the periodic cycle, which owns the cadence. Writing the result here would make the ledger a
+ * function of how often a human presses a button, and would also advance `pending` past a
+ * measurement the cycle has not taken. `reconcileRulesFor` stays the only writer — and this path
+ * deliberately never runs it, so a manual push can never trigger a removal sequence out of band.
+ *
+ * Exported for tests only; `handlePushNow` is the sole production caller.
  */
-async function guardedManualPush(conn: TeamConnection, ctx: PushCycleContext): Promise<PushOnceResult> {
+export async function guardedManualPush(conn: TeamConnection, ctx: PushCycleContext): Promise<PushOnceResult> {
   if (_running.has(conn.id)) {
     _pendingTrigger.add(conn.id)
     return { count: 0 }
@@ -1052,7 +1593,17 @@ async function guardedManualPush(conn: TeamConnection, ctx: PushCycleContext): P
   _running.add(conn.id)
   const release = await acquireSlot()
   try {
-    return await pushOnceDetailed(conn, ctx)
+    const prev = await loadRulesState(conn.id)
+    // The SAME pure helper the periodic cycle's `planRulesReconcile` uses — two callers deriving
+    // seals two different ways is the class of drift this whole area has been fixing.
+    const { sealed } = computeLedger({
+      liveSessions: ctx.liveSessions,
+      denied: normalizeDenied(conn.deniedRepos),
+      index: ctx.index,
+      real: ctx.realStatsCache,
+      prev,
+    })
+    return await pushOnceDetailed(conn, ctx, { sealed })
   } finally {
     release()
     _running.delete(conn.id)

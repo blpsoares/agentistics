@@ -99,3 +99,13 @@ export async function deleteMemberWorkflows(memberId: string): Promise<number> {
     return 0
   }
 }
+
+/** Delete this member's workflow runs for the named sessions. Scoped by memberId AND sessionId:
+ *  a run is identified by `org:memberId:runId`, so an unscoped sessionId delete would reach
+ *  another member's runs for a session id that happens to collide. Returns the count deleted. */
+export async function deleteMemberWorkflowsBySession(memberId: string, sessionIds: string[]): Promise<number> {
+  if (sessionIds.length === 0) return 0
+  const col = await getWorkflowsCollection()
+  const res = await col.deleteMany({ memberId, sessionId: { $in: sessionIds } })
+  return res.deletedCount ?? 0
+}

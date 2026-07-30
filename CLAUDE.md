@@ -418,6 +418,22 @@ The display **name is set by the central** on the minted token — there is no n
   model / date genuinely have no cache granularity and stay cache-blind (`cacheBlindScope`).
 - **The central is the sole authority on the push interval** — members clamp to `max(central, EXPRESS_MIN_SEC)`; there is no faster member override.
 - **`agentop central` runs from anywhere** — in a repo checkout it wraps `central.sh` (which does `build: .`); from the standalone binary (no repo) `cli-central.ts` falls back to a Docker-image path: it materializes a compose that pulls `ghcr.io/blpsoares/agentistics:<version>` + generates `central.env` into `~/.agentistics/central/` and drives `docker compose` directly. The image is published to GHCR by the `publish-image` job in `release.yml`. Override the image with `AGENTISTICS_IMAGE`.
+- **Per-connection repository sharing — `deniedRepos` never goes on the wire.** It lives only in
+  `preferences.json`, the in-memory `TeamConnection`, and the browser tab on the machine's own
+  origin; `IngestBody` gains no field for it, and `GET /api/team/status` exposes only
+  `deniedCount` + the attribution boundary + a local prehistory count, same-origin. The
+  restricted statsCache (`buildSplitStatsCache`, `share-rules.ts`) is selected by the **declared**
+  rule — `hasRestrictions(conn.deniedRepos)` — never by comparing a filtered count against an
+  unfiltered one; a count comparison fails open on a cold consolidate store. **There is no
+  fallback to the unsplit cache on the restricted path, ever** — when the split cannot be built
+  faithfully, the push omits `statsCache` entirely rather than shipping the real one. The
+  retroactive-removal trigger (`planRulesReconcile`, `team-rules.ts`) is **denial, never
+  absence** — a session merely missing from a short store read is never treated as newly denied,
+  which would ask the central to delete perfectly valid sessions and drop them from the
+  sent-state forever. `stats-cache.json` stays Claude-only here too — the split's synthetic and
+  rebuilt halves are both accumulated from Claude sessions only (`accumulateClaudeSessions`).
+  See [docs/architecture.md](docs/architecture.md#per-connection-repository-sharing) and
+  [docs/security.md](docs/security.md#8-per-connection-repository-sharing--the-guarantee-stated-precisely).
 
 ---
 

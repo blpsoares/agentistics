@@ -43,6 +43,17 @@ export const NOTIFICATION_TEXT: Record<string, { pt: Localized; en: Localized }>
     pt: { title: 'Removido da central', message: 'O acesso desta máquina a {central} foi revogado. A conexão foi removida — gere um novo token nessa central para reconectar.' },
     en: { title: 'Removed from the central', message: 'Access to {central} was revoked for this machine. The connection was removed — mint a new token there to reconnect.' },
   },
+  // Raised once per retroactive removal (never once per cycle — the uploader guards the
+  // transition), so a rules change that takes several cycles to land is one "removing" toast and
+  // one "done", not a stream of them.
+  'member.resync_started': {
+    pt: { title: 'Removendo dados da central', message: 'Removendo {count} sessão(ões) de {central} conforme as novas regras de repositório.' },
+    en: { title: 'Removing data from the central', message: 'Removing {count} session(s) from {central} to match the new repository rules.' },
+  },
+  'member.resync_done': {
+    pt: { title: 'Regras aplicadas', message: '{count} sessão(ões) removida(s) de {central}.' },
+    en: { title: 'Rules applied', message: '{count} session(s) removed from {central}.' },
+  },
   'member.disconnected': {
     pt: { title: 'Desconectado da central', message: 'A conexão com {central} foi removida.' },
     en: { title: 'Disconnected from the central', message: 'The connection to {central} was removed.' },
@@ -95,6 +106,10 @@ export function resolveNotification(n: AppNotification, lang: 'pt' | 'en'): Loca
   if (message && message.includes('{central}')) {
     const central = String(n.meta?.central ?? '').trim()
     message = message.replace(/\{central\}/g, central || (lang === 'pt' ? 'a central' : 'the central'))
+  }
+  // Interpolate {count} from meta (the retroactive-removal notifications).
+  if (message && n.meta?.count !== undefined) {
+    message = message.replace('{count}', String(n.meta.count))
   }
   // Interpolate {name}/{actor} from meta (e.g. machine.renamed).
   if (message && n.meta?.name) message = message.replace('{name}', String(n.meta.name))
