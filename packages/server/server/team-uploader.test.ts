@@ -29,7 +29,10 @@ import { updateTeamConfigAt, type TeamConfigMutator, type Preferences } from './
 import { __setTeamConnDirForTests, TEAM_CONN_DIR, teamSentFile, teamSyncFile, teamForgetFile } from './config'
 import { loadRulesState, saveRulesState, emptyRulesState } from './team-rules'
 import { convertSentStateV1 } from './team-migrate'
-import { buildPathRepoIndex, buildSharedStatsCache, type PathRepoIndex } from './share-rules'
+import {
+  buildPathRepoIndex, buildSharedStatsCache, deniedDeltaByDay, filterShared, normalizeDenied,
+  type PathRepoIndex,
+} from './share-rules'
 import type { SessionMeta, TeamConnection, StatsCache, TeamConfig, WorkflowRun } from '@agentistics/core'
 import type { ServerProject } from './data'
 import type { IngestBody } from './team-store'
@@ -1912,4 +1915,65 @@ describe('GET /api/team/status does not build a push context', () => {
       __teardownConnectionForTests(connId)
     }
   })
+})
+
+// ---------------------------------------------------------------------------
+// The manual-push window: `guardedManualPush` reducing only days already in `sealed` leaves one
+// interval-wide hole. A day that crossed Claude's watermark AFTER the last periodic cycle is
+// still in `pending`, so a "Push now" landing in that window emits that day's rollup row
+// unreduced — the blocked repository's volume, on the wire. Bounded by one push interval and far
+// narrower than the pre-fix behaviour, but a real leak in a privacy control.
+//
+// The seal is therefore DERIVED read-only on this path (the same pure `computeLedger` the
+// periodic cycle uses) and never persisted: persistence stays on the periodic cycle, or
+// `advanceSeal`'s ledger becomes a function of how often a human clicks.
+// ---------------------------------------------------------------------------
+
+describe('an explicit push-now closes the window between two periodic cycles', () => {
+  it('reduces a day that crossed the watermark since the last cycle, and persists nothing', async () => {
+    const connId = randomConnId()
+    const central = mockCentral()
+    central.watch(connId)
+    try {
+      const conn = fakeConn(connId, central.server.port!, { deniedRepos: ['github.com/o/secret'] })
+      const pub = makeSession('pub-12', { git_remote: 'github.com/o/pub', start_time: '2026-07-20T09:00:00.000Z' })
+      const denied = makeSession('denied-12', { git_remote: 'github.com/o/secret', start_time: '2026-07-20T10:00:00.000Z' })
+      const sessions = [pub, denied]
+      const deniedKeys = normalizeDenied(['github.com/o/secret'])
+
+      // Exactly what the LAST PERIODIC CYCLE persisted: watermark 2026-07-01 → boundary 07-02, so
+      // 07-20 was still decomposable and got MEASURED into `pending`. Nothing is sealed yet.
+      const persisted = {
+        ...emptyRulesState(),
+        boundary: '2026-07-02',
+        pending: deniedDeltaByDay(sessions, filterShared(sessions, deniedKeys), '2026-07-02'),
+      }
+      expect(persisted.pending['2026-07-20']?.sessionCount).toBe(1) // the fixture is real
+      await saveRulesState(connId, persisted)
+
+      // The watermark has since moved past 07-20 — but no periodic cycle has run, so `sealed` on
+      // disk is still empty. THIS is the window, and this is a user pressing "Push now" inside it.
+      await guardedManualPush(conn, makeCtx({
+        storedSessions: sessions, liveSessions: sessions,
+        index: buildPathRepoIndex(sessions),
+        realStatsCache: realCacheFrom(sessions, '2026-07-21'),
+      }))
+
+      const pushed = central.ingests.map(b => b.statsCache).filter((c): c is StatsCache => !!c)
+      expect(pushed.length).toBe(1)
+      const row = pushed[0]!.dailyActivity.find(d => d.date === '2026-07-20')
+      expect(row?.sessionCount).toBe(1) // the real rollup row counts 2
+      expect(row?.messageCount).toBe(18)
+      expect(pushed[0]!.totalSessions).toBe(1)
+      expect(pushed[0]!.modelUsage['claude-sonnet-4-6']?.inputTokens).toBe(600)
+      expect(Object.values(pushed[0]!.hourCounts).reduce((a, b) => a + b, 0)).toBe(1)
+
+      // READ-ONLY. This assertion is the point: it pins the derivation as non-persisting, so a
+      // later reader cannot "simplify" it into a call that advances the ledger off the cycle.
+      expect(await loadRulesState(connId)).toEqual(persisted)
+    } finally {
+      __teardownConnectionForTests(connId)
+      await central.stop()
+    }
+  }, 10_000)
 })

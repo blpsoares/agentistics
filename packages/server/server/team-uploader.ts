@@ -33,7 +33,7 @@ import {
   type PathRepoIndex, type DeniedLedger,
 } from './share-rules'
 import { parseCapabilities, centralCanForget } from './team-capabilities'
-import { planRulesReconcile, loadRulesState, saveRulesState } from './team-rules'
+import { planRulesReconcile, computeLedger, loadRulesState, saveRulesState } from './team-rules'
 import { runForgetSequence, loadForgetJournal, type ForgetJournal, type ForgetProgress } from './team-forget-client'
 
 /** This machine's local workflow runs (computed metrics only — no chat/prompt text). Fallback
@@ -1567,12 +1567,21 @@ function jsonResponse(body: unknown): Response {
  * immediately rather than blocking the HTTP response — the already-running cycle picks up any
  * newer data on its own.
  *
- * The seal ledger is LOADED here rather than computed: this path deliberately does not run
- * `reconcileRulesFor` (a manual push must not trigger a removal sequence out of band, and
- * `advanceSeal`'s caller contract belongs to the periodic cycle, which owns the cadence). Reading
- * the persisted `sealed` is exact for this purpose — it is precisely what the last cycle sealed —
- * whereas passing `{}` would make an explicit "Push now" emit every sealed day's rollup row
- * verbatim, which is the one thing this whole mechanism exists to prevent.
+ * The seal is DERIVED here and deliberately NOT persisted — the one asymmetry between this path
+ * and the periodic cycle.
+ *
+ * Why derived and not simply loaded: the persisted `sealed` only covers days that had already
+ * crossed Claude's watermark by the last periodic cycle. A day that crossed since then is still
+ * sitting in `pending`, so a "Push now" landing in that window would emit that day's rollup row
+ * unreduced — the blocked repository's volume, on the wire. It is bounded by one push interval,
+ * but it is a leak in a privacy control, and `computeLedger` closes it for the cost of one pure
+ * call over data the context already holds.
+ *
+ * Why NOT persisted: `advanceSeal` seals out of `prev.pending` and its caller contract belongs to
+ * the periodic cycle, which owns the cadence. Writing the result here would make the ledger a
+ * function of how often a human presses a button, and would also advance `pending` past a
+ * measurement the cycle has not taken. `reconcileRulesFor` stays the only writer — and this path
+ * deliberately never runs it, so a manual push can never trigger a removal sequence out of band.
  *
  * Exported for tests only; `handlePushNow` is the sole production caller.
  */
@@ -1584,7 +1593,16 @@ export async function guardedManualPush(conn: TeamConnection, ctx: PushCycleCont
   _running.add(conn.id)
   const release = await acquireSlot()
   try {
-    const { sealed } = await loadRulesState(conn.id)
+    const prev = await loadRulesState(conn.id)
+    // The SAME pure helper the periodic cycle's `planRulesReconcile` uses — two callers deriving
+    // seals two different ways is the class of drift this whole area has been fixing.
+    const { sealed } = computeLedger({
+      liveSessions: ctx.liveSessions,
+      denied: normalizeDenied(conn.deniedRepos),
+      index: ctx.index,
+      real: ctx.realStatsCache,
+      prev,
+    })
     return await pushOnceDetailed(conn, ctx, { sealed })
   } finally {
     release()

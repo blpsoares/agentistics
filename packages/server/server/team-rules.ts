@@ -36,7 +36,7 @@ import type { SessionMeta, WorkflowRun, StatsCache } from '@agentistics/core'
 import {
   deniedSessionIds, denialSignature, deniedDeltaByDay, advanceSeal, attributionBoundary,
   sharedSessionIds, normalizeDenied, filterShared,
-  type PathRepoIndex, type DeniedLedger,
+  type PathRepoIndex, type DeniedLedger, type RepoKey,
 } from './share-rules'
 import { teamRulesFile } from './config'
 import { safeReadJson } from './utils'
@@ -91,6 +91,48 @@ export async function saveRulesState(connId: string, state: RulesState): Promise
   }
 }
 
+/**
+ * The seal ledger half of the reconcile, on its own and PURE — no disk, no persistence decision.
+ *
+ * Extracted so the periodic cycle (`planRulesReconcile`, which persists the result) and the
+ * manual push (`guardedManualPush` in team-uploader.ts, which does NOT) derive the seal through
+ * the SAME arithmetic. Two callers computing seals two different ways is precisely the class of
+ * drift this branch spent its review cycles fixing; the difference between them must be only
+ * whether the result is written down.
+ *
+ * The seal ledger's ONLY consumer is `buildSplitStatsCache`'s subtraction against `real`'s rollup
+ * rows, and `real` is supplemented from `liveSessions` — never from `storedSessions`
+ * (`pushOnceDetailed`, team-uploader.ts). The two arrays are NOT interchangeable: on a real
+ * machine the store can lag or lead the live array (buildSplitStatsCache's own precondition
+ * comment cites 5 stored sessions against 12 in the cache for one day), so measuring the delta
+ * over the store and subtracting it from a row built from the live array under- or
+ * over-subtracts. Under-subtraction lets a denied repo's volume ride out in the aggregate — the
+ * exact fail-open the split refuses everywhere else. Hence `liveSessions` here, matching the
+ * array `real`/`boundary` are actually about.
+ */
+export function computeLedger(input: {
+  liveSessions: readonly SessionMeta[]
+  denied: ReadonlySet<RepoKey>
+  index?: PathRepoIndex
+  real: StatsCache | null
+  prev: { sealed: DeniedLedger; pending: DeniedLedger }
+}): { sealed: DeniedLedger; pending: DeniedLedger; boundary: string | null } {
+  const { liveSessions, denied, index, real, prev } = input
+  const boundary = real ? attributionBoundary(real) : null
+  if (real === null) {
+    // No real StatsCache this cycle means no watermark to test against — `boundary` is `null`,
+    // under which `deniedDeltaByDay`'s day filter never fires, so EVERY day (including a day that
+    // is genuine prehistory once a real cache later appears) would be measured into `pending`.
+    // That is a permanently wrong seal waiting to happen the first time a real cache shows up
+    // (a Codex/Gemini-only machine that later installs Claude). Carry the ledger forward
+    // untouched instead of measuring anything this cycle.
+    return { sealed: prev.sealed, pending: prev.pending, boundary }
+  }
+  const sharedLive = filterShared(liveSessions, denied, index)
+  const fresh = deniedDeltaByDay(liveSessions, sharedLive, boundary)
+  return { ...advanceSeal(prev, fresh, boundary), boundary }
+}
+
 export interface RulesPlan {
   /** ids the central holds and may no longer have — the forget payload. Never "absent" ids. */
   forgetIds: string[]
@@ -137,31 +179,8 @@ export function planRulesReconcile(input: {
   const rulesChanged = rulesHash !== prevHash
 
   const denied = normalizeDenied(deniedRepos)
-  const boundary = real ? attributionBoundary(real) : null
-
-  // The seal ledger's ONLY consumer is `buildSplitStatsCache`'s subtraction against `real`'s
-  // rollup rows, and `real` is supplemented from `liveSessions` — never from `storedSessions`
-  // (`pushOnceDetailed`, team-uploader.ts). The two arrays are NOT interchangeable: on a real
-  // machine the store can lag or lead the live array (buildSplitStatsCache's own precondition
-  // comment cites 5 stored sessions against 12 in the cache for one day), so measuring the delta
-  // over the store and subtracting it from a row built from the live array under- or
-  // over-subtracts. Under-subtraction lets a denied repo's volume ride out in the aggregate —
-  // the exact fail-open the split refuses everywhere else. Hence `liveSessions` here, matching
-  // the array `real`/`boundary` are actually about.
-  const ledger = (): { sealed: DeniedLedger; pending: DeniedLedger } => {
-    if (real === null) {
-      // No real StatsCache this cycle means no watermark to test against — `boundary` is `null`,
-      // under which `deniedDeltaByDay`'s day filter never fires, so EVERY day (including a day that
-      // is genuine prehistory once a real cache later appears) would be measured into `pending`.
-      // That is a permanently wrong seal waiting to happen the first time a real cache shows up
-      // (a Codex/Gemini-only machine that later installs Claude). Carry the ledger forward
-      // untouched instead of measuring anything this cycle.
-      return { sealed: prev.sealed, pending: prev.pending }
-    }
-    const sharedLive = filterShared(liveSessions, denied, index)
-    const fresh = deniedDeltaByDay(liveSessions, sharedLive, boundary)
-    return advanceSeal(prev, fresh, boundary)
-  }
+  // The ledger half, shared verbatim with the manual-push path — see `computeLedger`.
+  const { sealed, pending, boundary } = computeLedger({ liveSessions, denied, index, real, prev })
 
   // R4 / the second belt: an empty store proves nothing about the denylist. Never derive a
   // FORGET PLAN from it — that is rule 1's data-loss hazard, and it stays gated here.
@@ -173,7 +192,6 @@ export function planRulesReconcile(input: {
   // advanced — every denied day then ships verbatim inside the rollup the moment it crosses the
   // watermark, permanently, and no cycle can ever recover it (`advanceSeal`'s caller contract).
   if (storedSessions.length === 0) {
-    const { sealed, pending } = ledger()
     // The rules hash may advance ONLY when nothing could be stranded. An empty sent-state proves
     // this connection holds no session document on the central that a later, non-empty store read
     // could reveal as denied — which is exactly the archiveMode: 'off' machine (it pushes the
@@ -213,8 +231,6 @@ export function planRulesReconcile(input: {
   // `liveSessions`, for the session-document half of a push.
   const sharedStored = filterShared(storedSessions, denied, index)
   const sharedIds = [...sharedSessionIds(sharedStored)].sort()
-
-  const { sealed, pending } = ledger()
 
   const next: RulesState = { rulesHash, sharedIds, boundary, sealed, pending }
 
