@@ -301,8 +301,15 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // exposes nothing else. Everything except POST /api/team/ingest → 404, so an
     // exposed instance leaks no dashboard, no data, no login — only a token-gated
     // write endpoint. Pair with a separate PRIVATE dashboard instance on the same Mongo.
+    // POST /api/team/forget is allowed too: a machine pushing to a public ingest instance
+    // must also be able to withdraw sessions it no longer shares, and the route is just as
+    // token-gated (inside the handler) as ingest itself — 404ing it here would strand a
+    // machine's crash-journaled removals against exactly the central it pushed them to.
     // ---------------------------------------------------------------------------
-    if (INGEST_ONLY && !(url.pathname === '/api/team/ingest' && req.method === 'POST')) {
+    if (INGEST_ONLY && !(
+      (url.pathname === '/api/team/ingest' && req.method === 'POST') ||
+      (url.pathname === '/api/team/forget' && req.method === 'POST')
+    )) {
       return new Response('Not found', { status: 404, headers: CORS_HEADERS })
     }
 
@@ -1613,6 +1620,18 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       return new Response(res.body, { status: res.status, headers })
     }
 
+    // POST /api/team/forget — a member deletes NAMED sessions of its own (repository sharing
+    // rules, §7). Minted-token-only, inside the handler; see team-forget.ts for why there is no
+    // legacy branch. Central-only, like every other team ingest route.
+    if (url.pathname === '/api/team/forget' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleTeamForget } = await import('./team-forget')
+      const res = await handleTeamForget(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
     // POST /api/team/leave-central — member proxy: tells the central to drop this member's
     // data, then the web resets the local config to solo. Keeps the token server-side.
     if (url.pathname === '/api/team/leave-central' && req.method === 'POST') {
@@ -1680,8 +1699,13 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // ---------------------------------------------------------------------------
     if (url.pathname === '/api/team/policy' && req.method === 'GET') {
       const { getCentralConfig, getInstanceId } = await import('./central-config')
+      const { CENTRAL_CAPABILITIES } = await import('./team-capabilities')
       const [config, instanceId] = await Promise.all([getCentralConfig(), getInstanceId()])
-      return new Response(JSON.stringify({ pushIntervalSec: config.pushIntervalSec, instanceId }), {
+      return new Response(JSON.stringify({
+        pushIntervalSec: config.pushIntervalSec,
+        instanceId,
+        capabilities: CENTRAL_CAPABILITIES,
+      }), {
         status: 200,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })

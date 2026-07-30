@@ -16,6 +16,7 @@ export const AUTH_PUBLIC = new Set([
   // Machine/CI traffic: authenticated by Bearer token inside the handler, not by cookie.
   '/api/team/ingest',
   '/api/team/leave',
+  '/api/team/forget',
   '/api/team/policy',
   '/api/team/whoami',
   '/api/team/agent',
