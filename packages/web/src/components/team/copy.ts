@@ -380,6 +380,45 @@ export const COPY = {
     en: 'Save',
     pt: 'Salvar',
   },
+  // Added for Task 12 (the two-step add-central wizard) — the step machine's own labels: the
+  // "Test connection" action, its identity confirmation, the step-2 header, and the back/continue
+  // navigation between the two steps.
+  addStep1Title: {
+    en: 'Step 1 of 2 — Identify the central',
+    pt: 'Passo 1 de 2 — Identificar a central',
+  },
+  addStep2Title: {
+    en: 'Step 2 of 2 — Choose what it may see',
+    pt: 'Passo 2 de 2 — Escolher o que ela pode ver',
+  },
+  testConnBtn: {
+    en: 'Test connection',
+    pt: 'Testar conexão',
+  },
+  testingConn: {
+    en: 'Testing…',
+    pt: 'Testando…',
+  },
+  testOkIdentity: {
+    en: 'Connected as {user} ({org})',
+    pt: 'Conectado como {user} ({org})',
+  },
+  testOkIdentityNoOrg: {
+    en: 'Connected as {user}',
+    pt: 'Conectado como {user}',
+  },
+  continueBtn: {
+    en: 'Continue',
+    pt: 'Continuar',
+  },
+  backBtn: {
+    en: 'Back',
+    pt: 'Voltar',
+  },
+  addEndpointRequired: {
+    en: 'Enter the central URL, or paste a token that carries one.',
+    pt: 'Digite a URL da central, ou cole um token que já contenha uma.',
+  },
 } satisfies Record<string, CopyEntry>
 
 /** `{one, other}` rows — pass through `plural(entry, n)` before interpolating any placeholders.

@@ -8,6 +8,7 @@ import { buildShareTargets, hostOf, type ServerProject } from '../../lib/shareRe
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { COPY } from './copy'
 import { ConnectionCard } from './ConnectionCard'
+import { AddCentralDrawer } from './AddCentralDrawer'
 import type { TeamStatusResponse, ConnectionStatusEntry } from './statusTypes'
 
 /** The two panel-level rows of the state table (§9.5) that are NOT per-card: an `/api/preferences`
@@ -47,22 +48,35 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang }: Conne
   const [archiveMode, setArchiveMode] = useState<ArchiveMode | null>(null)
   const [loadErr, setLoadErr] = useState<string | null>(null)
   const [statusResp, setStatusResp] = useState<TeamStatusResponse | null>(null)
+  const [addOpen, setAddOpen] = useState(false)
 
   useEffect(() => {
     let alive = true
-    fetch('/api/preferences')
-      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((prefs: { team?: TeamConfig; archiveMode?: ArchiveMode; archiveSessions?: boolean }) => {
-        if (!alive) return
-        // Defensive migration: `readTeamConnections` tolerates a missing/malformed `connections`
-        // array instead of `.map`-ing `undefined` — an old server payload must never read as
-        // "zero connections" through a crash.
-        setConnections(readTeamConnections(prefs))
-        setArchiveMode(resolveArchiveChoice(prefs))
-      })
-      .catch(err => { if (alive) setLoadErr(err instanceof Error ? err.message : String(err)) })
+    void reloadPreferences(alive)
     return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  /** Shared by the mount effect and the add-central drawer's `onConnected` — both need the exact
+   *  same `/api/preferences` read, never a hand-spliced local update of the new connection (the
+   *  server is the source of truth for what actually got persisted, including a token-rotation
+   *  update that reuses an existing id). */
+  async function reloadPreferences(alive: boolean) {
+    try {
+      const r = await fetch('/api/preferences')
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const prefs = await r.json() as { team?: TeamConfig; archiveMode?: ArchiveMode; archiveSessions?: boolean }
+      if (!alive) return
+      // Defensive migration: `readTeamConnections` tolerates a missing/malformed `connections`
+      // array instead of `.map`-ing `undefined` — an old server payload must never read as
+      // "zero connections" through a crash.
+      setConnections(readTeamConnections(prefs))
+      setArchiveMode(resolveArchiveChoice(prefs))
+      setLoadErr(null)
+    } catch (err) {
+      if (alive) setLoadErr(err instanceof Error ? err.message : String(err))
+    }
+  }
 
   // ONE poller for the whole panel — N cards must never mean N intervals hitting the route.
   useEffect(() => {
@@ -173,24 +187,34 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang }: Conne
         <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-secondary)' }}>
           {COPY.connectedCentrals[lang]} {connections.length > 0 && `(${connections.length})`}
         </div>
-        {/* Inert until Task 12 lands the add wizard — intentionally has no onClick yet. */}
         <button
           type="button"
-          disabled
+          onClick={() => setAddOpen(true)}
           title={COPY.addCentral[lang]}
           style={{
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
             padding: isMobile ? '0 14px' : '7px 14px', minHeight: isMobile ? 44 : undefined,
             width: isMobile ? '100%' : undefined,
             borderRadius: 7, fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit',
-            border: '1px dashed var(--border)', background: 'transparent', color: 'var(--text-tertiary)',
-            cursor: 'not-allowed', opacity: 0.6,
+            border: '1px dashed var(--anthropic-orange)', background: 'transparent', color: 'var(--anthropic-orange)',
+            cursor: 'pointer',
           }}
         >
           <Plus size={13} />
           {COPY.addCentral[lang]}
         </button>
       </div>
+
+      <AddCentralDrawer
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onConnected={() => { void reloadPreferences(true) }}
+        connections={connections}
+        sessions={sessions}
+        projects={projects}
+        modelUsage={modelUsage}
+        lang={lang}
+      />
 
       {connections.length === 0 ? (
         <div style={{
