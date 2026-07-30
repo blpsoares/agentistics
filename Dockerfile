@@ -36,6 +36,22 @@ FROM oven/bun:1-slim AS runner
 
 WORKDIR /app
 
+# The TLS trust store, installed EXPLICITLY rather than inherited from the base image.
+#
+# A central talks to Mongo over TLS (Atlas is `mongodb+srv://…`, certificate-verified). The base
+# image happened to ship a usable trust store, so this worked — until a rebuild pulled a newer
+# `oven/bun:1-slim` whose store differed, and every Mongo connection began failing with
+# "Cert does not contain a DNS name". Same code, same Dockerfile, same commit: only the
+# unpinned base had moved. The app served its static assets fine and 500'd on every route that
+# touched the database, which reads as data loss rather than as a TLS fault.
+#
+# Depending on a base image for the trust store is depending on something nobody pinned. Install
+# it here so a rebuild cannot silently take it away.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && update-ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
 # Copy workspace manifests + lock
 COPY package.json bun.lock ./
 COPY packages/core/package.json      ./packages/core/
