@@ -277,10 +277,13 @@ export function Section({ title, editing, onEdit, onCancel, onSave, canEdit = tr
       {editing ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {editChildren}
-          {/* column-reverse puts Save above Cancel visually while keeping Cancel first in the
+          {/* Not rendered at all when the parent owns the save — `display: none` would leave two
+              phantom Save buttons per drawer in the DOM and the accessibility tree.
+              column-reverse puts Save above Cancel visually while keeping Cancel first in the
               DOM, so the thumb lands on the confirming action, not the discarding one. */}
+          {!hideActions && (
           <div style={{
-            display: hideActions ? 'none' : 'flex', gap: 8, justifyContent: 'flex-end',
+            display: 'flex', gap: 8, justifyContent: 'flex-end',
             flexDirection: isMobile ? 'column-reverse' : 'row',
           }}>
             <button type="button" onClick={onCancel} style={{
@@ -298,6 +301,7 @@ export function Section({ title, editing, onEdit, onCancel, onSave, canEdit = tr
               fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
             }}><Check size={14} /> {l.save}</button>
           </div>
+          )}
         </div>
       ) : children}
     </div>
