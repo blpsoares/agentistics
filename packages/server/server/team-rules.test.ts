@@ -233,6 +233,77 @@ describe('planRulesReconcile', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// The empty-store belt gates the FORGET plan, not the seal ledger.
+//
+// `archiveMode: 'off'` is a supported, documented mode in which `loadConsolidated()` is
+// permanently empty while `liveSessions` is full. The ledger is measured from `liveSessions` and
+// needs neither the store nor `forgetIds`, so suppressing it along with the forget plan means
+// `pending` never fills and `sealed` never advances on such a machine — every denied day ships
+// verbatim inside Claude's rollup the moment it crosses the watermark, forever.
+// ---------------------------------------------------------------------------
+
+describe('planRulesReconcile — an empty store suppresses the forget plan, never the ledger', () => {
+  const denied = { ...s('b', 'github.com/o/secret'), start_time: '2026-07-20T10:00:00.000Z' }
+  const pub = { ...s('a', 'github.com/o/pub'), start_time: '2026-07-20T11:00:00.000Z' }
+
+  it("measures the denied delta from liveSessions with an empty store (the archiveMode: 'off' shape)", () => {
+    const plan = planRulesReconcile({
+      ...base, deniedRepos: ['github.com/o/secret'],
+      sentHashes: {},
+      storedSessions: [],            // loadConsolidated() is permanently empty in this mode
+      liveSessions: [pub, denied],   // …while the live array is complete
+    })
+    // The belt still holds: an empty store proves nothing about the denylist, so it can never
+    // name a session for deletion.
+    expect(plan.forgetIds).toEqual([])
+    expect(plan.forgetRuns).toEqual([])
+    // …but the ledger, which is measured from liveSessions, DID advance.
+    expect(plan.next.pending['2026-07-20']?.sessionCount).toBe(1)
+    expect(plan.next.boundary).toBe('2026-07-02')
+  })
+
+  it('seals that day once the watermark crosses it, still with an empty store', () => {
+    const first = planRulesReconcile({
+      ...base, deniedRepos: ['github.com/o/secret'],
+      sentHashes: {}, storedSessions: [], liveSessions: [pub, denied],
+    })
+    expect(first.next.pending['2026-07-20']?.sessionCount).toBe(1)
+
+    // The watermark moves past 07-20 — the day becomes undecomposable rollup, and the only thing
+    // that can still reduce its row is the seal taken while it was measurable.
+    const second = planRulesReconcile({
+      ...base, deniedRepos: ['github.com/o/secret'],
+      sentHashes: {}, storedSessions: [], liveSessions: [pub, denied],
+      real: { lastComputedDate: '2026-07-21', dailyActivity: [], totalSessions: 0, hourCounts: {} } as unknown as StatsCache,
+      prev: first.next,
+    })
+    expect(second.next.sealed['2026-07-20']?.sessionCount).toBe(1)
+  })
+
+  it('persists the fresh rules hash when nothing could be stranded, and withholds it when something could', () => {
+    // Nothing was ever pushed as a session document (the archiveMode: 'off' machine pushes the
+    // store, which is empty) — so there is nothing a later store read could reveal as denied, and
+    // the hash may advance. Without this the status route reports `pendingRules: true` forever on
+    // a machine whose rules ARE being enforced.
+    const clean = planRulesReconcile({
+      ...base, deniedRepos: ['github.com/o/secret'],
+      sentHashes: {}, storedSessions: [], liveSessions: [pub, denied],
+    })
+    expect(clean.next.rulesHash).toBe(denialSignature(['github.com/o/secret']))
+
+    // But a non-empty sent-state means session documents ARE on the central that this empty store
+    // cannot classify. Advancing the hash there would suppress re-detection with the data still
+    // in place — rule 1's hazard in reverse. `pendingRules` stays true, which is the truth.
+    const stranded = planRulesReconcile({
+      ...base, deniedRepos: ['github.com/o/secret'],
+      sentHashes: { b: 'h2' }, storedSessions: [], liveSessions: [pub, denied],
+    })
+    expect(stranded.next.rulesHash).toBe('')
+    expect(stranded.forgetIds).toEqual([])
+  })
+})
+
 // Sanity cross-check against share-rules.ts's own primitives, so this module's seal test above
 // is not the only place the boundary/seal arithmetic is exercised.
 test('attributionBoundary/deniedDeltaByDay agree with the fixture used above', () => {
