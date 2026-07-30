@@ -45,6 +45,10 @@ export interface Preferences {
   archiveSessions?: boolean
   /** Team mode configuration. Absent / mode=solo means solo behavior (no push). */
   team?: TeamConfig
+  /** Whether the `agentop` control center puts the terminal into mouse-reporting mode.
+   *  Absent = on, which is the default the control center assumes. Turned off with `m` in the app
+   *  by anyone who would rather keep their terminal's own click-drag text selection. */
+  mouse?: boolean
 }
 
 export type ArchiveMode = 'off' | 'consolidate' | 'full'

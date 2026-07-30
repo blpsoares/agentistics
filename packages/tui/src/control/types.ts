@@ -1,0 +1,326 @@
+/**
+ * types.ts — the contract between the control center (presentation) and its host (logic).
+ *
+ * The Ink layer owns NO logic: `cli-start.ts` still decides what the service state is, what the
+ * choices are and what each action does. It implements `ControlHost`; the components below render
+ * already-localized strings and report intents through it. Keeping the split this way is what
+ * lets the whole surface be rewritten without changing a single behaviour.
+ */
+
+import type { CliLang } from './lang'
+
+export type TabId = 'services' | 'setup' | 'logs' | 'cheatsheet' | 'help' | 'contribute'
+
+export const TAB_ORDER: readonly TabId[] = [
+  'services',
+  'setup',
+  'logs',
+  'cheatsheet',
+  'help',
+  'contribute',
+] as const
+
+/** A service is `unknown` when detection itself failed (no docker, no lsof) — never assume down. */
+export type ServiceState = 'up' | 'down' | 'unknown'
+
+/**
+ * A LOGICAL service — what the user thinks about, and what the list shows one row per.
+ *
+ * There are two, and only two: the analytics server itself, and the team central. The ways of
+ * running each of them are `RuntimeId`s below, and they are NOT services. Listing them as if they
+ * were is what made the screen offer to start a Docker copy of a server that was already running
+ * natively: the same program, the same files, the same port, presented as two independent things
+ * the user could start independently. CLAUDE.md states outright that the two must never both run.
+ */
+export type ServiceId = 'agentistics' | 'central'
+
+/**
+ * One concrete way to run a logical service — an implementation detail of the host.
+ *
+ * `local` is the native process, `machine` is the same program inside a container
+ * (docker-compose.machine.yml), and `central` is the team central's container. A `RuntimeId`
+ * appears in the contract only where an action or a log genuinely has to name ONE of them: the
+ * conflict case (both runtimes of `agentistics` up at once), a start option, and the full-screen
+ * Logs screen's source selector.
+ */
+export type RuntimeId = 'local' | 'machine' | 'central'
+
+/**
+ * How a runtime runs — the word a row and a pane badge wear.
+ *
+ * Deliberately untranslated: `native` and `docker` are the same two words in both languages, and
+ * they are the words the CLI, the compose files and the docs already use.
+ */
+export type ServiceRuntime = 'native' | 'docker'
+
+/**
+ * Anything an action or a log read can name: a logical service, or one exact runtime of one.
+ *
+ * `central` is a member of both halves, which is not an accident and not an ambiguity — the central
+ * has exactly one runtime, so naming the service and naming its runtime are the same instruction.
+ */
+export type ServiceRef = ServiceId | RuntimeId
+
+/** Which services an action targets. `all` means every runtime currently up. */
+export type ActionTarget = ServiceRef | 'all'
+
+export type LogSource = ServiceRef
+
+/**
+ * One runtime of a logical service, as the host currently sees it.
+ *
+ * Every field past `available` is OPTIONAL and absent whenever it could not be detected — a missing
+ * pid is `undefined`, never `0`, and a runtime whose uptime the OS would not give up says nothing
+ * rather than claiming it started this instant. The N/A-versus-real-0 rule the dashboard follows
+ * for harness capabilities applies here for the same reason: a confident wrong number is worse
+ * than an honest gap, and the user acts on what this screen says.
+ */
+export interface ServiceRuntimeState {
+  id: RuntimeId
+  kind: ServiceRuntime
+  state: ServiceState
+  /**
+   * Whether this box can run it AT ALL — false when the runtime's prerequisite is missing (docker
+   * not installed). It is what keeps an honest `unknown` from spreading: a container runtime on a
+   * box with no docker cannot be running, so it neither makes its service's state unknown nor gets
+   * offered as a start option. A verb that cannot possibly work is worse than a missing one.
+   */
+  available: boolean
+  /** Why this runtime's state is `unknown`, already localized. */
+  reason?: string
+  /** OS pid of a native process, or the container's main pid. */
+  pid?: number
+  /**
+   * When the process started, as epoch milliseconds.
+   *
+   * An instant rather than a duration on purpose: the detail pane repaints far more often than the
+   * status refreshes, and a "seconds so far" number would freeze at whatever it was when the host
+   * last looked while the clock beside it kept moving. Formatting is the UI's job.
+   */
+  startedAt?: number
+  /** The dashboard URL, when the runtime serves one. */
+  webUrl?: string
+  /** The api + mcp URL, when it is a DIFFERENT port from the dashboard's. */
+  apiUrl?: string
+}
+
+/** Only a NATIVE start has a shape left to choose; a container start has one way of happening. */
+export type StartHow = 'fg' | 'bg'
+
+/** What `ControlHost.start` needs: which runtime, and — natively — whether it keeps this terminal. */
+export interface StartRequest {
+  runtime: RuntimeId
+  how?: StartHow
+}
+
+/**
+ * A start the host is offering, ready to be drawn and handed straight back to `start()`.
+ *
+ * The host composes these because it is the only side that knows what this box can actually run:
+ * without docker there is no container option, and while anything is up there are no start options
+ * at all — which is precisely the fix for "it offered to start a docker copy while one was already
+ * running". The UI renders `label`/`hint` and returns the value; it decides nothing.
+ */
+export interface StartOption extends StartRequest {
+  /** Already-localized verb, e.g. "Start (docker)". */
+  label: string
+  /** Already-localized one-line explanation, for surfaces that show hints. */
+  hint?: string
+  /**
+   * The runtime this start would collide with, when there is one.
+   *
+   * The api port is single-occupancy, so taking it means stopping whatever holds it — and WHICH
+   * runtime that is is host knowledge. The UI reads this to know that the collision question
+   * applies and what to stop when the answer is yes; it used to know instead that `local` was the
+   * runtime with a port, which is a rule about the product living in the presentation layer.
+   */
+  blockedBy?: RuntimeId
+  /**
+   * This start records history, so the archive consent gate applies before it runs.
+   *
+   * A container start does not ask: `runStart()` never has, and the gate belongs to the process
+   * that will be writing to `~/.agentistics`.
+   */
+  asksArchive?: boolean
+  /**
+   * Worth asking whether it should come back on boot, once it worked.
+   *
+   * True for the things meant to outlive this terminal. The machine container is not among them —
+   * Docker already restores it (`restart: unless-stopped`), so the question would be offering to
+   * install a second answer to something already answered.
+   */
+  offersBoot?: boolean
+}
+
+/** A stop that names ONE runtime — offered only to break a conflict. */
+export interface StopOption {
+  runtime: RuntimeId
+  /** Already-localized verb, e.g. "Stop (native)". */
+  label: string
+}
+
+/**
+ * One logical service, as the host currently sees it.
+ *
+ * The list shows one row per service whether it is up or down — a stopped central stays visible
+ * (dim) rather than being hidden, because hiding it would turn "start the central" into a hunt
+ * through a menu. What changes with the state is what the row can DO: a running service offers
+ * restart / stop / open and no start at all, a stopped one offers exactly the starts this box can
+ * perform.
+ */
+export interface ControlService {
+  id: ServiceId
+  /** Already-localized name — "agentistics", "agentistics central". */
+  label: string
+  /**
+   * The service's state, aggregated from its runtimes: `up` when any runtime is up, `unknown` when
+   * an AVAILABLE runtime could not be probed, `down` only when every runtime is confidently down.
+   */
+  state: ServiceState
+  /** Every runtime this box could run it under, in the order they are offered. */
+  runtimes: ServiceRuntimeState[]
+  /** The runtimes that are up right now, in that same order. Empty when nothing is up. */
+  running: RuntimeId[]
+  /** The runtime the detail pane describes: the first running one, absent when nothing is up. */
+  active?: ServiceRuntimeState
+  /**
+   * Set when MORE THAN ONE runtime of this service is up at once — already localized, and naming
+   * both runtimes.
+   *
+   * The state must never be normalised away by showing one of the two: they read the same files and
+   * fight over the same port, so a user shown half of it would act on a half-truth. Its presence is
+   * the flag; pair it with a word as well as a colour, and offer `stopOptions`.
+   */
+  conflict?: string
+  /** Why the state is `unknown`, already localized. */
+  reason?: string
+  /**
+   * Whether it comes back on boot — `undefined` when the host cannot tell, never a guess.
+   *
+   * A state rather than a localized string, exactly like `ServiceState`: the two words are chrome
+   * the TUI owns, and the host is the only side that can answer the question.
+   */
+  boot?: BootState
+  /** The starts this box can perform right now. ALWAYS EMPTY while the service is up. */
+  startOptions: StartOption[]
+  /** Per-runtime stops, populated only while more than one runtime is up. */
+  stopOptions: StopOption[]
+}
+
+/**
+ * Whether a service is registered to come back on its own after a reboot.
+ *
+ * ABSENT means the host could not tell — there is no user systemd on this platform, or the probe
+ * itself failed — and the detail pane then says NOTHING about boot rather than "no". A service that
+ * silently claims it will not restart is the fact a user acts on by installing a second copy of it.
+ */
+export type BootState = 'on' | 'off'
+
+export type TeamMode = 'solo' | 'central' | 'member'
+
+export type ArchiveMode = 'consolidate' | 'full' | 'off'
+
+export interface ControlStatus {
+  mode: TeamMode
+  /** Already-localized sentence describing the mode. */
+  modeLabel: string
+  endpoint?: string
+  services: ControlService[]
+  version: string
+  /** Set when a newer release exists; drives the update dot in the header. */
+  latestVersion?: string
+  /** The history-preservation setting in force, or `undefined` while it is still unanswered. */
+  archiveMode?: ArchiveMode
+  /**
+   * Whether the terminal should report the mouse. Defaults to ON — the mouse is the thing a user
+   * reaches for first, and `m` (or this preference) is how someone who wants their terminal's own
+   * selection back turns it off.
+   *
+   * It lives on the STATUS rather than in the TUI because the TUI reads no preferences: the host
+   * stores it beside the language and the archive mode, and hands the answer over like any other.
+   */
+  mouse?: boolean
+}
+
+export interface ActionResult {
+  ok: boolean
+  /** Already-localized one-line outcome, shown in the status line. */
+  message: string
+}
+
+export interface ControlHost {
+  /** Re-detect config + services. Must never throw; failures come back as `unknown` services. */
+  refresh(): Promise<ControlStatus>
+
+  /**
+   * Start one runtime — normally a `StartOption` handed straight back.
+   *
+   * `{ runtime: 'local', how: 'fg' }` never resolves usefully from inside the mounted app: the
+   * server needs the tty, which it can only have once the control center has unmounted, so the
+   * cockpit reports that choice as `onExit({ kind: 'foreground' })` instead and the host takes over.
+   */
+  start(req: StartRequest): Promise<ActionResult>
+
+  connect(v: { endpoint: string; token: string; org: string }): Promise<ActionResult>
+  disconnect(): Promise<ActionResult>
+
+  /**
+   * Bounce / stop what a target names. A LOGICAL target acts on whichever runtimes of it are
+   * actually up (both, when they are in conflict); a runtime target acts on exactly that one.
+   * Naming something that is not running is answered, not silently reported as done.
+   */
+  restart(target: ActionTarget): Promise<ActionResult>
+  stop(target: ActionTarget): Promise<ActionResult>
+
+  /** Persist a team mode from the Setup tab. `member` also needs `connect`. */
+  setMode(mode: 'solo'): Promise<ActionResult>
+  initCentral(): Promise<ActionResult>
+  /** The archive-history consent, asked once. `null` when already chosen. */
+  pendingArchiveMode(): Promise<ArchiveMode | null>
+  setArchiveMode(mode: ArchiveMode): Promise<ActionResult>
+
+  /**
+   * Install the systemd user service that brings a logical service up on every boot.
+   *
+   * Named by SERVICE rather than by the unit it writes: which runtime boots is the host's business
+   * (a container already restarts itself, so this is always the native unit), and a second
+   * vocabulary on this side of the boundary is one more thing the UI could get wrong.
+   */
+  enableBoot(service: ServiceId): Promise<ActionResult>
+
+  setLang(lang: CliLang): Promise<void>
+
+  /**
+   * Persist whether the mouse reports. Same shape as `setLang`, and for the same reason: the
+   * control center owns no persistence, so a preference it can toggle is a preference the host
+   * stores. Best-effort — a machine that cannot write its preferences still gets the toggle for
+   * this session.
+   */
+  setMouse(on: boolean): Promise<void>
+
+  /**
+   * Hand a URL to the desktop's browser.
+   *
+   * OPTIONAL, and the cockpit treats its absence as the feature not existing: the "open in browser"
+   * action, the `o` key and its footer hint all appear only when a host implements this. A hint for
+   * a key that does nothing is the one bug this screen's footer exists to prevent, and a headless
+   * box — the exact machine where `agentop` is most likely to be run over ssh — has no browser to
+   * hand it to.
+   */
+  openUrl?(url: string): Promise<ActionResult>
+
+  /**
+   * Newest-last lines of a log, or an empty array when there is nothing to show.
+   *
+   * A LOGICAL source reads whichever runtime is up (falling back to the service's primary runtime
+   * when none is, so the file a crashed server left behind is still readable); a runtime source
+   * reads exactly that one, which is what the full-screen Logs screen's selector needs.
+   */
+  readLog(source: LogSource, maxLines: number): Promise<string[]>
+}
+
+/**
+ * Why the control center stopped. `foreground` tells `cli.ts` to fall through to the in-process
+ * server startup, exactly as the old launcher's `'foreground'` sentinel did.
+ */
+export type ControlExit = { kind: 'quit'; code: number } | { kind: 'foreground' }

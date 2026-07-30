@@ -1,49 +1,84 @@
 /**
- * cli-start.ts — `agentop start`, the interactive launcher.
+ * cli-start.ts — the logic behind the `agentop` control center.
  *
- * A re-runnable, English-by-default (pt-BR available) control panel with arrow-key navigation.
- * It shows a banner and a two-part status — CONFIG (what preferences say: solo / member→central /
- * central) and RUNNING (what's actually up: agentistics on this machine, an agentistics central
- * container, an agentistics machine container — detected live) — then lets you start
- * "agentistics" (this machine) or "agentistics central" (the aggregator), connect/disconnect from
- * a central, stop running services, or switch language. Naming: "agentistics" = the per-machine
- * app, "agentistics central" = the aggregator — never "dashboard" (both have one).
+ * This module owns everything the control center DOES: what the current mode is, which services
+ * are up, and what each action performs. The Ink layer (`@agentistics/tui/control`) owns only how
+ * that is drawn — the two meet at `ControlHost`, implemented here, whose methods return an
+ * already-localized `ActionResult` instead of printing.
  *
- * Language follows `--lang en|pt`, else `preferences.lang` (shared with the web), else English; the
- * in-launcher toggle persists to that same preference.
+ * Nothing here may write to stdout while the alternate screen is live: a stray line lands in a
+ * buffer Ink is repainting and corrupts the frame. Actions therefore either run under
+ * `captureOutput` (their prints are swallowed and the last line becomes the failure message) or,
+ * when their output is the point — `docker compose up --build`, `central.sh init` — under
+ * `suspend`, which steps out of the alternate screen, gives the child the real tty and pauses so
+ * the output can be read.
  *
- * Non-interactive stdin (a pipe or a systemd unit) skips the panel and behaves like `agentop
- * server`. runStart() returns a numeric exit code or the sentinel 'foreground' (cli.ts then starts
- * the in-process server and does not exit).
+ * Language follows `--lang en|pt`, else `preferences.lang` (shared with the web), else English;
+ * the in-app toggle persists to that same preference.
+ *
+ * Non-interactive stdin (a pipe or a systemd unit) never opens the control center and behaves like
+ * `agentop server`. runStart() returns a numeric exit code or the sentinel 'foreground' (cli.ts
+ * then starts the in-process server and does not exit).
  */
 
 import { spawn } from 'node:child_process'
+import { writeSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
+import { homedir, platform } from 'node:os'
+import { DEFAULT_TEAM } from '@agentistics/core'
+import type {
+  ActionResult,
+  ActionTarget,
+  BootState,
+  ControlHost,
+  ControlService,
+  ControlStatus,
+  LogSource,
+  RuntimeId,
+  ServiceId,
+  ServiceRef,
+  ServiceRuntimeState,
+  ServiceState,
+  StartOption,
+  StartRequest,
+} from '@agentistics/tui/control'
 import { PORT, WEB_PORT } from './config'
-import { readPreferences, writePreferences } from './preferences'
+import { readPreferences, writePreferences, resolveArchiveMode, type ArchiveMode } from './preferences'
 import { runCentral } from './cli-central'
 import { ensureArchiveModeChosen } from './cli-setup'
 import { memberConnect, memberLeave } from './cli-member'
 import { enableAutostart } from './autostart'
-import { select, confirm, input, pause, clearScreen } from './cli-ui'
+import { confirm } from './cli-ui'
+import { CURRENT_VERSION, getVersionInfo } from './version'
 import { cliStrings, type CliLang, type CliStrings } from './cli-i18n'
+import { resolveLang } from './cli-lang'
 
 export type StartResult = number | 'foreground'
 
-// ANSI
+// ANSI, for the output this module still writes to the REAL terminal: the suspended commands,
+// the foreground handover and the non-interactive `agentop restart --all`.
 const ESC = '\x1b'
 const R = `${ESC}[0m`
-const B = `${ESC}[1m`
 const D = `${ESC}[2m`
-const O = `${ESC}[38;5;208m`
 const CY = `${ESC}[96m`
 const GR = `${ESC}[92m`
 const YE = `${ESC}[33m`
-const WH = `${ESC}[97m`
 
 const CENTRAL_PROJECT = 'team-mode'      // central.sh: PROJECT=${PROJECT:-team-mode}
 const MACHINE_IMAGE = 'agentistics-machine' // docker-compose.machine.yml: image
+const CENTRAL_FILTER = `label=com.docker.compose.project=${CENTRAL_PROJECT}`
+const MACHINE_FILTER = `ancestor=${MACHINE_IMAGE}`
+
+/**
+ * Inside a container the app always listens on 47291 — both compose files pin `PORT: 47291`, so the
+ * INTERNAL port is a constant even though the published one is the user's choice (APP_PORT).
+ * Asking docker which host port that maps to is the only way to state the central's URL without
+ * guessing; 48080 is merely the default the wizard offers.
+ */
+const CONTAINER_APP_PORT = '47291/tcp'
+const CENTRAL_DEFAULT_PORT = 48080
+
+const SERVER_LOG = join(homedir(), '.agentistics', 'agentop-server.log')
 
 // shell helpers
 async function sh(cmd: string[]): Promise<{ code: number; out: string }> {
@@ -58,31 +93,203 @@ async function sh(cmd: string[]): Promise<{ code: number; out: string }> {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 // language
-async function resolveLang(): Promise<CliLang> {
-  const i = process.argv.indexOf('--lang')
-  const flag = i >= 0 ? process.argv[i + 1] : undefined
-  if (flag === 'pt' || flag === 'en') return flag
-  try {
-    const prefs = await readPreferences()
-    return prefs.lang === 'pt' ? 'pt' : 'en'
-  } catch {
-    return 'en'
-  }
-}
+// resolveLang lives in cli-lang.ts so `agentop tui` resolves the language identically.
 
 // state + detection
 type Mode = 'solo' | 'central' | 'member'
 
-async function loadState(): Promise<{ mode: Mode; endpoint?: string }> {
+async function loadState(): Promise<{ mode: Mode; endpoint?: string; mouse: boolean }> {
   try {
     const prefs = await readPreferences()
-    return { mode: prefs.team?.mode ?? 'solo', endpoint: prefs.team?.endpoint }
+    // Mouse ON unless the preference says otherwise — the default the control center assumes, and
+    // the one an unreadable preferences file falls back to below. It is the reachable-by-default
+    // half of the setting; `m` in the app is how it is turned off, and it is written back here.
+    return { mode: prefs.team?.mode ?? 'solo', endpoint: prefs.team?.endpoint, mouse: prefs.mouse !== false }
   } catch {
-    return { mode: 'solo' }
+    return { mode: 'solo', mouse: true }
   }
 }
 
-interface Services { local: boolean; central: boolean; machine: boolean }
+/**
+ * Which runtimes are up, by runtime id.
+ *
+ * A RUNTIME, not a service: `local` and `machine` are two ways of running the ONE logical service
+ * the user calls "agentistics", and the whole point of the logical model is that this map is the
+ * host's business and never reaches the screen as three rows.
+ */
+type RuntimeUp = Record<RuntimeId, boolean>
+
+/**
+ * The runtimes each target names, most-preferred first.
+ *
+ * One total record rather than a lookup with a fallback, so the compiler is the thing that notices
+ * a new runtime or a new service — and so a logical target and a runtime target resolve through
+ * exactly the same table. `central` appears on both sides because the central has a single runtime:
+ * naming the service and naming its runtime are the same instruction.
+ */
+export const TARGET_RUNTIMES: Record<ServiceRef, readonly RuntimeId[]> = {
+  agentistics: ['local', 'machine'],
+  central: ['central'],
+  local: ['local'],
+  machine: ['machine'],
+}
+
+/** Canonical order, used wherever a set of runtimes has to be listed or acted on in sequence. */
+export const RUNTIME_ORDER: readonly RuntimeId[] = ['local', 'machine', 'central']
+
+/**
+ * The runtimes an action target names, restricted to the ones actually RUNNING.
+ *
+ * This is where a logical target becomes something to act on: `stop('agentistics')` means "stop
+ * whichever way it happens to be running", which is one runtime normally and two in the conflict
+ * case — and nothing at all when it is already down, which the caller reports rather than
+ * pretending it stopped something.
+ */
+export function targetRuntimes(target: ActionTarget, up: readonly RuntimeId[]): RuntimeId[] {
+  const named = target === 'all' ? RUNTIME_ORDER : TARGET_RUNTIMES[target]
+  return named.filter(id => up.includes(id))
+}
+
+/**
+ * The runtime whose log a source names.
+ *
+ * A logical source reads whichever runtime is up; with none up it falls back to the service's
+ * primary runtime, because the most useful log of a server that is NOT running is the file the last
+ * one left behind. A runtime source resolves to itself, which is what the full-screen Logs screen's
+ * selector needs in order to read a container the cockpit does not have selected.
+ */
+export function logRuntime(source: LogSource, up: readonly RuntimeId[]): RuntimeId {
+  const candidates = TARGET_RUNTIMES[source]
+  return candidates.find(id => up.includes(id)) ?? candidates[0]!
+}
+
+/**
+ * A logical service's state, from the states of its runtimes.
+ *
+ * `up` if any runtime is up. Otherwise `unknown` if an AVAILABLE runtime could not be probed — the
+ * old "never assume down" rule, scoped so it cannot spread: a container runtime on a box without
+ * docker is not undetectable, it is impossible, so it must not make the whole service read as
+ * unknown on every machine that has no docker installed. Only when every runtime that could be
+ * running is confidently down is the service down.
+ */
+export function aggregateState(
+  runtimes: readonly Pick<ServiceRuntimeState, 'state' | 'available' | 'reason'>[],
+): { state: ServiceState; reason?: string } {
+  if (runtimes.some(r => r.state === 'up')) return { state: 'up' }
+  const blind = runtimes.find(r => r.available && r.state === 'unknown')
+  return blind ? { state: 'unknown', reason: blind.reason } : { state: 'down' }
+}
+
+/**
+ * The starts a single runtime offers. Native is the only one with a shape left to choose.
+ *
+ * Each option carries what must happen AROUND it — the port it contends for, whether the archive
+ * consent applies, whether it is worth bringing back on boot. Those are facts about this box and
+ * this product, so they are stated here with the option rather than re-derived from the runtime id
+ * by the screen drawing it: a UI that knows `local` is the runtime with a port is a UI holding a
+ * piece of the model.
+ */
+function startOptionsFor(runtime: RuntimeId, s: CliStrings): StartOption[] {
+  switch (runtime) {
+    case 'local':
+      return [
+        {
+          runtime: 'local', how: 'fg', label: s.optForeground, hint: s.optForegroundHint,
+          // The foreground path hands the terminal back to `runStart()`, which clears the port and
+          // asks the gate itself; the flags describe the start either way.
+          blockedBy: 'local', asksArchive: true,
+        },
+        {
+          runtime: 'local', how: 'bg', label: s.optBackground, hint: s.optBackgroundHint,
+          blockedBy: 'local', asksArchive: true, offersBoot: true,
+        },
+      ]
+    case 'machine':
+      return [{ runtime: 'machine', label: s.optDocker, hint: s.optDockerHint }]
+    case 'central':
+      return [{ runtime: 'central', label: s.optCentral, hint: s.optCentralHint, offersBoot: true }]
+  }
+}
+
+/**
+ * One logical service, assembled from the runtimes it could be running under.
+ *
+ * PURE — states and strings in, the value the screen draws out — because every judgement worth
+ * getting right is in here: that a running service offers NO start (which is the whole answer to
+ * "it offered to start a docker copy while one was already running"), that a service with two
+ * runtimes up says so instead of showing one of them, and that a stopped service still gets a row
+ * with the starts this box can actually perform.
+ */
+export function buildService(
+  id: ServiceId,
+  label: string,
+  runtimes: ServiceRuntimeState[],
+  s: CliStrings,
+  /**
+   * What only an OS probe can answer. Optional and absent by default, so a caller that cannot ask
+   * — or a platform with no user systemd — produces a service that says nothing about boot rather
+   * than one that says "no".
+   */
+  facts: { boot?: BootState } = {},
+): ControlService {
+  const up = runtimes.filter(r => r.state === 'up')
+  const { state, reason } = aggregateState(runtimes)
+  return {
+    id,
+    label,
+    state,
+    runtimes,
+    running: up.map(r => r.id),
+    active: up[0],
+    boot: facts.boot,
+    // Named, not merely coloured, and never reduced to whichever copy we happened to find first.
+    conflict: up.length > 1 ? s.svcConflict(up.map(r => r.kind)) : undefined,
+    reason,
+    // The single most important line in the model: while anything is up there is nothing to start.
+    startOptions: up.length > 0
+      ? []
+      : runtimes.filter(r => r.available).flatMap(r => startOptionsFor(r.id, s)),
+    stopOptions: up.length > 1
+      ? up.map(r => ({ runtime: r.id, label: s.stopRuntime(r.kind) }))
+      : [],
+  }
+}
+
+/**
+ * `systemctl --user is-enabled` answers, mapped onto the three things the screen can say.
+ *
+ * PURE, and deliberately exhaustive on the KNOWN answers only: anything systemd does not recognise
+ * — `not-found`, an empty line, an error it printed to stderr, a version that invents a new word —
+ * comes back `undefined`, which the detail pane renders as no boot row at all. The one answer this
+ * function may never invent is "off", because a user who reads that installs a boot unit they
+ * already have.
+ */
+export function parseBootState(out: string): BootState | undefined {
+  const word = out.trim().split('\n')[0]?.trim() ?? ''
+  // `linked`/`enabled-runtime` are enabled by another name; `alias` follows its target, so it is
+  // only ever reported for a unit that IS installed.
+  if (word === 'enabled' || word === 'enabled-runtime' || word === 'linked' || word === 'linked-runtime') return 'on'
+  if (word === 'disabled' || word === 'masked' || word === 'masked-runtime') return 'off'
+  return undefined
+}
+
+/**
+ * Does this service come back after a reboot?
+ *
+ * Only Linux can be asked: `enableAutostart` writes a systemd USER unit, and macOS (launchd) and
+ * Windows are not wired up at all — so on those platforms the honest answer is silence, which costs
+ * one `platform()` check rather than a subprocess that would fail anyway. `agentistics` boots as
+ * the native server (a container already restarts itself with Docker), which is the same mapping
+ * `enableBoot` uses.
+ */
+async function bootState(service: ServiceId): Promise<BootState | undefined> {
+  if (platform() !== 'linux') return undefined
+  const unit = service === 'central' ? 'agentop-central' : 'agentop-server'
+  const r = await sh(['systemctl', '--user', 'is-enabled', unit])
+  // systemctl prints the state to stdout even when it exits non-zero, so the code is not the
+  // signal — the word is. A missing binary answers 127 with nothing, which parses to `undefined`.
+  return parseBootState(r.out)
+}
 
 async function isServerRunning(): Promise<boolean> {
   try {
@@ -98,13 +305,45 @@ async function dockerIds(filter: string): Promise<string[]> {
   return r.out.split(/\s+/).filter(Boolean)
 }
 
-async function detectServices(): Promise<Services> {
+async function detectRuntimes(): Promise<RuntimeUp> {
   const [local, central, machine] = await Promise.all([
     isServerRunning(),
-    dockerIds(`label=com.docker.compose.project=${CENTRAL_PROJECT}`).then((i) => i.length > 0),
-    dockerIds(`ancestor=${MACHINE_IMAGE}`).then((i) => i.length > 0),
+    dockerIds(CENTRAL_FILTER).then((i) => i.length > 0),
+    dockerIds(MACHINE_FILTER).then((i) => i.length > 0),
   ])
   return { local, central, machine }
+}
+
+/** The running runtimes, in canonical order — the input every target resolution needs. */
+async function runningRuntimes(): Promise<RuntimeId[]> {
+  const up = await detectRuntimes()
+  return RUNTIME_ORDER.filter(id => up[id])
+}
+
+/** Is exactly this runtime up? Used where probing all three would be wasted work. */
+async function isRuntimeUp(id: RuntimeId): Promise<boolean> {
+  if (id === 'local') return isServerRunning()
+  return (await dockerIds(id === 'central' ? CENTRAL_FILTER : MACHINE_FILTER)).length > 0
+}
+
+/**
+ * A container's state, distinguishing "not running" from "we could not tell" from "impossible here".
+ *
+ * Reporting `down` when docker's daemon is unreachable would be a lie the user then acts on —
+ * starting a central that is already up, or believing one stopped. `sh` answers 127 when the binary
+ * cannot be spawned at all and a non-zero code when docker itself refused, and those two are NOT
+ * the same fact: with no docker installed there is no container to be uncertain about, so the
+ * runtime is reported unavailable and stops colouring its service's state (and stops being offered
+ * as a start that could not possibly work). With docker present but silent we still know nothing.
+ */
+async function dockerState(
+  filter: string,
+  s: CliStrings,
+): Promise<{ state: ServiceState; reason?: string; available: boolean }> {
+  const r = await sh(['docker', 'ps', '-q', '-f', filter])
+  if (r.code === 127) return { state: 'unknown', reason: s.dockerMissing, available: false }
+  if (r.code !== 0) return { state: 'unknown', reason: s.dockerUnreachable, available: true }
+  return { state: r.out.split(/\s+/).filter(Boolean).length > 0 ? 'up' : 'down', available: true }
 }
 
 // stopping
@@ -119,12 +358,110 @@ export function pidsToKill(lsofOut: string, selfPid: number): string[] {
   return lsofOut.split(/\s+/).filter(Boolean).filter((pid) => pid !== self)
 }
 
-async function stopLocal(s: CliStrings): Promise<void> {
-  process.stdout.write(`  ${D}${s.stoppingLocal}${R}\n`)
+/**
+ * The pids listening on the api port, which is what "the local server" means here.
+ *
+ * One mechanism, two readers: the stop path kills this list and the control center's detail pane
+ * names its first entry. A second way of finding the server would eventually disagree with this
+ * one, and then the screen would offer to stop a process it is not showing.
+ */
+async function listeningServerPids(): Promise<string[]> {
   // `-sTCP:LISTEN` targets only the listening server, never a client connection
   // (e.g. our own health-check socket); pidsToKill drops our pid as a safety net.
   const lsof = await sh(['lsof', '-ti', `tcp:${PORT}`, '-sTCP:LISTEN'])
-  const pids = pidsToKill(lsof.out, process.pid)
+  return pidsToKill(lsof.out, process.pid)
+}
+
+/**
+ * Elapsed-seconds output from `ps`, in either spelling it comes in.
+ *
+ * `-o etimes=` prints whole seconds and is a GNU/procps extension; BSD `ps` (macOS) only knows
+ * `-o etime=`, which prints `[[DD-]HH:]MM:SS`. Anything else — an error line, an empty answer from
+ * a pid that has just exited — is `undefined`, so the caller reports no uptime instead of a zero.
+ */
+export function parseElapsedSeconds(out: string): number | undefined {
+  const text = out.trim()
+  if (/^\d+$/.test(text)) return Number(text)
+  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(text)
+  if (!m) return undefined
+  const secs = Number(m[1] ?? 0) * 86400 + Number(m[2] ?? 0) * 3600 + Number(m[3] ?? 0) * 60 + Number(m[4] ?? 0)
+  return Number.isFinite(secs) ? secs : undefined
+}
+
+/** When a native process started, as epoch ms, or `undefined` when the OS would not say. */
+async function processStartedAt(pid: number): Promise<number | undefined> {
+  const primary = await sh(['ps', '-o', 'etimes=', '-p', String(pid)])
+  let secs = primary.code === 0 ? parseElapsedSeconds(primary.out) : undefined
+  if (secs === undefined) {
+    const fallback = await sh(['ps', '-o', 'etime=', '-p', String(pid)])
+    secs = fallback.code === 0 ? parseElapsedSeconds(fallback.out) : undefined
+  }
+  // Derived from an elapsed time rather than read directly, so it is accurate to the second — which
+  // is a thousand times finer than the coarsest unit any uptime is ever rendered in.
+  return secs === undefined ? undefined : Date.now() - secs * 1000
+}
+
+/** What `docker inspect` can tell us about a running container, each part independently absent. */
+export interface ContainerFacts {
+  pid?: number
+  startedAt?: number
+  /** Host port the container's 47291 is published as; absent under host networking. */
+  hostPort?: number
+}
+
+/**
+ * The one-line inspect template, and its parser.
+ *
+ * `range` over the port map rather than indexing into it: a template that indexes a key which does
+ * not exist FAILS the whole command, and the machine container runs on host networking, so asking
+ * for its published port that way would cost us its pid and start time as well.
+ */
+const INSPECT_FORMAT =
+  '{{.State.Pid}}|{{.State.StartedAt}}|{{range $p, $c := .NetworkSettings.Ports}}{{range $c}}{{$p}}={{.HostPort}} {{end}}{{end}}'
+
+export function parseContainerFacts(out: string, containerPort: string = CONTAINER_APP_PORT): ContainerFacts {
+  const [rawPid = '', rawStarted = '', rawPorts = ''] = out.trim().split('|')
+  const pid = Number(rawPid.trim())
+  // A container that is not running inspects as pid 0 and as the zero time `0001-01-01T00:00:00Z`
+  // — both are real values that are not facts, so they are filtered rather than rendered.
+  const started = Date.parse(rawStarted.trim())
+  const mapping = rawPorts.trim().split(/\s+/).find(p => p.startsWith(`${containerPort}=`))
+  const hostPort = mapping ? Number(mapping.slice(containerPort.length + 1)) : Number.NaN
+  return {
+    pid: Number.isInteger(pid) && pid > 0 ? pid : undefined,
+    startedAt: Number.isFinite(started) && started > 0 ? started : undefined,
+    hostPort: Number.isInteger(hostPort) && hostPort > 0 ? hostPort : undefined,
+  }
+}
+
+/** Inspect the first container matching `filter`. Every failure path yields an empty answer. */
+async function containerFacts(filter: string): Promise<ContainerFacts> {
+  const ids = await dockerIds(filter)
+  const id = ids[0]
+  if (!id) return {}
+  const r = await sh(['docker', 'inspect', '-f', INSPECT_FORMAT, id])
+  if (r.code !== 0) return {}
+  return parseContainerFacts(r.out)
+}
+
+/**
+ * The native server's pid and start time.
+ *
+ * Only the first listener is named: a second pid on that port means something we did not start is
+ * also there, and picking one of several to call "the server" is a guess the detail pane should not
+ * be making on the user's behalf. Without lsof there are no pids at all, and both fields stay away.
+ */
+interface ProcessFacts { pid?: number; startedAt?: number }
+
+async function nativeServerFacts(): Promise<ProcessFacts> {
+  const pid = Number((await listeningServerPids())[0])
+  if (!Number.isInteger(pid) || pid <= 0) return {}
+  return { pid, startedAt: await processStartedAt(pid) }
+}
+
+async function stopLocal(s: CliStrings): Promise<void> {
+  process.stdout.write(`  ${D}${s.stoppingLocal}${R}\n`)
+  const pids = await listeningServerPids()
   if (pids.length) { for (const pid of pids) await sh(['kill', pid]) }
   else await sh(['pkill', '-f', 'agentop server'])
   for (let i = 0; i < 20; i++) { if (!(await isServerRunning())) return; await sleep(150) }
@@ -137,39 +474,6 @@ async function stopContainers(filter: string, msg: string): Promise<void> {
   await sh(['docker', 'stop', ...ids])
 }
 
-// banner + status
-function printBanner(s: CliStrings): void {
-  const art = [
-    '▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀ ▀█▀ █ █▀▀ █▀',
-    '█▀█ █▄█ ██▄ █░▀█ ░█░ █ ▄█ ░█░ █ █▄▄ ▄█',
-  ]
-  process.stdout.write('\n')
-  for (const line of art) process.stdout.write(`  ${O}${B}${line}${R}\n`)
-  process.stdout.write(`  ${D}${s.tagline}${R}\n`)
-}
-
-const RULE = `  ${D}${R}`
-
-function printStatus(s: CliStrings, mode: Mode, endpoint: string | undefined, svc: Services): void {
-  const config =
-    mode === 'member' ? `${CY}${s.configMember(`${WH}${endpoint ?? '(?)'}${R}${CY}`)}${R}`
-    : mode === 'central' ? `${CY}${s.configCentral}${R}`
-    : `${CY}${s.configSolo}${R}`
-
-  const running: string[] = []
-  if (svc.local) running.push(`${GR}●${R} ${s.runAgentistics}  ${D}http://localhost:${WEB_PORT}${R}`)
-  if (svc.central) running.push(`${GR}●${R} ${s.runCentral}`)
-  if (svc.machine) running.push(`${GR}●${R} ${s.runMachine}`)
-  const runLine = running.length ? running.join(`\n           `) : `${D}○ ${s.nothingRunning}${R}`
-
-  process.stdout.write(
-    `${RULE}\n` +
-    `  ${D}${s.configLabel}${R}   ${config}\n` +
-    `  ${D}${s.runningLabel}${R}  ${runLine}\n` +
-    `${RULE}\n`,
-  )
-}
-
 // run methods
 function serverReinvocation(): string {
   const script = process.argv[1]
@@ -177,41 +481,42 @@ function serverReinvocation(): string {
   return fromSource ? `"${process.execPath}" "${script}" server` : `"${process.execPath}" server`
 }
 
-function startBackground(s: CliStrings): void {
-  const log = join(homedir(), '.agentistics', 'agentop-server.log')
-  const child = spawn('sh', ['-c', `nohup ${serverReinvocation()} >> "${log}" 2>&1 &`], { stdio: 'ignore', detached: true })
+/** Detach a server into the background. Silent: the caller is the one that knows whether it may
+ *  print (the control center reports through the status line instead). Returns the log path. */
+function startBackground(): string {
+  const child = spawn('sh', ['-c', `nohup ${serverReinvocation()} >> "${SERVER_LOG}" 2>&1 &`], { stdio: 'ignore', detached: true })
   child.unref()
-  process.stdout.write(
-    `\n  ${GR}${s.startedBg}${R}\n` +
-    `  ${D}${s.webLabel}:${R}  ${CY}http://localhost:${WEB_PORT}${R}\n` +
-    `  ${D}${s.logsLabel}:${R} ${log}\n`,
-  )
+  return SERVER_LOG
 }
 
-async function startDocker(s: CliStrings): Promise<void> {
+/** Build + start the machine container. Writes to the tty, so it only ever runs suspended — hence
+ *  `tty()` rather than stdout for the lines that must survive the mute a suspension installs. */
+async function startDocker(s: CliStrings): Promise<number> {
   const compose = join(process.cwd(), 'docker-compose.machine.yml')
   if (!(await Bun.file(compose).exists())) {
     process.stderr.write(`\n  ${YE}${s.noComposeFrom(process.cwd())}${R}\n  ${s.runFromRepo}\n`)
-    return
+    return 1
   }
-  process.stdout.write(`\n  ${D}${s.buildingMachine}${R}\n\n`)
+  tty(`\n  ${D}${s.buildingMachine}${R}\n\n`)
   const child = spawn('docker', ['compose', '-f', compose, 'up', '-d', '--build'], { stdio: 'inherit' })
   const code = await new Promise<number>((resolve) => child.on('exit', (c) => resolve(c ?? 1)))
   if (code === 0) {
-    process.stdout.write(
+    tty(
       `\n  ${GR}${s.containerUp}${R}\n` +
       `  ${D}${s.webLabel}:${R}  ${CY}http://localhost:${WEB_PORT}${R}\n` +
       `  ${D}${s.bootLabel}:${R} ${s.bootNote}\n`,
     )
   }
+  return code
 }
 
-async function offerBoot(s: CliStrings, mode: 'server' | 'central'): Promise<void> {
-  if (!(await confirm(s.confirmBoot, false))) return
-  const res = await enableAutostart(mode)
-  process.stdout.write('  ' + res.message.replace(/\n/g, '\n  ') + '\n')
-}
-
+/**
+ * The "a server is already running — kill it?" gate, for the FOREGROUND handover.
+ *
+ * Foreground is the one path that still runs on the real terminal (the control center has exited
+ * by then), so the confirmation is asked the way it always was. The background path asks the same
+ * question inside the control center, as an Ink prompt, and calls `stop('local')` on a yes.
+ */
 async function clearPortOrAbort(s: CliStrings, localRunning: boolean): Promise<boolean> {
   if (!localRunning) return true
   process.stdout.write(`\n  ${YE}${s.alreadyRunning(`${CY}http://localhost:${WEB_PORT}${R}${YE}`)}${R}\n`)
@@ -221,69 +526,6 @@ async function clearPortOrAbort(s: CliStrings, localRunning: boolean): Promise<b
   }
   await stopLocal(s)
   return true
-}
-
-// connect / disconnect
-async function connectFlow(s: CliStrings): Promise<void> {
-  const endpoint = await input(s.promptEndpoint)
-  const token = await input(s.promptToken)
-  const org = await input(s.promptOrg, { default: 'default' })
-  await memberConnect({ endpoint, token, org: org || undefined })
-}
-
-async function disconnectFlow(s: CliStrings): Promise<void> {
-  await memberLeave()
-  process.stdout.write(`  ${GR}${s.disconnected}${R}\n`)
-}
-
-// stop submenu
-async function stopMenu(s: CliStrings, svc: Services): Promise<boolean> {
-  const choices: { name: string; value: string }[] = []
-  if (svc.local) choices.push({ name: s.stopLocal, value: 'local' })
-  if (svc.central) choices.push({ name: s.stopCentral, value: 'central' })
-  if (svc.machine) choices.push({ name: s.stopMachine, value: 'machine' })
-  if (choices.length > 1) choices.push({ name: s.stopEverything, value: 'all' })
-  choices.push({ name: s.cancel, value: 'cancel' })
-
-  const pick = await select({ message: s.stopWhich, choices })
-  if (pick === 'cancel') return false
-  if (pick === 'local' || pick === 'all') await stopLocal(s)
-  if (pick === 'central' || pick === 'all') await stopContainers(`label=com.docker.compose.project=${CENTRAL_PROJECT}`, s.stoppingCentral)
-  if (pick === 'machine' || pick === 'all') await stopContainers(`ancestor=${MACHINE_IMAGE}`, s.stoppingMachine)
-  return true
-}
-
-// "agentistics" (this machine) → how to run
-async function runAgentistics(s: CliStrings, localRunning: boolean): Promise<StartResult | 'handled'> {
-  const how = await select<string>({
-    message: s.howTitle,
-    choices: [
-      { name: s.foreground, value: 'fg', hint: s.foregroundHint },
-      { name: s.background, value: 'bg', hint: s.backgroundHint },
-      { name: s.docker, value: 'docker', hint: s.dockerHint },
-      { name: s.back, value: 'back' },
-    ],
-  })
-  if (how === 'back') return 'handled'
-  if (how === 'fg') {
-    if (!(await clearPortOrAbort(s, localRunning))) return 'handled'
-    // First-run: pick how history is preserved before the server starts (CLI mirror of the
-    // web consent gate). No-op once chosen. The Docker path uses the web gate instead.
-    await ensureArchiveModeChosen()
-    return 'foreground'
-  }
-  if (how === 'bg') {
-    if (!(await clearPortOrAbort(s, localRunning))) return 'handled'
-    await ensureArchiveModeChosen()
-    startBackground(s)
-    await offerBoot(s, 'server')
-    await pause(s.pauseMsg)
-    return 'handled'
-  }
-  // docker
-  await startDocker(s)
-  await pause(s.pauseMsg)
-  return 'handled'
 }
 
 // restart (per-service helpers)
@@ -309,7 +551,16 @@ async function restartLocalSvc(s: CliStrings, rebuild = false): Promise<void> {
   }
   process.stdout.write(`  ${D}${s.restartingLocal}${R}\n`)
   await stopLocal(s)
-  startBackground(s)
+  const log = startBackground()
+  // `agentop restart --all` is a plain CLI command with no screen to report into, and it is the one
+  // caller of this that the user is watching. `startBackground` fell silent when the control center
+  // took it over — which left that command saying "restarted" and never where the server now is or
+  // where its output went. Inside the control center these lines are swallowed by `captureOutput`
+  // or by the suspension, so saying them costs the alternate screen nothing.
+  process.stdout.write(
+    `  ${D}${s.webLabel}:${R}  ${CY}http://localhost:${WEB_PORT}${R}\n` +
+    `  ${D}${s.logsLabel}:${R} ${log}\n`,
+  )
 }
 async function restartCentralSvc(s: CliStrings, rebuild = false): Promise<void> {
   process.stdout.write(`  ${D}${rebuild ? s.rebuildingCentral : s.restartingCentral}${R}\n`)
@@ -328,116 +579,564 @@ async function restartMachineSvc(s: CliStrings, rebuild = false): Promise<void> 
     process.stderr.write(`  ${YE}${s.noComposeFrom(process.cwd())}${R}\n`)
     // fall through to a plain restart so the machine still comes back up
   }
-  const ids = await dockerIds(`ancestor=${MACHINE_IMAGE}`)
+  const ids = await dockerIds(MACHINE_FILTER)
   if (ids.length) await sh(['docker', 'restart', ...ids])
 }
 
-/** Restart every service currently up. `rebuild` recreates Docker images (central + machine). */
-async function restartRunning(s: CliStrings, svc: Services, rebuild = false): Promise<boolean> {
-  if (!(svc.local || svc.central || svc.machine)) return false
-  if (svc.local) await restartLocalSvc(s, rebuild)
-  if (svc.central) await restartCentralSvc(s, rebuild)
-  if (svc.machine) await restartMachineSvc(s, rebuild)
-  process.stdout.write(`\n  ${GR}${s.restartedAll}${R}\n`)
-  return true
-}
-
-// restart submenu (pick one running service, or all)
-async function restartMenu(s: CliStrings, svc: Services): Promise<boolean> {
-  const choices: { name: string; value: string }[] = []
-  if (svc.local) choices.push({ name: s.stopLocal, value: 'local' })
-  if (svc.central) choices.push({ name: s.stopCentral, value: 'central' })
-  if (svc.machine) choices.push({ name: s.stopMachine, value: 'machine' })
-  if (choices.length > 1) choices.push({ name: s.stopEverything, value: 'all' })
-  choices.push({ name: s.cancel, value: 'cancel' })
-
-  const pick = await select({ message: s.restartWhich, choices })
-  if (pick === 'cancel') return false
-  if (pick === 'all') return restartRunning(s, svc)
-  if (pick === 'local') await restartLocalSvc(s)
-  if (pick === 'central') await restartCentralSvc(s)
-  if (pick === 'machine') await restartMachineSvc(s)
-  process.stdout.write(`\n  ${GR}${s.restartedDone}${R}\n`)
-  return true
+/** Bounce exactly these runtimes. `rebuild` recreates Docker images (central + machine). */
+async function restartRuntimes(s: CliStrings, targets: readonly RuntimeId[], rebuild = false): Promise<void> {
+  if (targets.includes('local')) await restartLocalSvc(s, rebuild)
+  if (targets.includes('central')) await restartCentralSvc(s, rebuild)
+  if (targets.includes('machine')) await restartMachineSvc(s, rebuild)
 }
 
 /** Non-interactive `agentop restart --all [--rebuild]`: bounce (or rebuild) every running
- *  service. Returns an exit code. */
+ *  runtime. Returns an exit code. */
 export async function restartAllServices(rebuild = false): Promise<number> {
   const s = cliStrings(await resolveLang())
-  const svc = await detectServices()
-  if (!(svc.local || svc.central || svc.machine)) {
+  const targets = await runningRuntimes()
+  if (targets.length === 0) {
     process.stdout.write(`  ${D}○ ${s.nothingRunning}${R}\n`)
     return 0
   }
-  await restartRunning(s, svc, rebuild)
+  await restartRuntimes(s, targets, rebuild)
+  process.stdout.write(`\n  ${GR}${s.restartedAll}${R}\n`)
   return 0
 }
 
-// main loop
+// ---------------------------------------------------------------------------
+// Talking to the terminal while Ink owns it
+// ---------------------------------------------------------------------------
+
+/**
+ * Run `fn` with stdout/stderr diverted into a string.
+ *
+ * The action modules (`cli-member`, the stop/restart helpers) report by printing, which is right
+ * for their own CLI subcommands and fatal inside the alternate screen. Capturing keeps them
+ * unchanged and turns their output into something better: the failure message shown in the status
+ * line, which is otherwise a generic sentence.
+ */
+async function captureOutput<T>(fn: () => Promise<T>): Promise<{ value: T; text: string }> {
+  const chunks: string[] = []
+  const realOut = process.stdout.write.bind(process.stdout)
+  const realErr = process.stderr.write.bind(process.stderr)
+  const sink = ((chunk: unknown) => {
+    chunks.push(typeof chunk === 'string' ? chunk : String(chunk))
+    return true
+  }) as typeof process.stdout.write
+  process.stdout.write = sink
+  process.stderr.write = sink
+  try {
+    return { value: await fn(), text: chunks.join('') }
+  } finally {
+    process.stdout.write = realOut
+    process.stderr.write = realErr
+  }
+}
+
+/**
+ * Write straight to the terminal's own descriptor, past whatever is patched over
+ * `process.stdout`. This is how the suspend wrapper and the commands it hosts talk to the user
+ * while the JS-level stream is muted.
+ */
+function tty(text: string): void {
+  try { writeSync(1, text) } catch { /* the terminal went away — nothing to say and no one to tell */ }
+}
+
+/**
+ * Swallow JS-level stdout for the duration.
+ *
+ * Ink keeps rendering while a command has the tty: its spinner ticks and the frame queued just
+ * before we left both arrive after the alternate screen is gone, and an Ink frame is not just
+ * text — it erases the lines above itself first, which here means erasing the user's real
+ * scrollback. Stderr is deliberately left alone, so a command that fails still says why.
+ */
+async function muteStdout<T>(fn: () => Promise<T>): Promise<T> {
+  const real = process.stdout.write.bind(process.stdout)
+  process.stdout.write = (() => true) as typeof process.stdout.write
+  try {
+    return await fn()
+  } finally {
+    process.stdout.write = real
+  }
+}
+
+const ANSI_RE = new RegExp(`${ESC}\\[[0-9;]*m`, 'g')
+
+/** The most specific thing a captured failure said: its last non-empty line, undecorated. */
+function lastLine(text: string): string {
+  const lines = text.replace(ANSI_RE, '').split('\n').map(l => l.trim()).filter(Boolean)
+  return lines[lines.length - 1] ?? ''
+}
+
+/** Only the shape of `altScreen` this module uses — the value arrives by dynamic import. */
+interface Suspendable {
+  suspend<T>(fn: () => Promise<T>): Promise<T>
+}
+
+type Suspend = <T>(fn: () => Promise<T>) => Promise<T>
+
+/** Wait for Enter on a terminal we have just handed back to the user. */
+function pauseForEnter(message: string): Promise<void> {
+  return new Promise(resolve => {
+    tty(`\n  ${D}${message}${R} `)
+    const onData = (chunk: Buffer) => {
+      const text = chunk.toString()
+      if (!text.includes('\n') && !text.includes('\r')) return
+      process.stdin.off('data', onData)
+      resolve()
+    }
+    process.stdin.on('data', onData)
+    process.stdin.resume()
+  })
+}
+
+/**
+ * Hand the real terminal to `fn`, then pause so its output can be read.
+ *
+ * Leaving the alternate screen is only half of it: Ink is still mounted and still listening on
+ * stdin in raw mode, so without detaching its `data` handlers a `q` typed at the paused prompt
+ * would quit the app and every keystroke meant for the child would be read as navigation. The
+ * handlers are put back exactly as they were, so Ink resumes unaware anything happened.
+ */
+function makeSuspend(altScreen: Suspendable, strings: () => CliStrings): Suspend {
+  return async function suspend<T>(fn: () => Promise<T>): Promise<T> {
+    const stdin = process.stdin
+    const listeners = stdin.rawListeners('data') as Array<(chunk: Buffer) => void>
+    stdin.removeAllListeners('data')
+    const wasRaw = stdin.isRaw === true
+    if (wasRaw) stdin.setRawMode(false)
+    try {
+      // The mute goes INSIDE the suspension: leaving and re-entering the alternate screen are
+      // themselves stdout writes, and swallowing those would strand the terminal in one buffer.
+      return await altScreen.suspend(() => muteStdout(async () => {
+        try {
+          return await fn()
+        } finally {
+          await pauseForEnter(strings().pauseMsg)
+        }
+      }))
+    } finally {
+      if (wasRaw) stdin.setRawMode(true)
+      for (const listener of listeners) stdin.on('data', listener)
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ControlHost — every action the control center can ask for
+// ---------------------------------------------------------------------------
+
+/** The host, plus the language it currently speaks (runStart needs it after the app exits). */
+interface StartHost extends ControlHost {
+  readonly lang: CliLang
+}
+
+/** Neither question the setup wizard asks has an answer yet. Fails closed: unreadable ≠ fresh. */
+async function isUnconfigured(): Promise<boolean> {
+  try {
+    const prefs = await readPreferences()
+    return !prefs.team || resolveArchiveMode(prefs) === undefined
+  } catch {
+    return false
+  }
+}
+
+async function tailFile(path: string, maxLines: number): Promise<string[]> {
+  try {
+    const file = Bun.file(path)
+    if (!(await file.exists())) return []
+    const lines = (await file.text()).split('\n')
+    while (lines.length && lines[lines.length - 1] === '') lines.pop()
+    return lines.slice(-maxLines)
+  } catch {
+    return []
+  }
+}
+
+function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartHost {
+  let lang = initialLang
+  const S = () => cliStrings(lang)
+  // Built here so it always reports in the language the host is currently speaking.
+  const suspend = makeSuspend(altScreen, S)
+
+  // The update check is fired once and never awaited. `refresh()` runs on every action and on
+  // every `r`, and a GitHub call on that path would stall the whole screen behind the network;
+  // an answer that arrives late simply lights the header up on the next refresh.
+  let latestVersion: string | undefined
+  if (process.env.AGENTISTICS_NO_UPDATE_CHECK !== '1') {
+    void getVersionInfo()
+      .then(info => { if (info.hasUpdate) latestVersion = info.latest })
+      .catch(() => { /* offline — the header simply says nothing */ })
+  }
+
+  /** Has the archive consent never been answered? Used only to append a hint, so it fails open. */
+  const archivePending = async (): Promise<boolean> => {
+    try {
+      return resolveArchiveMode(await readPreferences()) === undefined
+    } catch {
+      return false
+    }
+  }
+
+  /** The setting in force, for the Setup tab to state. `undefined` while it is still unanswered. */
+  const currentArchiveMode = async (): Promise<ArchiveMode | undefined> => {
+    try {
+      return resolveArchiveMode(await readPreferences())
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * The service panel, in two passes: is a runtime up, and — only then — what is it.
+   *
+   * The second pass is skipped for anything not running, which is what keeps `refresh()` cheap on
+   * the common machine where two of the three runtimes are down: no `docker inspect` for a
+   * container that does not exist, no `ps` for a pid nobody found. Every fact in it is
+   * independently optional and every command behind it is guarded, so a box without lsof, or with
+   * docker installed but not answering, loses detail and never the screen.
+   *
+   * The three runtimes then fold into TWO rows, which is the whole point: `local` and `machine` are
+   * one program run two ways, and `buildService` is what decides what that row says and offers.
+   */
+  const serviceRows = async (): Promise<ControlService[]> => {
+    const s = S()
+    const [local, central, machine, bootAgentistics, bootCentral] = await Promise.all([
+      isServerRunning(),
+      dockerState(CENTRAL_FILTER, s),
+      dockerState(MACHINE_FILTER, s),
+      // Two more probes on the refresh path, both local, both guarded, both answering `undefined`
+      // rather than throwing — and both skipped outright off Linux.
+      bootState('agentistics'),
+      bootState('central'),
+    ])
+    const [nativeFacts, centralFacts, machineFacts] = await Promise.all([
+      local ? nativeServerFacts() : Promise.resolve<ProcessFacts>({}),
+      central.state === 'up' ? containerFacts(CENTRAL_FILTER) : Promise.resolve<ContainerFacts>({}),
+      machine.state === 'up' ? containerFacts(MACHINE_FILTER) : Promise.resolve<ContainerFacts>({}),
+    ])
+    // The published port is the central's own business and never reaches a runtime row; splitting
+    // it off here keeps the rows to fields `ServiceRuntimeState` actually declares.
+    const { hostPort: centralPort, ...centralProc } = centralFacts
+    const { hostPort: _machinePort, ...machineProc } = machineFacts
+
+    const localUrls = { webUrl: `http://localhost:${WEB_PORT}`, apiUrl: `http://localhost:${PORT}` }
+
+    const nativeRuntime: ServiceRuntimeState = {
+      id: 'local',
+      kind: 'native',
+      state: local ? 'up' : 'down',
+      // Nothing to install and nothing to ask: this binary is the runtime.
+      available: true,
+      ...(local ? { ...localUrls, ...nativeFacts } : {}),
+    }
+    const machineRuntime: ServiceRuntimeState = {
+      id: 'machine',
+      kind: 'docker',
+      state: machine.state,
+      available: machine.available,
+      reason: machine.reason,
+      // Host networking (docker-compose.machine.yml): the container's ports land directly on the
+      // host, which is why it publishes nothing and its URLs are the native ones.
+      ...(machine.state === 'up' ? { ...localUrls, ...machineProc } : {}),
+    }
+    const centralRuntime: ServiceRuntimeState = {
+      id: 'central',
+      kind: 'docker',
+      state: central.state,
+      available: central.available,
+      reason: central.reason,
+      // The central publishes ONE port and serves the dashboard and the api on it, so there is no
+      // second URL to name — `apiUrl` is for the split the native server has, not for repeating
+      // the same address under another word.
+      ...(central.state === 'up'
+        ? { webUrl: `http://localhost:${centralPort ?? CENTRAL_DEFAULT_PORT}`, ...centralProc }
+        : {}),
+    }
+
+    return [
+      buildService('agentistics', s.svcAgentistics, [nativeRuntime, machineRuntime], s, { boot: bootAgentistics }),
+      buildService('central', s.svcCentral, [centralRuntime], s, { boot: bootCentral }),
+    ]
+  }
+
+  /**
+   * Which runtime a log source means, probing as little as possible.
+   *
+   * A log pane polls once a second, in two places, so resolving a source that names exactly one
+   * runtime must cost nothing at all — and even the logical `agentistics` stops probing the moment
+   * it finds a runtime up, because that is the one `logRuntime` would pick anyway.
+   */
+  const resolveLogRuntime = async (source: LogSource): Promise<RuntimeId> => {
+    const candidates = TARGET_RUNTIMES[source]
+    if (candidates.length === 1) return candidates[0]!
+    const up: RuntimeId[] = []
+    for (const id of candidates) {
+      if (await isRuntimeUp(id)) { up.push(id); break }
+    }
+    return logRuntime(source, up)
+  }
+
+  const modeSentence = (s: CliStrings, mode: Mode): string =>
+    // The endpoint travels in its own field and the header prints it separately; embedding it
+    // here too would render it twice.
+    mode === 'member' ? s.configMemberBare : mode === 'central' ? s.configCentral : s.configSolo
+
+  return {
+    get lang() { return lang },
+
+    async refresh(): Promise<ControlStatus> {
+      const s = S()
+      const [{ mode, endpoint, mouse }, services] = await Promise.all([loadState(), serviceRows()])
+      return {
+        mode,
+        modeLabel: modeSentence(s, mode),
+        endpoint: mode === 'member' ? endpoint : undefined,
+        services,
+        version: CURRENT_VERSION,
+        latestVersion,
+        archiveMode: await currentArchiveMode(),
+        mouse,
+      }
+    },
+
+    /**
+     * Start ONE runtime — the one the user picked off the service's own start options.
+     *
+     * There is no "which service?" left to decide here: the screen offers a runtime only when its
+     * logical service has nothing up, so the case that produced the complaint — an offer to start a
+     * container copy of a server already running natively — cannot be reached rather than being
+     * refused after the fact. The port check below stays anyway, for the seconds between a refresh
+     * and a keypress.
+     */
+    async start(req: StartRequest): Promise<ActionResult> {
+      const s = S()
+
+      if (req.runtime === 'central') {
+        const code = await suspend(() => runCentral('up', []))
+        return code === 0
+          ? { ok: true, message: s.centralStarted }
+          : { ok: false, message: s.centralFailed }
+      }
+
+      if (req.runtime === 'machine') {
+        const code = await suspend(() => startDocker(s))
+        return code === 0
+          ? { ok: true, message: s.containerUp }
+          : { ok: false, message: s.dockerStartFailed }
+      }
+
+      // Foreground can only start once we no longer own the tty, so the control center reports it
+      // as an exit and `runStart` takes over; this branch is unreachable from the Ink layer.
+      if (req.how === 'fg') return { ok: false, message: s.foregroundLater }
+
+      // The control center asks about a port collision before it ever gets here (and stops the
+      // old server itself if the user says so), so reaching this means one came up in between.
+      // Killing a server the user was never asked about is not a substitute for the question.
+      if (await isServerRunning()) {
+        return { ok: false, message: `${s.alreadyRunning(`http://localhost:${WEB_PORT}`)} ${s.useRestartInstead}` }
+      }
+
+      startBackground()
+      const hint = (await archivePending()) ? ` · ${s.archiveUnsetHint}` : ''
+      return { ok: true, message: `${s.startedBg} http://localhost:${WEB_PORT}${hint}` }
+    },
+
+    async connect(v): Promise<ActionResult> {
+      const s = S()
+      const { value: code, text } = await captureOutput(() =>
+        memberConnect({ endpoint: v.endpoint, token: v.token, org: v.org || undefined }),
+      )
+      if (code === 0) return { ok: true, message: s.connected }
+      return { ok: false, message: lastLine(text) || s.connectFailed }
+    },
+
+    async disconnect(): Promise<ActionResult> {
+      const s = S()
+      const { value: code, text } = await captureOutput(() => memberLeave())
+      if (code === 0) return { ok: true, message: s.disconnected }
+      return { ok: false, message: lastLine(text) || s.disconnectFailed }
+    },
+
+    /**
+     * Bounce whatever the target names, resolved against what is RUNNING.
+     *
+     * The resolution is the reason the screen can stop naming runtimes: `restart('agentistics')`
+     * bounces the native server or the container, whichever is actually up — and both of them when
+     * they are in conflict, which is the only honest reading of "restart it". Naming something that
+     * is not running is answered plainly instead of reported as a restart that never happened.
+     */
+    async restart(target: ActionTarget): Promise<ActionResult> {
+      const s = S()
+      const targets = targetRuntimes(target, await runningRuntimes())
+      if (targets.length === 0) return { ok: false, message: s.svcNotRunning }
+      const work = () => restartRuntimes(s, targets)
+      // A central bounce goes through central.sh / docker compose with inherited stdio, which
+      // writes past any capture we install — it has to have the terminal to itself.
+      if (targets.includes('central')) await suspend(work)
+      else await captureOutput(work)
+      return { ok: true, message: target === 'all' ? s.restartedAll : s.restartedDone }
+    },
+
+    async stop(target: ActionTarget): Promise<ActionResult> {
+      const s = S()
+      const targets = targetRuntimes(target, await runningRuntimes())
+      if (targets.length === 0) return { ok: false, message: s.svcNotRunning }
+      await captureOutput(async () => {
+        if (targets.includes('local')) await stopLocal(s)
+        if (targets.includes('central')) await stopContainers(CENTRAL_FILTER, s.stoppingCentral)
+        if (targets.includes('machine')) await stopContainers(MACHINE_FILTER, s.stoppingMachine)
+      })
+      return { ok: true, message: target === 'all' ? s.stoppedAll : s.stoppedDone }
+    },
+
+    // `solo` is the only mode a preference write can establish on its own: central and member
+    // both need a real action to succeed first (`initCentral`, `connect`), which writes it.
+    async setMode(): Promise<ActionResult> {
+      const s = S()
+      try {
+        await writePreferences({ team: { ...DEFAULT_TEAM } })
+        return { ok: true, message: s.soloSet }
+      } catch {
+        return { ok: false, message: s.prefsWriteFailed }
+      }
+    },
+
+    async initCentral(): Promise<ActionResult> {
+      const s = S()
+      // `central.sh init` asks its own questions; it needs the real terminal, not a captured one.
+      const code = await suspend(() => runCentral('init', []))
+      return code === 0
+        ? { ok: true, message: s.centralInitDone }
+        : { ok: false, message: s.centralInitFailed }
+    },
+
+    async pendingArchiveMode(): Promise<ArchiveMode | null> {
+      // `null` is "nothing left to ask" — the same rule as `ensureArchiveModeChosen()`, which
+      // never re-asks. Otherwise the recommended default comes back as the preselected answer.
+      try {
+        return resolveArchiveMode(await readPreferences()) === undefined ? 'consolidate' : null
+      } catch {
+        // Unreadable preferences are not consent; ask rather than assume.
+        return 'consolidate'
+      }
+    },
+
+    async setArchiveMode(mode: ArchiveMode): Promise<ActionResult> {
+      const s = S()
+      try {
+        await writePreferences({ archiveMode: mode })
+        return { ok: true, message: s.archiveSet(mode) }
+      } catch {
+        return { ok: false, message: s.prefsWriteFailed }
+      }
+    },
+
+    async enableBoot(service: ServiceId): Promise<ActionResult> {
+      // `agentistics` boots as the native server: the machine container already comes back with
+      // Docker (`restart: unless-stopped`), so there is no unit to write for it.
+      const res = await enableAutostart(service === 'central' ? 'central' : 'server')
+      // enableAutostart formats for a printed block; the status line is one row.
+      return { ok: res.ok, message: res.message.split('\n').map(l => l.trim()).filter(Boolean).join(' · ') }
+    },
+
+    /**
+     * Hand a URL to the desktop's browser.
+     *
+     * Tried in the order a box is likely to answer: `xdg-open` on Linux, `open` on macOS,
+     * `cmd /c start` under WSL and Windows. Every one is spawned DETACHED with its output
+     * discarded — `xdg-open` keeps a child around and its stderr would land in the alternate
+     * screen Ink is repainting, which is the one thing this module may never do.
+     *
+     * `openUrl` is optional on `ControlHost` precisely because this can legitimately have nowhere
+     * to go: on a headless box every candidate fails, we say so in one line, and the cockpit stops
+     * offering the action rather than leaving a key that does nothing.
+     */
+    async openUrl(url: string): Promise<ActionResult> {
+      const s = S()
+      const candidates: string[][] = [
+        ['xdg-open', url],
+        ['open', url],
+        // `start` is a cmd builtin, and the empty string is the window TITLE — without it cmd reads
+        // a quoted URL as the title and opens nothing.
+        ['cmd.exe', '/c', 'start', '', url],
+      ]
+      for (const cmd of candidates) {
+        try {
+          const p = Bun.spawn(cmd, { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' })
+          // A launcher that is going to fail does so immediately; one that worked has usually not
+          // exited yet, and waiting for the browser itself would freeze the screen.
+          const code = await Promise.race([
+            p.exited,
+            new Promise<number>(resolve => setTimeout(() => resolve(0), 400)),
+          ])
+          if (code === 0) return { ok: true, message: s.urlOpened(url) }
+        } catch {
+          // Not installed on this box — try the next spelling.
+        }
+      }
+      return { ok: false, message: s.urlOpenFailed }
+    },
+
+    async setLang(next: CliLang): Promise<void> {
+      lang = next
+      try { await writePreferences({ lang: next }) } catch { /* best-effort */ }
+    },
+
+    // Best-effort, exactly like the language: a box that cannot write its preferences still gets
+    // the toggle for this session, because the control center holds the answer itself and only
+    // asks us to remember it.
+    async setMouse(on: boolean): Promise<void> {
+      try { await writePreferences({ mouse: on }) } catch { /* best-effort */ }
+    },
+
+    async readLog(source: LogSource, maxLines: number): Promise<string[]> {
+      const runtime = await resolveLogRuntime(source)
+      if (runtime === 'local') return tailFile(SERVER_LOG, maxLines)
+      const ids = await dockerIds(runtime === 'central' ? CENTRAL_FILTER : MACHINE_FILTER)
+      if (!ids.length) return []
+      // `2>&1` inside the shell rather than two pipes read separately: a container writes to both
+      // streams and reading them apart would interleave the log in the wrong order.
+      const r = await sh(['sh', '-c', `docker logs --tail ${maxLines} ${ids[0]} 2>&1`])
+      if (r.code !== 0) return []
+      return r.out.split('\n').filter(line => line.length > 0)
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * `agentop` / `agentop start` — open the control center, then act on how it exited.
+ *
+ * Without an interactive stdin nothing is drawn at all: the caller runs the server, exactly as a
+ * systemd unit or a pipe has always done.
+ */
 export async function runStart(): Promise<StartResult> {
   if (!process.stdin.isTTY) return 'foreground'
 
-  let lang = await resolveLang()
+  const lang = await resolveLang()
+  const [{ runControlCenter }, { altScreen }] = await Promise.all([
+    import('@agentistics/tui/control'),
+    import('@agentistics/tui/control/altScreen'),
+  ])
 
-  for (;;) {
-    const s = cliStrings(lang)
-    const { mode, endpoint } = await loadState()
-    const svc = await detectServices()
-    const anyRunning = svc.local || svc.central || svc.machine
+  const host = createControlHost(lang, altScreen)
 
-    clearScreen()
-    printBanner(s)
-    printStatus(s, mode, endpoint, svc)
+  // A machine that has never been configured opens on Setup rather than on Services. Bare
+  // `agentop` used to run the wizard outright; the control center replaced that, and landing an
+  // unconfigured user on a list of services to start would leave the mode and the history-
+  // preservation consent — the two things the wizard existed to ask — behind a tab they have no
+  // reason to look for.
+  const exit = await runControlCenter({ lang, host, tab: (await isUnconfigured()) ? 'setup' : undefined })
+  if (exit.kind !== 'foreground') return exit.code
 
-    const choices: { name: string; value: string; hint?: string }[] = [
-      { name: s.itemAgentistics, value: 'agentistics', hint: s.itemAgentisticsHint },
-      { name: s.itemCentral, value: 'central', hint: s.itemCentralHint },
-    ]
-    if (mode === 'member') choices.push({ name: s.itemDisconnect, value: 'disconnect', hint: s.itemDisconnectHint })
-    else choices.push({ name: s.itemConnect, value: 'connect', hint: s.itemConnectHint })
-    if (anyRunning) choices.push({ name: s.itemRestart, value: 'restart', hint: s.itemRestartHint })
-    if (anyRunning) choices.push({ name: s.itemStop, value: 'stop' })
-    choices.push({ name: s.itemLanguage, value: 'language' })
-    choices.push({ name: s.quit, value: 'quit' })
-
-    const action = await select({ message: s.menuTitle, choices })
-
-    let acted = false
-    switch (action) {
-      case 'agentistics': {
-        const r = await runAgentistics(s, svc.local)
-        if (r === 'foreground') return 'foreground'
-        // 'handled' → the submenu already paused where needed; just redraw.
-        break
-      }
-      case 'central': {
-        const code = await runCentral('up', [])
-        if (code === 0) await offerBoot(s, 'central')
-        acted = true
-        break
-      }
-      case 'connect':
-        await connectFlow(s)
-        acted = true
-        break
-      case 'disconnect':
-        await disconnectFlow(s)
-        acted = true
-        break
-      case 'restart':
-        acted = await restartMenu(s, svc)
-        break
-      case 'stop':
-        acted = await stopMenu(s, svc)
-        break
-      case 'language':
-        lang = lang === 'en' ? 'pt' : 'en'
-        try { await writePreferences({ lang }) } catch { /* best-effort */ }
-        break
-      case 'quit':
-        return 0
-    }
-    if (acted) await pause(s.pauseMsg)
-  }
+  // The terminal is ours again, so the two questions the foreground start has always asked can be
+  // asked the way they always were — and in the same order: free the port first (a refusal aborts
+  // the start), then the archive consent, which must not be answered for a server that never runs.
+  const s = cliStrings(host.lang)
+  if (!(await clearPortOrAbort(s, await isServerRunning()))) return 0
+  await ensureArchiveModeChosen()
+  return 'foreground'
 }

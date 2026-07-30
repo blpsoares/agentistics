@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { sessionLabel } from './format'
+import { sessionLabel, fmt } from './format'
 
 describe('sessionLabel', () => {
   it('prefers the title when present', () => {
@@ -32,5 +32,28 @@ describe('sessionLabel', () => {
   it('returns an empty string when nothing usable is present', () => {
     expect(sessionLabel({})).toBe('')
     expect(sessionLabel({ title: '   ', first_prompt: '' })).toBe('')
+  })
+})
+
+describe('fmt', () => {
+  it('formats thousands with K', () => {
+    expect(fmt(1_500)).toBe('1.5K')
+  })
+
+  it('formats millions with M', () => {
+    expect(fmt(2_400_000)).toBe('2.4M')
+  })
+
+  it('formats billions with B rather than four-digit millions', () => {
+    // 13_290_800_000 used to render as "13290.8M", which is unreadable at a glance.
+    expect(fmt(13_290_800_000)).toBe('13.3B')
+  })
+
+  it('formats trillions with T', () => {
+    expect(fmt(2_500_000_000_000)).toBe('2.5T')
+  })
+
+  it('leaves small numbers alone', () => {
+    expect(fmt(942)).toBe('942')
   })
 })
