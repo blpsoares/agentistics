@@ -15,13 +15,23 @@
 
 import type { TeamConnection, TeamConfig } from '@agentistics/core'
 import { connectionId, defaultTeam, normalizeTeamConfig, normalizeEndpointKey } from '@agentistics/core'
-import { readPreferences, updateTeamConfig } from './preferences'
+import { readPreferences, updateTeamConfig, PreferencesLockTimeoutError } from './preferences'
 import { safeConnId } from './config'
 import { readJsonLimited, LIMITS } from './limits'
 import { removeConnection, getUploaderStatus, reconcileUploaderNow, pushNow } from './team-uploader'
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+}
+
+/** R4 (round-2 review of Task 5): a `PreferencesLockTimeoutError` means another process is
+ *  mid-write, not that this request is malformed — 503 + Retry-After tells the caller to try
+ *  again shortly, instead of a 400/500 that reads as "this will never work". */
+function lockTimeoutResponse(): Response {
+  return new Response(JSON.stringify({ error: 'another process is writing preferences — retry shortly' }), {
+    status: 503,
+    headers: { 'Content-Type': 'application/json', 'Retry-After': '2' },
+  })
 }
 
 function trimSlashes(url: string): string {
@@ -196,7 +206,7 @@ async function readBody<T>(req: Request): Promise<{ ok: true; value: T } | { ok:
 
 export type AddConnectionOutcome =
   | { ok: true; action: 'insert' | 'update'; connId: string }
-  | { ok: false; reason: 'verify-failed' | 'conflict'; error: string }
+  | { ok: false; reason: 'verify-failed' | 'conflict' | 'lock-timeout'; error: string }
 
 /**
  * Core logic behind POST /api/team/connections — whoami-verifies BEFORE storing anything (see
@@ -214,43 +224,50 @@ export async function addOrUpdateConnection(body: ConnectionBody): Promise<AddCo
   if (!who.ok) return { ok: false, reason: 'verify-failed', error: who.error ?? 'connection could not be verified' }
 
   let outcome: { action: 'insert' | 'update' | 'conflict'; connId?: string } = { action: 'insert' }
-  await updateTeamConfig((current: TeamConfig) => {
-    const decision = decideConnectionUpsert(current.connections, body.endpoint, body.token)
-    if (decision.action === 'conflict') {
-      outcome = { action: 'conflict' }
-      return undefined
-    }
-    if (decision.action === 'update') {
-      const existing = decision.existing
-      const updated: TeamConnection = {
-        ...existing,
+  try {
+    await updateTeamConfig((current: TeamConfig) => {
+      const decision = decideConnectionUpsert(current.connections, body.endpoint, body.token)
+      if (decision.action === 'conflict') {
+        outcome = { action: 'conflict' }
+        return undefined
+      }
+      if (decision.action === 'update') {
+        const existing = decision.existing
+        const updated: TeamConnection = {
+          ...existing,
+          endpoint: body.endpoint,
+          token: body.token,
+          // Same precedence as the insert branch below — an explicit body value wins, else the
+          // fresh whoami reading, else what's already stored: an explicit caller-supplied org must
+          // never be silently overridden by whoami on every reconnect.
+          org: body.org ?? who.org ?? existing.org,
+          user: who.user ?? existing.user,
+          // id and label are preserved on an update — renaming goes through PATCH.
+        }
+        outcome = { action: 'update', connId: existing.id }
+        const connections = current.connections.map(c => (c.id === existing.id ? updated : c))
+        return normalizeTeamConfig({ ...defaultTeam(), mode: 'member', connections })
+      }
+      const id = connectionId()
+      const created: TeamConnection = {
+        id,
         endpoint: body.endpoint,
         token: body.token,
-        // Same precedence as the insert branch below — an explicit body value wins, else the
-        // fresh whoami reading, else what's already stored: an explicit caller-supplied org must
-        // never be silently overridden by whoami on every reconnect.
-        org: body.org ?? who.org ?? existing.org,
-        user: who.user ?? existing.user,
-        // id and label are preserved on an update — renaming goes through PATCH.
+        org: body.org ?? who.org ?? 'default',
+        user: who.user ?? '',
+        deniedRepos: [],
+        addedAt: new Date().toISOString(),
+        ...(body.label !== undefined ? { label: body.label } : {}),
       }
-      outcome = { action: 'update', connId: existing.id }
-      const connections = current.connections.map(c => (c.id === existing.id ? updated : c))
-      return normalizeTeamConfig({ ...defaultTeam(), mode: 'member', connections })
+      outcome = { action: 'insert', connId: id }
+      return normalizeTeamConfig({ ...defaultTeam(), mode: 'member', connections: [...current.connections, created] })
+    })
+  } catch (err) {
+    if (err instanceof PreferencesLockTimeoutError) {
+      return { ok: false, reason: 'lock-timeout', error: 'another process is writing preferences — retry shortly' }
     }
-    const id = connectionId()
-    const created: TeamConnection = {
-      id,
-      endpoint: body.endpoint,
-      token: body.token,
-      org: body.org ?? who.org ?? 'default',
-      user: who.user ?? '',
-      deniedRepos: [],
-      addedAt: new Date().toISOString(),
-      ...(body.label !== undefined ? { label: body.label } : {}),
-    }
-    outcome = { action: 'insert', connId: id }
-    return normalizeTeamConfig({ ...defaultTeam(), mode: 'member', connections: [...current.connections, created] })
-  })
+    throw err
+  }
 
   if (outcome.action === 'conflict') {
     return { ok: false, reason: 'conflict', error: 'this token is already used by another connection' }
@@ -275,6 +292,7 @@ export async function handleAddConnection(req: Request): Promise<Response> {
 
   const result = await addOrUpdateConnection(body)
   if (!result.ok) {
+    if (result.reason === 'lock-timeout') return lockTimeoutResponse()
     return json({ error: result.error }, result.reason === 'conflict' ? 409 : 400)
   }
   return json({ ok: true, id: result.connId, action: result.action })
@@ -295,14 +313,19 @@ export async function handlePatchConnection(req: Request, rawId: string): Promis
   if ('error' in body) return json({ error: body.error }, 400)
 
   let found = false
-  await updateTeamConfig((current: TeamConfig) => {
-    const existing = current.connections.find(c => c.id === id)
-    if (!existing) return undefined
-    found = true
-    const connections = current.connections.map(c =>
-      c.id === id ? { ...c, label: body.label || undefined } : c)
-    return normalizeTeamConfig({ ...defaultTeam(), mode: 'member', connections })
-  })
+  try {
+    await updateTeamConfig((current: TeamConfig) => {
+      const existing = current.connections.find(c => c.id === id)
+      if (!existing) return undefined
+      found = true
+      const connections = current.connections.map(c =>
+        c.id === id ? { ...c, label: body.label || undefined } : c)
+      return normalizeTeamConfig({ ...defaultTeam(), mode: 'member', connections })
+    })
+  } catch (err) {
+    if (err instanceof PreferencesLockTimeoutError) return lockTimeoutResponse()
+    throw err
+  }
 
   if (!found) return json({ error: 'unknown connection' }, 404)
   return json({ ok: true })

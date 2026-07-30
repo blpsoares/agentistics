@@ -254,6 +254,23 @@ export class PreferencesLockTimeoutError extends Error {
 }
 
 /**
+ * TEST-ONLY seam (R5 in the round-2 review): `preferences.test.ts` is the only file allowed to
+ * call this. It exists because the alternative — proving the cross-process test actually catches
+ * a missing lock — was previously done by hand-editing `acquireFileLock` to a no-op with `sed`,
+ * running the suite, and reverting. That is not a repeatable regression guard, and per the
+ * review, "unproven on this hardware" is exactly the state a probabilistic guard can rot in
+ * silently. With this flag, `preferences.test.ts` has a committed, permanent control test that
+ * disables the lock through a real code path (not a source edit) and asserts the SAME race that
+ * the main guard test protects against reliably loses or corrupts data — proving the guard is not
+ * vacuous, on every CI run, not just the one time a reviewer's finding forced a manual check.
+ * Never read by any production code path; defaults to (and must always default to) `false`.
+ */
+let _testOnlyDisableLock = false
+export function __setTestOnlyDisableLock(disabled: boolean): void {
+  _testOnlyDisableLock = disabled
+}
+
+/**
  * Acquire an O_EXCL lock file next to `primary`. `open(path, 'wx')` fails with EEXIST if the
  * file already exists — the same primitive `mkdir -p` style tools use for a filesystem mutex,
  * portable across the platforms this ships on (no `flock` dependency).
@@ -272,28 +289,55 @@ export class PreferencesLockTimeoutError extends Error {
  * for `LOCK_STALE_MS`.
  */
 async function acquireFileLock(primary: string): Promise<() => Promise<void>> {
+  if (_testOnlyDisableLock) return async () => {}
   const lockPath = lockPathFor(primary)
   await mkdir(dirname(lockPath), { recursive: true })
   const owner = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
   const deadline = Date.now() + LOCK_ACQUIRE_TIMEOUT_MS
   while (true) {
+    let created = false
     try {
       const handle = await open(lockPath, 'wx')
-      await handle.writeFile(owner, 'utf-8')
-      await handle.close()
+      created = true // R1: the lock file now exists — any failure from here on must unlink it,
+      // or a transient ENOSPC/EIO on the write/close leaves a lock nobody holds and no writer on
+      // this machine can proceed again until LOCK_STALE_MS (60s) elapses.
+      try {
+        await handle.writeFile(owner, 'utf-8')
+        await handle.close()
+      } catch (writeErr) {
+        try { await unlink(lockPath) } catch { /* best-effort — see the outer catch below too */ }
+        throw writeErr
+      }
       // Defend this lock against a contending process's staleness check while we're still
       // legitimately inside the critical section (B-2's second half) — a `setInterval` refresh
-      // of the mtime, unref'd so it can never keep this process alive on its own.
+      // of the mtime, unref'd so it can never keep this process alive on its own. R3: re-reads
+      // the file's OWNER before each refresh (not just its own remembered `owner` var) and stops
+      // itself the moment it no longer matches — otherwise a heartbeat that fired blind would
+      // keep refreshing WHOEVER'S lock now occupies this path after a stale-reclaim stole it out
+      // from under this holder, making that stolen lock look perpetually fresh to everyone else.
       const heartbeat = setInterval(() => {
-        const now = new Date()
-        void utimes(lockPath, now, now).catch(() => {
-          // Best-effort: if this fails the lock is either already gone (nothing left to defend)
-          // or the filesystem is misbehaving, neither of which this timer can fix.
-        })
+        void (async () => {
+          try {
+            const current = await readFile(lockPath, 'utf-8')
+            if (current !== owner) {
+              clearInterval(heartbeat)
+              return
+            }
+            const now = new Date()
+            await utimes(lockPath, now, now)
+          } catch {
+            // The lock is gone, unreadable, or the filesystem is misbehaving — nothing this
+            // timer can fix; it will simply try again next tick (or the section will end and
+            // clear it via `releaseFileLock`).
+          }
+        })()
       }, LOCK_HEARTBEAT_MS)
       heartbeat.unref?.()
       return () => releaseFileLock(lockPath, owner, heartbeat)
     } catch (err) {
+      if (created) throw err // R1: NOT an EEXIST contention case — a real failure after we
+      // already created the file, already unlinked above; propagate as-is, never re-enter the
+      // contention/retry loop with a lock we just gave up on.
       if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err
       // Someone else holds it (or held it and crashed) — decide whether we have POSITIVE
       // evidence the lock is free right now (staleReclaimed / lockVanished), which is the only
@@ -323,8 +367,12 @@ async function acquireFileLock(primary: string): Promise<() => Promise<void>> {
         // Any OTHER stat failure (EACCES/EIO/...) is not proof the lock vanished — treated as
         // ordinary contention below, never as a reason to retry immediately.
       }
-      if (Date.now() > deadline) throw new PreferencesLockTimeoutError(lockPath)
+      // R2: check the known-free retry BEFORE the deadline. A stale reclaim (or a lock that
+      // simply vanished) that lands AT OR AFTER the deadline just freed the lock this call is
+      // entitled to take — throwing here instead would discard a lock we are about to be able to
+      // acquire, for no reason but bad luck in when the clock was read.
       if (staleReclaimed || lockVanished) continue // known-free right now — retry without waiting
+      if (Date.now() > deadline) throw new PreferencesLockTimeoutError(lockPath)
       await new Promise(resolve => setTimeout(resolve, LOCK_POLL_MS))
     }
   }

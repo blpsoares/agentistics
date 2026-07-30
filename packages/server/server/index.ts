@@ -6,7 +6,7 @@ import type { Server, ServerWebSocket } from 'bun'
 import { getRates } from './rates'
 import { getVersionInfo, startVersionRecheck } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
-import { readPreferences, writePreferences, redactPreferences, type Preferences } from './preferences'
+import { readPreferences, writePreferences, redactPreferences, PreferencesLockTimeoutError, type Preferences } from './preferences'
 import {
   readStoredNotifications, addStoredNotification, markStoredNotificationsRead,
   dismissStoredNotification, clearStoredNotifications, localViewer, type NotificationInput,
@@ -663,6 +663,15 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
+        // R4: a lock timeout is transient contention, not a bad request — a 400/500 tells the
+        // caller "this will never work", a 503+Retry-After tells it "try again shortly", which is
+        // the true state of the world (another process is mid-write).
+        if (err instanceof PreferencesLockTimeoutError) {
+          return new Response(JSON.stringify({ error: 'another process is writing preferences — retry shortly' }), {
+            status: 503,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '2' },
+          })
+        }
         const safe = safeError(err, { verbose: PROFILE === 'local' })
         console.error(safe.logLine)
         return new Response(JSON.stringify(safe.body), {

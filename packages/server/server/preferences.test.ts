@@ -2,7 +2,10 @@ import { test, expect } from 'bun:test'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { fileURLToPath } from 'node:url'
-import { readPreferencesFrom, writePreferencesTo, updateTeamConfigAt, LOCK_STALE_MS } from './preferences'
+import {
+  readPreferencesFrom, writePreferencesTo, updateTeamConfigAt,
+  LOCK_STALE_MS, LOCK_ACQUIRE_TIMEOUT_MS, __setTestOnlyDisableLock,
+} from './preferences'
 
 // Regression: preferences were stored under CLAUDE_DIR, which in Docker (machine +
 // self-contributing central) is the host ~/.claude mounted READ-ONLY at /host-claude.
@@ -357,7 +360,102 @@ test('a genuine token change still lands — an empty token only ever means "unc
 // preferences.lock-test-child.ts) racing the SAME read-modify-write against the main test
 // process, proving the O_EXCL lock file — not just the in-process chain — is what prevents a lost
 // update across process boundaries.
+//
+// R5 (round-2 review): a `bun run <script>` child's own startup/import cost (~100ms+) dwarfs the
+// sub-millisecond time a handful of sequential fs writes take, so without synchronization the
+// MAIN process routinely finishes its entire loop before the child has even started — no overlap
+// ever happens, and the test would stay green whether or not the lock exists. `waitForFile` below
+// is a barrier: the child writes a ready-marker right after its own startup completes and right
+// before its write loop starts; the parent waits for that marker before starting its own loop, so
+// both loops actually run concurrently for their full duration instead of hoping for scheduling
+// luck.
 // ---------------------------------------------------------------------------
+
+const childScriptPath = join(
+  // `new URL(import.meta.url).pathname` yields a leading-slash path like `/C:/…` on Windows,
+  // which breaks the spawned `bun run` — `fileURLToPath` handles the platform difference.
+  dirname(fileURLToPath(import.meta.url)), '..', 'test', 'fixtures', 'preferences.lock-test-child.ts',
+)
+
+async function waitForFile(path: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!(await Bun.file(path).exists())) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${path} to appear`)
+    await new Promise(r => setTimeout(r, 5))
+  }
+}
+
+/** Outcome of `raceTwoProcesses`. With the lock disabled, EITHER side reading a torn write mid-race
+ *  can throw (not just the final read) — `readJsonPrefs` deliberately throws on unparseable JSON
+ *  rather than silently defaulting (see its own doc comment), so a torn write surfaces as an
+ *  exception from `updateTeamConfigAt` itself, not only as a bad final file. All of that is
+ *  evidence of the SAME underlying corruption, not a test bug, so it's captured here rather than
+ *  left to crash the test. */
+interface RaceResult {
+  ids: string[] | null
+  /** The final file failed to parse, OR either process's write loop threw (almost always because
+   *  it tried to read a torn file mid-race) OR the child exited non-zero. */
+  corrupted: boolean
+}
+
+/** Spawns the child fixture, waits for both sides to be ready, then races `COUNT` sequential
+ *  `updateTeamConfigAt` appends from THIS process against `COUNT` from the child — the real
+ *  production write path, from two real OS processes, synchronized to actually overlap.
+ *  `disableLock` plumbs `__setTestOnlyDisableLock` through to BOTH sides (it's a per-process
+ *  module-level flag, so the child needs its own `--disable-lock` flag; setting it only in the
+ *  parent would leave the child still locking and prove nothing). */
+async function raceTwoProcesses(opts: { primary: string; legacy: string; count: number; disableLock: boolean }): Promise<RaceResult> {
+  const { primary, legacy, count } = opts
+  const childReady = `${primary}.child-ready`
+  const childArgs = [childScriptPath, primary, legacy, 'bbbb', String(count), childReady]
+  if (opts.disableLock) childArgs.push('--disable-lock')
+  const child = Bun.spawn(['bun', 'run', ...childArgs], { stdout: 'pipe', stderr: 'pipe' })
+
+  if (opts.disableLock) __setTestOnlyDisableLock(true)
+  let mainCorrupted = false
+  try {
+    await waitForFile(childReady, 10_000) // barrier: don't start until the child is about to loop
+
+    const mainWrites = (async () => {
+      for (let i = 0; i < count; i++) {
+        await updateTeamConfigAt(primary, legacy, (current) => ({
+          ...current,
+          connections: [
+            ...current.connections,
+            {
+              id: `c_aaaa${i.toString(16).padStart(8, '0')}`,
+              // A distinct endpoint per entry: `connections[]`'s uniqueness key is the endpoint
+              // (see TeamConnection's doc comment in core/src/team.ts) — migrateTeamConfig
+              // legitimately dedupes same-endpoint entries, which would look exactly like a
+              // lost-update bug in the lock if every iteration reused one endpoint.
+              endpoint: `http://127.0.0.1:2/aaaa${i}`,
+              org: 'default',
+              user: '',
+              token: '',
+              deniedRepos: [],
+            },
+          ],
+        }))
+      }
+    })().catch(() => { mainCorrupted = true }) // a torn read mid-race throws — that IS the finding
+
+    const [exitCode] = await Promise.all([child.exited, mainWrites])
+    if (exitCode !== 0) mainCorrupted = true // the child hit the same class of failure
+  } finally {
+    if (opts.disableLock) __setTestOnlyDisableLock(false) // never leak into a later test
+  }
+
+  let text: string
+  try {
+    text = await readFile(primary, 'utf-8')
+    JSON.parse(text) // torn writes from two processes racing rename() fail to parse
+  } catch {
+    return { ids: null, corrupted: true }
+  }
+  if (mainCorrupted) return { ids: null, corrupted: true }
+  const final = await readPreferencesFrom(primary, legacy)
+  return { ids: final.team!.connections.map(c => c.id), corrupted: false }
+}
 
 test('two SEPARATE OS processes writing the same preferences file concurrently lose no updates', async () => {
   const { primary, legacy } = await tmpPaths2()
@@ -366,60 +464,48 @@ test('two SEPARATE OS processes writing the same preferences file concurrently l
   await writePreferencesTo(primary, legacy, { team: { schema: 2, mode: 'member', connections: [] } })
 
   const COUNT = 15
-  // `new URL(import.meta.url).pathname` yields a leading-slash path like `/C:/…` on Windows,
-  // which breaks the spawned `bun run` — `fileURLToPath` handles the platform difference.
-  const childScript = join(dirname(fileURLToPath(import.meta.url)), '..', 'test', 'fixtures', 'preferences.lock-test-child.ts')
-  const child = Bun.spawn(['bun', 'run', childScript, primary, legacy, 'bbbb', String(COUNT)], {
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
+  const { ids, corrupted } = await raceTwoProcesses({ primary, legacy, count: COUNT, disableLock: false })
 
-  // The MAIN test process races the child with the SAME kind of sequential read-modify-write,
-  // through the SAME exported `updateTeamConfigAt` — this is not a hand-rolled stand-in for the
-  // production write path, it IS the production write path, called from two OS processes.
-  const mainWrites = (async () => {
-    for (let i = 0; i < COUNT; i++) {
-      await updateTeamConfigAt(primary, legacy, (current) => ({
-        ...current,
-        connections: [
-          ...current.connections,
-          {
-            id: `c_aaaa${i.toString(16).padStart(8, '0')}`,
-            // A distinct endpoint per entry: `connections[]`'s uniqueness key is the endpoint
-            // (see TeamConnection's doc comment in core/src/team.ts) — migrateTeamConfig
-            // legitimately dedupes same-endpoint entries, which would look exactly like a
-            // lost-update bug in the lock if every iteration reused one endpoint.
-            endpoint: `http://127.0.0.1:2/aaaa${i}`,
-            org: 'default',
-            user: '',
-            token: '',
-            deniedRepos: [],
-          },
-        ],
-      }))
-    }
-  })()
-
-  const [exitCode] = await Promise.all([child.exited, mainWrites])
-  if (exitCode !== 0) {
-    const stderr = await new Response(child.stderr).text()
-    throw new Error(`child process exited ${exitCode}: ${stderr}`)
-  }
-
-  const final = await readPreferencesFrom(primary, legacy)
-  const ids = final.team!.connections.map(c => c.id)
+  expect(corrupted).toBe(false) // the file on disk is whole JSON, not a torn write, and neither side threw
   // Every single one of the 2×COUNT appends survived — no lost update across the process
   // boundary, which is exactly what a missing/ineffective cross-process lock would drop.
   expect(ids).toHaveLength(2 * COUNT)
   expect(new Set(ids).size).toBe(2 * COUNT) // no duplicate/corrupted id either
-  const mainIds = ids.filter(id => id.startsWith('c_aaaa'))
-  const childIds = ids.filter(id => id.startsWith('c_bbbb'))
+  const mainIds = ids!.filter(id => id.startsWith('c_aaaa'))
+  const childIds = ids!.filter(id => id.startsWith('c_bbbb'))
   expect(mainIds).toHaveLength(COUNT)
   expect(childIds).toHaveLength(COUNT)
-  // The file on disk is whole JSON, not a torn write from two processes racing rename().
-  const text = await readFile(primary, 'utf-8')
-  expect(() => JSON.parse(text)).not.toThrow()
 }, 20_000)
+
+test('control: with the lock disabled via the test-only seam, the SAME synchronized race loses or corrupts data — proves the guard above is not vacuous on this hardware', async () => {
+  const { primary, legacy } = await tmpPaths2()
+  await writePreferencesTo(primary, legacy, { team: { schema: 2, mode: 'member', connections: [] } })
+
+  // A much higher COUNT than the guard test above: each individual read-modify-write is a
+  // handful of fast fs syscalls, so even with synchronized starts the contention window per
+  // iteration is small — more iterations means more chances for the two processes' operations to
+  // actually interleave mid-cycle instead of happening to serialize by accident.
+  const COUNT = 200
+  const { ids, corrupted } = await raceTwoProcesses({ primary, legacy, count: COUNT, disableLock: true })
+
+  // With BOTH processes' lock acquisition short-circuited to a no-op (same synchronized-start
+  // race as the guard test above — same COUNT, same barrier, same production `updateTeamConfigAt`
+  // call), the read-modify-write MUST tear or lose an update: either the file fails to parse or a
+  // process throws reading a torn file mid-race (both captured as `corrupted`), or fewer than
+  // 2×COUNT ids survive. If this assertion ever starts failing, it means EITHER the hardware
+  // genuinely stopped reproducing the race (investigate before trusting the guard test's green as
+  // meaningful) OR something reintroduced accidental serialization outside the lock.
+  const lostOrTorn = corrupted || ids === null || ids.length < 2 * COUNT
+  expect(lostOrTorn).toBe(true)
+}, 20_000)
+
+// The exact bug R1/R2 fixed: LOCK_ACQUIRE_TIMEOUT_MS being <= LOCK_STALE_MS makes the stale-reclaim
+// path unreachable for ordinary contention (a waiter always gives up before a fresh-looking lock
+// could ever be judged stale) — this is a standing regression guard against that specific
+// inversion recurring, not just documentation of the current values.
+test('LOCK_ACQUIRE_TIMEOUT_MS is strictly greater than LOCK_STALE_MS — the waiter always gets a turn at reclaiming a stale lock', () => {
+  expect(LOCK_ACQUIRE_TIMEOUT_MS).toBeGreaterThan(LOCK_STALE_MS)
+})
 
 test('a brand-new connection with no token is still stored token-less', async () => {
   const { primary, legacy } = await tmpPaths2()
