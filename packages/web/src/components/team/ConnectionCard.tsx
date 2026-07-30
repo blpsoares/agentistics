@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, EyeOff, Pencil, Loader2, Check, X } from 'lucide-react'
-import type { TeamConnection } from '@agentistics/core'
+import type { SessionMeta, TeamConnection, ModelUsage } from '@agentistics/core'
 import type { ArchiveMode } from '../ArchiveConsentModal'
 import type { ShareTarget } from '../../lib/shareRepos'
 import { hostOf, plural } from '../../lib/shareRepos'
@@ -18,9 +18,13 @@ export interface ConnectionCardProps {
   conn: TeamConnection
   status: ConnectionStatusEntry | undefined
   archiveMode: ArchiveMode | null
-  /** Computed once in ConnectionsPanel from the unfiltered session/project lists — Task 11's
-   *  repository picker consumes this same array instead of recomputing it per card. */
+  /** Computed once in ConnectionsPanel from the unfiltered session/project lists — the repository
+   *  picker (Task 11) consumes this same array instead of recomputing it per card. */
   shareTargets: ShareTarget[]
+  /** Unfiltered — threaded through to the repository picker for its impact estimate and its
+   *  "proven prehistory" check. */
+  sessions: SessionMeta[]
+  modelUsage: Record<string, ModelUsage>
   /** True when another connection on this panel resolves to the same host — promotes the user
    *  name into the primary label (`acme:48080 · lucas`), the only thing that tells them apart. */
   duplicateHost: boolean
@@ -28,10 +32,12 @@ export interface ConnectionCardProps {
   onRename: (id: string, label: string) => void
   onDisconnect: (id: string) => Promise<void>
   onSyncNow: (id: string) => Promise<void>
+  onApplyRules: (id: string, deniedRepos: string[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
 }
 
 export function ConnectionCard({
-  conn, status, archiveMode, shareTargets, duplicateHost, lang, onRename, onDisconnect, onSyncNow,
+  conn, status, archiveMode, shareTargets, sessions, modelUsage, duplicateHost, lang,
+  onRename, onDisconnect, onSyncNow, onApplyRules,
 }: ConnectionCardProps) {
   const isMobile = useIsMobile()
   const [expanded, setExpanded] = useState(false)
@@ -183,7 +189,18 @@ export function ConnectionCard({
             onResolved={setIdentity}
           />
 
-          <RepoPanelSlot state={state} status={status} archiveMode={archiveMode} shareTargets={shareTargets} lang={lang} />
+          <RepoPanelSlot
+            connId={conn.id}
+            deniedRepos={conn.deniedRepos}
+            state={state}
+            status={status}
+            archiveMode={archiveMode}
+            shareTargets={shareTargets}
+            sessions={sessions}
+            modelUsage={modelUsage}
+            lang={lang}
+            onApplyRules={onApplyRules}
+          />
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', flexDirection: isMobile ? 'column' : 'row' }}>
             <button

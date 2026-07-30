@@ -1,10 +1,12 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
+import type { SessionMeta, ModelUsage } from '@agentistics/core'
 import type { ArchiveMode } from '../ArchiveConsentModal'
 import type { ShareTarget } from '../../lib/shareRepos'
 import { COPY, interpolate } from './copy'
 import { relTime, resolveRepoPanelMode, type CardState } from './cardState'
 import type { ConnectionStatusEntry, ResyncProgress } from './statusTypes'
+import { SharedReposPanel } from './SharedReposPanel'
 
 /**
  * ConnectionCardParts.tsx — the small presentational helpers `ConnectionCard.tsx` composes.
@@ -81,16 +83,22 @@ export function ResyncStrip({ resync, lang }: { resync: ResyncProgress; lang: 'p
 }
 
 /**
- * SLOT — Task 11 builds the real per-repository denylist editor here. This branch only decides
- * WHICH surface should occupy the slot: hidden (nothing can be un-shared until the token works),
- * the two "editing is impossible right now" notices, or the editable placeholder Task 11 replaces.
+ * SLOT — decides WHICH surface occupies the repo-panel area: hidden (nothing can be un-shared
+ * until the token works), the two "editing is impossible right now" notices, or the real
+ * per-repository denylist editor (Task 11). `editable` covers BOTH `connected` and `offline` —
+ * rules are local and must stay changeable while this central is unreachable.
  */
-export function RepoPanelSlot({ state, status, archiveMode, shareTargets, lang }: {
+export function RepoPanelSlot({ connId, deniedRepos, state, status, archiveMode, shareTargets, sessions, modelUsage, lang, onApplyRules }: {
+  connId: string
+  deniedRepos: string[]
   state: CardState
   status: ConnectionStatusEntry | undefined
   archiveMode: ArchiveMode | null
   shareTargets: ShareTarget[]
+  sessions: SessionMeta[]
+  modelUsage: Record<string, ModelUsage>
   lang: 'pt' | 'en'
+  onApplyRules: (connId: string, deniedRepos: string[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
 }) {
   const mode = resolveRepoPanelMode(state, status?.centralTooOld ?? false, archiveMode)
   if (mode === 'hidden') return null // nothing can be removed until the token works
@@ -102,14 +110,18 @@ export function RepoPanelSlot({ state, status, archiveMode, shareTargets, lang }
       </div>
     )
   }
-  // TODO(Task 11): the per-repository denylist picker (MultiPicker over `shareTargets`,
-  // PATCH deniedRepos) replaces this placeholder. Kept editable-looking (not disabled) because
-  // both `connected` and `offline` reach here — rules are local and must stay changeable while
-  // this central is unreachable.
   return (
-    <div style={{ padding: '8px 12px', borderRadius: 7, fontSize: 11.5, color: 'var(--text-tertiary)', border: '1px dashed var(--border)' }}>
-      {COPY.sharedRepos[lang]} ({shareTargets.length})
-    </div>
+    <SharedReposPanel
+      connId={connId}
+      deniedRepos={deniedRepos}
+      cardState={state}
+      status={status}
+      shareTargets={shareTargets}
+      sessions={sessions}
+      modelUsage={modelUsage}
+      lang={lang}
+      onApply={onApplyRules}
+    />
   )
 }
 

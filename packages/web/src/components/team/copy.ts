@@ -370,6 +370,16 @@ export const COPY = {
     en: 'Could not identify',
     pt: 'Não foi possível identificar',
   },
+  // Added for Task 11 (the per-central repository denylist editor) — `Section`'s default labels
+  // are English-only, so a caller localizing its own content must supply its own edit/save labels.
+  editRules: {
+    en: 'Edit',
+    pt: 'Editar',
+  },
+  saveRules: {
+    en: 'Save',
+    pt: 'Salvar',
+  },
 } satisfies Record<string, CopyEntry>
 
 /** `{one, other}` rows — pass through `plural(entry, n)` before interpolating any placeholders.

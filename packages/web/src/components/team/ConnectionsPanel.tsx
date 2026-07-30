@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Plus } from 'lucide-react'
-import type { SessionMeta, TeamConnection, TeamConfig } from '@agentistics/core'
+import type { SessionMeta, TeamConnection, TeamConfig, ModelUsage } from '@agentistics/core'
 import { readTeamConnections } from '@agentistics/core'
 import type { ArchiveMode } from '../ArchiveConsentModal'
 import { resolveArchiveChoice } from '../../lib/archive'
@@ -29,6 +29,9 @@ export interface ConnectionsPanelProps {
   /** MUST be the unfiltered project list — see `buildShareTargets`'s own docstring: a filtered
    *  derivative would silently shrink what this machine can even offer to block. */
   projects: ServerProject[]
+  /** For the repository picker's impact estimate (`blendedCostPerToken`) — the app's global model
+   *  usage, same source every other blended-cost consumer in the app uses. */
+  modelUsage: Record<string, ModelUsage>
   lang: 'pt' | 'en'
 }
 
@@ -38,7 +41,7 @@ export interface ConnectionsPanelProps {
  * `/api/team/status` poller shared by every card (never one poller per card), and the
  * `shareTargets` memo Task 11's picker will consume.
  */
-export function ConnectionsPanel({ sessions, projects, lang }: ConnectionsPanelProps) {
+export function ConnectionsPanel({ sessions, projects, modelUsage, lang }: ConnectionsPanelProps) {
   const isMobile = useIsMobile()
   const [connections, setConnections] = useState<TeamConnection[] | null>(null)
   const [archiveMode, setArchiveMode] = useState<ArchiveMode | null>(null)
@@ -113,6 +116,23 @@ export function ConnectionsPanel({ sessions, projects, lang }: ConnectionsPanelP
   async function handleDisconnect(id: string) {
     const res = await fetch(`/api/team/connections/${encodeURIComponent(id)}`, { method: 'DELETE' })
     if (res.ok) setConnections(prev => (prev ?? []).filter(c => c.id !== id))
+  }
+
+  /**
+   * The ONE write the repository picker performs: `PATCH { deniedRepos }`, then stop — the server
+   * owns the forget/push sequence from here, watched via the panel's existing `/api/team/status`
+   * poll (`status.resync`). Never looped, never followed by a direct call to any forget endpoint.
+   */
+  async function handleApplyRules(id: string, deniedRepos: string[]): Promise<{ ok: true; queued: boolean } | { ok: false }> {
+    const res = await fetch(`/api/team/connections/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deniedRepos }),
+    }).catch(() => null)
+    if (!res || !res.ok) return { ok: false }
+    const body = await res.json().catch(() => ({ queued: false })) as { queued?: boolean }
+    setConnections(prev => (prev ?? []).map(c => (c.id === id ? { ...c, deniedRepos } : c)))
+    return { ok: true, queued: Boolean(body.queued) }
   }
 
   async function handleSyncNow(id: string) {
@@ -194,11 +214,14 @@ export function ConnectionsPanel({ sessions, projects, lang }: ConnectionsPanelP
               status={statusById[conn.id]}
               archiveMode={archiveMode}
               shareTargets={shareTargets}
+              sessions={sessions}
+              modelUsage={modelUsage}
               duplicateHost={(duplicateHosts.get(hostOf(conn.endpoint)) ?? 0) > 1}
               lang={lang}
               onRename={(id, label) => { void handleRename(id, label) }}
               onDisconnect={handleDisconnect}
               onSyncNow={handleSyncNow}
+              onApplyRules={handleApplyRules}
             />
           ))}
         </div>

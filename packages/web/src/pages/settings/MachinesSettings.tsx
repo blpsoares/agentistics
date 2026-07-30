@@ -98,7 +98,7 @@ function SoloMemberMachinesView({ pt }: { pt: boolean }) {
           ? 'Máquinas de membros registradas — tokens, presença, rotação e revogação.'
           : 'Registered member machines — tokens, presence, rotate/revoke.'}
       </p>
-      <ConnectionsPanel sessions={ctx.data.sessions} projects={ctx.data.projects} lang={pt ? 'pt' : 'en'} />
+      <ConnectionsPanel sessions={ctx.data.sessions} projects={ctx.data.projects} modelUsage={ctx.data.statsCache.modelUsage} lang={pt ? 'pt' : 'en'} />
     </>
   )
 }
