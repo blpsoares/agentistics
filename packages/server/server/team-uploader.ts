@@ -459,6 +459,38 @@ export async function saveSentState(connId: string, state: SentState): Promise<v
   await writeFile(teamSentFile(connId), JSON.stringify(next, null, 2), 'utf-8')
 }
 
+/**
+ * Record workflow run ids the central has ACCEPTED into this connection's sent-state.
+ *
+ * `sent.runIds` is what `planRulesReconcile` reads as `sentRunIds`, and it is the only thing that
+ * can ever name a run for withdrawal. Without this writer the list stayed `[]` forever, so
+ * `forgetRuns` was always empty and the whole run-withdrawal path — the plan field, the journal's
+ * `runIds`, the runs-only refusal and the per-ack drop in team-forget-client.ts — was dead code.
+ * The bounded consequence is narrow but real: the central deletes runs by session, so a denied
+ * session named in `forgetIds` takes its runs with it, but a run pushed for a session that was
+ * never pushed as a session document (an `archiveMode: 'off'` machine ships workflows with zero
+ * session docs) is unwithdrawable and nothing would ever notice.
+ *
+ * Called only AFTER a response the central accepted — the same rule `_lastPushedPayloadHash`
+ * follows. Recording a run before the POST succeeded would name it as "the central holds this"
+ * when it does not, and the withdrawal that later drops it would be the only correction.
+ *
+ * Merges rather than replaces: a run stays named until a completed forget sequence drops it.
+ * Best-effort — a failed write just means the next accepted push records it again.
+ */
+async function recordSentRunIds(connId: string, runs: readonly WorkflowRun[]): Promise<void> {
+  const ids = runs.map(r => r.runId).filter(Boolean)
+  if (ids.length === 0) return
+  try {
+    const current = await loadRawSentState(connId)
+    const merged = unionIds(current.runIds, ids)
+    if (merged.length === current.runIds.length) return // nothing new
+    await writeFile(teamSentFile(connId), JSON.stringify({ version: 2, hashes: current.hashes, runIds: merged }, null, 2), 'utf-8')
+  } catch (err) {
+    console.warn(`[team-uploader] could not record pushed run ids for ${connId}:`, err instanceof Error ? err.message : String(err))
+  }
+}
+
 const BATCH_SIZE = 200
 
 // ---------------------------------------------------------------------------
@@ -603,6 +635,22 @@ export async function getPushContext(deps: PushContextDeps = {}): Promise<PushCy
  *  (which would start the real 5s supervisor against the developer's real preferences file). */
 export function invalidatePushContext(): void {
   _cachedContext = null
+}
+
+/**
+ * The last-built push-cycle context, or `null` when none has been built (or it was invalidated).
+ * NEVER builds one, and deliberately ignores the TTL — this is for read-only, display-only
+ * consumers that want whatever the push cycle last computed and can honestly say "unknowable"
+ * otherwise.
+ *
+ * Its reason to exist: `GET /api/team/status` is polled by the browser every ~5s, while
+ * `notifyDataChanged()` calls `invalidatePushContext()` on EVERY local file change. During active
+ * coding the TTL therefore protects nothing, and a status handler calling `getPushContext()` runs
+ * a full `buildApiResponse()` — which also WRITES the consolidate store — plus
+ * `loadConsolidated()` at the browser's poll cadence instead of the connection's push interval.
+ */
+export function peekPushContext(): PushCycleContext | null {
+  return _cachedContext
 }
 
 // ---------------------------------------------------------------------------
@@ -802,6 +850,9 @@ export async function pushOnceDetailed(
             // content would then match the memoized digest and never retry, silently losing that
             // statsCache/workflow update until unrelated content happens to change.
             _lastPushedPayloadHash.set(conn.id, payloadDigest)
+            // Same rule, same moment: the runs this payload carried are now held by the central,
+            // so they become withdrawable.
+            await recordSentRunIds(conn.id, workflows)
           } else if (res.status === 401 || res.status === 403) fireHandleAuthError(conn, res.status)
         } catch (e) {
           warnPushError(conn.id, e instanceof Error ? e.message : String(e))
@@ -862,6 +913,10 @@ export async function pushOnceDetailed(
         // denied repo's volume in the cache the central already holds (reproduced end-to-end
         // against a live central).
         _lastPushedPayloadHash.set(conn.id, payloadDigest)
+        // Batch 0 is also the batch that carried `workflows` — the central accepted it, so those
+        // runs are now withdrawable. Recorded here rather than after the loop for the same reason
+        // the memo is: only an accepted response earns it.
+        await recordSentRunIds(conn.id, workflows)
       }
     }
 
@@ -1191,7 +1246,11 @@ async function runConnectionPushCycle(conn: TeamConnection, deps: RunPushCycleDe
     const syncAndPush = async (): Promise<boolean> => {
       didPush = true
       await reconcileSyncState(conn.id, endpoint, conn.token ?? '', policy.instanceId)
-      const res = await pushOnceDetailed({ ...conn, endpoint }, ctx)
+      // `rulesPlan.next.sealed`, never `{}`: the ledger's ONLY consumer is the split cache's
+      // subtraction against `real`'s rollup rows. A push built with an empty ledger emits a
+      // sealed day's row VERBATIM — the blocked repository's sessions, messages, tokens and hour
+      // buckets — and a sealed day cannot be re-derived once its sessions age out of the store.
+      const res = await pushOnceDetailed({ ...conn, endpoint }, ctx, { sealed: rulesPlan.next.sealed })
       return !res.error
     }
 
@@ -1245,8 +1304,10 @@ async function runConnectionPushCycle(conn: TeamConnection, deps: RunPushCycleDe
         await reconcileSyncState(conn.id, endpoint, conn.token ?? '', policy.instanceId)
       }
       // The push itself always runs: a central too old to forget, or one that is momentarily
-      // down, must not stop this connection pushing altogether.
-      await pushOnceDetailed({ ...conn, endpoint }, ctx)
+      // down, must not stop this connection pushing altogether. Same ledger as the sequence's own
+      // push above — this is the branch a machine with nothing to forget takes EVERY cycle, so an
+      // empty ledger here is the common case of the leak, not the rare one.
+      await pushOnceDetailed({ ...conn, endpoint }, ctx, { sealed: rulesPlan.next.sealed })
     }
     return nextIntervalSec
   } finally {
@@ -1505,8 +1566,17 @@ function jsonResponse(body: unknown): Response {
  * this defers (matching `runConnectionCycle`'s `_pendingTrigger`) and returns a zero result
  * immediately rather than blocking the HTTP response — the already-running cycle picks up any
  * newer data on its own.
+ *
+ * The seal ledger is LOADED here rather than computed: this path deliberately does not run
+ * `reconcileRulesFor` (a manual push must not trigger a removal sequence out of band, and
+ * `advanceSeal`'s caller contract belongs to the periodic cycle, which owns the cadence). Reading
+ * the persisted `sealed` is exact for this purpose — it is precisely what the last cycle sealed —
+ * whereas passing `{}` would make an explicit "Push now" emit every sealed day's rollup row
+ * verbatim, which is the one thing this whole mechanism exists to prevent.
+ *
+ * Exported for tests only; `handlePushNow` is the sole production caller.
  */
-async function guardedManualPush(conn: TeamConnection, ctx: PushCycleContext): Promise<PushOnceResult> {
+export async function guardedManualPush(conn: TeamConnection, ctx: PushCycleContext): Promise<PushOnceResult> {
   if (_running.has(conn.id)) {
     _pendingTrigger.add(conn.id)
     return { count: 0 }
@@ -1514,7 +1584,8 @@ async function guardedManualPush(conn: TeamConnection, ctx: PushCycleContext): P
   _running.add(conn.id)
   const release = await acquireSlot()
   try {
-    return await pushOnceDetailed(conn, ctx)
+    const { sealed } = await loadRulesState(conn.id)
+    return await pushOnceDetailed(conn, ctx, { sealed })
   } finally {
     release()
     _running.delete(conn.id)

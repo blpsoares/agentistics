@@ -21,12 +21,12 @@ import {
   __setRestrictedForTests, __hasPendingOnChangeForTests, __clearOnChangeTimerForTests,
   __teardownConnectionForTests,
   scheduleOnChangeTrigger, loadSentState, reconcileUploaderNow, MAX_SUPPRESSED_STREAK,
-  replayForgetJournals, getResyncProgress,
+  replayForgetJournals, getResyncProgress, guardedManualPush,
   type PushCycleContext,
 } from './team-uploader'
 import { updateTeamConfigAt, type TeamConfigMutator, type Preferences } from './preferences'
 import { __setTeamConnDirForTests, TEAM_CONN_DIR, teamSentFile, teamSyncFile, teamForgetFile } from './config'
-import { loadRulesState } from './team-rules'
+import { loadRulesState, saveRulesState, emptyRulesState } from './team-rules'
 import { convertSentStateV1 } from './team-migrate'
 import { buildPathRepoIndex, buildSharedStatsCache, type PathRepoIndex } from './share-rules'
 import type { SessionMeta, TeamConnection, StatsCache, TeamConfig, WorkflowRun } from '@agentistics/core'
@@ -1637,6 +1637,212 @@ describe('a runs-only plan never reports success', () => {
       expect(raw.runIds).toEqual(['r-6'])
     } finally {
       __setNotifierForTests(() => {})
+      __teardownConnectionForTests(connId)
+      await central.stop()
+    }
+  }, 10_000)
+})
+
+// ---------------------------------------------------------------------------
+// Critical 1: the seal ledger must reach the thing that CONSUMES it — the pushed cache.
+//
+// `planRulesReconcile` measured the denied delta into `pending` and `advanceSeal` moved it into
+// `sealed` as Claude's watermark crossed the day, and then the push built its split cache with
+// `sealed: {}` — so that day's rollup row went out VERBATIM: the blocked repository's sessions,
+// messages, tokens and hour buckets, permanently (a sealed day cannot be re-derived once its
+// sessions age out) and one day at a time. These tests assert on what crossed the WIRE, not on
+// the ledger file: a test that exercises `advanceSeal` or `buildSplitStatsCache` in isolation is
+// exactly what let this survive.
+// ---------------------------------------------------------------------------
+
+/** A `real` StatsCache that genuinely was supplemented from `sessions` — which is
+ *  `buildSplitStatsCache`'s CHECKED precondition, so a hand-written cache would simply make the
+ *  split refuse and the assertions below vacuous. */
+function realCacheFrom(sessions: readonly SessionMeta[], lastComputedDate: string): StatsCache {
+  return { ...buildSharedStatsCache(sessions), lastComputedDate }
+}
+
+describe('the seal ledger reaches the PUSHED cache', () => {
+  it("reduces a sealed day's rollup row on the wire once the watermark crosses it", async () => {
+    const connId = randomConnId()
+    const central = mockCentral()
+    central.watch(connId)
+    try {
+      const conn = fakeConn(connId, central.server.port!, { deniedRepos: ['github.com/o/secret'] })
+      const pub = makeSession('pub-7', { git_remote: 'github.com/o/pub', start_time: '2026-07-20T09:00:00.000Z' })
+      const denied = makeSession('denied-7', { git_remote: 'github.com/o/secret', start_time: '2026-07-20T10:00:00.000Z' })
+      const sessions = [pub, denied]
+      const index = buildPathRepoIndex(sessions)
+      const deps = { readPreferences: fakeReadPreferences(conn), migrateTeamStateOnce: async () => {} }
+
+      // Cycle 1 — watermark 2026-07-01, so the boundary is 07-02 and 07-20 is still DECOMPOSABLE:
+      // the day is rebuilt from the shared set on the wire, and the denied delta is measured into
+      // `pending`.
+      await runConnectionCycle(connId, {
+        ...deps,
+        ctx: makeCtx({ storedSessions: sessions, liveSessions: sessions, index, realStatsCache: realCacheFrom(sessions, '2026-07-01') }),
+      })
+      // Cycle 2 — the watermark MOVES past 07-20. The day is now undecomposable rollup, and the
+      // only thing that can still reduce its row is the seal taken while it was measurable.
+      await runConnectionCycle(connId, {
+        ...deps,
+        ctx: makeCtx({ storedSessions: sessions, liveSessions: sessions, index, realStatsCache: realCacheFrom(sessions, '2026-07-21') }),
+      })
+
+      const pushedCaches = central.ingests
+        .map(b => b.statsCache)
+        .filter((c): c is StatsCache => !!c)
+      // Both cycles pushed a cache — otherwise every assertion below would be vacuous.
+      expect(pushedCaches.length).toBe(2)
+      const sealedCycle = pushedCaches[1]!
+      expect(sealedCycle.lastComputedDate).toBe('2026-07-21') // this really is cycle 2's cache
+
+      // The machine's REAL rollup row for that day counts both sessions…
+      const realRow = realCacheFrom(sessions, '2026-07-21').dailyActivity.find(d => d.date === '2026-07-20')
+      expect(realRow?.sessionCount).toBe(2)
+      expect(realRow?.messageCount).toBe(36)
+      // …and what crossed the wire counts only the shared one.
+      const row = sealedCycle.dailyActivity.find(d => d.date === '2026-07-20')
+      expect(row).toBeDefined()
+      expect(row!.sessionCount).toBe(1)
+      expect(row!.messageCount).toBe(18)
+      // The per-day token row, the rollup-only scalars and modelUsage are reduced by the same seal.
+      const tokenRow = sealedCycle.dailyModelTokens.find(d => d.date === '2026-07-20')
+      expect(tokenRow?.tokensByModel['claude-sonnet-4-6']).toBe(1000)
+      expect(sealedCycle.totalSessions).toBe(1)
+      expect(sealedCycle.totalMessages).toBe(18)
+      expect(sealedCycle.modelUsage['claude-sonnet-4-6']?.inputTokens).toBe(600)
+      expect(sealedCycle.modelUsage['claude-sonnet-4-6']?.outputTokens).toBe(400)
+      // Σ hourCounts === totalSessions on a real cache; the seal keeps that invariant (and this
+      // asserts the hour buckets were reduced without depending on the developer's timezone).
+      expect(Object.values(sealedCycle.hourCounts).reduce((a, b) => a + b, 0)).toBe(1)
+    } finally {
+      __teardownConnectionForTests(connId)
+      await central.stop()
+    }
+  }, 10_000)
+
+  it('an explicit push-now uses the persisted seal too, instead of an empty ledger', async () => {
+    const connId = randomConnId()
+    const central = mockCentral()
+    central.watch(connId)
+    try {
+      const conn = fakeConn(connId, central.server.port!, { deniedRepos: ['github.com/o/secret'] })
+      const pub = makeSession('pub-10', { git_remote: 'github.com/o/pub', start_time: '2026-07-20T09:00:00.000Z' })
+      const denied = makeSession('denied-10', { git_remote: 'github.com/o/secret', start_time: '2026-07-20T10:00:00.000Z' })
+      const sessions = [pub, denied]
+
+      // The seal the periodic cycle would have persisted by the time the day became prehistory.
+      await saveRulesState(connId, {
+        ...emptyRulesState(),
+        boundary: '2026-07-22',
+        sealed: {
+          '2026-07-20': {
+            sessionCount: 1, messageCount: 18, toolCallCount: 0,
+            tokensByModel: { 'claude-sonnet-4-6': 1000 },
+            usageByModel: { 'claude-sonnet-4-6': { input: 600, output: 400, cacheRead: 0, cacheWrite: 0 } },
+            hourCounts: {},
+          },
+        },
+      })
+
+      await guardedManualPush({ ...conn }, makeCtx({
+        storedSessions: sessions, liveSessions: sessions,
+        index: buildPathRepoIndex(sessions),
+        realStatsCache: realCacheFrom(sessions, '2026-07-21'),
+      }))
+
+      const pushed = central.ingests.map(b => b.statsCache).filter((c): c is StatsCache => !!c)
+      expect(pushed.length).toBe(1)
+      expect(pushed[0]!.dailyActivity.find(d => d.date === '2026-07-20')?.sessionCount).toBe(1)
+      expect(pushed[0]!.totalSessions).toBe(1)
+    } finally {
+      __teardownConnectionForTests(connId)
+      await central.stop()
+    }
+  }, 10_000)
+})
+
+// ---------------------------------------------------------------------------
+// Important 3: `sent.runIds` had no writer, so the whole run-withdrawal path was inert —
+// `sentRunIds` was always [], `forgetRuns` always [], and the journal's `runIds`, the runs-only
+// refusal and the per-ack drop were all unreachable. A run pushed for a session that was never
+// pushed as a session document is then unwithdrawable, and nothing would ever notice.
+// ---------------------------------------------------------------------------
+
+function fakeRun(runId: string, sessionId: string): WorkflowRun {
+  return {
+    runId, name: 'audit', sessionId, status: 'completed',
+    startedAt: '2026-07-20T10:00:00.000Z', durationMs: 0, phases: [], agents: [],
+    totals: { agentCount: 0, tokensIn: 0, tokensOut: 0, costUSD: 0, durationMs: 0, toolUses: 0 },
+  }
+}
+
+function sentRunIdsOf(connId: string): string[] {
+  return (JSON.parse(readFileSync(teamSentFile(connId), 'utf-8')) as { runIds: string[] }).runIds
+}
+
+describe('pushed workflow runs are recorded in the sent-state', () => {
+  it('records a run id the central accepted', async () => {
+    const connId = randomConnId()
+    await using server = Bun.serve({ port: 0, fetch: () => Response.json({ ok: true }) })
+    try {
+      await saveSentState(connId, {})
+      const res = await pushOnceDetailed(fakeConn(connId, server.port!), makeCtx({ workflows: [fakeRun('r-8', 'pub-8')] }))
+      expect(res.error).toBeUndefined()
+      expect(sentRunIdsOf(connId)).toEqual(['r-8'])
+    } finally {
+      __teardownConnectionForTests(connId)
+    }
+  })
+
+  it('does NOT record a run the central never accepted', async () => {
+    const connId = randomConnId()
+    await using server = Bun.serve({ port: 0, fetch: () => new Response('boom', { status: 500 }) })
+    try {
+      await saveSentState(connId, {})
+      await pushOnceDetailed(fakeConn(connId, server.port!), makeCtx({ workflows: [fakeRun('r-8b', 'pub-8b')] }))
+      // Same rule the payload memo already follows: never memoize before the response.
+      expect(sentRunIdsOf(connId)).toEqual([])
+    } finally {
+      __teardownConnectionForTests(connId)
+    }
+  })
+
+  it('a run pushed today is actually named for withdrawal when its repo is blocked tomorrow', async () => {
+    const connId = randomConnId()
+    const central = mockCentral()
+    central.watch(connId)
+    try {
+      const pub = makeSession('pub-9', { git_remote: 'github.com/o/pub' })
+      const secret = makeSession('secret-9', { git_remote: 'github.com/o/secret' })
+      const sessions = [pub, secret]
+      const ctx = makeCtx({
+        storedSessions: sessions, liveSessions: sessions,
+        workflows: [fakeRun('r-9', 'secret-9')],
+        index: buildPathRepoIndex(sessions),
+      })
+
+      // Day 1 — no denylist: both sessions and the run go to the central.
+      const open = fakeConn(connId, central.server.port!)
+      await runConnectionCycle(connId, {
+        readPreferences: fakeReadPreferences(open), migrateTeamStateOnce: async () => {}, ctx,
+      })
+      expect(Object.keys(await loadSentState(connId)).sort()).toEqual(['pub-9', 'secret-9'])
+      // The writer this finding is about: without it the list below stays empty forever.
+      expect(sentRunIdsOf(connId)).toEqual(['r-9'])
+
+      // Day 2 — the repo is blocked. The session is named for deletion AND so is its run.
+      const blocked = fakeConn(connId, central.server.port!, { deniedRepos: ['github.com/o/secret'] })
+      await runConnectionCycle(connId, {
+        readPreferences: fakeReadPreferences(blocked), migrateTeamStateOnce: async () => {}, ctx,
+      })
+      expect(central.forgetBodies).toEqual([['secret-9']])
+      // Every batch acked → the run ids may finally leave the sent-state (team-forget-client.ts).
+      // This drop is only reachable because the list was non-empty above.
+      expect(sentRunIdsOf(connId)).toEqual([])
+      expect(Object.keys(await loadSentState(connId))).toEqual(['pub-9'])
+    } finally {
       __teardownConnectionForTests(connId)
       await central.stop()
     }
