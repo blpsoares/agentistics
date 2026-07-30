@@ -45,8 +45,17 @@ export function interpolate(template: string, vars: Record<string, string | numb
   return template.replace(/\{(\w+)\}/g, (match, key: string) => (key in vars ? String(vars[key]) : match))
 }
 
-/** Plain (non-pluralized) rows. */
-export const COPY: Record<string, CopyEntry> = {
+/**
+ * Plain (non-pluralized) rows.
+ *
+ * `satisfies` rather than a `: Record<string, CopyEntry>` annotation — Task 9's own consumer
+ * (`copy.test.ts`) only ever iterates via `Object.entries`, so it never needed this, but Task 10's
+ * components index by literal key (`COPY.checking[lang]`). With `noUncheckedIndexedAccess` on
+ * (tsconfig.json), a widened `Record<string, CopyEntry>` type makes every such access
+ * `CopyEntry | undefined`; `satisfies` keeps the literal key types while still checking every row
+ * against the same shape.
+ */
+export const COPY = {
   pageIntro: {
     en: 'Connect this machine to one or more centrals. You choose, per central, which repositories it may see.',
     pt: 'Conecte esta máquina a uma ou mais centrais. Você escolhe, por central, quais repositórios ela pode ver.',
@@ -319,10 +328,53 @@ export const COPY: Record<string, CopyEntry> = {
     en: 'Only computed session metrics (tokens, cost, duration) are pushed — no conversation content.',
     pt: 'Apenas métricas computadas (tokens, custo, duração) são enviadas — nenhum conteúdo de conversa.',
   },
-}
+  // Added for Task 10 (the connection card list) — the design doc's §9.5 wording ("appears as
+  // <user>", the identity panel's read-only rows) was not yet in this table under Task 9.
+  appearsAs: {
+    en: 'appears as',
+    pt: 'aparece como',
+  },
+  rename: {
+    en: 'Rename',
+    pt: 'Renomear',
+  },
+  syncing: {
+    en: 'Syncing…',
+    pt: 'Sincronizando…',
+  },
+  identityUrl: {
+    en: 'URL',
+    pt: 'URL',
+  },
+  identityToken: {
+    en: 'Token',
+    pt: 'Token',
+  },
+  identityUser: {
+    en: 'User',
+    pt: 'Usuário',
+  },
+  identityOrg: {
+    en: 'Organization',
+    pt: 'Organização',
+  },
+  identityLatency: {
+    en: 'Latency',
+    pt: 'Latência',
+  },
+  networkError: {
+    en: 'Network error',
+    pt: 'Erro de rede',
+  },
+  couldNotIdentify: {
+    en: 'Could not identify',
+    pt: 'Não foi possível identificar',
+  },
+} satisfies Record<string, CopyEntry>
 
-/** `{one, other}` rows — pass through `plural(entry, n)` before interpolating any placeholders. */
-export const PLURAL_COPY: Record<string, PluralCopyEntry> = {
+/** `{one, other}` rows — pass through `plural(entry, n)` before interpolating any placeholders.
+ *  `satisfies`, not an annotation — same reasoning as `COPY` above. */
+export const PLURAL_COPY = {
   blockedPill: {
     en: { one: '1 hidden', other: '{n} hidden' },
     pt: { one: '1 oculto', other: '{n} ocultos' },
@@ -353,4 +405,4 @@ export const PLURAL_COPY: Record<string, PluralCopyEntry> = {
     en: { one: 'Rules applied — 1 session re-sent', other: 'Rules applied — {n} sessions re-sent' },
     pt: { one: 'Regras aplicadas — 1 sessão reenviada', other: 'Regras aplicadas — {n} sessões reenviadas' },
   },
-}
+} satisfies Record<string, PluralCopyEntry>
