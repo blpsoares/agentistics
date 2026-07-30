@@ -3,16 +3,21 @@
  * validation for POST/PATCH, and the two uniqueness rules folded into `decideConnectionUpsert`
  * (a known endpoint updates in place; a token owned by a different connection is refused).
  *
- * The impure handlers (whoami over the network, the preferences write chain, the central
- * /api/team/leave call) are exercised manually against a mock central — see task-4-report.md —
- * not here, per the project's "do not mock the filesystem" testing convention.
+ * The whoami-over-the-network / central-`/api/team/leave` parts of the impure handlers are
+ * exercised manually against a mock central — see task-4-report.md — not here, per the project's
+ * "do not mock the filesystem" testing convention. `leaveConnectionById`'s OWN DI seam
+ * (`readPreferences`/`removeConnection`/`log`) is a different case: it never touches the
+ * filesystem or the network when all three are injected, so it IS unit-tested below (review
+ * finding N3) — specifically the previously-uncovered half of I1, where a lock-timeout write
+ * failure inside `removeConnection` must surface as `{ok: false}`, never asserted success.
  */
 import { describe, it, expect } from 'bun:test'
 import {
   validateConnectionBody, validatePatchBody, decideConnectionUpsert,
-  aggregateConnectionStatuses, type ConnectionStatusEntry,
+  aggregateConnectionStatuses, leaveConnectionById, type ConnectionStatusEntry,
 } from './team-connections'
 import type { TeamConnection } from '@agentistics/core'
+import type { Preferences } from './preferences'
 
 function conn(id: string, extra?: Partial<TeamConnection>): TeamConnection {
   return {
@@ -215,5 +220,67 @@ describe('aggregateConnectionStatuses — the top-level status the pill reads', 
     expect(out.lastSuccessAt).toBeNull()
     expect(out.latencyMs).toBeNull()
     expect(out.errKind).toBe('net')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// leaveConnectionById — DI-tested (review finding N3): with readPreferences/removeConnection/log
+// all injected, this never touches the filesystem or a real central. The endpoint used below
+// (127.0.0.1:1, a privileged port nothing listens on) makes the best-effort POST to the central's
+// /api/team/leave fail fast and be swallowed, same as it would be for a genuinely offline
+// central — irrelevant to what these tests assert.
+// ---------------------------------------------------------------------------
+
+function fakePrefsWith(connections: TeamConnection[]): () => Promise<Preferences> {
+  return async () => ({ team: { schema: 2, mode: 'member', connections } }) as Preferences
+}
+
+describe('leaveConnectionById', () => {
+  it('a removeConnection write failure (e.g. a lock timeout) surfaces as ok:false, never asserted success', async () => {
+    const target = conn('c_aaaaaaaaaaaa', { endpoint: 'http://127.0.0.1:1' })
+    const result = await leaveConnectionById(target.id, {
+      readPreferences: fakePrefsWith([target]),
+      removeConnection: async () => ({ removed: false, error: 'preferences write lock timed out' }),
+    })
+    expect(result).toEqual({ ok: false, error: 'preferences write lock timed out' })
+  })
+
+  it('a successful removeConnection reports ok:true with the removed connection\'s endpoint', async () => {
+    const target = conn('c_bbbbbbbbbbbb', { endpoint: 'http://127.0.0.1:1' })
+    const result = await leaveConnectionById(target.id, {
+      readPreferences: fakePrefsWith([target]),
+      removeConnection: async () => ({ removed: true }),
+    })
+    expect(result).toEqual({ ok: true, endpoint: target.endpoint })
+  })
+
+  it('an unknown connection id is refused before removeConnection is ever called', async () => {
+    let called = false
+    const result = await leaveConnectionById('c_ffffffffffff', {
+      readPreferences: fakePrefsWith([]), // empty — the id below matches nothing
+      removeConnection: async () => { called = true; return { removed: true } },
+    })
+    expect(result).toEqual({ ok: false, error: 'unknown connection' })
+    expect(called).toBe(false)
+  })
+
+  it('deps.log is forwarded to removeConnection verbatim (review finding N5) — the seam actually reaches its consumer', async () => {
+    const target = conn('c_cccccccccccc', { endpoint: 'http://127.0.0.1:1' })
+    let receivedLog: unknown = null
+    const fakeRemoveConnection = (async (
+      _id: string,
+      _reason: 'revoked' | 'manual',
+      innerDeps?: { log?: unknown },
+    ) => {
+      receivedLog = innerDeps?.log
+      return { removed: true } as const
+    }) as unknown as typeof import('./team-uploader').removeConnection
+    const myLog = { info: () => {}, warn: () => {} }
+    await leaveConnectionById(target.id, {
+      readPreferences: fakePrefsWith([target]),
+      removeConnection: fakeRemoveConnection,
+      log: myLog,
+    })
+    expect(receivedLog).toBe(myLog)
   })
 })

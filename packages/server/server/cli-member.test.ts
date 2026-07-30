@@ -1,7 +1,8 @@
 import { test, expect } from 'bun:test'
 import type { TeamConnection } from '@agentistics/core'
 import type { Preferences } from './preferences'
-import { decideLeaveTarget, memberLeave } from './cli-member'
+import { decideLeaveTarget, memberLeave, type MemberLeaveDeps } from './cli-member'
+import { cliStrings } from './cli-i18n'
 
 function conn(id: string, endpoint: string): TeamConnection {
   return { id, endpoint, org: 'default', user: 'u', token: 't', deniedRepos: [] }
@@ -90,7 +91,23 @@ test('--endpoint matches case-insensitively and folds a default port, like conne
 // developer's real preferences file; `port` points at the fixture instead of the real local
 // server. Exercises the riskiest, previously-untested path: the local-server-vs-direct-fallback
 // CHOICE, and that a server ANSWER (not just a network failure) is reported honestly.
+//
+// TWO further seams are used on every call, deliberately, per review findings N1/N2:
+//   - `isTTY: false` — `decideLeaveTarget`'s branching depends on it, and inferring it from
+//     `process.stdin.isTTY` meant this suite silently changed behavior depending on whether it
+//     ran under a pty (a developer's own terminal) or a pipe (CI, the git hook): under a REAL
+//     tty the N-connection no-flag test hit the `'prompt'` branch instead of `'ambiguous'`,
+//     drove the actual interactive `select()`, and consumed that terminal's stdin for 5s.
+//   - `strings: EN` — `memberLeave` defaults to `cliStrings(await resolveLang())`, and
+//     `resolveLang()` reads `~/.agentistics/preferences.json`'s `lang` field. Every assertion
+//     below is a hardcoded English literal, so leaving this un-injected meant the whole suite
+//     depended on the developer's real preferences file AND failed outright on any machine
+//     actually configured for `pt` — the same "test coupled to real data" class of bug this plan
+//     has now shipped four different ways across earlier rounds.
 // ---------------------------------------------------------------------------
+
+const EN = cliStrings('en')
+const TTY_OFF: Pick<MemberLeaveDeps, 'isTTY' | 'strings'> = { isTTY: false, strings: EN }
 
 function fakePrefs(connections: TeamConnection[]): () => Promise<Preferences> {
   return async () => ({ team: { schema: 2, mode: 'member', connections } }) as Preferences
@@ -123,7 +140,7 @@ test('memberLeave: N connections, no flag (non-TTY under bun test) — exit 1, n
   let leaveDirectCalled = false
   const { code, stderr } = await captureOutput(() => memberLeave(
     {},
-    { readPreferences: fakePrefs([a, b]), port: 1, leaveDirect: async () => { leaveDirectCalled = true; return { ok: true } } },
+    { ...TTY_OFF, readPreferences: fakePrefs([a, b]), port: 1, leaveDirect: async () => { leaveDirectCalled = true; return { ok: true } } },
   ))
   expect(code).toBe(1)
   expect(stderr).toContain('2 centrals')
@@ -139,7 +156,7 @@ test('memberLeave: a local-server 404 answer is reported as a failure, never pri
   let leaveDirectCalled = false
   const { code, stdout, stderr } = await captureOutput(() => memberLeave(
     {},
-    { readPreferences: fakePrefs([a]), port: server.port!, leaveDirect: async () => { leaveDirectCalled = true; return { ok: true } } },
+    { ...TTY_OFF, readPreferences: fakePrefs([a]), port: server.port!, leaveDirect: async () => { leaveDirectCalled = true; return { ok: true } } },
   ))
   expect(code).toBe(1)
   expect(stdout).not.toContain('left ')
@@ -160,6 +177,7 @@ test('memberLeave: local server unreachable — falls back to the injected direc
   const { code, stdout } = await captureOutput(() => memberLeave(
     {},
     {
+      ...TTY_OFF,
       readPreferences: fakePrefs([a]),
       port: deadPort,
       leaveDirect: async (connId) => { leaveDirectCalledWith = connId; return { ok: true } },
@@ -176,7 +194,7 @@ test('memberLeave: local server IS reachable — the direct fallback is never in
   let leaveDirectCalled = false
   const { code } = await captureOutput(() => memberLeave(
     {},
-    { readPreferences: fakePrefs([a]), port: server.port!, leaveDirect: async () => { leaveDirectCalled = true; return { ok: true } } },
+    { ...TTY_OFF, readPreferences: fakePrefs([a]), port: server.port!, leaveDirect: async () => { leaveDirectCalled = true; return { ok: true } } },
   ))
   expect(code).toBe(0)
   expect(leaveDirectCalled).toBe(false)
@@ -195,7 +213,7 @@ test('memberLeave --all: one connection failing does not abort the others (allSe
   const b = conn('c_bbbbbbbbbbbb', 'http://b:1')
   const { code, stdout, stderr } = await captureOutput(() => memberLeave(
     { all: true },
-    { readPreferences: fakePrefs([a, b]), port: server.port!, leaveDirect: async () => ({ ok: true }) },
+    { ...TTY_OFF, readPreferences: fakePrefs([a, b]), port: server.port!, leaveDirect: async () => ({ ok: true }) },
   ))
   expect(code).toBe(1) // partial failure — not a clean "left all"
   expect(stdout).toContain('left http://a:1') // the connection that succeeded is still reported

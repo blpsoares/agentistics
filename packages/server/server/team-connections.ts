@@ -206,7 +206,12 @@ async function readBody<T>(req: Request): Promise<{ ok: true; value: T } | { ok:
 
 export type AddConnectionOutcome =
   | { ok: true; action: 'insert' | 'update'; connId: string }
-  | { ok: false; reason: 'verify-failed' | 'conflict' | 'lock-timeout'; error: string }
+  // `ownerEndpoint` is set only for `reason: 'conflict'` — the endpoint of the DIFFERENT
+  // connection that already holds this token, not the endpoint the caller tried to connect to.
+  // Review finding N4: the message built from this must name the owner, or it asserts something
+  // false (a caller retrying against a second central saw "that token already belongs to
+  // <the central they were JUST talking to>", which is backwards).
+  | { ok: false; reason: 'verify-failed' | 'conflict' | 'lock-timeout'; error: string; ownerEndpoint?: string }
 
 /**
  * Core logic behind POST /api/team/connections — whoami-verifies BEFORE storing anything (see
@@ -223,12 +228,12 @@ export async function addOrUpdateConnection(body: ConnectionBody): Promise<AddCo
   const who = await whoamiVerify(body.endpoint, body.token)
   if (!who.ok) return { ok: false, reason: 'verify-failed', error: who.error ?? 'connection could not be verified' }
 
-  let outcome: { action: 'insert' | 'update' | 'conflict'; connId?: string } = { action: 'insert' }
+  let outcome: { action: 'insert' | 'update' | 'conflict'; connId?: string; ownerEndpoint?: string } = { action: 'insert' }
   try {
     await updateTeamConfig((current: TeamConfig) => {
       const decision = decideConnectionUpsert(current.connections, body.endpoint, body.token)
       if (decision.action === 'conflict') {
-        outcome = { action: 'conflict' }
+        outcome = { action: 'conflict', ownerEndpoint: decision.existing.endpoint }
         return undefined
       }
       if (decision.action === 'update') {
@@ -270,7 +275,11 @@ export async function addOrUpdateConnection(body: ConnectionBody): Promise<AddCo
   }
 
   if (outcome.action === 'conflict') {
-    return { ok: false, reason: 'conflict', error: 'this token is already used by another connection' }
+    return {
+      ok: false, reason: 'conflict',
+      error: `this token is already used by the connection to ${outcome.ownerEndpoint}`,
+      ownerEndpoint: outcome.ownerEndpoint,
+    }
   }
   if (outcome.action === 'update' && outcome.connId) {
     nudgeAfterUpdate(outcome.connId)
@@ -293,7 +302,10 @@ export async function handleAddConnection(req: Request): Promise<Response> {
   const result = await addOrUpdateConnection(body)
   if (!result.ok) {
     if (result.reason === 'lock-timeout') return lockTimeoutResponse()
-    return json({ error: result.error }, result.reason === 'conflict' ? 409 : 400)
+    return json(
+      { error: result.error, ...(result.reason === 'conflict' ? { ownerEndpoint: result.ownerEndpoint } : {}) },
+      result.reason === 'conflict' ? 409 : 400,
+    )
   }
   return json({ ok: true, id: result.connId, action: result.action })
 }
@@ -345,12 +357,18 @@ export type LeaveConnectionOutcome =
  * HTTP-agnostic for the same reason `addOrUpdateConnection` is — `cli-member.ts`'s no-server
  * fallback path calls this directly instead of duplicating it.
  *
- * `deps` is injectable for tests (mirrors `removeConnection`'s own `deps.updateTeamConfig` seam) —
- * the defaults touch the developer's real preferences file, which a test must never do.
+ * `deps` is injectable for tests (mirrors `removeConnection`'s own `deps.updateTeamConfig`/
+ * `deps.log` seams) — the defaults touch the developer's real preferences file, which a test must
+ * never do. `deps.log` is forwarded verbatim to `removeConnection` — see its docstring for why
+ * `cli-member.ts`'s no-server fallback is the one production caller that overrides it.
  */
 export async function leaveConnectionById(
   rawId: string,
-  deps: { readPreferences?: typeof readPreferences; removeConnection?: typeof removeConnection } = {},
+  deps: {
+    readPreferences?: typeof readPreferences
+    removeConnection?: typeof removeConnection
+    log?: { info: (msg: string) => void; warn: (msg: string) => void }
+  } = {},
 ): Promise<LeaveConnectionOutcome> {
   const _readPreferences = deps.readPreferences ?? readPreferences
   const _removeConnection = deps.removeConnection ?? removeConnection
@@ -383,7 +401,7 @@ export async function leaveConnectionById(
 
   // Check the actual removal result (I1) — a lock-timeout write failure must NOT be reported as
   // a successful leave; the previous version ignored removeConnection's outcome entirely.
-  const result = await _removeConnection(id, 'manual')
+  const result = await _removeConnection(id, 'manual', deps.log ? { log: deps.log } : {})
   if (!result.removed) return { ok: false, error: result.error }
   return { ok: true, endpoint: conn.endpoint }
 }

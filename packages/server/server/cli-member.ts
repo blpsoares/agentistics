@@ -28,7 +28,7 @@
 import { defaultTeam, normalizeEndpointKey, unpackConnectToken, type TeamConnection } from '@agentistics/core'
 import { PORT } from './config'
 import { readPreferencesOrExit, type Preferences } from './preferences'
-import { cliStrings, resolveLang } from './cli-i18n'
+import { cliStrings, resolveLang, type CliStrings } from './cli-i18n'
 
 // ---------------------------------------------------------------------------
 // connect
@@ -43,7 +43,10 @@ export interface MemberConnectOptions {
 
 type ConnectResult =
   | { ok: true; action: 'insert' | 'update'; connId: string }
-  | { ok: false; reason: 'conflict' | 'other'; error: string }
+  // `ownerEndpoint` is set only for `reason: 'conflict'` — the endpoint of the DIFFERENT
+  // connection that already holds this token (review finding N4: the message built from this
+  // must name that owner, not the endpoint the caller just tried to connect to).
+  | { ok: false; reason: 'conflict' | 'other'; error: string; ownerEndpoint?: string }
 
 /** Try the local server's POST /api/team/connections first. `null` = no server reachable (a
  *  network failure, or a 404 — an OLDER local server binary that predates this route, which must
@@ -59,11 +62,16 @@ async function connectViaLocalServer(body: { endpoint: string; token: string; or
       signal: AbortSignal.timeout(8_000),
     })
     if (res.status === 404) return null // an older server binary without this route — fall back
-    const json = await res.json().catch(() => null) as { ok?: boolean; id?: string; action?: string; error?: string } | null
+    const json = await res.json().catch(() => null) as { ok?: boolean; id?: string; action?: string; error?: string; ownerEndpoint?: string } | null
     if (res.ok && json?.ok && typeof json.id === 'string') {
       return { ok: true, action: json.action === 'update' ? 'update' : 'insert', connId: json.id }
     }
-    return { ok: false, reason: res.status === 409 ? 'conflict' : 'other', error: json?.error ?? `local server returned HTTP ${res.status}` }
+    return {
+      ok: false,
+      reason: res.status === 409 ? 'conflict' : 'other',
+      error: json?.error ?? `local server returned HTTP ${res.status}`,
+      ownerEndpoint: json?.ownerEndpoint,
+    }
   } catch {
     return null // no local server reachable — caller falls back to the direct sequence
   }
@@ -77,7 +85,14 @@ async function connectDirect(body: { endpoint: string; token: string; org?: stri
   const validated = validateConnectionBody(body)
   if ('error' in validated) return { ok: false, reason: 'other', error: validated.error }
   const outcome = await addOrUpdateConnection(validated)
-  if (!outcome.ok) return { ok: false, reason: outcome.reason === 'conflict' ? 'conflict' : 'other', error: outcome.error }
+  if (!outcome.ok) {
+    return {
+      ok: false,
+      reason: outcome.reason === 'conflict' ? 'conflict' : 'other',
+      error: outcome.error,
+      ownerEndpoint: outcome.reason === 'conflict' ? outcome.ownerEndpoint : undefined,
+    }
+  }
   return { ok: true, action: outcome.action, connId: outcome.connId }
 }
 
@@ -111,7 +126,13 @@ export async function memberConnect(opts: MemberConnectOptions): Promise<number>
   const result = viaServer ?? await connectDirect(body)
 
   if (!result.ok) {
-    const message = result.reason === 'conflict' ? s.tokenInUse(endpoint) : result.error
+    // `s.tokenInUse` must name the OWNER of the token, never the endpoint the caller just tried
+    // to connect to — those are different connections (review finding N4). Fall back to the raw
+    // server error only if the owner endpoint genuinely wasn't reported (should not happen in
+    // practice; addOrUpdateConnection always sets it on a conflict).
+    const message = result.reason === 'conflict' && result.ownerEndpoint
+      ? s.tokenInUse(result.ownerEndpoint)
+      : result.error
     process.stderr.write(`${message}\n`)
     return 1
   }
@@ -168,11 +189,21 @@ export function decideLeaveTarget(
 
 type LeaveResult = { ok: true } | { ok: false; error: string }
 
-/** Try the local server's DELETE route. `null` = unreachable (network failure) — falls back to
- *  the direct sequence below. Any ANSWER from the server (2xx or an error status, e.g. 404 for an
- *  already-gone connection) is authoritative and is returned as-is — see the module docstring
- *  (review finding I1): silently falling back on an answered error is exactly what HTTP-first
- *  exists to prevent, and printing success for a 404 asserts a removal that never happened. */
+/**
+ * Try the local server's DELETE route. `null` = unreachable (network failure) — falls back to
+ * the direct sequence below. Any ANSWER from the server (2xx or an error status, e.g. 404 for an
+ * already-gone connection) is authoritative and is returned as-is — see the module docstring
+ * (review finding I1): silently falling back on an answered error is exactly what HTTP-first
+ * exists to prevent, and printing success for a 404 asserts a removal that never happened.
+ *
+ * Deliberately does NOT fall back to `null` on a 404 the way `connectViaLocalServer` does for an
+ * older server binary predating its route — a DELETE 404 is far more often a genuine "unknown
+ * connection" than a missing route, and treating it as "try the direct sequence instead" would
+ * risk two very different situations (the connection is already gone vs. this server doesn't
+ * even have the route) looking identical to the caller. The asymmetry is intentional; the error
+ * message below says so explicitly instead of implying a specific cause ("no connection
+ * matches") that may not be what happened.
+ */
 async function leaveViaLocalServer(connId: string, port: number): Promise<LeaveResult | null> {
   try {
     const res = await fetch(`http://localhost:${port}/api/team/connections/${encodeURIComponent(connId)}`, {
@@ -181,6 +212,17 @@ async function leaveViaLocalServer(connId: string, port: number): Promise<LeaveR
     })
     if (res.ok) return { ok: true }
     const json = await res.json().catch(() => null) as { error?: string } | null
+    if (res.status === 404 && !json?.error) {
+      // A CURRENT server answers 404 for an unknown id with a real {error: "..."} JSON body
+      // (handled by the branch below). No such body means the router itself has nothing to
+      // match — most likely a local server binary that predates this route, but possibly a
+      // genuinely unknown connection too; say the ambiguity plainly rather than guess.
+      return {
+        ok: false,
+        error: 'the local server answered 404 with no details — either this connection is '
+          + 'already gone, or the running agentop predates this route (upgrade and retry)',
+      }
+    }
     return { ok: false, error: json?.error ?? `local server returned HTTP ${res.status}` }
   } catch {
     return null
@@ -240,11 +282,20 @@ function reportLeaveOutcomes(s: ReturnType<typeof cliStrings>, outcomes: { conn:
  *  can stand up a `Bun.serve` fixture on an ephemeral port. `readPreferences` overrides how the
  *  current connection list is obtained, so a test never touches the developer's real preferences
  *  file (the production default, `readPreferencesOrExit`, also prints a friendly message and
- *  exits 1 on a corrupt file — a real CLI invocation must keep that safety net). */
+ *  exits 1 on a corrupt file — a real CLI invocation must keep that safety net). `isTTY` overrides
+ *  `process.stdin.isTTY` — review finding N1: inferring it directly meant a test run under a REAL
+ *  pty (a developer's own terminal, not CI's piped stdin) hit the `'prompt'` branch and drove the
+ *  actual interactive `select()`, consuming that terminal's stdin and hanging for 5s. `strings`
+ *  overrides the whole localized string table — review finding N2: `resolveLang()` calls
+ *  `readPreferences()`, so every un-injected test silently depended on the machine's real
+ *  `preferences.json`'s `lang` field and its hardcoded English assertions would fail on any
+ *  machine actually configured for `pt`. */
 export interface MemberLeaveDeps {
   readPreferences?: () => Promise<Preferences>
   port?: number
   leaveDirect?: (connId: string) => Promise<LeaveResult>
+  isTTY?: boolean
+  strings?: CliStrings
 }
 
 /**
@@ -262,9 +313,10 @@ export async function memberLeave(opts: MemberLeaveOptions = {}, deps: MemberLea
 
   const prefs = await _readPreferences()
   const connections = prefs.team?.connections ?? []
-  const s = cliStrings(await resolveLang())
+  const s = deps.strings ?? cliStrings(await resolveLang())
+  const isTTY = deps.isTTY ?? Boolean(process.stdin.isTTY)
 
-  const decision = decideLeaveTarget(connections, { ...opts, isTTY: Boolean(process.stdin.isTTY) })
+  const decision = decideLeaveTarget(connections, { ...opts, isTTY })
 
   switch (decision.type) {
     case 'none':

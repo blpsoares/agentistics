@@ -695,4 +695,58 @@ describe('removeConnection — splices one entry, GCs only its own files (B-2)',
     await rm(join(primary, '..'), { recursive: true, force: true }).catch(() => {})
     await rm(join(legacy, '..'), { recursive: true, force: true }).catch(() => {})
   })
+
+  // Review finding I1 (second half): removeConnection used to warn-and-return `void` on a write
+  // failure, so nothing downstream could tell a lock timeout from a real removal. It now returns
+  // {removed:false, error} — assert that explicitly, not just the side effects.
+  it('a write failure (e.g. a lock timeout) returns {removed:false, error} instead of asserting success', async () => {
+    const id = randomConnId()
+    const conn = fakeConn(id, 1)
+    const store: TeamConfig = { schema: 2, mode: 'member', connections: [conn] }
+    const failingUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+      mutate(store) // run it (so removedConn gets set internally) but then simulate the write failing
+      throw new Error('preferences write lock timed out')
+    }
+
+    const result = await removeConnection(id, 'manual', { updateTeamConfig: failingUpdateTeamConfig })
+
+    expect(result).toEqual({ removed: false, error: 'preferences write lock timed out' })
+  })
+
+  it('a successful removal returns {removed:true}', async () => {
+    const id = randomConnId()
+    const conn = fakeConn(id, 1)
+    let store: TeamConfig = { schema: 2, mode: 'member', connections: [conn] }
+    const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+      const next = mutate(store)
+      if (next !== undefined) store = next
+      return store
+    }
+
+    const result = await removeConnection(id, 'manual', { updateTeamConfig: fakeUpdateTeamConfig })
+
+    expect(result).toEqual({ removed: true })
+  })
+
+  // Review finding N5: deps.log defaults to console; a caller (cli-member.ts's direct-fallback
+  // path) can override it to silence the [team-uploader] lines instead of having them print into
+  // its own terminal output — zero behavior change for the default (server/browser) path, which
+  // never passes this.
+  it('deps.log overrides console with zero change to default (unspecified) behavior', async () => {
+    const id = randomConnId()
+    const conn = fakeConn(id, 1)
+    let store: TeamConfig = { schema: 2, mode: 'member', connections: [conn] }
+    const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+      const next = mutate(store)
+      if (next !== undefined) store = next
+      return store
+    }
+    const logged: string[] = []
+    const fakeLog = { info: (m: string) => logged.push(`info:${m}`), warn: (m: string) => logged.push(`warn:${m}`) }
+
+    const result = await removeConnection(id, 'manual', { updateTeamConfig: fakeUpdateTeamConfig, log: fakeLog })
+
+    expect(result).toEqual({ removed: true })
+    expect(logged.some(l => l.startsWith('info:') && l.includes('removed connection'))).toBe(true)
+  })
 })

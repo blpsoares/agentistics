@@ -102,7 +102,9 @@ function configLines(s: CliStrings, mode: Mode, connections: TeamConnection[]): 
   // fact — a hand-copied literal here duplicated its English text instead of calling it, so a
   // pt-BR user saw untranslated text in `agentop status` even though the launcher localizes it.
   const lines = connections.map(c => {
-    const suffix = c.deniedRepos.length > 0 ? ` ${D}${s.deniedSuffix(c.deniedRepos.length)}${R}` : ''
+    // s.deniedSuffix already begins with its own leading space (" · N repo(s) blocked") — do
+    // not prepend a second one here (that was a double-space bug this round found).
+    const suffix = c.deniedRepos.length > 0 ? `${D}${s.deniedSuffix(c.deniedRepos.length)}${R}` : ''
     return `      ${D}↳${R} ${c.endpoint || '(?)'}${suffix}`
   })
   return [header, ...lines]

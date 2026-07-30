@@ -227,7 +227,13 @@ function fireHandleAuthError(conn: TeamConnection, status: number): void {
  * since the mutator returns `undefined` in that case, does not even re-write the file).
  *
  * `deps.updateTeamConfig` is injectable for tests — the default touches the developer's real
- * ~/.agentistics/preferences.json, which a test must never do.
+ * ~/.agentistics/preferences.json, which a test must never do. `deps.log` (review finding N5)
+ * defaults to `console` — the ONLY caller that overrides it is `cli-member.ts`'s direct-fallback
+ * path (via `leaveConnectionById`'s own `deps.log`), which passes a silent logger so `member
+ * leave`'s own "left <endpoint>" line isn't followed by a redundant `[team-uploader]` line in the
+ * user's terminal. The browser's DELETE route never overrides it, so its behavior — and the
+ * `member.disconnected`/`member.removed` notification this function still always fires — is
+ * unchanged.
  *
  * Returns `{removed: true}` once the postcondition (this id is not in `connections[]`) holds —
  * whether THIS call did the removing or it was already gone — and `{removed: false, error}` only
@@ -239,9 +245,10 @@ function fireHandleAuthError(conn: TeamConnection, status: number): void {
 export async function removeConnection(
   connId: string,
   reason: 'revoked' | 'manual' = 'revoked',
-  deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
+  deps: { updateTeamConfig?: typeof updateTeamConfig; log?: { info: (msg: string) => void; warn: (msg: string) => void } } = {},
 ): Promise<{ removed: true } | { removed: false; error: string }> {
   const _updateTeamConfig = deps.updateTeamConfig ?? updateTeamConfig
+  const _log = deps.log ?? console
   teardownConnection(connId)
 
   let removedConn: TeamConnection | undefined
@@ -255,7 +262,7 @@ export async function removeConnection(
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.warn(`[team-uploader] failed to persist removal of ${connId}:`, msg)
+    _log.warn(`[team-uploader] failed to persist removal of ${connId}: ${msg}`)
     return { removed: false, error: msg }
   }
   if (!removedConn) return { removed: true } // idempotent — the postcondition already held
@@ -270,9 +277,9 @@ export async function removeConnection(
   ])
 
   if (reason === 'manual') {
-    console.info(`[team-uploader] removed connection ${connId} (${hostOf(removedConn.endpoint)}) — user disconnected it`)
+    _log.info(`[team-uploader] removed connection ${connId} (${hostOf(removedConn.endpoint)}) — user disconnected it`)
   } else {
-    console.warn(`[team-uploader] removed connection ${connId} (${hostOf(removedConn.endpoint)}) — central revoked this token or it was removed`)
+    _log.warn(`[team-uploader] removed connection ${connId} (${hostOf(removedConn.endpoint)}) — central revoked this token or it was removed`)
   }
   try {
     const { reconcileNow } = await import('./team-agent-client')
