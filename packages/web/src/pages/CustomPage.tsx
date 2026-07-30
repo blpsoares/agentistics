@@ -1367,7 +1367,8 @@ export default function CustomPage() {
               <button className="icon-btn" onClick={() => setManageOpen(false)} style={{ width: 26, height: 26 }}><X size={12} /></button>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* A <label>, not a <div>: the text has to toggle the box like any other checkbox. */}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
               <input
                 type="checkbox"
                 checked={manageSelected.size === layoutNames.length && layoutNames.length > 0}
@@ -1375,12 +1376,12 @@ export default function CustomPage() {
                   if (e.target.checked) setManageSelected(new Set(layoutNames))
                   else setManageSelected(new Set())
                 }}
-                style={{ accentColor: 'var(--anthropic-orange)' }}
+                style={{ accentColor: 'var(--anthropic-orange)', cursor: 'pointer' }}
               />
               <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
                 {pt ? 'Selecionar todos' : 'Select all'}
               </span>
-            </div>
+            </label>
 
             <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
               {layoutNames.map(name => {

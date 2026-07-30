@@ -210,7 +210,42 @@ export function RecordCardAction({ onClick, children, danger, label }: {
 // view) by default; when `editing` it renders `editChildren` + Save/Cancel. The
 // caller owns the `editing` boolean (per-section state). Used in the detail drawers
 // so info shows read-first and each section is edited independently.
-export function Section({ title, editing, onEdit, onCancel, onSave, canEdit = true, children, editChildren, labels }: {
+/**
+ * One unit of work inside a single save. `run` throws to fail; `label` names the part for the
+ * user, so a partial failure can say WHICH part did not save.
+ */
+export interface SaveStep {
+  label: string
+  /** Skip entirely when false — an untouched section must not fire a request. */
+  dirty: boolean
+  run: () => Promise<void>
+}
+
+/**
+ * Run every dirty step, then report. Deliberately does NOT stop at the first failure.
+ *
+ * These steps are separate HTTP requests with no transaction behind them, so there is no rollback
+ * to offer: by the time step 2 fails, step 1 is already committed on the server. Aborting would
+ * leave the same partial state AND silently skip work the user asked for. So every step is
+ * attempted and the caller is told exactly which parts landed and which did not — a partial save
+ * the user can see beats a partial save dressed up as an abort.
+ */
+export async function runSaveSteps(steps: SaveStep[]): Promise<{ saved: string[]; failed: { label: string; error: string }[] }> {
+  const saved: string[] = []
+  const failed: { label: string; error: string }[] = []
+  for (const step of steps) {
+    if (!step.dirty) continue
+    try {
+      await step.run()
+      saved.push(step.label)
+    } catch (e) {
+      failed.push({ label: step.label, error: e instanceof Error ? e.message : String(e) })
+    }
+  }
+  return { saved, failed }
+}
+
+export function Section({ title, editing, onEdit, onCancel, onSave, canEdit = true, children, editChildren, labels, hideActions }: {
   title: string
   editing: boolean
   onEdit: () => void
@@ -220,6 +255,9 @@ export function Section({ title, editing, onEdit, onCancel, onSave, canEdit = tr
   children: React.ReactNode
   editChildren: React.ReactNode
   labels?: { edit: string; save: string; cancel: string }
+  /** Parent owns edit mode and supplies ONE save for the whole form — this section renders no
+   *  Edit button and no Save/Cancel row. Used by drawers that save everything at once. */
+  hideActions?: boolean
 }) {
   const l = labels ?? { edit: 'Edit', save: 'Save', cancel: 'Cancel' }
   const isMobile = useIsMobile()
@@ -227,7 +265,7 @@ export function Section({ title, editing, onEdit, onCancel, onSave, canEdit = tr
     <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.07em', textTransform: 'uppercase' }}>{title}</div>
-        {canEdit && !editing && (
+        {canEdit && !editing && !hideActions && (
           <button type="button" onClick={onEdit} style={{
             display: 'inline-flex', alignItems: 'center', gap: 5, padding: isMobile ? '0 12px' : '5px 10px',
             minHeight: isMobile ? 40 : undefined, borderRadius: 7,
@@ -242,7 +280,7 @@ export function Section({ title, editing, onEdit, onCancel, onSave, canEdit = tr
           {/* column-reverse puts Save above Cancel visually while keeping Cancel first in the
               DOM, so the thumb lands on the confirming action, not the discarding one. */}
           <div style={{
-            display: 'flex', gap: 8, justifyContent: 'flex-end',
+            display: hideActions ? 'none' : 'flex', gap: 8, justifyContent: 'flex-end',
             flexDirection: isMobile ? 'column-reverse' : 'row',
           }}>
             <button type="button" onClick={onCancel} style={{
@@ -349,24 +387,54 @@ export function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) 
   )
 }
 
-export function Checkbox({ checked, onChange, label }: { checked: boolean; onChange: (checked: boolean) => void; label: string }) {
+/**
+ * A checkbox whose ENTIRE row — box and label — is the control.
+ *
+ * This used to be a `<label>` wrapping a `div[role=checkbox]`, with the click handler on the inner
+ * div only. A `<label>` forwards clicks solely to a real form control (`<input>`/`<select>`/…), and
+ * never to a div with an ARIA role — so clicking the text did nothing, which is the one thing every
+ * user expects a checkbox label to do. Making the row itself the single focusable control fixes the
+ * label click, keyboard and the touch target in one shape, instead of syncing two elements.
+ */
+export function Checkbox({ checked, onChange, label, disabled }: {
+  checked: boolean
+  onChange: (checked: boolean) => void
+  label: string
+  disabled?: boolean
+}) {
+  const isMobile = useIsMobile()
+  const toggle = (e: React.SyntheticEvent) => {
+    if (disabled) return
+    // Checkboxes sit inside clickable RecordCards (as `leading`), where bubbling would toggle the
+    // row AND open the drawer behind it from a single tap.
+    e.stopPropagation()
+    onChange(!checked)
+  }
   return (
-    <label style={{
-      display: 'flex', alignItems: 'center', gap: 8,
-      fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer',
-    }}>
+    <div
+      role="checkbox"
+      aria-checked={checked}
+      aria-disabled={disabled || undefined}
+      tabIndex={disabled ? -1 : 0}
+      onClick={toggle}
+      onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); toggle(e) } }}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 8,
+        fontSize: 12, color: 'var(--text-secondary)',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        // Only on mobile: a 44px row on desktop turns a list of checkboxes into a stack of bars.
+        minHeight: isMobile ? 44 : undefined,
+      }}
+    >
       <div
-        role="checkbox"
-        aria-checked={checked}
-        tabIndex={0}
-        onClick={() => onChange(!checked)}
-        onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); onChange(!checked) } }}
+        aria-hidden
         style={{
           width: 16, height: 16, borderRadius: 4, flexShrink: 0,
           border: `1px solid ${checked ? 'var(--anthropic-orange)' : 'var(--border)'}`,
           background: checked ? 'var(--anthropic-orange)' : 'transparent',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          cursor: 'pointer', transition: 'all 0.15s',
+          transition: 'all 0.15s',
         }}
       >
         {checked && (
@@ -375,8 +443,66 @@ export function Checkbox({ checked, onChange, label }: { checked: boolean; onCha
           </svg>
         )}
       </div>
-      <span>{label}</span>
-    </label>
+      {label && <span>{label}</span>}
+    </div>
+  )
+}
+
+/**
+ * The single Edit / Save-Cancel footer for a drawer that saves EVERY section at once.
+ *
+ * Replaces the per-section Save: a form used to need one confirmation per field group, so changing
+ * a machine's name, teams and owners meant three Edit→Save cycles. Here the whole form goes into
+ * edit mode together and commits once.
+ */
+export function SaveBar({ editing, canEdit, dirty, busy, onEdit, onCancel, onSave, labels }: {
+  editing: boolean
+  canEdit: boolean
+  /** Nothing changed → Save is inert, so a no-op cannot fire requests. */
+  dirty: boolean
+  busy?: boolean
+  onEdit: () => void
+  onCancel: () => void
+  onSave: () => void
+  labels: { edit: string; save: string; cancel: string; saving: string }
+}) {
+  const isMobile = useIsMobile()
+  if (!canEdit) return null
+  const base: React.CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+    minHeight: isMobile ? 44 : undefined, width: isMobile ? '100%' : undefined,
+    borderRadius: 7, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+  }
+  if (!editing) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+        <button type="button" onClick={onEdit} style={{
+          ...base, padding: isMobile ? '0 14px' : '8px 14px',
+          border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)',
+        }}><Pencil size={13} /> {labels.edit}</button>
+      </div>
+    )
+  }
+  return (
+    <div style={{
+      display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 18,
+      // Save above Cancel on mobile, while Cancel stays first in the DOM — the thumb should land
+      // on the confirming action, not the discarding one.
+      flexDirection: isMobile ? 'column-reverse' : 'row',
+    }}>
+      <button type="button" onClick={onCancel} disabled={busy} style={{
+        ...base, padding: isMobile ? '0 12px' : '7px 12px',
+        border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)',
+        opacity: busy ? 0.5 : 1, cursor: busy ? 'not-allowed' : 'pointer',
+      }}>{labels.cancel}</button>
+      <button type="button" onClick={onSave} disabled={busy || !dirty} style={{
+        ...base, padding: isMobile ? '0 14px' : '8px 14px',
+        border: '1px solid var(--anthropic-orange)',
+        background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+        opacity: (busy || !dirty) ? 0.5 : 1,
+        cursor: (busy || !dirty) ? 'not-allowed' : 'pointer',
+      }}><Check size={14} /> {busy ? labels.saving : labels.save}</button>
+    </div>
   )
 }
 

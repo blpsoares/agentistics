@@ -702,6 +702,7 @@ export default function TagsPage() {
           onEdit={() => setSourcesEditing(true)}
           onCancel={() => setSourcesEditing(false)}
           onSave={() => setSourcesEditing(false)}
+          hideActions
           labels={{ edit: pt ? 'Editar' : 'Edit', save: pt ? 'Pronto' : 'Done', cancel: pt ? 'Fechar' : 'Close' }}
           editChildren={
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -764,6 +765,7 @@ export default function TagsPage() {
           onEdit={() => setFiltersEditing(true)}
           onCancel={() => setFiltersEditing(false)}
           onSave={() => setFiltersEditing(false)}
+          hideActions
           labels={{ edit: pt ? 'Editar' : 'Edit', save: pt ? 'Pronto' : 'Done', cancel: pt ? 'Fechar' : 'Close' }}
           editChildren={
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -820,6 +822,7 @@ export default function TagsPage() {
           onEdit={() => setWindowEditing(true)}
           onCancel={() => setWindowEditing(false)}
           onSave={() => setWindowEditing(false)}
+          hideActions
           labels={{ edit: pt ? 'Editar' : 'Edit', save: pt ? 'Pronto' : 'Done', cancel: pt ? 'Fechar' : 'Close' }}
           editChildren={
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -891,6 +894,7 @@ export default function TagsPage() {
           onEdit={() => setShareEditing(true)}
           onCancel={() => setShareEditing(false)}
           onSave={() => setShareEditing(false)}
+          hideActions
           labels={{ edit: pt ? 'Editar' : 'Edit', save: pt ? 'Pronto' : 'Done', cancel: pt ? 'Fechar' : 'Close' }}
           editChildren={
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

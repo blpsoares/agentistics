@@ -3,7 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import { Plus, Copy, Check, RotateCw, Trash2, Pencil, X } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
 import { TeamSettings, type TeamConfig } from '../../components/TeamSettings'
-import { SectionHeader, Section, Select, Checkbox, ConfirmModal, RecordCard, RecordCardAction } from './primitives'
+import { SectionHeader, Section, Select, Checkbox, ConfirmModal, RecordCard, RecordCardAction, SaveBar, runSaveSteps } from './primitives'
 import { Drawer } from './Drawer'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { defaultTeam } from '@agentistics/core'
@@ -164,7 +164,13 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   const [editOwnerRows, setEditOwnerRows] = useState<string[]>([])
   const [editErr, setEditErr] = useState<string | null>(null)
   // Per-section edit toggle inside the (read-first) edit drawer. Only one section edits at a time.
-  const [editingSection, setEditingSection] = useState<null | 'details' | 'owners'>(null)
+  // The WHOLE edit drawer is one form: it used to hold a per-section value ('details' | 'owners'),
+  // which forced an Edit→Save cycle per field group. Now every section edits together and commits
+  // once (see saveAll + SaveBar).
+  const [editingAll, setEditingAll] = useState(false)
+  const [saveBusy, setSaveBusy] = useState(false)
+  /** Partial-save report: which parts failed. Empty means the last save was clean. */
+  const [saveFailed, setSaveFailed] = useState<{ label: string; error: string }[]>([])
 
   // Central URL state
   const [publicUrl, setPublicUrl] = useState('')
@@ -400,7 +406,9 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     const ids = m.accountIds ?? (m.accountId ? [m.accountId] : [])
     setEditOwnerRows(ids.length > 0 ? ids : [''])
     setEditErr(null)
-    setEditingSection(null)
+    // Always open read-first, with any previous partial-save report cleared.
+    setEditingAll(false)
+    setSaveFailed([])
     setEditMachineOpen(true)
   }
 
@@ -429,61 +437,67 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   }
 
   // Per-section saves (read-first drawer): each Section saves only its own fields.
-  async function saveDetails() {
+  /** POST /api/iam/machines with one of its payload shapes; throws on a non-2xx. */
+  async function postMachine(body: Record<string, unknown>): Promise<void> {
+    const res = await fetch('/api/iam/machines', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  }
+
+  /** What the edit drawer would change, per part. Also drives the Save button's enabled state, so
+   *  an untouched form cannot fire a single request. */
+  function editDiff() {
+    const m = editingMachine
+    if (!m) return { name: false, teams: false, owners: false, any: false, newTeamIds: [] as string[], newOwners: [] as string[] }
+    const newTeamIds = [...new Set(editTeamIds.filter(id => id.trim()))]
+    const newOwners = [...new Set(editOwnerRows.filter(id => id.trim()))]
+    const sameSet = (a: string[], b: string[]) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort())
+    const name = editName.trim() !== m.machineName
+    const teams = !sameSet(machineTeamIds(m), newTeamIds)
+    const owners = !sameSet(m.accountIds ?? (m.accountId ? [m.accountId] : []), newOwners)
+    return { name, teams, owners, any: name || teams || owners, newTeamIds, newOwners }
+  }
+
+  /**
+   * Commit the whole drawer in one go.
+   *
+   * Every part is attempted even if an earlier one fails: these are three separate requests with no
+   * transaction behind them, so once the rename has committed there is nothing to roll back — and
+   * stopping would leave the same partial state while silently dropping the rest of what the user
+   * asked for. Whatever fails is named back to them instead.
+   */
+  async function saveAll() {
     if (!editingMachine) return
     if (!editName.trim()) {
       setEditErr(pt ? 'O nome não pode ficar vazio.' : 'Name cannot be empty.')
       return
     }
-    const nameChanged = editName.trim() !== editingMachine.machineName
-    const newTeamIds = [...new Set(editTeamIds.filter(id => id.trim()))]
-    const originalTeamIds = machineTeamIds(editingMachine)
-    const teamsChanged = JSON.stringify([...originalTeamIds].sort()) !== JSON.stringify([...newTeamIds].sort())
-    try {
-      if (nameChanged) {
-        const res = await fetch('/api/iam/machines', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ renameId: editingMachine.id, name: editName.trim() }),
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      }
-      if (teamsChanged) {
-        const res = await fetch('/api/iam/machines', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reassignId: editingMachine.id, teamIds: newTeamIds }),
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      }
-      setEditErr(null)
-      setEditingSection(null)
-      void load()
-    } catch (e) {
-      setEditErr(String(e))
-    }
+    const d = editDiff()
+    if (!d.any) { setEditingAll(false); return }
+    setSaveBusy(true)
+    setEditErr(null)
+    setSaveFailed([])
+    const { failed } = await runSaveSteps([
+      { label: pt ? 'nome' : 'name', dirty: d.name, run: () => postMachine({ renameId: editingMachine.id, name: editName.trim() }) },
+      { label: pt ? 'times' : 'teams', dirty: d.teams, run: () => postMachine({ reassignId: editingMachine.id, teamIds: d.newTeamIds }) },
+      { label: pt ? 'contas' : 'owners', dirty: d.owners, run: () => postMachine({ ownerId: editingMachine.id, accountIds: d.newOwners }) },
+    ])
+    setSaveBusy(false)
+    setSaveFailed(failed)
+    // Stay in edit mode when something failed, so the unsaved values are still on screen to retry.
+    if (failed.length === 0) setEditingAll(false)
+    void load()
   }
 
-  async function saveOwners() {
-    if (!editingMachine) return
-    const originalOwners = editingMachine.accountIds ?? (editingMachine.accountId ? [editingMachine.accountId] : [])
-    const newOwners = [...new Set(editOwnerRows.filter(id => id.trim()))]
-    const ownersChanged = JSON.stringify([...originalOwners].sort()) !== JSON.stringify([...newOwners].sort())
-    try {
-      if (ownersChanged) {
-        const res = await fetch('/api/iam/machines', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ownerId: editingMachine.id, accountIds: newOwners }),
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      }
-      setEditErr(null)
-      setEditingSection(null)
-      void load()
-    } catch (e) {
-      setEditErr(String(e))
-    }
+  /** Reload every draft field from the machine as it currently is. */
+  function resetEditDrafts() {
+    setEditName(editMachine?.machineName ?? '')
+    setEditTeamIds(editMachine ? machineTeamIds(editMachine) : [])
+    const ids = editMachine?.accountIds ?? (editMachine?.accountId ? [editMachine.accountId] : [])
+    setEditOwnerRows(ids.length > 0 ? ids : [''])
   }
 
   function toggleSelectAll() {
@@ -1164,36 +1178,18 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
       {/* Edit machine drawer — read-first with a per-section Edit toggle. */}
       <Drawer open={editMachineOpen} onClose={() => setEditMachineOpen(false)} title={pt ? 'Editar máquina' : 'Edit machine'}
         lang={pt ? 'pt' : 'en'}
-        dirty={
-          (editingSection === 'details' && !!editingMachine && (
-            editName.trim() !== editingMachine.machineName
-            || JSON.stringify([...machineTeamIds(editingMachine)].sort())
-               !== JSON.stringify([...new Set(editTeamIds.filter(id => id.trim()))].sort())
-          ))
-          || (editingSection === 'owners' && !!editingMachine && (
-            JSON.stringify([...(editingMachine.accountIds ?? (editingMachine.accountId ? [editingMachine.accountId] : []))].sort())
-            !== JSON.stringify([...new Set(editOwnerRows.filter(id => id.trim()))].sort())
-          ))
-        }>
+        dirty={editingAll && editDiff().any}>
         {drawerErrPanel(editErr)}
 
         {/* DETAILS SECTION (name + team) — read-first */}
         <Section
           title={pt ? 'Detalhes' : 'Details'}
-          editing={editingSection === 'details'}
+          editing={editingAll}
           canEdit={editCanManage}
-          onEdit={() => {
-            setEditErr(null)
-            setEditName(editMachine?.machineName ?? '')
-            setEditTeamIds(editMachine ? machineTeamIds(editMachine) : [])
-            setEditingSection('details')
-          }}
-          onCancel={() => {
-            setEditName(editMachine?.machineName ?? '')
-            setEditTeamIds(editMachine ? machineTeamIds(editMachine) : [])
-            setEditingSection(null)
-          }}
-          onSave={() => void saveDetails()}
+          hideActions
+          onEdit={() => {}}
+          onCancel={() => {}}
+          onSave={() => {}}
           labels={sectionLabels}
           editChildren={
             <>
@@ -1273,20 +1269,12 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
         {/* OWNERS SECTION — read-first */}
         <Section
           title={pt ? 'Contas (owners)' : 'Owners'}
-          editing={editingSection === 'owners'}
+          editing={editingAll}
           canEdit={editCanManage}
-          onEdit={() => {
-            setEditErr(null)
-            const ids = editMachine?.accountIds ?? (editMachine?.accountId ? [editMachine.accountId] : [])
-            setEditOwnerRows(ids.length > 0 ? ids : [''])
-            setEditingSection('owners')
-          }}
-          onCancel={() => {
-            const ids = editMachine?.accountIds ?? (editMachine?.accountId ? [editMachine.accountId] : [])
-            setEditOwnerRows(ids.length > 0 ? ids : [''])
-            setEditingSection(null)
-          }}
-          onSave={() => void saveOwners()}
+          hideActions
+          onEdit={() => {}}
+          onCancel={() => {}}
+          onSave={() => {}}
           labels={sectionLabels}
           editChildren={
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1349,6 +1337,35 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
             )
           })()}
         </Section>
+
+        {/* Partial-save report. Every part is attempted, so naming what failed is the only honest
+            outcome — the rest of the form DID save. */}
+        {saveFailed.length > 0 && (
+          <div style={{
+            marginTop: 14, padding: '9px 11px', borderRadius: 8, fontSize: 12, lineHeight: 1.5,
+            border: '1px solid #ef4444', background: 'rgba(239,68,68,0.08)', color: '#ef4444',
+          }}>
+            {pt
+              ? `Não foi possível salvar: ${saveFailed.map(f => f.label).join(', ')}. O restante foi salvo.`
+              : `Could not save: ${saveFailed.map(f => f.label).join(', ')}. Everything else was saved.`}
+          </div>
+        )}
+
+        <SaveBar
+          editing={editingAll}
+          canEdit={editCanManage}
+          dirty={editDiff().any}
+          busy={saveBusy}
+          onEdit={() => { setEditErr(null); setSaveFailed([]); resetEditDrafts(); setEditingAll(true) }}
+          onCancel={() => { setSaveFailed([]); resetEditDrafts(); setEditingAll(false) }}
+          onSave={() => void saveAll()}
+          labels={{
+            edit: pt ? 'Editar' : 'Edit',
+            save: pt ? 'Salvar' : 'Save',
+            cancel: pt ? 'Cancelar' : 'Cancel',
+            saving: pt ? 'Salvando…' : 'Saving…',
+          }}
+        />
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
           <button style={ghostBtn} onClick={() => setEditMachineOpen(false)}>{pt ? 'Fechar' : 'Close'}</button>

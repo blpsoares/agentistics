@@ -3,7 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import { Plus, Trash2, Copy, Check, Dice5, KeyRound, Pencil, X } from 'lucide-react'
 import { generatePassword } from '../../lib/password'
 import type { AppContext } from '../../lib/app-context'
-import { SectionHeader, Section, Checkbox, Select, ConfirmModal, RecordCard, RecordCardAction } from './primitives'
+import { SectionHeader, Section, Checkbox, Select, ConfirmModal, RecordCard, RecordCardAction, SaveBar, runSaveSteps } from './primitives'
 import { Drawer } from './Drawer'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { stepUpFetch } from '../../lib/stepup'
@@ -199,11 +199,15 @@ export default function UsersSettings() {
   const [editErr, setEditErr] = useState<string | null>(null)
   const [tempPassword, setTempPassword] = useState<string | null>(null)
   // Per-section edit toggle inside the (read-first) edit drawer. Only one section edits at a time.
-  const [editingSection, setEditingSection] = useState<null | 'identity' | 'teams' | 'machines' | 'tags'>(null)
+  // The edit drawer is ONE form. This held a per-section value, which forced an Edit→Save cycle
+  // per field group — four of them on this screen. Everything now edits together (saveAll+SaveBar).
+  const [editingAll, setEditingAll] = useState(false)
+  const [saveBusy, setSaveBusy] = useState(false)
+  /** Partial-save report: which parts failed. Empty means the last save was clean. */
+  const [saveFailed, setSaveFailed] = useState<{ label: string; error: string }[]>([])
   // Tag grants being edited for this account (ids). Saved as a diff against what each tag's
   // sharedWith currently says, so a partially-applied save can simply be retried.
   const [eTagIds, setETagIds] = useState<string[]>([])
-  const [savingTags, setSavingTags] = useState(false)
   // Add machine inline form in edit drawer
   const [addMachineName, setAddMachineName] = useState('')
   const [addMachineTeam, setAddMachineTeam] = useState('')
@@ -337,8 +341,8 @@ export default function UsersSettings() {
     setEditErr(null); setTempPassword(null); setAddMachineName(''); setAddMachineTeam(''); setAddedMachineToken(null); setAddedMachineName(null)
     setRenamingMachineId(null); setRenameMachineValue('')
     setLinkMachineIds([]); setLinking(false)
-    setETagIds([]); setSavingTags(false)
-    setEditingSection(null)
+    setETagIds([])
+    setEditingAll(false); setSaveFailed([])
     setEditOpen(true)
     void loadTags()
     // Fetch linked machines
@@ -357,71 +361,98 @@ export default function UsersSettings() {
   function addERow() { setERows(rs => [...rs, { teamId: '', role: 'user' }]) }
   function removeERow(i: number) { setERows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs) }
 
-  async function saveEdit() {
-    if (!editId) return
-    if (!en.trim()) { setEditErr(pt ? 'O nome não pode ficar vazio.' : 'Name cannot be empty.'); return }
-    const body: Record<string, unknown> = { id: editId, name: en.trim() }
-    if (!editIsOwner) body.memberships = eRows.filter(r => r.teamId)
-    const res = await stepUpFetch('/api/iam/accounts', {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (!res.ok) { const d = await res.json() as { error?: string }; setEditErr(d.error || `HTTP ${res.status}`); return }
-    setEditOpen(false); void load()
+
+  /** What the edit drawer would change, per part. Drives the Save button's enabled state too. */
+  function editDiff() {
+    const nameChanged = en.trim() !== (editAccount?.name ?? '').trim()
+    const baseline = (editAccount && editAccount.memberships.length ? editAccount.memberships : [{ teamId: '', role: 'user' }])
+      .map(m => ({ t: m.teamId, r: m.role }))
+    const membershipsChanged = !editIsOwner
+      && JSON.stringify(eRows.map(r => ({ t: r.teamId, r: r.role }))) !== JSON.stringify(baseline)
+    const tagsChanged = sortedIds(eTagIds) !== sortedIds(currentTagIds)
+    return { nameChanged, membershipsChanged, tagsChanged, any: nameChanged || membershipsChanged || tagsChanged }
   }
 
-  // Per-section saves (read-first drawer): each Section saves only its own fields.
-  async function saveIdentity() {
+  /**
+   * Commit the whole drawer in one go.
+   *
+   * Name and memberships are the SAME endpoint, so they go in ONE request — two round trips for one
+   * form was never necessary. Tag grants are a different resource (`/api/tags`, one PATCH per tag)
+   * and stay a separate step. Every step is attempted even if an earlier one fails: there is no
+   * transaction across these endpoints, so stopping would leave the same partial state while
+   * silently dropping the rest. Whatever fails is named back to the user.
+   */
+  async function saveAll() {
     if (!editId) return
     if (!en.trim()) { setEditErr(pt ? 'O nome não pode ficar vazio.' : 'Name cannot be empty.'); return }
-    const res = await stepUpFetch('/api/iam/accounts', {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: editId, name: en.trim() }),
-    })
-    if (!res.ok) { const d = await res.json() as { error?: string }; setEditErr(d.error || `HTTP ${res.status}`); return }
-    setEditErr(null); setEditingSection(null); void load()
-  }
-  async function saveTeams() {
-    if (!editId) return
-    const res = await stepUpFetch('/api/iam/accounts', {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: editId, memberships: eRows.filter(r => r.teamId) }),
-    })
-    if (!res.ok) { const d = await res.json() as { error?: string }; setEditErr(d.error || `HTTP ${res.status}`); return }
-    setEditErr(null); setEditingSection(null); void load()
-  }
-
-  /** Apply the tag section's edits for the account being edited. Only grantable tags are touched —
-   *  a tag the viewer merely sees (created by someone else) is never PATCHed, since the server
-   *  would refuse it. Each differing tag is one PATCH carrying its FULL sharedWith array. */
-  async function saveTagGrants() {
-    if (!editId || savingTags) return
-    setSavingTags(true)
+    const d = editDiff()
+    if (!d.any) { setEditingAll(false); return }
+    setSaveBusy(true)
     setEditErr(null)
-    let failed = false
-    try {
-      for (const t of grantableTags) {
-        const want = eTagIds.includes(t._id)
-        const has = t.sharedWith.includes(editId)
-        if (want === has) continue
-        const sharedWith = want ? [...t.sharedWith, editId] : t.sharedWith.filter(x => x !== editId)
-        const res = await fetch('/api/tags', {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: t._id, sharedWith }),
-        })
-        if (!res.ok) {
-          const d = await res.json().catch(() => ({})) as { error?: string }
-          setEditErr(d.error || `HTTP ${res.status}`)
-          failed = true
-          break
-        }
-      }
-      await loadTags()
-      if (!failed) setEditingSection(null)
-    } finally {
-      setSavingTags(false)
-    }
+    setSaveFailed([])
+
+    const accountBody: Record<string, unknown> = { id: editId }
+    if (d.nameChanged) accountBody.name = en.trim()
+    if (d.membershipsChanged) accountBody.memberships = eRows.filter(r => r.teamId)
+
+    const { failed } = await runSaveSteps([
+      {
+        label: d.nameChanged && d.membershipsChanged
+          ? (pt ? 'nome e times' : 'name and teams')
+          : d.nameChanged ? (pt ? 'nome' : 'name') : (pt ? 'times' : 'teams'),
+        dirty: d.nameChanged || d.membershipsChanged,
+        run: async () => {
+          // stepUpFetch, not fetch: role and memberships live on this endpoint, so it is step-up
+          // gated (see stepup.ts). Downgrading it to a bare fetch would break that gate.
+          const res = await stepUpFetch('/api/iam/accounts', {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(accountBody),
+          })
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({})) as { error?: string }
+            throw new Error(body.error || `HTTP ${res.status}`)
+          }
+        },
+      },
+      {
+        label: pt ? 'tags' : 'tags',
+        dirty: d.tagsChanged,
+        run: async () => {
+          for (const t of grantableTags) {
+            const want = eTagIds.includes(t._id)
+            const has = t.sharedWith.includes(editId)
+            if (want === has) continue
+            const sharedWith = want ? [...t.sharedWith, editId] : t.sharedWith.filter(x => x !== editId)
+            const res = await fetch('/api/tags', {
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: t._id, sharedWith }),
+            })
+            if (!res.ok) {
+              const body = await res.json().catch(() => ({})) as { error?: string }
+              throw new Error(body.error || `HTTP ${res.status}`)
+            }
+          }
+          await loadTags()
+        },
+      },
+    ])
+
+    setSaveBusy(false)
+    setSaveFailed(failed)
+    // Stay in edit mode on failure so the unsaved values are still on screen to retry.
+    if (failed.length === 0) setEditingAll(false)
+    void load()
   }
+
+  /** Reload every draft field from the account as it currently is. */
+  function resetEditDrafts() {
+    setEn(editAccount?.name ?? '')
+    setERows(editAccount && editAccount.memberships.length
+      ? editAccount.memberships.map(m => ({ teamId: m.teamId, role: m.role }))
+      : [{ teamId: '', role: 'user' }])
+    setETagIds(currentTagIds)
+  }
+
 
   async function resetPassword() {
     if (!editId) return
@@ -1103,24 +1134,18 @@ export default function UsersSettings() {
           so it can't be lost to a stray click (Close/Save are explicit). */}
       <Drawer open={editOpen} onClose={() => { if (!tempPassword && !addedMachineToken) setEditOpen(false) }} title={pt ? 'Editar conta' : 'Edit account'}
         lang={lang}
-        dirty={
-          (editingSection === 'identity' && en.trim() !== (editAccount?.name ?? '').trim())
-          || (editingSection === 'teams'
-            && JSON.stringify(eRows.map(r => ({ t: r.teamId, r: r.role })))
-               !== JSON.stringify((editAccount && editAccount.memberships.length ? editAccount.memberships : [{ teamId: '', role: 'user' }]).map(m => ({ t: m.teamId, r: m.role }))))
-          || (editingSection === 'machines' && (addMachineName.trim() !== '' || addMachineTeam !== '' || renamingMachineId !== null))
-          || (editingSection === 'tags' && sortedIds(eTagIds) !== sortedIds(currentTagIds))
-        }>
+        dirty={editingAll && editDiff().any}>
         {drawerErr(editErr)}
 
         {/* IDENTITY SECTION (read-first) */}
         <Section
           title={pt ? 'Identidade' : 'Identity'}
-          editing={editingSection === 'identity'}
+          editing={editingAll}
           canEdit={canEditEdit}
-          onEdit={() => { setEditErr(null); setEn(editAccount?.name ?? ''); setEditingSection('identity') }}
-          onCancel={() => { setEn(editAccount?.name ?? ''); setEditingSection(null) }}
-          onSave={() => void saveIdentity()}
+          hideActions
+          onEdit={() => {}}
+          onCancel={() => {}}
+          onSave={() => {}}
           labels={sectionLabels}
           editChildren={
             <>
@@ -1155,18 +1180,12 @@ export default function UsersSettings() {
         {/* ACCESS (TEAMS) SECTION (read-first; owners have no team scope) */}
         <Section
           title={pt ? 'Acesso (times)' : 'Access (teams)'}
-          editing={editingSection === 'teams'}
+          editing={editingAll}
           canEdit={canEditEdit && !editIsOwner}
-          onEdit={() => {
-            setEditErr(null)
-            setERows(editAccount && editAccount.memberships.length ? editAccount.memberships.map(m => ({ ...m })) : [{ teamId: '', role: 'user' }])
-            setEditingSection('teams')
-          }}
-          onCancel={() => {
-            setERows(editAccount && editAccount.memberships.length ? editAccount.memberships.map(m => ({ ...m })) : [{ teamId: '', role: 'user' }])
-            setEditingSection(null)
-          }}
-          onSave={() => void saveTeams()}
+          hideActions
+          onEdit={() => {}}
+          onCancel={() => {}}
+          onSave={() => {}}
           labels={sectionLabels}
           editChildren={
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1229,11 +1248,12 @@ export default function UsersSettings() {
             else are shown but not editable, because the server would refuse the write. */}
         <Section
           title="Tags"
-          editing={editingSection === 'tags'}
+          editing={editingAll}
           canEdit={canEditEdit && grantableTags.length > 0}
-          onEdit={() => { setEditErr(null); setETagIds(currentTagIds); setEditingSection('tags') }}
-          onCancel={() => { setETagIds(currentTagIds); setEditingSection(null) }}
-          onSave={() => void saveTagGrants()}
+          hideActions
+          onEdit={() => {}}
+          onCancel={() => {}}
+          onSave={() => {}}
           labels={sectionLabels}
           editChildren={
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -1274,9 +1294,6 @@ export default function UsersSettings() {
                   })}
                 </div>
               )}
-              {savingTags && (
-                <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>{pt ? 'Salvando…' : 'Saving…'}</div>
-              )}
             </div>
           }
         >
@@ -1294,11 +1311,14 @@ export default function UsersSettings() {
         {/* MACHINES SECTION (read-first; add/rename/revoke behind the section's Edit toggle) */}
         <Section
           title={pt ? 'Máquinas' : 'Machines'}
-          editing={editingSection === 'machines'}
+          // This section's own buttons (add machine / rename) act immediately against the server,
+          // so it contributes no step to saveAll — it just opens and closes with the rest.
+          editing={editingAll}
           canEdit={canEditEdit}
-          onEdit={() => { setEditErr(null); setEditingSection('machines') }}
-          onCancel={() => { setAddMachineName(''); setAddMachineTeam(''); setRenamingMachineId(null); setRenameMachineValue(''); setEditingSection(null) }}
-          onSave={() => { setAddMachineName(''); setAddMachineTeam(''); setRenamingMachineId(null); setRenameMachineValue(''); setEditingSection(null) }}
+          hideActions
+          onEdit={() => {}}
+          onCancel={() => {}}
+          onSave={() => {}}
           labels={sectionLabels}
           editChildren={
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1553,6 +1573,35 @@ export default function UsersSettings() {
             )}
           </div>
         )}
+
+        {/* Partial-save report. Every part is attempted, so naming what failed is the only honest
+            outcome — the rest of the form DID save. */}
+        {saveFailed.length > 0 && (
+          <div style={{
+            marginTop: 14, padding: '9px 11px', borderRadius: 8, fontSize: 12, lineHeight: 1.5,
+            border: '1px solid #ef4444', background: 'rgba(239,68,68,0.08)', color: '#ef4444',
+          }}>
+            {pt
+              ? `Não foi possível salvar: ${saveFailed.map(f => f.label).join(', ')}. O restante foi salvo.`
+              : `Could not save: ${saveFailed.map(f => f.label).join(', ')}. Everything else was saved.`}
+          </div>
+        )}
+
+        <SaveBar
+          editing={editingAll}
+          canEdit={canEditEdit}
+          dirty={editDiff().any}
+          busy={saveBusy}
+          onEdit={() => { setEditErr(null); setSaveFailed([]); resetEditDrafts(); setEditingAll(true) }}
+          onCancel={() => { setSaveFailed([]); resetEditDrafts(); setEditingAll(false) }}
+          onSave={() => void saveAll()}
+          labels={{
+            edit: pt ? 'Editar' : 'Edit',
+            save: pt ? 'Salvar' : 'Save',
+            cancel: pt ? 'Cancelar' : 'Cancel',
+            saving: pt ? 'Salvando…' : 'Saving…',
+          }}
+        />
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
           <button style={ghostBtn} onClick={() => setEditOpen(false)}>{pt ? 'Fechar' : 'Close'}</button>
