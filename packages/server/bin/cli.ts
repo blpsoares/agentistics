@@ -103,13 +103,21 @@ Central:
     standalone binary it pulls the published image (ghcr.io/blpsoares/agentistics) and
     materializes a compose in ~/.agentistics/central — no clone required.
 
-Member:
-  agentop member connect --endpoint <url> --token <token> [--org <org>]
-    Verify the token against the central and save this machine as a member.
-  agentop member leave
-    Notify the central and reset back to solo.
-  agentop member status
-    Show the current mode/endpoint/user and last sync state.
+Member (a machine may belong to several centrals at once):
+  agentop member connect --endpoint <url> --token <token> [--org <org>] [--label <name>]
+    Verify the token against the central, then add a new connection or UPDATE an existing
+    one keyed by its endpoint (a token rotation on a known central updates in place).
+  agentop member list
+    List every connection this machine has, with its live sync state. ('status' is an alias.)
+  agentop member status [--endpoint <url>]
+    Show every connection's mode/endpoint/user/last-sync (or just one, with --endpoint).
+  agentop member leave [--endpoint <url>] [--all]
+    0 connections     nothing to do.
+    1 connection      leaves it, no prompt.
+    N, --endpoint     leaves that one connection.
+    N, --all          leaves every connection — back to solo.
+    N, no flag, TTY   arrow-key picker (pick one, "Leave all", or Cancel).
+    N, no flag, non-TTY  refuses — pass --endpoint <url> or --all instead of guessing.
 
 CI (GitHub Actions):
   agentop ci-push [--endpoint <url>] [--token <ci-token>] [--org <org>]
@@ -152,7 +160,10 @@ Examples:
   agentop watch
   agentop central up
   agentop member connect --endpoint http://host:48080 --token abc123
-  agentop member status
+  agentop member connect --endpoint http://other:48080 --token def456 --label "Client B"
+  agentop member list
+  agentop member leave --endpoint http://host:48080
+  agentop member leave --all
   agentop upgrade
   agentop check-update
   agentop autostart server enable
@@ -311,33 +322,42 @@ if (command === 'central') {
 if (command === 'member') {
   const sub = args[0]
   const rest = args.slice(1)
+  // readFlag returns the NEXT argv token — a boolean flag like --all must NEVER be read this
+  // way, or `member leave --all` would swallow whatever argument follows it (there happens to be
+  // none today, but the bug is in the parsing, not in today's argv shape).
+  const readFlag = (name: string): string | undefined => {
+    const idx = rest.indexOf(name)
+    return idx !== -1 && rest[idx + 1] ? rest[idx + 1] : undefined
+  }
+  const hasFlag = (name: string): boolean => rest.includes(name)
+
   if (sub === 'connect') {
     const { memberConnect } = await import('../server/cli-member.ts')
-    const readFlag = (name: string): string | undefined => {
-      const idx = rest.indexOf(name)
-      return idx !== -1 && rest[idx + 1] ? rest[idx + 1] : undefined
-    }
     const endpoint = readFlag('--endpoint')
     const token = readFlag('--token')
     const org = readFlag('--org')
+    const label = readFlag('--label')
     if (!endpoint || !token) {
-      console.error('Usage: agentop member connect --endpoint <url> --token <token> [--org <org>]\n')
+      console.error('Usage: agentop member connect --endpoint <url> --token <token> [--org <org>] [--label <name>]\n')
       process.exit(1)
     }
-    const code = await memberConnect({ endpoint, token, org })
+    const code = await memberConnect({ endpoint, token, org, label })
     process.exit(code)
   }
   if (sub === 'leave') {
     const { memberLeave } = await import('../server/cli-member.ts')
-    const code = await memberLeave()
+    const endpoint = readFlag('--endpoint')
+    const all = hasFlag('--all')
+    const code = await memberLeave({ endpoint, all })
     process.exit(code)
   }
-  if (sub === 'status') {
+  if (sub === 'status' || sub === 'list') {
     const { memberStatus } = await import('../server/cli-member.ts')
-    const code = await memberStatus()
+    const endpoint = readFlag('--endpoint')
+    const code = await memberStatus({ endpoint })
     process.exit(code)
   }
-  console.error(`Invalid member action: ${sub ?? '(none)'}. Expected one of: connect, leave, status.\n`)
+  console.error(`Invalid member action: ${sub ?? '(none)'}. Expected one of: connect, leave, status, list.\n`)
   console.log(HELP)
   process.exit(1)
 }

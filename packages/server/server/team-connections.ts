@@ -194,21 +194,24 @@ async function readBody<T>(req: Request): Promise<{ ok: true; value: T } | { ok:
   return { ok: true, value: parsed.value }
 }
 
-/**
- * POST /api/team/connections — { endpoint, token, org?, label? }.
- * whoami-verifies BEFORE storing anything (see whoamiVerify). A known normalized endpoint
- * updates in place (token/org/user refreshed; id and label preserved — label changes go through
- * PATCH). A token already owned by another connection is refused with 409. Otherwise a fresh
- * connection is minted and appended. Never returns a token.
- */
-export async function handleAddConnection(req: Request): Promise<Response> {
-  const parsed = await readBody<unknown>(req)
-  if (!parsed.ok) return json({ error: parsed.error }, 400)
-  const body = validateConnectionBody(parsed.value)
-  if ('error' in body) return json({ error: body.error }, 400)
+export type AddConnectionOutcome =
+  | { ok: true; action: 'insert' | 'update'; connId: string }
+  | { ok: false; reason: 'verify-failed' | 'conflict'; error: string }
 
+/**
+ * Core logic behind POST /api/team/connections — whoami-verifies BEFORE storing anything (see
+ * whoamiVerify), then a known normalized endpoint updates in place (token/org/user refreshed; id
+ * and label preserved — label changes go through PATCH); a token already owned by another
+ * connection is refused; otherwise a fresh connection is minted and appended.
+ *
+ * Deliberately HTTP-agnostic (no `Request`/`Response`) so `cli-member.ts`'s no-local-server
+ * fallback path (Task 6, spec §8) can call the EXACT SAME decision the route uses instead of
+ * re-implementing whoami-verify + decideConnectionUpsert by hand and risking drift between the
+ * two. Never returns a token.
+ */
+export async function addOrUpdateConnection(body: ConnectionBody): Promise<AddConnectionOutcome> {
   const who = await whoamiVerify(body.endpoint, body.token)
-  if (!who.ok) return json({ error: who.error ?? 'connection could not be verified' }, 400)
+  if (!who.ok) return { ok: false, reason: 'verify-failed', error: who.error ?? 'connection could not be verified' }
 
   let outcome: { action: 'insert' | 'update' | 'conflict'; connId?: string } = { action: 'insert' }
   await updateTeamConfig((current: TeamConfig) => {
@@ -250,15 +253,31 @@ export async function handleAddConnection(req: Request): Promise<Response> {
   })
 
   if (outcome.action === 'conflict') {
-    return json({ error: 'this token is already used by another connection' }, 409)
+    return { ok: false, reason: 'conflict', error: 'this token is already used by another connection' }
   }
-
   if (outcome.action === 'update' && outcome.connId) {
     nudgeAfterUpdate(outcome.connId)
-  } else {
+  } else if (outcome.connId) {
     nudgeAfterInsert()
   }
-  return json({ ok: true, id: outcome.connId, action: outcome.action })
+  return { ok: true, action: outcome.action as 'insert' | 'update', connId: outcome.connId! }
+}
+
+/**
+ * POST /api/team/connections — { endpoint, token, org?, label? }. Thin HTTP wrapper around
+ * `addOrUpdateConnection` (see its docstring for the decision itself).
+ */
+export async function handleAddConnection(req: Request): Promise<Response> {
+  const parsed = await readBody<unknown>(req)
+  if (!parsed.ok) return json({ error: parsed.error }, 400)
+  const body = validateConnectionBody(parsed.value)
+  if ('error' in body) return json({ error: body.error }, 400)
+
+  const result = await addOrUpdateConnection(body)
+  if (!result.ok) {
+    return json({ error: result.error }, result.reason === 'conflict' ? 409 : 400)
+  }
+  return json({ ok: true, id: result.connId, action: result.action })
 }
 
 /** PATCH /api/team/connections/:id — { label } — read-modify-write that entry only. */
@@ -289,24 +308,31 @@ export async function handlePatchConnection(req: Request, rawId: string): Promis
   return json({ ok: true })
 }
 
+export type LeaveConnectionOutcome =
+  | { ok: true; endpoint: string }
+  | { ok: false; error: string }
+
 /**
- * DELETE /api/team/connections/:id — whoami is implicit (the stored token is used as-is): calls
- * the central's POST /api/team/leave with that connection's token (best-effort — an offline or
- * already-revoked central must not block local removal), then removes the entry and its state
- * files via `removeConnection` (team-uploader.ts), which runs the removal inside the same
- * preferences write chain and tears down this connection's timers/socket immediately.
+ * Core logic behind DELETE /api/team/connections/:id — whoami is implicit (the stored token is
+ * used as-is): best-effort POST to the central's /api/team/leave with that connection's token (an
+ * offline or already-revoked central must not block local removal), then removes the entry and
+ * its state files via `removeConnection` (team-uploader.ts), which runs the removal inside the
+ * same preferences write chain and tears down this connection's timers/socket immediately.
+ *
+ * HTTP-agnostic for the same reason `addOrUpdateConnection` is — `cli-member.ts`'s no-server
+ * fallback path calls this directly instead of duplicating it.
  */
-export async function handleDeleteConnection(_req: Request, rawId: string): Promise<Response> {
+export async function leaveConnectionById(rawId: string): Promise<LeaveConnectionOutcome> {
   let id: string
   try {
     id = safeConnId(rawId)
   } catch {
-    return json({ error: 'invalid connection id' }, 400)
+    return { ok: false, error: 'invalid connection id' }
   }
 
   const prefs = await readPreferences()
   const conn = (prefs.team?.connections ?? []).find(c => c.id === id)
-  if (!conn) return json({ error: 'unknown connection' }, 404)
+  if (!conn) return { ok: false, error: 'unknown connection' }
 
   try {
     const endpoint = trimSlashes(conn.endpoint)
@@ -324,6 +350,15 @@ export async function handleDeleteConnection(_req: Request, rawId: string): Prom
   }
 
   await removeConnection(id, 'manual')
+  return { ok: true, endpoint: conn.endpoint }
+}
+
+/** DELETE /api/team/connections/:id — thin HTTP wrapper around `leaveConnectionById`. */
+export async function handleDeleteConnection(_req: Request, rawId: string): Promise<Response> {
+  const result = await leaveConnectionById(rawId)
+  if (!result.ok) {
+    return json({ error: result.error }, result.error === 'unknown connection' ? 404 : 400)
+  }
   return json({ ok: true })
 }
 

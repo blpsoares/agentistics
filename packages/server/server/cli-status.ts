@@ -7,6 +7,7 @@
  * reimplements the tiny shell/docker helpers locally rather than importing private members.
  */
 
+import type { TeamConnection } from '@agentistics/core'
 import { PORT, WEB_PORT } from './config'
 import { readPreferencesOrExit } from './preferences'
 
@@ -81,14 +82,31 @@ type Mode = 'solo' | 'central' | 'member'
 /** A corrupt preferences file must NOT be reported as `solo` — that is precisely the lie the
  *  refusal in readJsonPrefs exists to prevent. `readPreferencesOrExit` names the file and
  *  exits non-zero instead. */
-async function loadConfig(): Promise<{ mode: Mode; endpoint?: string }> {
+async function loadConfig(): Promise<{ mode: Mode; connections: TeamConnection[] }> {
   const prefs = await readPreferencesOrExit()
-  return { mode: prefs.team?.mode ?? 'solo', endpoint: prefs.team?.endpoint }
+  return { mode: prefs.team?.mode ?? 'solo', connections: prefs.team?.connections ?? [] }
+}
+
+/** 0 → solo; 1 → today's exact single-line form, unchanged; N → `member → N centrals` plus one
+ *  indented `↳ endpoint[ · k repo(s) blocked]` line per connection (spec §8.1) — collapsing to
+ *  just the first connection would silently misreport every central but one. */
+function configLines(mode: Mode, connections: TeamConnection[]): string[] {
+  if (mode === 'central') return [`${CY}central${R}`]
+  if (mode !== 'member' || connections.length === 0) return [`${CY}solo${R}`]
+  if (connections.length === 1) {
+    return [`${CY}member${R} ${D}→${R} ${WH}${connections[0]!.endpoint ?? '(?)'}${R}`]
+  }
+  const header = `${CY}member${R} ${D}→${R} ${WH}${connections.length} centrals${R}`
+  const lines = connections.map(c => {
+    const suffix = c.deniedRepos.length > 0 ? ` ${D}· ${c.deniedRepos.length} repo(s) blocked${R}` : ''
+    return `      ${D}↳${R} ${c.endpoint || '(?)'}${suffix}`
+  })
+  return [header, ...lines]
 }
 
 export async function runStatus(): Promise<number> {
   // CONFIG
-  const { mode, endpoint } = await loadConfig()
+  const { mode, connections } = await loadConfig()
 
   // SERVICES (detected live)
   const [local, central, machine] = await Promise.all([
@@ -97,16 +115,13 @@ export async function runStatus(): Promise<number> {
     dockerIds(`ancestor=${MACHINE_IMAGE}`).then((i) => i.length > 0),
   ])
 
-  const configValue =
-    mode === 'member' ? `${CY}member${R} ${D}→${R} ${WH}${endpoint ?? '(?)'}${R}`
-    : mode === 'central' ? `${CY}central${R}`
-    : `${CY}solo${R}`
-
   process.stdout.write('\n')
   process.stdout.write(`  ${O}${B}agentop status${R}\n`)
   process.stdout.write(`${RULE}\n`)
   process.stdout.write(`  ${D}CONFIG${R}\n`)
-  process.stdout.write(`    ${D}mode${R}      ${configValue}\n`)
+  const [firstLine, ...restLines] = configLines(mode, connections)
+  process.stdout.write(`    ${D}mode${R}      ${firstLine}\n`)
+  for (const line of restLines) process.stdout.write(`${line}\n`)
   process.stdout.write(`${RULE}\n`)
   process.stdout.write(`  ${D}SERVICES${R}\n`)
   const localLine = local

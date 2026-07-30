@@ -20,6 +20,7 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import type { TeamConnection } from '@agentistics/core'
 import { PORT, WEB_PORT } from './config'
 import { readPreferences, writePreferences } from './preferences'
 import { runCentral } from './cli-central'
@@ -27,7 +28,7 @@ import { ensureArchiveModeChosen } from './cli-setup'
 import { memberConnect, memberLeave } from './cli-member'
 import { enableAutostart } from './autostart'
 import { select, confirm, input, pause, clearScreen } from './cli-ui'
-import { cliStrings, type CliLang, type CliStrings } from './cli-i18n'
+import { cliStrings, resolveLang, type CliStrings } from './cli-i18n'
 
 export type StartResult = number | 'foreground'
 
@@ -57,28 +58,15 @@ async function sh(cmd: string[]): Promise<{ code: number; out: string }> {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-// language
-async function resolveLang(): Promise<CliLang> {
-  const i = process.argv.indexOf('--lang')
-  const flag = i >= 0 ? process.argv[i + 1] : undefined
-  if (flag === 'pt' || flag === 'en') return flag
-  try {
-    const prefs = await readPreferences()
-    return prefs.lang === 'pt' ? 'pt' : 'en'
-  } catch {
-    return 'en'
-  }
-}
-
 // state + detection
 type Mode = 'solo' | 'central' | 'member'
 
-async function loadState(): Promise<{ mode: Mode; endpoint?: string }> {
+async function loadState(): Promise<{ mode: Mode; connections: TeamConnection[] }> {
   try {
     const prefs = await readPreferences()
-    return { mode: prefs.team?.mode ?? 'solo', endpoint: prefs.team?.endpoint }
+    return { mode: prefs.team?.mode ?? 'solo', connections: prefs.team?.connections ?? [] }
   } catch {
-    return { mode: 'solo' }
+    return { mode: 'solo', connections: [] }
   }
 }
 
@@ -150,11 +138,25 @@ function printBanner(s: CliStrings): void {
 
 const RULE = `  ${D}${R}`
 
-function printStatus(s: CliStrings, mode: Mode, endpoint: string | undefined, svc: Services): void {
-  const config =
-    mode === 'member' ? `${CY}${s.configMember(`${WH}${endpoint ?? '(?)'}${R}${CY}`)}${R}`
-    : mode === 'central' ? `${CY}${s.configCentral}${R}`
-    : `${CY}${s.configSolo}${R}`
+/** 0 connections → solo (unchanged); 1 → today's exact single-line form (unchanged); N → a
+ *  header line (`configMembers`) plus one `↳ endpoint[ · k repo(s) blocked]` line per connection
+ *  (spec §8.1) — never collapses down to just the first connection's endpoint, which would lie
+ *  about every central but one. */
+function configLine(s: CliStrings, mode: Mode, connections: TeamConnection[]): string {
+  if (mode === 'central') return `${CY}${s.configCentral}${R}`
+  if (mode !== 'member' || connections.length === 0) return `${CY}${s.configSolo}${R}`
+  if (connections.length === 1) {
+    return `${CY}${s.configMember(`${WH}${connections[0]!.endpoint || '(?)'}${R}${CY}`)}${R}`
+  }
+  const lines = connections.map(c => {
+    const suffix = c.deniedRepos.length > 0 ? s.deniedSuffix(c.deniedRepos.length) : ''
+    return `  ${D}${s.configMemberLine(`${WH}${c.endpoint || '(?)'}${R}${D}`, `${D}${suffix}${R}`)}${R}`
+  })
+  return `${CY}${s.configMembers(connections.length)}${R}\n${lines.join('\n')}`
+}
+
+function printStatus(s: CliStrings, mode: Mode, connections: TeamConnection[], svc: Services): void {
+  const config = configLine(s, mode, connections)
 
   const running: string[] = []
   if (svc.local) running.push(`${GR}●${R} ${s.runAgentistics}  ${D}http://localhost:${WEB_PORT}${R}`)
@@ -231,9 +233,13 @@ async function connectFlow(s: CliStrings): Promise<void> {
   await memberConnect({ endpoint, token, org: org || undefined })
 }
 
-async function disconnectFlow(s: CliStrings): Promise<void> {
+// `memberLeave` now prints its own outcome (left one / left all / still connected to N / nothing
+// to leave) for every 0/1/N case — the launcher must not ALSO print a blanket "back to solo" on
+// top of it, which used to be true unconditionally but is wrong the moment N > 1 and only one
+// connection was left. Delegating the whole flow (including the N-connection picker) to
+// `memberLeave` is deliberate — see spec §8.1 — so the launcher and the CLI can never diverge.
+async function disconnectFlow(_s: CliStrings): Promise<void> {
   await memberLeave()
-  process.stdout.write(`  ${GR}${s.disconnected}${R}\n`)
 }
 
 // stop submenu
@@ -382,20 +388,34 @@ export async function runStart(): Promise<StartResult> {
 
   for (;;) {
     const s = cliStrings(lang)
-    const { mode, endpoint } = await loadState()
+    const { mode, connections } = await loadState()
     const svc = await detectServices()
     const anyRunning = svc.local || svc.central || svc.machine
 
     clearScreen()
     printBanner(s)
-    printStatus(s, mode, endpoint, svc)
+    printStatus(s, mode, connections, svc)
 
     const choices: { name: string; value: string; hint?: string }[] = [
       { name: s.itemAgentistics, value: 'agentistics', hint: s.itemAgentisticsHint },
       { name: s.itemCentral, value: 'central', hint: s.itemCentralHint },
     ]
-    if (mode === 'member') choices.push({ name: s.itemDisconnect, value: 'disconnect', hint: s.itemDisconnectHint })
-    else choices.push({ name: s.itemConnect, value: 'connect', hint: s.itemConnectHint })
+    // ADDITIVE, not either/or: with N ≥ 1 connections, Connect must still be reachable (a second,
+    // third… central), relabelled as "add another" once at least one exists. Leaving this as an
+    // if/else (only ever showing ONE of the two) makes a second central unreachable from the
+    // launcher — this was the single highest-risk line in the multi-central rewrite.
+    choices.push({
+      name: connections.length > 0 ? s.itemConnectMore : s.itemConnect,
+      value: 'connect',
+      hint: s.itemConnectHint,
+    })
+    if (connections.length > 0) {
+      choices.push({
+        name: s.itemDisconnect,
+        value: 'disconnect',
+        hint: connections.length > 1 ? s.itemDisconnectMultiHint : s.itemDisconnectHint,
+      })
+    }
     if (anyRunning) choices.push({ name: s.itemRestart, value: 'restart', hint: s.itemRestartHint })
     if (anyRunning) choices.push({ name: s.itemStop, value: 'stop' })
     choices.push({ name: s.itemLanguage, value: 'language' })

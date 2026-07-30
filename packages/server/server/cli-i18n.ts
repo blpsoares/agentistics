@@ -15,6 +15,9 @@ export interface CliStrings {
   runningLabel: string
   configSolo: string
   configMember: (endpoint: string) => string
+  configMembers: (n: number) => string
+  configMemberLine: (endpoint: string, suffix: string) => string
+  deniedSuffix: (n: number) => string
   configCentral: string
   runAgentistics: string
   runCentral: string
@@ -28,8 +31,10 @@ export interface CliStrings {
   itemCentralHint: string
   itemConnect: string
   itemConnectHint: string
+  itemConnectMore: string
   itemDisconnect: string
   itemDisconnectHint: string
+  itemDisconnectMultiHint: string
   itemStop: string
   itemRestart: string
   itemRestartHint: string
@@ -110,6 +115,18 @@ export interface CliStrings {
   upgradeBackupKept: (backup: string) => string
   upgradeRestartFailed: (version: string) => string
   upgradeRestartHint: string
+
+  // multi-central member commands (Task 6 — spec §8.2)
+  leaveWhich: string
+  leaveAll: string
+  leftOne: (endpoint: string) => string
+  leftAll: (n: number) => string
+  stillConnected: (n: number) => string
+  noConnections: string
+  ambiguousLeave: (n: number) => string
+  connectedAs: (user: string, n: number) => string
+  updatedExisting: (endpoint: string) => string
+  tokenInUse: (endpoint: string) => string
 }
 
 const EN: CliStrings = {
@@ -118,6 +135,9 @@ const EN: CliStrings = {
   runningLabel: 'running',
   configSolo: 'solo — nothing leaves this machine',
   configMember: (e) => `member — sends metrics to a central at ${e}`,
+  configMembers: (n) => `member — sends metrics to ${n} centrals`,
+  configMemberLine: (endpoint, suffix) => `  ↳ ${endpoint}${suffix}`,
+  deniedSuffix: (n) => ` · ${n} repo(s) blocked`,
   configCentral: 'central — this machine hosts the team central',
   runAgentistics: 'agentistics    (this machine)',
   runCentral: 'agentistics central    (docker)',
@@ -131,8 +151,10 @@ const EN: CliStrings = {
   itemCentralHint: 'team aggregator · :48080',
   itemConnect: 'Connect to a central',
   itemConnectHint: 'send my metrics (become a member)',
+  itemConnectMore: 'Add another central',
   itemDisconnect: 'Disconnect from the central',
   itemDisconnectHint: 'back to solo',
+  itemDisconnectMultiHint: 'pick a central to leave',
   itemStop: 'Stop a running service…',
   itemRestart: 'Restart a running service…',
   itemRestartHint: 'one, or all',
@@ -211,6 +233,17 @@ const EN: CliStrings = {
   upgradeBackupKept: (backup) => `Previous binary kept at ${backup}.`,
   upgradeRestartFailed: (version) => `v${version} is installed, but some services were NOT restarted onto it:`,
   upgradeRestartHint: 'Restart them by hand (e.g. `agentop restart --all`) — they still run the old version.',
+
+  leaveWhich: 'Leave which central?',
+  leaveAll: 'Leave all centrals',
+  leftOne: (endpoint) => `left ${endpoint}`,
+  leftAll: (n) => `left all ${n} centrals — back to solo.`,
+  stillConnected: (n) => `still connected to ${n} central(s).`,
+  noConnections: 'not connected to any central.',
+  ambiguousLeave: (n) => `connected to ${n} centrals — pass --endpoint <url> or --all.`,
+  connectedAs: (user, n) => `connected as ${user} — ${n} central(s) total.`,
+  updatedExisting: (endpoint) => `updated the existing connection to ${endpoint}`,
+  tokenInUse: (endpoint) => `that token already belongs to ${endpoint}`,
 }
 
 const PT: CliStrings = {
@@ -219,6 +252,9 @@ const PT: CliStrings = {
   runningLabel: 'no ar',
   configSolo: 'solo — nada sai desta máquina',
   configMember: (e) => `member — envia métricas para uma central em ${e}`,
+  configMembers: (n) => `member — envia métricas para ${n} centrais`,
+  configMemberLine: (endpoint, suffix) => `  ↳ ${endpoint}${suffix}`,
+  deniedSuffix: (n) => ` · ${n} repo(s) bloqueado(s)`,
   configCentral: 'central — esta máquina hospeda a central do time',
   runAgentistics: 'agentistics    (esta máquina)',
   runCentral: 'agentistics central    (docker)',
@@ -232,8 +268,10 @@ const PT: CliStrings = {
   itemCentralHint: 'agregador do time · :48080',
   itemConnect: 'Conectar a uma central',
   itemConnectHint: 'enviar minhas métricas (virar member)',
+  itemConnectMore: 'Adicionar outra central',
   itemDisconnect: 'Desconectar da central',
   itemDisconnectHint: 'voltar para solo',
+  itemDisconnectMultiHint: 'escolher de qual central sair',
   itemStop: 'Parar um serviço…',
   itemRestart: 'Reiniciar um serviço…',
   itemRestartHint: 'um, ou todos',
@@ -312,10 +350,40 @@ const PT: CliStrings = {
   upgradeBackupKept: (backup) => `Binário anterior mantido em ${backup}.`,
   upgradeRestartFailed: (version) => `a v${version} foi instalada, mas alguns serviços NÃO foram reiniciados nela:`,
   upgradeRestartHint: 'Reinicie na mão (ex.: `agentop restart --all`) — eles ainda rodam a versão antiga.',
+
+  leaveWhich: 'Sair de qual central?',
+  leaveAll: 'Sair de todas as centrais',
+  leftOne: (endpoint) => `saiu de ${endpoint}`,
+  leftAll: (n) => `saiu de todas as ${n} centrais — de volta para solo.`,
+  stillConnected: (n) => `ainda conectado a ${n} central(is).`,
+  noConnections: 'sem conexão com nenhuma central.',
+  ambiguousLeave: (n) => `conectado a ${n} centrais — use --endpoint <url> ou --all.`,
+  connectedAs: (user, n) => `conectado como ${user} — ${n} central(is) no total.`,
+  updatedExisting: (endpoint) => `atualizou a conexão existente com ${endpoint}`,
+  tokenInUse: (endpoint) => `esse token já pertence a ${endpoint}`,
 }
 
 const TABLE: Record<CliLang, CliStrings> = { en: EN, pt: PT }
 
 export function cliStrings(lang: CliLang): CliStrings {
   return TABLE[lang] ?? EN
+}
+
+/**
+ * Resolve the CLI language: `--lang en|pt` wins, else `preferences.lang` (shared with the web
+ * toggle), else English. Lives here (not in cli-start.ts, its original home) so cli-member.ts can
+ * share it without a circular import — cli-start.ts already imports memberConnect/memberLeave
+ * from cli-member.ts, so the reverse import would form a cycle.
+ */
+export async function resolveLang(): Promise<CliLang> {
+  const i = process.argv.indexOf('--lang')
+  const flag = i >= 0 ? process.argv[i + 1] : undefined
+  if (flag === 'pt' || flag === 'en') return flag
+  try {
+    const { readPreferences } = await import('./preferences')
+    const prefs = await readPreferences()
+    return prefs.lang === 'pt' ? 'pt' : 'en'
+  } catch {
+    return 'en'
+  }
 }
