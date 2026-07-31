@@ -22,6 +22,7 @@ import {
   __teardownConnectionForTests,
   scheduleOnChangeTrigger, loadSentState, reconcileUploaderNow, MAX_SUPPRESSED_STREAK,
   replayForgetJournals, getResyncProgress, guardedManualPush, peekPushContext,
+  AUTH_FAIL_SUSTAIN_MS, __setAuthErrSinceForTests,
   type PushCycleContext,
 } from './team-uploader'
 import { handleTeamStatus } from './team-connections'
@@ -791,7 +792,196 @@ describe('removeConnection — splices one entry, GCs only its own files (B-2)',
     const result = await removeConnection(id, 'manual', { updateTeamConfig: fakeUpdateTeamConfig, log: fakeLog })
 
     expect(result).toEqual({ removed: true })
-    expect(logged.some(l => l.startsWith('info:') && l.includes('removed connection'))).toBe(true)
+    expect(logged.some(l => l.startsWith('warn:') && l.includes('removed connection'))).toBe(true)
+  })
+
+  // Review the production incident this whole task fixes: a central answers 401 to a perfectly
+  // valid token whenever it cannot find it in Mongo — its own state right after a rebuild that
+  // recreates the volume, or while its database is still coming up. Two consecutive push cycles
+  // (roughly a minute at the default interval) used to be enough to splice the connection out of
+  // `connections[]` entirely, taking `deniedRepos` with it. removeConnection must no longer be
+  // reachable from an auth failure at all — only a sustained one (past AUTH_FAIL_SUSTAIN_MS) may
+  // mark the connection, and marking is never removal.
+  it('reason === "revoked" also logs at console.warn, naming the connection + endpoint host, never the token', async () => {
+    const id = randomConnId()
+    const conn = fakeConn(id, 1, { token: 'super-secret-token' })
+    let store: TeamConfig = { schema: 2, mode: 'member', connections: [conn] }
+    const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+      const next = mutate(store)
+      if (next !== undefined) store = next
+      return store
+    }
+    const logged: string[] = []
+    const fakeLog = { info: (m: string) => logged.push(`info:${m}`), warn: (m: string) => logged.push(`warn:${m}`) }
+
+    await removeConnection(id, 'revoked', { updateTeamConfig: fakeUpdateTeamConfig, log: fakeLog })
+
+    const warnLine = logged.find(l => l.startsWith('warn:') && l.includes('removed connection'))
+    expect(warnLine).toBeDefined()
+    expect(warnLine).toContain(id)
+    expect(warnLine).toContain('127.0.0.1')
+    expect(warnLine).not.toContain('super-secret-token')
+  })
+})
+
+describe('sustained auth failure — durable mark, never removal (production-incident fix)', () => {
+  /** A mock central whose /api/team/whoami and /api/team/ingest status codes can be flipped
+   *  mid-test, and which records which paths were actually hit — the "stop pushing" assertion
+   *  needs to see whether /api/team/ingest was ever called at all, not just its response. */
+  function authFixture(initialStatus: number) {
+    let ingestStatus = initialStatus
+    let whoamiStatus = initialStatus
+    const hits: string[] = []
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const path = new URL(req.url).pathname
+        hits.push(path)
+        if (path === '/api/team/policy') {
+          return Response.json({ pushIntervalSec: 30, instanceId: 'inst-1', capabilities: [] })
+        }
+        if (path === '/api/team/whoami') {
+          if (whoamiStatus !== 200) return new Response('unauthorized', { status: whoamiStatus })
+          return Response.json({ ok: true, user: 'test-user', org: 'default' })
+        }
+        // /api/team/ingest
+        if (ingestStatus !== 200) return new Response('unauthorized', { status: ingestStatus })
+        await req.json().catch(() => undefined)
+        return Response.json({ ok: true, count: 0 })
+      },
+    })
+    return {
+      port: server.port!,
+      hits,
+      setIngestStatus: (s: number) => { ingestStatus = s },
+      setWhoamiStatus: (s: number) => { whoamiStatus = s },
+      stop: () => server.stop(true),
+    }
+  }
+
+  it('two consecutive 401 cycles no longer remove the connection, and deniedRepos survives', async () => {
+    const fx = authFixture(401)
+    try {
+      const id = randomConnId()
+      const conn = fakeConn(id, fx.port, { deniedRepos: ['github.com/org/secret', 'github.com/org/other'] })
+      let store: TeamConfig = { schema: 2, mode: 'member', connections: [conn] }
+      const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+        const next = mutate(store)
+        if (next !== undefined) store = next
+        return store
+      }
+      const ctx = makeCtx({ realStatsCache: buildRealCacheFor([]) })
+
+      // Two consecutive cycles — the OLD threshold (AUTH_ERR_RESET_THRESHOLD = 2) used to splice
+      // the connection out right here.
+      await pushOnceDetailed(conn, ctx, { updateTeamConfig: fakeUpdateTeamConfig })
+      await pushOnceDetailed(conn, ctx, { updateTeamConfig: fakeUpdateTeamConfig })
+
+      expect(store.connections.map(c => c.id)).toEqual([id])
+      expect(store.connections[0]!.deniedRepos).toEqual(['github.com/org/secret', 'github.com/org/other'])
+      // Not sustained yet either (real elapsed time between two immediate calls is far below
+      // AUTH_FAIL_SUSTAIN_MS) — so not even the new durable mark has landed.
+      expect(store.connections[0]!.authFailedAt).toBeUndefined()
+    } finally {
+      fx.stop()
+    }
+  })
+
+  it('a sustained auth failure (past AUTH_FAIL_SUSTAIN_MS) sets the persisted flag and stops pushing', async () => {
+    const fx = authFixture(401)
+    try {
+      const id = randomConnId()
+      const conn = fakeConn(id, fx.port, { deniedRepos: [] })
+      let store: TeamConfig = { schema: 2, mode: 'member', connections: [conn] }
+      const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+        const next = mutate(store)
+        if (next !== undefined) store = next
+        return store
+      }
+      const ctx = makeCtx({ realStatsCache: { totalCostUSD: 0 } as unknown as StatsCache })
+
+      // Fast-forward the connection's failure clock past the sustain threshold instead of
+      // actually waiting AUTH_FAIL_SUSTAIN_MS in real time.
+      __setAuthErrSinceForTests(id, Date.now() - AUTH_FAIL_SUSTAIN_MS - 1_000)
+
+      await pushOnceDetailed(conn, ctx, { updateTeamConfig: fakeUpdateTeamConfig })
+      // handleAuthError runs fire-and-forget off the 401 branch (same as the pre-existing
+      // notifyPushError path) — yield one tick so its `markAuthFailed` write has landed before
+      // asserting on it, exactly like the existing "after the bound elapses" test above does.
+      await new Promise(resolve => setTimeout(resolve, 0))
+
+      // Marked, not removed.
+      expect(store.connections.map(c => c.id)).toEqual([id])
+      expect(typeof store.connections[0]!.authFailedAt).toBe('string')
+      expect(store.connections[0]!.authFailedAt!.length).toBeGreaterThan(0)
+
+      const hitsBefore = fx.hits.length
+      fx.hits.length = 0
+
+      // Next cycle: re-read the (now-marked) connection, same as the real supervisor loop would.
+      const marked = store.connections[0]!
+      const result = await pushOnceDetailed(marked, ctx, { updateTeamConfig: fakeUpdateTeamConfig })
+
+      expect(result).toEqual({ count: 0 })
+      // Only the cheap whoami probe was attempted — never the full ingest payload — while the
+      // central still rejects the token.
+      expect(fx.hits).toEqual(['/api/team/whoami'])
+      expect(hitsBefore).toBeGreaterThan(0) // sanity: the marking cycle did contact the central
+    } finally {
+      fx.stop()
+    }
+  })
+
+  it('a success after a sustained failure clears the flag and resumes pushing, with no human action', async () => {
+    const fx = authFixture(401)
+    try {
+      const id = randomConnId()
+      const conn = fakeConn(id, fx.port, { deniedRepos: [] })
+      // Start already marked, as if a previous process (or a previous test cycle) set it.
+      const markedAt = new Date(Date.now() - 60_000).toISOString()
+      let store: TeamConfig = {
+        schema: 2, mode: 'member', connections: [{ ...conn, authFailedAt: markedAt }],
+      }
+      const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+        const next = mutate(store)
+        if (next !== undefined) store = next
+        return store
+      }
+      const ctx = makeCtx({ realStatsCache: { totalCostUSD: 0 } as unknown as StatsCache })
+
+      // The central is unauthorized no more.
+      fx.setWhoamiStatus(200)
+      fx.setIngestStatus(200)
+
+      const marked = store.connections[0]!
+      const result = await pushOnceDetailed(marked, ctx, { updateTeamConfig: fakeUpdateTeamConfig })
+
+      // Flag cleared — no human had to do anything.
+      expect(store.connections[0]!.authFailedAt).toBeUndefined()
+      // And THIS SAME cycle already resumed pushing (the probe's success falls through into the
+      // normal push path) rather than waiting a whole extra interval to notice.
+      expect(fx.hits).toContain('/api/team/whoami')
+      expect(fx.hits).toContain('/api/team/ingest')
+      expect(result.count).toBe(0) // no session deltas in this ctx — just the statsCache/keep-alive push
+    } finally {
+      fx.stop()
+    }
+  })
+
+  it('Disconnect (manual) and `member leave` still remove a connection, even one currently marked auth-failed', async () => {
+    const id = randomConnId()
+    const conn = fakeConn(id, 1, { authFailedAt: new Date().toISOString() })
+    let store: TeamConfig = { schema: 2, mode: 'member', connections: [conn] }
+    const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+      const next = mutate(store)
+      if (next !== undefined) store = next
+      return store
+    }
+
+    const result = await removeConnection(id, 'manual', { updateTeamConfig: fakeUpdateTeamConfig })
+
+    expect(result).toEqual({ removed: true })
+    expect(store.connections).toEqual([])
   })
 })
 

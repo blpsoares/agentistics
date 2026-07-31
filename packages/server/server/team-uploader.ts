@@ -59,8 +59,12 @@ const _netErrStreak = new Map<string, number>()
 const _lastSuccessAt = new Map<string, number>()
 /** Current error state per connection: 'auth' | 'net'. Absent = ok. */
 const _pushErrKind = new Map<string, 'auth' | 'net'>()
-/** Consecutive auth-error cycles per connection (see handleAuthError). */
-const _authErrStreak = new Map<string, number>()
+/** ms epoch of the FIRST auth-error (401/403) of the current consecutive streak, per connection
+ *  (see handleAuthError). Cleared on any success. In-memory only — deliberately not persisted:
+ *  what must survive a restart is the DECISION already made (`TeamConnection.authFailedAt`), not
+ *  this in-flight clock. A restart mid-streak simply restarts the clock, which only delays
+ *  marking the connection — it can never cause a spurious mark, so it is not a correctness gap. */
+const _authErrSince = new Map<string, number>()
 /** The interval (seconds) most recently learned from each central's policy. */
 const _centralIntervalSec = new Map<string, number>()
 /** ms round-trip of the most recent SUCCESSFUL policy fetch, per connection — the status route
@@ -179,7 +183,7 @@ function clearPushError(connId: string): void {
 /** Record a successful contact with a central (used by the status pill + recovery). */
 function markPushSuccess(connId: string): void {
   _lastSuccessAt.set(connId, Date.now())
-  _authErrStreak.set(connId, 0) // any success clears the revoke countdown
+  _authErrSince.delete(connId) // any success clears the sustained-failure clock
 }
 
 export interface UploaderStatus {
@@ -260,34 +264,123 @@ async function notifyPushRecovered(conn: TeamConnection): Promise<void> {
   _notify({ type: 'success', code: 'member.reconnected', meta: notifyMeta(conn) })
 }
 
-// A 401/403 means the central revoked/removed this connection's token. Count consecutive
-// auth-error cycles; after this many the connection auto-removes itself (see handleAuthError).
-// One transient 401 (e.g. a mid-rotation blip) is tolerated.
-const AUTH_ERR_RESET_THRESHOLD = 2
+// A 401/403 means the central is currently rejecting this connection's token — either because it
+// was genuinely revoked, or because the central itself is between a restart and its database
+// coming back (a real incident: ~1 minute of 401s at the default 30s cadence). The two look
+// IDENTICAL from here, so the response can never be "delete the connection" (see the removed
+// AUTH_ERR_RESET_THRESHOLD-based removal this replaced — two consecutive cycles, ~1 minute, used
+// to be enough to throw away the token and the user's denylist with it). Instead the failure must
+// be SUSTAINED IN TIME before anything durable happens.
+//
+// Arithmetic: a central restart/DB-coming-back window is on the order of a minute; the previous
+// 2-cycle threshold (~1 minute at the default 30s interval) sat squarely inside it. 10 minutes is
+// an order of magnitude past any restart this project has actually observed, while still catching
+// a genuinely revoked token within the same working session (at the 15s floor that is 40 cycles;
+// at the default 30s interval, 20 cycles) — same shape as the old cycle-count threshold, just
+// keyed to wall-clock time so a restart's duration, not its cycle count, decides whether it trips.
+export const AUTH_FAIL_SUSTAIN_MS = 10 * 60_000
 
 /**
- * Handle a persistent-auth (401/403) push failure for one connection. Emits the first-error
- * notification (transition-guarded) and counts consecutive auth-error cycles. Once the count
- * reaches AUTH_ERR_RESET_THRESHOLD the token is treated as revoked and ONLY this connection is
- * removed — the other connections in `connections[]` are untouched. Reset the streak to 0 on
- * any success (see markPushSuccess).
+ * Persist the "this connection needs attention" flag — `TeamConnection.authFailedAt` — once a
+ * connection's auth failures have been sustained past `AUTH_FAIL_SUSTAIN_MS`. Never removes the
+ * connection: `deniedRepos`, the label, everything stays. Idempotent (a connection already marked
+ * is a no-op, including across a concurrent race — the mutator re-checks after re-reading).
  */
-async function handleAuthError(conn: TeamConnection, status: number): Promise<void> {
-  await notifyPushError(conn, 'auth', { status })
-  const streak = (_authErrStreak.get(conn.id) ?? 0) + 1
-  _authErrStreak.set(conn.id, streak)
-  if (streak >= AUTH_ERR_RESET_THRESHOLD) {
-    await removeConnection(conn.id, 'revoked')
+async function markAuthFailed(
+  conn: TeamConnection,
+  deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
+): Promise<void> {
+  const _updateTeamConfig = deps.updateTeamConfig ?? updateTeamConfig
+  const now = new Date().toISOString()
+  try {
+    await _updateTeamConfig((current: TeamConfig) => {
+      const existing = current.connections ?? []
+      const idx = existing.findIndex(c => c.id === conn.id)
+      if (idx === -1) return undefined // removed meanwhile (e.g. user disconnected it) — nothing to mark
+      if (existing[idx]!.authFailedAt) return undefined // already marked — idempotent
+      const next = existing.slice()
+      next[idx] = { ...next[idx]!, authFailedAt: now }
+      return normalizeTeamConfig({ ...current, connections: next })
+    })
+    console.warn(`[team-uploader] ${conn.id} (${hostOf(conn.endpoint)}) unauthorized for ` +
+      `${Math.round(AUTH_FAIL_SUSTAIN_MS / 60_000)}+ minutes — pausing pushes, connection kept ` +
+      `(rotate the token on the central, then reconnect if it was genuinely revoked; recovers ` +
+      `on its own if the central was only restarting)`)
+  } catch (err) {
+    console.warn(`[team-uploader] failed to persist auth-failed state for ${conn.id}: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
-/** Fire-and-forget `handleAuthError`, WITH a `.catch()` — it reaches `removeConnection` →
+/**
+ * Clear the persisted "needs attention" flag once the central accepts this connection's token
+ * again — called from every success path in `pushOnceDetailed`. No-op (and no write) when the
+ * connection was never marked, so a healthy connection's every successful cycle costs nothing
+ * extra here.
+ */
+async function clearAuthFailure(
+  conn: TeamConnection,
+  deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
+): Promise<void> {
+  _authErrSince.delete(conn.id)
+  if (!conn.authFailedAt) return
+  const _updateTeamConfig = deps.updateTeamConfig ?? updateTeamConfig
+  try {
+    await _updateTeamConfig((current: TeamConfig) => {
+      const existing = current.connections ?? []
+      const idx = existing.findIndex(c => c.id === conn.id)
+      if (idx === -1) return undefined
+      if (!existing[idx]!.authFailedAt) return undefined
+      const { authFailedAt: _drop, ...rest } = existing[idx]!
+      const next = existing.slice()
+      next[idx] = rest
+      return normalizeTeamConfig({ ...current, connections: next })
+    })
+  } catch (err) {
+    console.warn(`[team-uploader] failed to clear auth-failed state for ${conn.id}: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+/**
+ * Handle a persistent-auth (401/403) push failure for one connection. Emits the first-error
+ * notification immediately (transition-guarded, unchanged) — the user should hear about it right
+ * away — but the DURABLE "needs attention" state only lands once the failure has been sustained
+ * for `AUTH_FAIL_SUSTAIN_MS`, so a central restart's brief 401 window never trips it.
+ */
+async function handleAuthError(
+  conn: TeamConnection,
+  status: number,
+  deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
+): Promise<void> {
+  await notifyPushError(conn, 'auth', { status })
+  if (conn.authFailedAt) return // already marked — nothing new until a success clears it
+  const since = _authErrSince.get(conn.id)
+  if (since === undefined) {
+    _authErrSince.set(conn.id, Date.now())
+    return // first failure of this streak — give it time before doing anything durable
+  }
+  if (Date.now() - since >= AUTH_FAIL_SUSTAIN_MS) {
+    await markAuthFailed(conn, deps)
+  }
+}
+
+/** Fire-and-forget `handleAuthError`, WITH a `.catch()` — it can reach `markAuthFailed` →
  *  `readPreferences()`/`updateTeamConfig()`, which throw by design on a corrupt preferences file
  *  (see preferences.ts). Bare `void handleAuthError(...)` would turn that into an unhandled
  *  rejection instead of the same best-effort warning every other failure path in this file logs. */
-function fireHandleAuthError(conn: TeamConnection, status: number): void {
-  void handleAuthError(conn, status).catch(err =>
+function fireHandleAuthError(
+  conn: TeamConnection,
+  status: number,
+  deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
+): void {
+  void handleAuthError(conn, status, deps).catch(err =>
     console.warn(`[team-uploader] handleAuthError failed for ${conn.id}:`, err instanceof Error ? err.message : String(err)))
+}
+
+/** Test-only: fast-forward a connection's sustained-auth-failure clock into the past, so a test
+ *  can prove the `AUTH_FAIL_SUSTAIN_MS` threshold trips without a real 10-minute wait. Mirrors the
+ *  other `__set*ForTests` seams in this file. */
+export function __setAuthErrSinceForTests(connId: string, epochMs: number): void {
+  _authErrSince.set(connId, epochMs)
 }
 
 /**
@@ -361,10 +454,14 @@ export async function removeConnection(
     unlink(teamForgetFile(connId)),
   ])
 
+  // Always console.warn, on EVERY removal path, naming the connection + endpoint host + reason —
+  // never the token. This is the one line that made a silently-vanished connection debuggable at
+  // all (the production incident this fix addresses took guesswork to trace precisely because
+  // removal used to be quiet).
   if (reason === 'manual') {
-    _log.info(`[team-uploader] removed connection ${connId} (${hostOf(removedConn.endpoint)}) — user disconnected it`)
+    _log.warn(`[team-uploader] removed connection ${connId} (${hostOf(removedConn.endpoint)}) — reason: user disconnected it`)
   } else {
-    _log.warn(`[team-uploader] removed connection ${connId} (${hostOf(removedConn.endpoint)}) — central revoked this token or it was removed`)
+    _log.warn(`[team-uploader] removed connection ${connId} (${hostOf(removedConn.endpoint)}) — reason: central revoked this token or it was removed`)
   }
   try {
     const { reconcileNow } = await import('./team-agent-client')
@@ -717,6 +814,30 @@ async function resolveConnectionUser(
 }
 
 /**
+ * Cheap liveness/auth probe for a connection currently marked `authFailedAt` — proof the central
+ * accepts this token again, without building or sending the full push payload (sessions,
+ * statsCache, workflows) to a central that may still be rejecting it. Returns `true` only on a
+ * genuine 2xx from `/api/team/whoami`; `false` on 401/403, any other status, a network error or a
+ * timeout — all of which mean "still not ready", not a new error (the auth-rejected notification
+ * already fired and is transition-guarded; this probe only decides whether pushing may resume).
+ */
+async function probeAuthRecovered(conn: TeamConnection): Promise<boolean> {
+  try {
+    const endpoint = conn.endpoint.replace(/\/+$/, '')
+    const headers: Record<string, string> = {}
+    if (conn.token) headers['Authorization'] = `Bearer ${conn.token}`
+    const res = await fetch(`${endpoint}/api/team/whoami`, {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(5_000),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+/**
  * Core push implementation for ONE connection against the SHARED cycle context.
  * No-op (count=0) when the connection has no endpoint, or (having a token or not — an
  * open/legacy central accepts a token-less member, same as the WS client's gate) its `user`
@@ -729,6 +850,17 @@ export async function pushOnceDetailed(
 ): Promise<PushOnceResult> {
   if (!conn.endpoint) {
     return { count: 0 }
+  }
+  if (conn.authFailedAt) {
+    // Sustained auth failure already marked durable — do not hammer a central that is still
+    // rejecting this token with the full push payload. A cheap whoami probe, on the connection's
+    // OWN normal cycle (this function runs no faster than that), is what lets it recover on its
+    // own the moment the central answers again, with no human action.
+    const recovered = await probeAuthRecovered(conn)
+    if (!recovered) return { count: 0 } // still rejected — stay paused, retry next cycle
+    await clearAuthFailure(conn, deps)
+    // Fall through: the token just proved itself good again, so this same cycle pushes normally
+    // instead of waiting a whole extra interval to notice.
   }
   let user = conn.user
   if (!user) {
@@ -844,6 +976,7 @@ export async function pushOnceDetailed(
           // A reachable central (even a non-2xx that isn't auth) counts as contact for the pill.
           if (res.ok) {
             markPushSuccess(conn.id); clearPushError(conn.id); void notifyPushRecovered(conn)
+            await clearAuthFailure(conn, deps)
             // Only memoize once the central actually accepted it — recording it BEFORE a
             // known-successful POST would permanently swallow a payload whose first attempt
             // failed (network error or non-2xx): every later cycle with the same unchanged
@@ -853,7 +986,7 @@ export async function pushOnceDetailed(
             // Same rule, same moment: the runs this payload carried are now held by the central,
             // so they become withdrawable.
             await recordSentRunIds(conn.id, workflows)
-          } else if (res.status === 401 || res.status === 403) fireHandleAuthError(conn, res.status)
+          } else if (res.status === 401 || res.status === 403) fireHandleAuthError(conn, res.status, deps)
         } catch (e) {
           warnPushError(conn.id, e instanceof Error ? e.message : String(e))
           void notifyPushError(conn, 'net')
@@ -885,9 +1018,11 @@ export async function pushOnceDetailed(
       if (!res.ok) {
         const msg = `ingest returned ${res.status}`
         console.warn(`[team-uploader] ${conn.id} ${msg}; stopping push`)
-        // 401/403 = the central rejected the token → actionable auth notification (and,
-        // after repeated failures, this connection is auto-removed).
-        if (res.status === 401 || res.status === 403) fireHandleAuthError(conn, res.status)
+        // 401/403 = the central is rejecting the token → actionable auth notification immediately;
+        // a DURABLE "needs attention" mark (and the pushes-paused behavior above) only lands once
+        // the failure has been sustained past AUTH_FAIL_SUSTAIN_MS — the connection is never
+        // removed from here.
+        if (res.status === 401 || res.status === 403) fireHandleAuthError(conn, res.status, deps)
         return { count: pushed, error: msg }
       }
 
@@ -902,6 +1037,7 @@ export async function pushOnceDetailed(
       markPushSuccess(conn.id)
       clearPushError(conn.id)
       void notifyPushRecovered(conn)
+      await clearAuthFailure(conn, deps)
       if (i === 0) {
         // Batch 0 carried the SAME `{statsCache, workflows}` pair the empty-delta branch above
         // would have attached — and the central just accepted it. Recording it here (restricted
@@ -1166,7 +1302,7 @@ function teardownConnection(connId: string): void {
   _pendingTrigger.delete(connId)
   _lastSuccessAt.delete(connId)
   _pushErrKind.delete(connId)
-  _authErrStreak.delete(connId)
+  _authErrSince.delete(connId)
   _netErrStreak.delete(connId)
   _centralIntervalSec.delete(connId)
   _latencyMs.delete(connId)

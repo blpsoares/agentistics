@@ -36,6 +36,13 @@ export interface TeamConnection {
   label?: string
   /** ISO — deterministic card ordering. */
   addedAt?: string
+  /** ISO — set once this connection's auth failures have been REJECTED (401/403) continuously
+   *  for at least `AUTH_FAIL_SUSTAIN_MS` (team-uploader.ts). While set, pushes are paused (a
+   *  central that is rejecting the token is never hammered) but the connection and its
+   *  `deniedRepos` are kept — an auth failure must never delete a connection, only mark it. A
+   *  transient blip (e.g. a central restart recreating its DB) clears on the very next success
+   *  and never reaches this field at all. Absent = never marked / already recovered. */
+  authFailedAt?: string
 }
 
 export interface TeamConfig {
@@ -181,6 +188,7 @@ export function migrateTeamConfig(raw: unknown): TeamConfig {
         ...(typeof entry.pushIntervalSec === 'number' ? { pushIntervalSec: entry.pushIntervalSec } : {}),
         ...(typeof entry.label === 'string' ? { label: entry.label } : {}),
         ...(typeof entry.addedAt === 'string' ? { addedAt: entry.addedAt } : {}),
+        ...(typeof entry.authFailedAt === 'string' ? { authFailedAt: entry.authFailedAt } : {}),
       })
     }
     // An EMPTY sanitized array is NOT proof of "solo", and treating it as authoritative was a

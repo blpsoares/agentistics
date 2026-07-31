@@ -602,6 +602,11 @@ export function buildConnectionStatusEntry(
 ): ConnectionStatusEntry {
   const prevHash = local.rulesHash ? local.rulesHash : denialSignature([])
   const pendingRules = denialSignature(conn.deniedRepos) !== prevHash
+  // `conn.authFailedAt` is the DURABLE mark (survives a server restart; team-uploader.ts's
+  // in-memory `_pushErrKind` does not) — it must win over the in-memory uploader status so a
+  // freshly-restarted process still reports "unauthorized" for a connection marked before the
+  // restart, instead of reading as healthy until its first cycle runs again.
+  const errKind: 'auth' | 'net' | null = conn.authFailedAt ? 'auth' : uploaderStatus.errKind
   return {
     id: conn.id,
     endpoint: conn.endpoint,
@@ -609,7 +614,7 @@ export function buildConnectionStatusEntry(
     user: conn.user,
     ...(conn.label ? { label: conn.label } : {}),
     lastSuccessAt: uploaderStatus.lastSuccessAt,
-    errKind: uploaderStatus.errKind,
+    errKind,
     latencyMs: uploaderStatus.latencyMs,
     deniedCount: normalizeDenied(conn.deniedRepos).size,
     restricted: hasRestrictions(conn.deniedRepos),
