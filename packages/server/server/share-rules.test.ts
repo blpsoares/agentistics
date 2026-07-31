@@ -4,7 +4,7 @@ import type { SessionMeta, WorkflowRun, HarnessId, ShareSource } from '@agentist
 import {
   canonicalRepoKey, normalizeDenied, buildPathRepoIndex, repoKeyOf, sessionShared,
   filterShared, deniedSessionIds, sharedSessionIds, filterSharedWorkflows,
-  withUnresolvedDenied, denialSignature, hasRestrictions,
+  withUnresolvedDenied, denialSignature, hasRestrictions, filterLiveShared, denylistRules,
   normalizeSources, shareRulesOf, sourcesRestrict, withUnresolvedSources,
   rulesSignature, emptyRulesSignature, filterSharedRules, deniedSessionIdsRules,
 } from './share-rules'
@@ -1026,4 +1026,103 @@ test('in allowlist mode, matching either an allowed repo or an allowed project i
   const byProject = s({ session_id: 'p', project_path: '/p/allowed', git_remote: 'https://github.com/o/other' })
   const rules = shareRulesOf('allowlist', [repoSrc('github.com/o/allowed'), projectSrc('/p/allowed')])
   expect(deniedSessionIdsRules([byRepo, byProject], rules)).toEqual(new Set())
+})
+
+// ---------------------------------------------------------------------------
+// The same-array precondition, asserted rather than trusted
+// ---------------------------------------------------------------------------
+
+test('sub-day shrinkage REFUSES — a decomposable day the store only partly covers', () => {
+  // real says 2026-06-25 had 2 sessions; the store now holds only one of them.
+  const all = [storeSessions()[0]!]
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  expect(buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-06-23', sealed: {} })).toBeNull()
+})
+
+test('a token disagreement on a decomposable day REFUSES', () => {
+  const all = storeSessions().map(s => ({ ...s, input_tokens: s.input_tokens + 1 }))
+  expect(buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })).toBeNull()
+})
+
+test('a message-count disagreement on a decomposable day REFUSES', () => {
+  const all = storeSessions()
+  all[0]!.user_message_count += 3
+  expect(buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })).toBeNull()
+})
+
+test('a decomposable day the STORE has and the cache does not also REFUSES', () => {
+  const all = [
+    ...storeSessions(),
+    s({ session_id: 'extra', start_time: localAt('2026-06-30', 9), model: 'claude-opus-5', input_tokens: 7, user_message_count: 1 }),
+  ]
+  expect(buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })).toBeNull()
+})
+
+test('PREHISTORY days are never checked — the store is legitimately a subset there', () => {
+  // realCache()'s 2026-02-06 row (10 sessions) has no counterpart in the store at all.
+  const all = storeSessions()
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })
+  expect(out).not.toBeNull()
+  expect(out!.dailyActivity.find(d => d.date === '2026-02-06')!.sessionCount).toBe(10)
+})
+
+test('non-Claude sessions in the store do not trip the precondition', () => {
+  const all = [...storeSessions(), s({ session_id: 'cx', harness: 'codex', start_time: localAt('2026-06-25', 9), user_message_count: 4 })]
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })
+  expect(out).not.toBeNull()
+})
+
+// --- the live channel (reverse WebSocket) obeys the same denylist as the uploader ---
+
+const LIVE_SESSIONS = [
+  s({ session_id: 'open-blocked', project_path: '/w/secret', git_remote: 'github.com/acme/secret' }),
+  s({ session_id: 'open-shared', project_path: '/w/public', git_remote: 'github.com/acme/public' }),
+]
+const liveIndex = () => buildPathRepoIndex(LIVE_SESSIONS)
+
+test('an unrestricted connection gets the live snapshot untouched', () => {
+  const snap = { liveSessionIds: ['open-blocked', 'open-shared'], liveProcesses: [{ cwd: '/anywhere' }] }
+  const out = filterLiveShared(snap, LIVE_SESSIONS, denylistRules(normalizeDenied([])))
+  expect(out.liveSessionIds).toEqual(['open-blocked', 'open-shared'])
+  expect(out.liveProcesses).toHaveLength(1)
+})
+
+// The leak this exists to close: the uploader withheld the repo's metrics while the reverse
+// channel announced its session id every 8 seconds.
+test('a denied repo\'s open session id never leaves the machine', () => {
+  const snap = { liveSessionIds: ['open-blocked', 'open-shared'], liveProcesses: [] }
+  const out = filterLiveShared(snap, LIVE_SESSIONS, denylistRules(normalizeDenied(['github.com/acme/secret'])), liveIndex())
+  expect(out.liveSessionIds).toEqual(['open-shared'])
+})
+
+test('a live id with no matching session is dropped, not passed through', () => {
+  // Unattributable to any repo, and the central resolves live ids against the sessions it was
+  // pushed — so keeping it only ever leaked an identifier for a row nobody could render.
+  const snap = { liveSessionIds: ['ghost'], liveProcesses: [] }
+  const out = filterLiveShared(snap, LIVE_SESSIONS, denylistRules(normalizeDenied(['github.com/acme/secret'])), liveIndex())
+  expect(out.liveSessionIds).toEqual([])
+})
+
+test('a process is reported only when its cwd resolves to a repo that is not denied', () => {
+  const snap = {
+    liveSessionIds: [],
+    liveProcesses: [{ cwd: '/w/secret' }, { cwd: '/w/public' }, { cwd: '/w/never-seen' }],
+  }
+  const out = filterLiveShared(snap, LIVE_SESSIONS, denylistRules(normalizeDenied(['github.com/acme/secret'])), liveIndex())
+  // /w/secret is denied; /w/never-seen cannot be attributed, and cwd is often the repo name —
+  // under restrictions an unrecognized directory is withheld rather than assumed innocent.
+  expect(out.liveProcesses.map(p => p.cwd)).toEqual(['/w/public'])
+})
+
+test('denying the no-repo bucket alone still withholds unattributable processes', () => {
+  const snap = { liveSessionIds: [], liveProcesses: [{ cwd: '/w/never-seen' }] }
+  const out = filterLiveShared(snap, LIVE_SESSIONS, denylistRules(normalizeDenied([NO_REPO_KEY])), liveIndex())
+  expect(out.liveProcesses).toEqual([])
+})
+
+test('the alias folding that guards filterShared guards the live channel too', () => {
+  const snap = { liveSessionIds: ['open-blocked'], liveProcesses: [] }
+  // Denied under a different SSH/case spelling of the same remote.
+  const out = filterLiveShared(snap, LIVE_SESSIONS, denylistRules(normalizeDenied(['git@github.com:Acme/Secret.git'])), liveIndex())
+  expect(out.liveSessionIds).toEqual([])
 })

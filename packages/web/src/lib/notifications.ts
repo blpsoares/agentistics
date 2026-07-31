@@ -27,6 +27,19 @@ export const NOTIFICATION_TEXT: Record<string, { pt: Localized; en: Localized }>
   // an unattributed "can't reach the central" is unactionable: the bell showed two byte-identical
   // rows while only one central was down. `meta.central` is missing on rows persisted by an older
   // build, so the placeholder falls back to a generic noun — see resolveNotification.
+  // Raised when an owner recovers their password with the second factor. It is a WARNING, not a
+  // success: the whole point of showing it to every other owner is that this is what an account
+  // takeover would look like, and the only chance anyone has to notice it.
+  'iam.password_recovered': {
+    pt: {
+      title: 'Senha de owner redefinida',
+      message: 'A conta {email} redefiniu a senha pelo segundo fator ({factor}). Se não foi você, revogue o acesso e troque a senha agora.',
+    },
+    en: {
+      title: 'Owner password was reset',
+      message: 'The account {email} reset its password using its second factor ({factor}). If this was not you, revoke access and change the password now.',
+    },
+  },
   'member.auth_rejected': {
     pt: { title: 'Central rejeitou esta máquina', message: 'Não autorizado por {central} — o token pode ser inválido ou revogado. Gere um novo no Team Manager dessa central.' },
     en: { title: 'Central rejected this machine', message: 'Unauthorized from {central} — the token may be invalid or revoked. Mint a new one in that central’s Team Manager.' },

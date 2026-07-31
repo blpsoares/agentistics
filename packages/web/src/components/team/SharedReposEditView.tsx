@@ -243,8 +243,12 @@ function RowGroup({ label, rows, lang, mode, partialRepoKeys, onToggleRow }: {
       {rows.map(r => {
         const t = r.target
         const partial = !r.denied && partialRepoKeys.has(t.key)
-        const sub = r.locked
-          ? COPY.mixedRepoWarn[lang]
+        // A locked row in the unattributed bucket gets its OWN sentence: `mixedRepoWarn` describes
+        // a folder holding more than one repository, which is not why this one is locked.
+        const sub = r.locked && t.kind === 'none'
+          ? COPY.lockedNoRepoWarn[lang]
+          : r.locked
+            ? COPY.mixedRepoWarn[lang]
           : partial
             ? (mode === 'allowlist' ? COPY.repoPartialAllowSub[lang] : COPY.repoPartialSub[lang])
             : t.kind === 'none'
@@ -395,8 +399,14 @@ function ProjectRowGroup({ label, rows, lang, onToggleRow }: {
       </div>
       {rows.map(r => {
         const t = r.target
+        // `repoKey` is '' for a project in the unattributed bucket, and those rows became lockable
+        // when the bucket itself did — so `lockedByRepo` would render "Blocked by repository "
+        // with a dangling empty name. That bucket has its own sentence, which says why it cannot
+        // be split rather than naming a repository that does not exist.
         const sub = r.locked
-          ? interpolate(COPY.lockedByRepo[lang], { repo: t.repoKey })
+          ? (t.repoKey
+              ? interpolate(COPY.lockedByRepo[lang], { repo: t.repoKey })
+              : COPY.lockedNoRepoWarn[lang])
           : `${interpolate(plural(PLURAL_COPY.sessionsN[lang], t.sessions), { n: t.sessions })}${t.lastActive ? ` · ${interpolate(COPY.lastActiveT[lang], { t: relTime(t.lastActive, pt) })}` : ''}`
         return (
           <div key={t.key} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>

@@ -2,6 +2,7 @@
 import React, { useState } from 'react'
 import { AlertCircle, ShieldCheck } from 'lucide-react'
 import { Field } from './Login'
+import { PasswordHint } from './PasswordHint'
 
 /** First-boot owner creation. Requires the one-time setup token printed to the central's logs.
  *  Posts /api/iam/bootstrap; on success the server sets the session cookie and the app opens. */
@@ -44,6 +45,7 @@ export function OwnerSetup({ onDone }: { onDone: () => void }) {
         <Field label="Name" type="text" value={name} onChange={setName} disabled={submitting} />
         <Field label="Email" type="email" value={email} onChange={setEmail} disabled={submitting} />
         <Field label="Password" type="password" value={password} onChange={setPassword} disabled={submitting} />
+        <PasswordHint value={password} />
         <Field label="Confirm password" type="password" value={confirm} onChange={setConfirm} disabled={submitting} />
         {error && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#ef4444', marginBottom: 12 }}>

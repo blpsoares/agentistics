@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { AlertCircle, LogIn, ShieldCheck } from 'lucide-react'
 import { Revealable, REVEAL_PAD } from './PasswordReveal'
+import { RecoverPassword } from './RecoverPassword'
 
 /** Central account login (email + password). Posts /api/iam/login; the server sets the session cookie. */
 export function Login({ onAuthed }: { onAuthed: () => void }) {
@@ -10,6 +11,7 @@ export function Login({ onAuthed }: { onAuthed: () => void }) {
   const [error, setError] = useState<'wrong' | 'network' | 'rate' | null>(null)
   /** Set when the password stage succeeded but a second factor is still owed. */
   const [challenge, setChallenge] = useState<string | null>(null)
+  const [recovering, setRecovering] = useState(false)
   const ref = useRef<HTMLInputElement>(null)
   useEffect(() => { ref.current?.focus() }, [])
 
@@ -28,6 +30,10 @@ export function Login({ onAuthed }: { onAuthed: () => void }) {
       if (res.ok && data.ok) onAuthed()
       else setError('wrong')
     } catch { setError('network') } finally { setSubmitting(false) }
+  }
+
+  if (recovering) {
+    return <RecoverPassword onDone={() => { setRecovering(false); setPassword('') }} onCancel={() => setRecovering(false)} />
   }
 
   if (challenge) {
@@ -55,6 +61,10 @@ export function Login({ onAuthed }: { onAuthed: () => void }) {
         <button type="submit" disabled={!email.trim() || !password || submitting}
           style={{ width: '100%', padding: '9px 14px', borderRadius: 8, border: '1px solid var(--anthropic-orange)', background: (!email.trim() || !password || submitting) ? 'var(--bg-elevated)' : 'var(--anthropic-orange-dim)', color: (!email.trim() || !password || submitting) ? 'var(--text-tertiary)' : 'var(--anthropic-orange)', fontSize: 13, fontWeight: 600, cursor: (!email.trim() || !password || submitting) ? 'default' : 'pointer', fontFamily: 'inherit' }}>
           {submitting ? 'Signing in…' : 'Sign in'}
+        </button>
+        <button type="button" onClick={() => setRecovering(true)}
+          style={{ width: '100%', marginTop: 10, padding: '6px 14px', borderRadius: 8, border: 'none', background: 'transparent', color: 'var(--text-tertiary)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+          Forgot your password?
         </button>
       </form>
     </div>

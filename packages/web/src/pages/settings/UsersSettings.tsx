@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Plus, Trash2, Copy, Check, Dice5, KeyRound, Pencil, X } from 'lucide-react'
 import { generatePassword } from '../../lib/password'
+import { PasswordHint } from '../../components/PasswordHint'
 import type { AppContext } from '../../lib/app-context'
 import { SectionHeader, Section, Checkbox, Select, ConfirmModal, RecordCard, RecordCardAction, SaveBar, runSaveSteps } from './primitives'
 import { Drawer } from './Drawer'
@@ -13,6 +14,9 @@ interface Team { _id: string; name: string }
 interface Membership { teamId: string; role: 'manager' | 'user' }
 interface Account { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: Membership[] }
 interface MachineRow { name: string; teamId: string }
+/** An open "please reset my password" request, already scoped by the server to accounts this
+ *  principal may reset. */
+interface ResetRequest { id: string; accountId: string; email: string; name: string; reason?: string; createdAt: string }
 interface LinkedMachine { id: string; machineName: string; teamId?: string; accountId?: string; accountIds?: string[]; lastSeenAt: string | null }
 // The slice of GET /api/tags this page needs. Tag visibility is an explicit account list
 // (`sharedWith`), so onboarding a new hire means granting the tags here instead of opening every
@@ -199,6 +203,8 @@ export default function UsersSettings() {
   const [loadingMachines, setLoadingMachines] = useState(false)
   const [editErr, setEditErr] = useState<string | null>(null)
   const [tempPassword, setTempPassword] = useState<string | null>(null)
+  /** Open "please reset me" requests this principal may act on — the server scopes the list. */
+  const [resetRequests, setResetRequests] = useState<ResetRequest[]>([])
   // Per-section edit toggle inside the (read-first) edit drawer. Only one section edits at a time.
   // The edit drawer is ONE form. This held a per-section value, which forced an Edit→Save cycle
   // per field group — four of them on this screen. Everything now edits together (saveAll+SaveBar).
@@ -455,6 +461,19 @@ export default function UsersSettings() {
   }
 
 
+  const loadResetRequests = useCallback(() => {
+    fetch('/api/iam/reset-requests')
+      .then(r => (r.ok ? r.json() : { requests: [] }))
+      .then((d: { requests?: ResetRequest[] }) => setResetRequests(d.requests ?? []))
+      .catch(() => setResetRequests([]))
+  }, [])
+  useEffect(loadResetRequests, [loadResetRequests])
+
+  async function dismissRequest(id: string) {
+    await fetch(`/api/iam/reset-requests?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+    loadResetRequests()
+  }
+
   async function resetPassword() {
     if (!editId) return
     const res = await stepUpFetch('/api/iam/accounts', {
@@ -465,6 +484,7 @@ export default function UsersSettings() {
     const d = await res.json() as { tempPassword?: string }
     setTempPassword(d.tempPassword ?? null)
     void load()
+    loadResetRequests()
   }
 
   async function addMachine() {
@@ -694,6 +714,41 @@ export default function UsersSettings() {
           : 'Accounts that sign in to the central dashboard. Each user belongs to one or more teams.'}
       </p>
 
+      {resetRequests.length > 0 && (
+        <div style={{ border: '1px solid var(--anthropic-orange)55', background: 'var(--anthropic-orange-dim)', borderRadius: 10, padding: 14, marginBottom: 16 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
+            {pt ? 'Pedidos de redefinição de senha' : 'Password reset requests'}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginBottom: 10, lineHeight: 1.5 }}>
+            {pt
+              ? 'Quem não tem segundo fator pede aqui. Redefinir gera uma senha temporária — entregue por um canal que você confie; ela força a troca no próximo login.'
+              : 'People without a second factor ask here. Resetting mints a temporary password — hand it over on a channel you trust; it forces a change at their next sign-in.'}
+          </div>
+          {resetRequests.map(r => {
+            const account = accounts.find(a => a.id === r.accountId)
+            return (
+              <div key={r.id} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderTop: '1px solid var(--border-subtle)' }}>
+                <div style={{ minWidth: 200, flex: 1 }}>
+                  <div style={{ fontSize: 12.5, color: 'var(--text-primary)', fontWeight: 600 }}>{r.name} <span style={{ fontWeight: 400, color: 'var(--text-tertiary)' }}>{r.email}</span></div>
+                  {r.reason && <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 2, lineHeight: 1.5 }}>“{r.reason}”</div>}
+                  <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)', marginTop: 2 }}>{new Date(r.createdAt).toLocaleString()}</div>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {account && (
+                    <button type="button" style={ghostBtn} onClick={() => { void openEditDrawer(account); setConfirmReset(true) }}>
+                      {pt ? 'Redefinir senha' : 'Reset password'}
+                    </button>
+                  )}
+                  <button type="button" style={ghostBtn} onClick={() => { void dismissRequest(r.id) }}>
+                    {pt ? 'Dispensar' : 'Dismiss'}
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
       {/* Role legend — each row leads with the role's real badge, so the colour seen here is the
           same one the accounts list uses. Rows wrap instead of sharing one line with dot
           separators, which crammed the three descriptions together on narrow screens. */}
@@ -892,6 +947,7 @@ export default function UsersSettings() {
               <Dice5 size={13} /> {pt ? 'Gerar' : 'Generate'}
             </button>
           </div>
+          <PasswordHint value={ap} lang={lang} />
         </Field>
 
         {/* SECURITY SECTION */}

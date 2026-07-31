@@ -180,6 +180,12 @@ const liveTimers = new Map<string, ReturnType<typeof setInterval>>()
  * only: session ids plus the cwd of a process too new to have written a transcript. Never chat,
  * matching the rule that members push computed data only.
  *
+ * The snapshot goes through THIS connection's denylist (`filterLiveShared`) before it leaves the
+ * machine — the reverse channel is an outbound path like the uploader, and a repo withheld from
+ * one must not be announced by the other. The connection is re-read on every tick rather than
+ * captured at socket-open, so editing the denylist takes effect within one interval instead of
+ * waiting for a reconnect that may never come.
+ *
  * Best-effort throughout: a failed snapshot or a dead socket skips a beat rather than throwing
  * into the connection's event handlers. Keyed by connId so tearing down one connection's timer
  * (`stopLiveReporting`) never touches another connection's.
@@ -190,17 +196,36 @@ function startLiveReporting(connId: string, socket: WebSocket): void {
   const send = async (): Promise<void> => {
     if (socket.readyState !== WebSocket.OPEN) return
     try {
-      const [{ buildApiResponse }, { getLiveSnapshot }] = await Promise.all([
+      const [{ buildApiResponse }, { getLiveSnapshot }, shareRules] = await Promise.all([
         import('./data'),
         import('./live-sessions'),
+        import('./share-rules'),
       ])
       const data = await buildApiResponse()
       const snap = await getLiveSnapshot(data.sessions)
+
+      // A connection that vanished mid-flight reports nothing: there is no denylist left to
+      // consult, and defaulting to "unrestricted" would leak precisely when the rule is gone.
+      const conn = readTeamConnections(await readPreferences()).find(c => c.id === connId)
+      if (!conn) return
+      // The TYPED rules, never the legacy `deniedRepos` mirror: that mirror can only express
+      // "these repo keys are blocked", so a project-only rule would not reach this channel at all
+      // and an allowlist would be read as its own inverse. The live channel says what this machine
+      // is working on RIGHT NOW — a leak here is the sharpest one the feature has.
+      const rules = shareRules.shareRulesOf(conn.shareMode, conn.sources)
+      // An allowlist ALWAYS restricts (an empty one shares nothing), so the index cannot be gated
+      // on a non-empty source set the way a denylist's could.
+      const restricted = rules.mode === 'allowlist' || rules.sources.size > 0
+      const index = restricted
+        ? shareRules.buildPathRepoIndex(data.sessions, data.projects)
+        : undefined
+      const shared = shareRules.filterLiveShared(snap, data.sessions, rules, index)
+
       if (socket.readyState !== WebSocket.OPEN) return
       socket.send(JSON.stringify({
         type: 'live-sessions',
-        sessionIds: snap.liveSessionIds,
-        processes: snap.liveProcesses,
+        sessionIds: shared.liveSessionIds,
+        processes: shared.liveProcesses,
       }))
     } catch { /* transient — the next tick retries */ }
   }

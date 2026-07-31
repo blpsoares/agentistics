@@ -62,7 +62,9 @@ export const RULES: Record<'login' | 'loginAttempts' | 'token' | 'api' | 'ingest
 }
 
 /** Routes where a wrong guess is the attack: credentials and bearer tokens. */
-const LOGIN_PATHS = new Set(['/api/iam/login', '/api/iam/login/mfa', '/api/team/login', '/api/iam/bootstrap'])
+const LOGIN_PATHS = new Set([
+  '/api/iam/login', '/api/iam/login/mfa', '/api/team/login', '/api/iam/bootstrap', '/api/iam/recover', '/api/iam/reset-request',
+])
 const TOKEN_PATHS = new Set(['/api/team/whoami', '/api/team/agent'])
 
 /** Which rule governs a path. Pure so the routing policy is testable without a server. */
@@ -149,6 +151,21 @@ export class MemoryLimiter {
     const r = evaluate(this.buckets.get(key), rule, nowMs)
     this.buckets.set(key, r.next)
     return { allowed: r.allowed, retryAfterSec: r.retryAfterSec }
+  }
+
+  /**
+   * Is this key currently blocked? Reads the block WITHOUT spending budget.
+   *
+   * `check` answers two questions at once — "are you blocked" and "have you called too often" —
+   * and increments a counter to answer the second. That is right for a per-IP ceiling on calls,
+   * and wrong for a per-ACCOUNT allowance of FAILURES: there, every attempt (including the
+   * successful ones and the ones rejected for an unrelated reason) ate into the budget meant for
+   * wrong guesses, so five failures were never actually available.
+   */
+  blocked(key: string, nowMs: number = Date.now()): { allowed: boolean; retryAfterSec: number } {
+    const b = this.buckets.get(key)
+    if (!b || b.blockedUntil <= nowMs) return { allowed: true, retryAfterSec: 0 }
+    return { allowed: false, retryAfterSec: Math.ceil((b.blockedUntil - nowMs) / 1000) }
   }
 
   fail(key: string, rule: RateRule, nowMs: number = Date.now()): void {

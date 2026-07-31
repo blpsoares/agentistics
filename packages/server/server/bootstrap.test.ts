@@ -16,7 +16,7 @@ test('bootstrapTokenMatches compares against the stored hash', () => {
 })
 
 test('validateOwnerInput accepts a well-formed body', () => {
-  const r = validateOwnerInput({ name: ' Alice ', email: ' Alice@Example.com ', password: 'brisk-tundra-lantern', confirm: 'brisk-tundra-lantern', token: 't' })
+  const r = validateOwnerInput({ name: ' Alice ', email: ' Alice@Example.com ', password: 'Brisk-tundra-lantern', confirm: 'Brisk-tundra-lantern', token: 't' })
   expect(r.ok).toBe(true)
   if (r.ok) {
     expect(r.value.name).toBe('Alice')
@@ -26,9 +26,10 @@ test('validateOwnerInput accepts a well-formed body', () => {
 })
 
 test('validateOwnerInput rejects bad input with a specific error', () => {
-  expect(validateOwnerInput({ email: 'a@b.co', password: 'brisk-tundra-lantern', confirm: 'brisk-tundra-lantern', token: 't' })).toEqual({ ok: false, error: 'name is required' })
-  expect(validateOwnerInput({ name: 'A', email: 'nope', password: 'brisk-tundra-lantern', confirm: 'brisk-tundra-lantern', token: 't' })).toEqual({ ok: false, error: 'valid email is required' })
-  expect(validateOwnerInput({ name: 'A', email: 'a@b.co', password: 'short', confirm: 'short', token: 't' })).toEqual({ ok: false, error: 'password must be at least 12 characters' })
-  expect(validateOwnerInput({ name: 'A', email: 'a@b.co', password: 'brisk-tundra-lantern', confirm: 'brisk-tundra-lantern-x', token: 't' })).toEqual({ ok: false, error: 'passwords do not match' })
-  expect(validateOwnerInput({ name: 'A', email: 'a@b.co', password: 'brisk-tundra-lantern', confirm: 'brisk-tundra-lantern' })).toEqual({ ok: false, error: 'missing bootstrap token' })
+  expect(validateOwnerInput({ email: 'a@b.co', password: 'Brisk-tundra-lantern', confirm: 'Brisk-tundra-lantern', token: 't' })).toEqual({ ok: false, error: 'name is required' })
+  expect(validateOwnerInput({ name: 'A', email: 'nope', password: 'Brisk-tundra-lantern', confirm: 'Brisk-tundra-lantern', token: 't' })).toEqual({ ok: false, error: 'valid email is required' })
+  expect(validateOwnerInput({ name: 'A', email: 'a@b.co', password: 'Sh0rt!', confirm: 'Sh0rt!', token: 't' }))
+    .toEqual({ ok: false, error: 'password must be at least 8 characters, with one uppercase letter and one symbol' })
+  expect(validateOwnerInput({ name: 'A', email: 'a@b.co', password: 'Brisk-tundra-lantern', confirm: 'Brisk-tundra-lantern-x', token: 't' })).toEqual({ ok: false, error: 'passwords do not match' })
+  expect(validateOwnerInput({ name: 'A', email: 'a@b.co', password: 'Brisk-tundra-lantern', confirm: 'Brisk-tundra-lantern' })).toEqual({ ok: false, error: 'missing bootstrap token' })
 })

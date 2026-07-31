@@ -72,8 +72,15 @@ describe('capabilitiesFor', () => {
     expect(caps.requireSecureCookies).toBe(true)
   })
 
-  it('does not require MFA on lan, and ties secure cookies to TLS there', () => {
-    expect(capabilitiesFor('lan', { ...base, central: true }).requireMfaForOwner).toBe(false)
+  it('requires owner MFA on every profile — the account is worth the same on a LAN', () => {
+    // It used to be a `public`-only rule. An owner reaches every team's data wherever the port is
+    // bound, and self-service recovery now leans on the second factor existing at all.
+    for (const p of ['local', 'lan', 'public'] as const) {
+      expect(capabilitiesFor(p, { ...base, central: true, exposure: p }).requireMfaForOwner).toBe(true)
+    }
+  })
+
+  it('ties secure cookies to TLS on lan', () => {
     expect(capabilitiesFor('lan', { ...base, central: true }).requireSecureCookies).toBe(false)
     expect(capabilitiesFor('lan', { ...base, central: true, tls: true }).requireSecureCookies).toBe(true)
   })

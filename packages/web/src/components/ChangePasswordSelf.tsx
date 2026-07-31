@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import { AlertCircle, KeyRound, X, CheckCircle } from 'lucide-react'
 import type { Lang } from '@agentistics/core'
 import { Field } from './Login'
+import { PasswordHint } from './PasswordHint'
 
 /** Self-service, dismissible change-password modal (requires the current password).
  *  Posts /api/iam/change-password { currentPassword, newPassword }; the server re-issues the
@@ -62,8 +63,8 @@ export function ChangePasswordSelf({ lang, onClose }: { lang: Lang; onClose: () 
         </div>
         <p style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5, margin: '0 0 18px' }}>
           {pt
-            ? 'Informe sua senha atual e escolha uma nova: mínimo 12 caracteres, evitando senhas comuns e qualquer coisa que contenha seu nome ou e-mail.'
-            : 'Enter your current password and choose a new one: at least 12 characters, avoiding common passwords and anything containing your name or e-mail.'}
+            ? 'Informe sua senha atual e escolha uma nova.'
+            : 'Enter your current password and choose a new one.'}
         </p>
         {done ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: 'var(--anthropic-orange)', padding: '10px 0' }}>
@@ -73,6 +74,7 @@ export function ChangePasswordSelf({ lang, onClose }: { lang: Lang; onClose: () 
           <>
             <Field label={pt ? 'Senha atual' : 'Current password'} type="password" value={current} onChange={setCurrent} inputRef={ref} disabled={submitting} />
             <Field label={pt ? 'Nova senha' : 'New password'} type="password" value={password} onChange={setPassword} disabled={submitting} />
+            <PasswordHint value={password} lang={lang} />
             <Field label={pt ? 'Confirmar senha' : 'Confirm password'} type="password" value={confirm} onChange={setConfirm} disabled={submitting} />
             {(mismatch || error) && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#ef4444', marginBottom: 12 }}>

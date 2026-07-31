@@ -150,6 +150,33 @@ describe('registerFailure', () => {
   })
 })
 
+describe('MemoryLimiter.blocked — the per-account read that spends nothing', () => {
+  it('answers "not blocked" without consuming the attempt budget', () => {
+    const lim = new MemoryLimiter()
+    // The whole allowance, read a hundred times: reading is not attempting.
+    for (let i = 0; i < 100; i++) expect(lim.blocked('acct:a', t0).allowed).toBe(true)
+    for (let i = 0; i < rule.limit; i++) lim.fail('acct:a', rule, t0)
+    expect(lim.blocked('acct:a', t0).allowed).toBe(false)
+  })
+
+  it('lets exactly `limit` failures through before blocking', () => {
+    const lim = new MemoryLimiter()
+    for (let i = 1; i < rule.limit; i++) {
+      lim.fail('acct:b', rule, t0)
+      expect(lim.blocked('acct:b', t0).allowed).toBe(true)
+    }
+    lim.fail('acct:b', rule, t0)
+    expect(lim.blocked('acct:b', t0).allowed).toBe(false)
+  })
+
+  it('opens again when the block expires', () => {
+    const lim = new MemoryLimiter()
+    for (let i = 0; i < rule.limit; i++) lim.fail('acct:c', rule, t0)
+    const wait = lim.blocked('acct:c', t0).retryAfterSec
+    expect(lim.blocked('acct:c', t0 + wait * 1000 + 1).allowed).toBe(true)
+  })
+})
+
 describe('MemoryLimiter', () => {
   it('isolates keys from each other', () => {
     const l = new MemoryLimiter()
@@ -202,6 +229,9 @@ describe('rateRuleFor', () => {
     expect(rateRuleFor('/api/iam/login/mfa')).toBe(RULES.loginAttempts)
     expect(rateRuleFor('/api/team/login')).toBe(RULES.loginAttempts)
     expect(rateRuleFor('/api/iam/bootstrap')).toBe(RULES.loginAttempts)
+    // Owner recovery is a credential endpoint: it is public, and a wrong guess there is the
+    // attack. Its per-account budget is what keeps a 40-bit recovery code out of reach.
+    expect(rateRuleFor('/api/iam/recover')).toBe(RULES.loginAttempts)
     expect(RULES.loginAttempts.limit).toBeGreaterThan(RULES.login.limit)
   })
 

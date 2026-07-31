@@ -211,6 +211,10 @@ export const COPY = {
     en: "This folder contains more than one repository, so sessions in it can't be split. It is blocked as a whole.",
     pt: 'Esta pasta contém mais de um repositório, então as sessões nela não podem ser separadas. Ela é bloqueada por inteiro.',
   },
+  lockedNoRepoWarn: {
+    en: 'Sessions with no git remote cannot be split. Blocked as a whole.',
+    pt: 'Sessões sem remote git não podem ser separadas. Bloqueadas por inteiro.',
+  },
   staleHint: {
     en: 'Still blocked. If the repository comes back, it stays hidden from this central.',
     pt: 'Continuam bloqueados. Se o repositório voltar, ele segue oculto desta central.',
