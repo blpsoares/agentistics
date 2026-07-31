@@ -223,7 +223,7 @@ describe('runForgetSequence', () => {
     expect(existsSync(teamForgetFile(connId))).toBe(false)
   })
 
-  it('removes the connection on 401 and does not widen the delete', async () => {
+  it('a 401 mid-batch calls onRevoked (never a removal) and does not widen the delete', async () => {
     const connId = randomConnId()
     const ids = Array.from({ length: 600 }, (_, i) => `s${i}`)
     await seedSentState(connId, ids)
@@ -245,13 +245,53 @@ describe('runForgetSequence', () => {
     const out = await runForgetSequence(fakeConn(connId), { forgetIds: ids, forgetRuns: [], rulesHash: 'h1' }, deps)
 
     expect(out.ok).toBe(false)
+    // `onRevoked` fires — production wires this to `markAuthFailed`, never to `removeConnection`
+    // (see team-uploader.ts). This unit only proves the HOOK fires with the right args; the
+    // production wiring itself is proven in team-uploader.test.ts.
     expect(revoked).toEqual([{ connId, reason: 'revoked' }])
+    // Callers must be able to tell "stopped because of an auth rejection" apart from any other
+    // failure — this is what tells `runConnectionPushCycle` not to attempt a further request this
+    // cycle (no fallback push either).
+    expect(out.authRejected).toBe(true)
+    expect(out.pendingRules).toBe(true)
     // The delete was never widened: exactly the planned ids were named, in two bounded batches,
     // and the sequence STOPPED at the 401 rather than retrying or falling back to a broader call.
     expect(batch).toBe(2)
     expect(bodies).toHaveLength(2)
     expect(bodies.flat()).toEqual(ids)
     expect(bodies.every(b => b.length <= FORGET_BATCH_SIZE)).toBe(true)
+    // The journal stays open — nothing here ever unlinks it — so the next cycle resumes exactly
+    // these (still-unacked) ids.
+    expect(existsSync(teamForgetFile(connId))).toBe(true)
+  })
+
+  it('a 401 on the identity check (whoami) also calls onRevoked, never reaching the forget batches', async () => {
+    const connId = randomConnId()
+    const ids = ['s1', 's2']
+    await seedSentState(connId, ids)
+    const revoked: Array<{ connId: string; reason: string }> = []
+    let forgetCalls = 0
+    const deps = baseDeps({
+      fetch: (async (input: RequestInfo | URL) => {
+        if (String(input).endsWith('/api/team/whoami')) {
+          return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 })
+        }
+        forgetCalls++
+        return new Response(JSON.stringify({ ok: true, deleted: ids.length }), { status: 200 })
+      }),
+      onRevoked: async (id, reason) => { revoked.push({ connId: id, reason }) },
+    })
+
+    const out = await runForgetSequence(fakeConn(connId), { forgetIds: ids, forgetRuns: [], rulesHash: 'h1' }, deps)
+
+    expect(out.ok).toBe(false)
+    expect(out.authRejected).toBe(true)
+    expect(revoked).toEqual([{ connId, reason: 'revoked' }])
+    expect(forgetCalls).toBe(0) // never widened past the identity check
+    // No journal either: the sequence never reached step 2 (the journal write comes after whoami).
+    expect(existsSync(teamForgetFile(connId))).toBe(false)
+    // Nothing was ever removed from the sent-state.
+    expect((await readSentState(connId)).hashes['s1']).toBe('hash-of-s1')
   })
 
   it('deletes the journal only after the sequence completes', async () => {

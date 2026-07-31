@@ -282,11 +282,18 @@ export const AUTH_FAIL_SUSTAIN_MS = 10 * 60_000
 
 /**
  * Persist the "this connection needs attention" flag — `TeamConnection.authFailedAt` — once a
- * connection's auth failures have been sustained past `AUTH_FAIL_SUSTAIN_MS`. Never removes the
- * connection: `deniedRepos`, the label, everything stays. Idempotent (a connection already marked
- * is a no-op, including across a concurrent race — the mutator re-checks after re-reading).
+ * connection's auth failures are confirmed. Never removes the connection: `deniedRepos`, the
+ * label, everything stays. Idempotent (a connection already marked is a no-op, including across a
+ * concurrent race — the mutator re-checks after re-reading).
+ *
+ * Called from two places, both a CONFIRMED rejection rather than a guess: (1) `handleAuthError`
+ * below, only once a push cycle's 401/403 streak has been sustained past `AUTH_FAIL_SUSTAIN_MS`
+ * (a single push-cycle 401 is too cheap a signal — it is exactly what a central restart produces);
+ * (2) `team-forget-client.ts`'s `runForgetSequence`, immediately on its own 401/403 — that one
+ * needs no sustain window because a `whoami`/`forget` rejection during an active removal sequence
+ * is already a real, single confirmed rejection, not push-cycle noise. Exported for that caller.
  */
-async function markAuthFailed(
+export async function markAuthFailed(
   conn: TeamConnection,
   deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
 ): Promise<void> {
@@ -302,10 +309,9 @@ async function markAuthFailed(
       next[idx] = { ...next[idx]!, authFailedAt: now }
       return normalizeTeamConfig({ ...current, connections: next })
     })
-    console.warn(`[team-uploader] ${conn.id} (${hostOf(conn.endpoint)}) unauthorized for ` +
-      `${Math.round(AUTH_FAIL_SUSTAIN_MS / 60_000)}+ minutes — pausing pushes, connection kept ` +
-      `(rotate the token on the central, then reconnect if it was genuinely revoked; recovers ` +
-      `on its own if the central was only restarting)`)
+    console.warn(`[team-uploader] ${conn.id} (${hostOf(conn.endpoint)}) marked unauthorized — ` +
+      `pausing pushes, connection kept (rotate the token on the central, then reconnect if it ` +
+      `was genuinely revoked; recovers on its own if the central was only restarting)`)
   } catch (err) {
     console.warn(`[team-uploader] failed to persist auth-failed state for ${conn.id}: ${err instanceof Error ? err.message : String(err)}`)
   }
@@ -1335,6 +1341,10 @@ function scheduleConnectionCycle(connId: string, delaySec: number): void {
  *  still-fresh fake context in the module-level cache — an accident a test must never depend on. */
 interface RunPushCycleDeps {
   ctx?: PushCycleContext
+  /** Injectable for tests that exercise an auth failure through the full cycle (including the
+   *  retroactive-removal sequence's own `onRevoked` → `markAuthFailed`) — the default touches the
+   *  developer's real `~/.agentistics/preferences.json`, which a test must never do. */
+  updateTeamConfig?: typeof updateTeamConfig
 }
 
 /** The bounded (semaphore-limited) network portion of one connection's cycle: learn the
@@ -1386,9 +1396,17 @@ async function runConnectionPushCycle(conn: TeamConnection, deps: RunPushCycleDe
       // subtraction against `real`'s rollup rows. A push built with an empty ledger emits a
       // sealed day's row VERBATIM — the blocked repository's sessions, messages, tokens and hour
       // buckets — and a sealed day cannot be re-derived once its sessions age out of the store.
-      const res = await pushOnceDetailed({ ...conn, endpoint }, ctx, { sealed: rulesPlan.next.sealed })
+      const res = await pushOnceDetailed({ ...conn, endpoint }, ctx, { sealed: rulesPlan.next.sealed, updateTeamConfig: deps.updateTeamConfig })
       return !res.error
     }
+
+    // Set when the forget sequence stopped because the central rejected the token (401/403) —
+    // the connection was just marked auth-failed (never removed), and NOTHING further may be
+    // attempted against it for the rest of this cycle: not the fallback push below, which would
+    // otherwise immediately hit the same still-rejecting central with the full payload using this
+    // cycle's now-stale `conn` snapshot (the mark itself is only visible from the NEXT cycle's
+    // fresh `readPreferences()` read).
+    let authRejectedThisCycle = false
 
     if (needsForget) {
       // The whole sequence runs under this connection's push lock (`_running`, taken by
@@ -1407,7 +1425,9 @@ async function runConnectionPushCycle(conn: TeamConnection, deps: RunPushCycleDe
         { forgetIds, forgetRuns, rulesHash: rulesPlan.next.rulesHash },
         {
           canForget: connectionCanForget,
-          onRevoked: async (id, reason) => { await removeConnection(id, reason) },
+          // Mark, never remove — see the class docstring in team-forget-client.ts. A rejection
+          // here is a real, confirmed one (the request already happened), so no sustain window.
+          onRevoked: async () => { await markAuthFailed({ ...conn, endpoint }, { updateTeamConfig: deps.updateTeamConfig }) },
           onProgress: p => { _resyncProgress.set(conn.id, p) },
           pushRebuiltCache: syncAndPush,
         },
@@ -1424,12 +1444,13 @@ async function runConnectionPushCycle(conn: TeamConnection, deps: RunPushCycleDe
         }
       } else {
         console.warn(`[team-uploader] ${conn.id} retroactive removal incomplete: ${outcome.error ?? 'unknown error'}`)
+        authRejectedThisCycle = !!outcome.authRejected
       }
     } else {
       await saveRulesState(conn.id, rulesPlan.next)
     }
 
-    if (!didPush) {
+    if (!didPush && !authRejectedThisCycle) {
       // §5.5b: `reconcileSyncState` CLEARS the sent-state on a signature change, and the
       // sent-state is the only record of what this connection pushed. Running it after a removal
       // that did not complete would strand every already-pushed denied session on the central
@@ -1443,7 +1464,7 @@ async function runConnectionPushCycle(conn: TeamConnection, deps: RunPushCycleDe
       // down, must not stop this connection pushing altogether. Same ledger as the sequence's own
       // push above — this is the branch a machine with nothing to forget takes EVERY cycle, so an
       // empty ledger here is the common case of the leak, not the rare one.
-      await pushOnceDetailed({ ...conn, endpoint }, ctx, { sealed: rulesPlan.next.sealed })
+      await pushOnceDetailed({ ...conn, endpoint }, ctx, { sealed: rulesPlan.next.sealed, updateTeamConfig: deps.updateTeamConfig })
     }
     return nextIntervalSec
   } finally {
@@ -1455,11 +1476,13 @@ let _migrated = false
 
 /** Injectable for tests — the defaults touch the developer's real preferences file and run the
  *  real (marker-guarded, so normally cheap) state migration; a test must never do either. `ctx`
- *  is threaded straight through to `runConnectionPushCycle` (see `RunPushCycleDeps`). */
+ *  and `updateTeamConfig` are threaded straight through to `runConnectionPushCycle` (see
+ *  `RunPushCycleDeps`). */
 interface RunCycleDeps {
   readPreferences?: typeof readPreferences
   migrateTeamStateOnce?: () => Promise<void>
   ctx?: PushCycleContext
+  updateTeamConfig?: typeof updateTeamConfig
 }
 
 /**
@@ -1493,7 +1516,7 @@ export async function runConnectionCycle(connId: string, deps: RunCycleDeps = {}
       stopConnectionChain(connId)
       return
     }
-    nextIntervalSec = await runConnectionPushCycle(conn, { ctx: deps.ctx })
+    nextIntervalSec = await runConnectionPushCycle(conn, { ctx: deps.ctx, updateTeamConfig: deps.updateTeamConfig })
   } catch (err) {
     console.warn(`[team-uploader] cycle error for ${connId}:`, err instanceof Error ? err.message : String(err))
   } finally {

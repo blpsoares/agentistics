@@ -43,8 +43,16 @@
  *   `notifyDataChanged`-debounced push already in flight can land AFTER the delete and re-insert
  *   exactly the documents just removed — and since they are no longer in the sent-state, nothing
  *   would ever remove them again (R27, the worst race in the design).
- * - **401/403 → `removeConnection(connId, 'revoked')`. Never widen the delete.** The sequence
- *   stops where it is; the remaining ids stay in the sent-state and in the journal.
+ * - **401/403 → mark the connection auth-failed (`markAuthFailed`), never widen the delete, and
+ *   never remove the connection.** The sequence stops WHERE IT IS — the remaining ids stay in the
+ *   sent-state and the journal stays open — and the caller (`runConnectionPushCycle`) must not
+ *   attempt any further request against this connection for the rest of THIS cycle either
+ *   (`ForgetOutcome.authRejected`). A single rejected request used to remove the connection and
+ *   its `deniedRepos` outright — worse than the sibling incident in the plain push cycle, because
+ *   this path fires exactly when the user just changed their privacy rules, destroying them at the
+ *   moment they matter most. The sequence is already journal-resumable and idempotent, so aborting
+ *   and retrying on a later cycle (once the central accepts the token again) is exactly the
+ *   behavior it is designed for — nothing here needs to become durable beyond the mark itself.
  *
  * Nothing about the denylist goes on the wire: the only outbound body is `{ sessionIds }`.
  * Workflow runs are NOT named separately — the central deletes a session's runs along with the
@@ -101,7 +109,9 @@ export interface ForgetDeps {
   /** Whether this connection's central advertised `forget.sessions`. Defaults to the uploader's
    *  learned capability map (dynamic import — team-uploader.ts imports THIS module). */
   canForget?: (connId: string) => boolean | Promise<boolean>
-  /** What a 401/403 means: the token is dead. Defaults to `removeConnection(connId, 'revoked')`. */
+  /** What a 401/403 means: the central is (currently) rejecting this token. Defaults to marking
+   *  the connection auth-failed (`markAuthFailed` in team-uploader.ts) — never to removing it. The
+   *  name is kept ("revoked") for the event this represents, not the action taken. */
   onRevoked?: (connId: string, reason: 'revoked') => Promise<void>
   /** Step 4 — pushing the rebuilt split statsCache in the SAME cycle. Resolves `true` when the
    *  push landed; the journal is deleted only then (§6.3: "the journal stays open until a cache
@@ -129,8 +139,13 @@ export interface ForgetOutcome {
   error?: string
   /** The connection's rules are declared but NOT yet enforced on this central — Task 6's status
    *  route reports this so the UI can never show success while the central still holds the data.
-   *  Absent on the revoke path: the connection itself is being removed. */
+   *  Also true on the revoke path now: the connection is kept (only marked auth-failed), so its
+   *  rules genuinely remain unenforced until a later cycle's retry succeeds. */
   pendingRules?: boolean
+  /** True when the sequence stopped because the central rejected the token (401/403) — the
+   *  caller (`runConnectionPushCycle`) must not attempt any further request for this connection
+   *  this cycle (no fallback push either), since the token is currently no good. */
+  authRejected?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -262,9 +277,13 @@ export async function runForgetSequence(
   if (conn.token) headers['Authorization'] = `Bearer ${conn.token}`
 
   const revoke = async (): Promise<void> => {
-    const onRevoked = deps.onRevoked ?? (async (id: string) => {
-      const { removeConnection } = await import('./team-uploader')
-      await removeConnection(id, 'revoked')
+    const onRevoked = deps.onRevoked ?? (async (_id: string) => {
+      // Mark, never remove — see the class docstring above. `markAuthFailed` is idempotent and
+      // safe to call with no sustained-failure history: a rejection seen mid-forget-sequence is
+      // already a real, confirmed rejection (not a guess extrapolated from push-cycle timing), so
+      // there is nothing to wait out here.
+      const { markAuthFailed } = await import('./team-uploader')
+      await markAuthFailed(conn)
     })
     try {
       await onRevoked(conn.id, 'revoked')
@@ -294,7 +313,7 @@ export async function runForgetSequence(
     })
     if (res.status === 401 || res.status === 403) {
       await revoke()
-      return { ok: false, deleted: 0, error: `whoami rejected (${res.status})` }
+      return { ok: false, deleted: 0, pendingRules: true, authRejected: true, error: `whoami rejected (${res.status})` }
     }
     const body = res.ok ? await readJsonBody(res) : null
     if (!body || body.ok !== true || typeof body.user !== 'string' || body.user === '') {
@@ -342,7 +361,7 @@ export async function runForgetSequence(
     }
     if (res.status === 401 || res.status === 403) {
       await revoke()
-      return { ok: false, deleted, error: `forget rejected (${res.status})` }
+      return { ok: false, deleted, pendingRules: true, authRejected: true, error: `forget rejected (${res.status})` }
     }
     const body = res.ok ? await readJsonBody(res) : null
     // The body, never `res.ok`: a proxy answering the route's JSON 404 with a 200 HTML page must

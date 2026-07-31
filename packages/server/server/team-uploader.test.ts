@@ -1726,6 +1726,94 @@ describe('runConnectionCycle — the retroactive removal sequence', () => {
       await central.stop()
     }
   }, 10_000)
+
+  // The coordinator's follow-up to the sibling incident fix: team-forget-client.ts's own 401/403
+  // handling used to call `removeConnection(id, 'revoked')` on a SINGLE rejected request during an
+  // active retroactive-removal sequence — strictly worse than the plain-push-cycle bug, because it
+  // fires exactly when the user just changed their privacy rules, destroying `deniedRepos` at the
+  // moment it matters most. Exercised through the FULL production stack (`runConnectionCycle`,
+  // with the real `onRevoked: markAuthFailed` wiring from `runConnectionPushCycle`) against a fake
+  // in-memory preferences store — never the developer's real `~/.agentistics/preferences.json`.
+  it('a 401 mid-forget marks the connection auth-failed (never removes it), leaves the journal open and pushes nothing further this cycle — then a later success resumes and completes it', async () => {
+    const connId = randomConnId()
+    const conn = fakeConn(connId, 1, { deniedRepos: ['github.com/o/secret'] }) // port replaced below
+    let store: TeamConfig = { schema: 2, mode: 'member', connections: [{ ...conn }] }
+    const fakePrefs = async (): Promise<Preferences> => ({ team: store })
+    const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+      const next = mutate(store)
+      if (next !== undefined) store = next
+      return store
+    }
+
+    let forgetAuthFail = true
+    let forgetCalls = 0
+    const ingestCalls: string[] = []
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url)
+        if (url.pathname === '/api/team/policy') {
+          return Response.json({ pushIntervalSec: 30, instanceId: 'inst-1', capabilities: ['forget.sessions'] })
+        }
+        if (url.pathname === '/api/team/whoami') return Response.json({ ok: true, user: 'test-user' })
+        if (url.pathname === '/api/team/forget') {
+          forgetCalls++
+          const body = await req.json() as { sessionIds: string[] }
+          if (forgetAuthFail) return new Response('unauthorized', { status: 401 })
+          return Response.json({ ok: true, deleted: body.sessionIds.length, deletedRuns: 0 })
+        }
+        ingestCalls.push(url.pathname)
+        await req.json().catch(() => undefined)
+        return Response.json({ ok: true })
+      },
+    })
+    // Bind the connection to this server's actual port (fakeConn above used a placeholder).
+    store.connections[0]!.endpoint = `http://127.0.0.1:${server.port}`
+
+    try {
+      const pub = makeSession('pub-5', { git_remote: 'github.com/o/pub' })
+      const denied = makeSession('denied-5', { git_remote: 'github.com/o/secret' })
+      const ctx = makeCtx({ storedSessions: [pub, denied], liveSessions: [pub, denied], index: buildPathRepoIndex([pub, denied]) })
+      await saveSentState(connId, { 'denied-5': 'h-denied' })
+
+      const deps = { readPreferences: fakePrefs, migrateTeamStateOnce: async () => {}, ctx, updateTeamConfig: fakeUpdateTeamConfig }
+
+      // Cycle 1 — the forget batch is rejected with a 401.
+      await runConnectionCycle(connId, deps)
+
+      expect(forgetCalls).toBe(1)
+      // Never removed: still exactly one connection, same id, deniedRepos intact.
+      expect(store.connections.map(c => c.id)).toEqual([connId])
+      expect(store.connections[0]!.deniedRepos).toEqual(['github.com/o/secret'])
+      // Marked, durably, instead.
+      expect(typeof store.connections[0]!.authFailedAt).toBe('string')
+      // The journal stays open — the batch was journaled (step 2) before it was rejected (step 3).
+      expect(existsSync(teamForgetFile(connId))).toBe(true)
+      // The denied session is still named locally (nothing was acked).
+      expect(Object.keys(await loadSentState(connId))).toContain('denied-5')
+      // Nothing further was attempted this cycle — no fallback push against a central that just
+      // rejected this same token.
+      expect(ingestCalls).toEqual([])
+
+      // Cycle 2 — the central now accepts the token again. No human touched the connection.
+      forgetAuthFail = false
+      await runConnectionCycle(connId, deps)
+
+      expect(forgetCalls).toBe(2)
+      expect(existsSync(teamForgetFile(connId))).toBe(false) // journal closed — the sequence completed
+      expect(Object.keys(await loadSentState(connId))).not.toContain('denied-5')
+      // Resumed and completed with no human action: the mark is cleared…
+      expect(store.connections[0]!.authFailedAt).toBeUndefined()
+      // …the connection is still exactly the one that was marked (same id, rules intact)…
+      expect(store.connections.map(c => c.id)).toEqual([connId])
+      expect(store.connections[0]!.deniedRepos).toEqual(['github.com/o/secret'])
+      // …and pushing resumed (the rebuilt cache push, Step 4 of the sequence).
+      expect(ingestCalls.length).toBeGreaterThan(0)
+    } finally {
+      __teardownConnectionForTests(connId)
+      server.stop(true)
+    }
+  }, 10_000)
 })
 
 // ---------------------------------------------------------------------------
