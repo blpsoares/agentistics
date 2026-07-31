@@ -22,7 +22,7 @@ import {
   MFA_CHALLENGE_TTL_MS,
 } from './auth'
 import { TEAM_SESSION_SECRET } from './config'
-import { generateSecret, otpauthUri, verifyTotp, generateRecoveryCodes, hashRecoveryCode } from './totp'
+import { generateSecret, otpauthUri, verifyTotp, generateRecoveryCodes, hashRecoveryCode, totpSkewSteps, TOTP_STEP_SECONDS } from './totp'
 import { getMfa, isMfaEnabled, enableMfa, disableMfa, consumeRecoveryCode } from './mfa-store'
 import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships } from './iam-view'
 import type { AccountDoc, Membership, Role } from './iam-types'
@@ -291,7 +291,14 @@ export async function handleMfa(req: Request, pathname: string): Promise<Respons
     const code = typeof b.code === 'string' ? b.code : ''
     // Verifying the code before storing proves the authenticator is really in sync — enrolling
     // an unverified secret locks the account out of its own second factor.
-    if (!secret || !verifyTotp(secret, code, Math.floor(Date.now() / 1000))) {
+    const nowSec = Math.floor(Date.now() / 1000)
+    if (!secret || !verifyTotp(secret, code, nowSec)) {
+      // Still refused — but say WHICH failure it is. A code that is right for a different
+      // moment means the two clocks disagree, which no amount of retyping fixes.
+      const skew = secret ? totpSkewSteps(secret, code, nowSec) : null
+      if (skew !== null) {
+        return json({ error: 'clock_skew', skewSeconds: skew * TOTP_STEP_SECONDS }, 400)
+      }
       return json({ error: 'invalid code' }, 400)
     }
     const recoveryCodes = generateRecoveryCodes()
@@ -314,7 +321,10 @@ export async function handleMfa(req: Request, pathname: string): Promise<Respons
       : ''
     const mfa = await getMfa(account._id)
     if (!mfa) return json({ ok: true })
-    if (!verifyTotp(mfa.secret, code, Math.floor(Date.now() / 1000))) {
+    const nowSec = Math.floor(Date.now() / 1000)
+    if (!verifyTotp(mfa.secret, code, nowSec)) {
+      const skew = totpSkewSteps(mfa.secret, code, nowSec)
+      if (skew !== null) return json({ error: 'clock_skew', skewSeconds: skew * TOTP_STEP_SECONDS }, 401)
       return json({ error: 'invalid code' }, 401)
     }
     await disableMfa(account._id)

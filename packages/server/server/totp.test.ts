@@ -9,6 +9,8 @@ import {
   base32Decode,
   totpAt,
   verifyTotp,
+  totpSkewSteps,
+  TOTP_STEP_SECONDS,
   otpauthUri,
   generateSecret,
   generateRecoveryCodes,
@@ -132,5 +134,41 @@ describe('recovery codes', () => {
   it('normalises case and spacing so a hand-typed code still matches', () => {
     const [c] = generateRecoveryCodes(1)
     expect(hashRecoveryCode(`  ${c!.toLowerCase()} `)).toBe(hashRecoveryCode(c!))
+  })
+})
+
+describe('totpSkewSteps — telling a wrong code apart from a wrong clock', () => {
+  const secret = 'JBSWY3DPEHPK3PXP'
+  const now = 1_700_000_000
+
+  it('reports zero when the code is for the current step', () => {
+    expect(totpSkewSteps(secret, totpAt(secret, Math.floor(now / TOTP_STEP_SECONDS)), now)).toBe(0)
+  })
+
+  it('reports how many steps ahead a code from a device with the right time is', () => {
+    // The server is 6 minutes BEHIND: the device's code belongs to a later step.
+    const deviceCounter = Math.floor((now + 6 * 60) / TOTP_STEP_SECONDS)
+    expect(totpSkewSteps(secret, totpAt(secret, deviceCounter), now)).toBe(12)
+  })
+
+  it('reports a negative skew when the server runs ahead', () => {
+    const deviceCounter = Math.floor((now - 3 * 60) / TOTP_STEP_SECONDS)
+    expect(totpSkewSteps(secret, totpAt(secret, deviceCounter), now)).toBe(-6)
+  })
+
+  it('returns null for a code this secret never produced — a wrong code stays wrong', () => {
+    expect(totpSkewSteps(secret, '000000', now, 2)).toBeNull()
+    expect(totpSkewSteps(secret, 'not-a-code', now)).toBeNull()
+  })
+
+  it('stays inside its window, so a very stale code is not excused', () => {
+    const far = Math.floor(now / TOTP_STEP_SECONDS) + 40
+    expect(totpSkewSteps(secret, totpAt(secret, far), now, 20)).toBeNull()
+  })
+
+  it('never accepts what verifyTotp rejects — it only explains it', () => {
+    const drifted = totpAt(secret, Math.floor(now / TOTP_STEP_SECONDS) + 12)
+    expect(verifyTotp(secret, drifted, now)).toBe(false)
+    expect(totpSkewSteps(secret, drifted, now)).toBe(12)
   })
 })

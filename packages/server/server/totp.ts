@@ -87,6 +87,44 @@ export function verifyTotp(secretBase32: string, code: string, nowSec: number, w
   return false
 }
 
+/**
+ * How far the presented code sits from the current step, searched over a WIDE window, or null
+ * when it is not this secret's code at all.
+ *
+ * A TOTP failure has two causes that look identical to the user — a wrong code, and two clocks
+ * that disagree — and only one of them is their fault. A container whose host slept (WSL2 and
+ * laptops both do this) drifts minutes in an afternoon, so every enrolment then fails with
+ * "invalid code" and no way to tell. This is a DIAGNOSTIC, never an authorisation: the caller
+ * still refuses the code — enrolling a secret against a clock that is wrong only moves the
+ * failure to every future login.
+ */
+export function totpSkewSteps(
+  secretBase32: string,
+  code: string,
+  nowSec: number,
+  windowSteps = 20,
+): number | null {
+  const trimmed = code.replace(/\s/g, '')
+  if (!/^\d{6,8}$/.test(trimmed)) return null
+  const counter = Math.floor(nowSec / STEP_SECONDS)
+  // Nearest first, so a code that matches twice (it cannot, in practice) reports the small skew.
+  for (let d = 0; d <= windowSteps; d++) {
+    for (const signed of d === 0 ? [0] : [d, -d]) {
+      let expected: string
+      try {
+        expected = totpAt(secretBase32, counter + signed, trimmed.length)
+      } catch {
+        return null
+      }
+      if (expected === trimmed) return signed
+    }
+  }
+  return null
+}
+
+/** Seconds per TOTP step — the unit `totpSkewSteps` reports in. */
+export const TOTP_STEP_SECONDS = STEP_SECONDS
+
 export function otpauthUri(secretBase32: string, account: string, issuer: string): string {
   const label = `${encodeURIComponent(issuer)}:${encodeURIComponent(account)}`
   const params = new URLSearchParams({

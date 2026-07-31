@@ -1,19 +1,23 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { ShieldCheck, ShieldOff, Copy, Check, AlertCircle } from 'lucide-react'
 import type { Lang } from '@agentistics/core'
+import { qrMatrix } from '../lib/qr'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 /**
  * Two-factor enrolment for the signed-in account.
  *
- * The secret is rendered as text with a copy button rather than a QR code: every authenticator
- * app accepts manual entry, and drawing a QR would mean pulling in a rendering dependency that
- * the compiled binary would then have to carry.
+ * The QR is the primary path and the base32 key is the fallback, not the other way round: the
+ * screen used to offer the key alone, and transcribing 32 characters by hand is the step people
+ * get wrong — producing an "invalid code" indistinguishable from a broken server. `lib/qr.ts`
+ * draws it with no dependency, so the compiled binary carries nothing extra.
  *
  * Recovery codes are shown exactly once — the server stores only their sha256 hashes and cannot
  * show them again.
  */
 export function MfaSetup({ lang, onClose }: { lang: Lang; onClose: () => void }) {
   const pt = lang === 'pt'
+  const isMobile = useIsMobile()
   const [enabled, setEnabled] = useState<boolean | null>(null)
   const [secret, setSecret] = useState<string | null>(null)
   const [uri, setUri] = useState<string | null>(null)
@@ -50,12 +54,12 @@ export function MfaSetup({ lang, onClose }: { lang: Lang; onClose: () => void })
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ secret, code: code.trim() }),
       })
-      const d = (await r.json()) as { ok?: boolean; recoveryCodes?: string[]; error?: string }
+      const d = (await r.json()) as { ok?: boolean; recoveryCodes?: string[]; error?: string; skewSeconds?: number }
       if (r.ok && d.ok && d.recoveryCodes) {
         setRecovery(d.recoveryCodes)
         setSecret(null); setCode(''); setEnabled(true)
       } else {
-        setError(pt ? 'Código inválido — verifique o relógio do aparelho.' : 'Invalid code — check the device clock.')
+        setError(describeCodeError(d, pt))
       }
     } catch { setError(pt ? 'Erro de rede.' : 'Network error.') } finally { setBusy(false) }
   }
@@ -69,7 +73,7 @@ export function MfaSetup({ lang, onClose }: { lang: Lang; onClose: () => void })
         body: JSON.stringify({ code: code.trim() }),
       })
       if (r.ok) { setEnabled(false); setCode('') }
-      else setError(pt ? 'Código inválido.' : 'Invalid code.')
+      else setError(describeCodeError(await r.json().catch(() => ({})), pt))
     } catch { setError(pt ? 'Erro de rede.' : 'Network error.') } finally { setBusy(false) }
   }
 
@@ -124,17 +128,28 @@ export function MfaSetup({ lang, onClose }: { lang: Lang; onClose: () => void })
 
         {!recovery && secret && (
           <form onSubmit={enable} style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
-              {pt ? 'Adicione esta chave no seu app autenticador e confirme o código gerado.' : 'Add this key to your authenticator app, then confirm the code it shows.'}
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
+              {pt ? 'Escaneie o código com seu app autenticador e confirme o código de 6 dígitos que ele mostrar.' : 'Scan this with your authenticator app, then confirm the 6-digit code it shows.'}
             </div>
-            <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-              <code style={{ ...codeBlock, flex: 1, margin: 0 }}>{secret.match(/.{1,4}/g)?.join(' ')}</code>
-              <button type="button" onClick={() => { void navigator.clipboard?.writeText(uri ?? secret); setCopied(true); setTimeout(() => setCopied(false), 1500) }}
-                title={pt ? 'Copiar URI otpauth://' : 'Copy the otpauth:// URI'} style={iconBtn}>
-                {copied ? <Check size={14} /> : <Copy size={14} />}
-              </button>
-            </div>
-            <input value={code} onChange={e => setCode(e.target.value)} placeholder="123456" style={input} autoFocus />
+
+            <Qr uri={uri ?? secret} />
+
+            <details style={{ marginBottom: 10 }}>
+              <summary style={{ ...summary, ...(isMobile ? { minHeight: 44, display: 'flex', alignItems: 'center' } : null) }}>{pt ? 'Não consigo escanear' : "Can't scan it"}</summary>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '8px 0 6px' }}>
+                {pt ? 'Digite esta chave no app (opção "inserir chave manualmente"):' : 'Type this key into the app ("enter key manually"):'}
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <code style={{ ...codeBlock, flex: 1, margin: 0 }}>{secret.match(/.{1,4}/g)?.join(' ')}</code>
+                <button type="button" onClick={() => { void navigator.clipboard?.writeText(secret); setCopied(true); setTimeout(() => setCopied(false), 1500) }}
+                  title={pt ? 'Copiar a chave' : 'Copy the key'} style={iconBtn}>
+                  {copied ? <Check size={14} /> : <Copy size={14} />}
+                </button>
+              </div>
+            </details>
+
+            <input value={code} onChange={e => setCode(e.target.value)} placeholder="123456" style={input} autoFocus
+              inputMode="numeric" autoComplete="one-time-code" />
             {error && <Err text={error} />}
             <button type="submit" disabled={!code.trim() || busy} style={primaryBtn}>{pt ? 'Ativar' : 'Enable'}</button>
           </form>
@@ -142,6 +157,45 @@ export function MfaSetup({ lang, onClose }: { lang: Lang; onClose: () => void })
       </div>
     </div>
   )
+}
+
+/**
+ * The QR itself. Always dark-on-WHITE regardless of the dashboard theme — a scanner needs the
+ * contrast, and an inverted symbol is not reliably readable.
+ */
+function Qr({ uri }: { uri: string }) {
+  const path = useMemo(() => {
+    let d = ''
+    try {
+      const m = qrMatrix(uri)
+      for (let r = 0; r < m.length; r++) {
+        for (let c = 0; c < m.length; c++) if (m[r]![c]) d += `M${c + 4} ${r + 4}h1v1h-1z`
+      }
+      return { d, size: m.length + 8 }
+    } catch { return null }
+  }, [uri])
+
+  if (!path) return null
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+      <svg viewBox={`0 0 ${path.size} ${path.size}`} shapeRendering="crispEdges" role="img" aria-label="QR"
+        style={{ width: '100%', maxWidth: 208, height: 'auto', background: '#fff', borderRadius: 10 }}>
+        <path d={path.d} fill="#000" />
+      </svg>
+    </div>
+  )
+}
+
+/** Turn the server's refusal into the sentence that names the actual problem. */
+function describeCodeError(d: { error?: string; skewSeconds?: number }, pt: boolean): string {
+  if (d.error === 'clock_skew' && typeof d.skewSeconds === 'number') {
+    const behind = d.skewSeconds > 0 // the code belongs to a LATER step → the server trails
+    const mins = Math.max(1, Math.round(Math.abs(d.skewSeconds) / 60))
+    return pt
+      ? `O código está certo, mas os relógios não batem: o servidor está ~${mins} min ${behind ? 'atrasado' : 'adiantado'} em relação ao seu aparelho. Sincronize o relógio do servidor e tente de novo.`
+      : `The code is right, but the clocks disagree: the server is ~${mins} min ${behind ? 'behind' : 'ahead of'} your device. Fix the server clock and try again.`
+  }
+  return pt ? 'Código inválido.' : 'Invalid code.'
 }
 
 function Err({ text }: { text: string }) {
@@ -175,7 +229,10 @@ const primaryBtn: React.CSSProperties = {
   background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)', fontSize: 13,
   fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
 }
-const dangerBtn: React.CSSProperties = { ...primaryBtn, borderColor: '#ef4444', background: 'transparent', color: '#ef4444' }
+const summary: React.CSSProperties = {
+  fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer', padding: '6px 0',
+}
+const dangerBtn: React.CSSProperties ={ ...primaryBtn, borderColor: '#ef4444', background: 'transparent', color: '#ef4444' }
 const iconBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0 12px',
   minWidth: 44, minHeight: 44, borderRadius: 8, border: '1px solid var(--border)',
