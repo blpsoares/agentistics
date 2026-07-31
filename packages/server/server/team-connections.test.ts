@@ -15,7 +15,8 @@ import { describe, it, expect, afterEach } from 'bun:test'
 import {
   validateConnectionBody, validatePatchBody, decideConnectionUpsert,
   aggregateConnectionStatuses, leaveConnectionById, resolveShareRules, ruleCountsOf,
-  buildConnectionStatusEntry, otelExportEnabled, addOrUpdateConnection, type ConnectionStatusEntry,
+  buildConnectionStatusEntry, otelExportEnabled, addOrUpdateConnection, handlePatchConnection,
+  type ConnectionStatusEntry,
 } from './team-connections'
 import type { TeamConnection, TeamConfig, ShareSource } from '@agentistics/core'
 import { NO_REPO_KEY } from '@agentistics/core'
@@ -380,7 +381,12 @@ describe('decideConnectionUpsert — the two uniqueness rules', () => {
 
 describe('addOrUpdateConnection — clears authFailedAt on a whoami-verified reconnect (review Important 2)', () => {
   it('an update against a connection currently marked auth-failed leaves authFailedAt undefined', async () => {
-    const existing = conn('c_a', { authFailedAt: '2026-07-20T10:00:00.000Z', deniedRepos: ['github.com/o/secret'] })
+    const existing = conn('c_a', {
+      authFailedAt: '2026-07-20T10:00:00.000Z',
+      // The mirror is DERIVED from `sources` on every write, so a fixture must state both — an
+      // inconsistent pair is exactly the state review Critical 1 made impossible.
+      deniedRepos: ['github.com/o/secret'], sources: [repoSrc('github.com/o/secret')],
+    })
     let store: TeamConfig = { schema: 2, mode: 'member', connections: [existing] }
     const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
       const next = mutate(store)
@@ -678,5 +684,128 @@ describe('otelExportEnabled — the machine-wide OTel export signal (§ otelWarn
   it('is true when the env var names a real endpoint', () => {
     process.env[KEY] = 'http://localhost:4318'
     expect(otelExportEnabled()).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The PATCH route, driven end-to-end over an injected store (no filesystem, no network).
+// Covers review Critical 1 (the legacy mirror must stay consistent with `sources`, because the
+// SHIPPED picker builds its next request from `conn.deniedRepos`) and Important 2 (a source the
+// API accepts must be a source enforcement can key — never accepted-then-dropped).
+// ---------------------------------------------------------------------------
+
+function patchReq(body: unknown): Request {
+  return new Request('http://localhost/api/team/connections/c_aaaaaaaaaaaa', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+}
+
+/** A fake `updateTeamConfig` over an in-memory config, plus a no-op nudge (the real one calls
+ *  `pushNow`, which reads this developer's own `~/.agentistics`). */
+function fakeStore(initial: TeamConfig) {
+  const state = { config: initial }
+  const updateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+    const next = mutate(state.config)
+    if (next !== undefined) state.config = next
+    return state.config
+  }
+  return { state, deps: { updateTeamConfig, nudge: () => { /* no-op */ } } }
+}
+
+describe('handlePatchConnection — the legacy mirror stays consistent with sources (Critical 1)', () => {
+  it('a second edit built from a re-read of preferences does not lose the first edit\'s rule', async () => {
+    // The user already blocks one repo plus the unattributed bucket.
+    const stored = conn('c_aaaaaaaaaaaa', {
+      deniedRepos: ['github.com/o/secret', NO_REPO_KEY],
+      sources: [repoSrc('github.com/o/secret'), noneSrc()],
+    })
+    const { state, deps } = fakeStore({ schema: 2, mode: 'member', connections: [stored] })
+
+    // Edit 1 — the shipped picker reads `conn.deniedRepos` and PATCHes the legacy shape.
+    const draft1 = [...state.config.connections[0]!.deniedRepos, 'github.com/o/other']
+    const res1 = await handlePatchConnection(patchReq({ deniedRepos: draft1 }), 'c_aaaaaaaaaaaa', deps)
+    expect(res1.status).toBe(200)
+
+    const afterFirst = state.config.connections[0]!
+    // The mirror the UI will read next must describe the rules that were just persisted.
+    expect(new Set(afterFirst.deniedRepos)).toEqual(new Set(['github.com/o/secret', NO_REPO_KEY, 'github.com/o/other']))
+
+    // Edit 2 — the picker re-reads preferences and adds a third repo on top of that draft.
+    const draft2 = [...afterFirst.deniedRepos, 'github.com/o/third']
+    const res2 = await handlePatchConnection(patchReq({ deniedRepos: draft2 }), 'c_aaaaaaaaaaaa', deps)
+    expect(res2.status).toBe(200)
+
+    const afterSecond = state.config.connections[0]!
+    const keys = new Set(afterSecond.sources!.map(s => `${s.type}:${s.value}`))
+    // The repo added by edit 1 must still be blocked — the whole point of the finding.
+    expect(keys).toEqual(new Set([
+      'repo:github.com/o/secret', 'none:', 'repo:github.com/o/other', 'repo:github.com/o/third',
+    ]))
+    expect(new Set(afterSecond.deniedRepos)).toEqual(new Set([
+      'github.com/o/secret', NO_REPO_KEY, 'github.com/o/other', 'github.com/o/third',
+    ]))
+  })
+
+  it('switching to allowlist writes an EMPTY mirror and a schema an older reader refuses', async () => {
+    const stored = conn('c_aaaaaaaaaaaa', {
+      deniedRepos: ['github.com/o/secret'],
+      sources: [repoSrc('github.com/o/secret')],
+    })
+    const { state, deps } = fakeStore({ schema: 2, mode: 'member', connections: [stored] })
+
+    const res = await handlePatchConnection(patchReq({ shareMode: 'allowlist' }), 'c_aaaaaaaaaaaa', deps)
+    expect(res.status).toBe(200)
+    // An empty mirror alone reads as "no restriction at all" to a reader that only knows
+    // `deniedRepos` — which would share EVERYTHING. The schema bump is what stops that.
+    expect(state.config.connections[0]!.deniedRepos).toEqual([])
+    expect(state.config.schema).toBe(3)
+  })
+})
+
+describe('validateShareSources — a source the API accepts must be one enforcement can key (Important 2)', () => {
+  it('rejects a repo source that cannot be normalized, and persists nothing', async () => {
+    const stored = conn('c_aaaaaaaaaaaa', { deniedRepos: ['github.com/o/secret'], sources: [repoSrc('github.com/o/secret')] })
+    const { state, deps } = fakeStore({ schema: 2, mode: 'member', connections: [stored] })
+
+    for (const junk of ['/home/me/local', 'file:///home/me/local', 'not-a-remote', '']) {
+      const res = await handlePatchConnection(patchReq({ sources: [repoSrc(junk)] }), 'c_aaaaaaaaaaaa', deps)
+      expect(res.status).toBe(400)
+      const body = await res.json() as { error: string }
+      // Names the source TYPE, never the value (a repo path is user data).
+      expect(body.error).toContain('repo')
+      if (junk) expect(body.error).not.toContain(junk)
+    }
+    // Not one of those requests touched the stored rules.
+    expect(state.config.connections[0]!.sources).toEqual([repoSrc('github.com/o/secret')])
+    expect(state.config.connections[0]!.deniedRepos).toEqual(['github.com/o/secret'])
+  })
+
+  it('rejects a project source with a blank value', async () => {
+    const out = validatePatchBody({ sources: [projectSrc('')] })
+    expect('error' in out).toBe(true)
+    if ('error' in out) expect(out.error).toContain('project')
+    expect('error' in validateConnectionBody({
+      endpoint: 'https://central.example.com', token: 't', sources: [projectSrc('')],
+    })).toBe(true)
+  })
+
+  it('requires a none source to carry an empty value', () => {
+    expect('error' in validatePatchBody({ sources: [{ type: 'none', value: 'something' }] })).toBe(true)
+    expect('error' in validatePatchBody({ sources: [noneSrc()] })).toBe(false)
+  })
+
+  it('rejects an unresolvable repo through the LEGACY deniedRepos door too', () => {
+    // Same hole, other entrance: a legacy body is converted to typed sources and must clear the
+    // same bar, or it persists a rule the enforcement set drops.
+    const out = validatePatchBody({ deniedRepos: ['/home/me/local'] })
+    expect('error' in out).toBe(true)
+    if ('error' in out) expect(out.error).not.toContain('/home/me/local')
+  })
+
+  it("a legacy deniedRepos body carrying '' becomes the none source, not repo ''", () => {
+    // Important 3: normalizeDenied folds '' into the sentinel; dropping that fold here silently
+    // un-blocks the unattributed bucket for any older client still sending the legacy shape.
+    expect(validatePatchBody({ deniedRepos: ['', 'github.com/o/r'] }))
+      .toEqual({ sources: [noneSrc(), repoSrc('github.com/o/r')] })
   })
 })

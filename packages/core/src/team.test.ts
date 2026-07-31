@@ -590,3 +590,81 @@ test('normalizeEndpointKey: unparseable input still compares consistently instea
   expect(normalizeEndpointKey(undefined as unknown as string)).toBe('')
   expect(normalizeEndpointKey(null as unknown as string)).toBe('')
 })
+
+// ---------------------------------------------------------------------------
+// The legacy mirror is DERIVED, never frozen (review Critical 1) + the '' fold (Important 3).
+// ---------------------------------------------------------------------------
+
+import type { TeamConnection } from './team'
+
+function ruleConn(extra: Partial<TeamConnection> = {}): TeamConnection {
+  return {
+    id: 'c_aaaaaaaaaaaa', endpoint: 'http://c:48080', org: 'default', user: 'u', token: 't',
+    deniedRepos: [], shareMode: 'denylist', sources: [], ...extra,
+  }
+}
+
+test('normalizeTeamConfig: the legacy deniedRepos mirror is rebuilt from sources on every write', () => {
+  const out = normalizeTeamConfig({
+    mode: 'member',
+    connections: [ruleConn({
+      // A STALE mirror — exactly the shape a PATCH that wrote only `sources` used to leave behind.
+      deniedRepos: ['github.com/o/old'],
+      sources: [
+        { type: 'repo', value: 'github.com/o/secret' },
+        { type: 'none', value: '' },
+        { type: 'repo', value: 'github.com/o/other' },
+      ],
+    })],
+  })
+  expect(out.connections[0]!.deniedRepos).toEqual(['github.com/o/secret', NO_REPO_KEY, 'github.com/o/other'])
+  expect(out.schema).toBe(2)
+})
+
+test('normalizeTeamConfig: an allowlist connection writes an EMPTY mirror and bumps the schema', () => {
+  const out = normalizeTeamConfig({
+    mode: 'member',
+    connections: [ruleConn({
+      deniedRepos: ['github.com/o/old'],
+      shareMode: 'allowlist',
+      sources: [{ type: 'repo', value: 'github.com/o/only' }],
+    })],
+  })
+  // An empty mirror alone reads as "no restriction" to an older reader — hence the schema bump.
+  expect(out.connections[0]!.deniedRepos).toEqual([])
+  expect(out.schema).toBe(3)
+})
+
+test('normalizeTeamConfig: a project source also bumps the schema — the mirror cannot express it', () => {
+  const out = normalizeTeamConfig({
+    mode: 'member',
+    connections: [ruleConn({ sources: [{ type: 'project', value: '/home/u/work' }] })],
+  })
+  expect(out.connections[0]!.deniedRepos).toEqual([])
+  expect(out.schema).toBe(3)
+})
+
+test('normalizeTeamConfig: a connection with NO sources key keeps its stored mirror verbatim', () => {
+  // Nothing to derive from — this is a hand-built/legacy connection, and wiping its denylist
+  // here would be the fail-open the derivation exists to prevent.
+  const out = normalizeTeamConfig({
+    mode: 'member',
+    connections: [{
+      id: 'c_aaaaaaaaaaaa', endpoint: 'http://c:48080', org: 'default', user: 'u', token: 't',
+      deniedRepos: ['github.com/o/secret'],
+    }],
+  })
+  expect(out.connections[0]!.deniedRepos).toEqual(['github.com/o/secret'])
+})
+
+test("migrateTeamConfig: a stored deniedRepos [''] becomes the `none` source, never repo ''", () => {
+  // normalizeDenied folds '' into the sentinel deliberately (NO_REPO_KEY's docstring calls the
+  // empty string there a fail-open privacy bug); mapping it to {type:'repo', value:''} instead
+  // makes sourceKey drop it and un-blocks the unattributed bucket.
+  const out = migrateTeamConfig({
+    mode: 'member',
+    connections: [{ id: 'c_aaaaaaaaaaaa', endpoint: 'http://c:48080', org: 'default', user: 'u', token: 't', deniedRepos: [''] }],
+  })
+  expect(out.connections[0]!.sources).toEqual([{ type: 'none', value: '' }])
+  expect(out.connections[0]!.deniedRepos).toEqual([NO_REPO_KEY])
+})

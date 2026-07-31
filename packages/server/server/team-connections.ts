@@ -14,7 +14,7 @@
  */
 
 import type { TeamConnection, TeamConfig, ShareSource, ShareSourceType } from '@agentistics/core'
-import { connectionId, defaultTeam, normalizeTeamConfig, normalizeEndpointKey, NO_REPO_KEY } from '@agentistics/core'
+import { connectionId, defaultTeam, normalizeTeamConfig, normalizeEndpointKey, normalizeGitRemote, NO_REPO_KEY } from '@agentistics/core'
 import { readPreferences, updateTeamConfig, PreferencesLockTimeoutError } from './preferences'
 import { safeConnId } from './config'
 import { readJsonLimited, LIMITS } from './limits'
@@ -26,7 +26,7 @@ import type { ForgetProgress } from './team-forget-client'
 import { loadRulesState } from './team-rules'
 import {
   sourcesRestrict, withUnresolvedSources, rulesSignature, emptyRulesSignature, normalizeSources,
-  attributionBoundary, prehistoryCount,
+  attributionBoundary, prehistoryCount, canonicalRepoKey,
 } from './share-rules'
 
 function json(body: unknown, status = 200): Response {
@@ -80,10 +80,19 @@ const SHARE_SOURCE_TYPES = new Set<ShareSourceType>(['repo', 'project', 'none'])
 const MAX_SOURCES = 2000
 
 /** TOTAL validator for a `ShareSource[]`: every entry must be `{type, value}` with a known type
- *  and a string value, and the list must not exceed `MAX_SOURCES`. ANY invalid entry — a bad type,
- *  a non-string value, a bare string instead of an object — rejects the WHOLE list rather than
- *  silently dropping it: a rules body is a privacy control, and a partial application of it is a
- *  fail-open, not a best-effort parse. */
+ *  and a string value, the value must be one ENFORCEMENT can key (see below), and the list must
+ *  not exceed `MAX_SOURCES`. ANY invalid entry — a bad type, a non-string value, a bare string
+ *  instead of an object — rejects the WHOLE list rather than silently dropping it: a rules body is
+ *  a privacy control, and a partial application of it is a fail-open, not a best-effort parse.
+ *
+ *  The per-type value checks mirror `share-rules.ts`'s `sourceKey` exactly, and exist because
+ *  anything it returns `null` for is DROPPED from the enforcement set while remaining PERSISTED —
+ *  so `GET /api/preferences` reports the rule, the picker renders it checked, and the session it
+ *  claims to hide is pushed anyway. Rejecting here is what makes `sourceKey`'s "the API boundary
+ *  has already rejected it" a true statement instead of an assumption.
+ *
+ *  Errors name the source TYPE and never the value: an unresolvable repo value is typically a
+ *  local path, i.e. user data that must not be echoed back into a response or a log. */
 function validateShareSources(v: unknown): ShareSource[] | { error: string } {
   if (!Array.isArray(v)) return { error: 'sources must be an array' }
   if (v.length > MAX_SOURCES) return { error: `sources must not exceed ${MAX_SOURCES} entries` }
@@ -97,7 +106,16 @@ function validateShareSources(v: unknown): ShareSource[] | { error: string } {
       return { error: `unknown source type ${JSON.stringify(e.type)}` }
     }
     if (typeof e.value !== 'string') return { error: 'source value must be a string' }
-    out.push({ type: e.type as ShareSourceType, value: e.value })
+    const type = e.type as ShareSourceType
+    if (type === 'repo' && !canonicalRepoKey(normalizeGitRemote(e.value))) {
+      return { error: 'a repo source must be a resolvable git remote' }
+    }
+    if (type === 'project' && !e.value) return { error: 'a project source must name a project path' }
+    // The `none` bucket is a fixed dimension, not a value — a non-empty one means the caller
+    // believes it is naming something, and honouring it as `none:` would apply a rule they did
+    // not ask for.
+    if (type === 'none' && e.value !== '') return { error: 'a none source must carry an empty value' }
+    out.push({ type, value: e.value })
   }
   return out
 }
@@ -105,9 +123,16 @@ function validateShareSources(v: unknown): ShareSource[] | { error: string } {
 /** Convert a legacy `deniedRepos: string[]` body into typed sources — the request-boundary
  *  counterpart of `@agentistics/core`'s `migrateSources` (which does the same conversion in the
  *  read path for a connection already on disk). Duplicated rather than imported because that
- *  function is private to the shape migration and this is a different one-shot conversion. */
+ *  function is private to the shape migration and this is a different one-shot conversion.
+ *
+ *  `''` folds to the `none` bucket alongside `NO_REPO_KEY`, exactly as `normalizeDenied` has
+ *  always folded it: an older client can legitimately send `''` for the unattributed bucket, and
+ *  mapping it to `{type:'repo', value:''}` would produce a source `sourceKey` drops — the bucket
+ *  would stop being blocked while the picker still showed it checked. */
 function legacyDeniedReposToSources(deniedRepos: readonly string[]): ShareSource[] {
-  return deniedRepos.map(v => v === NO_REPO_KEY ? { type: 'none' as const, value: '' } : { type: 'repo' as const, value: v })
+  return deniedRepos.map(v => (v === NO_REPO_KEY || v === '')
+    ? { type: 'none' as const, value: '' }
+    : { type: 'repo' as const, value: v })
 }
 
 /** The rules half of a POST/PATCH body — `{shareMode?, sources?}`, or the legacy `{deniedRepos?}`
@@ -131,7 +156,13 @@ function parseRulesFromBody(r: Record<string, unknown>): { shareMode?: 'denylist
 
   if ('deniedRepos' in r && r.deniedRepos !== undefined) {
     if (!isStringArray(r.deniedRepos)) return { error: 'deniedRepos must be an array of strings' }
-    return { shareMode, sources: legacyDeniedReposToSources(r.deniedRepos) }
+    // Through the SAME validator as a typed body: a legacy client naming an unresolvable repo
+    // would otherwise persist a rule enforcement drops, which is the whole of Important 2 reached
+    // by the other door. The shipped picker cannot hit this — it builds its draft through
+    // `normalizeDenied`, which already discards anything unresolvable.
+    const sources = validateShareSources(legacyDeniedReposToSources(r.deniedRepos))
+    if ('error' in sources) return sources
+    return { shareMode, sources }
   }
 
   return { shareMode }
@@ -503,8 +534,17 @@ function nudgeAfterRulesChange(connId: string): void {
  *  goes through the exact same path as editing the list, because `resolveShareRules` treats a mode
  *  change and a sources change identically (Task 4: no special-cased shrink path). Returns
  *  `{ ok, queued: true }` when a rules change was accepted, so the caller knows the removal (if
- *  any) is now running server-side rather than applied synchronously. */
-export async function handlePatchConnection(req: Request, rawId: string): Promise<Response> {
+ *  any) is now running server-side rather than applied synchronously.
+ *
+ *  `deps` is injectable for tests — the defaults write the developer's real
+ *  `~/.agentistics/preferences.json` and kick a real push cycle, neither of which a test may do. */
+export async function handlePatchConnection(
+  req: Request,
+  rawId: string,
+  deps: { updateTeamConfig?: typeof updateTeamConfig; nudge?: (connId: string) => void } = {},
+): Promise<Response> {
+  const _updateTeamConfig = deps.updateTeamConfig ?? updateTeamConfig
+  const _nudge = deps.nudge ?? nudgeAfterRulesChange
   let id: string
   try {
     id = safeConnId(rawId)
@@ -520,7 +560,7 @@ export async function handlePatchConnection(req: Request, rawId: string): Promis
   let found = false
   let rulesChanged = false
   try {
-    await updateTeamConfig((current: TeamConfig) => {
+    await _updateTeamConfig((current: TeamConfig) => {
       const existing = current.connections.find(c => c.id === id)
       if (!existing) return undefined
       found = true
@@ -547,7 +587,7 @@ export async function handlePatchConnection(req: Request, rawId: string): Promis
 
   if (!found) return json({ error: 'unknown connection' }, 404)
   if (rulesChanged) {
-    nudgeAfterRulesChange(id)
+    _nudge(id)
     return json({ ok: true, queued: true })
   }
   return json({ ok: true })
