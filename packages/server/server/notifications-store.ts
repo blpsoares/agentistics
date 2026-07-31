@@ -74,7 +74,7 @@ export interface StoredNotification {
   title?: string
   message?: string
   ts: number
-  /** What this notification is ABOUT — a machine, team, account or tag. Absent means
+  /** What this notification is ABOUT — a machine, team, or account. Absent means
    *  instance-wide (see `notifications-authority.ts`). A row written before this field existed
    *  has none, and is treated exactly the same way: instance-wide, scoped only by the other rules
    *  (`hiddenFor`, `CODES_NAMING_A_PERSON`) — never retroactively hidden. */
@@ -106,7 +106,7 @@ export interface NotificationInput {
   meta?: Record<string, unknown>
   title?: string
   message?: string
-  /** Set by the emitter when the notification is about a specific machine/team/account/tag —
+  /** Set by the emitter when the notification is about a specific machine/team/account —
    *  see `notifications-authority.ts`. Omit for a genuinely instance-wide notification. */
   subject?: NotificationSubject
 }
@@ -203,7 +203,7 @@ export async function readNotificationsFrom(path: string): Promise<StoredNotific
 export function visibleTo(n: StoredNotification, viewer: Viewer): boolean {
   if ((n.hiddenFor ?? []).includes(viewer.id)) return false
   if (n.code && CODES_NAMING_A_PERSON.has(n.code) && !viewer.canSeeNames) return false
-  if (viewer.entitlement && !subjectVisibleTo(viewer.entitlement.principal, n.subject, viewer.entitlement.ctx)) return false
+  if (viewer.entitlement && !subjectVisibleTo(viewer.entitlement.principal, n.subject, viewer.entitlement.ctx, n.code)) return false
   return true
 }
 
@@ -226,12 +226,18 @@ async function writeTo(path: string, items: StoredNotification[]): Promise<void>
   await Bun.write(path, JSON.stringify(payload, null, 2))
 }
 
-/** Identity of a notification for dedupe purposes: same code+meta (or same raw text) is the same
- *  event, regardless of which client reported it. */
+/** Identity of a notification for dedupe purposes: same code+meta+subject (or same raw text) is
+ *  the same event, regardless of which client reported it.
+ *
+ *  `subject` is part of the identity, not an afterthought: a code with no distinguishing `meta`
+ *  (`iam.reset_requested` carries none at all) would otherwise let a SECOND account's event
+ *  overwrite the stored row's subject on the dupe path below — collapsing two people's open
+ *  requests into one row and silently reassigning who it is delivered to. */
 function keyOf(n: NotificationInput | StoredNotification): string {
+  const subjectKey = n.subject ? `${n.subject.kind}/${n.subject.id}` : ''
   return n.code
-    ? `c:${n.code}:${JSON.stringify(n.meta ?? {})}`
-    : `t:${n.title ?? ''}:${n.message ?? ''}`
+    ? `c:${n.code}:${JSON.stringify(n.meta ?? {})}:${subjectKey}`
+    : `t:${n.title ?? ''}:${n.message ?? ''}:${subjectKey}`
 }
 
 let seq = 0

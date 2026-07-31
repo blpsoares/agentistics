@@ -99,6 +99,26 @@ describe('adding', () => {
     expect(after).toHaveLength(2)
   })
 
+  test('same code+meta but a different subject is a different notification, not a dupe update', async () => {
+    // iam.reset_requested carries no meta at all, so two DIFFERENT accounts requesting a reset
+    // must not collapse into one row that then only shows the SECOND requester's subject —
+    // Alice's manager would lose the row entirely and Bob's manager would see an unread notice
+    // about a request that isn't theirs.
+    await addNotificationTo(file, { type: 'info', code: 'iam.reset_requested', subject: { kind: 'account', id: 'alice' } })
+    const after = await addNotificationTo(file, { type: 'info', code: 'iam.reset_requested', subject: { kind: 'account', id: 'bob' } })
+    expect(after).toHaveLength(2)
+    const stored = await readNotificationsFrom(file)
+    expect(stored.map(n => n.subject?.id).sort()).toEqual(['alice', 'bob'])
+  })
+
+  test('the SAME subject re-firing still updates the existing row instead of duplicating it', async () => {
+    await addNotificationTo(file, { type: 'info', code: 'iam.reset_requested', subject: { kind: 'account', id: 'alice' } })
+    await markAllReadIn(file)
+    const after = await addNotificationTo(file, { type: 'info', code: 'iam.reset_requested', subject: { kind: 'account', id: 'alice' } })
+    expect(after).toHaveLength(1)
+    expect(after[0]!.read).toBe(false)
+  })
+
   test('the history is capped so it cannot grow without limit', async () => {
     for (let i = 0; i < MAX_ITEMS + 15; i++) {
       await addNotificationTo(file, { type: 'info', code: `code-${i}` })
@@ -339,7 +359,6 @@ describe('subject scoping (role/team entitlement)', () => {
     accountMemberships: {
       'user-1': [{ teamId: 'team-a', role: 'user' }],
     },
-    readableTagIds: new Set(),
   }
 
   test('the owner sees a machine-scoped notification for a team it does not belong to', async () => {
@@ -369,9 +388,17 @@ describe('subject scoping (role/team entitlement)', () => {
     expect(await listNotificationsFor(file, scopedViewer(teamUser, ctx))).toHaveLength(1)
   })
 
-  test('a notification with no subject reaches everyone regardless of entitlement', async () => {
+  test('a notification with no subject reaches everyone regardless of entitlement, when its code is instance-wide', async () => {
     await addNotificationTo(file, { type: 'info', code: 'app.update_available' })
     expect(await listNotificationsFor(file, scopedViewer(outsider, ctx))).toHaveLength(1)
+  })
+
+  test('a notification with no subject AND a code that is not instance-wide fails closed for a non-owner', async () => {
+    // Guards against the next emitter forgetting to set a subject: it must not silently become
+    // global just because nobody scoped it.
+    await addNotificationTo(file, { type: 'info', code: 'some.new_code_nobody_scoped' })
+    expect(await listNotificationsFor(file, scopedViewer(outsider, ctx))).toHaveLength(0)
+    expect(await listNotificationsFor(file, scopedViewer(owner, ctx))).toHaveLength(1)
   })
 
   test('a legacy/unattributed row (no subject at all) is not retroactively hidden from anyone the other rules already let through', async () => {

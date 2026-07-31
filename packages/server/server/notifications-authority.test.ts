@@ -1,11 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { subjectVisibleTo, type NotificationAuthorityContext } from './notifications-authority'
+import { subjectVisibleTo, INSTANCE_WIDE_CODES, type NotificationAuthorityContext } from './notifications-authority'
 import type { Principal } from './iam-types'
 
 const emptyCtx: NotificationAuthorityContext = {
   machines: {},
   accountMemberships: {},
-  readableTagIds: new Set(),
 }
 
 const owner: Principal = { accountId: 'owner-1', role: 'owner', memberships: [] }
@@ -13,12 +12,31 @@ const manager: Principal = { accountId: 'mgr-1', role: 'member', memberships: [{
 const teamMember: Principal = { accountId: 'user-1', role: 'member', memberships: [{ teamId: 'team-a', role: 'user' }] }
 const outsider: Principal = { accountId: 'user-2', role: 'member', memberships: [{ teamId: 'team-b', role: 'user' }] }
 
-describe('subjectVisibleTo — no subject (instance-wide)', () => {
-  test('reaches every authenticated account, not just the owner', () => {
+describe('INSTANCE_WIDE_CODES — pinned contents (the review gate for this list)', () => {
+  test('is exactly the codes deliberately allowed to skip subject scoping', () => {
+    // A new subjectless emitter must add itself here ON PURPOSE — silently reaching everyone
+    // (the "route not registered" mistake CLAUDE.md's capability-guard.ts rule calls out) is
+    // exactly what this pinned list exists to prevent. Update this alongside the Set.
+    expect([...INSTANCE_WIDE_CODES].sort()).toEqual(['app.update_available'])
+  })
+})
+
+describe('subjectVisibleTo — no subject', () => {
+  test('a code on INSTANCE_WIDE_CODES reaches every authenticated account, not just the owner', () => {
+    expect(subjectVisibleTo(owner, undefined, emptyCtx, 'app.update_available')).toBe(true)
+    expect(subjectVisibleTo(manager, undefined, emptyCtx, 'app.update_available')).toBe(true)
+    expect(subjectVisibleTo(teamMember, undefined, emptyCtx, 'app.update_available')).toBe(true)
+    expect(subjectVisibleTo(outsider, undefined, emptyCtx, 'app.update_available')).toBe(true)
+  })
+
+  test('a code NOT on INSTANCE_WIDE_CODES is denied to a non-owner — a forgotten subject must not silently go global', () => {
+    expect(subjectVisibleTo(manager, undefined, emptyCtx, 'some.new_code')).toBe(false)
+    expect(subjectVisibleTo(owner, undefined, emptyCtx, 'some.new_code')).toBe(true)
+  })
+
+  test('no code at all (a raw title/message notification) is denied to a non-owner — it cannot be classified as instance-wide', () => {
+    expect(subjectVisibleTo(manager, undefined, emptyCtx)).toBe(false)
     expect(subjectVisibleTo(owner, undefined, emptyCtx)).toBe(true)
-    expect(subjectVisibleTo(manager, undefined, emptyCtx)).toBe(true)
-    expect(subjectVisibleTo(teamMember, undefined, emptyCtx)).toBe(true)
-    expect(subjectVisibleTo(outsider, undefined, emptyCtx)).toBe(true)
   })
 })
 
@@ -27,7 +45,6 @@ describe('subjectVisibleTo — owner override', () => {
     expect(subjectVisibleTo(owner, { kind: 'machine', id: 'unknown-machine' }, emptyCtx)).toBe(true)
     expect(subjectVisibleTo(owner, { kind: 'account', id: 'unknown-account' }, emptyCtx)).toBe(true)
     expect(subjectVisibleTo(owner, { kind: 'team', id: 'unknown-team' }, emptyCtx)).toBe(true)
-    expect(subjectVisibleTo(owner, { kind: 'tag', id: 'unknown-tag' }, emptyCtx)).toBe(true)
   })
 })
 
@@ -103,17 +120,15 @@ describe('subjectVisibleTo — account subject', () => {
   })
 })
 
-describe('subjectVisibleTo — tag subject', () => {
-  test('visible only when the caller already resolved read access into readableTagIds', () => {
-    const ctx: NotificationAuthorityContext = { ...emptyCtx, readableTagIds: new Set(['tag-1']) }
-    expect(subjectVisibleTo(manager, { kind: 'tag', id: 'tag-1' }, ctx)).toBe(true)
-    expect(subjectVisibleTo(manager, { kind: 'tag', id: 'tag-2' }, ctx)).toBe(false)
-  })
-})
-
 describe('subjectVisibleTo — fails closed on the unknown', () => {
   test('an unrecognized subject kind is denied for anyone but the owner', () => {
     // @ts-expect-error deliberately malformed input — the store must never trust an unknown kind
     expect(subjectVisibleTo(manager, { kind: 'bogus', id: 'x' }, emptyCtx)).toBe(false)
+  })
+
+  test('a code that IS on INSTANCE_WIDE_CODES is irrelevant once a subject is present — subject wins', () => {
+    // A subject always narrows scoping to itself; the code's instance-wide status only matters
+    // when there is no subject to check instead.
+    expect(subjectVisibleTo(manager, { kind: 'team', id: 'team-b' }, emptyCtx, 'app.update_available')).toBe(false)
   })
 })

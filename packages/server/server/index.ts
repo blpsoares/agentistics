@@ -633,8 +633,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         }
         return json({ error: 'method not allowed' }, 405)
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return json({ error: message }, 500)
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return json(safe.body, 500)
       }
     }
 

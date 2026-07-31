@@ -44,7 +44,14 @@ export function broadcastNotification(n: {
   // that receive the SSE event below just refetch — they never write it themselves, so the id is
   // the server's and every device dismisses the same row.
   addStoredNotification(n).catch(err => console.error('[notifications] failed to persist', err))
-  const payload = sseEncoder.encode(`event: notification\ndata: ${JSON.stringify(n)}\n\n`)
+  // The SSE FRAME carries NOTHING about the notification itself — it is a refresh signal only.
+  // `sseClients` is a flat, unauthenticated broadcast set with no principal attached (unlike
+  // GET /api/notifications, which scopes by `Viewer.entitlement`), so putting `code`/`meta`/
+  // `subject` on the wire here would hand every open tab — any signed-in account, any role — the
+  // full body of a notification the entitlement check in notifications-authority.ts exists to
+  // withhold from it. Every listener (`useNotificationStream.ts`) already just re-fetches the
+  // already-scoped `/api/notifications` on this event; it never reads the payload.
+  const payload = sseEncoder.encode('event: notification\ndata: {}\n\n')
   for (const ctrl of [...sseClients]) {
     try {
       ctrl.enqueue(payload)

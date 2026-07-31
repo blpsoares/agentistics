@@ -17,14 +17,21 @@
  *  - `team`    → `teamVisibleTo`    (iam-view.ts)  — the same check that scopes the team list.
  *  - `machine` → `canManageMachine` (iam-view.ts)  — the same check the machine-admin routes use.
  *  - `account` → `accountVisibleTo` (iam-view.ts)  — the same check the accounts panel uses.
- *  - `tag`     → the caller pre-resolves readability into `readableTagIds` via
- *                `tags-authority.ts`'s own `canReadTag`, so this module never has to know a tag's
- *                shape (sources/sharedWith/createdBy )— it only asks "is this id in the set".
  *
- * NO SUBJECT = INSTANCE-WIDE. A notification about the instance itself (an update banner, a
- * central-level notice with no single owner) carries no subject at all, and reaches every
- * authenticated account, owner or not — withholding it from everyone but the owner would silence a
- * message every account genuinely needs, for a device that happens to have no one specific target.
+ * A `tag` kind was drafted alongside these three but deliberately left OUT: nothing in the product
+ * emits a tag-scoped notification yet, and a kind with no reachable `true` case is dead code
+ * wearing a test. Add it back — plus the `readableTagIds` the caller would resolve via
+ * `tags-authority.ts`'s `canReadTag` — the day an emitter needs it, not before.
+ *
+ * NO SUBJECT ≠ AUTOMATICALLY GLOBAL. A notification about the instance itself (an update banner)
+ * carries no subject and should reach every authenticated account, owner or not. But "no subject"
+ * is also what a FORGOTTEN one looks like, and those two cases must not be the same code path:
+ * `INSTANCE_WIDE_CODES` is the explicit, closed list of codes allowed to skip subject scoping —
+ * mirroring `AUTH_PUBLIC` in `index-routes.ts` (a route not listed there is authenticated by
+ * default; a code not listed here is not instance-wide by default). A subjectless notification
+ * whose code is NOT on the list is denied to non-owners, exactly like an unresolved subject —
+ * silently reaching everyone was the "route not registered is assumed harmless" mistake
+ * CLAUDE.md's `capability-guard.ts` rule calls out, applied to this surface.
  *
  * FAIL CLOSED. A subject this module cannot resolve — an id absent from the context the caller
  * built, or a kind it does not recognise — is denied to anyone but the owner. A missed
@@ -33,13 +40,26 @@
 import type { AccountDoc, Membership, Principal } from './iam-types'
 import { teamVisibleTo, canManageMachine, accountVisibleTo } from './iam-view'
 
-export type NotificationSubjectKind = 'machine' | 'team' | 'account' | 'tag'
+export type NotificationSubjectKind = 'machine' | 'team' | 'account'
 
-/** What a notification is about. Set by the emitter; absent means instance-wide. */
+/** What a notification is about. Set by the emitter; absent means "no single target" — see
+ *  `INSTANCE_WIDE_CODES` for who then receives it. */
 export interface NotificationSubject {
   kind: NotificationSubjectKind
   id: string
 }
+
+/**
+ * The closed list of codes allowed to reach every authenticated account with NO subject at all.
+ * A code not on this list, emitted with no subject, is denied to non-owners rather than silently
+ * reaching everyone — see the module doc. Keep this list and its own test
+ * (`notifications-authority.test.ts`) in sync the way `authz-gate.test.ts` pins `AUTH_PUBLIC`.
+ */
+export const INSTANCE_WIDE_CODES: ReadonlySet<string> = new Set([
+  // The dashboard/central binary itself is out of date — a fact about the instance, not about any
+  // one team, machine or account.
+  'app.update_available',
+])
 
 /** Structural subset of a machine record — exactly what `canManageMachine` needs, kept minimal so
  *  this module (and its tests) depend on no Mongo type. */
@@ -62,19 +82,22 @@ export interface NotificationAuthorityContext {
   /** accountId → that account's memberships, for `accountVisibleTo` (which needs the TARGET's
    *  memberships, not the caller's). */
   accountMemberships: Record<string, Membership[]>
-  /** Tag ids the principal may already read, resolved by the caller via `tags-authority.ts`'s
-   *  `canReadTag` — this module makes no independent decision about tags. */
-  readableTagIds: Set<string>
 }
 
-/** Pure: may `p` receive a notification about `subject`? `subject` absent = instance-wide. */
+/**
+ * Pure: may `p` receive a notification with this `subject` and `code`?
+ *
+ * `code` is only consulted when `subject` is absent, to check it against `INSTANCE_WIDE_CODES` —
+ * a notification that DOES carry a subject is scoped by the subject alone, regardless of its code.
+ */
 export function subjectVisibleTo(
   p: Principal,
   subject: NotificationSubject | undefined,
   ctx: NotificationAuthorityContext,
+  code?: string,
 ): boolean {
   if (p.role === 'owner') return true
-  if (!subject) return true
+  if (!subject) return code !== undefined && INSTANCE_WIDE_CODES.has(code)
   switch (subject.kind) {
     case 'team':
       return teamVisibleTo(p, subject.id)
@@ -89,8 +112,6 @@ export function subjectVisibleTo(
       if (!memberships) return false // unresolved subject — fail closed
       return accountVisibleTo(p, { _id: subject.id, memberships } as AccountDoc)
     }
-    case 'tag':
-      return ctx.readableTagIds.has(subject.id)
     default:
       return false // unrecognized kind — fail closed
   }
