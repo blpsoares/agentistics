@@ -297,6 +297,18 @@ export async function disableAutostart(mode: AutostartMode): Promise<AutostartRe
  * `agentop server` has no service to bounce. `central` is redirected to `agentop central restart`
  * (that path rebuilds/restarts the Docker service, which a systemctl bounce can't do).
  */
+/** Is `mode` installed as a systemd user unit? The one fact that decides whether a restart goes
+ *  through systemd or through the detached process the control center starts. */
+export async function unitInstalled(mode: AutostartMode): Promise<boolean> {
+  if (platform() !== 'linux') return false
+  try {
+    await readFile(unitPath(mode), 'utf8')
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function restartAutostart(mode: AutostartMode): Promise<AutostartResult> {
   if (platform() !== 'linux') return notSupported('restart')
 

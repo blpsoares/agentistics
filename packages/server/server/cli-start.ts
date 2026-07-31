@@ -711,6 +711,40 @@ async function restartRuntimes(
 
 /** Non-interactive `agentop restart --all [--rebuild]`: bounce (or rebuild) every running
  *  runtime. Returns an exit code. */
+/**
+ * Restart the NATIVE server (`agentop restart server [--rebuild]`), whatever way it was started.
+ *
+ * `restartAutostart` knows exactly one way for a server to be running: a systemd user unit. But
+ * the control center — and `agentop server --bg` — start a DETACHED process instead, which is the
+ * common case and the one this tool sets up by default. Against that server, `restart` reported
+ * "no agentop-server service is installed … install autostart first": it named the thing it could
+ * not find rather than the running process it was asked to bounce, and then did nothing at all.
+ * With --rebuild that is worse than nothing, because the rebuild HAD already happened and the
+ * old build kept serving.
+ *
+ * So the way it is running decides: a unit is restarted through systemd (which is what keeps it
+ * supervised), a detached process is stopped and started again — the same `restartLocalSvc` the
+ * cockpit uses — and a server that is not running at all is reported as such instead of being
+ * silently "restarted".
+ */
+export async function restartNativeServer(rebuild = false): Promise<{ ok: boolean; message: string }> {
+  const s = cliStrings(await resolveLang())
+  const { unitInstalled, restartAutostart } = await import('./autostart')
+  if (await unitInstalled('server')) {
+    if (rebuild) {
+      const r = await rebuildNativeBinary()
+      if (r === 'not-repo') return { ok: false, message: s.localRebuildHint }
+      if (r === 'failed') return { ok: false, message: s.localRebuildFailed }
+    }
+    return restartAutostart('server')
+  }
+  if (!(await isRuntimeUp('local'))) {
+    return { ok: false, message: s.nothingRunning }
+  }
+  await restartLocalSvc(s, { rebuild })
+  return { ok: true, message: s.restartedDone }
+}
+
 export async function restartAllServices(rebuild = false): Promise<number> {
   const s = cliStrings(await resolveLang())
   const targets = await runningRuntimes()

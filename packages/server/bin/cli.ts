@@ -587,8 +587,17 @@ if (command === 'restart') {
     console.error(`Invalid mode: ${modeArg}. Expected one of: server, watch, central.\n`)
     process.exit(1)
   }
-  // --rebuild on a native mode (server/watch) rebuilds + reinstalls the binary from the repo so
-  // the restart serves new frontend/code (a plain bounce would keep the old build).
+  // The server is the mode this tool actually starts for you, and it starts it DETACHED, not as a
+  // systemd unit — so restarting it cannot assume systemd. `restartNativeServer` restarts whatever
+  // is running (and rebuilds first when asked); `watch` has only the unit form.
+  if (modeArg === 'server') {
+    const { restartNativeServer } = await import('../server/cli-start.ts')
+    const r = await restartNativeServer(rebuild)
+    process.stdout.write(r.message + '\n')
+    process.exit(r.ok ? 0 : 1)
+  }
+  // --rebuild on a native mode rebuilds + reinstalls the binary from the repo so the restart
+  // serves new frontend/code (a plain bounce would keep the old build).
   if (rebuild) {
     const { rebuildNativeBinary } = await import('../server/cli-start.ts')
     const r = await rebuildNativeBinary()
