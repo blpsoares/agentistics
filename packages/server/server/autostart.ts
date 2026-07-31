@@ -15,6 +15,7 @@
 import { homedir, platform, userInfo } from 'os'
 import { join, resolve } from 'path'
 import { mkdir, writeFile, readFile, unlink } from 'fs/promises'
+import { existsSync } from 'fs'
 
 export type AutostartMode = 'server' | 'central' | 'watch'
 
@@ -67,32 +68,48 @@ function tildeRc(rc: string): string {
 }
 
 /**
- * Best-effort repo root, used only by the `central` mode command.
+ * Locate the repo checkout holding `central.sh`, used only by the `central` mode command.
  *
- * ASSUMPTION: this file lives at `<repoRoot>/packages/server/server/autostart.ts`,
- * so the repo root is three directories up from `import.meta.dir`. When running
- * from the compiled binary that path does not exist; in that case we fall back
- * to the current working directory. Either way the resulting command is only a
- * best-effort default the user can edit in the generated unit file.
+ * The old version derived it as three directories up from `import.meta.dir` and guarded that
+ * with a try/catch. `resolve` does not throw, so the guard never fired: under the COMPILED
+ * BINARY `import.meta.dir` is Bun's virtual root (`/$bunfs/root`), three up is `/`, and the
+ * unit shipped `ExecStart=bash /central.sh up` — a service that exits 127 and is restarted
+ * every 5 seconds forever. Existence is the only thing that distinguishes a real checkout from
+ * a path that merely parses, so check for the file rather than assuming the layout.
+ *
+ * Returns null when no candidate holds the script — see `serviceCommandFor`.
  */
-function repoRoot(): string {
-  try {
-    return resolve(import.meta.dir, '..', '..', '..')
-  } catch {
-    return process.cwd()
+function findCentralScript(): string | null {
+  const candidates = [
+    // Running from source: <repoRoot>/packages/server/server/autostart.ts
+    resolve(import.meta.dir, '..', '..', '..'),
+    // Compiled binary invoked from inside a checkout.
+    process.cwd(),
+  ]
+  for (const dir of candidates) {
+    const script = join(dir, 'central.sh')
+    if (existsSync(script)) return script
   }
+  return null
 }
 
-/** The exact shell command each mode's service should run. */
-export function serviceCommandFor(mode: AutostartMode): string {
+/**
+ * The exact shell command each mode's service should run, or null when this machine cannot run
+ * that mode at all. `central` needs `central.sh`, which only exists in a repo checkout; from an
+ * installed binary there is nothing to point at. Null means the caller must REFUSE — the same
+ * rule the control center applies to a rebuild it cannot perform: absent beats present-and-failing.
+ */
+export function serviceCommandFor(mode: AutostartMode): string | null {
   const bin = process.execPath
   switch (mode) {
     case 'server':
       return `${bin} server`
     case 'watch':
       return `${bin} watch`
-    case 'central':
-      return `bash ${join(repoRoot(), 'central.sh')} up`
+    case 'central': {
+      const script = findCentralScript()
+      return script ? `bash ${script} up` : null
+    }
   }
 }
 
@@ -100,7 +117,7 @@ function unitPath(mode: AutostartMode): string {
   return join(homedir(), '.config', 'systemd', 'user', `agentop-${mode}.service`)
 }
 
-function unitContents(mode: AutostartMode): string {
+function unitContents(mode: AutostartMode, command: string): string {
   return [
     '[Unit]',
     `Description=agentop ${mode} (agentistics autostart)`,
@@ -109,7 +126,7 @@ function unitContents(mode: AutostartMode): string {
     '',
     '[Service]',
     'Type=simple',
-    `ExecStart=${serviceCommandFor(mode)}`,
+    `ExecStart=${command}`,
     'Restart=on-failure',
     'RestartSec=5',
     '',
@@ -225,10 +242,22 @@ export async function uninstallUpdateHook(): Promise<AutostartResult> {
 export async function enableAutostart(mode: AutostartMode): Promise<AutostartResult> {
   if (platform() !== 'linux') return notSupported('enable')
 
+  // Refuse before writing anything. A unit whose ExecStart cannot resolve is not a partial
+  // success — it is a service systemd restarts every 5 seconds for the life of the machine.
+  const command = serviceCommandFor(mode)
+  if (!command) {
+    return {
+      ok: false,
+      message: `Cannot enable agentop-${mode} here: central.sh was not found. ` +
+        `That script lives in the repository checkout, so run this from one ` +
+        `(the installed binary has nothing to point the service at).`,
+    }
+  }
+
   const path = unitPath(mode)
   try {
     await mkdir(join(homedir(), '.config', 'systemd', 'user'), { recursive: true })
-    await writeFile(path, unitContents(mode), 'utf8')
+    await writeFile(path, unitContents(mode, command), 'utf8')
   } catch (err: any) {
     return { ok: false, message: `Could not write unit file ${path}: ${err?.message ?? err}` }
   }

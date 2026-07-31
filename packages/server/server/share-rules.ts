@@ -139,6 +139,53 @@ export function filterShared<T extends Pick<SessionMeta, 'git_remote' | 'project
 }
 
 /**
+ * What a restricted connection may learn about the assistants running RIGHT NOW.
+ *
+ * The reverse channel (`team-agent-client.ts` → `team-live.ts`) is a second way out of this
+ * machine, and it used to bypass the denylist entirely: the uploader withheld a repo's metrics
+ * while the live reporter kept announcing that repo's `session_id` every 8 seconds — and the
+ * `cwd` of any process too new to have a transcript. Withholding the metrics of a repo whose
+ * name and activity you broadcast is not a privacy control. Every outbound path applies the
+ * same rule, so this one runs through `sessionShared` like the uploader does.
+ *
+ * Fail-closed on BOTH halves, which is stricter than `filterShared` and deliberately so:
+ *
+ * - A live id whose session we cannot find is dropped. It cannot be attributed to a repo, and
+ *   the central could not render it anyway (it resolves live ids against the sessions it was
+ *   pushed), so keeping it only ever leaked an identifier for a row nobody could see.
+ * - A process is reported only when its `cwd` resolves POSITIVELY to a repo that is not denied.
+ *   A process has no session to attribute, and `cwd` is the sensitive field here — a path is
+ *   often the repo name. Under restrictions an unrecognized directory is withheld rather than
+ *   assumed innocent.
+ *
+ * With no restrictions the snapshot passes through untouched — the common case pays nothing.
+ */
+export function filterLiveShared<
+  P extends { cwd: string },
+>(
+  snapshot: { liveSessionIds: readonly string[]; liveProcesses: readonly P[] },
+  sessions: readonly Pick<SessionMeta, 'session_id' | 'git_remote' | 'project_path'>[],
+  denied: ReadonlySet<RepoKey>,
+  index?: PathRepoIndex,
+): { liveSessionIds: string[]; liveProcesses: P[] } {
+  if (denied.size === 0) {
+    return { liveSessionIds: [...snapshot.liveSessionIds], liveProcesses: [...snapshot.liveProcesses] }
+  }
+  const byId = new Map(sessions.map(s => [s.session_id, s]))
+  const liveSessionIds = snapshot.liveSessionIds.filter(id => {
+    const s = byId.get(id)
+    return !!s && sessionShared(s, denied, index)
+  })
+  const liveProcesses = snapshot.liveProcesses.filter(p => {
+    // Positive resolution only: repoKeyOf falls back to NO_REPO_KEY for an unknown path, which
+    // would read as "shared" whenever the user has not also denied the no-repo bucket.
+    const key = index?.resolved.get(p.cwd)
+    return !!key && !denied.has(key)
+  })
+  return { liveSessionIds, liveProcesses }
+}
+
+/**
  * Sessions the denylist ACTIVELY excludes — the only legitimate removal trigger.
  *
  * Never define this as "in the sent-state but absent from the store": `loadConsolidated()`

@@ -4,7 +4,7 @@ import type { SessionMeta, WorkflowRun, HarnessId } from '@agentistics/core'
 import {
   canonicalRepoKey, normalizeDenied, buildPathRepoIndex, repoKeyOf, sessionShared,
   filterShared, deniedSessionIds, sharedSessionIds, filterSharedWorkflows,
-  withUnresolvedDenied, denialSignature, hasRestrictions,
+  withUnresolvedDenied, denialSignature, hasRestrictions, filterLiveShared,
 } from './share-rules'
 
 function s(over: Partial<SessionMeta> & { session_id: string }): SessionMeta {
@@ -804,4 +804,59 @@ test('non-Claude sessions in the store do not trip the precondition', () => {
   const all = [...storeSessions(), s({ session_id: 'cx', harness: 'codex', start_time: localAt('2026-06-25', 9), user_message_count: 4 })]
   const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })
   expect(out).not.toBeNull()
+})
+
+// --- the live channel (reverse WebSocket) obeys the same denylist as the uploader ---
+
+const LIVE_SESSIONS = [
+  s({ session_id: 'open-blocked', project_path: '/w/secret', git_remote: 'github.com/acme/secret' }),
+  s({ session_id: 'open-shared', project_path: '/w/public', git_remote: 'github.com/acme/public' }),
+]
+const liveIndex = () => buildPathRepoIndex(LIVE_SESSIONS)
+
+test('an unrestricted connection gets the live snapshot untouched', () => {
+  const snap = { liveSessionIds: ['open-blocked', 'open-shared'], liveProcesses: [{ cwd: '/anywhere' }] }
+  const out = filterLiveShared(snap, LIVE_SESSIONS, normalizeDenied([]))
+  expect(out.liveSessionIds).toEqual(['open-blocked', 'open-shared'])
+  expect(out.liveProcesses).toHaveLength(1)
+})
+
+// The leak this exists to close: the uploader withheld the repo's metrics while the reverse
+// channel announced its session id every 8 seconds.
+test('a denied repo\'s open session id never leaves the machine', () => {
+  const snap = { liveSessionIds: ['open-blocked', 'open-shared'], liveProcesses: [] }
+  const out = filterLiveShared(snap, LIVE_SESSIONS, normalizeDenied(['github.com/acme/secret']), liveIndex())
+  expect(out.liveSessionIds).toEqual(['open-shared'])
+})
+
+test('a live id with no matching session is dropped, not passed through', () => {
+  // Unattributable to any repo, and the central resolves live ids against the sessions it was
+  // pushed — so keeping it only ever leaked an identifier for a row nobody could render.
+  const snap = { liveSessionIds: ['ghost'], liveProcesses: [] }
+  const out = filterLiveShared(snap, LIVE_SESSIONS, normalizeDenied(['github.com/acme/secret']), liveIndex())
+  expect(out.liveSessionIds).toEqual([])
+})
+
+test('a process is reported only when its cwd resolves to a repo that is not denied', () => {
+  const snap = {
+    liveSessionIds: [],
+    liveProcesses: [{ cwd: '/w/secret' }, { cwd: '/w/public' }, { cwd: '/w/never-seen' }],
+  }
+  const out = filterLiveShared(snap, LIVE_SESSIONS, normalizeDenied(['github.com/acme/secret']), liveIndex())
+  // /w/secret is denied; /w/never-seen cannot be attributed, and cwd is often the repo name —
+  // under restrictions an unrecognized directory is withheld rather than assumed innocent.
+  expect(out.liveProcesses.map(p => p.cwd)).toEqual(['/w/public'])
+})
+
+test('denying the no-repo bucket alone still withholds unattributable processes', () => {
+  const snap = { liveSessionIds: [], liveProcesses: [{ cwd: '/w/never-seen' }] }
+  const out = filterLiveShared(snap, LIVE_SESSIONS, normalizeDenied([NO_REPO_KEY]), liveIndex())
+  expect(out.liveProcesses).toEqual([])
+})
+
+test('the alias folding that guards filterShared guards the live channel too', () => {
+  const snap = { liveSessionIds: ['open-blocked'], liveProcesses: [] }
+  // Denied under a different SSH/case spelling of the same remote.
+  const out = filterLiveShared(snap, LIVE_SESSIONS, normalizeDenied(['git@github.com:Acme/Secret.git']), liveIndex())
+  expect(out.liveSessionIds).toEqual([])
 })
