@@ -110,6 +110,22 @@ export function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
 }
 
+/**
+ * The push-identity `user` for a machine, given its (resolved) owner account name, if any.
+ *
+ * A machine with no owner account has no person to name. Every ingested session is stamped with
+ * this `user` and it is the ONLY field the member/user dimension (`distinctUsers` / `filterByUsers`
+ * in `@agentistics/core`) reads — those already treat a falsy `user` as "no owner" and exclude the
+ * session from that dimension, folding it instead into the machine dimension it belongs to
+ * (`listMachines`, `machineStatsCaches`). Falling back to the machine's own name/label here — as
+ * both `mintMachine`'s caller and `setMachineOwners` used to — is what made an ownerless machine
+ * surface as a "member" under its own name (filters, MembersPage's "by member" view, the
+ * `MachinesSettings` table). Must NEVER be `ownerName ?? machineName`.
+ */
+export function machineUserFor(ownerName: string | undefined | null): string {
+  return ownerName ?? ''
+}
+
 // ---------------------------------------------------------------------------
 // Internal
 // ---------------------------------------------------------------------------
@@ -496,21 +512,23 @@ export async function setMachineLabel(id: string, label: string): Promise<boolea
   return res.matchedCount > 0
 }
 
-/** Replace a machine's set of owner accounts. accountIds[0] becomes the primary (accountId), kept
- *  for whoami/back-compat. Passing an empty list clears ownership. The `user` (push identity) is
- *  left untouched — ownership is about visibility/management, not the machine's display name. */
 /** Set a machine's owner accounts. `user` is the machine's display identity and must follow the
  *  owning account (mint derives it the same way), otherwise a re-assigned machine keeps showing the
- *  previous — possibly deleted — account's name. Pass `user` as the first owner's name, or omit it
- *  to fall back to the machine's own label when ownership is cleared. History is keyed by the token
- *  hash (memberId), not by this string, so changing it never splits past sessions. */
+ *  previous — possibly deleted — account's name. Pass `user` as the first owner's name; omit it to
+ *  keep the previous owner's name when accounts are still assigned, or to CLEAR to '' when the last
+ *  owner is removed. A machine is not a person: falling back to the machine's own `label` here (as
+ *  this used to) is what made an unowned machine surface as a "member" — every session is tagged
+ *  with this `user`, and the user/member dimension (`distinctUsers`/`filterByUsers` in
+ *  @agentistics/core) reads an empty `user` as "no owner" and excludes it, while the machine
+ *  dimension keeps naming the machine by its `label` regardless. History is keyed by the token hash
+ *  (memberId), not by this string, so changing it never splits past sessions. */
 export async function setMachineOwners(id: string, accountIds: string[], user?: string): Promise<boolean> {
   const col = await getTokensCollection()
   const unique = [...new Set(accountIds.filter(Boolean))]
   const doc = await col.findOne({ _id: id })
-  const nextUser = user ?? doc?.label ?? doc?.user
+  const nextUser = user !== undefined ? user : (unique.length > 0 ? machineUserFor(doc?.user) : '')
   const res = await col.updateOne({ _id: id }, {
-    $set: { accountIds: unique, accountId: unique[0], ...(nextUser ? { user: nextUser } : {}) },
+    $set: { accountIds: unique, accountId: unique[0], user: nextUser },
   })
   return res.matchedCount > 0
 }

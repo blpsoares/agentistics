@@ -28,6 +28,20 @@ test('distinctUsers returns sorted unique users and skips undefined', () => {
   expect(distinctUsers(sessions)).toEqual(['devA', 'devB'])
 })
 
+// An ownerless machine's sessions carry `user: ''` (never a fallback to the machine's own name —
+// see `machineUserFor` in server/team-tokens.ts). `distinctUsers`/`filterByUsers` must treat that
+// exactly like `undefined`, or such a machine would surface as a "member" in the filter/UI
+// dimension under its own name — the bug this whole fix exists for.
+test('distinctUsers treats an empty-string user (ownerless machine) like undefined — never lists it as a member', () => {
+  const sessions = [session('1', 'devA'), session('2', ''), session('3', 'devB')]
+  expect(distinctUsers(sessions)).toEqual(['devA', 'devB'])
+})
+
+test('filterByUsers drops empty-string-user (ownerless machine) sessions like untagged ones', () => {
+  const sessions = [session('1', 'devA'), session('2', ''), session('3', 'devB')]
+  expect(filterByUsers(sessions, ['devA', 'devB']).map(s => s.session_id).sort()).toEqual(['1', '3'])
+})
+
 test('filterByUsers with empty selection passes everything through', () => {
   const sessions = [session('1', 'devA'), session('2', 'devB')]
   expect(filterByUsers(sessions, [])).toHaveLength(2)
