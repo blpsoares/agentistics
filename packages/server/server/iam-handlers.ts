@@ -22,6 +22,7 @@ import {
   MFA_CHALLENGE_TTL_MS,
 } from './auth'
 import { TEAM_SESSION_SECRET } from './config'
+import { CAPS } from './exposure'
 import { generateSecret, otpauthUri, verifyTotp, generateRecoveryCodes, hashRecoveryCode, totpSkewSteps, TOTP_STEP_SECONDS } from './totp'
 import { getMfa, isMfaEnabled, enableMfa, disableMfa, consumeRecoveryCode } from './mfa-store'
 import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships } from './iam-view'
@@ -117,7 +118,7 @@ export async function handleIamLogin(
   // argon2 verify so a locked account costs no CPU (that verify is the expensive part, and an
   // unauthenticated caller must never be able to spend it freely).
   const acctKey = `acct:${normalizeEmail(email)}`
-  const acctVerdict = limiter.check(acctKey, RULES.login)
+  const acctVerdict = limiter.blocked(acctKey)
   if (!acctVerdict.allowed) return tooManyRequests(acctVerdict.retryAfterSec)
 
   const account = await findAccountByEmail(email)
@@ -173,7 +174,7 @@ export async function handleIamLoginMfa(req: Request): Promise<Response> {
   // Rate-limit the second factor on its own key: six digits is a small space, so an
   // unbounded challenge would reduce 2FA to a brute-forceable formality.
   const mfaKey = `mfa:${parsed.accountId}`
-  const verdict = limiter.check(mfaKey, RULES.login)
+  const verdict = limiter.blocked(mfaKey)
   if (!verdict.allowed) return tooManyRequests(verdict.retryAfterSec)
 
   const account = await getAccount(parsed.accountId)
@@ -234,7 +235,7 @@ export async function handleStepUp(req: Request): Promise<Response> {
   // Same rate-limit treatment as login: this endpoint verifies a credential, so it is a
   // guessing oracle if left unbounded — and the argon2 verify below is expensive.
   const key = `stepup:${account._id}`
-  const verdict = limiter.check(key, RULES.login)
+  const verdict = limiter.blocked(key)
   if (!verdict.allowed) return tooManyRequests(verdict.retryAfterSec)
 
   let ok = false
@@ -313,6 +314,31 @@ export async function handleMfa(req: Request, pathname: string): Promise<Respons
     })
   }
 
+  // A fresh set of recovery codes, proven with a live code from the authenticator.
+  //
+  // They used to be issued once, at enrolment, and never again: lose the sheet and the only
+  // net under a lost phone was gone, silently. With MFA now mandatory for owners and recovery
+  // leaning on it, that gap closes the way back in.
+  if (pathname === '/api/iam/mfa/recovery-codes' && req.method === 'POST') {
+    let body: unknown
+    try { body = await req.json() } catch { body = {} }
+    const code = typeof (body as Record<string, unknown>).code === 'string'
+      ? ((body as Record<string, unknown>).code as string)
+      : ''
+    const mfa = await getMfa(account._id)
+    if (!mfa) return json({ error: 'mfa not enabled' }, 400)
+    const nowSec = Math.floor(Date.now() / 1000)
+    if (!verifyTotp(mfa.secret, code, nowSec)) {
+      const skew = totpSkewSteps(mfa.secret, code, nowSec)
+      if (skew !== null) return json({ error: 'clock_skew', skewSeconds: skew * TOTP_STEP_SECONDS }, 401)
+      return json({ error: 'invalid code' }, 401)
+    }
+    const recoveryCodes = generateRecoveryCodes()
+    await enableMfa(account._id, mfa.secret, recoveryCodes.map(hashRecoveryCode))
+    void writeAudit({ action: 'mfa.recovery_regenerated', ip: 'unknown', actorId: account._id })
+    return json({ ok: true, recoveryCodes })
+  }
+
   if (pathname === '/api/iam/mfa' && req.method === 'DELETE') {
     let body: unknown
     try { body = await req.json() } catch { body = {} }
@@ -343,7 +369,111 @@ export async function handleIamMe(req: Request): Promise<Response> {
   if (!principal) return json({ authed: false })
   const account = await getAccount(principal.accountId)
   if (!account) return json({ authed: false })
-  return json({ authed: true, account: publicAccount(account) })
+  // Whether this caller still owes an enrolment. The gate in index.ts already refuses their
+  // requests; without saying so HERE the SPA only sees 403s and renders "failed to load", which
+  // is how a mandatory second factor reads as a broken dashboard.
+  const mfaEnrollmentRequired =
+    CAPS.requireMfaForOwner &&
+    account.role === 'owner' &&
+    !(await isMfaEnabled(account._id).catch(() => true))
+  return json({ authed: true, account: publicAccount(account), mfaEnrollmentRequired })
+}
+
+/**
+ * POST /api/iam/recover — the "forgot my password" path for an OWNER.
+ * Body: { email, code, newPassword }
+ *
+ * The account proves itself with its SECOND FACTOR — a live authenticator code, or one of the
+ * single-use recovery codes — and sets a new password in the same step. No e-mail is sent
+ * because a self-hosted central has no mail server; the proof is something the owner already
+ * holds.
+ *
+ * The trade this makes is deliberate and worth naming: for an owner, possession of the
+ * authenticator (or the recovery sheet) now equals the account, where before it was worthless
+ * without the password. That is why the second factor is MANDATORY for owners, why every other
+ * owner is notified when it happens, why it is audited, and why every session dies with the old
+ * password — prevention is not available at this moment, so what is left is making it loud.
+ *
+ * Members do NOT get this path: they may have no second factor at all, and an owner (or a
+ * manager of their team) can already reset them. Extending it to any MFA-enrolled account is a
+ * one-line change if that is ever wanted.
+ *
+ * Answers are deliberately identical for "no such account", "not an owner", "no MFA" and "wrong
+ * code": this endpoint is public, and each distinction would be a free oracle.
+ */
+export async function handleRecover(req: Request, ip = 'unknown'): Promise<Response> {
+  const parsedBody = await readJsonLimited<unknown>(req, LIMITS.bodyBytes)
+  if (!parsedBody.ok) {
+    return json({ ok: false, error: parsedBody.error }, parsedBody.error === 'too_large' ? 413 : 400)
+  }
+  const b = parsedBody.value as Record<string, unknown>
+  const email = typeof b.email === 'string' ? b.email : ''
+  const code = typeof b.code === 'string' ? b.code.trim() : ''
+  const newPassword = typeof b.newPassword === 'string' ? b.newPassword : ''
+
+  const deny = () => json({ ok: false, error: 'invalid email or code' }, 401)
+
+  // Per-account backoff before any work: the codes are 40 bits each, which is ample WITH a
+  // limiter in front and weak without one.
+  const key = `recover:${normalizeEmail(email)}`
+  const verdict = limiter.blocked(key)
+  if (!verdict.allowed) return tooManyRequests(verdict.retryAfterSec)
+
+  const account = await findAccountByEmail(email)
+  const mfa = account ? await getMfa(account._id) : null
+  if (!account || account.role !== 'owner' || !mfa) {
+    limiter.fail(key, RULES.login)
+    void writeAudit({ action: 'password.recover_failure', ip, meta: { email: normalizeEmail(email) } })
+    return deny()
+  }
+
+  // The password is checked BEFORE the code is burned: a rejected password must not cost the
+  // caller one of the ten codes they may be down to.
+  const policy = validatePasswordPolicy(newPassword, { email: account.email, name: account.name })
+  if (!policy.ok) return json({ ok: false, error: policy.error }, 400)
+
+  const nowSec = Math.floor(Date.now() / 1000)
+  let usedRecovery = false
+  if (!verifyTotp(mfa.secret, code, nowSec)) {
+    usedRecovery = await consumeRecoveryCode(account._id, hashRecoveryCode(code))
+    if (!usedRecovery) {
+      limiter.fail(key, RULES.login)
+      // Same refusal, but say WHICH failure when the clock is the problem — otherwise a drifted
+      // server reads as "my recovery codes don't work either".
+      const skew = totpSkewSteps(mfa.secret, code, nowSec)
+      void writeAudit({ action: 'password.recover_failure', ip, actorId: account._id })
+      if (skew !== null) return json({ ok: false, error: 'clock_skew', skewSeconds: skew * TOTP_STEP_SECONDS }, 401)
+      return deny()
+    }
+  }
+  limiter.reset(key)
+
+  await updateAccount(account._id, {
+    passwordHash: await hashPassword(newPassword),
+    // They chose this password themselves; forcing another change at the next login would be
+    // ceremony, not security.
+    mustChangePassword: false,
+  })
+  await bumpSessionVersion(account._id)
+  void writeAudit({
+    action: 'password.recover',
+    ip,
+    actorId: account._id,
+    meta: { secondFactor: usedRecovery ? 'recovery' : 'totp' },
+  })
+
+  // Loud on purpose: if this was not you, the notification is the only chance to notice.
+  try {
+    const { broadcastNotification } = await import('./sse')
+    broadcastNotification({
+      type: 'warning',
+      code: 'iam.password_recovered',
+      meta: { email: account.email, factor: usedRecovery ? 'recovery' : 'totp' },
+    })
+  } catch { /* the reset stands even if nobody could be told */ }
+
+  const left = usedRecovery ? Math.max(0, mfa.recoveryHashes.length - 1) : mfa.recoveryHashes.length
+  return json({ ok: true, usedRecovery, recoveryCodesLeft: left })
 }
 
 /**

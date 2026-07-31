@@ -23,6 +23,8 @@ export const AUTH_PUBLIC = new Set([
   '/api/iam/status',
   '/api/iam/bootstrap',
   '/api/iam/login',
+  // Forgot-password for an owner: proven with the second factor, so no session exists yet.
+  '/api/iam/recover',
   // Second login stage: the caller holds a challenge, not yet a session.
   '/api/iam/login/mfa',
   '/api/iam/logout',
@@ -68,6 +70,7 @@ export const MFA_EXEMPT = new Set([
   '/api/iam/mfa',
   '/api/iam/mfa/start',
   '/api/iam/mfa/enable',
+  '/api/iam/mfa/recovery-codes',
   '/api/team/session',
   '/api/iam/status',
 ])

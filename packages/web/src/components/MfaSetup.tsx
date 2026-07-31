@@ -15,7 +15,13 @@ import { useIsMobile } from '../hooks/useIsMobile'
  * Recovery codes are shown exactly once — the server stores only their sha256 hashes and cannot
  * show them again.
  */
-export function MfaSetup({ lang, onClose }: { lang: Lang; onClose: () => void }) {
+export function MfaSetup({ lang, onClose, required = false }: {
+  lang: Lang
+  onClose: () => void
+  /** Enrolment is owed, not optional: the overlay does not dismiss and there is no way out but
+   *  finishing. Used by the App gate for an owner the server is already refusing. */
+  required?: boolean
+}) {
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
   const [enabled, setEnabled] = useState<boolean | null>(null)
@@ -64,6 +70,20 @@ export function MfaSetup({ lang, onClose }: { lang: Lang; onClose: () => void })
     } catch { setError(pt ? 'Erro de rede.' : 'Network error.') } finally { setBusy(false) }
   }
 
+  async function regenerate() {
+    if (!code.trim() || busy) return
+    setBusy(true); setError(null)
+    try {
+      const r = await fetch('/api/iam/mfa/recovery-codes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code.trim() }),
+      })
+      const d = (await r.json()) as { ok?: boolean; recoveryCodes?: string[]; error?: string; skewSeconds?: number }
+      if (r.ok && d.ok && d.recoveryCodes) { setRecovery(d.recoveryCodes); setCode('') }
+      else setError(describeCodeError(d, pt))
+    } catch { setError(pt ? 'Erro de rede.' : 'Network error.') } finally { setBusy(false) }
+  }
+
   async function disable() {
     if (!code.trim() || busy) return
     setBusy(true); setError(null)
@@ -78,7 +98,7 @@ export function MfaSetup({ lang, onClose }: { lang: Lang; onClose: () => void })
   }
 
   return (
-    <div onClick={onClose} style={overlay}>
+    <div onClick={required ? undefined : onClose} style={overlay}>
       <div onClick={e => e.stopPropagation()} style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
           <span style={{ display: 'inline-flex', padding: 8, borderRadius: 9, background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)' }}>
@@ -106,8 +126,15 @@ export function MfaSetup({ lang, onClose }: { lang: Lang; onClose: () => void })
             <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
               {pt ? 'Ativa nesta conta. Para desativar, confirme com um código atual.' : 'Active on this account. To turn it off, confirm with a current code.'}
             </div>
-            <input value={code} onChange={e => setCode(e.target.value)} placeholder="123456" style={input} />
+            <input value={code} onChange={e => setCode(e.target.value)} placeholder="123456" style={input}
+              inputMode="numeric" autoComplete="one-time-code" />
             {error && <Err text={error} />}
+            {/* Codes used to be issued once, at enrolment, and never again — so a mislaid sheet
+                quietly removed the only net under a lost phone. Same current code proves both. */}
+            <button onClick={regenerate} disabled={!code.trim() || busy} style={primaryBtn}>
+              {pt ? 'Gerar novos códigos de recuperação' : 'Generate new recovery codes'}
+            </button>
+            <div style={{ height: 8 }} />
             <button onClick={disable} disabled={!code.trim() || busy} style={dangerBtn}>
               {pt ? 'Desativar' : 'Disable'}
             </button>
@@ -117,9 +144,13 @@ export function MfaSetup({ lang, onClose }: { lang: Lang; onClose: () => void })
         {!recovery && enabled === false && !secret && (
           <div style={{ marginTop: 10 }}>
             <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
-              {pt
-                ? 'Uma senha sozinha é um único ponto de falha numa instância exposta na internet. Ative um segundo fator.'
-                : 'A password alone is a single point of failure on an internet-exposed instance. Add a second factor.'}
+              {required
+                ? (pt
+                  ? 'Contas de owner exigem um segundo fator: elas alcançam os dados de todos os times e todas as rotas de administração. É também o que permite você recuperar a própria conta sozinho, sem acesso à máquina.'
+                  : 'Owner accounts require a second factor: they reach every team’s data and every admin route. It is also what lets you recover this account yourself, without access to the machine.')
+                : (pt
+                  ? 'Uma senha sozinha é um único ponto de falha numa instância exposta na internet. Ative um segundo fator.'
+                  : 'A password alone is a single point of failure on an internet-exposed instance. Add a second factor.')}
             </div>
             {error && <Err text={error} />}
             <button onClick={start} disabled={busy} style={primaryBtn}>{pt ? 'Começar' : 'Start'}</button>

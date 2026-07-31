@@ -52,7 +52,12 @@ export function capabilitiesFor(profile: ExposureProfile, env: ExposureEnv): Cap
       localChat: true,
       localTranscripts: true,
       mcpAdmin: true,
-      requireMfaForOwner: false,
+      // Required on EVERY profile, not only `public`. Two reasons, and neither is about the
+      // network: an owner account can reach every team's data and every admin route, and — since
+      // account recovery is now self-service through the second factor — an owner with no second
+      // factor has no way back in except the host. "Local" describes where the port is bound,
+      // not how much the account is worth.
+      requireMfaForOwner: true,
       requireSecureCookies: false,
     }
   }
@@ -62,7 +67,7 @@ export function capabilitiesFor(profile: ExposureProfile, env: ExposureEnv): Cap
       localChat: env.allowLocalShell,
       localTranscripts: env.allowLocalShell,
       mcpAdmin: env.allowLocalShell,
-      requireMfaForOwner: false,
+      requireMfaForOwner: true,
       requireSecureCookies: env.tls,
     }
   }

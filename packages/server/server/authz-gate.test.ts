@@ -26,6 +26,11 @@ describe('public route allowlist', () => {
       '/api/iam/login/mfa',
       '/api/iam/logout',
       '/api/iam/me',
+      // Owner password recovery. Public by necessity — the caller is locked out, so there is no
+      // session to present — and safe to be public only because it proves the account's SECOND
+      // FACTOR before it changes anything, rate-limits per account, and answers identically for
+      // an unknown e-mail, a non-owner and a wrong code.
+      '/api/iam/recover',
       '/api/iam/status',
       '/api/team/agent',
       '/api/team/forget',

@@ -1297,6 +1297,15 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       return new Response(res.body, { status: res.status, headers })
     }
 
+    if (url.pathname === '/api/iam/recover' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleRecover } = await import('./iam-handlers')
+      const res = await handleRecover(req, clientIp)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
     if (url.pathname === '/api/iam/mfa' || url.pathname.startsWith('/api/iam/mfa/')) {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleMfa } = await import('./iam-handlers')

@@ -84,7 +84,14 @@ interface TeamSessionState {
 }
 
 export interface IamAccount { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: { teamId: string; role: 'manager' | 'user' }[]; mustChangePassword: boolean }
-interface IamState { needsBootstrap: boolean; authed: boolean; account?: IamAccount }
+interface IamState {
+  needsBootstrap: boolean
+  authed: boolean
+  account?: IamAccount
+  /** The server refuses this owner's requests until a second factor exists. Reported by
+   *  /api/iam/me so the app can show the enrolment screen instead of a wall of 403s. */
+  mfaEnrollmentRequired?: boolean
+}
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
 const LOAD_STAGES: { key: string; labelPt: string; labelEn: string; icon: React.ReactNode; phase: 1 | 2 | 3 }[] = [
@@ -1197,7 +1204,7 @@ export default function AppLayout() {
     Promise.all([
       fetch('/api/iam/status').then(r => r.ok ? r.json() : { needsBootstrap: false }),
       fetch('/api/iam/me').then(r => r.ok ? r.json() : { authed: false }),
-    ]).then(([st, me]) => setIam({ needsBootstrap: !!st.needsBootstrap, authed: !!me.authed, account: me.account }))
+    ]).then(([st, me]) => setIam({ needsBootstrap: !!st.needsBootstrap, authed: !!me.authed, account: me.account, mfaEnrollmentRequired: !!me.mfaEnrollmentRequired }))
       .catch(() => setIam({ needsBootstrap: false, authed: false }))
   }, [])
   useEffect(() => { if (teamSession?.central) reloadIam() }, [teamSession?.central, reloadIam])
@@ -1993,6 +2000,13 @@ export default function AppLayout() {
     if (iam.needsBootstrap) return <OwnerSetup onDone={() => { reloadIam(); refetch() }} />
     if (!iam.authed) return <Login onAuthed={() => { reloadIam(); refetch() }} />
     if (iam.account?.mustChangePassword) return <ChangePassword onDone={() => { reloadIam(); refetch() }} />
+    // An owner owes a second factor. The gate in index.ts is already refusing everything else,
+    // so this is not an extra restriction — it is the screen that says WHY, and the only way the
+    // owner can satisfy it. It also carries the recovery codes that make the account
+    // self-recoverable, which is the other half of why it is mandatory.
+    if (iam.mfaEnrollmentRequired) {
+      return <MfaSetup lang={lang} required onClose={() => { reloadIam(); refetch() }} />
+    }
   } else if (teamSession.required && !teamSession.authed) {
     // Non-central (member/solo) keeps the legacy password gate.
     return <TeamLogin onAuthed={() => { setTeamSession(s => ({ ...(s ?? { required: true }), required: true, authed: true })); refetch() }} />
