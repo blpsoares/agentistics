@@ -2,11 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Plus, Copy, Check, RotateCw, Trash2, Pencil, X } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
-import { TeamSettings, type TeamConfig } from '../../components/TeamSettings'
+import { ConnectionsPanel } from '../../components/team/ConnectionsPanel'
 import { SectionHeader, Section, Select, Checkbox, ConfirmModal, RecordCard, RecordCardAction, SaveBar, runSaveSteps } from './primitives'
 import { Drawer } from './Drawer'
 import { useIsMobile } from '../../hooks/useIsMobile'
-import { defaultTeam } from '@agentistics/core'
 
 // interfaces
 interface MachineInfo {
@@ -88,23 +87,9 @@ function ReadField({ label, value }: { label: string; value: React.ReactNode }) 
   )
 }
 
-// solo/member fallback (unchanged)
-const DEFAULT_TEAM_CONFIG: TeamConfig = defaultTeam()
-
+// solo/member fallback — the second (easily-missed) `ConnectionsPanel` call site (Task 10).
 function SoloMemberMachinesView({ pt }: { pt: boolean }) {
-  const [team, setTeam] = useState<TeamConfig>(DEFAULT_TEAM_CONFIG)
-  const [loadErr, setLoadErr] = useState<string | null>(null)
-
-  useEffect(() => {
-    fetch('/api/preferences')
-      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((prefs: { team?: Partial<TeamConfig> }) => {
-        if (prefs.team) {
-          setTeam({ ...DEFAULT_TEAM_CONFIG, ...prefs.team })
-        }
-      })
-      .catch(err => { setLoadErr(err instanceof Error ? err.message : String(err)) })
-  }, [])
+  const ctx = useOutletContext<AppContext>()
 
   return (
     <>
@@ -113,17 +98,7 @@ function SoloMemberMachinesView({ pt }: { pt: boolean }) {
           ? 'Máquinas de membros registradas — tokens, presença, rotação e revogação.'
           : 'Registered member machines — tokens, presence, rotate/revoke.'}
       </p>
-      {loadErr ? (
-        <div style={{
-          padding: '10px 14px', borderRadius: 8,
-          background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
-          fontSize: 12, color: '#ef4444',
-        }}>
-          {loadErr}
-        </div>
-      ) : (
-        <TeamSettings team={team} onChange={setTeam} lang={pt ? 'pt' : 'en'} central={false} presence={undefined} />
-      )}
+      <ConnectionsPanel sessions={ctx.data.sessions} projects={ctx.data.projects} modelUsage={ctx.data.statsCache.modelUsage} lang={pt ? 'pt' : 'en'} onConnectionsChanged={ctx.refreshDeniedRepoLabels} />
     </>
   )
 }

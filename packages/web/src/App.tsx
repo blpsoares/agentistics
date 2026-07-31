@@ -17,9 +17,10 @@ import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_
 import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
 import type { TagDef } from './lib/tagMatch'
-import type { Filters, HarnessId, HealthIssue } from '@agentistics/core'
+import type { Filters, HarnessId, HealthIssue, TeamConfig } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER } from '@agentistics/core'
+import { formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections } from '@agentistics/core'
+import { buildDeniedRepoLabels } from './lib/shareRepos'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
 import { ActivityHeatmap } from './components/ActivityHeatmap'
@@ -1326,6 +1327,22 @@ export default function AppLayout() {
   // First-run archive consent gate: undefined = prefs not loaded, null = loaded but
   // not yet chosen (blocks the app), ArchiveMode = chosen.
   const [archiveChoice, setArchiveChoice] = useState<ArchiveMode | null | undefined>(undefined)
+  // Task 13 — the hidden-repo badge: canonical repo key -> labels of the connections hiding it.
+  // Populated from the same /api/preferences load `archiveChoice` uses below; empty map (never
+  // undefined) so every consumer can read it without an extra "not loaded yet" branch.
+  const [deniedRepoLabels, setDeniedRepoLabels] = useState<Map<string, string[]>>(new Map())
+  /** Re-reads the connection list so the hidden-repo badge follows the rules instead of freezing at
+   *  whatever they were on page load. The preferences effect below is mount-only and this is an
+   *  SPA, so un-blocking a repository (or disconnecting the central entirely) used to leave
+   *  `/repositories` still claiming "Hidden from 1 central" until a manual reload — told hidden,
+   *  not hidden. Fired by `ConnectionsPanel`'s `onConnectionsChanged` after EVERY write it makes,
+   *  which is the single source both `RepositoriesList` and `RepoDetailPage` read through. */
+  const refreshDeniedRepoLabels = useCallback(() => {
+    fetch('/api/preferences')
+      .then(r => (r.ok ? r.json() : null))
+      .then(prefs => { if (prefs) setDeniedRepoLabels(buildDeniedRepoLabels(readTeamConnections(prefs))) })
+      .catch(() => { /* a failed refresh keeps the last-known map — never wipes the badges */ })
+  }, [])
   const chooseArchive = useCallback((mode: ArchiveMode) => {
     setArchiveChoice(mode)
     fetch('/api/preferences', {
@@ -1440,7 +1457,7 @@ export default function AppLayout() {
     // only a real 200 response with no archiveMode may set it. On failure we retry with
     // backoff and leave state at `undefined` (neutral loading bg) so nothing false-gates.
     let cancelled = false
-    const apply = (prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean }) => {
+    const apply = (prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean; team?: TeamConfig }) => {
       if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
       if (prefs.lang) setLangState(prefs.lang)
       if (prefs.theme) setThemeState(prefs.theme)
@@ -1453,6 +1470,9 @@ export default function AppLayout() {
       // Resolve the archive mode (migrates the legacy archiveSessions boolean). Only reached on
       // a successful load — a failed fetch is retried in `load`, never funneled through here.
       setArchiveChoice(resolveArchiveChoice(prefs))
+      // Task 13 — the hidden-repo badge map, rebuilt from the same load (readTeamConnections
+      // tolerates a missing/malformed `connections` array instead of `.map`-ing `undefined`).
+      setDeniedRepoLabels(buildDeniedRepoLabels(readTeamConnections(prefs)))
     }
     const load = async (attempt = 0) => {
       try {
@@ -2464,6 +2484,8 @@ export default function AppLayout() {
           me: iam?.account,
           teams: teamsList,
           machines: machinesList,
+          deniedRepoLabels,
+          refreshDeniedRepoLabels,
         }} />
       </main>
 

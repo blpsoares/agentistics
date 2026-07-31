@@ -10,7 +10,7 @@ import { SortControl } from '../components/SortControl'
 
 export default function RepositoriesPage() {
   const ctx = useOutletContext<AppContext>()
-  const { derived, currency, brlRate, lang, isCentral } = ctx
+  const { derived, currency, brlRate, lang, isCentral, deniedRepoLabels } = ctx
   const navigate = useNavigate()
   const pt = lang === 'pt'
   const [query, setQuery] = useState('')
@@ -128,6 +128,7 @@ export default function RepositoriesPage() {
           brlRate={brlRate}
           lang={lang}
           onOpen={openRepo}
+          deniedRepoLabels={deniedRepoLabels}
         />
       </Section>
     </>
