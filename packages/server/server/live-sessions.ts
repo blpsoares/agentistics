@@ -234,16 +234,26 @@ export function resolveOpenSessionIds(
   const byId = new Map(sessions.map(s => [s.session_id, s]))
   const open = new Set<string>()
 
-  // Pass 1 — exact identity. The id must name a session of that process's own harness, and the
-  // session must have been touched since the process launched; a resumed id we have no session for
-  // is dropped, never guessed at.
+  // Pass 1 — exact identity. The id comes from a file descriptor: the kernel says this process
+  // holds that session's file open. A resumed id we have no session for is still dropped (never
+  // guessed at), the harness must match, and the conversation must be FRESH — a panel a terminal
+  // multiplexer restored and nobody has touched in two days is not work in progress.
+  //
+  // What is deliberately NOT asked here is `lastActivityMs(s) >= p.startedMs`, i.e. that the
+  // conversation was touched since this process launched. That is backwards for the two most
+  // ordinary ways to have an assistant open: `--resume` (the process starts now, the conversation
+  // is from this morning) and a panel sitting idle between turns. Measured on a real machine with
+  // five assistants running, it rejected BOTH fd-identified processes — their sessions known AND
+  // fresh — and the fleet reported as one. Freshness already bounds staleness; requiring the
+  // activity to post-date the process only ever penalised resuming, which is not a defect.
+  //
+  // The heuristics below (activity-after-start, one session per process) are for ANONYMOUS
+  // processes, where a guess is all there is. They have no business in the path that has proof.
   const anonymous: HarnessProcess[] = []
   for (const p of normalised) {
     if (!p.sessionId) { anonymous.push(p); continue }
     const s = byId.get(p.sessionId)
-    if (s && s.harness === p.harness && isFresh(s) && lastActivityMs(s) >= (p.startedMs ?? 0)) {
-      open.add(s.session_id)
-    }
+    if (s && s.harness === p.harness && isFresh(s)) open.add(s.session_id)
   }
 
   // Pass 2 — harness + project fallback for processes that never named a session.

@@ -224,6 +224,45 @@ test('a restored-but-unused panel does not come back as an unmatched process', (
   expect(snap.liveProcesses).toEqual([])
 })
 
+// --- fd-identified processes are trusted, whatever the conversation's timing -----------------
+// The regression: five assistants running on one machine reported as ONE. Both fd-identified
+// processes were dropped because their conversation had last been touched BEFORE the process
+// started — which is what `--resume` and an idle panel look like from outside.
+
+test('a RESUMED session is open: the conversation predates the process, and the fd proves it', () => {
+  // `claude --resume` — process launched a minute ago, the conversation is from this morning.
+  const sessions = [s('resumed', '/proj/a', minsAgo(180))]
+  const procs = [{ harness: 'claude' as HarnessId, cwd: '/proj/a', sessionId: 'resumed', startedMs: NOW - 60_000 }]
+  expect(resolveLiveSnapshot(procs, sessions, NOW).liveSessionIds).toEqual(['resumed'])
+})
+
+test('an idle panel between turns stays open', () => {
+  // Sitting waiting for the user. Activity is older than the process; the panel is still open.
+  const sessions = [s('idle', '/proj/a', minsAgo(90))]
+  const procs = [{ harness: 'claude' as HarnessId, cwd: '/proj/a', sessionId: 'idle', startedMs: NOW - 30 * 60_000 }]
+  expect(resolveLiveSnapshot(procs, sessions, NOW).liveSessionIds).toEqual(['idle'])
+})
+
+test('several fd-identified assistants are ALL reported, not just the most recently used', () => {
+  const sessions = [
+    s('a', '/proj/a', minsAgo(2)), s('b', '/proj/a', minsAgo(120)), s('c', '/proj/a', minsAgo(300)),
+  ]
+  const procs = [
+    { harness: 'claude' as HarnessId, cwd: '/proj/a', sessionId: 'a', startedMs: NOW - 60_000 },
+    { harness: 'claude' as HarnessId, cwd: '/proj/a', sessionId: 'b', startedMs: NOW - 60_000 },
+    { harness: 'claude' as HarnessId, cwd: '/proj/a', sessionId: 'c', startedMs: NOW - 60_000 },
+  ]
+  expect(resolveLiveSnapshot(procs, sessions, NOW).liveSessionIds.sort()).toEqual(['a', 'b', 'c'])
+})
+
+test('freshness still bounds it — an fd on a two-day-old conversation is not open', () => {
+  // The counterpart to the three above: trusting the fd must not resurrect the restored-but-unused
+  // panel. Freshness is what separates them, not the process's start time.
+  const sessions = [s('stale', '/proj/a', minsAgo(60 * 46))]
+  const procs = [{ harness: 'claude' as HarnessId, cwd: '/proj/a', sessionId: 'stale', startedMs: NOW - 60_000 }]
+  expect(resolveLiveSnapshot(procs, sessions, NOW).liveSessionIds).toEqual([])
+})
+
 test('a process whose session IS open is not also listed as starting', () => {
   const sessions = [s('open', '/proj/a', minsAgo(1))]
   const procs = [{ harness: 'claude' as HarnessId, cwd: '/proj/a', sessionId: 'open', startedMs: NOW - 60_000 }]
