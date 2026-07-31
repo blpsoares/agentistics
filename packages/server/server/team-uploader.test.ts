@@ -876,6 +876,11 @@ describe('sustained auth failure — durable mark, never removal (production-inc
       // the connection out right here.
       await pushOnceDetailed(conn, ctx, { updateTeamConfig: fakeUpdateTeamConfig })
       await pushOnceDetailed(conn, ctx, { updateTeamConfig: fakeUpdateTeamConfig })
+      // handleAuthError runs fire-and-forget off the 401 branch — yield one tick so its (would-be)
+      // write has landed before asserting on it. Without this the old removeConnection call from
+      // the SECOND cycle's un-awaited promise would not have flushed yet either, and this test
+      // would have gone green against the very removal it names.
+      await new Promise(resolve => setTimeout(resolve, 0))
 
       expect(store.connections.map(c => c.id)).toEqual([id])
       expect(store.connections[0]!.deniedRepos).toEqual(['github.com/org/secret', 'github.com/org/other'])
@@ -966,6 +971,97 @@ describe('sustained auth failure — durable mark, never removal (production-inc
     } finally {
       fx.stop()
     }
+  })
+
+  // Important 1 from review: an AGENTISTICS_INGEST_ONLY central 404s every route except
+  // POST /api/team/ingest and POST /api/team/forget by design — so treating anything short of a
+  // 2xx from GET /api/team/whoami as "still rejected" would strand a member on such a central
+  // forever, even after the operator restores the token, with disconnect+reconnect (minting a new
+  // token/identity) as the only escape. Only an explicit 401/403 may keep the connection paused.
+  it('a marked connection recovers against a central where whoami 404s but ingest itself accepts the token (ingest-only central)', async () => {
+    const fx = authFixture(401)
+    try {
+      const id = randomConnId()
+      const conn = fakeConn(id, fx.port, { deniedRepos: [] })
+      const markedAt = new Date(Date.now() - 60_000).toISOString()
+      let store: TeamConfig = {
+        schema: 2, mode: 'member', connections: [{ ...conn, authFailedAt: markedAt }],
+      }
+      const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+        const next = mutate(store)
+        if (next !== undefined) store = next
+        return store
+      }
+      const ctx = makeCtx({ realStatsCache: { totalCostUSD: 0 } as unknown as StatsCache })
+
+      // whoami is not a route this central serves at all (ingest-only) — but the token itself
+      // works again, proven by ingest accepting it.
+      fx.setWhoamiStatus(404)
+      fx.setIngestStatus(200)
+
+      const marked = store.connections[0]!
+      const result = await pushOnceDetailed(marked, ctx, { updateTeamConfig: fakeUpdateTeamConfig })
+
+      // The probe could not prove recovery from whoami alone (404, not 2xx) — but a 404 is not a
+      // rejection either, so the mark is cleared and the real push is trusted to decide.
+      expect(store.connections[0]!.authFailedAt).toBeUndefined()
+      expect(fx.hits).toContain('/api/team/whoami')
+      expect(fx.hits).toContain('/api/team/ingest')
+      expect(result.count).toBe(0)
+    } finally {
+      fx.stop()
+    }
+  })
+
+  it('a marked connection stays paused while whoami still explicitly answers 401/403, never escalating past the probe', async () => {
+    const fx = authFixture(401)
+    try {
+      const id = randomConnId()
+      const conn = fakeConn(id, fx.port, { deniedRepos: [] })
+      const markedAt = new Date(Date.now() - 60_000).toISOString()
+      let store: TeamConfig = {
+        schema: 2, mode: 'member', connections: [{ ...conn, authFailedAt: markedAt }],
+      }
+      const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+        const next = mutate(store)
+        if (next !== undefined) store = next
+        return store
+      }
+      const ctx = makeCtx({ realStatsCache: { totalCostUSD: 0 } as unknown as StatsCache })
+      // whoamiStatus/ingestStatus both default to 401 from authFixture(401) — still explicitly
+      // rejected.
+
+      const marked = store.connections[0]!
+      const result = await pushOnceDetailed(marked, ctx, { updateTeamConfig: fakeUpdateTeamConfig })
+
+      expect(store.connections[0]!.authFailedAt).toBe(markedAt) // untouched — still paused
+      expect(fx.hits).toEqual(['/api/team/whoami']) // never reached ingest
+      expect(result).toEqual({ count: 0 })
+    } finally {
+      fx.stop()
+    }
+  })
+
+  it('a network error/timeout during the probe also keeps the connection paused', async () => {
+    const id = randomConnId()
+    // Port 1 is not a listening server on this machine — the probe's fetch will error/timeout.
+    const conn = fakeConn(id, 1, { deniedRepos: [] })
+    const markedAt = new Date(Date.now() - 60_000).toISOString()
+    let store: TeamConfig = {
+      schema: 2, mode: 'member', connections: [{ ...conn, authFailedAt: markedAt }],
+    }
+    const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+      const next = mutate(store)
+      if (next !== undefined) store = next
+      return store
+    }
+    const ctx = makeCtx({ realStatsCache: { totalCostUSD: 0 } as unknown as StatsCache })
+
+    const marked = store.connections[0]!
+    const result = await pushOnceDetailed(marked, ctx, { updateTeamConfig: fakeUpdateTeamConfig })
+
+    expect(store.connections[0]!.authFailedAt).toBe(markedAt) // untouched — a down central stays paused
+    expect(result).toEqual({ count: 0 })
   })
 
   it('Disconnect (manual) and `member leave` still remove a connection, even one currently marked auth-failed', async () => {

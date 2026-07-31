@@ -274,14 +274,23 @@ export type AddConnectionOutcome =
  * fallback path (Task 6, spec §8) can call the EXACT SAME decision the route uses instead of
  * re-implementing whoami-verify + decideConnectionUpsert by hand and risking drift between the
  * two. Never returns a token.
+ *
+ * `deps` is injectable for tests — the defaults hit the real network (`whoamiVerify`) and the
+ * developer's real `~/.agentistics/preferences.json` (`updateTeamConfig`), neither of which a test
+ * may do.
  */
-export async function addOrUpdateConnection(body: ConnectionBody): Promise<AddConnectionOutcome> {
-  const who = await whoamiVerify(body.endpoint, body.token)
+export async function addOrUpdateConnection(
+  body: ConnectionBody,
+  deps: { updateTeamConfig?: typeof updateTeamConfig; whoamiVerify?: typeof whoamiVerify } = {},
+): Promise<AddConnectionOutcome> {
+  const _updateTeamConfig = deps.updateTeamConfig ?? updateTeamConfig
+  const _whoamiVerify = deps.whoamiVerify ?? whoamiVerify
+  const who = await _whoamiVerify(body.endpoint, body.token)
   if (!who.ok) return { ok: false, reason: 'verify-failed', error: who.error ?? 'connection could not be verified' }
 
   let outcome: { action: 'insert' | 'update' | 'conflict'; connId?: string; ownerEndpoint?: string } = { action: 'insert' }
   try {
-    await updateTeamConfig((current: TeamConfig) => {
+    await _updateTeamConfig((current: TeamConfig) => {
       const decision = decideConnectionUpsert(current.connections, body.endpoint, body.token)
       if (decision.action === 'conflict') {
         outcome = { action: 'conflict', ownerEndpoint: decision.existing.endpoint }
@@ -289,8 +298,14 @@ export async function addOrUpdateConnection(body: ConnectionBody): Promise<AddCo
       }
       if (decision.action === 'update') {
         const existing = decision.existing
+        // Drop `authFailedAt` explicitly rather than carry it forward via `...existing` — this
+        // branch is only reached once `whoamiVerify` above has ALREADY proven the new token good,
+        // which is strictly stronger proof than the push cycle's own recovery probe. A user who
+        // rotates the token on the central and reconnects (exactly the advice the mark's own log
+        // line gives) must not still see "unauthorized" on a token that demonstrably works.
+        const { authFailedAt: _cleared, ...prev } = existing
         const updated: TeamConnection = {
-          ...existing,
+          ...prev,
           endpoint: body.endpoint,
           token: body.token,
           // Same precedence as the insert branch below — an explicit body value wins, else the

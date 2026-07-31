@@ -15,11 +15,11 @@ import { describe, it, expect, afterEach } from 'bun:test'
 import {
   validateConnectionBody, validatePatchBody, decideConnectionUpsert,
   aggregateConnectionStatuses, leaveConnectionById, resolveDeniedRepos,
-  buildConnectionStatusEntry, otelExportEnabled, type ConnectionStatusEntry,
+  buildConnectionStatusEntry, otelExportEnabled, addOrUpdateConnection, type ConnectionStatusEntry,
 } from './team-connections'
-import type { TeamConnection } from '@agentistics/core'
+import type { TeamConnection, TeamConfig } from '@agentistics/core'
 import { NO_REPO_KEY } from '@agentistics/core'
-import type { Preferences } from './preferences'
+import type { Preferences, TeamConfigMutator } from './preferences'
 import type { UploaderStatus } from './team-uploader'
 
 function conn(id: string, extra?: Partial<TeamConnection>): TeamConnection {
@@ -258,6 +258,59 @@ describe('decideConnectionUpsert — the two uniqueness rules', () => {
     const a = conn('c_a', { endpoint: 'https://a.example.com', token: '' })
     const decision = decideConnectionUpsert([a], 'https://b.example.com', '')
     expect(decision.action).toBe('insert')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// addOrUpdateConnection — DI-tested (review follow-up, Important 2): reconnecting with a
+// whoami-VERIFIED token must clear a connection's `authFailedAt` mark. `whoamiVerify` and
+// `updateTeamConfig` are both injected — the defaults hit the real network and the developer's
+// real ~/.agentistics/preferences.json, which a test must never do.
+// ---------------------------------------------------------------------------
+
+describe('addOrUpdateConnection — clears authFailedAt on a whoami-verified reconnect (review Important 2)', () => {
+  it('an update against a connection currently marked auth-failed leaves authFailedAt undefined', async () => {
+    const existing = conn('c_a', { authFailedAt: '2026-07-20T10:00:00.000Z', deniedRepos: ['github.com/o/secret'] })
+    let store: TeamConfig = { schema: 2, mode: 'member', connections: [existing] }
+    const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+      const next = mutate(store)
+      if (next !== undefined) store = next
+      return store
+    }
+    const fakeWhoamiVerify = async () => ({ ok: true as const, user: 'alice', org: 'default' })
+
+    const result = await addOrUpdateConnection(
+      { endpoint: existing.endpoint, token: 'rotated-good-token' },
+      { updateTeamConfig: fakeUpdateTeamConfig, whoamiVerify: fakeWhoamiVerify },
+    )
+
+    expect(result).toEqual({ ok: true, action: 'update', connId: 'c_a' })
+    const updated = store.connections.find(c => c.id === 'c_a')!
+    // The token demonstrably works (whoami just proved it) — the mark must not survive.
+    expect(updated.authFailedAt).toBeUndefined()
+    expect(updated.token).toBe('rotated-good-token')
+    // Nothing else about the connection's identity or rules was disturbed by clearing the mark.
+    expect(updated.deniedRepos).toEqual(['github.com/o/secret'])
+    expect(updated.id).toBe('c_a')
+  })
+
+  it('a rejected whoami leaves an existing mark untouched (verify-failed, no store write at all)', async () => {
+    const existing = conn('c_a', { authFailedAt: '2026-07-20T10:00:00.000Z' })
+    let store: TeamConfig = { schema: 2, mode: 'member', connections: [existing] }
+    const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+      const next = mutate(store)
+      if (next !== undefined) store = next
+      return store
+    }
+    const fakeWhoamiVerify = async () => ({ ok: false as const, error: 'the central rejected this token' })
+
+    const result = await addOrUpdateConnection(
+      { endpoint: existing.endpoint, token: 'still-bad-token' },
+      { updateTeamConfig: fakeUpdateTeamConfig, whoamiVerify: fakeWhoamiVerify },
+    )
+
+    expect(result).toEqual({ ok: false, reason: 'verify-failed', error: 'the central rejected this token' })
+    expect(store.connections.find(c => c.id === 'c_a')!.authFailedAt).toBe('2026-07-20T10:00:00.000Z')
   })
 })
 

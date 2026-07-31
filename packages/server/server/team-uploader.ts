@@ -820,12 +820,21 @@ async function resolveConnectionUser(
 }
 
 /**
- * Cheap liveness/auth probe for a connection currently marked `authFailedAt` — proof the central
- * accepts this token again, without building or sending the full push payload (sessions,
- * statsCache, workflows) to a central that may still be rejecting it. Returns `true` only on a
- * genuine 2xx from `/api/team/whoami`; `false` on 401/403, any other status, a network error or a
- * timeout — all of which mean "still not ready", not a new error (the auth-rejected notification
- * already fired and is transition-guarded; this probe only decides whether pushing may resume).
+ * Cheap liveness/auth probe for a connection currently marked `authFailedAt` — decides only
+ * whether the central is STILL EXPLICITLY REJECTING this token, not whether `/api/team/whoami`
+ * happens to answer 2xx. An `AGENTISTICS_INGEST_ONLY` central 404s every route except
+ * `POST /api/team/ingest` and `POST /api/team/forget` by design (see `index.ts`) — treating that
+ * 404 as "still rejected" would strand a member on such a central forever, since the probe would
+ * never see anything but 404 even after the operator restores the token. Same for any central
+ * behind a proxy that answers a non-2xx for an unknown path while ingest itself is healthy.
+ *
+ * So: 401/403 → `false` (the central is still actively rejecting — stay paused, do not spend the
+ * full push payload proving it again). A network error or timeout also → `false` (the `catch`) —
+ * a genuinely down central must still stay paused. EVERYTHING ELSE (2xx, 404, 500, whatever a
+ * route that may not even exist here returns) → `true` — "can't tell from this probe alone", so
+ * let the real push decide: if the token is in fact still bad, that push 401s and
+ * `handleAuthError` simply restarts the 10-minute clock (self-correcting, and it removes any
+ * dependency on `/api/team/whoami` existing or behaving a particular way).
  */
 async function probeAuthRecovered(conn: TeamConnection): Promise<boolean> {
   try {
@@ -837,7 +846,8 @@ async function probeAuthRecovered(conn: TeamConnection): Promise<boolean> {
       headers,
       signal: AbortSignal.timeout(5_000),
     })
-    return res.ok
+    if (res.status === 401 || res.status === 403) return false
+    return true
   } catch {
     return false
   }
