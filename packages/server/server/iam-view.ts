@@ -151,6 +151,20 @@ export function canSeeMemberNames(p: Principal): boolean {
   return p.role === 'owner' || p.memberships.some(m => m.role === 'manager')
 }
 
+/**
+ * Whether DELETE /api/iam/mfa may proceed for an account of this role.
+ *
+ * An owner reaches every team's data and every admin route, and — since account recovery is now
+ * self-service through the second factor (see `exposure.ts`'s `requireMfaForOwner`) — an owner
+ * with no second factor has no way back in except the host. So an owner may never turn MFA off,
+ * full stop: not with a valid TOTP code, not with a recovery code. The two ways back in an owner
+ * still has (a single-use recovery code, or `./central.sh reset-password --clear-mfa` from the
+ * host) both stay open — neither goes through this route. A non-owner keeps today's behaviour.
+ */
+export function mfaDisableAllowed(role: Role): boolean {
+  return role !== 'owner'
+}
+
 /** Whether a principal may view/manage a specific machine: owner, a manager of ANY of the machine's
  *  teams, OR one of the machine's owner accounts (a user managing a machine they own). A machine may
  *  have several owner accounts AND belong to several teams. */

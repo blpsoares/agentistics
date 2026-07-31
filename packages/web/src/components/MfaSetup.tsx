@@ -15,12 +15,26 @@ import { useIsMobile } from '../hooks/useIsMobile'
  * Recovery codes are shown exactly once — the server stores only their sha256 hashes and cannot
  * show them again.
  */
-export function MfaSetup({ lang, onClose, required = false }: {
+/**
+ * Whether the "Disable" action should render at all: only once MFA is actually enabled, AND only
+ * for a caller the server will let disable it (`canDisable` mirrors `mfaDisableAllowed` in
+ * `iam-view.ts` — an owner is never allowed to turn it off, so the button must never appear for
+ * one). Pulled out pure so the condition is testable without a live fetch/state render — the
+ * button's absence is exactly as load-bearing as its presence.
+ */
+export function disableActionVisible(enabled: boolean, canDisable: boolean): boolean {
+  return enabled && canDisable
+}
+
+export function MfaSetup({ lang, onClose, required = false, canDisable = true }: {
   lang: Lang
   onClose: () => void
   /** Enrolment is owed, not optional: the overlay does not dismiss and there is no way out but
    *  finishing. Used by the App gate for an owner the server is already refusing. */
   required?: boolean
+  /** False for an owner: the server refuses DELETE /api/iam/mfa outright for that role
+   *  (`mfaDisableAllowed`), so showing the button would just be a promise the route breaks. */
+  canDisable?: boolean
 }) {
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
@@ -140,7 +154,11 @@ export function MfaSetup({ lang, onClose, required = false }: {
         {!recovery && enabled === true && (
           <div style={{ marginTop: 10 }}>
             <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
-              {pt ? 'Ativa nesta conta. Para desativar, confirme com um código atual.' : 'Active on this account. To turn it off, confirm with a current code.'}
+              {canDisable
+                ? (pt ? 'Ativa nesta conta. Para desativar, confirme com um código atual.' : 'Active on this account. To turn it off, confirm with a current code.')
+                : (pt
+                  ? 'Ativa nesta conta e obrigatória — contas owner não podem desativar a verificação em duas etapas. Você ainda pode gerar novos códigos de recuperação com um código atual.'
+                  : 'Active on this account and mandatory — owner accounts cannot turn off two-factor authentication. You can still generate new recovery codes with a current code.')}
             </div>
             <input value={code} onChange={e => setCode(e.target.value)} placeholder="123456" style={input}
               inputMode="numeric" autoComplete="one-time-code" />
@@ -150,10 +168,16 @@ export function MfaSetup({ lang, onClose, required = false }: {
             <button onClick={regenerate} disabled={!code.trim() || busy} style={primaryBtn}>
               {pt ? 'Gerar novos códigos de recuperação' : 'Generate new recovery codes'}
             </button>
-            <div style={{ height: 8 }} />
-            <button onClick={disable} disabled={!code.trim() || busy} style={dangerBtn}>
-              {pt ? 'Desativar' : 'Disable'}
-            </button>
+            {/* The route (`mfaDisableAllowed`) is the actual control; this is the button staying
+                consistent with it so an owner is never offered an action the server will refuse. */}
+            {disableActionVisible(enabled, canDisable) && (
+              <>
+                <div style={{ height: 8 }} />
+                <button onClick={disable} disabled={!code.trim() || busy} style={dangerBtn}>
+                  {pt ? 'Desativar' : 'Disable'}
+                </button>
+              </>
+            )}
           </div>
         )}
 

@@ -25,7 +25,7 @@ import { TEAM_SESSION_SECRET } from './config'
 import { CAPS } from './exposure'
 import { generateSecret, otpauthUri, verifyTotp, generateRecoveryCodes, hashRecoveryCode, totpSkewSteps, TOTP_STEP_SECONDS } from './totp'
 import { getMfa, isMfaEnabled, enableMfa, disableMfa, consumeRecoveryCode } from './mfa-store'
-import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, authorizeAccountPatch } from './iam-view'
+import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, authorizeAccountPatch, mfaDisableAllowed } from './iam-view'
 import type { AccountDoc, Membership, Role } from './iam-types'
 import { normalizeEmail } from './iam-types'
 import { limiter, RULES, tooManyRequests } from './rate-limit'
@@ -292,7 +292,8 @@ async function proveSecondFactor(accountId: string, secret: string, code: string
  *   GET    /api/iam/mfa        → { enabled }
  *   POST   /api/iam/mfa/start  → { secret, otpauthUri }  (generated, not yet active)
  *   POST   /api/iam/mfa/enable { secret, code } → { recoveryCodes } shown exactly once
- *   DELETE /api/iam/mfa        { code } → disables
+ *   DELETE /api/iam/mfa        { code } → disables (refused outright for an owner — see
+ *                                          `mfaDisableAllowed`)
  */
 export async function handleMfa(req: Request, pathname: string, ip = 'unknown'): Promise<Response> {
   const principal = await getPrincipal(req)
@@ -367,6 +368,14 @@ export async function handleMfa(req: Request, pathname: string, ip = 'unknown'):
   }
 
   if (pathname === '/api/iam/mfa' && req.method === 'DELETE') {
+    // Mandatory for owners, full stop: refused before any code is even looked at, so a valid
+    // TOTP code or a spent recovery code is not a way around it either. The UI already hides
+    // the button (`MfaSetup`'s `canDisable`) — this is the route that actually enforces it, per
+    // "the route is the control; the UI is a convenience." A non-owner is unaffected.
+    if (!mfaDisableAllowed(account.role)) {
+      void writeAudit({ action: 'mfa.disable_refused', ip, actorId: account._id })
+      return json({ error: 'mfa is mandatory for owner accounts and cannot be disabled' }, 403)
+    }
     let body: unknown
     try { body = await req.json() } catch { body = {} }
     const code = typeof (body as Record<string, unknown>).code === 'string'
