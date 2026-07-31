@@ -115,44 +115,65 @@ test('re-adding the SAME endpoint with the SAME token it already owns is a dupli
 
 // --- 5. the submit body --------------------------------------------------------------------------
 
-test('the submit body carries exactly endpoint/token/org/deniedRepos, trailing-slash-trimmed, label omitted when blank', () => {
+test('the submit body carries exactly endpoint/token/org/shareMode/sources, trailing-slash-trimmed, label omitted when blank', () => {
   const body = buildSubmitBody({
     endpoint: 'https://central.example.com/', token: 'sekrit', org: 'acme', label: '',
-    deniedKeys: new Set(),
+    mode: 'denylist', submitted: { projectRows: [], repoKeys: new Set(), projectPaths: new Set() },
   })
-  expect(body).toEqual({ endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme', deniedRepos: [] })
+  expect(body).toEqual({
+    endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme',
+    shareMode: 'denylist', sources: [],
+  })
 })
 
 test('the submit body includes label when non-blank', () => {
   const body = buildSubmitBody({
     endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme', label: '  Prod  ',
-    deniedKeys: new Set(),
+    mode: 'denylist', submitted: { projectRows: [], repoKeys: new Set(), projectPaths: new Set() },
   })
   expect(body.label).toBe('Prod')
 })
 
-test('deniedRepos includes NO_REPO_KEY the moment anything is blocked, even if it was never explicitly chosen', () => {
+test('denylist sources widen in NO_REPO_KEY the moment anything is blocked, even if it was never explicitly chosen', () => {
   const body = buildSubmitBody({
     endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme', label: '',
-    deniedKeys: new Set(['github.com/org/repo']),
+    mode: 'denylist', submitted: { projectRows: [], repoKeys: new Set(['github.com/org/repo']), projectPaths: new Set() },
   })
-  expect(new Set(body.deniedRepos)).toEqual(new Set(['github.com/org/repo', NO_REPO_KEY]))
+  const values = new Set(body.sources.map(s => s.type === 'none' ? NO_REPO_KEY : s.value))
+  expect(values).toEqual(new Set(['github.com/org/repo', NO_REPO_KEY]))
 })
 
-test('deniedRepos stays [] when nothing is blocked', () => {
+test('sources stays [] when nothing is blocked', () => {
   const body = buildSubmitBody({
     endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme', label: '',
-    deniedKeys: new Set(),
+    mode: 'denylist', submitted: { projectRows: [], repoKeys: new Set(), projectPaths: new Set() },
   })
-  expect(body.deniedRepos).toEqual([])
+  expect(body.sources).toEqual([])
 })
 
-test('deniedRepos does not duplicate NO_REPO_KEY when it was already explicitly chosen', () => {
+test('the none source is never duplicated when NO_REPO_KEY was already explicitly chosen', () => {
   const body = buildSubmitBody({
     endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme', label: '',
-    deniedKeys: new Set(['github.com/org/repo', NO_REPO_KEY]),
+    mode: 'denylist', submitted: { projectRows: [], repoKeys: new Set(['github.com/org/repo', NO_REPO_KEY]), projectPaths: new Set() },
   })
-  expect(body.deniedRepos.filter(k => k === NO_REPO_KEY).length).toBe(1)
+  expect(body.sources.filter(s => s.type === 'none').length).toBe(1)
+})
+
+test('allowlist mode never widens in NO_REPO_KEY — an empty allowlist must stay empty, not silently share nothing extra', () => {
+  const body = buildSubmitBody({
+    endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme', label: '',
+    mode: 'allowlist', submitted: { projectRows: [], repoKeys: new Set(['github.com/org/repo']), projectPaths: new Set() },
+  })
+  expect(body.sources.some(s => s.type === 'none')).toBe(false)
+  expect(body.shareMode).toBe('allowlist')
+})
+
+test('project sources round-trip into the submit body alongside repo sources', () => {
+  const body = buildSubmitBody({
+    endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme', label: '',
+    mode: 'denylist', submitted: { projectRows: [], repoKeys: new Set(), projectPaths: new Set(['/home/user/app']) },
+  })
+  expect(body.sources).toContainEqual({ type: 'project', value: '/home/user/app' })
 })
 
 // --- 6. dirty ------------------------------------------------------------------------------------

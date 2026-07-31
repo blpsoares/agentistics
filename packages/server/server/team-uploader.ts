@@ -28,8 +28,8 @@ import { migrateTeamStateOnce, convertSentStateV1, type SentStateV2 } from './te
 import { readJsonLimited, LIMITS } from './limits'
 import type { ServerProject } from './data'
 import {
-  normalizeDenied, hasRestrictions, buildPathRepoIndex, filterShared, sharedSessionIds,
-  filterSharedWorkflows, attributionBoundary, buildSplitStatsCache,
+  buildPathRepoIndex, sharedSessionIds, filterSharedWorkflows, attributionBoundary, buildSplitStatsCache,
+  shareRulesOf, sourcesRestrict, filterSharedRules,
   type PathRepoIndex, type DeniedLedger,
 } from './share-rules'
 import { parseCapabilities, centralCanForget } from './team-capabilities'
@@ -282,8 +282,8 @@ export const AUTH_FAIL_SUSTAIN_MS = 10 * 60_000
 
 /**
  * Persist the "this connection needs attention" flag — `TeamConnection.authFailedAt` — once a
- * connection's auth failures are confirmed. Never removes the connection: `deniedRepos`, the
- * label, everything stays. Idempotent (a connection already marked is a no-op, including across a
+ * connection's auth failures are confirmed. Never removes the connection: its rules (`shareMode`/
+ * `sources`), the label, everything stays. Idempotent (a connection already marked is a no-op, including across a
  * concurrent race — the mutator re-checks after re-reading).
  *
  * Called from two places, both a CONFIRMED rejection rather than a guess: (1) `handleAuthError`
@@ -887,15 +887,15 @@ export async function pushOnceDetailed(
   const ingestTimeoutMs = ctx.ingestTimeoutMs ?? DEFAULT_INGEST_TIMEOUT_MS
 
   try {
-    const denied = normalizeDenied(conn.deniedRepos)
-    const restricted = hasRestrictions(conn.deniedRepos)
+    const rules = shareRulesOf(conn.shareMode, conn.sources)
+    const restricted = sourcesRestrict(conn.shareMode, conn.sources)
     // Tracked so the scheduling functions (scheduleOnChangeTrigger, scheduleConnectionCycle),
     // which only ever see a connId, can also honor this connection's restriction (§5.3.4).
     _restrictedConn.set(conn.id, restricted)
 
     // BEFORE selectDeltas — see the class doc. A denied session that reached nextSent would be
     // invisible to every later push, so un-blocking the repo would never send it.
-    const shared = restricted ? filterShared(ctx.storedSessions, denied, ctx.index) : ctx.storedSessions
+    const shared = restricted ? filterSharedRules(ctx.storedSessions, rules, ctx.index) : ctx.storedSessions
     const sent = await loadSentState(conn.id)
     const { toSend, nextSent } = selectDeltas(shared, sent)
 
@@ -915,7 +915,7 @@ export async function pushOnceDetailed(
       const split = buildSplitStatsCache({
         real: ctx.realStatsCache,
         allStored: ctx.liveSessions,
-        shared: filterShared(ctx.liveSessions, denied, ctx.index),
+        shared: filterSharedRules(ctx.liveSessions, rules, ctx.index),
         boundary,
         sealed: deps.sealed ?? {},
       })
@@ -1211,7 +1211,8 @@ async function reconcileRulesFor(conn: TeamConnection, ctx: PushCycleContext) {
   const prevRules = await loadRulesState(conn.id)
   const rawSent = await loadRawSentState(conn.id)
   const rulesPlan = planRulesReconcile({
-    deniedRepos: conn.deniedRepos,
+    mode: conn.shareMode,
+    sources: conn.sources,
     sentHashes: rawSent.hashes,
     sentRunIds: rawSent.runIds,
     storedSessions: ctx.storedSessions,
@@ -1570,7 +1571,7 @@ async function supervisorTick(deps: { readPreferences?: typeof readPreferences }
       // still fan out on every local change and use an unjittered cadence — exactly the moment a
       // user has just blocked a repo, which is when the timing leak in §5.3.4 matters most. This
       // tick runs every ~5s, so a freshly-declared restriction is honored well before any push.
-      _restrictedConn.set(c.id, hasRestrictions(c.deniedRepos))
+      _restrictedConn.set(c.id, sourcesRestrict(c.shareMode, c.sources))
       if (!_activeChains.has(c.id)) startConnectionChain(c)
     }
     for (const id of Array.from(_activeChains)) {
@@ -1767,7 +1768,7 @@ export async function guardedManualPush(conn: TeamConnection, ctx: PushCycleCont
     // seals two different ways is the class of drift this whole area has been fixing.
     const { sealed } = computeLedger({
       liveSessions: ctx.liveSessions,
-      denied: normalizeDenied(conn.deniedRepos),
+      rules: shareRulesOf(conn.shareMode, conn.sources),
       index: ctx.index,
       real: ctx.realStatsCache,
       prev,

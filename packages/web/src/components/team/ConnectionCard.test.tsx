@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test'
 import {
   resolveCardState, resolveRepoPanelMode, showsApplyQueuedBanner, isBrokenEndpoint,
-  resolveWritesDisabled,
+  resolveWritesDisabled, resolveRulePill,
 } from './cardState'
 import { canEditRepos, type ApplyPhase } from './repoPanelState'
 import { resolvePanelBranch } from './ConnectionsPanel'
@@ -23,6 +23,7 @@ function status(over: Partial<ConnectionStatusEntry> = {}): ConnectionStatusEntr
   return {
     id: 'c_1', endpoint: 'https://central.example', org: 'default', user: 'alice',
     lastSuccessAt: null, errKind: null, latencyMs: null,
+    shareMode: 'denylist', deniedRepos: 0, deniedProjects: 0, allowedCount: 0,
     deniedCount: 0, restricted: false, boundary: null, prehistorySessions: null,
     canForget: true, centralTooOld: false, resync: null, pendingRules: false,
     ...over,
@@ -151,4 +152,24 @@ test('resolveWritesDisabled closes for every write-blocking reason, and only tho
   expect(resolveWritesDisabled('connected', false, false, 'submitting')).toBe(true)
   expect(resolveWritesDisabled('offline', false, false, 'idle')).toBe(false)
   expect(resolveWritesDisabled('connected', false, false, 'error')).toBe(false)
+})
+
+// --- the collapsed card's rules pill (review Important 3) ---------------------------------------
+
+test('denylist: the pill counts what is HIDDEN', () => {
+  expect(resolveRulePill(status({ shareMode: 'denylist', deniedRepos: 2, deniedProjects: 1, deniedCount: 3 })))
+    .toEqual({ tone: 'deny', count: 3 })
+})
+
+test('allowlist: the same count is what is SHARED, never "hidden"', () => {
+  // `ruleCountsOf` puts the allowlist total in BOTH `allowedCount` and the legacy `deniedCount` —
+  // reading the legacy field as "blocked" reported "3 hidden" for a connection sharing only 3
+  // repositories out of 40.
+  expect(resolveRulePill(status({ shareMode: 'allowlist', allowedCount: 3, deniedCount: 3 })))
+    .toEqual({ tone: 'allow', count: 3 })
+})
+
+test('no rules at all, and a never-polled connection, show no pill', () => {
+  expect(resolveRulePill(status({ shareMode: 'denylist', deniedCount: 0 }))).toBeNull()
+  expect(resolveRulePill(undefined)).toBeNull()
 })

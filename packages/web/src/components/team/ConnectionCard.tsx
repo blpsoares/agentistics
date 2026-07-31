@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, EyeOff, Pencil, Loader2, Check, X } from 'lucide-react'
-import type { SessionMeta, TeamConnection, ModelUsage } from '@agentistics/core'
+import type { SessionMeta, TeamConnection, ModelUsage, ShareSource } from '@agentistics/core'
 import type { ArchiveMode } from '../ArchiveConsentModal'
-import type { ShareTarget } from '../../lib/shareRepos'
+import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
+import type { ShareMode } from './sharePanelState'
 import { hostOf, plural } from '../../lib/shareRepos'
 import { StatusDot, ConfirmModal } from '../../pages/settings/primitives'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { COPY, PLURAL_COPY, interpolate } from './copy'
 import { ConnectionIdentity, type ProbedIdentity } from './ConnectionIdentity'
 import type { ConnectionStatusEntry } from './statusTypes'
-import { isBrokenEndpoint, resolveCardState, showsApplyQueuedBanner, resolveWritesDisabled, DOT } from './cardState'
+import { isBrokenEndpoint, resolveCardState, resolveRulePill, showsApplyQueuedBanner, resolveWritesDisabled, DOT } from './cardState'
 import { resolveCardActionsHidden, type ApplyPhase } from './repoPanelState'
 import {
   IconBtn, DisconnectButton, mobileBtn, StatusLine, ResyncStrip, RepoPanelSlot,
@@ -22,6 +23,8 @@ export interface ConnectionCardProps {
   /** Computed once in ConnectionsPanel from the unfiltered session/project lists — the repository
    *  picker (Task 11) consumes this same array instead of recomputing it per card. */
   shareTargets: ShareTarget[]
+  /** The project projection (Plan 4 Task 5), computed once from the same unfiltered lists. */
+  projectTargets: ProjectTarget[]
   /** Unfiltered — threaded through to the repository picker for its impact estimate and its
    *  "proven prehistory" check. */
   sessions: SessionMeta[]
@@ -36,11 +39,11 @@ export interface ConnectionCardProps {
   onRename: (id: string, label: string) => void
   onDisconnect: (id: string) => Promise<void>
   onSyncNow: (id: string) => Promise<void>
-  onApplyRules: (id: string, deniedRepos: string[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
+  onApplyRules: (id: string, mode: ShareMode, sources: ShareSource[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
 }
 
 export function ConnectionCard({
-  conn, status, archiveMode, shareTargets, sessions, modelUsage, otelEnabled, duplicateHost, lang,
+  conn, status, archiveMode, shareTargets, projectTargets, sessions, modelUsage, otelEnabled, duplicateHost, lang,
   onRename, onDisconnect, onSyncNow, onApplyRules,
 }: ConnectionCardProps) {
   const isMobile = useIsMobile()
@@ -149,7 +152,9 @@ export function ConnectionCard({
     )
   }
 
-  const deniedCount = status?.deniedCount ?? 0
+  // Polarity follows the connection's MODE — see `resolveRulePill`. Same shared-positive
+  // discipline the expanded read view already follows.
+  const rulePill = resolveRulePill(status)
   const disableWrites = resolveWritesDisabled(state, syncing, disconnecting, applyPhase)
 
   return (
@@ -234,14 +239,20 @@ export function ConnectionCard({
             </div>
           )}
         </div>
-        {deniedCount > 0 && (
+        {rulePill && (
           <span style={{
             display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999,
-            background: 'color-mix(in srgb, var(--anthropic-orange) 15%, transparent)',
-            color: 'var(--anthropic-orange)', fontSize: 11, fontWeight: 700, flexShrink: 0,
+            background: rulePill.tone === 'allow'
+              ? 'color-mix(in srgb, var(--accent-green) 15%, transparent)'
+              : 'color-mix(in srgb, var(--anthropic-orange) 15%, transparent)',
+            color: rulePill.tone === 'allow' ? 'var(--accent-green)' : 'var(--anthropic-orange)',
+            fontSize: 11, fontWeight: 700, flexShrink: 0,
           }}>
-            <EyeOff size={11} />
-            {interpolate(plural(PLURAL_COPY.blockedPill[lang], deniedCount), { n: deniedCount })}
+            {rulePill.tone === 'allow' ? <Check size={11} /> : <EyeOff size={11} />}
+            {interpolate(
+              plural(rulePill.tone === 'allow' ? PLURAL_COPY.allowedPill[lang] : PLURAL_COPY.blockedPill[lang], rulePill.count),
+              { n: rulePill.count },
+            )}
           </span>
         )}
         {expanded ? <ChevronDown size={20} style={{ flexShrink: 0 }} /> : <ChevronRight size={20} style={{ flexShrink: 0 }} />}
@@ -272,11 +283,13 @@ export function ConnectionCard({
 
           <RepoPanelSlot
             connId={conn.id}
-            deniedRepos={conn.deniedRepos}
+            sources={conn.sources}
+            shareMode={conn.shareMode}
             state={state}
             status={status}
             archiveMode={archiveMode}
             shareTargets={shareTargets}
+            projectTargets={projectTargets}
             sessions={sessions}
             modelUsage={modelUsage}
             otelEnabled={otelEnabled}

@@ -4,23 +4,30 @@ import type { SessionMeta, TeamConnection, ModelUsage } from '@agentistics/core'
 import Drawer from '../../pages/settings/Drawer'
 import { FieldInput } from '../../pages/settings/primitives'
 import { useIsMobile } from '../../hooks/useIsMobile'
-import { buildShareTargets, hostOf, type ServerProject } from '../../lib/shareRepos'
+import { buildShareTargets, buildProjectTargets, hostOf, type ServerProject, type ProjectTarget } from '../../lib/shareRepos'
 import { COPY, interpolate } from './copy'
-import { EditView } from './SharedReposEditView'
+import { EditView, ProjectEditView, ModeSelector, PickerTabs } from './SharedReposEditView'
 import { diffDraft, toggleTarget, shareAllDraft, blockAllDraft } from './repoPanelState'
+import {
+  resolveInitialTab, toggleProjectTarget, shareAllProjectsDraft, blockAllProjectsDraft,
+  isEmptyAllowlist, isProjectLocked, partiallyDeniedRepoKeys, resolveSubmittedRules,
+  type PickerTab, type ShareMode,
+} from './sharePanelState'
 import {
   unpackToken, canOpenRules, canConnect, resolveDupeState, computeDirty, buildSubmitBody,
   buildDefaultDraft, type WizardStep, type TestOutcome,
 } from './addCentralState'
 
 /**
- * AddCentralDrawer.tsx — the two-step "add a central" wizard (Task 12, design doc §9.6).
+ * AddCentralDrawer.tsx — the two-step "add a central" wizard (Task 12, design doc §9.6), extended
+ * by Plan 4 Tasks 6–7 with the same two-tab Projects/Repositories picker and the mode selector
+ * `SharedReposPanel.tsx` uses.
  *
- * Step 1 identifies the central (token/endpoint + a required successful test); step 2 is the
- * SAME repository picker Task 11 built (`SharedReposEditView.tsx`'s `EditView`), defaulted to
- * share-everything. Both steps commit in exactly ONE `POST /api/team/connections` carrying
- * `{ endpoint, token, org, label?, deniedRepos }` — see `addCentralState.ts`'s docstring for why
- * the connection is never created before the rules are chosen.
+ * Step 1 identifies the central (token/endpoint + a required successful test); step 2 is the SAME
+ * picker, defaulted to share-everything. Both steps commit in exactly ONE
+ * `POST /api/team/connections` carrying `{ endpoint, token, org, label?, shareMode, sources }` —
+ * see `addCentralState.ts`'s docstring for why the connection is never created before the rules
+ * are chosen.
  *
  * This file is layout plus fetches: the step machine, the token unpacking, the duplicate/conflict
  * decisions, the dirty computation and the exact submit body all live in `addCentralState.ts` and
@@ -72,10 +79,14 @@ export function AddCentralDrawer({
   const [testing, setTesting] = useState(false)
 
   const [draft, setDraft] = useState<Set<string> | null>(null)
+  const [projectDraft, setProjectDraft] = useState<Set<string> | null>(null)
+  const [mode, setMode] = useState<ShareMode>('denylist')
+  const [tab, setTab] = useState<PickerTab>(resolveInitialTab())
   const [rulesTouched, setRulesTouched] = useState(false)
   const [search, setSearch] = useState('')
   const [showStale, setShowStale] = useState(false)
   const [showAllMobile, setShowAllMobile] = useState(false)
+  const [showEmptyAllowlistWarning, setShowEmptyAllowlistWarning] = useState(false)
 
   const [connecting, setConnecting] = useState(false)
   const [connectErr, setConnectErr] = useState<string | null>(null)
@@ -86,10 +97,26 @@ export function AddCentralDrawer({
     () => buildShareTargets(sessions, projects, [], { noRepo: noRepoLabel }),
     [sessions, projects, noRepoLabel],
   )
+  const projectTargets = useMemo(
+    () => buildProjectTargets(sessions, projects, []),
+    [sessions, projects],
+  )
   const defaultDraft = useMemo(() => buildDefaultDraft(targets), [targets])
   const draftDenied = draft ?? defaultDraft
+  const projectDraftDenied = projectDraft ?? new Set<string>()
   const emptyStored = useMemo(() => new Set<string>(), [])
   const diff = diffDraft(draftDenied, emptyStored)
+  const projectDiff = diffDraft(projectDraftDenied, emptyStored)
+  // The two drafts always mean "this switch is OFF" — the WIRE shape does not (see
+  // `resolveSubmittedRules`). Computed ONCE and shared by the empty-allowlist gate and the submit
+  // body, exactly as `SharedReposPanel` does: passing the raw drafts into either of them made a
+  // wizard-created allowlist store the one repository the user had just switched OFF, and nothing
+  // else.
+  const submitted = useMemo(
+    () => resolveSubmittedRules(mode, targets, projectTargets, draftDenied, projectDraftDenied),
+    [mode, targets, projectTargets, draftDenied, projectDraftDenied],
+  )
+  const partialRepoKeys = useMemo(() => partiallyDeniedRepoKeys(submitted.projectRows), [submitted])
 
   const bareToken = useMemo(() => unpackToken(tokenInput).token, [tokenInput])
   const dupe = resolveDupeState(connections, endpoint, bareToken)
@@ -150,13 +177,34 @@ export function AddCentralDrawer({
     setDraft(blockAllDraft(targets))
     setRulesTouched(true)
   }
+  function onToggleProjectRow(target: ProjectTarget, nextShared: boolean) {
+    setProjectDraft(toggleProjectTarget(projectDraftDenied, target, nextShared, isProjectLocked(target, draftDenied)))
+    setRulesTouched(true)
+  }
+  function onShareAllProjects() {
+    setProjectDraft(shareAllProjectsDraft(projectTargets))
+    setRulesTouched(true)
+  }
+  function onBlockAllProjects() {
+    setProjectDraft(blockAllProjectsDraft(projectTargets))
+    setRulesTouched(true)
+  }
+  function onModeChange(next: ShareMode) {
+    setMode(next)
+    setShowEmptyAllowlistWarning(false)
+    setRulesTouched(true)
+  }
 
   async function handleConnect() {
     if (!canConnect(step, test, dupe) || !test?.ok) return
+    if (isEmptyAllowlist(mode, submitted.repoKeys, submitted.projectPaths)) {
+      setShowEmptyAllowlistWarning(true)
+      return
+    }
     setConnecting(true)
     setConnectErr(null)
     const body = buildSubmitBody({
-      endpoint, token: bareToken, org: test.org ?? '', label, deniedKeys: draftDenied,
+      endpoint, token: bareToken, org: test.org ?? '', label, mode, submitted,
     })
     try {
       const res = await fetch('/api/team/connections', {
@@ -182,8 +230,12 @@ export function AddCentralDrawer({
     setLabel('')
     setTest(null)
     setDraft(null)
+    setProjectDraft(null)
+    setMode('denylist')
+    setTab(resolveInitialTab())
     setRulesTouched(false)
     setSearch('')
+    setShowEmptyAllowlistWarning(false)
     setConnectErr(null)
     onClose()
   }
@@ -273,24 +325,53 @@ export function AddCentralDrawer({
             {COPY.addRulesIntro[lang]}
           </div>
 
-          <EditView
-            targets={targets}
-            draftDenied={draftDenied}
-            diff={diff}
-            search={search}
-            onSearch={setSearch}
-            showStale={showStale}
-            onToggleStale={() => setShowStale(v => !v)}
-            showAllMobile={showAllMobile}
-            onShowAllMobile={() => setShowAllMobile(true)}
-            isMobile={isMobile}
-            lang={lang}
-            impactSessions={0}
-            impactCost={0}
-            onToggleRow={onToggleRow}
-            onShareAll={onShareAll}
-            onBlockAll={onBlockAll}
-          />
+          <ModeSelector mode={mode} onChange={onModeChange} lang={lang} isMobile={isMobile} />
+          <PickerTabs tab={tab} onChange={setTab} lang={lang} isMobile={isMobile} />
+
+          {tab === 'projects' ? (
+            <ProjectEditView
+              targets={projectTargets}
+              draftDenied={projectDraftDenied}
+              draftRepoKeys={draftDenied}
+              diff={projectDiff}
+              search={search}
+              onSearch={setSearch}
+              showStale={showStale}
+              onToggleStale={() => setShowStale(v => !v)}
+              showAllMobile={showAllMobile}
+              onShowAllMobile={() => setShowAllMobile(true)}
+              isMobile={isMobile}
+              lang={lang}
+              onToggleRow={onToggleProjectRow}
+              onShareAll={onShareAllProjects}
+              onBlockAll={onBlockAllProjects}
+            />
+          ) : (
+            <EditView
+              targets={targets}
+              draftDenied={draftDenied}
+              diff={diff}
+              search={search}
+              onSearch={setSearch}
+              showStale={showStale}
+              onToggleStale={() => setShowStale(v => !v)}
+              showAllMobile={showAllMobile}
+              onShowAllMobile={() => setShowAllMobile(true)}
+              isMobile={isMobile}
+              lang={lang}
+              mode={mode}
+              partialRepoKeys={partialRepoKeys}
+              impactSessions={0}
+              impactCost={0}
+              onToggleRow={onToggleRow}
+              onShareAll={onShareAll}
+              onBlockAll={onBlockAll}
+            />
+          )}
+
+          {showEmptyAllowlistWarning && (
+            <InlineNote tone="error">{COPY.emptyAllowlistWarning[lang]}</InlineNote>
+          )}
 
           {connectErr && <InlineNote tone="error">{connectErr}</InlineNote>}
 

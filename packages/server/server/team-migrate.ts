@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { readPreferences, writePreferences } from './preferences'
 import { TEAM_CONN_DIR, teamSentFile, teamSyncFile, teamRulesFile, TEAM_SENT_FILE, TEAM_SYNC_FILE } from './config'
 import { safeReadJson } from './utils'
-import { denialSignature } from './share-rules'
+import { emptyRulesSignature } from './share-rules'
 
 export interface SentStateV2 {
   version: 2
@@ -87,7 +87,7 @@ export async function migrateTeamStateOnce(): Promise<void> {
       // a rules change — that would make the whole fleet run a removal on upgrade day.
       await writeFile(
         teamRulesFile(id),
-        JSON.stringify({ rulesHash: denialSignature([]), sharedIds: [], boundary: '', sealed: {}, pending: {} }, null, 2),
+        JSON.stringify({ rulesHash: emptyRulesSignature(), sharedIds: [], boundary: '', sealed: {}, pending: {} }, null, 2),
         'utf-8',
       )
     }

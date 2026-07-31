@@ -38,9 +38,13 @@ export interface TeamConnection {
   user: string
   /** Bearer secret (never logged). May be '' against an open/legacy central. */
   token: string
-  /** LEGACY. DENYLIST of canonical repo keys, plus NO_REPO_KEY. [] = share everything. Still
-   *  read by the migration below; never written by this version onward — write `sources` +
-   *  `shareMode` instead. */
+  /** LEGACY MIRROR of `sources`, DERIVED on every write by `normalizeTeamConfig` — never edited
+   *  by hand and never a second source of truth. It exists because an older binary (or a
+   *  container sharing ~/.agentistics), the shipped repository picker and `agentop status` all
+   *  still read it; leaving it frozen while `sources` moved on made those readers describe rules
+   *  that were no longer in force, and the picker then PATCHed that stale draft back, silently
+   *  un-blocking a repository. It can only express "these repo keys, plus the unattributed
+   *  bucket, are blocked" — see `legacyMirrorOf` / `TEAM_SCHEMA_TYPED_RULES`. */
   deniedRepos: string[]
   /** 'denylist' (share everything except `sources`) | 'allowlist' (share only `sources`).
    *  ABSENT reads as 'denylist' — every config that predates this field already behaves as a
@@ -63,9 +67,20 @@ export interface TeamConnection {
   authFailedAt?: string
 }
 
+/** The shape every reader since the multi-connection migration understands: `connections[]` whose
+ *  rules are fully expressed by the legacy `deniedRepos` mirror. */
+export const TEAM_SCHEMA_BASE = 2
+/** Stamped INSTEAD of `TEAM_SCHEMA_BASE` as soon as any connection's rules cannot be expressed by
+ *  that mirror — an `allowlist` connection, or any `project` source. Both cases mirror as an EMPTY
+ *  `deniedRepos`, and an empty mirror is exactly what "no restriction at all" looks like to a
+ *  reader that only knows `deniedRepos`: it would share the very repositories the user restricted.
+ *  The version marker is therefore load-bearing, not bookkeeping — it is the only thing that lets a
+ *  reader tell "nothing is blocked" from "the rules are in a shape I cannot read". */
+export const TEAM_SCHEMA_TYPED_RULES = 3
+
 export interface TeamConfig {
   /** Written by this version and above. Absent means an older client wrote it. */
-  schema?: 2
+  schema?: 2 | 3
   mode: 'solo' | 'member'
   connections: TeamConnection[]
   /** Legacy MIRROR of connections[0]. Still written for one release so an older binary or
@@ -155,17 +170,55 @@ export function normalizeEndpointKey(url: string): string {
   }
 }
 
-/** Force `mode` from connections.length, stamp the schema, and rebuild the legacy mirror.
+/**
+ * The legacy `deniedRepos` mirror for one connection, DERIVED from its typed rules — the single
+ * writer of that field. Only a DENYLIST of repo keys is expressible:
+ *  - `allowlist` mode mirrors as `[]`, because the legacy shape has no way to say "share only
+ *    these". The empty list is not the whole answer (it reads as "share everything") — the schema
+ *    bump is; see `TEAM_SCHEMA_TYPED_RULES`.
+ *  - `project` sources are dropped for the same reason, and bump the schema likewise.
+ *  - `none` — and, defensively, an empty `value` on any repo source — folds to `NO_REPO_KEY`, the
+ *    same fold `normalizeDenied` performs: `''` is eaten by any `.filter(Boolean)` downstream,
+ *    which turns "block unattributed work" into "block nothing".
+ * Order is preserved and duplicates collapse. Pure.
+ */
+function legacyMirrorOf(c: TeamConnection): string[] {
+  if (c.shareMode === 'allowlist') return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const s of c.sources ?? []) {
+    if (!s || s.type === 'project') continue
+    const key = s.type === 'none' || s.value === '' ? NO_REPO_KEY : s.value
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(key)
+  }
+  return out
+}
+
+/** Whether `legacyMirrorOf` loses nothing for this connection. False → the config must carry
+ *  `TEAM_SCHEMA_TYPED_RULES` so a reader that only knows the mirror can tell it is incomplete
+ *  instead of reading it as "no restrictions". Pure. */
+function mirrorExpressesRules(c: TeamConnection): boolean {
+  if (c.shareMode === 'allowlist') return false
+  return !(c.sources ?? []).some(s => s && s.type === 'project')
+}
+
+/** Force `mode` from connections.length, stamp the schema, and rebuild the legacy mirrors —
+ *  `deniedRepos` is DERIVED from `sources` here and nowhere else, so every write path (POST,
+ *  PATCH, the uploader, the migration) leaves the two describing the same rules. A connection
+ *  carrying NO `sources` key at all is the one exception: there is nothing to derive from, and
+ *  blanking its stored denylist would be the fail-open this derivation exists to prevent.
  *  Pure — returns a new object with a new array. */
 export function normalizeTeamConfig(cfg: TeamConfig): TeamConfig {
   const connections = cfg.connections.map(c => ({
     ...c,
-    deniedRepos: [...c.deniedRepos],
+    deniedRepos: c.sources ? legacyMirrorOf(c) : [...c.deniedRepos],
     ...(c.sources ? { sources: c.sources.map(s => ({ ...s })) } : {}),
   }))
   const first = connections[0]
   return {
-    schema: 2,
+    schema: connections.every(mirrorExpressesRules) ? TEAM_SCHEMA_BASE : TEAM_SCHEMA_TYPED_RULES,
     mode: connections.length > 0 ? 'member' : 'solo',
     connections,
     endpoint: first?.endpoint ?? '',
@@ -186,7 +239,10 @@ function migrateShareMode(entry: Partial<TeamConnection> & Record<string, unknow
 
 /** Derive the typed `sources` list. An entry that already carries `sources` is trusted as-is
  *  (sanitized); one that doesn't is migrated from the legacy `deniedRepos` denylist, mapping
- *  `NO_REPO_KEY` to the typed `none` bucket. Pure. */
+ *  `NO_REPO_KEY` — AND a bare `''`, the fold `normalizeDenied` has always performed — to the typed
+ *  `none` bucket. Mapping `''` to `{type:'repo', value:''}` instead would produce a source
+ *  `sourceKey` drops, silently un-blocking the unattributed bucket on a config where it was
+ *  blocked. Pure. */
 function migrateSources(entry: Partial<TeamConnection> & Record<string, unknown>, deniedRepos: string[]): ShareSource[] {
   if (Array.isArray(entry.sources)) {
     return (entry.sources as unknown[])
@@ -196,7 +252,9 @@ function migrateSources(entry: Partial<TeamConnection> & Record<string, unknown>
         typeof (s as ShareSource).value === 'string')
       .map(s => ({ type: s.type, value: s.value }))
   }
-  return deniedRepos.map(v => v === NO_REPO_KEY ? { type: 'none' as const, value: '' } : { type: 'repo' as const, value: v })
+  return deniedRepos.map(v => (v === NO_REPO_KEY || v === '')
+    ? { type: 'none' as const, value: '' }
+    : { type: 'repo' as const, value: v })
 }
 
 /**

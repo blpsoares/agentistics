@@ -34,7 +34,8 @@ import {
   buildPathRepoIndex, buildSharedStatsCache, deniedDeltaByDay, filterShared, normalizeDenied,
   type PathRepoIndex,
 } from './share-rules'
-import type { SessionMeta, TeamConnection, StatsCache, TeamConfig, WorkflowRun } from '@agentistics/core'
+import type { SessionMeta, TeamConnection, StatsCache, TeamConfig, WorkflowRun, ShareSource } from '@agentistics/core'
+import { NO_REPO_KEY } from '@agentistics/core'
 import type { ServerProject } from './data'
 import type { IngestBody } from './team-store'
 
@@ -212,14 +213,24 @@ function randomConnId(): string {
   return 'c_' + crypto.randomUUID().replace(/-/g, '').slice(0, 12)
 }
 
+/** Mirrors `@agentistics/core`'s legacy migration: `deniedRepos` entries become typed `repo`
+ *  sources, `NO_REPO_KEY` becomes the typed `none` bucket. Lets every existing `deniedRepos`-based
+ *  fixture below keep working unchanged against the Task 4 code path (which reads
+ *  `sources`/`shareMode`, never `deniedRepos`) — pass `sources`/`shareMode` explicitly in `extra`
+ *  to override this derivation (e.g. for a project rule or allowlist mode). */
 function fakeConn(id: string, port: number, extra?: Partial<TeamConnection>): TeamConnection {
+  const deniedRepos = extra?.deniedRepos ?? []
+  const sources: ShareSource[] = deniedRepos.map(v =>
+    v === NO_REPO_KEY ? { type: 'none' as const, value: '' } : { type: 'repo' as const, value: v })
   return {
     id,
     endpoint: `http://127.0.0.1:${port}`,
     org: 'default',
     user: 'test-user',
     token: 'test-token',
-    deniedRepos: [],
+    deniedRepos,
+    shareMode: 'denylist',
+    sources,
     ...extra,
   }
 }
@@ -1290,6 +1301,76 @@ describe('pushOnceDetailed with a denylist', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Task 4 — the routes/push cycle carrying the new typed-source shape (project rules, allowlist
+// mode). The "manual check against a throwaway central" the plan calls for, run here as a real
+// HTTP round-trip against `ingestFixture()` instead of a live central process (this worktree must
+// not bind 47291/47292 — the user's own instance runs there).
+// ---------------------------------------------------------------------------
+
+describe('pushOnceDetailed — project rules and allowlist mode (Task 4)', () => {
+  const claudeSession = (id: string, remote: string, path = `/p/${id}`) =>
+    makeSession(id, { git_remote: remote, project_path: path, harness: 'claude' })
+
+  it('a project rule (denylist mode) blocks those sessions and lets everything else through', async () => {
+    const fx = ingestFixture()
+    const id = randomConnId()
+    try {
+      const ctx = makeCtx({
+        storedSessions: [
+          claudeSession('keep', 'github.com/org/pub', '/p/other'),
+          claudeSession('hide', '', '/p/secret-project'),
+        ],
+      })
+      const conn = fakeConn(id, fx.port, { deniedRepos: [], sources: [{ type: 'project', value: '/p/secret-project' }] })
+      await pushOnceDetailed(conn, ctx)
+      const sentIds = fx.bodies.flatMap(b => b.sessions.map(s => s.session_id))
+      expect(sentIds).toEqual(['keep'])
+    } finally {
+      fx.stop()
+    }
+  })
+
+  it('allowlist mode with an empty source list shares nothing at all', async () => {
+    const fx = ingestFixture()
+    const id = randomConnId()
+    try {
+      const ctx = makeCtx({
+        storedSessions: [claudeSession('a', 'github.com/org/pub'), claudeSession('b', 'github.com/org/other')],
+      })
+      const conn = fakeConn(id, fx.port, { deniedRepos: [], shareMode: 'allowlist', sources: [] })
+      await pushOnceDetailed(conn, ctx)
+      const sentIds = fx.bodies.flatMap(b => b.sessions.map(s => s.session_id))
+      expect(sentIds).toEqual([])
+    } finally {
+      fx.stop()
+    }
+  })
+
+  it('allowlist mode shares only the named repo/project, nothing else', async () => {
+    const fx = ingestFixture()
+    const id = randomConnId()
+    try {
+      const ctx = makeCtx({
+        storedSessions: [
+          claudeSession('allowed-repo', 'github.com/org/allowed'),
+          claudeSession('allowed-project', 'github.com/org/other', '/p/allowed-project'),
+          claudeSession('excluded', 'github.com/org/other', '/p/excluded'),
+        ],
+      })
+      const conn = fakeConn(id, fx.port, {
+        deniedRepos: [], shareMode: 'allowlist',
+        sources: [{ type: 'repo', value: 'github.com/org/allowed' }, { type: 'project', value: '/p/allowed-project' }],
+      })
+      await pushOnceDetailed(conn, ctx)
+      const sentIds = fx.bodies.flatMap(b => b.sessions.map(s => s.session_id)).sort()
+      expect(sentIds).toEqual(['allowed-project', 'allowed-repo'])
+    } finally {
+      fx.stop()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // §5.3.4 — suppress the activity heartbeat on a restricted connection. An empty-delta cycle plus
 // notifyDataChanged() would otherwise turn work inside a blocked repo into a ~2s-resolution
 // timestamped heartbeat on the central (every request stamps lastSeenAt), from which session
@@ -1754,6 +1835,61 @@ describe('runConnectionCycle — the retroactive removal sequence', () => {
       expect((await loadRulesState(connId)).rulesHash).not.toBe('')
     } finally {
       __teardownConnectionForTests(connId)
+    }
+  }, 10_000)
+
+  // Task 4: switching denylist→allowlist with the SAME source list can shrink the shared set
+  // drastically (everything not explicitly listed flips from shared to hidden) — the plan
+  // requires this to flow through the EXACT SAME forget sequence as editing the list, not a
+  // special-cased path. Asserted here as the "manual check" the plan calls for: two real cycles
+  // against a mock central, mode changing between them.
+  it('switching denylist→allowlist (same sources) forgets everything the new mode no longer shares, exactly once', async () => {
+    const connId = randomConnId()
+    const central = mockCentral()
+    central.watch(connId)
+    try {
+      const allowed = makeSession('allowed-1', { git_remote: 'github.com/o/allowed' })
+      const other = makeSession('other-1', { git_remote: 'github.com/o/other' })
+      const ctx = makeCtx({
+        storedSessions: [allowed, other],
+        liveSessions: [allowed, other],
+        index: buildPathRepoIndex([allowed, other]),
+      })
+
+      // Cycle 1: plain denylist, sources empty — everything is shared and pushed.
+      const denylistConn = fakeConn(connId, central.server.port!, { deniedRepos: [], shareMode: 'denylist', sources: [] })
+      await runConnectionCycle(connId, {
+        readPreferences: fakeReadPreferences(denylistConn),
+        migrateTeamStateOnce: async () => {},
+        ctx,
+      })
+      expect(Object.keys(await loadSentState(connId)).sort()).toEqual(['allowed-1', 'other-1'])
+      expect(central.forgetBodies).toEqual([])
+
+      // Cycle 2: SAME source list, switched to allowlist — only 'allowed-1' matches the one
+      // listed repo, so 'other-1' must be forgotten even though the source list itself is
+      // unchanged (rulesSignature folds the mode in, so this trips the detector like any edit).
+      const allowlistConn = fakeConn(connId, central.server.port!, {
+        deniedRepos: [], shareMode: 'allowlist', sources: [{ type: 'repo', value: 'github.com/o/allowed' }],
+      })
+      await runConnectionCycle(connId, {
+        readPreferences: fakeReadPreferences(allowlistConn),
+        migrateTeamStateOnce: async () => {},
+        ctx,
+      })
+      expect(central.forgetBodies).toEqual([['other-1']])
+      expect(Object.keys(await loadSentState(connId))).toEqual(['allowed-1'])
+
+      // Cycle 3: nothing changed since cycle 2 — the removal must not run again.
+      await runConnectionCycle(connId, {
+        readPreferences: fakeReadPreferences(allowlistConn),
+        migrateTeamStateOnce: async () => {},
+        ctx,
+      })
+      expect(central.forgetBodies).toEqual([['other-1']]) // still just the one call
+    } finally {
+      __teardownConnectionForTests(connId)
+      await central.stop()
     }
   }, 10_000)
 

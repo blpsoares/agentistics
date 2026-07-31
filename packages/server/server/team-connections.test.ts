@@ -14,13 +14,15 @@
 import { describe, it, expect, afterEach } from 'bun:test'
 import {
   validateConnectionBody, validatePatchBody, decideConnectionUpsert,
-  aggregateConnectionStatuses, leaveConnectionById, resolveDeniedRepos,
-  buildConnectionStatusEntry, otelExportEnabled, addOrUpdateConnection, type ConnectionStatusEntry,
+  aggregateConnectionStatuses, leaveConnectionById, resolveShareRules, ruleCountsOf,
+  buildConnectionStatusEntry, otelExportEnabled, addOrUpdateConnection, handlePatchConnection,
+  type ConnectionStatusEntry,
 } from './team-connections'
-import type { TeamConnection, TeamConfig } from '@agentistics/core'
+import type { TeamConnection, TeamConfig, ShareSource } from '@agentistics/core'
 import { NO_REPO_KEY } from '@agentistics/core'
 import type { Preferences, TeamConfigMutator } from './preferences'
 import type { UploaderStatus } from './team-uploader'
+import { rulesSignature } from './share-rules'
 
 function conn(id: string, extra?: Partial<TeamConnection>): TeamConnection {
   return {
@@ -30,9 +32,15 @@ function conn(id: string, extra?: Partial<TeamConnection>): TeamConnection {
     user: 'alice',
     token: `token-${id}`,
     deniedRepos: [],
+    shareMode: 'denylist',
+    sources: [],
     ...extra,
   }
 }
+
+const repoSrc = (value: string): ShareSource => ({ type: 'repo', value })
+const projectSrc = (value: string): ShareSource => ({ type: 'project', value })
+const noneSrc = (): ShareSource => ({ type: 'none', value: '' })
 
 describe('validateConnectionBody', () => {
   it('accepts a minimal valid body and trims a trailing slash off the endpoint', () => {
@@ -90,19 +98,53 @@ describe('validateConnectionBody', () => {
     if (!('error' in out)) expect(out.token).toBe(' sekrit ')
   })
 
-  it('accepts an omitted deniedRepos as absent', () => {
+  it('accepts an omitted sources/shareMode as absent', () => {
     const out = validateConnectionBody({ endpoint: 'https://central.example.com', token: 't' })
     expect('error' in out).toBe(false)
-    if (!('error' in out)) expect(out.deniedRepos).toBeUndefined()
+    if (!('error' in out)) {
+      expect(out.sources).toBeUndefined()
+      expect(out.shareMode).toBeUndefined()
+    }
   })
 
-  it('accepts an array-of-strings deniedRepos', () => {
-    const out = validateConnectionBody({ endpoint: 'https://central.example.com', token: 't', deniedRepos: ['github.com/o/r'] })
+  it('accepts a typed sources array plus a shareMode', () => {
+    const out = validateConnectionBody({
+      endpoint: 'https://central.example.com', token: 't',
+      shareMode: 'allowlist', sources: [repoSrc('github.com/o/r'), projectSrc('/p/a')],
+    })
     expect('error' in out).toBe(false)
-    if (!('error' in out)) expect(out.deniedRepos).toEqual(['github.com/o/r'])
+    if (!('error' in out)) {
+      expect(out.shareMode).toBe('allowlist')
+      expect(out.sources).toEqual([repoSrc('github.com/o/r'), projectSrc('/p/a')])
+    }
   })
 
-  it('rejects a non-array or mixed-type deniedRepos as 400, without throwing', () => {
+  it('rejects an unknown source type, a non-string value, or a non-object entry as 400', () => {
+    for (const junk of [
+      [{ type: 'bogus', value: 'x' }], [{ type: 'repo', value: 42 }], ['not-an-object'], [null], [{}],
+    ]) {
+      expect('error' in validateConnectionBody({ endpoint: 'https://central.example.com', token: 't', sources: junk })).toBe(true)
+    }
+  })
+
+  it('rejects a non-array sources as 400', () => {
+    expect('error' in validateConnectionBody({ endpoint: 'https://central.example.com', token: 't', sources: 'nope' })).toBe(true)
+  })
+
+  it('rejects an unknown shareMode as 400', () => {
+    expect('error' in validateConnectionBody({ endpoint: 'https://central.example.com', token: 't', shareMode: 'bogus' })).toBe(true)
+  })
+
+  it('accepts the legacy deniedRepos shape and converts it to typed repo/none sources', () => {
+    const out = validateConnectionBody({ endpoint: 'https://central.example.com', token: 't', deniedRepos: ['github.com/o/r', NO_REPO_KEY] })
+    expect('error' in out).toBe(false)
+    if (!('error' in out)) {
+      expect(out.sources).toEqual([repoSrc('github.com/o/r'), noneSrc()])
+      expect((out as unknown as Record<string, unknown>).deniedRepos).toBeUndefined()
+    }
+  })
+
+  it('rejects a non-array or mixed-type legacy deniedRepos as 400, without throwing', () => {
     for (const junk of ['github.com/o/r', 42, { repo: 'x' }, ['ok', 42], [null], [{}]]) {
       expect('error' in validateConnectionBody({ endpoint: 'https://central.example.com', token: 't', deniedRepos: junk })).toBe(true)
     }
@@ -130,66 +172,135 @@ describe('validatePatchBody', () => {
     }
   })
 
-  it('rejects a body with neither label nor deniedRepos — nothing to update', () => {
+  it('rejects a body with neither label, shareMode nor sources — nothing to update', () => {
     expect('error' in validatePatchBody({})).toBe(true)
   })
 
-  it('accepts a deniedRepos-only body, with no label', () => {
+  it('accepts a sources-only body, with no label', () => {
+    const out = validatePatchBody({ sources: [repoSrc('github.com/o/r')] })
+    expect(out).toEqual({ sources: [repoSrc('github.com/o/r')] })
+  })
+
+  it('accepts an empty sources array — the explicit "clear all rules" shape', () => {
+    expect(validatePatchBody({ sources: [] })).toEqual({ sources: [] })
+  })
+
+  it('accepts a shareMode-only body — a pure mode switch that keeps the existing sources', () => {
+    expect(validatePatchBody({ shareMode: 'allowlist' })).toEqual({ shareMode: 'allowlist' })
+  })
+
+  it('accepts label and sources together', () => {
+    const out = validatePatchBody({ label: 'Prod', sources: [noneSrc()] })
+    expect(out).toEqual({ label: 'Prod', sources: [noneSrc()] })
+  })
+
+  it('rejects a non-array or mixed-type sources as 400, without throwing', () => {
+    for (const junk of ['x', 42, { repo: 'x' }, ['ok', 42], [null], [{ type: 'bogus', value: 'x' }]]) {
+      expect('error' in validatePatchBody({ sources: junk })).toBe(true)
+    }
+  })
+
+  it('rejects an unknown shareMode as 400', () => {
+    expect('error' in validatePatchBody({ shareMode: 'bogus' })).toBe(true)
+  })
+
+  it('rejects an oversized sources list as 400', () => {
+    const huge = Array.from({ length: 2001 }, (_, i) => repoSrc(`github.com/o/r${i}`))
+    expect('error' in validatePatchBody({ sources: huge })).toBe(true)
+  })
+
+  it('accepts the legacy deniedRepos shape and converts it to typed sources', () => {
     const out = validatePatchBody({ deniedRepos: ['github.com/o/r'] })
-    expect(out).toEqual({ deniedRepos: ['github.com/o/r'] })
+    expect(out).toEqual({ sources: [repoSrc('github.com/o/r')] })
   })
 
-  it('accepts an empty deniedRepos array — the explicit "clear all rules" shape', () => {
-    expect(validatePatchBody({ deniedRepos: [] })).toEqual({ deniedRepos: [] })
-  })
-
-  it('accepts label and deniedRepos together', () => {
-    const out = validatePatchBody({ label: 'Prod', deniedRepos: [NO_REPO_KEY] })
-    expect(out).toEqual({ label: 'Prod', deniedRepos: [NO_REPO_KEY] })
-  })
-
-  it('rejects a non-array or mixed-type deniedRepos as 400, without throwing', () => {
+  it('rejects a non-array or mixed-type legacy deniedRepos as 400, without throwing', () => {
     for (const junk of ['x', 42, { repo: 'x' }, ['ok', 42], [null]]) {
       expect('error' in validatePatchBody({ deniedRepos: junk })).toBe(true)
     }
   })
 })
 
-describe('resolveDeniedRepos — the zero→non-zero transition rule (§4.2)', () => {
-  it('a brand-new (undefined) denylist gaining its first entries gets NO_REPO_KEY appended', () => {
-    const out = resolveDeniedRepos(undefined, ['github.com/o/r'])
-    expect(out).toEqual(['github.com/o/r', NO_REPO_KEY])
+describe('resolveShareRules — the zero→non-zero transition rule (§4.2), denylist mode', () => {
+  it('a brand-new (undefined) previous gaining its first entries gets the none bucket appended', () => {
+    const out = resolveShareRules(undefined, { sources: [repoSrc('github.com/o/r')] })
+    expect(out).toEqual({ mode: 'denylist', sources: [repoSrc('github.com/o/r'), noneSrc()] })
   })
 
-  it('an empty denylist gaining its first entries gets NO_REPO_KEY appended', () => {
-    const out = resolveDeniedRepos([], ['github.com/o/r'])
-    expect(out).toEqual(['github.com/o/r', NO_REPO_KEY])
+  it('an empty previous gaining its first entries gets the none bucket appended', () => {
+    const out = resolveShareRules({ mode: 'denylist', sources: [] }, { sources: [repoSrc('github.com/o/r')] })
+    expect(out.sources).toEqual([repoSrc('github.com/o/r'), noneSrc()])
   })
 
   it('an empty→empty edit stays empty — no restriction is ever created from nothing', () => {
-    expect(resolveDeniedRepos(undefined, [])).toEqual([])
-    expect(resolveDeniedRepos([], [])).toEqual([])
+    expect(resolveShareRules(undefined, { sources: [] })).toEqual({ mode: 'denylist', sources: [] })
+    expect(resolveShareRules({ mode: 'denylist', sources: [] }, { sources: [] })).toEqual({ mode: 'denylist', sources: [] })
   })
 
   it('applying the transition twice from the same starting point is idempotent', () => {
-    const first = resolveDeniedRepos([], ['github.com/o/r'])
-    const second = resolveDeniedRepos([], ['github.com/o/r'])
+    const first = resolveShareRules({ mode: 'denylist', sources: [] }, { sources: [repoSrc('github.com/o/r')] })
+    const second = resolveShareRules({ mode: 'denylist', sources: [] }, { sources: [repoSrc('github.com/o/r')] })
     expect(first).toEqual(second)
   })
 
-  it('an already-restricted connection editing its list WITHOUT NO_REPO_KEY is honoured as-is — no forced re-add', () => {
-    const out = resolveDeniedRepos(['github.com/o/old', NO_REPO_KEY], ['github.com/o/new'])
-    expect(out).toEqual(['github.com/o/new'])
+  it('an already-restricted connection editing its list WITHOUT the none bucket is honoured as-is — no forced re-add', () => {
+    const out = resolveShareRules({ mode: 'denylist', sources: [repoSrc('github.com/o/old'), noneSrc()] }, { sources: [repoSrc('github.com/o/new')] })
+    expect(out.sources).toEqual([repoSrc('github.com/o/new')])
   })
 
-  it('an already-restricted connection keeping NO_REPO_KEY explicitly is honoured as-is, not duplicated', () => {
-    const out = resolveDeniedRepos(['github.com/o/r', NO_REPO_KEY], ['github.com/o/r', NO_REPO_KEY])
-    expect(out).toEqual(['github.com/o/r', NO_REPO_KEY])
+  it('an already-restricted connection keeping the none bucket explicitly is honoured as-is, not duplicated', () => {
+    const sources = [repoSrc('github.com/o/r'), noneSrc()]
+    const out = resolveShareRules({ mode: 'denylist', sources }, { sources })
+    expect(out.sources).toEqual(sources)
   })
 
-  it('an already-restricted connection un-blocking everything is honoured as-is (no re-add of NO_REPO_KEY)', () => {
-    const out = resolveDeniedRepos(['github.com/o/r', NO_REPO_KEY], [])
-    expect(out).toEqual([])
+  it('an already-restricted connection un-blocking everything is honoured as-is (no re-add of the none bucket)', () => {
+    const out = resolveShareRules({ mode: 'denylist', sources: [repoSrc('github.com/o/r'), noneSrc()] }, { sources: [] })
+    expect(out.sources).toEqual([])
+  })
+
+  it('an omitted mode/sources in the request keeps whatever the connection already has', () => {
+    const out = resolveShareRules({ mode: 'allowlist', sources: [repoSrc('github.com/o/r')] }, {})
+    expect(out).toEqual({ mode: 'allowlist', sources: [repoSrc('github.com/o/r')] })
+  })
+})
+
+describe('resolveShareRules — allowlist mode: never auto-adds the none bucket', () => {
+  it('switching to allowlist with sources does not gain the none bucket', () => {
+    const out = resolveShareRules({ mode: 'denylist', sources: [] }, { mode: 'allowlist', sources: [repoSrc('github.com/o/r')] })
+    expect(out).toEqual({ mode: 'allowlist', sources: [repoSrc('github.com/o/r')] })
+  })
+
+  it('switching to allowlist with an EMPTY source list is honoured as-is — the explicit "share nothing" shape', () => {
+    const out = resolveShareRules({ mode: 'denylist', sources: [] }, { mode: 'allowlist', sources: [] })
+    expect(out).toEqual({ mode: 'allowlist', sources: [] })
+  })
+
+  it('a bigger shrink: denylist→allowlist with the SAME source list changes what is shared, and the sources are honoured as-is', () => {
+    const sources = [repoSrc('github.com/o/r')]
+    const out = resolveShareRules({ mode: 'denylist', sources }, { mode: 'allowlist' })
+    expect(out).toEqual({ mode: 'allowlist', sources })
+  })
+})
+
+describe('ruleCountsOf — status route per-dimension counts, never the values', () => {
+  it('denylist mode splits repo(+none) and project counts, and reports allowedCount:0', () => {
+    const out = ruleCountsOf('denylist', [repoSrc('github.com/o/r'), noneSrc(), projectSrc('/p/a'), projectSrc('/p/b')])
+    expect(out).toEqual({ shareMode: 'denylist', deniedRepos: 2, deniedProjects: 2, allowedCount: 0 })
+  })
+
+  it('allowlist mode reports one combined allowedCount, and zero for the denylist fields', () => {
+    const out = ruleCountsOf('allowlist', [repoSrc('github.com/o/r'), projectSrc('/p/a')])
+    expect(out).toEqual({ shareMode: 'allowlist', deniedRepos: 0, deniedProjects: 0, allowedCount: 2 })
+  })
+
+  it('mode absent/junk reads as denylist, the same default as shareRulesOf', () => {
+    expect(ruleCountsOf(undefined, [repoSrc('github.com/o/r')]).shareMode).toBe('denylist')
+  })
+
+  it('counts are of the NORMALIZED set — duplicate/case-variant repo entries collapse to one', () => {
+    const out = ruleCountsOf('denylist', [repoSrc('github.com/o/r'), repoSrc('GitHub.com/O/R')])
+    expect(out.deniedRepos).toBe(1)
   })
 })
 
@@ -270,7 +381,12 @@ describe('decideConnectionUpsert — the two uniqueness rules', () => {
 
 describe('addOrUpdateConnection — clears authFailedAt on a whoami-verified reconnect (review Important 2)', () => {
   it('an update against a connection currently marked auth-failed leaves authFailedAt undefined', async () => {
-    const existing = conn('c_a', { authFailedAt: '2026-07-20T10:00:00.000Z', deniedRepos: ['github.com/o/secret'] })
+    const existing = conn('c_a', {
+      authFailedAt: '2026-07-20T10:00:00.000Z',
+      // The mirror is DERIVED from `sources` on every write, so a fixture must state both — an
+      // inconsistent pair is exactly the state review Critical 1 made impossible.
+      deniedRepos: ['github.com/o/secret'], sources: [repoSrc('github.com/o/secret')],
+    })
     let store: TeamConfig = { schema: 2, mode: 'member', connections: [existing] }
     const fakeUpdateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
       const next = mutate(store)
@@ -318,6 +434,7 @@ function statusEntry(id: string, extra?: Partial<ConnectionStatusEntry>): Connec
   return {
     id, endpoint: `https://${id}.example.com`, org: 'default', user: 'alice',
     lastSuccessAt: null, errKind: null, latencyMs: null,
+    shareMode: 'denylist', deniedRepos: 0, deniedProjects: 0, allowedCount: 0,
     deniedCount: 0, restricted: false, boundary: null, prehistorySessions: null,
     canForget: false, centralTooOld: true, resync: null, pendingRules: false,
     ...extra,
@@ -326,18 +443,22 @@ function statusEntry(id: string, extra?: Partial<ConnectionStatusEntry>): Connec
 
 const NEVER_RAN: UploaderStatus = { lastSuccessAt: null, errKind: null, latencyMs: null }
 
-describe('buildConnectionStatusEntry — the per-connection status shape (§5.9)', () => {
-  it('restricted comes from the STORED denylist, never from uploader state — a connection with no cycle yet is still restricted', () => {
-    const c = conn('c_a', { deniedRepos: ['github.com/o/r', NO_REPO_KEY] })
+describe('buildConnectionStatusEntry — the per-connection status shape (§5.9, Task 4)', () => {
+  it('restricted comes from the STORED sources, never from uploader state — a connection with no cycle yet is still restricted', () => {
+    const c = conn('c_a', { sources: [repoSrc('github.com/o/r'), noneSrc()] })
     const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
       boundary: null, prehistorySessions: null, canForget: false, resync: null, rulesHash: '',
     })
     expect(entry.restricted).toBe(true)
     expect(entry.deniedCount).toBe(2)
+    expect(entry.shareMode).toBe('denylist')
+    expect(entry.deniedRepos).toBe(2) // repo + none both count toward the repo dimension
+    expect(entry.deniedProjects).toBe(0)
+    expect(entry.allowedCount).toBe(0)
   })
 
   it('an unrestricted connection reports restricted:false and deniedCount:0', () => {
-    const c = conn('c_a', { deniedRepos: [] })
+    const c = conn('c_a', { sources: [] })
     const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
       boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '',
     })
@@ -345,13 +466,41 @@ describe('buildConnectionStatusEntry — the per-connection status shape (§5.9)
     expect(entry.deniedCount).toBe(0)
   })
 
-  it('never leaks the denylist itself — only the count', () => {
-    const c = conn('c_a', { deniedRepos: ['github.com/secret/repo', NO_REPO_KEY] })
+  it('allowlist mode reports allowedCount and is ALWAYS restricted, even with an empty list', () => {
+    const c = conn('c_a', { shareMode: 'allowlist', sources: [repoSrc('github.com/o/r'), projectSrc('/p/a')] })
+    const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
+      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '',
+    })
+    expect(entry.shareMode).toBe('allowlist')
+    expect(entry.allowedCount).toBe(2)
+    expect(entry.deniedRepos).toBe(0)
+    expect(entry.deniedProjects).toBe(0)
+    expect(entry.deniedCount).toBe(2) // legacy field mirrors allowedCount in this mode
+    expect(entry.restricted).toBe(true)
+
+    const empty = conn('c_b', { shareMode: 'allowlist', sources: [] })
+    expect(buildConnectionStatusEntry(empty, NEVER_RAN, {
+      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '',
+    }).restricted).toBe(true)
+  })
+
+  it('denylist mode splits deniedRepos and deniedProjects separately', () => {
+    const c = conn('c_a', { sources: [repoSrc('github.com/o/r'), projectSrc('/p/a'), projectSrc('/p/b')] })
+    const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
+      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '',
+    })
+    expect(entry.deniedRepos).toBe(1)
+    expect(entry.deniedProjects).toBe(2)
+  })
+
+  it('never leaks the sources themselves — only the counts', () => {
+    const c = conn('c_a', { sources: [repoSrc('github.com/secret/repo'), noneSrc()] })
     const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
       boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '',
     })
     expect(JSON.stringify(entry)).not.toContain('secret')
-    expect((entry as unknown as Record<string, unknown>).deniedRepos).toBeUndefined()
+    expect((entry as unknown as Record<string, unknown>).sources).toBeUndefined()
+    expect((entry as unknown as Record<string, unknown>).deniedRepos).toBe(2)
   })
 
   it('never leaks the token', () => {
@@ -387,20 +536,28 @@ describe('buildConnectionStatusEntry — the per-connection status shape (§5.9)
     expect(entry.resync).toEqual({ phase: 'forget', done: 40, total: 120 })
   })
 
-  it('pendingRules is true when the denylist changed since the last persisted rulesHash', () => {
-    const c = conn('c_a', { deniedRepos: ['github.com/o/r', NO_REPO_KEY] })
-    // rulesHash '' reads as denialSignature([]) (team-rules.ts rule 2) — the persisted state has
-    // never seen ANY denylist, so the current one (non-empty) is a pending change.
+  it('pendingRules is true when the sources changed since the last persisted rulesHash', () => {
+    const c = conn('c_a', { sources: [repoSrc('github.com/o/r'), noneSrc()] })
+    // rulesHash '' reads as emptyRulesSignature() (team-rules.ts rule 2) — the persisted state has
+    // never seen ANY rules, so the current one (non-empty) is a pending change.
     const entry = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '' })
     expect(entry.pendingRules).toBe(true)
   })
 
-  it('pendingRules is false once the persisted rulesHash matches the current denylist', () => {
-    const c = conn('c_a', { deniedRepos: [] })
-    // An empty denylist matches the '' sentinel (both read as denialSignature([])) — nothing
-    // pending for a connection that was never restricted.
+  it('pendingRules is false once the persisted rulesHash matches the current sources', () => {
+    const c = conn('c_a', { sources: [] })
+    // Empty sources in denylist mode match the '' sentinel (both read as emptyRulesSignature()) —
+    // nothing pending for a connection that was never restricted.
     const entry = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '' })
     expect(entry.pendingRules).toBe(false)
+  })
+
+  it('pendingRules is true when ONLY the mode changed, sources identical — a mode switch is a rules change too', () => {
+    const sources = [repoSrc('github.com/o/r')]
+    const c = conn('c_a', { shareMode: 'allowlist', sources })
+    const prevHash = rulesSignature('denylist', sources)
+    const entry = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: prevHash })
+    expect(entry.pendingRules).toBe(true)
   })
 })
 
@@ -527,5 +684,128 @@ describe('otelExportEnabled — the machine-wide OTel export signal (§ otelWarn
   it('is true when the env var names a real endpoint', () => {
     process.env[KEY] = 'http://localhost:4318'
     expect(otelExportEnabled()).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The PATCH route, driven end-to-end over an injected store (no filesystem, no network).
+// Covers review Critical 1 (the legacy mirror must stay consistent with `sources`, because the
+// SHIPPED picker builds its next request from `conn.deniedRepos`) and Important 2 (a source the
+// API accepts must be a source enforcement can key — never accepted-then-dropped).
+// ---------------------------------------------------------------------------
+
+function patchReq(body: unknown): Request {
+  return new Request('http://localhost/api/team/connections/c_aaaaaaaaaaaa', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+}
+
+/** A fake `updateTeamConfig` over an in-memory config, plus a no-op nudge (the real one calls
+ *  `pushNow`, which reads this developer's own `~/.agentistics`). */
+function fakeStore(initial: TeamConfig) {
+  const state = { config: initial }
+  const updateTeamConfig = async (mutate: TeamConfigMutator): Promise<TeamConfig> => {
+    const next = mutate(state.config)
+    if (next !== undefined) state.config = next
+    return state.config
+  }
+  return { state, deps: { updateTeamConfig, nudge: () => { /* no-op */ } } }
+}
+
+describe('handlePatchConnection — the legacy mirror stays consistent with sources (Critical 1)', () => {
+  it('a second edit built from a re-read of preferences does not lose the first edit\'s rule', async () => {
+    // The user already blocks one repo plus the unattributed bucket.
+    const stored = conn('c_aaaaaaaaaaaa', {
+      deniedRepos: ['github.com/o/secret', NO_REPO_KEY],
+      sources: [repoSrc('github.com/o/secret'), noneSrc()],
+    })
+    const { state, deps } = fakeStore({ schema: 2, mode: 'member', connections: [stored] })
+
+    // Edit 1 — the shipped picker reads `conn.deniedRepos` and PATCHes the legacy shape.
+    const draft1 = [...state.config.connections[0]!.deniedRepos, 'github.com/o/other']
+    const res1 = await handlePatchConnection(patchReq({ deniedRepos: draft1 }), 'c_aaaaaaaaaaaa', deps)
+    expect(res1.status).toBe(200)
+
+    const afterFirst = state.config.connections[0]!
+    // The mirror the UI will read next must describe the rules that were just persisted.
+    expect(new Set(afterFirst.deniedRepos)).toEqual(new Set(['github.com/o/secret', NO_REPO_KEY, 'github.com/o/other']))
+
+    // Edit 2 — the picker re-reads preferences and adds a third repo on top of that draft.
+    const draft2 = [...afterFirst.deniedRepos, 'github.com/o/third']
+    const res2 = await handlePatchConnection(patchReq({ deniedRepos: draft2 }), 'c_aaaaaaaaaaaa', deps)
+    expect(res2.status).toBe(200)
+
+    const afterSecond = state.config.connections[0]!
+    const keys = new Set(afterSecond.sources!.map(s => `${s.type}:${s.value}`))
+    // The repo added by edit 1 must still be blocked — the whole point of the finding.
+    expect(keys).toEqual(new Set([
+      'repo:github.com/o/secret', 'none:', 'repo:github.com/o/other', 'repo:github.com/o/third',
+    ]))
+    expect(new Set(afterSecond.deniedRepos)).toEqual(new Set([
+      'github.com/o/secret', NO_REPO_KEY, 'github.com/o/other', 'github.com/o/third',
+    ]))
+  })
+
+  it('switching to allowlist writes an EMPTY mirror and a schema an older reader refuses', async () => {
+    const stored = conn('c_aaaaaaaaaaaa', {
+      deniedRepos: ['github.com/o/secret'],
+      sources: [repoSrc('github.com/o/secret')],
+    })
+    const { state, deps } = fakeStore({ schema: 2, mode: 'member', connections: [stored] })
+
+    const res = await handlePatchConnection(patchReq({ shareMode: 'allowlist' }), 'c_aaaaaaaaaaaa', deps)
+    expect(res.status).toBe(200)
+    // An empty mirror alone reads as "no restriction at all" to a reader that only knows
+    // `deniedRepos` — which would share EVERYTHING. The schema bump is what stops that.
+    expect(state.config.connections[0]!.deniedRepos).toEqual([])
+    expect(state.config.schema).toBe(3)
+  })
+})
+
+describe('validateShareSources — a source the API accepts must be one enforcement can key (Important 2)', () => {
+  it('rejects a repo source that cannot be normalized, and persists nothing', async () => {
+    const stored = conn('c_aaaaaaaaaaaa', { deniedRepos: ['github.com/o/secret'], sources: [repoSrc('github.com/o/secret')] })
+    const { state, deps } = fakeStore({ schema: 2, mode: 'member', connections: [stored] })
+
+    for (const junk of ['/home/me/local', 'file:///home/me/local', 'not-a-remote', '']) {
+      const res = await handlePatchConnection(patchReq({ sources: [repoSrc(junk)] }), 'c_aaaaaaaaaaaa', deps)
+      expect(res.status).toBe(400)
+      const body = await res.json() as { error: string }
+      // Names the source TYPE, never the value (a repo path is user data).
+      expect(body.error).toContain('repo')
+      if (junk) expect(body.error).not.toContain(junk)
+    }
+    // Not one of those requests touched the stored rules.
+    expect(state.config.connections[0]!.sources).toEqual([repoSrc('github.com/o/secret')])
+    expect(state.config.connections[0]!.deniedRepos).toEqual(['github.com/o/secret'])
+  })
+
+  it('rejects a project source with a blank value', async () => {
+    const out = validatePatchBody({ sources: [projectSrc('')] })
+    expect('error' in out).toBe(true)
+    if ('error' in out) expect(out.error).toContain('project')
+    expect('error' in validateConnectionBody({
+      endpoint: 'https://central.example.com', token: 't', sources: [projectSrc('')],
+    })).toBe(true)
+  })
+
+  it('requires a none source to carry an empty value', () => {
+    expect('error' in validatePatchBody({ sources: [{ type: 'none', value: 'something' }] })).toBe(true)
+    expect('error' in validatePatchBody({ sources: [noneSrc()] })).toBe(false)
+  })
+
+  it('rejects an unresolvable repo through the LEGACY deniedRepos door too', () => {
+    // Same hole, other entrance: a legacy body is converted to typed sources and must clear the
+    // same bar, or it persists a rule the enforcement set drops.
+    const out = validatePatchBody({ deniedRepos: ['/home/me/local'] })
+    expect('error' in out).toBe(true)
+    if ('error' in out) expect(out.error).not.toContain('/home/me/local')
+  })
+
+  it("a legacy deniedRepos body carrying '' becomes the none source, not repo ''", () => {
+    // Important 3: normalizeDenied folds '' into the sentinel; dropping that fold here silently
+    // un-blocks the unattributed bucket for any older client still sending the legacy shape.
+    expect(validatePatchBody({ deniedRepos: ['', 'github.com/o/r'] }))
+      .toEqual({ sources: [noneSrc(), repoSrc('github.com/o/r')] })
   })
 })

@@ -1,14 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Plus } from 'lucide-react'
-import type { SessionMeta, TeamConnection, TeamConfig, ModelUsage } from '@agentistics/core'
+import type { SessionMeta, TeamConnection, TeamConfig, ModelUsage, ShareSource } from '@agentistics/core'
 import { readTeamConnections } from '@agentistics/core'
 import type { ArchiveMode } from '../ArchiveConsentModal'
 import { resolveArchiveChoice } from '../../lib/archive'
-import { buildShareTargets, hostOf, type ServerProject } from '../../lib/shareRepos'
+import { buildShareTargets, buildProjectTargets, hostOf, type ServerProject } from '../../lib/shareRepos'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { COPY } from './copy'
 import { ConnectionCard } from './ConnectionCard'
 import { AddCentralDrawer } from './AddCentralDrawer'
+import type { ShareMode } from './sharePanelState'
 import type { TeamStatusResponse, ConnectionStatusEntry } from './statusTypes'
 
 /** The two panel-level rows of the state table (§9.5) that are NOT per-card: an `/api/preferences`
@@ -145,6 +146,13 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
     () => buildShareTargets(sessions, projects, [], { noRepo: COPY.noRepoTitle[lang] }),
     [sessions, projects, lang],
   )
+  // Plan 4 Task 5 — the project-side projection, same unfiltered lists. `[]` here is the baseline
+  // (no repo denied at build time); the picker itself recomputes each project's live lock from its
+  // own repo-tab draft (`SharedReposPanel`), so this baseline is purely informational.
+  const projectTargets = useMemo(
+    () => buildProjectTargets(sessions, projects, []),
+    [sessions, projects],
+  )
 
   // Two connections resolving to the same host promote the user name into the card's primary
   // label — see ConnectionCard's docstring.
@@ -174,16 +182,18 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
   }
 
   /**
-   * The ONE write the repository picker performs: `PATCH { deniedRepos }`, then stop — the server
-   * owns the forget/push sequence from here, watched via the panel's existing `/api/team/status`
-   * poll (`status.resync`). Never looped, never followed by a direct call to any forget endpoint.
+   * The ONE write the sharing-rules picker performs: `PATCH { shareMode, sources }`, then stop —
+   * the server owns the forget/push sequence from here, watched via the panel's existing
+   * `/api/team/status` poll (`status.resync`). Never looped, never followed by a direct call to
+   * any forget endpoint. Plan 4: replaces the legacy `{ deniedRepos }` body — the server still
+   * accepts that shape from an older client, but this panel writes only the typed shape now.
    */
-  async function handleApplyRules(id: string, deniedRepos: string[]): Promise<{ ok: true; queued: boolean } | { ok: false }> {
+  async function handleApplyRules(id: string, mode: ShareMode, sources: ShareSource[]): Promise<{ ok: true; queued: boolean } | { ok: false }> {
     return applyRulesSequence(
       () => fetch(`/api/team/connections/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deniedRepos }),
+        body: JSON.stringify({ shareMode: mode, sources }),
       }),
       reloadAfterWrite,
     )
@@ -278,6 +288,7 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
               status={statusById[conn.id]}
               archiveMode={archiveMode}
               shareTargets={shareTargets}
+              projectTargets={projectTargets}
               sessions={sessions}
               modelUsage={modelUsage}
               otelEnabled={statusResp?.otelExportEnabled ?? false}

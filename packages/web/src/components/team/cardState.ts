@@ -89,6 +89,30 @@ export function resolveWritesDisabled(
   return state === 'resyncing' || syncing || disconnecting || isApplyBusy(phase)
 }
 
+/** The collapsed card's rules pill: how many sources the connection names, and WHICH WAY to read
+ *  them. `null` = no pill (no rules at all). */
+export interface RulePill {
+  /** 'allow' = the count is what IS shared; 'deny' = what is hidden. */
+  tone: 'allow' | 'deny'
+  count: number
+}
+
+/**
+ * The pill's polarity comes from `status.shareMode`, never from the field name. `deniedCount` is
+ * the LEGACY combined count and carries `allowedCount` in allowlist mode (see the server's
+ * `ruleCountsOf`), so reading it as "blocked" unconditionally reported a connection sharing only
+ * 3 of 40 repositories as "3 hidden" — the exact inverse of the truth, on the one surface that is
+ * visible without expanding the card. `status` absent (never polled) shows no pill: unknown is not
+ * "nothing is restricted".
+ */
+export function resolveRulePill(status: ConnectionStatusEntry | undefined): RulePill | null {
+  if (!status) return null
+  const allowlist = status.shareMode === 'allowlist'
+  const count = allowlist ? (status.allowedCount || status.deniedCount) : status.deniedCount
+  if (!count || count <= 0) return null
+  return { tone: allowlist ? 'allow' : 'deny', count }
+}
+
 export function relTime(iso: string | number, pt: boolean): string {
   const ts = typeof iso === 'number' ? iso : Date.parse(iso)
   const s = Math.floor((Date.now() - ts) / 1000)

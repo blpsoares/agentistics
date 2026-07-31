@@ -11,7 +11,7 @@
 
 import { createHash } from 'node:crypto'
 import { NO_REPO_KEY, normalizeGitRemote, emptyStatsCache } from '@agentistics/core'
-import type { SessionMeta, WorkflowRun, StatsCache } from '@agentistics/core'
+import type { SessionMeta, WorkflowRun, StatsCache, ShareSource } from '@agentistics/core'
 
 export type RepoKey = string
 
@@ -109,24 +109,209 @@ export function repoKeyOf(
 }
 
 /**
- * A session is shared when its own key is not denied AND — when its directory is known to
- * hold more than one repo — no remote under that directory is denied.
+ * A rule set as `sessionShared` consumes it: a mode plus the sources it applies to, each keyed
+ * as `${type}:${value}` — `repo:<canonical key>`, `project:<project_path>`, or the fixed
+ * `none:` bucket (value is always `''` for that type). Building this Set is the caller's job
+ * (e.g. from `ShareSource[]`); this module only ever reads it.
+ */
+export interface ShareRules {
+  mode: 'denylist' | 'allowlist'
+  sources: ReadonlySet<string>
+}
+
+/** The `repo` / `none` source key for a resolved repo bucket. Never `repo:${NO_REPO_KEY}` —
+ *  the `none` dimension is a distinct type from a repo whose value happens to be the sentinel. */
+function repoSourceKey(key: RepoKey): string {
+  return key === NO_REPO_KEY ? 'none:' : `repo:${key}`
+}
+
+/** The `project` source key for a project path. */
+function projectSourceKey(path: string): string {
+  return `project:${path}`
+}
+
+/** Whether a session matches ANY source, on either dimension. Path ambiguity (`conflictPaths`)
+ *  is handled by the caller, one repo key at a time — it is a repo-dimension concern only. */
+function matchesAnySource(
+  s: Pick<SessionMeta, 'git_remote' | 'project_path'>,
+  sources: ReadonlySet<string>,
+  index?: PathRepoIndex,
+): boolean {
+  if (sources.has(repoSourceKey(repoKeyOf(s, index)))) return true
+  if (s.project_path && sources.has(projectSourceKey(s.project_path))) return true
+  return false
+}
+
+/**
+ * A session is shared according to `rules.mode`:
+ * - **denylist**: shared iff it matches NO source, AND — when its directory is known to hold
+ *   more than one repo — none of those repos is a denied source either.
+ * - **allowlist**: shared iff it matches SOME source, AND — same ambiguous-directory case —
+ *   every repo that could be behind that path is an allowed source too.
  *
  * `scanProjectDir` stamps one remote on every session of a directory and `getProjectGitStats`
  * even scans one level of subdirectories for workspace folders, so a workspace holding a
  * shared and a blocked repo would otherwise ship the blocked repo's `first_prompt` and
- * `title` under the shared key. Annotating the ambiguity and sharing anyway is a fail-open.
+ * `title` under the shared key. Annotating the ambiguity and sharing anyway is a fail-open —
+ * hence the conflict check runs in BOTH modes, fail-closed each time.
  */
 export function sessionShared(
   s: Pick<SessionMeta, 'git_remote' | 'project_path'>,
-  denied: ReadonlySet<RepoKey>,
+  rules: ShareRules,
   index?: PathRepoIndex,
 ): boolean {
-  if (denied.size === 0) return true
-  if (denied.has(repoKeyOf(s, index))) return false
+  const { mode, sources } = rules
   const conflict = index?.conflicts.get(s.project_path)
-  if (conflict) for (const key of conflict) if (denied.has(key)) return false
+
+  if (mode === 'allowlist') {
+    // Empty sources means nothing is listed — the reading that leaks is "no restriction".
+    if (sources.size === 0) return false
+    if (!matchesAnySource(s, sources, index)) return false
+    if (conflict) for (const key of conflict) if (!sources.has(repoSourceKey(key))) return false
+    return true
+  }
+
+  // denylist
+  if (sources.size === 0) return true
+  if (matchesAnySource(s, sources, index)) return false
+  if (conflict) for (const key of conflict) if (sources.has(repoSourceKey(key))) return false
   return true
+}
+
+/** The legacy denylist-of-repo-keys shape, adapted into a `ShareRules` for `sessionShared`.
+ *  Every existing caller in this file (and every caller outside it, unchanged by this task)
+ *  still passes a plain `ReadonlySet<RepoKey>` denylist — this is the one place that gets
+ *  translated into the new `${type}:${value}` keying, so their behavior is inherited exactly. */
+export function denylistRules(denied: ReadonlySet<RepoKey>): ShareRules {
+  const sources = new Set<string>()
+  for (const key of denied) sources.add(repoSourceKey(key))
+  return { mode: 'denylist', sources }
+}
+
+// ---------------------------------------------------------------------------
+// Task 4 — the typed-source shape (`mode` + `ShareSource[]`) the routes now carry.
+//
+// The legacy denylist-of-repo-keys functions above stay exactly as they were — every existing
+// caller (and every existing test) keeps behaving identically. These siblings are the general
+// case: a source is `repo` (a canonical remote key), `project` (a project_path) or `none` (the
+// unattributed bucket), and the mode can be `denylist` OR `allowlist`. `sessionShared` (above)
+// already accepts this shape directly (`ShareRules`); everything below is plumbing that turns the
+// PERSISTED `TeamConnection.sources`/`shareMode` into that shape, and the handful of list-level
+// operations (filter, denied-id set, signature) `team-rules.ts`/`team-uploader.ts` need built from
+// it — the same operations `filterShared`/`deniedSessionIds`/`denialSignature` provide for the
+// legacy shape, so the two dimensions and two modes reach every downstream consumer identically.
+// ---------------------------------------------------------------------------
+
+/** The canonical `${type}:${value}` key for a single typed source — the same keying
+ *  `ShareRules.sources` expects. Repo values are folded through `canonicalRepoKey`/
+ *  `normalizeGitRemote`, exactly like the legacy denylist, so the same repository entered via two
+ *  URL forms still collapses to one rule. Project values compare verbatim — `project_path` is
+ *  already a stable, canonical string (see data.ts). `none` always keys as the fixed `none:`
+ *  bucket, ignoring whatever `value` happens to hold. Junk (an unresolvable repo, a blank project
+ *  path) returns `null` and is dropped by every caller below — the API boundary is expected to
+ *  have already rejected it; this is the second, defensive layer. */
+function sourceKey(source: ShareSource): string | null {
+  if (!source || typeof source.value !== 'string') return null
+  if (source.type === 'none') return 'none:'
+  if (source.type === 'repo') {
+    const key = canonicalRepoKey(normalizeGitRemote(source.value))
+    return key ? repoSourceKey(key) : null
+  }
+  if (source.type === 'project') {
+    return source.value ? projectSourceKey(source.value) : null
+  }
+  return null
+}
+
+/** The stored typed source list → the canonical key Set `sessionShared`'s `ShareRules.sources`
+ *  consumes. Order-, case- and normalization-independent; junk entries are dropped. */
+export function normalizeSources(sources: readonly ShareSource[] | null | undefined): Set<string> {
+  const out = new Set<string>()
+  for (const raw of sources ?? []) {
+    const key = sourceKey(raw)
+    if (key) out.add(key)
+  }
+  return out
+}
+
+/** Build the `ShareRules` `sessionShared` (and everything below) consumes from a connection's
+ *  stored mode + typed sources. `mode` absent/junk reads as `'denylist'` — the same default
+ *  `@agentistics/core`'s `migrateTeamConfig` applies, so a connection read straight off disk and
+ *  one read through this function agree. The one place that does this translation. */
+export function shareRulesOf(
+  mode: 'denylist' | 'allowlist' | undefined,
+  sources: readonly ShareSource[] | undefined,
+): ShareRules {
+  return { mode: mode === 'allowlist' ? 'allowlist' : 'denylist', sources: normalizeSources(sources) }
+}
+
+/** Whether this connection currently applies ANY restriction. Allowlist mode is ALWAYS a
+ *  restriction — even an EMPTY allowlist is the strictest possible case (shares nothing), not the
+ *  absence of one. Denylist mode is a restriction only once it names at least one source, exactly
+ *  like the legacy `hasRestrictions`. */
+export function sourcesRestrict(
+  mode: 'denylist' | 'allowlist' | undefined,
+  sources: readonly ShareSource[] | undefined,
+): boolean {
+  if (mode === 'allowlist') return true
+  return normalizeSources(sources).size > 0
+}
+
+/** The fail-closed default applied the moment a DENYLIST connection acquires its first
+ *  restriction — mirrors `withUnresolvedDenied`, but scoped to denylist mode only: in allowlist
+ *  mode the unattributed bucket is already hidden by default like everything not explicitly
+ *  listed, so there is nothing to add. A no-op in allowlist mode and on an empty list (nothing to
+ *  attach the sentinel to — the zero→non-zero transition is the caller's job, same as before). */
+export function withUnresolvedSources(
+  mode: 'denylist' | 'allowlist' | undefined,
+  sources: readonly ShareSource[],
+): ShareSource[] {
+  if (mode === 'allowlist') return [...sources]
+  if (sources.length === 0) return []
+  return sources.some(s => s.type === 'none') ? [...sources] : [...sources, { type: 'none' as const, value: '' }]
+}
+
+/** Stable fingerprint of a connection's rules — mode AND typed sources, order-, case- and
+ *  normalization-independent. Unlike `denialSignature` (repo keys only, denylist only), this
+ *  covers the mode: switching denylist ↔ allowlist with the exact same source list still changes
+ *  the signature, because the set of shared sessions inverts even though `sources` itself did not
+ *  change — and the retroactive-removal detector (`planRulesReconcile`) must fire for that. */
+export function rulesSignature(
+  mode: 'denylist' | 'allowlist' | undefined,
+  sources: readonly ShareSource[] | undefined,
+): string {
+  const m = mode === 'allowlist' ? 'allowlist' : 'denylist'
+  const keys = [...normalizeSources(sources)].sort()
+  return createHash('sha256').update(m + '\n' + keys.join('\n')).digest('hex')
+}
+
+/** `rulesSignature` for "no rules have ever been declared" — the one sentinel value a missing
+ *  `rulesHash` reads as (team-rules.ts rule 2), computed once so `team-rules.ts`,
+ *  `team-connections.ts` and `team-migrate.ts` can never drift apart on what that sentinel is. */
+export function emptyRulesSignature(): string {
+  return rulesSignature('denylist', [])
+}
+
+export function filterSharedRules<T extends Pick<SessionMeta, 'git_remote' | 'project_path'>>(
+  sessions: readonly T[],
+  rules: ShareRules,
+  index?: PathRepoIndex,
+): T[] {
+  return sessions.filter(s => sessionShared(s, rules, index))
+}
+
+/** Sessions the CURRENT rules actively exclude — the general-shape sibling of
+ *  `deniedSessionIds`, same "denial, never absence" contract. */
+export function deniedSessionIdsRules(
+  sessions: readonly SessionMeta[],
+  rules: ShareRules,
+  index?: PathRepoIndex,
+): Set<string> {
+  const out = new Set<string>()
+  for (const s of sessions) {
+    if (s.session_id && !sessionShared(s, rules, index)) out.add(s.session_id)
+  }
+  return out
 }
 
 export function filterShared<T extends Pick<SessionMeta, 'git_remote' | 'project_path'>>(
@@ -135,7 +320,8 @@ export function filterShared<T extends Pick<SessionMeta, 'git_remote' | 'project
   index?: PathRepoIndex,
 ): T[] {
   if (denied.size === 0) return [...sessions]
-  return sessions.filter(s => sessionShared(s, denied, index))
+  const rules = denylistRules(denied)
+  return sessions.filter(s => sessionShared(s, rules, index))
 }
 
 /**
@@ -165,22 +351,28 @@ export function filterLiveShared<
 >(
   snapshot: { liveSessionIds: readonly string[]; liveProcesses: readonly P[] },
   sessions: readonly Pick<SessionMeta, 'session_id' | 'git_remote' | 'project_path'>[],
-  denied: ReadonlySet<RepoKey>,
+  rules: ShareRules,
   index?: PathRepoIndex,
 ): { liveSessionIds: string[]; liveProcesses: P[] } {
-  if (denied.size === 0) {
+  // Only an unrestricted DENYLIST passes the snapshot through. An allowlist is always a
+  // restriction — an empty one shares nothing — so it must never take this shortcut.
+  if (rules.mode === 'denylist' && rules.sources.size === 0) {
     return { liveSessionIds: [...snapshot.liveSessionIds], liveProcesses: [...snapshot.liveProcesses] }
   }
   const byId = new Map(sessions.map(s => [s.session_id, s]))
   const liveSessionIds = snapshot.liveSessionIds.filter(id => {
     const s = byId.get(id)
-    return !!s && sessionShared(s, denied, index)
+    return !!s && sessionShared(s, rules, index)
   })
   const liveProcesses = snapshot.liveProcesses.filter(p => {
-    // Positive resolution only: repoKeyOf falls back to NO_REPO_KEY for an unknown path, which
-    // would read as "shared" whenever the user has not also denied the no-repo bucket.
+    // Positive resolution only: `repoKeyOf` falls back to NO_REPO_KEY for an unknown path, which
+    // under a denylist would read as "shared" whenever the user has not also denied the no-repo
+    // bucket. A process has no session to attribute and `cwd` is the sensitive field — a path is
+    // usually the repository's name — so an unrecognized directory is withheld in BOTH modes.
     const key = index?.resolved.get(p.cwd)
-    return !!key && !denied.has(key)
+    if (!key) return false
+    const matched = rules.sources.has(repoSourceKey(key)) || rules.sources.has(projectSourceKey(p.cwd))
+    return rules.mode === 'allowlist' ? matched : !matched
   })
   return { liveSessionIds, liveProcesses }
 }
@@ -201,8 +393,9 @@ export function deniedSessionIds(
 ): Set<string> {
   const out = new Set<string>()
   if (denied.size === 0) return out
+  const rules = denylistRules(denied)
   for (const s of sessions) {
-    if (s.session_id && !sessionShared(s, denied, index)) out.add(s.session_id)
+    if (s.session_id && !sessionShared(s, rules, index)) out.add(s.session_id)
   }
   return out
 }
@@ -565,10 +758,11 @@ export function deniedTouchesPrehistory(
 ): boolean | null {
   if (boundary === null) return null
   if (boundary === '' || denied.size === 0) return false
+  const rules = denylistRules(denied)
   for (const s of allStored) {
     const day = sessionDay(s)
     if (day === null || day >= boundary) continue
-    if (!sessionShared(s, denied, index)) return true
+    if (!sessionShared(s, rules, index)) return true
   }
   return false
 }

@@ -1,10 +1,12 @@
 import { test, expect } from 'bun:test'
 import { NO_REPO_KEY, normalizeGitRemote } from '@agentistics/core'
-import type { SessionMeta, WorkflowRun, HarnessId } from '@agentistics/core'
+import type { SessionMeta, WorkflowRun, HarnessId, ShareSource } from '@agentistics/core'
 import {
   canonicalRepoKey, normalizeDenied, buildPathRepoIndex, repoKeyOf, sessionShared,
   filterShared, deniedSessionIds, sharedSessionIds, filterSharedWorkflows,
-  withUnresolvedDenied, denialSignature, hasRestrictions, filterLiveShared,
+  withUnresolvedDenied, denialSignature, hasRestrictions, filterLiveShared, denylistRules,
+  normalizeSources, shareRulesOf, sourcesRestrict, withUnresolvedSources,
+  rulesSignature, emptyRulesSignature, filterSharedRules, deniedSessionIdsRules,
 } from './share-rules'
 
 function s(over: Partial<SessionMeta> & { session_id: string }): SessionMeta {
@@ -126,7 +128,7 @@ test('non-Claude sessions obey the same rule', () => {
 test('a remote-less non-Claude session in a denied folder is dropped via the index', () => {
   const idx = buildPathRepoIndex([s({ session_id: 'claude1', project_path: '/repo', git_remote: 'github.com/o/secret' })])
   const codex = s({ session_id: 'codex1', harness: 'codex', project_path: '/repo' })
-  expect(sessionShared(codex, normalizeDenied(['github.com/o/secret']), idx)).toBe(false)
+  expect(sessionShared(codex, denyRepo('github.com/o/secret'), idx)).toBe(false)
 })
 
 test('a conflicting path fails CLOSED — denied if ANY remote under it is denied', () => {
@@ -135,7 +137,122 @@ test('a conflicting path fails CLOSED — denied if ANY remote under it is denie
     s({ session_id: 'b', project_path: '/ws', git_remote: 'github.com/o/secret' }),
   ])
   const inPublic = s({ session_id: 'c', project_path: '/ws', git_remote: 'github.com/o/public' })
-  expect(sessionShared(inPublic, normalizeDenied(['github.com/o/secret']), idx)).toBe(false)
+  expect(sessionShared(inPublic, denyRepo('github.com/o/secret'), idx)).toBe(false)
+})
+
+// --- Task 3: the predicate learns projects and allowlist mode ---
+
+/** Builds a `ShareRules` object the way a caller would, keyed as `${type}:${value}`. */
+function rules(mode: 'denylist' | 'allowlist', entries: Array<{ type: 'repo' | 'project' | 'none'; value?: string }>): { mode: 'denylist' | 'allowlist'; sources: Set<string> } {
+  const sources = new Set<string>()
+  for (const e of entries) sources.add(`${e.type}:${e.value ?? ''}`)
+  return { mode, sources }
+}
+function denyRepo(...values: string[]) { return rules('denylist', values.map(value => ({ type: 'repo' as const, value }))) }
+function allowRepo(...values: string[]) { return rules('allowlist', values.map(value => ({ type: 'repo' as const, value }))) }
+function denyProject(...values: string[]) { return rules('denylist', values.map(value => ({ type: 'project' as const, value }))) }
+function allowProject(...values: string[]) { return rules('allowlist', values.map(value => ({ type: 'project' as const, value }))) }
+function denyNone() { return rules('denylist', [{ type: 'none' as const }]) }
+function allowNone() { return rules('allowlist', [{ type: 'none' as const }]) }
+
+test('THE HEADLINE ALLOWLIST INVARIANT: an allowlist with an empty source set shares NOTHING', () => {
+  const rulesEmpty = rules('allowlist', [])
+  expect(rulesEmpty.sources.size).toBe(0)
+  const withRepo = s({ session_id: 'a', git_remote: 'github.com/o/r' })
+  const noRepo = s({ session_id: 'b' })
+  expect(sessionShared(withRepo, rulesEmpty)).toBe(false)
+  expect(sessionShared(noRepo, rulesEmpty)).toBe(false)
+})
+
+test('a project rule denies its exact project_path, and allows it in allowlist mode', () => {
+  const inProject = s({ session_id: 'a', project_path: '/work/app' })
+  const elsewhere = s({ session_id: 'b', project_path: '/work/other' })
+  expect(sessionShared(inProject, denyProject('/work/app'))).toBe(false)
+  expect(sessionShared(elsewhere, denyProject('/work/app'))).toBe(true)
+  expect(sessionShared(inProject, allowProject('/work/app'))).toBe(true)
+  expect(sessionShared(elsewhere, allowProject('/work/app'))).toBe(false)
+})
+
+test('a project rule catches a remote-less session (no repo to key on at all)', () => {
+  const remoteLess = s({ session_id: 'a', project_path: '/loose/folder', git_remote: undefined })
+  expect(sessionShared(remoteLess, denyProject('/loose/folder'))).toBe(false)
+  expect(sessionShared(remoteLess, allowProject('/loose/folder'))).toBe(true)
+  // A DIFFERENT project is untouched by the rule.
+  const other = s({ session_id: 'b', project_path: '/other/folder', git_remote: undefined })
+  expect(sessionShared(other, denyProject('/loose/folder'))).toBe(true)
+  expect(sessionShared(other, allowProject('/loose/folder'))).toBe(false)
+})
+
+test('a repo rule catches a session whose project was never named elsewhere (the worktree case)', () => {
+  // No PathRepoIndex at all: the session carries its OWN remote directly, so repoKeyOf never
+  // needs the index to resolve it. This is the everyday case of a repo cloned into a brand new
+  // worktree path nobody has seen before.
+  const freshWorktree = s({ session_id: 'a', project_path: '/tmp/worktree-created-today', git_remote: 'github.com/o/secret' })
+  expect(sessionShared(freshWorktree, denyRepo('github.com/o/secret'))).toBe(false)
+  expect(sessionShared(freshWorktree, allowRepo('github.com/o/secret'))).toBe(true)
+})
+
+test('a repo rule also catches a remote-less session THROUGH the path index (worktree resolved via a sibling session)', () => {
+  const idx = buildPathRepoIndex([s({ session_id: 'seed', project_path: '/ws', git_remote: 'github.com/o/secret' })])
+  const noRemote = s({ session_id: 'a', project_path: '/ws', git_remote: undefined })
+  expect(sessionShared(noRemote, denyRepo('github.com/o/secret'), idx)).toBe(false)
+  expect(sessionShared(noRemote, allowRepo('github.com/o/secret'), idx)).toBe(true)
+})
+
+test('the `none` bucket matches only a session that resolves to no repository at all', () => {
+  const noRepo = s({ session_id: 'a', git_remote: undefined })
+  const withRepo = s({ session_id: 'b', git_remote: 'github.com/o/r' })
+  expect(sessionShared(noRepo, denyNone())).toBe(false)
+  expect(sessionShared(withRepo, denyNone())).toBe(true)
+  expect(sessionShared(noRepo, allowNone())).toBe(true)
+  expect(sessionShared(withRepo, allowNone())).toBe(false)
+})
+
+test('DENY WINS ACROSS DIMENSIONS in denylist mode: a blocked repo denies even when the project is not listed', () => {
+  const inBlockedRepo = s({ session_id: 'a', project_path: '/some/unlisted/path', git_remote: 'github.com/o/secret' })
+  // Only a repo source is denied; nothing names this session's project at all.
+  expect(sessionShared(inBlockedRepo, denyRepo('github.com/o/secret'))).toBe(false)
+})
+
+test('in allowlist mode, matching EITHER an allowed repo or an allowed project is enough', () => {
+  const viaRepo = s({ session_id: 'a', project_path: '/unlisted', git_remote: 'github.com/o/allowed' })
+  const viaProject = s({ session_id: 'b', project_path: '/allowed/path', git_remote: 'github.com/o/other' })
+  const allowBoth = rules('allowlist', [{ type: 'repo', value: 'github.com/o/allowed' }, { type: 'project', value: '/allowed/path' }])
+  expect(sessionShared(viaRepo, allowBoth)).toBe(true)
+  expect(sessionShared(viaProject, allowBoth)).toBe(true)
+})
+
+test('a session matching nothing: denylist shares it, allowlist withholds it — the two AGREE only in the direction each defines', () => {
+  const untouched = s({ session_id: 'a', project_path: '/nowhere', git_remote: 'github.com/o/unrelated' })
+  const someRule = rules('denylist', [{ type: 'repo', value: 'github.com/o/other' }])
+  const someAllow = rules('allowlist', [{ type: 'repo', value: 'github.com/o/other' }])
+  expect(sessionShared(untouched, someRule)).toBe(true)
+  expect(sessionShared(untouched, someAllow)).toBe(false)
+})
+
+test('conflictPaths survives, denylist direction: shared only if EVERY repo under the path is undenied', () => {
+  const idx = buildPathRepoIndex([
+    s({ session_id: 'seedA', project_path: '/ws', git_remote: 'github.com/o/public' }),
+    s({ session_id: 'seedB', project_path: '/ws', git_remote: 'github.com/o/secret' }),
+  ])
+  const inPublic = s({ session_id: 'c', project_path: '/ws', git_remote: 'github.com/o/public' })
+  // The session's OWN remote is fine, but a sibling repo sharing its path is denied.
+  expect(sessionShared(inPublic, denyRepo('github.com/o/secret'), idx)).toBe(false)
+  // Neither conflicting repo is denied: shared.
+  expect(sessionShared(inPublic, denyRepo('github.com/o/unrelated'), idx)).toBe(true)
+})
+
+test('conflictPaths survives, allowlist direction: shared only if ALL repos under the path are allowed', () => {
+  const idx = buildPathRepoIndex([
+    s({ session_id: 'seedA', project_path: '/ws', git_remote: 'github.com/o/public' }),
+    s({ session_id: 'seedB', project_path: '/ws', git_remote: 'github.com/o/secret' }),
+  ])
+  const inPublic = s({ session_id: 'c', project_path: '/ws', git_remote: 'github.com/o/public' })
+  // Only the session's own remote is allowed; the sibling repo under the same path is not —
+  // the ambiguity must fail closed, not open.
+  expect(sessionShared(inPublic, allowRepo('github.com/o/public'), idx)).toBe(false)
+  // Both conflicting repos allowed: shared.
+  expect(sessionShared(inPublic, allowRepo('github.com/o/public', 'github.com/o/secret'), idx)).toBe(true)
 })
 
 test('withUnresolvedDenied adds the sentinel only once restrictions exist, idempotently', () => {
@@ -806,6 +923,155 @@ test('non-Claude sessions in the store do not trip the precondition', () => {
   expect(out).not.toBeNull()
 })
 
+// ---------------------------------------------------------------------------
+// Task 4 — the typed-source shape (mode + ShareSource[])
+// ---------------------------------------------------------------------------
+
+const repoSrc = (value: string): ShareSource => ({ type: 'repo', value })
+const projectSrc = (value: string): ShareSource => ({ type: 'project', value })
+const noneSrc = (): ShareSource => ({ type: 'none', value: '' })
+
+test('normalizeSources canonicalizes repo values and folds "none" to a fixed key', () => {
+  const out = normalizeSources([repoSrc('https://github.com/Acme/API.git'), repoSrc('git@github.com:acme/api.git'), noneSrc()])
+  expect(out).toEqual(new Set(['repo:github.com/acme/api', 'none:']))
+})
+
+test('normalizeSources keeps project paths verbatim, as their own dimension', () => {
+  const out = normalizeSources([projectSrc('/home/alice/work/repo')])
+  expect(out).toEqual(new Set(['project:/home/alice/work/repo']))
+})
+
+test('normalizeSources drops junk (unresolvable repo, blank project path)', () => {
+  const out = normalizeSources([repoSrc(''), projectSrc(''), { type: 'repo', value: 123 as unknown as string }])
+  expect(out.size).toBe(0)
+})
+
+test('shareRulesOf: mode absent/junk reads as denylist, same default as migrateTeamConfig', () => {
+  expect(shareRulesOf(undefined, [repoSrc('github.com/o/r')]).mode).toBe('denylist')
+  expect(shareRulesOf('bogus' as never, []).mode).toBe('denylist')
+  expect(shareRulesOf('allowlist', []).mode).toBe('allowlist')
+})
+
+test('sourcesRestrict: allowlist is ALWAYS a restriction, even empty', () => {
+  expect(sourcesRestrict('allowlist', [])).toBe(true)
+  expect(sourcesRestrict('allowlist', [repoSrc('github.com/o/r')])).toBe(true)
+})
+
+test('sourcesRestrict: denylist is a restriction only once it names a source', () => {
+  expect(sourcesRestrict('denylist', [])).toBe(false)
+  expect(sourcesRestrict(undefined, undefined)).toBe(false)
+  expect(sourcesRestrict('denylist', [repoSrc('github.com/o/r')])).toBe(true)
+})
+
+test('withUnresolvedSources: denylist mode auto-adds the none bucket exactly once', () => {
+  expect(withUnresolvedSources('denylist', [])).toEqual([])
+  expect(withUnresolvedSources('denylist', [repoSrc('github.com/o/r')])).toEqual([repoSrc('github.com/o/r'), noneSrc()])
+  const already = [repoSrc('github.com/o/r'), noneSrc()]
+  expect(withUnresolvedSources('denylist', already)).toEqual(already)
+})
+
+test('withUnresolvedSources: allowlist mode never adds the none bucket — nothing to add', () => {
+  expect(withUnresolvedSources('allowlist', [])).toEqual([])
+  expect(withUnresolvedSources('allowlist', [repoSrc('github.com/o/r')])).toEqual([repoSrc('github.com/o/r')])
+})
+
+test('rulesSignature covers the mode — same sources, different mode, different signature', () => {
+  const sources = [repoSrc('github.com/o/r')]
+  expect(rulesSignature('denylist', sources)).not.toBe(rulesSignature('allowlist', sources))
+})
+
+test('rulesSignature is order/case/normalization independent, like denialSignature', () => {
+  const a = rulesSignature('denylist', [repoSrc('github.com/o/r1'), repoSrc('github.com/o/r2')])
+  const b = rulesSignature('denylist', [repoSrc('GitHub.com/O/r2'), repoSrc('github.com/O/R1')])
+  expect(a).toBe(b)
+})
+
+test('emptyRulesSignature is rulesSignature(denylist, [])', () => {
+  expect(emptyRulesSignature()).toBe(rulesSignature('denylist', []))
+})
+
+test('filterSharedRules / deniedSessionIdsRules: allowlist with an empty source set shares nothing', () => {
+  const sessions = [s({ session_id: 'a', project_path: '/p/a', git_remote: 'https://github.com/o/r' })]
+  const rules = shareRulesOf('allowlist', [])
+  expect(filterSharedRules(sessions, rules)).toEqual([])
+  expect(deniedSessionIdsRules(sessions, rules)).toEqual(new Set(['a']))
+})
+
+test('filterSharedRules / deniedSessionIdsRules: a project rule catches a remote-less session', () => {
+  const sessions = [s({ session_id: 'a', project_path: '/p/a', git_remote: '' })]
+  const denylistRules = shareRulesOf('denylist', [projectSrc('/p/a')])
+  expect(filterSharedRules(sessions, denylistRules)).toEqual([])
+  expect(deniedSessionIdsRules(sessions, denylistRules)).toEqual(new Set(['a']))
+
+  const allowlistRules = shareRulesOf('allowlist', [projectSrc('/p/a')])
+  expect(filterSharedRules(sessions, allowlistRules)).toEqual(sessions)
+  expect(deniedSessionIdsRules(sessions, allowlistRules)).toEqual(new Set())
+})
+
+test('filterSharedRules / deniedSessionIdsRules: a repo rule catches a session whose project was never named', () => {
+  const sessions = [s({ session_id: 'a', project_path: '', git_remote: 'https://github.com/o/secret' })]
+  const rules = shareRulesOf('denylist', [repoSrc('github.com/o/secret')])
+  expect(filterSharedRules(sessions, rules)).toEqual([])
+  expect(deniedSessionIdsRules(sessions, rules)).toEqual(new Set(['a']))
+})
+
+test('deny wins across dimensions in denylist mode: a blocked repo denies even if the project is not listed', () => {
+  const sessions = [s({ session_id: 'a', project_path: '/p/a', git_remote: 'https://github.com/o/secret' })]
+  const rules = shareRulesOf('denylist', [repoSrc('github.com/o/secret')])
+  expect(deniedSessionIdsRules(sessions, rules)).toEqual(new Set(['a']))
+})
+
+test('in allowlist mode, matching either an allowed repo or an allowed project is enough', () => {
+  const byRepo = s({ session_id: 'r', project_path: '/p/other', git_remote: 'https://github.com/o/allowed' })
+  const byProject = s({ session_id: 'p', project_path: '/p/allowed', git_remote: 'https://github.com/o/other' })
+  const rules = shareRulesOf('allowlist', [repoSrc('github.com/o/allowed'), projectSrc('/p/allowed')])
+  expect(deniedSessionIdsRules([byRepo, byProject], rules)).toEqual(new Set())
+})
+
+// ---------------------------------------------------------------------------
+// The same-array precondition, asserted rather than trusted
+// ---------------------------------------------------------------------------
+
+test('sub-day shrinkage REFUSES — a decomposable day the store only partly covers', () => {
+  // real says 2026-06-25 had 2 sessions; the store now holds only one of them.
+  const all = [storeSessions()[0]!]
+  const shared = filterShared(all, normalizeDenied(['github.com/o/secret']))
+  expect(buildSplitStatsCache({ real: realCache(), allStored: all, shared, boundary: '2026-06-23', sealed: {} })).toBeNull()
+})
+
+test('a token disagreement on a decomposable day REFUSES', () => {
+  const all = storeSessions().map(s => ({ ...s, input_tokens: s.input_tokens + 1 }))
+  expect(buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })).toBeNull()
+})
+
+test('a message-count disagreement on a decomposable day REFUSES', () => {
+  const all = storeSessions()
+  all[0]!.user_message_count += 3
+  expect(buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })).toBeNull()
+})
+
+test('a decomposable day the STORE has and the cache does not also REFUSES', () => {
+  const all = [
+    ...storeSessions(),
+    s({ session_id: 'extra', start_time: localAt('2026-06-30', 9), model: 'claude-opus-5', input_tokens: 7, user_message_count: 1 }),
+  ]
+  expect(buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })).toBeNull()
+})
+
+test('PREHISTORY days are never checked — the store is legitimately a subset there', () => {
+  // realCache()'s 2026-02-06 row (10 sessions) has no counterpart in the store at all.
+  const all = storeSessions()
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })
+  expect(out).not.toBeNull()
+  expect(out!.dailyActivity.find(d => d.date === '2026-02-06')!.sessionCount).toBe(10)
+})
+
+test('non-Claude sessions in the store do not trip the precondition', () => {
+  const all = [...storeSessions(), s({ session_id: 'cx', harness: 'codex', start_time: localAt('2026-06-25', 9), user_message_count: 4 })]
+  const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })
+  expect(out).not.toBeNull()
+})
+
 // --- the live channel (reverse WebSocket) obeys the same denylist as the uploader ---
 
 const LIVE_SESSIONS = [
@@ -816,7 +1082,7 @@ const liveIndex = () => buildPathRepoIndex(LIVE_SESSIONS)
 
 test('an unrestricted connection gets the live snapshot untouched', () => {
   const snap = { liveSessionIds: ['open-blocked', 'open-shared'], liveProcesses: [{ cwd: '/anywhere' }] }
-  const out = filterLiveShared(snap, LIVE_SESSIONS, normalizeDenied([]))
+  const out = filterLiveShared(snap, LIVE_SESSIONS, denylistRules(normalizeDenied([])))
   expect(out.liveSessionIds).toEqual(['open-blocked', 'open-shared'])
   expect(out.liveProcesses).toHaveLength(1)
 })
@@ -825,7 +1091,7 @@ test('an unrestricted connection gets the live snapshot untouched', () => {
 // channel announced its session id every 8 seconds.
 test('a denied repo\'s open session id never leaves the machine', () => {
   const snap = { liveSessionIds: ['open-blocked', 'open-shared'], liveProcesses: [] }
-  const out = filterLiveShared(snap, LIVE_SESSIONS, normalizeDenied(['github.com/acme/secret']), liveIndex())
+  const out = filterLiveShared(snap, LIVE_SESSIONS, denylistRules(normalizeDenied(['github.com/acme/secret'])), liveIndex())
   expect(out.liveSessionIds).toEqual(['open-shared'])
 })
 
@@ -833,7 +1099,7 @@ test('a live id with no matching session is dropped, not passed through', () => 
   // Unattributable to any repo, and the central resolves live ids against the sessions it was
   // pushed — so keeping it only ever leaked an identifier for a row nobody could render.
   const snap = { liveSessionIds: ['ghost'], liveProcesses: [] }
-  const out = filterLiveShared(snap, LIVE_SESSIONS, normalizeDenied(['github.com/acme/secret']), liveIndex())
+  const out = filterLiveShared(snap, LIVE_SESSIONS, denylistRules(normalizeDenied(['github.com/acme/secret'])), liveIndex())
   expect(out.liveSessionIds).toEqual([])
 })
 
@@ -842,7 +1108,7 @@ test('a process is reported only when its cwd resolves to a repo that is not den
     liveSessionIds: [],
     liveProcesses: [{ cwd: '/w/secret' }, { cwd: '/w/public' }, { cwd: '/w/never-seen' }],
   }
-  const out = filterLiveShared(snap, LIVE_SESSIONS, normalizeDenied(['github.com/acme/secret']), liveIndex())
+  const out = filterLiveShared(snap, LIVE_SESSIONS, denylistRules(normalizeDenied(['github.com/acme/secret'])), liveIndex())
   // /w/secret is denied; /w/never-seen cannot be attributed, and cwd is often the repo name —
   // under restrictions an unrecognized directory is withheld rather than assumed innocent.
   expect(out.liveProcesses.map(p => p.cwd)).toEqual(['/w/public'])
@@ -850,13 +1116,13 @@ test('a process is reported only when its cwd resolves to a repo that is not den
 
 test('denying the no-repo bucket alone still withholds unattributable processes', () => {
   const snap = { liveSessionIds: [], liveProcesses: [{ cwd: '/w/never-seen' }] }
-  const out = filterLiveShared(snap, LIVE_SESSIONS, normalizeDenied([NO_REPO_KEY]), liveIndex())
+  const out = filterLiveShared(snap, LIVE_SESSIONS, denylistRules(normalizeDenied([NO_REPO_KEY])), liveIndex())
   expect(out.liveProcesses).toEqual([])
 })
 
 test('the alias folding that guards filterShared guards the live channel too', () => {
   const snap = { liveSessionIds: ['open-blocked'], liveProcesses: [] }
   // Denied under a different SSH/case spelling of the same remote.
-  const out = filterLiveShared(snap, LIVE_SESSIONS, normalizeDenied(['git@github.com:Acme/Secret.git']), liveIndex())
+  const out = filterLiveShared(snap, LIVE_SESSIONS, denylistRules(normalizeDenied(['git@github.com:Acme/Secret.git'])), liveIndex())
   expect(out.liveSessionIds).toEqual([])
 })

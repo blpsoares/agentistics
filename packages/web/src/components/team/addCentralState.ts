@@ -1,7 +1,8 @@
-import type { TeamConnection } from '@agentistics/core'
+import type { TeamConnection, ShareSource } from '@agentistics/core'
 import { NO_REPO_KEY, normalizeEndpointKey, unpackConnectToken } from '@agentistics/core'
 import type { ShareTarget } from '../../lib/shareRepos'
 import { shareAllDraft } from './repoPanelState'
+import { buildSourcesFromDraft, type ShareMode, type SubmittedRules } from './sharePanelState'
 
 /**
  * addCentralState.ts — the pure decisions behind `AddCentralDrawer.tsx` (Task 12, design doc §9.6).
@@ -128,7 +129,8 @@ export interface ConnectSubmitBody {
   token: string
   org: string
   label?: string
-  deniedRepos: string[]
+  shareMode: ShareMode
+  sources: ShareSource[]
 }
 
 function trimTrailingSlashes(url: string): string {
@@ -136,39 +138,52 @@ function trimTrailingSlashes(url: string): string {
 }
 
 /**
- * The zero→non-zero transition rule (mirrors the server's `withUnresolvedDenied` in
- * `share-rules.ts`): an EMPTY draft stays `[]` ("share everything"), but the moment anything at
- * all is blocked, `NO_REPO_KEY` widens in automatically — a user who blocks one repository without
- * ever touching the "no repository" bucket should not have unattributed sessions leak through by
- * omission. Duplicated here rather than imported (the web bundle cannot import
- * `packages/server/*`) — the exact same reasoning `repoPanelState.ts`'s `normalizeDenied` already
- * documents for its own server mirror.
+ * The zero→non-zero transition rule (mirrors the server's `withUnresolvedSources` in
+ * `share-rules.ts`), DENYLIST MODE ONLY: an EMPTY repo-key draft stays `[]` ("share everything"),
+ * but the moment anything at all is blocked, `NO_REPO_KEY` widens in automatically — a user who
+ * blocks one repository without ever touching the "no repository" bucket should not have
+ * unattributed sessions leak through by omission. In ALLOWLIST mode there is nothing to widen —
+ * the unattributed bucket is already hidden by default like everything not explicitly listed, so
+ * widening it in would be the ONE thing that silently shares more than the user chose. Duplicated
+ * here rather than imported (the web bundle cannot import `packages/server/*`) — the exact same
+ * reasoning `repoPanelState.ts`'s `normalizeDenied` already documents for its own server mirror.
  */
-function withNoRepoWidening(keys: readonly string[]): string[] {
-  if (keys.length === 0) return []
+function withNoRepoWidening(mode: ShareMode, keys: readonly string[]): string[] {
+  if (mode === 'allowlist' || keys.length === 0) return [...keys]
   return keys.includes(NO_REPO_KEY) ? [...keys] : [...keys, NO_REPO_KEY]
 }
 
 /**
- * The ONE request body this wizard ever produces — `{ endpoint, token, org, label?, deniedRepos }`
- * for the single `POST /api/team/connections` that creates the connection AND commits the rules
- * together. `deniedRepos` is exactly the step-2 draft, widened by `withNoRepoWidening`.
+ * The ONE request body this wizard ever produces — `{ endpoint, token, org, label?, shareMode,
+ * sources }` for the single `POST /api/team/connections` that creates the connection AND commits
+ * the rules together. `sources` is built from `submitted` (repo keys widened by
+ * `withNoRepoWidening` in denylist mode) via `buildSourcesFromDraft`.
+ *
+ * `submitted` is a `SubmittedRules`, i.e. the output of `resolveSubmittedRules` — NEVER the
+ * wizard's two raw drafts. That distinction is the whole of a Critical review finding: the drafts
+ * mean "this switch is OFF" in both modes, while an allowlist's `sources` mean the OPPOSITE, so
+ * passing them straight through sent the central the one repository the user had just hidden and
+ * nothing else. Taking the converted struct (not two loose Sets) is what makes the correct call
+ * the obvious one at the call site.
  */
 export function buildSubmitBody(input: {
   endpoint: string
   token: string
   org: string
   label: string
-  deniedKeys: ReadonlySet<string>
+  mode: ShareMode
+  submitted: SubmittedRules
 }): ConnectSubmitBody {
   const endpoint = trimTrailingSlashes(input.endpoint.trim())
   const org = input.org.trim()
   const label = input.label.trim()
+  const widenedRepoKeys = withNoRepoWidening(input.mode, [...input.submitted.repoKeys])
   const body: ConnectSubmitBody = {
     endpoint,
     token: input.token,
     org,
-    deniedRepos: withNoRepoWidening([...input.deniedKeys]),
+    shareMode: input.mode,
+    sources: buildSourcesFromDraft(new Set(widenedRepoKeys), input.submitted.projectPaths),
   }
   if (label) body.label = label
   return body

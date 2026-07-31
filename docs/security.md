@@ -157,19 +157,50 @@ test asserting exactly that (`auth-principal.test.ts`, `stepup.test.ts`).
   That is the entire reason `agentop doctor --exposed` exists and refuses to declare readiness
   on a check it could not verify.
 
-## 8. Per-connection repository sharing — the guarantee, stated precisely
+## 8. Per-connection sharing rules — the guarantee, stated precisely
 
-A member can block specific git repositories per central connection (`share-rules.ts`,
-`team-rules.ts`, `team-forget-client.ts` — see [architecture.md](architecture.md#per-connection-repository-sharing)
-for how it works). `deniedRepos` exists in exactly three places — `~/.agentistics/preferences.json`,
-the in-memory `TeamConnection` on the member, and the browser tab talking to that machine's own
-origin — and appears in **no** request body sent to a central: `IngestBody` is unchanged, and
-`GET /api/team/status` exposes only `deniedCount`, the attribution boundary and the local
-prehistory count, all same-origin.
+A member can restrict what each central connection receives, across **two dimensions** —
+repository (`git_remote`) and project (`project_path`) — under one of **two modes**
+(`share-rules.ts`, `team-rules.ts`, `team-forget-client.ts` — see
+[architecture.md](architecture.md#per-connection-repository-sharing) for how it works):
 
-**What is guaranteed:** a central never learns *which* repositories are hidden, nor how many, nor
-their names, sessions, prompts, titles, models or cost — **provided the repository was never
-pushed to it and had no activity before the attribution boundary.**
+- **`denylist`** ("share everything except…") — the default, and the same behaviour every
+  existing `deniedRepos` config had before this shipped.
+- **`allowlist`** ("share only…") — nothing reaches this central unless it matches a listed
+  repo or project.
+
+The typed rule list (`TeamConnection.sources: ShareSource[]`, plus `shareMode`) exists in exactly
+three places — `~/.agentistics/preferences.json`, the in-memory `TeamConnection` on the member, and
+the browser tab talking to that machine's own origin — and appears in **no** request body sent to
+a central: `IngestBody` is unchanged, and `GET /api/team/status` exposes only `shareMode` and a
+per-dimension **count** (`deniedRepos`/`deniedProjects`, or `allowedCount` in allowlist mode) —
+never the values, same-origin only.
+
+**What is guaranteed:** a central never learns *which* repositories or projects are hidden (or
+allowed), nor how many, nor their names, sessions, prompts, titles, models or cost — **provided
+that data was never pushed to it and had no activity before the attribution boundary.** This holds
+identically in both modes: allowlist mode does not disclose the *complement* of what it shares
+either — a central sees only what was let through, never a hint of what else exists.
+
+**Allowlist mode is the safer default to choose for an untrusted central**, specifically because
+of how it treats the unknown: a repository or project that appears on the machine *after* the rule
+was set is **hidden** under allowlist (it matches nothing, so it is not shared) but **shared** under
+denylist (it matches no *block*, so it goes through). Denylist requires the user to notice and add
+every new thing they want hidden; allowlist requires them to notice and add every new thing they
+want shared. For a central the user does not fully trust, the fail-closed direction is the one
+where forgetting to update the rules leaks nothing new.
+
+**One thing "share only…" must not be read as promising, and the UI must say so explicitly:
+allowlist mode still ships the prehistory rollup.** Work done at or before Claude's own
+`lastComputedDate` summarisation watermark cannot be decomposed by repository or project by
+*anyone*, including this machine — the consolidate store is a strict subset of what Claude already
+rolled up into `stats-cache.json`, and there is no per-session record left to filter. That block
+travels to every connection, allowlist or denylist, as unattributed daily volume (tokens, cost,
+session/message counts with no repo, no project, no session id, no prompt attached) — exactly as it
+does today under a denylist. Choosing "share only project X" narrows everything *decomposable*, not
+that rollup; the existing `prehistorySessions` marker (surfaced in the confirm modal and the read
+view) reports its size so the user can judge how much of their history that covers. A stronger-
+sounding mode name must never imply a stronger guarantee than the attribution boundary allows.
 
 **What is NOT guaranteed, and must be said in the UI — do not present this feature as stronger
 than this:**
@@ -190,11 +221,12 @@ than this:**
    overlapping shared-session sets, can take a set difference and recover the other's rules.
    Per-connection restrictions are confidential against a *single* central operator, not against
    collusion between them.
-5. **CI ingest and the OpenTelemetry exporter are outside the denylist entirely.** A machine
-   denylist is a *member push* rule; it does not reach `agentop ci-push` (CI sessions are stamped
-   server-side under a different `memberId`, keyed by repo) or `otel-watcher.ts`'s OTLP export.
-   Blocking a repo from a member connection does not stop that repo's GitHub Actions runs or OTel
-   metrics from reaching the same central by a different path.
+5. **CI ingest and the OpenTelemetry exporter are outside these rules entirely, in either mode.**
+   A connection's sharing rules are a *member push* rule; they do not reach `agentop ci-push` (CI
+   sessions are stamped server-side under a different `memberId`, keyed by repo) or
+   `otel-watcher.ts`'s OTLP export. Blocking (or failing to allowlist) a repo on a member
+   connection does not stop that repo's GitHub Actions runs or OTel metrics from reaching the same
+   central by a different path.
 
 ## 9. Verifying it yourself
 

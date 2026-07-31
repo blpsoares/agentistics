@@ -418,22 +418,41 @@ The display **name is set by the central** on the minted token — there is no n
   model / date genuinely have no cache granularity and stay cache-blind (`cacheBlindScope`).
 - **The central is the sole authority on the push interval** — members clamp to `max(central, EXPRESS_MIN_SEC)`; there is no faster member override.
 - **`agentop central` runs from anywhere** — in a repo checkout it wraps `central.sh` (which does `build: .`); from the standalone binary (no repo) `cli-central.ts` falls back to a Docker-image path: it materializes a compose that pulls `ghcr.io/blpsoares/agentistics:<version>` + generates `central.env` into `~/.agentistics/central/` and drives `docker compose` directly. The image is published to GHCR by the `publish-image` job in `release.yml`. Override the image with `AGENTISTICS_IMAGE`.
-- **Per-connection repository sharing — `deniedRepos` never goes on the wire.** It lives only in
-  `preferences.json`, the in-memory `TeamConnection`, and the browser tab on the machine's own
-  origin; `IngestBody` gains no field for it, and `GET /api/team/status` exposes only
-  `deniedCount` + the attribution boundary + a local prehistory count, same-origin. The
-  restricted statsCache (`buildSplitStatsCache`, `share-rules.ts`) is selected by the **declared**
-  rule — `hasRestrictions(conn.deniedRepos)` — never by comparing a filtered count against an
-  unfiltered one; a count comparison fails open on a cold consolidate store. **There is no
+- **Per-connection sharing rules — projects and repositories, denylist or allowlist, never on the
+  wire.** A connection restricts what it receives across two dimensions (`repo`/`project`, plus
+  the fixed `none` bucket for sessions with no resolvable repo) under one of two modes:
+  `shareMode: 'denylist'` (share everything except `sources` — the default) or `'allowlist'`
+  (share only `sources`). **`share-rules.ts` is the only place these semantics live** —
+  `sessionShared(session, rules, index)` where `rules = { mode, sources }`; nothing downstream
+  re-derives them. **Deny wins across dimensions in denylist mode**: matching a blocked repo denies
+  a session even if its project is not listed. **`shareMode` absent reads as `'denylist'`** —
+  every pre-existing config is one, and treating absence as anything else would silently invert
+  live rules; `migrateTeamConfig` (`@agentistics/core/team.ts`) derives `{shareMode:'denylist',
+  sources}` from a legacy `deniedRepos: string[]`, deterministically and idempotently, in the same
+  read path Plan 1's migration already used. **`deniedRepos` is derived-on-write only, from Task 2
+  onward** — it is kept solely as a read-migration source; any code that still *writes* it directly
+  is a bug. The typed rules live only in `preferences.json`, the in-memory `TeamConnection`, and the
+  browser tab on the machine's own origin; `IngestBody` gains no field for them, and
+  `GET /api/team/status` exposes only `shareMode` + a per-dimension **count**
+  (`deniedRepos`/`deniedProjects`, or `allowedCount` in allowlist mode) — never the values,
+  same-origin only. The restricted statsCache (`buildSplitStatsCache`, `share-rules.ts`) is
+  selected by the **declared** rule — `sourcesRestrict(conn.shareMode, conn.sources)`, where
+  allowlist mode is ALWAYS a restriction (even an empty allowlist, the strictest case) and
+  denylist mode is one only once it names a source — never by comparing a filtered count against
+  an unfiltered one; a count comparison fails open on a cold consolidate store. **There is no
   fallback to the unsplit cache on the restricted path, ever** — when the split cannot be built
-  faithfully, the push omits `statsCache` entirely rather than shipping the real one. The
-  retroactive-removal trigger (`planRulesReconcile`, `team-rules.ts`) is **denial, never
-  absence** — a session merely missing from a short store read is never treated as newly denied,
-  which would ask the central to delete perfectly valid sessions and drop them from the
-  sent-state forever. `stats-cache.json` stays Claude-only here too — the split's synthetic and
-  rebuilt halves are both accumulated from Claude sessions only (`accumulateClaudeSessions`).
+  faithfully, the push omits `statsCache` entirely rather than shipping the real one.
+  **Allowlist mode still ships the prehistory rollup**: days at or before Claude's own
+  `lastComputedDate` watermark cannot be decomposed by repository or project by anyone, so that
+  block travels as unattributed daily volume in both modes — "share only X" narrows the
+  decomposable window, not that rollup. The retroactive-removal trigger (`planRulesReconcile`,
+  `team-rules.ts`) is **denial, never absence** — a session merely missing from a short store read
+  is never treated as newly denied, which would ask the central to delete perfectly valid sessions
+  and drop them from the sent-state forever. `stats-cache.json` stays Claude-only here too — the
+  split's synthetic and rebuilt halves are both accumulated from Claude sessions only
+  (`accumulateClaudeSessions`).
   See [docs/architecture.md](docs/architecture.md#per-connection-repository-sharing) and
-  [docs/security.md](docs/security.md#8-per-connection-repository-sharing--the-guarantee-stated-precisely).
+  [docs/security.md](docs/security.md#8-per-connection-sharing-rules--the-guarantee-stated-precisely).
 
 ---
 

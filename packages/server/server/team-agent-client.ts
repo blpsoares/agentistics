@@ -208,11 +208,18 @@ function startLiveReporting(connId: string, socket: WebSocket): void {
       // consult, and defaulting to "unrestricted" would leak precisely when the rule is gone.
       const conn = readTeamConnections(await readPreferences()).find(c => c.id === connId)
       if (!conn) return
-      const denied = shareRules.normalizeDenied(conn.deniedRepos)
-      const index = denied.size > 0
+      // The TYPED rules, never the legacy `deniedRepos` mirror: that mirror can only express
+      // "these repo keys are blocked", so a project-only rule would not reach this channel at all
+      // and an allowlist would be read as its own inverse. The live channel says what this machine
+      // is working on RIGHT NOW — a leak here is the sharpest one the feature has.
+      const rules = shareRules.shareRulesOf(conn.shareMode, conn.sources)
+      // An allowlist ALWAYS restricts (an empty one shares nothing), so the index cannot be gated
+      // on a non-empty source set the way a denylist's could.
+      const restricted = rules.mode === 'allowlist' || rules.sources.size > 0
+      const index = restricted
         ? shareRules.buildPathRepoIndex(data.sessions, data.projects)
         : undefined
-      const shared = shareRules.filterLiveShared(snap, data.sessions, denied, index)
+      const shared = shareRules.filterLiveShared(snap, data.sessions, rules, index)
 
       if (socket.readyState !== WebSocket.OPEN) return
       socket.send(JSON.stringify({

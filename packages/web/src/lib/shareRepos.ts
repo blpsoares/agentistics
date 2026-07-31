@@ -14,7 +14,7 @@
  * keeps sharing — a silent privacy failure with a confident-looking UI.
  */
 import type { SessionMeta } from '@agentistics/core'
-import { NO_REPO_KEY, normalizeGitRemote, repoShortName } from '@agentistics/core'
+import { NO_REPO_KEY, normalizeGitRemote, repoShortName, formatProjectName } from '@agentistics/core'
 
 /** Minimal shape needed from the server's project list — just enough to resolve a remote-less
  *  session's repository via its project's `gitRemote`. Structurally compatible with both
@@ -182,6 +182,76 @@ export function buildShareTargets(
       lastActive: b.lastActive,
       orphan: b.sessions === 0 && denied.has(b.key),
       conflictPaths,
+    })
+  }
+
+  targets.sort((a, b) => b.sessions - a.sessions || a.name.localeCompare(b.name))
+  return targets
+}
+
+export interface ProjectTarget {
+  key: string                  // project_path — the identity a project-level rule is keyed on
+  kind: 'project'
+  name: string                 // formatProjectName(path) — the SAME helper "Filtrar por projeto" uses
+  path: string
+  /** Canonical repo key this project resolves to (its own `gitRemote`, or via a session that
+   *  carries one) — '' when the project has no known git remote at all. NEVER `NO_REPO_KEY`: that
+   *  sentinel names the repo tab's own "no repository" bucket, a different dimension. */
+  repoKey: string
+  sessions: number
+  lastActive: string
+  /** True when `repoKey` is non-empty AND currently denied — "repo + project are the same thing"
+   *  (the user's own words): blocking the repo must show as blocked here too, never as an
+   *  independently-toggleable row that silently contradicts the repo tab. */
+  locked: boolean
+}
+
+/**
+ * Turns the app's raw (UNFILTERED) project list into one row per project — the SAME list
+ * "Filtrar por projeto" shows (same paths, same `formatProjectName` display names), so a user
+ * never sees two different project lists in the same app. A project's repository, when it has
+ * one, is resolved through the exact same path→repo index the repo tab uses (`buildPathIndex`),
+ * so the two tabs can never disagree about which repo governs a given project.
+ *
+ * Callers MUST pass `ctx.data.projects` / `ctx.data.sessions` — never a filtered derivative — for
+ * the same reason `buildShareTargets` documents.
+ */
+export function buildProjectTargets(
+  sessions: SessionMeta[],
+  projects: ServerProject[],
+  deniedRepoKeys: string[],
+): ProjectTarget[] {
+  const index = buildPathIndex(sessions, projects)
+  const denied = normalizeDeniedKeys(deniedRepoKeys)
+
+  const bySessions = new Map<string, { sessions: number; lastActive: string }>()
+  for (const s of sessions) {
+    if (!s.project_path) continue
+    const agg = bySessions.get(s.project_path) ?? { sessions: 0, lastActive: '' }
+    agg.sessions++
+    if (s.start_time && (!agg.lastActive || s.start_time > agg.lastActive)) agg.lastActive = s.start_time
+    bySessions.set(s.project_path, agg)
+  }
+
+  // Every project the filter knows about gets a row, even with zero sessions in THIS list — the
+  // filter itself lists every known project, not just ones with currently-matching sessions.
+  const paths = new Set<string>(projects.map(p => p.path))
+  for (const path of bySessions.keys()) paths.add(path)
+
+  const targets: ProjectTarget[] = []
+  for (const path of paths) {
+    if (!path) continue
+    const agg = bySessions.get(path) ?? { sessions: 0, lastActive: '' }
+    const repoKey = index.resolved.get(path) ?? ''
+    targets.push({
+      key: path,
+      kind: 'project',
+      name: formatProjectName(path),
+      path,
+      repoKey,
+      sessions: agg.sessions,
+      lastActive: agg.lastActive,
+      locked: repoKey !== '' && denied.has(repoKey),
     })
   }
 
