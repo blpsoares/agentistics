@@ -1228,7 +1228,12 @@ export default function AppLayout() {
     if (error && error.includes('401') && teamSession?.required) {
       setTeamSession({ required: true, authed: false })
     }
-    if (teamSession?.central && String(error).includes('401')) reloadIam()
+    // 403 too, and for a reason that cost someone their whole first-run: the moment an owner
+    // account is created, the gate starts refusing /api/data with `mfa_enrollment_required`
+    // until a second factor exists. The data layer only sees "HTTP 403" and renders "Failed to
+    // load data" — a dead end, on the screen right after signing up. Re-reading the IAM state is
+    // what turns that into the enrolment screen, which is the only thing that can clear it.
+    if (teamSession?.central && (String(error).includes('401') || String(error).includes('403'))) reloadIam()
   }, [error, teamSession?.required, teamSession?.central, reloadIam])
   const [theme, setThemeState] = useState<Theme>('dark')
   const [currency, setCurrencyState] = useState<'USD' | 'BRL'>('USD')
@@ -2014,6 +2019,14 @@ export default function AppLayout() {
 
   if (loading) {
     return <LoadingScreen lang={lang} loadProgress={loadProgress} />
+  }
+
+  // A 403 on a central is an AUTH state, not a broken server: the gate refuses data until the
+  // enrolment (or the sign-in) it is waiting for happens, and the effect above is already
+  // re-reading that state. Showing "Failed to load data — HTTP 403" in that gap turns the
+  // moment right after signing up into a dead end with a Retry button that cannot help.
+  if (error && teamSession.central && String(error).includes('403')) {
+    return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
   }
 
   if (error) {

@@ -109,6 +109,22 @@ export function MfaSetup({ lang, onClose, required = false }: {
           </span>
         </div>
 
+        {/* Why this screen is here, on EVERY step of a required enrolment.
+            It used to be one sentence on the first step only, so anyone who clicked through to
+            the QR was left staring at a mandatory screen with no statement of why it is
+            mandatory — and this is the screen that appears immediately after signing up. */}
+        {required && (
+          <div style={{
+            fontSize: 11.5, lineHeight: 1.55, color: 'var(--text-secondary)',
+            background: 'var(--anthropic-orange-dim)', border: '1px solid var(--anthropic-orange)44',
+            borderRadius: 8, padding: '9px 11px', margin: '8px 0 12px',
+          }}>
+            {pt
+              ? <>Obrigatório para contas <b>owner</b>. Um owner alcança os dados de todos os times e todas as rotas de administração — uma senha sozinha seria o único obstáculo. É também o que permite <b>você mesmo recuperar sua conta</b> se esquecer a senha, sem precisar de acesso à máquina.</>
+              : <>Required for <b>owner</b> accounts. An owner reaches every team's data and every admin route, so a password alone would be the only thing in the way. It is also what lets <b>you recover your own account</b> if you forget the password, without needing access to the machine.</>}
+          </div>
+        )}
+
         {recovery && (
           <div style={{ marginTop: 12 }}>
             <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
