@@ -2,13 +2,21 @@ import { test, expect } from 'bun:test'
 import { NO_REPO_KEY } from '@agentistics/core'
 import type { ShareSource } from '@agentistics/core'
 import type { SessionMeta } from '@agentistics/core'
-import type { ProjectTarget } from '../../lib/shareRepos'
+import type { ProjectTarget, ShareTarget } from '../../lib/shareRepos'
 import {
   resolveInitialTab, sourcesToRepoKeys, sourcesToProjectPaths, buildSourcesFromDraft,
   buildProjectRows, toggleProjectTarget, shareAllProjectsDraft, blockAllProjectsDraft,
   computeSharedSummary, isEmptyAllowlist, modeChanged, resolveModeConfirmVariant,
-  groupProjectRows,
+  groupProjectRows, resolveSubmittedRepoKeys, resolveSubmittedProjectPaths,
 } from './sharePanelState'
+
+function st(over: Partial<ShareTarget>): ShareTarget {
+  return {
+    key: 'github.com/org/repo', kind: 'repo', name: 'org/repo', host: 'github.com',
+    sessions: 1, lastActive: '', orphan: false, conflictPaths: [],
+    ...over,
+  }
+}
 
 function pt(over: Partial<ProjectTarget>): ProjectTarget {
   return {
@@ -171,4 +179,61 @@ test('resolveModeConfirmVariant names the direction of the switch so the confirm
   expect(resolveModeConfirmVariant('denylist', 'allowlist')).toBe('toAllowlist')
   expect(resolveModeConfirmVariant('allowlist', 'denylist')).toBe('toDenylist')
   expect(resolveModeConfirmVariant('denylist', 'denylist')).toBe('none')
+})
+
+// --- resolveSubmittedRepoKeys / resolveSubmittedProjectPaths (mode-aware draft -> sources) -----
+
+test('resolveSubmittedRepoKeys: denylist mode submits the raw denied set untouched', () => {
+  const targets = [st({ key: 'a' }), st({ key: 'b' }), st({ key: 'c' })]
+  const submitted = resolveSubmittedRepoKeys('denylist', targets, new Set(['a']))
+  expect([...submitted]).toEqual(['a'])
+})
+
+test('resolveSubmittedRepoKeys: allowlist mode submits the COMPLEMENT — what is switched ON, not off', () => {
+  const targets = [st({ key: 'a' }), st({ key: 'b' }), st({ key: 'c' })]
+  // 'a' is OFF (denied) -> under allowlist, only 'b' and 'c' (the ON/shared ones) are submitted.
+  const submitted = resolveSubmittedRepoKeys('allowlist', targets, new Set(['a']))
+  expect([...submitted].sort()).toEqual(['b', 'c'])
+})
+
+test('resolveSubmittedRepoKeys: allowlist "block all" (everything OFF) submits an EMPTY set, never everything', () => {
+  const targets = [st({ key: 'a' }), st({ key: 'b' })]
+  const submitted = resolveSubmittedRepoKeys('allowlist', targets, new Set(['a', 'b']))
+  expect(submitted.size).toBe(0)
+})
+
+test('resolveSubmittedRepoKeys: allowlist mode never submits a locked repo — it is always OFF, so never in the complement', () => {
+  const targets = [st({ key: 'a', conflictPaths: ['/shared'] }), st({ key: 'b' })]
+  // 'a' is locked (conflictPaths) and therefore always a member of draftDenied.
+  const submitted = resolveSubmittedRepoKeys('allowlist', targets, new Set(['a']))
+  expect([...submitted]).toEqual(['b'])
+})
+
+test('resolveSubmittedProjectPaths: denylist mode submits the raw project-denied set untouched, ignoring repo locks', () => {
+  const rows = [
+    { target: pt({ key: '/p1' }), denied: true, locked: false },
+    { target: pt({ key: '/p2' }), denied: false, locked: false },
+  ]
+  const submitted = resolveSubmittedProjectPaths('denylist', rows, new Set(['/p1']))
+  expect([...submitted]).toEqual(['/p1'])
+})
+
+test('resolveSubmittedProjectPaths: allowlist mode submits the complement, excluding rows locked by a denied repo', () => {
+  const rows = [
+    { target: pt({ key: '/p1' }), denied: false, locked: false }, // ON -> allowed
+    { target: pt({ key: '/p2' }), denied: true, locked: true },   // locked by its repo -> never allowed
+    { target: pt({ key: '/p3' }), denied: true, locked: false },  // direct project deny -> not allowed
+  ]
+  const submitted = resolveSubmittedProjectPaths('allowlist', rows, new Set(['/p3']))
+  expect([...submitted]).toEqual(['/p1'])
+})
+
+test('resolveSubmittedRepoKeys/resolveSubmittedProjectPaths + isEmptyAllowlist: an allowlist "share all" with locked rows never widens into "share everything"', () => {
+  // Locked repo 'a' is always a member of draftDenied (buildInitialDraft/shareAllDraft both force
+  // it in) — the complement therefore correctly excludes it, and blocking everything ELSE leaves
+  // the submitted set empty, tripping the refusal instead of silently allowing the locked repo.
+  const targets = [st({ key: 'a', conflictPaths: ['/shared'] })]
+  const submittedRepoKeys = resolveSubmittedRepoKeys('allowlist', targets, new Set(['a']))
+  const submittedProjectPaths = resolveSubmittedProjectPaths('allowlist', [], new Set())
+  expect(isEmptyAllowlist('allowlist', submittedRepoKeys, submittedProjectPaths)).toBe(true)
 })

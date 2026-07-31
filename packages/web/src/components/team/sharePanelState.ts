@@ -1,6 +1,6 @@
 import { NO_REPO_KEY, normalizeGitRemote } from '@agentistics/core'
 import type { SessionMeta, ShareSource } from '@agentistics/core'
-import { canonicalRepoKey, type ProjectTarget } from '../../lib/shareRepos'
+import { canonicalRepoKey, type ProjectTarget, type ShareTarget } from '../../lib/shareRepos'
 
 /**
  * sharePanelState.ts — the pure decisions behind the two-tab picker (Plan 4 Tasks 6–7):
@@ -98,6 +98,48 @@ export function buildProjectRows(
     const denied = locked || draftProjectPaths.has(target.key)
     return { target, denied, locked }
   })
+}
+
+// --- draft -> submitted sources (mode-aware conversion) -----------------------------------------
+
+/**
+ * `draftDenied` / `projectDraftDenied` (and every row's `denied` flag derived from them) always
+ * mean the SAME thing to the user regardless of mode: "this switch is OFF, this will not be
+ * shared" — that reading is mode-invariant by design, which is why `EditView`'s labels, counts and
+ * the confirm impact estimate never branch on mode and stay correct in both.
+ *
+ * But the WIRE shape does not have that invariance: `shareMode: 'denylist'` stores exactly the
+ * blocked set (`sources` = "share everything except these"), while `shareMode: 'allowlist'`
+ * stores its OPPOSITE — the set of things TO share (`sources` = "share only these"). Submitting
+ * the raw denied-set unchanged under `allowlist` would silently invert every rule the picker just
+ * displayed: "Block all" (every switch OFF) would submit a `sources` list naming every repo, which
+ * an allowlist reads as "share every one of these" — the exact opposite of the button just
+ * pressed, and the one path (Plan 4 Task 7) that must instead trip `isEmptyAllowlist`'s refusal.
+ *
+ * These two functions are the ONLY place that conversion happens, so `attemptSave`'s empty-check
+ * and `confirmApply`'s submitted `sources` always agree on what "the draft, in this mode" means.
+ * Denylist mode returns the raw set untouched (today's behaviour, unchanged); allowlist mode
+ * returns its complement over the known targets — which naturally excludes every locked repo (its
+ * key is unconditionally a member of `draftDenied`, so it can never appear in the complement) and
+ * every project locked by a denied repo (`EffectiveProjectRow.denied` already folds that in), so a
+ * repo the user cannot toggle back on can never smuggle itself in as an allowed project either.
+ */
+export function resolveSubmittedRepoKeys(
+  mode: ShareMode,
+  targets: readonly ShareTarget[],
+  draftDenied: ReadonlySet<string>,
+): Set<string> {
+  if (mode === 'denylist') return new Set(draftDenied)
+  return new Set(targets.filter(t => !draftDenied.has(t.key)).map(t => t.key))
+}
+
+export function resolveSubmittedProjectPaths(
+  mode: ShareMode,
+  projectRows: readonly EffectiveProjectRow[],
+  projectDraftDenied: ReadonlySet<string>,
+): Set<string> {
+  if (mode === 'denylist') return new Set(projectDraftDenied)
+  return new Set(projectRows.filter(r => !r.denied).map(r => r.target.key))
 }
 
 /** A no-op on a locked row — its switch renders disabled, but a stray call must not silently

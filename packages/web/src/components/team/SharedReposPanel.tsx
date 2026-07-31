@@ -21,6 +21,7 @@ import {
   resolveInitialTab, sourcesToRepoKeys, sourcesToProjectPaths, buildSourcesFromDraft,
   computeSharedSummary, isEmptyAllowlist, modeChanged, resolveModeConfirmVariant,
   toggleProjectTarget, shareAllProjectsDraft, blockAllProjectsDraft,
+  buildProjectRows, resolveSubmittedRepoKeys, resolveSubmittedProjectPaths,
   type PickerTab, type ShareMode, type ModeConfirmVariant,
 } from './sharePanelState'
 
@@ -97,8 +98,18 @@ export function SharedReposPanel({
   const [showEmptyAllowlistWarning, setShowEmptyAllowlistWarning] = useState(false)
 
   function startEdit() {
-    setDraft(buildInitialDraft(targets, storedRepoKeysArr))
-    setProjectDraft(new Set(storedProjectPathsArr))
+    // The stored `sources` mean "blocked" under denylist but "allowed" under allowlist — the
+    // draft's Set is always the mode-invariant "switch is OFF" shape (see the doc comment on
+    // `resolveSubmittedRepoKeys`), so seeding it from an allowlist's stored keys needs the SAME
+    // complement conversion the submit path uses. The conversion is its own inverse (denylist:
+    // identity; allowlist: complement-of-complement is the original set), so the one function
+    // serves both directions — without it, re-opening an already-saved allowlist showed its
+    // ALLOWED repo sitting in the "Blocked" group, and toggling from there would have inverted it.
+    const storedProjectRows = buildProjectRows(projectTargets, storedProjectPaths, storedRepoKeys)
+    const seedRepoKeys = resolveSubmittedRepoKeys(storedMode, targets, storedRepoKeys)
+    const seedProjectPaths = resolveSubmittedProjectPaths(storedMode, storedProjectRows, storedProjectPaths)
+    setDraft(buildInitialDraft(targets, [...seedRepoKeys]))
+    setProjectDraft(new Set(seedProjectPaths))
     setModeDraft(storedMode)
     setSearch('')
     setShowEmptyAllowlistWarning(false)
@@ -130,9 +141,17 @@ export function SharedReposPanel({
   const stats = statsCopyVars(status?.boundary ?? null, status?.prehistorySessions ?? null, lang)
   const modeVariant = resolveModeConfirmVariant(storedMode, effectiveMode)
 
+  // The picker's own draft sets always mean "this switch is OFF" (mode-invariant — see the doc
+  // comment on `resolveSubmittedRepoKeys`), but the WIRE shape is not: `allowlist` stores the
+  // OPPOSITE of what a denylist would. These are the sets actually submitted, computed ONCE per
+  // render and shared by the empty-allowlist check and the submit call so they can never disagree.
+  const projectRows = buildProjectRows(projectTargets, projectDraftDenied, draftDenied)
+  const submittedRepoKeys = resolveSubmittedRepoKeys(effectiveMode, targets, draftDenied)
+  const submittedProjectPaths = resolveSubmittedProjectPaths(effectiveMode, projectRows, projectDraftDenied)
+
   async function confirmApply() {
     setConfirmOpen(false)
-    const newSources = buildSourcesFromDraft(draftDenied, projectDraftDenied)
+    const newSources = buildSourcesFromDraft(submittedRepoKeys, submittedProjectPaths)
     const outcome = await onApply(connId, effectiveMode, newSources).catch(() => ({ ok: false as const }))
     if (!outcome.ok) { onPhase('error'); return }
     onEditingChange(false)
@@ -143,7 +162,7 @@ export function SharedReposPanel({
   }
 
   function attemptSave() {
-    if (isEmptyAllowlist(effectiveMode, draftDenied, projectDraftDenied)) {
+    if (isEmptyAllowlist(effectiveMode, submittedRepoKeys, submittedProjectPaths)) {
       setShowEmptyAllowlistWarning(true)
       return
     }
