@@ -193,8 +193,8 @@ Ordered by user impact, each phase independently shippable and verifiable:
 - `bun tsc --noEmit` and `bun test` after every phase; `bun run build` before declaring a
   phase done.
 - Visual verification against the running central at `localhost:48080` with the viewport
-  resized to 390px, signed in as both an owner (`bryanluccas@hotmail.com`) and a plain
-  user (`bryan_user@hotmail.com`) so the scoped/gated branches are both exercised.
+  resized to 390px, signed in as both an owner (`owner@example.com`) and a plain
+  user (`member@example.com`) so the scoped/gated branches are both exercised.
 - Before trusting any visual check, confirm the listener on the port is the freshly built
   code — the Linux (WSL) `bun` must own it, never the Windows `bun.exe`.
 - Desktop regression: the same pages at 1440px must be pixel-identical to today, since

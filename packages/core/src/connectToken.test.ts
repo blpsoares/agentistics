@@ -9,10 +9,10 @@ test('packConnectToken returns the raw secret when no endpoint', () => {
 })
 
 test('pack/unpack round-trips the endpoint and keeps the secret intact', () => {
-  const packed = packConnectToken(SECRET, 'http://100.109.247.39:48080/')
+  const packed = packConnectToken(SECRET, 'http://198.51.100.199:48080/')
   expect(packed).not.toBe(SECRET)
   const { endpoint, secret } = unpackConnectToken(packed)
-  expect(endpoint).toBe('http://100.109.247.39:48080') // trailing slash stripped
+  expect(endpoint).toBe('http://198.51.100.199:48080') // trailing slash stripped
   expect(secret).toBe(SECRET) // the bearer is always the raw secret
 })
 

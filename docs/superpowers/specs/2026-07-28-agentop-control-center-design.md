@@ -194,7 +194,7 @@ meant leaving the screen that showed the service. It is replaced by a lazygit-st
   config pane focused they are connect / disconnect, change history, switch language.
 - **The header is one row.** The compact wordmark plus the SHORT mode token, the version and the
   update dot. The mode sentence and the endpoint moved to the config pane; in member mode the old
-  header read `member — sends metrics to a central · http://100.109.247.39:48080` and wrapped.
+  header read `member — sends metrics to a central · http://198.51.100.199:48080` and wrapped.
 - **Geometry is pure and tested.** `cockpitLayout` in `chrome.ts` owns the column widths, the row
   split and the collapse thresholds, all derived from measured content; below the two columns'
   added floors the layout stacks rather than letting Ink compress it.

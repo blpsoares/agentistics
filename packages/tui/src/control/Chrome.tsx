@@ -38,7 +38,7 @@ import type { ControlStrings } from './i18n'
  * Which branch is drawn is decided by `headerLayout`, in the pure module, from the MEASURED art and
  * the measured tag — this component chooses nothing. The mode SENTENCE is not here either, only the
  * short token (`solo` / `central` / `member`): in member mode this row once read "member — sends
- * metrics to a central · http://100.109.247.39:48080" and wrapped, which shears every row below it.
+ * metrics to a central · http://198.51.100.199:48080" and wrapped, which shears every row below it.
  *
  * In the compact branch the MARK's columns are reserved before the tag is fitted, and `brandMark`
  * takes what that left. Both are total and neither can exceed what it was given, so the row cannot

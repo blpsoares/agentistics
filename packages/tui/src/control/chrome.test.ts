@@ -655,7 +655,7 @@ describe('fitValue', () => {
 
 describe('stripScheme', () => {
   test('drops the least informative part of a cramped URL', () => {
-    expect(stripScheme('http://100.109.247.39:48080')).toBe('100.109.247.39:48080')
+    expect(stripScheme('http://198.51.100.199:48080')).toBe('198.51.100.199:48080')
     expect(stripScheme('https://central.example.com/x')).toBe('central.example.com/x')
   })
 
@@ -845,7 +845,7 @@ describe('detailContent', () => {
     const c = detailContent(service({ boot: 'on' }), s, NOW, {
       rows: [
         { label: s.historyLabel, value: 'consolidate' },
-        { label: s.endpointLabel, value: 'http://100.109.247.39:48080' },
+        { label: s.endpointLabel, value: 'http://198.51.100.199:48080' },
       ],
     })
     expect(rowsUnder(c, s.sectionMachine).map(r => r.label))

@@ -178,10 +178,31 @@ ask_secret() {
   printf '%s' "$val"
 }
 
-# Detect this host's Tailscale IPv4, if the CLI is present (empty otherwise).
+# This host's Tailscale IPv4, or nothing. NEVER an error, and never a stall.
+#
+# Three ways this can go wrong and none of them may reach the user, because a suggested URL is
+# a convenience and `up` must not fail over one:
+#   - the CLI is not installed        -> `command -v` guard;
+#   - it is installed but the daemon is down, logged out, or hung -> stderr discarded, non-zero
+#     exit swallowed, and a `timeout` so an unresponsive daemon cannot hold up the deploy;
+#   - it answers something that is not an address (a notice, a login URL, an empty tailnet) ->
+#     the output is only accepted if it LOOKS like a CGNAT (100.64.0.0/10) address, so a stray
+#     line can never be printed back as "http://<whatever>:48080".
 detect_tailscale_ip() {
   command -v tailscale >/dev/null 2>&1 || return 0
-  tailscale ip -4 2>/dev/null | head -1 || true
+  local out=""
+  if command -v timeout >/dev/null 2>&1; then
+    out="$(timeout 3 tailscale ip -4 2>/dev/null | head -1 || true)"
+  else
+    out="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+  fi
+  # 100.64.0.0/10 — the range Tailscale assigns from. Anything else is not a tailnet address.
+  case "$out" in
+    100.6[4-9].*|100.[7-9][0-9].*|100.1[0-1][0-9].*|100.12[0-7].*)
+      printf '%s' "$out"
+      ;;
+  esac
+  return 0
 }
 
 # Generate central.env interactively.

@@ -170,7 +170,7 @@ const ESC = String.fromCharCode(27)
 const MINUTES = 60_000
 
 /** A long, real-shaped tailnet endpoint — the one whose sentence used to blow the header apart. */
-const LONG_ENDPOINT = 'http://100.109.247.39:48080'
+const LONG_ENDPOINT = 'http://198.51.100.199:48080'
 
 const LOCAL_URLS = { webUrl: 'http://localhost:47292', apiUrl: 'http://localhost:47291' }
 

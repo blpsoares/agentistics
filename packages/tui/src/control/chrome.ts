@@ -198,7 +198,7 @@ export function headerMetaWidth(meta: HeaderMeta): number {
  * The header's right-hand tag: mode, version, and the update dot.
  *
  * The mode SENTENCE used to live here and blew the row apart in member mode — "member — sends
- * metrics to a central · http://100.109.247.39:48080" is a paragraph, not a tag. Only the short
+ * metrics to a central · http://198.51.100.199:48080" is a paragraph, not a tag. Only the short
  * token survives; the sentence and the endpoint moved to the config pane, which has rows to spare.
  *
  * Under width pressure the pieces drop from the right: the update notice first, then the version.

@@ -192,7 +192,7 @@ export function Setup({
           key={row.key}
           label={row.label}
           // The long form when the column can hold it whole, the short one when it cannot —
-          // "http://100.109.247.39:48080" degrades to the host and port, never to a prefix.
+          // "http://198.51.100.199:48080" degrades to the host and port, never to a prefix.
           value={fitValue(row.value, row.short, cells.value)}
           cells={cells}
           selected={false}

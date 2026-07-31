@@ -616,7 +616,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                   type="text"
                   value={publicUrl}
                   onChange={e => setPublicUrl(e.target.value)}
-                  placeholder="http://100.109.247.39:48080"
+                  placeholder="http://198.51.100.199:48080"
                   style={{
                     ...input,
                     flex: 1,
