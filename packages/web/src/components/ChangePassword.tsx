@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { AlertCircle, KeyRound } from 'lucide-react'
 import { Field } from './Login'
+import { PasswordHint } from './PasswordHint'
 
 /** Blocking first-login password change (mustChangePassword). Forced flow — the server does not
  *  require the current password. Posts /api/iam/change-password; the server re-issues the cookie.
@@ -52,6 +53,7 @@ export function ChangePassword({ onDone }: { onDone: () => void }) {
           Your account was created with a temporary password. Choose a new one to continue.
         </p>
         <Field label="New password" type="password" value={password} onChange={setPassword} inputRef={ref} disabled={submitting} />
+        <PasswordHint value={password} />
         <Field label="Confirm password" type="password" value={confirm} onChange={setConfirm} disabled={submitting} />
         {(mismatch || error) && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#ef4444', marginBottom: 12 }}>

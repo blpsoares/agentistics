@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { AlertCircle, KeyRound, MailQuestion } from 'lucide-react'
 import { Field } from './Login'
+import { PasswordHint } from './PasswordHint'
 
 /**
  * "Forgot my password", for an owner.
@@ -80,6 +81,7 @@ function OwnerRecovery({ onDone, onCancel, onAsk }: { onDone: () => void; onCanc
       <Field label="Email" type="email" value={email} onChange={setEmail} disabled={submitting} />
       <Field label="Authenticator or recovery code" type="text" value={code} onChange={setCode} disabled={submitting} />
       <Field label="New password" type="password" value={password} onChange={setPassword} disabled={submitting} />
+      <PasswordHint value={password} />
       <Field label="Confirm password" type="password" value={confirm} onChange={setConfirm} disabled={submitting} />
       {error && (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 12, color: '#ef4444', marginBottom: 12, lineHeight: 1.5 }}>

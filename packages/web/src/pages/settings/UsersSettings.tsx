@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Plus, Trash2, Copy, Check, Dice5, KeyRound, Pencil, X } from 'lucide-react'
 import { generatePassword } from '../../lib/password'
+import { PasswordHint } from '../../components/PasswordHint'
 import type { AppContext } from '../../lib/app-context'
 import { SectionHeader, Section, Checkbox, Select, ConfirmModal, RecordCard, RecordCardAction, SaveBar, runSaveSteps } from './primitives'
 import { Drawer } from './Drawer'
@@ -946,6 +947,7 @@ export default function UsersSettings() {
               <Dice5 size={13} /> {pt ? 'Gerar' : 'Generate'}
             </button>
           </div>
+          <PasswordHint value={ap} lang={lang} />
         </Field>
 
         {/* SECURITY SECTION */}
