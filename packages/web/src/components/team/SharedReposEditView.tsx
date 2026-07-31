@@ -1,6 +1,6 @@
-import type { CSSProperties } from 'react'
-import { ChevronDown, ChevronRight, Search, GitBranch } from 'lucide-react'
-import type { ShareTarget } from '../../lib/shareRepos'
+import type { CSSProperties, ReactNode } from 'react'
+import { ChevronDown, ChevronRight, Search, GitBranch, Folder } from 'lucide-react'
+import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
 import { plural } from '../../lib/shareRepos'
 import { RowSwitch } from '../../pages/settings/primitives'
 import { COPY, PLURAL_COPY, interpolate } from './copy'
@@ -8,14 +8,100 @@ import { relTime } from './cardState'
 import {
   buildRows, groupRows, keepVisibleKeys, diffDraft, type EffectiveRow,
 } from './repoPanelState'
+import {
+  groupProjectRows, buildProjectRows, type EffectiveProjectRow, type PickerTab, type ShareMode,
+} from './sharePanelState'
 import { fmtCost } from '@agentistics/core'
 
 /**
- * SharedReposEditView.tsx — the edit-mode body of `SharedReposPanel.tsx` (Task 11). Split out for
- * the same reason `ConnectionCardParts.tsx` split out of `ConnectionCard.tsx` (Task 10): the parent
- * component owns the state machine (draft, search, apply phase), this file is pure layout over
- * `repoPanelState.ts`'s grouping/diff/impact — no decisions of its own beyond the mobile row cap.
+ * SharedReposEditView.tsx — the edit-mode body of `SharedReposPanel.tsx` (Task 11), extended by
+ * Plan 4 Tasks 6–7 with the Projects tab and the mode selector. Split out for the same reason
+ * `ConnectionCardParts.tsx` split out of `ConnectionCard.tsx` (Task 10): the parent component owns
+ * the state machine (drafts, search, tab, mode, apply phase), this file is pure layout over
+ * `repoPanelState.ts` / `sharePanelState.ts`'s grouping/diff/impact — no decisions of its own
+ * beyond the mobile row cap.
  */
+
+// --- Task 7: the mode selector -----------------------------------------------------------------
+
+/** Two mutually-exclusive options, not a checkbox — "share everything except…" (default) and
+ *  "share only…" are opposite readings of the same list, never both at once. */
+export function ModeSelector({ mode, onChange, lang, isMobile }: {
+  mode: ShareMode
+  onChange: (mode: ShareMode) => void
+  lang: 'pt' | 'en'
+  isMobile: boolean
+}) {
+  const options: { value: ShareMode; label: string; sub: string }[] = [
+    { value: 'denylist', label: COPY.modeExceptLabel[lang], sub: COPY.modeExceptSub[lang] },
+    { value: 'allowlist', label: COPY.modeOnlyLabel[lang], sub: COPY.modeOnlySub[lang] },
+  ]
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {options.map(opt => {
+        const active = mode === opt.value
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            aria-pressed={active}
+            style={{
+              display: 'flex', flexDirection: 'column', gap: 2, textAlign: 'left',
+              padding: isMobile ? '10px 12px' : '8px 12px', minHeight: isMobile ? 44 : undefined,
+              borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit',
+              border: `1px solid ${active ? 'var(--anthropic-orange)' : 'var(--border)'}`,
+              background: active ? 'var(--anthropic-orange-dim)' : 'transparent',
+            }}
+          >
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: active ? 'var(--anthropic-orange)' : 'var(--text-primary)' }}>
+              {opt.label}
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{opt.sub}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// --- Task 6: the two-tab bar ---------------------------------------------------------------------
+
+export function PickerTabs({ tab, onChange, lang, isMobile }: {
+  tab: PickerTab
+  onChange: (tab: PickerTab) => void
+  lang: 'pt' | 'en'
+  isMobile: boolean
+}) {
+  const tabs: { value: PickerTab; label: string; icon: ReactNode }[] = [
+    { value: 'projects', label: COPY.tabProjects[lang], icon: <Folder size={13} /> },
+    { value: 'repos', label: COPY.tabRepos[lang], icon: <GitBranch size={13} /> },
+  ]
+  return (
+    <div style={{ display: 'flex', gap: 6, borderBottom: '1px solid var(--border)' }}>
+      {tabs.map(t => {
+        const active = tab === t.value
+        return (
+          <button
+            key={t.value}
+            type="button"
+            onClick={() => onChange(t.value)}
+            aria-current={active}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'inherit',
+              padding: isMobile ? '10px 10px' : '6px 10px', minHeight: isMobile ? 44 : undefined,
+              border: 'none', borderBottom: `2px solid ${active ? 'var(--anthropic-orange)' : 'transparent'}`,
+              background: 'transparent', cursor: 'pointer', fontSize: 12.5, fontWeight: 700,
+              color: active ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+            }}
+          >
+            {t.icon}{t.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 
 const MOBILE_ROW_CAP = 12
 
@@ -177,6 +263,141 @@ function RowGroup({ label, rows, lang, onToggleRow }: {
                 background: 'var(--bg-elevated)', color: 'var(--text-tertiary)', border: '1px solid var(--border)',
               }}>{t.host}</span>
             )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// --- Task 6: the Projects tab body — same shape as EditView above, over the project dimension ---
+
+export function ProjectEditView({
+  targets, draftDenied, draftRepoKeys, diff, search, onSearch, showStale, onToggleStale, showAllMobile, onShowAllMobile,
+  isMobile, lang, onToggleRow, onShareAll, onBlockAll,
+}: {
+  targets: ProjectTarget[]
+  draftDenied: Set<string>
+  /** The REPO tab's live draft — a project locks the instant its repo is in this set (Task 6),
+   *  never from `targets`' own `.locked` (which is baked from the STORED rules at build time). */
+  draftRepoKeys: ReadonlySet<string>
+  diff: ReturnType<typeof diffDraft>
+  search: string
+  onSearch: (v: string) => void
+  showStale: boolean
+  onToggleStale: () => void
+  showAllMobile: boolean
+  onShowAllMobile: () => void
+  isMobile: boolean
+  lang: 'pt' | 'en'
+  onToggleRow: (target: ProjectTarget, nextShared: boolean) => void
+  onShareAll: () => void
+  onBlockAll: () => void
+}) {
+  const rows = buildProjectRows(targets, draftDenied, draftRepoKeys)
+  const grouped = groupProjectRows(rows, search, keepVisibleKeys(diff))
+  const sharedNow = rows.filter(r => r.target.sessions > 0 && !r.denied).length
+  const totalNow = rows.filter(r => r.target.sessions > 0).length
+
+  let blocked = grouped.blocked
+  let shared = grouped.shared
+  if (isMobile && !showAllMobile) {
+    const cap = MOBILE_ROW_CAP
+    blocked = grouped.blocked.slice(0, cap)
+    shared = grouped.shared.slice(0, Math.max(0, cap - blocked.length))
+  }
+  const shownCount = blocked.length + shared.length
+  const totalLiveCount = grouped.blocked.length + grouped.shared.length
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <button type="button" onClick={onShareAll} style={bulkBtnStyle(isMobile)}>{COPY.shareAll[lang]}</button>
+        <button type="button" onClick={onBlockAll} style={bulkBtnStyle(isMobile)}>{COPY.blockAll[lang]}</button>
+        <span style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginLeft: 'auto' }}>
+          {interpolate(plural(PLURAL_COPY.nShared[lang], sharedNow), { n: sharedNow, total: totalNow })}
+        </span>
+      </div>
+
+      <div style={{ position: 'relative' }}>
+        <Search size={13} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }} />
+        <input
+          value={search}
+          onChange={e => onSearch(e.target.value)}
+          placeholder={COPY.searchProjects[lang]}
+          style={{
+            width: '100%', boxSizing: 'border-box', padding: '7px 10px 7px 28px',
+            background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7,
+            fontSize: 13, color: 'var(--text-primary)', outline: 'none', fontFamily: 'inherit',
+          }}
+        />
+      </div>
+
+      <div style={{
+        display: 'flex', flexDirection: 'column', gap: 10,
+        ...(isMobile ? {} : { maxHeight: 360, overflowY: 'auto' }),
+      }}>
+        {blocked.length > 0 && <ProjectRowGroup label={interpolate(COPY.groupBlocked[lang], { n: grouped.blocked.length })} rows={blocked} lang={lang} onToggleRow={onToggleRow} />}
+        {shared.length > 0 && <ProjectRowGroup label={interpolate(COPY.groupShared[lang], { n: grouped.shared.length })} rows={shared} lang={lang} onToggleRow={onToggleRow} />}
+      </div>
+
+      {isMobile && !showAllMobile && shownCount < totalLiveCount && (
+        <button type="button" onClick={onShowAllMobile} style={{ ...bulkBtnStyle(true), width: '100%' }}>
+          {interpolate(COPY.showAllRepos[lang], { n: totalLiveCount })}
+        </button>
+      )}
+
+      {grouped.stale.length > 0 && (
+        <div>
+          <button type="button" onClick={onToggleStale} style={{
+            display: 'flex', alignItems: 'center', gap: 6, width: '100%', background: 'none', border: 'none',
+            padding: '4px 0', color: 'var(--text-tertiary)', fontSize: 11.5, cursor: 'pointer', fontFamily: 'inherit',
+          }}>
+            {showStale ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            {interpolate(plural(PLURAL_COPY.staleGroup[lang], grouped.stale.length), { n: grouped.stale.length })}
+          </button>
+          {showStale && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 4 }}>
+              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{COPY.staleHint[lang]}</span>
+              {grouped.stale.map(r => (
+                <div key={r.target.key} style={{ fontSize: 12, color: 'var(--text-secondary)', opacity: 0.7 }}>{r.target.name}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ProjectRowGroup({ label, rows, lang, onToggleRow }: {
+  label: string
+  rows: EffectiveProjectRow[]
+  lang: 'pt' | 'en'
+  onToggleRow: (target: ProjectTarget, nextShared: boolean) => void
+}) {
+  const pt = lang === 'pt'
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.05em', textTransform: 'uppercase', margin: '2px 0 2px' }}>
+        {label}
+      </div>
+      {rows.map(r => {
+        const t = r.target
+        const sub = r.locked
+          ? interpolate(COPY.lockedByRepo[lang], { repo: t.repoKey })
+          : `${interpolate(plural(PLURAL_COPY.sessionsN[lang], t.sessions), { n: t.sessions })}${t.lastActive ? ` · ${interpolate(COPY.lastActiveT[lang], { t: relTime(t.lastActive, pt) })}` : ''}`
+        return (
+          <div key={t.key} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <RowSwitch
+              on={!r.denied}
+              onToggle={() => onToggleRow(t, r.denied)}
+              label={t.name}
+              sub={sub}
+              icon={<Folder size={13} />}
+              disabled={r.locked}
+              dimmed={r.denied}
+            />
           </div>
         )
       })}

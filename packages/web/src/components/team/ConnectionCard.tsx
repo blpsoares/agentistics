@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, EyeOff, Pencil, Loader2, Check, X } from 'lucide-react'
-import type { SessionMeta, TeamConnection, ModelUsage } from '@agentistics/core'
+import type { SessionMeta, TeamConnection, ModelUsage, ShareSource } from '@agentistics/core'
 import type { ArchiveMode } from '../ArchiveConsentModal'
-import type { ShareTarget } from '../../lib/shareRepos'
+import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
+import type { ShareMode } from './sharePanelState'
 import { hostOf, plural } from '../../lib/shareRepos'
 import { StatusDot, ConfirmModal } from '../../pages/settings/primitives'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -22,6 +23,8 @@ export interface ConnectionCardProps {
   /** Computed once in ConnectionsPanel from the unfiltered session/project lists — the repository
    *  picker (Task 11) consumes this same array instead of recomputing it per card. */
   shareTargets: ShareTarget[]
+  /** The project projection (Plan 4 Task 5), computed once from the same unfiltered lists. */
+  projectTargets: ProjectTarget[]
   /** Unfiltered — threaded through to the repository picker for its impact estimate and its
    *  "proven prehistory" check. */
   sessions: SessionMeta[]
@@ -36,11 +39,11 @@ export interface ConnectionCardProps {
   onRename: (id: string, label: string) => void
   onDisconnect: (id: string) => Promise<void>
   onSyncNow: (id: string) => Promise<void>
-  onApplyRules: (id: string, deniedRepos: string[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
+  onApplyRules: (id: string, mode: ShareMode, sources: ShareSource[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
 }
 
 export function ConnectionCard({
-  conn, status, archiveMode, shareTargets, sessions, modelUsage, otelEnabled, duplicateHost, lang,
+  conn, status, archiveMode, shareTargets, projectTargets, sessions, modelUsage, otelEnabled, duplicateHost, lang,
   onRename, onDisconnect, onSyncNow, onApplyRules,
 }: ConnectionCardProps) {
   const isMobile = useIsMobile()
@@ -272,11 +275,13 @@ export function ConnectionCard({
 
           <RepoPanelSlot
             connId={conn.id}
-            deniedRepos={conn.deniedRepos}
+            sources={conn.sources}
+            shareMode={conn.shareMode}
             state={state}
             status={status}
             archiveMode={archiveMode}
             shareTargets={shareTargets}
+            projectTargets={projectTargets}
             sessions={sessions}
             modelUsage={modelUsage}
             otelEnabled={otelEnabled}

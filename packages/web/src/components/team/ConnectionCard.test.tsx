@@ -23,6 +23,7 @@ function status(over: Partial<ConnectionStatusEntry> = {}): ConnectionStatusEntr
   return {
     id: 'c_1', endpoint: 'https://central.example', org: 'default', user: 'alice',
     lastSuccessAt: null, errKind: null, latencyMs: null,
+    shareMode: 'denylist', deniedRepos: 0, deniedProjects: 0, allowedCount: 0,
     deniedCount: 0, restricted: false, boundary: null, prehistorySessions: null,
     canForget: true, centralTooOld: false, resync: null, pendingRules: false,
     ...over,

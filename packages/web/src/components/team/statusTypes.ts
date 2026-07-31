@@ -23,8 +23,18 @@ export interface ConnectionStatusEntry {
   lastSuccessAt: number | null
   errKind: 'auth' | 'net' | null
   latencyMs: number | null
-  /** Size of the stored denylist. NEVER the list itself — that only ever comes from
+  /** 'denylist' (share everything except the sources below) | 'allowlist' (share only them).
+   *  Never absent on the wire — the server's `ruleCountsOf` defaults absent/junk to 'denylist'. */
+  shareMode: 'denylist' | 'allowlist'
+  /** Denylist-mode counts (repo+none sources, project sources). Always 0 in allowlist mode — see
+   *  `allowedCount` there instead. NEVER the values themselves — those only ever come from
    *  `GET /api/preferences`, same-origin. */
+  deniedRepos: number
+  deniedProjects: number
+  /** Allowlist-mode count of everything listed. Always 0 in denylist mode. */
+  allowedCount: number
+  /** LEGACY, kept for older UI paths: `deniedRepos + deniedProjects` in denylist mode,
+   *  `allowedCount` in allowlist mode. */
   deniedCount: number
   restricted: boolean
   /** `null` = unknowable this cycle, distinct from the real `''` ("nothing rolled up yet"). */

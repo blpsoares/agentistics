@@ -1,11 +1,12 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
-import type { SessionMeta, ModelUsage } from '@agentistics/core'
+import type { SessionMeta, ModelUsage, ShareSource } from '@agentistics/core'
 import type { ArchiveMode } from '../ArchiveConsentModal'
-import type { ShareTarget } from '../../lib/shareRepos'
+import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
 import { COPY, interpolate } from './copy'
 import { relTime, resolveRepoPanelMode, type CardState } from './cardState'
 import type { ApplyPhase } from './repoPanelState'
+import type { ShareMode } from './sharePanelState'
 import type { ConnectionStatusEntry, ResyncProgress } from './statusTypes'
 import { SharedReposPanel } from './SharedReposPanel'
 
@@ -90,20 +91,22 @@ export function ResyncStrip({ resync, lang }: { resync: ResyncProgress; lang: 'p
  * rules are local and must stay changeable while this central is unreachable.
  */
 export function RepoPanelSlot({
-  connId, deniedRepos, state, status, archiveMode, shareTargets, sessions, modelUsage, otelEnabled,
-  lang, onApplyRules, phase, onPhase, editing, onEditingChange,
+  connId, sources, shareMode, state, status, archiveMode, shareTargets, projectTargets, sessions,
+  modelUsage, otelEnabled, lang, onApplyRules, phase, onPhase, editing, onEditingChange,
 }: {
   connId: string
-  deniedRepos: string[]
+  sources: ShareSource[] | undefined
+  shareMode: ShareMode | undefined
   state: CardState
   status: ConnectionStatusEntry | undefined
   archiveMode: ArchiveMode | null
   shareTargets: ShareTarget[]
+  projectTargets: ProjectTarget[]
   sessions: SessionMeta[]
   modelUsage: Record<string, ModelUsage>
   otelEnabled: boolean
   lang: 'pt' | 'en'
-  onApplyRules: (connId: string, deniedRepos: string[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
+  onApplyRules: (connId: string, mode: ShareMode, sources: ShareSource[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
   /** Owned by the CARD, which stays mounted while collapsed — the panel below only reports
    *  transitions into it (Important 2). */
   phase: ApplyPhase
@@ -126,10 +129,12 @@ export function RepoPanelSlot({
   return (
     <SharedReposPanel
       connId={connId}
-      deniedRepos={deniedRepos}
+      sources={sources}
+      shareMode={shareMode}
       cardState={state}
       status={status}
       shareTargets={shareTargets}
+      projectTargets={projectTargets}
       sessions={sessions}
       modelUsage={modelUsage}
       otelEnabled={otelEnabled}

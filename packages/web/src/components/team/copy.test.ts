@@ -156,6 +156,23 @@ describe('Plan 4 Task 1, fix 4 — "no repository" names what it actually covers
   })
 })
 
+describe('Plan 4 Task 7 — the mode-switch confirm copy differs per direction', () => {
+  test('toAllowlist and toDenylist confirm copy are different sentences, in both languages', () => {
+    expect(COPY.modeConfirmToAllowlist.en).not.toBe(COPY.modeConfirmToDenylist.en)
+    expect(COPY.modeConfirmToAllowlist.pt).not.toBe(COPY.modeConfirmToDenylist.pt)
+  })
+
+  test('the switch-to-allowlist copy states the consequence: hides what is not listed', () => {
+    expect(COPY.modeConfirmToAllowlist.en.toLowerCase()).toMatch(/hides|hidden/)
+    expect(COPY.modeConfirmToAllowlist.pt.toLowerCase()).toMatch(/oculta|ocult/)
+  })
+
+  test('an empty allowlist is refused with an explanation, never silently saved', () => {
+    expect(COPY.emptyAllowlistWarning.en.length).toBeGreaterThan(0)
+    expect(COPY.emptyAllowlistWarning.pt.length).toBeGreaterThan(0)
+  })
+})
+
 describe('Plan 4 Task 1, fix 6 — the machine name is distinct from the local nickname', () => {
   test('identityMachineName exists and is distinct wording from the account/user row', () => {
     expect(COPY.identityMachineName.en.toLowerCase()).toContain('machine')

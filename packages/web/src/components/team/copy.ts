@@ -143,6 +143,13 @@ export const COPY = {
     en: 'Hidden from this central ({n})',
     pt: 'Ocultos desta central ({n})',
   },
+  // Plan 4 Task 7 — the allowlist read view's positive counterpart: what IS listed, never framed
+  // as "hidden" (shared-positive discipline; "N hidden" stays the one negative surface, and it
+  // never applies to an allowlist's own list).
+  allowedBlockTitle: {
+    en: 'Shared with this central ({n})',
+    pt: 'Compartilhado com esta central ({n})',
+  },
   sharingAll: {
     en: 'Sharing every repository on this machine, including new ones.',
     pt: 'Compartilhando todos os repositórios desta máquina, inclusive os novos.',
@@ -465,6 +472,61 @@ export const COPY = {
   addEndpointRequired: {
     en: 'Enter the central URL, or paste a token that carries one.',
     pt: 'Digite a URL da central, ou cole um token que já contenha uma.',
+  },
+  // Plan 4 Task 6 — the two-tab picker. "Projetos" is the FIRST tab: the user's own words were
+  // "parece que só tem repo, mas a ideia é todos os projetos", so Projects leads and Repositories
+  // is the second lens over the same rules.
+  tabProjects: {
+    en: 'Projects',
+    pt: 'Projetos',
+  },
+  tabRepos: {
+    en: 'Repositories',
+    pt: 'Repositórios',
+  },
+  searchProjects: {
+    en: 'Search projects…',
+    pt: 'Buscar projetos…',
+  },
+  // "repo + projeto são a mesma coisa" (the user's own words) — a project whose repository is
+  // blocked in the OTHER tab renders blocked-and-locked, naming the repository responsible, so no
+  // contradictory pair (project shared, its repo blocked) can ever exist on screen.
+  lockedByRepo: {
+    en: 'Blocked by repository {repo}',
+    pt: 'Bloqueado pelo repositório {repo}',
+  },
+  // Plan 4 Task 7 — the per-connection mode selector.
+  modeExceptLabel: {
+    en: 'Share everything, except…',
+    pt: 'Compartilhar tudo, exceto…',
+  },
+  modeExceptSub: {
+    en: 'The default. A new project or repository is shared automatically.',
+    pt: 'O padrão. Um novo projeto ou repositório é compartilhado automaticamente.',
+  },
+  modeOnlyLabel: {
+    en: 'Share only…',
+    pt: 'Compartilhar apenas…',
+  },
+  modeOnlySub: {
+    en: 'A new project or repository is hidden automatically — the safer default for a central you trust less.',
+    pt: 'Um novo projeto ou repositório fica oculto automaticamente — o padrão mais seguro para uma central em que você confia menos.',
+  },
+  // The confirm modal must state the consequence in the DIRECTION being chosen — switching to
+  // "apenas" is usually a large removal, switching back widens sharing back open.
+  modeConfirmToAllowlist: {
+    en: 'Switching to "Share only…" hides everything not listed below — for most machines, that removes far more than it keeps.',
+    pt: 'Mudar para "Compartilhar apenas…" oculta tudo que não estiver listado abaixo — na maioria das máquinas, isso remove muito mais do que mantém.',
+  },
+  modeConfirmToDenylist: {
+    en: 'Switching to "Share everything, except…" shares everything not explicitly blocked below, including anything new from now on.',
+    pt: 'Mudar para "Compartilhar tudo, exceto…" compartilha tudo que não estiver bloqueado explicitamente abaixo, inclusive o que surgir depois.',
+  },
+  // An allowlist naming nothing on either dimension would silently share nothing — refused in the
+  // UI with this explanation rather than saved as-is.
+  emptyAllowlistWarning: {
+    en: 'Choose at least one project or repository to share. An empty "Share only…" list would share nothing at all.',
+    pt: 'Escolha ao menos um projeto ou repositório para compartilhar. Uma lista vazia em "Compartilhar apenas…" não compartilharia nada.',
   },
 } satisfies Record<string, CopyEntry>
 
