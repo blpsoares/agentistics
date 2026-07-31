@@ -17,14 +17,14 @@ import { join, resolve } from 'path'
 import { mkdir, writeFile, readFile, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
 
-export type AutostartMode = 'server' | 'central' | 'watch'
+export type AutostartMode = 'server' | 'central' | 'watch' | 'machine'
 
 export interface AutostartResult {
   ok: boolean
   message: string
 }
 
-const MODES: AutostartMode[] = ['server', 'central', 'watch']
+const MODES: AutostartMode[] = ['server', 'central', 'watch', 'machine']
 
 // --- shell-rc update-check hook markers (kept stable so uninstall is exact) ---
 const HOOK_BEGIN = '# >>> agentop update check >>>'
@@ -94,6 +94,24 @@ function findCentralScript(): string | null {
 }
 
 /**
+ * Locate `docker-compose.machine.yml`, the same way `findCentralScript` locates `central.sh` — it
+ * only exists in a repo checkout, so a boot unit for the Docker `machine` runtime can only be
+ * written from one. Returns null otherwise, which `serviceCommandFor('machine')` turns into a
+ * refusal rather than a unit whose `ExecStart` cannot resolve.
+ */
+function findMachineCompose(): string | null {
+  const candidates = [
+    resolve(import.meta.dir, '..', '..', '..'),
+    process.cwd(),
+  ]
+  for (const dir of candidates) {
+    const compose = join(dir, 'docker-compose.machine.yml')
+    if (existsSync(compose)) return compose
+  }
+  return null
+}
+
+/**
  * The exact shell command each mode's service should run, or null when this machine cannot run
  * that mode at all. `central` needs `central.sh`, which only exists in a repo checkout; from an
  * installed binary there is nothing to point at. Null means the caller must REFUSE — the same
@@ -109,6 +127,13 @@ export function serviceCommandFor(mode: AutostartMode): string | null {
     case 'central': {
       const script = findCentralScript()
       return script ? `bash ${script} up` : null
+    }
+    case 'machine': {
+      // No `--build`: the boot-time unit brings back whatever image is already there. A rebuild
+      // is a deliberate action (the control center's "Rebuild & restart"), never something that
+      // should happen silently every time the machine reboots.
+      const compose = findMachineCompose()
+      return compose ? `docker compose -f ${compose} up -d` : null
     }
   }
 }
@@ -246,10 +271,11 @@ export async function enableAutostart(mode: AutostartMode): Promise<AutostartRes
   // success — it is a service systemd restarts every 5 seconds for the life of the machine.
   const command = serviceCommandFor(mode)
   if (!command) {
+    const missing = mode === 'machine' ? 'docker-compose.machine.yml' : 'central.sh'
     return {
       ok: false,
-      message: `Cannot enable agentop-${mode} here: central.sh was not found. ` +
-        `That script lives in the repository checkout, so run this from one ` +
+      message: `Cannot enable agentop-${mode} here: ${missing} was not found. ` +
+        `That file lives in the repository checkout, so run this from one ` +
         `(the installed binary has nothing to point the service at).`,
     }
   }

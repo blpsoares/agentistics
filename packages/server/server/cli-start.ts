@@ -52,14 +52,14 @@ import type {
 } from '@agentistics/tui/control'
 import { PORT, WEB_PORT } from './config'
 import { readPreferences, writePreferences, resolveArchiveMode, type ArchiveMode } from './preferences'
-import { centralStartPlan, runCentral } from './cli-central'
+import { centralStartPlan, runCentral, type CentralStartPlan } from './cli-central'
 import { onOutputLine, publishLines, streamCommand } from './cli-stream'
 // The pure line decoder, by its own subpath: `@agentistics/tui/control` pulls in Ink and React, and
 // this module is loaded by every `agentop` subcommand.
 import { createLineDecoder } from '@agentistics/tui/control/stream'
 import { ensureArchiveModeChosen } from './cli-setup'
 import { memberConnect, memberLeave } from './cli-member'
-import { enableAutostart } from './autostart'
+import { enableAutostart, type AutostartMode } from './autostart'
 import { confirm } from './cli-ui'
 import { CURRENT_VERSION, getVersionInfo } from './version'
 import { cliStrings, type CliLang, type CliStrings } from './cli-i18n'
@@ -205,15 +205,37 @@ export function aggregateState(
 }
 
 /**
- * The starts a single runtime offers. Native is the only one with a shape left to choose.
+ * Facts `startOptionsFor` needs beyond the runtime id and the strings — everything a caller can
+ * only learn by asking this box, never by looking at the runtime's name.
+ */
+export interface StartFacts {
+  /**
+   * Which shape `central up` would take here — see `planCentralStart` in cli-central.ts. `native`
+   * is the ONLY state that offers a native start at all: it means an external (non-bundled) Mongo
+   * is configured and this is the standalone (no-repo) path, which is the one case
+   * `runCentral`/`runNativeCentral` can run the binary directly instead of Docker. Every other
+   * value (including `undefined`, before a plan was ever computed) keeps the Docker-only option
+   * this screen has always offered — a native option that could not actually reach a database
+   * would be a verb that fails on principle.
+   */
+  centralPlan?: CentralStartPlan
+}
+
+/**
+ * The starts a single runtime offers.
  *
  * Each option carries what must happen AROUND it — the port it contends for, whether the archive
  * consent applies, whether it is worth bringing back on boot. Those are facts about this box and
  * this product, so they are stated here with the option rather than re-derived from the runtime id
  * by the screen drawing it: a UI that knows `local` is the runtime with a port is a UI holding a
  * piece of the model.
+ *
+ * `offersBoot` is never set on a foreground option, for any runtime: a foreground process holds
+ * the terminal (or, for Docker, blocks it under `suspend` until Ctrl-C), so "start it at boot" is
+ * not a thing it can be — that question only makes sense for something that is going to keep
+ * running after this command returns.
  */
-function startOptionsFor(runtime: RuntimeId, s: CliStrings): StartOption[] {
+export function startOptionsFor(runtime: RuntimeId, s: CliStrings, facts: StartFacts = {}): StartOption[] {
   switch (runtime) {
     case 'local':
       return [
@@ -229,9 +251,47 @@ function startOptionsFor(runtime: RuntimeId, s: CliStrings): StartOption[] {
         },
       ]
     case 'machine':
-      return [{ runtime: 'machine', label: s.optDocker, hint: s.optDockerHint }]
-    case 'central':
-      return [{ runtime: 'central', label: s.optCentral, hint: s.optCentralHint, offersBoot: true }]
+      return [
+        {
+          // Foreground here means genuinely attached — `docker compose up --build` without `-d`,
+          // run under `suspend()` exactly like `central.sh init`: it needs the real tty because
+          // Ctrl-C is how you stop it, not because it asks a question. No `offersBoot`: it never
+          // returns until you interrupt it. No `asksArchive` either — a container start never has
+          // (see the field's own doc): the gate belongs to the process writing to ~/.agentistics,
+          // which here is the containerized server, not this CLI.
+          runtime: 'machine', how: 'fg', label: s.optDockerForeground, hint: s.optDockerForegroundHint,
+          blockedBy: 'local',
+        },
+        {
+          runtime: 'machine', how: 'bg', label: s.optDockerBackground, hint: s.optDockerBackgroundHint,
+          blockedBy: 'local',
+          // Honoured by the systemd `agentop-machine` unit (`docker compose … up -d`) — a genuinely
+          // separate mechanism from the native `agentop-server` unit `local` uses, so `enableBoot`
+          // is told which runtime asked (see `ControlHost.enableBoot`).
+          offersBoot: true,
+        },
+      ]
+    case 'central': {
+      if (facts.centralPlan === 'native') {
+        return [
+          {
+            runtime: 'central', how: 'fg', label: s.optCentralNativeForeground, hint: s.optCentralNativeForegroundHint,
+          },
+          {
+            runtime: 'central', how: 'bg', label: s.optCentralNativeBackground, hint: s.optCentralNativeBackgroundHint,
+            // No native-central systemd unit exists (`agentop-central` always runs `central.sh up`,
+            // the Docker path) — installing that unit for a process started natively would claim a
+            // boot mechanism that does not match what is actually running. Absent beats a boot
+            // toggle that quietly does nothing.
+          },
+        ]
+      }
+      return [
+        {
+          runtime: 'central', how: 'bg', label: s.optCentral, hint: s.optCentralHint, offersBoot: true,
+        },
+      ]
+    }
   }
 }
 
@@ -297,7 +357,7 @@ export function buildService(
    * cannot ask — or a platform with no user systemd — produces a service that says nothing about
    * boot rather than one that says "no", and offers no rebuild rather than one that cannot work.
    */
-  facts: { boot?: BootState; rebuild?: RebuildAbility } = {},
+  facts: { boot?: BootState; rebuild?: RebuildAbility; centralPlan?: CentralStartPlan } = {},
 ): ControlService {
   const up = runtimes.filter(r => r.state === 'up')
   const { state, reason } = aggregateState(runtimes)
@@ -315,7 +375,7 @@ export function buildService(
     // The single most important line in the model: while anything is up there is nothing to start.
     startOptions: up.length > 0
       ? []
-      : runtimes.filter(r => r.available).flatMap(r => startOptionsFor(r.id, s)),
+      : runtimes.filter(r => r.available).flatMap(r => startOptionsFor(r.id, s, { centralPlan: facts.centralPlan })),
     // …and its mirror: nothing to restart until something is running.
     restartOptions: up.length > 0 ? restartOptionsFor(id, up, s, facts.rebuild ?? {}) : [],
     stopOptions: up.length > 1
@@ -343,18 +403,20 @@ export function parseBootState(out: string): BootState | undefined {
 }
 
 /**
- * Does this service come back after a reboot?
+ * Does this AUTOSTART MODE come back after a reboot?
  *
  * Only Linux can be asked: `enableAutostart` writes a systemd USER unit, and macOS (launchd) and
  * Windows are not wired up at all — so on those platforms the honest answer is silence, which costs
- * one `platform()` check rather than a subprocess that would fail anyway. `agentistics` boots as
- * the native server (a container already restarts itself with Docker), which is the same mapping
- * `enableBoot` uses.
+ * one `platform()` check rather than a subprocess that would fail anyway.
+ *
+ * Named by MODE rather than by service: `agentistics` now has TWO distinct boot mechanisms
+ * (`agentop-server` for the native runtime, `agentop-machine` for the Docker one), and a single
+ * `service`-keyed probe could only ever answer for one of them — the same reason `enableBoot` now
+ * needs to know which runtime asked.
  */
-async function bootState(service: ServiceId): Promise<BootState | undefined> {
+async function bootState(mode: AutostartMode): Promise<BootState | undefined> {
   if (platform() !== 'linux') return undefined
-  const unit = service === 'central' ? 'agentop-central' : 'agentop-server'
-  const r = await sh(['systemctl', '--user', 'is-enabled', unit])
+  const r = await sh(['systemctl', '--user', 'is-enabled', `agentop-${mode}`])
   // systemctl prints the state to stdout even when it exits non-zero, so the code is not the
   // signal — the word is. A missing binary answers 127 with nothing, which parses to `undefined`.
   return parseBootState(r.out)
@@ -590,6 +652,31 @@ async function startDocker(s: CliStrings): Promise<number> {
     )
   }
   return code
+}
+
+/**
+ * Build + start the machine container ATTACHED — `docker compose up --build` with no `-d`, so this
+ * terminal streams its logs directly and Ctrl-C stops the container (the standard, unsurprising
+ * meaning of "run it in the foreground" for a compose service).
+ *
+ * Run under `suspend()`, the same wrapper `central.sh init` uses: not because this asks a question,
+ * but because it needs the REAL tty for the same reason a question does — Ctrl-C has to reach the
+ * child, which a piped/streamed child (Ink still owns the keyboard) cannot receive. `tty()` is used
+ * for the notices around it because `suspend()` mutes `process.stdout.write`; the child's own
+ * output bypasses that mute entirely by inheriting the real fd.
+ */
+async function startDockerForeground(s: CliStrings): Promise<number> {
+  const compose = machineComposePath()
+  if (!(await Bun.file(compose).exists())) {
+    tty(`\n  ${YE}${s.noComposeFrom(process.cwd())}${R}\n  ${s.runFromRepo}\n`)
+    return 1
+  }
+  tty(`\n  ${D}${s.buildingMachine}${R}\n`)
+  return new Promise<number>(resolve => {
+    const child = spawn('docker', ['compose', '-f', compose, 'up', '--build'], { stdio: 'inherit' })
+    child.on('exit', c => resolve(c ?? 1))
+    child.on('error', () => resolve(1))
+  })
 }
 
 /**
@@ -997,19 +1084,23 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
    */
   const serviceRows = async (): Promise<ControlService[]> => {
     const s = S()
-    const [local, central, machine, bootAgentistics, bootCentral, repo, machineCompose] = await Promise.all([
+    const [local, central, machine, bootAgentistics, bootMachine, bootCentral, repo, machineCompose, centralPlan] = await Promise.all([
       isServerRunning(),
       dockerState(CENTRAL_FILTER, s),
       dockerState(MACHINE_FILTER, s),
       // Two more probes on the refresh path, both local, both guarded, both answering `undefined`
       // rather than throwing — and both skipped outright off Linux.
-      bootState('agentistics'),
+      bootState('server'),
+      bootState('machine'),
       bootState('central'),
       // What a REBUILD would need, asked before it is offered: the native one recompiles this repo,
       // the machine one needs its compose file. Two `stat`s, and the answer is what keeps a verb
       // that cannot work off the action row.
       inRepoCheckout(),
       Bun.file(machineComposePath()).exists(),
+      // Whether `central up` would be Docker or native here — the one fact that decides whether a
+      // native start option even exists (see `StartFacts.centralPlan`).
+      centralStartPlan(),
     ])
     const [nativeFacts, centralFacts, machineFacts] = await Promise.all([
       local ? nativeServerFacts() : Promise.resolve<ProcessFacts>({}),
@@ -1057,7 +1148,11 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
 
     return [
       buildService('agentistics', s.svcAgentistics, [nativeRuntime, machineRuntime], s, {
-        boot: bootAgentistics,
+        // Two distinct boot mechanisms now exist for this one service (native `agentop-server` vs
+        // Docker `agentop-machine`); the detail pane can only state one, so it states the one that
+        // matches whichever runtime is actually up — the native unit otherwise, matching this
+        // field's behavior before the Docker runtime had a boot mechanism of its own at all.
+        boot: machine.state === 'up' ? bootMachine : bootAgentistics,
         rebuild: { local: repo, machine: machineCompose },
       }),
       // The central's rebuild always works: `central.sh up` inside a checkout, and the published
@@ -1066,6 +1161,7 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       buildService('central', s.svcCentral, [centralRuntime], s, {
         boot: bootCentral,
         rebuild: { central: true },
+        centralPlan,
       }),
     ]
   }
@@ -1132,11 +1228,20 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const s = S()
 
       if (req.runtime === 'central') {
-        // Asked BEFORE it is run, because the answer decides who gets the terminal. A first-ever
-        // central (`init`) has questions and one with an external database becomes a foreground
-        // server that never exits — both need the real tty. Everything else is docker compose with
-        // nothing to answer, which is what the pane is for.
         const plan = await centralStartPlan()
+        // Native + background is the one shape that neither streams nor suspends: it returns
+        // immediately with the server detached, so its own prints (which side, which port, the log
+        // path) are just captured for the status line like any other quick action.
+        if (plan === 'native' && req.how === 'bg') {
+          const { value: code } = await captureOutput(() => runCentral('up', [], { detached: true }))
+          return code === 0
+            ? { ok: true, message: s.centralStarted }
+            : { ok: false, message: s.centralFailed }
+        }
+        // Asked BEFORE it is run, because the answer decides who gets the terminal. A first-ever
+        // central (`init`) has questions, a native foreground start becomes a server that never
+        // exits until Ctrl-C — both need the real tty. Everything else is docker compose with
+        // nothing to answer, which is what the pane is for.
         const streamable = plan === 'script' || plan === 'image'
         const code = streamable
           ? await streamOutput(() => runCentral('up', [], { streamed: true }))
@@ -1147,7 +1252,13 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       }
 
       if (req.runtime === 'machine') {
-        const code = await streamOutput(() => startDocker(s))
+        // Foreground needs the real tty (Ctrl-C has to reach the child), so it is suspended in
+        // place rather than streamed — it never reports `foregroundLater`/exits the control center
+        // the way `local`'s foreground does, because a container start does not need to become
+        // this PROCESS's own foreground job to give the user a live, interruptible view of it.
+        const code = req.how === 'fg'
+          ? await suspend(() => startDockerForeground(s))
+          : await streamOutput(() => startDocker(s))
         return code === 0
           ? { ok: true, message: s.containerUp }
           : { ok: false, message: s.dockerStartFailed }
@@ -1298,10 +1409,17 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       }
     },
 
-    async enableBoot(service: ServiceId): Promise<ActionResult> {
-      // `agentistics` boots as the native server: the machine container already comes back with
-      // Docker (`restart: unless-stopped`), so there is no unit to write for it.
-      const res = await enableAutostart(service === 'central' ? 'central' : 'server')
+    async enableBoot(service: ServiceId, runtime?: RuntimeId): Promise<ActionResult> {
+      // `agentistics` boots as the native server by default — the manual "enable boot" action row
+      // (offered while the service is down, with nothing yet running to name a runtime) has always
+      // meant that, and still does when `runtime` is absent. `runtime: 'machine'` is the ONE case
+      // that now means something else: the option that just started the Docker runtime in the
+      // background hands its own runtime back here, so answering "yes" writes the `agentop-machine`
+      // unit (`docker compose … up -d`) instead of a native unit that would not match what is
+      // actually running. `central` has one mechanism regardless of `runtime` — `agentop-central`
+      // already runs `central.sh up` (Docker) — so it is passed through unchanged.
+      const mode = service === 'central' ? 'central' : runtime === 'machine' ? 'machine' : 'server'
+      const res = await enableAutostart(mode)
       // enableAutostart formats for a printed block; the status line is one row.
       return { ok: res.ok, message: res.message.split('\n').map(l => l.trim()).filter(Boolean).join(' · ') }
     },

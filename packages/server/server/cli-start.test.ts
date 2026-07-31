@@ -7,6 +7,7 @@ import {
   parseContainerFacts,
   parseElapsedSeconds,
   pidsToKill,
+  startOptionsFor,
   targetRuntimes,
 } from './cli-start'
 import { cliStrings } from './cli-i18n'
@@ -216,10 +217,12 @@ test('a stopped service keeps its row and offers exactly the starts this box can
   const svc = buildService('agentistics', EN.svcAgentistics, [NATIVE_DOWN, MACHINE_DOWN], EN)
   expect(svc.state).toBe('down')
   expect(svc.active).toBeUndefined()
+  // Every runtime that can run now offers BOTH shapes — attached and detached — not just `local`.
   expect(svc.startOptions.map(o => [o.runtime, o.how, o.label])).toEqual([
     ['local', 'fg', EN.optForeground],
     ['local', 'bg', EN.optBackground],
-    ['machine', undefined, EN.optDocker],
+    ['machine', 'fg', EN.optDockerForeground],
+    ['machine', 'bg', EN.optDockerBackground],
   ])
 })
 
@@ -228,11 +231,29 @@ test('a runtime this box cannot run is not offered as a start that could not pos
   expect(svc.startOptions.map(o => o.runtime)).toEqual(['local', 'local'])
 })
 
-test('the central is one runtime, one start option', () => {
+test('the Docker central offers one shape — background — with no plan or a Docker plan', () => {
   const svc = buildService('central', EN.svcCentral, [runtime({ id: 'central' })], EN)
   expect(svc.startOptions).toEqual([
-    { runtime: 'central', label: EN.optCentral, hint: EN.optCentralHint, offersBoot: true },
+    { runtime: 'central', how: 'bg', label: EN.optCentral, hint: EN.optCentralHint, offersBoot: true },
   ])
+  for (const centralPlan of ['script', 'image', 'init'] as const) {
+    expect(startOptionsFor('central', EN, { centralPlan })).toEqual([
+      { runtime: 'central', how: 'bg', label: EN.optCentral, hint: EN.optCentralHint, offersBoot: true },
+    ])
+  }
+})
+
+// A native central (external Mongo, standalone/no-repo) is the ONE case `runCentral` can run the
+// binary directly instead of Docker — see `planCentralStart` in cli-central.ts. It offers BOTH
+// shapes, neither of which carries `offersBoot`: foreground because it holds the terminal, and
+// background because no native-central systemd unit exists yet (see the field's own doc).
+test('a native-capable central offers foreground AND background, neither with a boot unit', () => {
+  const options = startOptionsFor('central', EN, { centralPlan: 'native' })
+  expect(options).toEqual([
+    { runtime: 'central', how: 'fg', label: EN.optCentralNativeForeground, hint: EN.optCentralNativeForegroundHint },
+    { runtime: 'central', how: 'bg', label: EN.optCentralNativeBackground, hint: EN.optCentralNativeBackgroundHint },
+  ])
+  expect(options.every(o => o.offersBoot === undefined)).toBe(true)
 })
 
 // Everything that has to happen AROUND a start is stated with the start, because this side is the
@@ -241,22 +262,29 @@ test('the central is one runtime, one start option', () => {
 // takes a port.
 test('a start states what must happen around it: the port, the gate, the boot unit', () => {
   const svc = buildService('agentistics', EN.svcAgentistics, [NATIVE_DOWN, MACHINE_DOWN], EN)
-  const [fg, bg, docker] = svc.startOptions
+  const [fg, bg, dockerFg, dockerBg] = svc.startOptions
 
-  // The native runtime is the one holding the api port, both ways of starting it.
+  // Both runtimes bind the same host ports (native directly, the container via host networking),
+  // so every option here would collide with a `local` that came up in the meantime.
   expect(fg!.blockedBy).toBe('local')
   expect(bg!.blockedBy).toBe('local')
-  expect(docker!.blockedBy).toBeUndefined()
+  expect(dockerFg!.blockedBy).toBe('local')
+  expect(dockerBg!.blockedBy).toBe('local')
 
-  // The consent gate belongs to the process that will be writing history here.
+  // The consent gate belongs to the process that will be writing history here — the CLI itself
+  // for the native runtime, the containerized server (never this CLI) for the Docker one.
   expect([fg!.asksArchive, bg!.asksArchive]).toEqual([true, true])
-  expect(docker!.asksArchive).toBeUndefined()
+  expect(dockerFg!.asksArchive).toBeUndefined()
+  expect(dockerBg!.asksArchive).toBeUndefined()
 
-  // Only what is meant to outlive this terminal is worth a boot unit — and never the container,
-  // which Docker already restores.
+  // Only a DETACHED option is worth a boot unit, and only where a real mechanism exists — which is
+  // now true for both runtimes: `local` background installs `agentop-server`, `machine` background
+  // installs `agentop-machine`. Neither foreground offers it: both hold this session's terminal
+  // (directly, or under `suspend` until Ctrl-C) rather than outliving it.
   expect(bg!.offersBoot).toBe(true)
+  expect(dockerBg!.offersBoot).toBe(true)
   expect(fg!.offersBoot).toBeUndefined()
-  expect(docker!.offersBoot).toBeUndefined()
+  expect(dockerFg!.offersBoot).toBeUndefined()
 })
 
 // The state the screen must never tidy away: showing one of the two would have the user act on a
@@ -363,7 +391,8 @@ test('the conflict sentence and the start options are localized', () => {
   expect(svc.conflict).toBe('conflito: native + docker rodando juntos — pare um')
   const down = buildService('agentistics', PT.svcAgentistics, [NATIVE_DOWN, MACHINE_DOWN], PT)
   expect(down.startOptions.map(o => o.label)).toEqual([
-    'Iniciar (neste terminal)', 'Iniciar (background)', 'Iniciar (docker)',
+    'Iniciar (neste terminal)', 'Iniciar (background)',
+    'Iniciar (docker, neste terminal)', 'Iniciar (docker, background)',
   ])
 })
 
@@ -371,7 +400,7 @@ test('an undetectable service still says why, and is still startable', () => {
   const svc = buildService('agentistics', EN.svcAgentistics, [NATIVE_DOWN, MACHINE_BLIND], EN)
   expect(svc.state).toBe('unknown')
   expect(svc.reason).toBe(EN.dockerUnreachable)
-  expect(svc.startOptions.map(o => o.runtime)).toEqual<RuntimeId[]>(['local', 'local', 'machine'])
+  expect(svc.startOptions.map(o => o.runtime)).toEqual<RuntimeId[]>(['local', 'local', 'machine', 'machine'])
 })
 
 // ---------------------------------------------------------------------------

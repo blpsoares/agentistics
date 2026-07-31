@@ -54,3 +54,22 @@ test('server and watch resolve to the running binary and never go looking for a 
   expect(serviceCommandFor('server')).toBe(`${process.execPath} server`)
   expect(serviceCommandFor('watch')).toBe(`${process.execPath} watch`)
 })
+
+// --- the `machine` unit's ExecStart — the Docker runtime's own boot command ---
+//
+// Before this, "start at boot" for the `agentistics` service could only ever mean the NATIVE
+// systemd unit above, even when the user actually runs it via `docker-compose.machine.yml`. A
+// boot answer that installs the wrong mechanism is worse than not offering one, so `machine` gets
+// its own command, resolved the same way `central` resolves `central.sh` — by finding the file
+// that only exists in a repo checkout, never by assuming a fixed path.
+
+test('the machine command points at a docker-compose.machine.yml that EXISTS', () => {
+  const cmd = serviceCommandFor('machine')
+  expect(cmd).not.toBeNull()
+  expect(cmd).toContain('docker compose -f ')
+  expect(cmd).toContain('up -d')
+  expect(cmd).not.toContain('--build') // boot brings back the existing image, never a rebuild
+  const match = /^docker compose -f (.+) up -d$/.exec(cmd!)
+  expect(match).not.toBeNull()
+  expect(existsSync(match![1]!)).toBe(true)
+})

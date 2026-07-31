@@ -97,10 +97,20 @@ export interface CliStrings {
   optForegroundHint: string
   optBackground: string
   optBackgroundHint: string
-  optDocker: string
-  optDockerHint: string
+  /** `machine` runtime, attached — `docker compose up --build` with no `-d`, Ctrl-C stops it. */
+  optDockerForeground: string
+  optDockerForegroundHint: string
+  /** `machine` runtime, detached — the same, in the background. */
+  optDockerBackground: string
+  optDockerBackgroundHint: string
   optCentral: string
   optCentralHint: string
+  /** A native central (external Mongo, standalone path) — foreground, Ctrl-C to stop. */
+  optCentralNativeForeground: string
+  optCentralNativeForegroundHint: string
+  /** Same, detached — returns immediately, runs in the background. */
+  optCentralNativeBackground: string
+  optCentralNativeBackgroundHint: string
   /** `Stop (native)` / `Stop (docker)` — offered only to break a conflict. */
   stopRuntime: (runtime: string) => string
 
@@ -236,10 +246,16 @@ const EN: CliStrings = {
   optForegroundHint: 'runs here until you quit',
   optBackground: 'Start (background)',
   optBackgroundHint: 'detached — keeps running',
-  optDocker: 'Start (docker)',
-  optDockerHint: 'the same server, in a container',
+  optDockerForeground: 'Start (docker, this terminal)',
+  optDockerForegroundHint: 'attached — Ctrl-C stops it',
+  optDockerBackground: 'Start (docker, background)',
+  optDockerBackgroundHint: 'detached — the same server, in a container',
   optCentral: 'Start',
   optCentralHint: 'the team central, in Docker',
+  optCentralNativeForeground: 'Start (this terminal)',
+  optCentralNativeForegroundHint: 'runs here until you quit — no Docker needed',
+  optCentralNativeBackground: 'Start (background)',
+  optCentralNativeBackgroundHint: 'detached — keeps running, no Docker needed',
   stopRuntime: (runtime) => `Stop (${runtime})`,
   optRestart: 'Restart',
   optRestartHint: 'bounce it — same build',
@@ -359,10 +375,16 @@ const PT: CliStrings = {
   optForegroundHint: 'roda aqui até você sair',
   optBackground: 'Iniciar (background)',
   optBackgroundHint: 'destacado — continua rodando',
-  optDocker: 'Iniciar (docker)',
-  optDockerHint: 'o mesmo server, em um container',
+  optDockerForeground: 'Iniciar (docker, neste terminal)',
+  optDockerForegroundHint: 'em primeiro plano — Ctrl-C para parar',
+  optDockerBackground: 'Iniciar (docker, background)',
+  optDockerBackgroundHint: 'destacado — o mesmo server, em um container',
   optCentral: 'Iniciar',
   optCentralHint: 'a central do time, em Docker',
+  optCentralNativeForeground: 'Iniciar (neste terminal)',
+  optCentralNativeForegroundHint: 'roda aqui até você sair — sem Docker',
+  optCentralNativeBackground: 'Iniciar (background)',
+  optCentralNativeBackgroundHint: 'destacado — continua rodando, sem Docker',
   stopRuntime: (runtime) => `Parar (${runtime})`,
   optRestart: 'Reiniciar',
   optRestartHint: 'só reinicia — mesmo build',

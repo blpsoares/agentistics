@@ -104,7 +104,14 @@ export interface ServiceRuntimeState {
   apiUrl?: string
 }
 
-/** Only a NATIVE start has a shape left to choose; a container start has one way of happening. */
+/**
+ * `fg` (attached — runs on this terminal, or the docker/native equivalent of that) versus `bg`
+ * (detached — returns immediately, keeps running). Every runtime that CAN run has both shapes now:
+ * `local` always did, `machine` runs `docker compose up [--build]` with or without `-d`, and
+ * `central` offers it only when a native start is even possible (see `StartFacts.centralPlan`) —
+ * the Docker central still has one shape, `bg`, because its `up` (central.sh or the standalone
+ * image path) has no attached variant.
+ */
 export type StartHow = 'fg' | 'bg'
 
 /** What `ControlHost.start` needs: which runtime, and — natively — whether it keeps this terminal. */
@@ -145,9 +152,14 @@ export interface StartOption extends StartRequest {
   /**
    * Worth asking whether it should come back on boot, once it worked.
    *
-   * True for the things meant to outlive this terminal. The machine container is not among them —
-   * Docker already restores it (`restart: unless-stopped`), so the question would be offering to
-   * install a second answer to something already answered.
+   * True only for a DETACHED option — a foreground one holds the terminal (or, for a container,
+   * blocks it under `suspend` until Ctrl-C), so the question would be about something that has not
+   * finished happening yet. Among the detached options, it is further true only where a genuine,
+   * separate boot mechanism exists: `local` background installs the native `agentop-server` unit,
+   * `machine` background installs `agentop-machine` (`docker compose … up -d`), Docker `central`
+   * keeps its existing `agentop-central` unit. A NATIVE central background start does not offer
+   * it — no native-central systemd unit exists yet, and installing the Docker one would claim a
+   * mechanism that does not match what actually started.
    */
   offersBoot?: boolean
 }
@@ -321,11 +333,16 @@ export interface ControlHost {
   /**
    * Install the systemd user service that brings a logical service up on every boot.
    *
-   * Named by SERVICE rather than by the unit it writes: which runtime boots is the host's business
-   * (a container already restarts itself, so this is always the native unit), and a second
-   * vocabulary on this side of the boundary is one more thing the UI could get wrong.
+   * `runtime` is the one the option that led here actually started (`StartOption.runtime`), passed
+   * straight back — a container and a native process boot through genuinely DIFFERENT mechanisms
+   * (a systemd user unit that runs `docker compose … up -d`, versus one that runs the binary
+   * directly), so the host needs to know which was used in order to write the matching unit rather
+   * than defaulting to the native one regardless. It is optional because the manual "enable boot"
+   * action row — offered while the service is down, with no runtime yet running to name — has no
+   * runtime to hand over; the host then falls back to its default (native for `agentistics`,
+   * Docker for `central`, its only mechanism).
    */
-  enableBoot(service: ServiceId): Promise<ActionResult>
+  enableBoot(service: ServiceId, runtime?: RuntimeId): Promise<ActionResult>
 
   setLang(lang: CliLang): Promise<void>
 
