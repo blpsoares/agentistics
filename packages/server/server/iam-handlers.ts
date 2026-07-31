@@ -469,6 +469,10 @@ export async function handleRecover(req: Request, ip = 'unknown'): Promise<Respo
       type: 'warning',
       code: 'iam.password_recovered',
       meta: { email: account.email, factor: usedRecovery ? 'recovery' : 'totp' },
+      // The account itself (so the affected person notices), the owner, and a manager of one of
+      // its teams — the same reach `accountVisibleTo` already grants over that account elsewhere.
+      // Previously this reached every account on the central.
+      subject: { kind: 'account', id: account._id },
     })
   } catch { /* the reset stands even if nobody could be told */ }
 
@@ -521,10 +525,16 @@ export async function handleResetRequest(req: Request, ip = 'unknown'): Promise<
   if (isNew) {
     try {
       const { broadcastNotification } = await import('./sse')
-      // Deliberately anonymous. Notifications go to every connected dashboard, and who forgot
-      // their password is not everybody's business; the name, the reason and the button live
-      // behind the authenticated list, visible only to those who could act on it anyway.
-      broadcastNotification({ type: 'info', code: 'iam.reset_requested' })
+      // Deliberately anonymous IN THE PAYLOAD — no email/name/reason travels here, those live
+      // behind the authenticated queue. The SUBJECT is the requesting account, so delivery is
+      // scoped by the same `accountVisibleTo` reach used elsewhere for this account: the owner,
+      // a manager of one of its teams, or the account itself. A plain user no longer learns that
+      // SOME colleague, somewhere, forgot their password. (The queue below is scoped by the
+      // stricter `canDeleteAccount` — who may actually ACT on the request — which is a narrower
+      // question than "who may hear that one exists".)
+      broadcastNotification({
+        type: 'info', code: 'iam.reset_requested', subject: { kind: 'account', id: account._id },
+      })
     } catch { /* the row is what matters; the bell is a courtesy */ }
   }
   return json({ ok: true })
