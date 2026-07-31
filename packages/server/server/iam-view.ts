@@ -79,6 +79,52 @@ export function canAssignMemberships(p: Principal, memberships: Membership[]): b
   return memberships.every(m => managed.has(m.teamId))
 }
 
+/** The only fields a PATCH to /api/iam/accounts may carry. Deliberately has NO `role` field —
+ *  role escalation through this path is not merely checked against, it is structurally absent. */
+export interface AccountPatchRequest {
+  name?: string
+  memberships?: Membership[]
+  resetPassword?: boolean
+}
+
+/**
+ * Authorization gate for editing OR resetting an account — the single place both the account-info
+ * edit and the admin password reset go through, so they can never drift apart on who may act on
+ * whom. Reuses canDeleteAccount (the same scope that already governs deletion: a manager may act
+ * only on user-role members of teams they manage) and canAssignMemberships (a manager may only
+ * assign memberships inside teams they manage). Decides authorization ONLY — the caller still
+ * builds and applies the actual database patch.
+ *
+ *  - self: a rename is fine; touching your own memberships or resetting your own password through
+ *    the ADMIN path is refused (self-service password change is a separate endpoint).
+ *  - owner: may edit anyone, but may not touch an OTHER owner's memberships (owner has none to
+ *    scope, and there is no "manage this owner" relationship to encode).
+ *  - manager (or anyone else): must satisfy canDeleteAccount(target) — same scope as deletion —
+ *    and, if reassigning memberships, canAssignMemberships too.
+ */
+export function authorizeAccountPatch(
+  p: Principal,
+  target: AccountDoc,
+  req: AccountPatchRequest,
+): { ok: true } | { ok: false; error: 'forbidden' } {
+  const isOwner = p.role === 'owner'
+  const isSelf = target._id === p.accountId
+
+  if (isSelf) {
+    if (req.memberships !== undefined || req.resetPassword === true) return { ok: false, error: 'forbidden' }
+    return { ok: true }
+  }
+  if (isOwner) {
+    if (target.role === 'owner' && req.memberships !== undefined) return { ok: false, error: 'forbidden' }
+    return { ok: true }
+  }
+  if (!canDeleteAccount(p, target)) return { ok: false, error: 'forbidden' }
+  if (req.memberships !== undefined && req.memberships.length > 0 && !canAssignMemberships(p, req.memberships)) {
+    return { ok: false, error: 'forbidden' }
+  }
+  return { ok: true }
+}
+
 /** Owner sees every team; a member sees only teams they belong to. */
 export function teamVisibleTo(p: Principal, teamId: string): boolean {
   if (p.role === 'owner') return true

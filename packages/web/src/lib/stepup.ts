@@ -14,9 +14,19 @@
 let token: string | null = null
 let expiresAt = 0
 
-/** Set by App.tsx: opens the re-auth dialog and resolves with what the user typed, or null. */
-type Prompter = () => Promise<{ password?: string; code?: string } | null>
+export interface StepUpAsk {
+  /** True when this account has a second factor enrolled — the server will take NOTHING else. */
+  needsCode: boolean
+  /** True when the previous answer was refused, so the dialog can say so instead of reopening blank. */
+  retry: boolean
+}
+
+/** Set by StepUpPrompt: opens the re-auth dialog and resolves with what the user typed, or null. */
+type Prompter = (ask: StepUpAsk) => Promise<{ password?: string; code?: string } | null>
 let prompter: Prompter | null = null
+
+/** How many refusals to sit through before giving up; the server rate-limits this endpoint too. */
+const MAX_ATTEMPTS = 3
 
 export function setStepUpPrompter(fn: Prompter | null): void {
   prompter = fn
@@ -32,21 +42,49 @@ function cached(): string | null {
   return token && Date.now() < expiresAt - 5_000 ? token : null
 }
 
+/**
+ * Which factor the server will demand of THIS account. Asked before the dialog opens, because a
+ * dialog that asks an enrolled user for their password can only ever be refused — which is how
+ * this feature read as "click confirm, nothing happens" for exactly the people it exists for.
+ * An unreachable probe falls back to the password: the server is still the one deciding, and a
+ * refusal below corrects the mode for the next attempt.
+ */
+async function factorNeeded(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/iam/mfa')
+    if (!res.ok) return false
+    const data = (await res.json()) as { enabled?: boolean }
+    return data.enabled === true
+  } catch {
+    return false
+  }
+}
+
 async function mintGrant(): Promise<string | null> {
   if (!prompter) return null
-  const answer = await prompter()
-  if (!answer) return null
-  const res = await fetch('/api/iam/stepup', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(answer),
-  })
-  if (!res.ok) return null
-  const data = (await res.json()) as { ok?: boolean; token?: string; expiresInSec?: number }
-  if (!data.ok || !data.token) return null
-  token = data.token
-  expiresAt = Date.now() + (data.expiresInSec ?? 300) * 1000
-  return token
+  let needsCode = await factorNeeded()
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const answer = await prompter({ needsCode, retry: attempt > 0 })
+    if (!answer) return null // cancelled — the caller gets the original refusal, not a hang
+    const res = await fetch('/api/iam/stepup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(answer),
+    })
+    if (res.ok) {
+      const data = (await res.json()) as { ok?: boolean; token?: string; expiresInSec?: number }
+      if (!data.ok || !data.token) return null
+      token = data.token
+      expiresAt = Date.now() + (data.expiresInSec ?? 300) * 1000
+      return token
+    }
+    // 401 is a wrong credential: worth another try, with the factor the server named. Anything
+    // else (429, 500) is not the user's to fix by retyping, so stop rather than hammer.
+    if (res.status !== 401) return null
+    const body = (await res.json().catch(() => ({}))) as { mfaRequired?: boolean }
+    if (typeof body.mfaRequired === 'boolean') needsCode = body.mfaRequired
+  }
+  return null
 }
 
 function withHeader(init: RequestInit | undefined, grant: string): RequestInit {

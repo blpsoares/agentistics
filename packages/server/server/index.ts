@@ -1306,7 +1306,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     if (url.pathname === '/api/iam/stepup' && req.method === 'POST') {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleStepUp } = await import('./iam-handlers')
-      const res = await handleStepUp(req)
+      const res = await handleStepUp(req, clientIp)
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })
@@ -1342,7 +1342,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     if (url.pathname === '/api/iam/mfa' || url.pathname.startsWith('/api/iam/mfa/')) {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleMfa } = await import('./iam-handlers')
-      const res = await handleMfa(req, url.pathname)
+      const res = await handleMfa(req, url.pathname, clientIp)
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })
@@ -1421,7 +1421,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     if (url.pathname === '/api/iam/accounts' && (req.method === 'GET' || req.method === 'POST' || req.method === 'PATCH' || req.method === 'DELETE')) {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleAccounts } = await import('./iam-handlers')
-      const res = await handleAccounts(req)
+      const res = await handleAccounts(req, clientIp)
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })
@@ -1439,7 +1439,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     if (url.pathname === '/api/iam/machines' && (req.method === 'GET' || req.method === 'POST' || req.method === 'DELETE')) {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleMachines } = await import('./iam-handlers')
-      const res = await handleMachines(req)
+      const res = await handleMachines(req, clientIp)
       // Revoke/rotate change the member set — refresh dashboards.
       if ((req.method === 'DELETE' || req.method === 'POST') && res.status >= 200 && res.status < 300) {
         const { triggerSseNotification } = await import('./sse'); triggerSseNotification()

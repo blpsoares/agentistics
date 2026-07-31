@@ -5,6 +5,7 @@ import type { AppContext } from '../../lib/app-context'
 import { ConnectionsPanel } from '../../components/team/ConnectionsPanel'
 import { SectionHeader, Section, Select, Checkbox, ConfirmModal, RecordCard, RecordCardAction, SaveBar, runSaveSteps } from './primitives'
 import { Drawer } from './Drawer'
+import { stepUpFetch } from '../../lib/stepup'
 import { useIsMobile } from '../../hooks/useIsMobile'
 
 // interfaces
@@ -323,7 +324,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
       const body: Record<string, unknown> = { name: row.name.trim() }
       if (uniqueAccountIds.length > 0) body.accountIds = uniqueAccountIds
       if (uniqueTeamIds.length > 0) body.teamIds = uniqueTeamIds
-      const res = await fetch('/api/iam/machines', {
+      const res = await stepUpFetch('/api/iam/machines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -342,7 +343,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
 
   async function revokeMachine(id: string) {
     try {
-      const res = await fetch('/api/iam/machines', {
+      const res = await stepUpFetch('/api/iam/machines', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),
@@ -357,7 +358,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
 
   async function rotateMachine(id: string) {
     try {
-      const res = await fetch('/api/iam/machines', {
+      const res = await stepUpFetch('/api/iam/machines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rotateId: id }),
@@ -414,7 +415,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   // Per-section saves (read-first drawer): each Section saves only its own fields.
   /** POST /api/iam/machines with one of its payload shapes; throws on a non-2xx. */
   async function postMachine(body: Record<string, unknown>): Promise<void> {
-    const res = await fetch('/api/iam/machines', {
+    const res = await stepUpFetch('/api/iam/machines', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -496,7 +497,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   async function bulkDelete() {
     try {
       for (const id of selectedIds) {
-        const res = await fetch('/api/iam/machines', {
+        const res = await stepUpFetch('/api/iam/machines', {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),

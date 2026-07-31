@@ -1,6 +1,6 @@
 // packages/server/server/iam-view.test.ts
-import { test, expect } from 'bun:test'
-import { canSeeMemberNames, publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships } from './iam-view'
+import { test, expect, describe, it } from 'bun:test'
+import { canSeeMemberNames, publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships, authorizeAccountPatch } from './iam-view'
 import type { AccountDoc, Principal } from './iam-types'
 
 const owner: Principal = { accountId: 'o1', role: 'owner', memberships: [] }
@@ -93,6 +93,57 @@ test('canManageMachineTeam: owner any team; manager own team only; user never', 
   expect(canManageMachineTeam(mgrA, 'B')).toBe(false)
   expect(canManageMachineTeam(userA, 'A')).toBe(false)
   expect(canManageMachineTeam(mgrA, undefined)).toBe(false)
+})
+
+// authorizeAccountPatch is the single gate for editing/resetting an account (name, memberships,
+// admin password reset) — it decides authorization only; the handler still parses/applies the
+// resulting patch. It never accepts a `role` field at all, which is what makes role-escalation
+// through this path structurally impossible rather than merely checked.
+describe('authorizeAccountPatch', () => {
+  const managedUser = acc('u1', { memberships: [{ teamId: 'A', role: 'user' }] })
+  const otherOwner = acc('o2', { role: 'owner' })
+
+  it('a manager can never escalate a target to owner — an owner target is always refused', () => {
+    // Even a completely innocuous edit (renaming) is refused once the target is an owner: a
+    // manager's authority is scoped to user-role members of teams they manage, full stop.
+    expect(authorizeAccountPatch(mgrA, otherOwner, { name: 'New Name' })).toEqual({ ok: false, error: 'forbidden' })
+    expect(authorizeAccountPatch(mgrA, otherOwner, { resetPassword: true })).toEqual({ ok: false, error: 'forbidden' })
+  })
+
+  it('a manager cannot assign memberships into a team they do not manage', () => {
+    expect(authorizeAccountPatch(mgrA, managedUser, { memberships: [{ teamId: 'B', role: 'user' }] }))
+      .toEqual({ ok: false, error: 'forbidden' })
+    // Managing team A is fine — that is in scope.
+    expect(authorizeAccountPatch(mgrA, managedUser, { memberships: [{ teamId: 'A', role: 'user' }] }))
+      .toEqual({ ok: true })
+  })
+
+  it('a manager cannot edit their own role or memberships through this path', () => {
+    const self = acc('m1', { memberships: [{ teamId: 'A', role: 'manager' }] })
+    expect(authorizeAccountPatch(mgrA, self, { memberships: [{ teamId: 'A', role: 'user' }] }))
+      .toEqual({ ok: false, error: 'forbidden' })
+    expect(authorizeAccountPatch(mgrA, self, { resetPassword: true }))
+      .toEqual({ ok: false, error: 'forbidden' })
+    // A plain rename of yourself is fine — only role-shaped fields (memberships/resetPassword)
+    // are refused on self.
+    expect(authorizeAccountPatch(mgrA, self, { name: 'New Name' })).toEqual({ ok: true })
+  })
+
+  it('an owner may edit anyone, but memberships on ANOTHER owner are still refused', () => {
+    expect(authorizeAccountPatch(owner, otherOwner, { name: 'New Name' })).toEqual({ ok: true })
+    expect(authorizeAccountPatch(owner, otherOwner, { memberships: [{ teamId: 'Z', role: 'user' }] }))
+      .toEqual({ ok: false, error: 'forbidden' })
+    expect(authorizeAccountPatch(owner, managedUser, { resetPassword: true })).toEqual({ ok: true })
+  })
+
+  it('a manager may reset the password of a user they manage', () => {
+    expect(authorizeAccountPatch(mgrA, managedUser, { resetPassword: true })).toEqual({ ok: true })
+  })
+
+  it('a manager may not touch an account outside every team they manage', () => {
+    const outsider = acc('u2', { memberships: [{ teamId: 'B', role: 'user' }] })
+    expect(authorizeAccountPatch(mgrA, outsider, { resetPassword: true })).toEqual({ ok: false, error: 'forbidden' })
+  })
 })
 
 test('canSeeMemberNames: owner and any-team manager yes; a plain user never', () => {

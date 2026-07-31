@@ -39,10 +39,81 @@ const DOMAIN = 'stepup-grant'
 const PROTECTED: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ['/api/iam/accounts', ['POST', 'PATCH', 'DELETE']],
   ['/api/iam/teams', ['DELETE']],
+  // The machines route writes the same `tokens` collection as /api/team/tokens below: POST mints
+  // a machine token (and rotates one via { rotateId }), DELETE revokes it. Gating the sibling and
+  // not this one left the control with a door beside it, which is no control at all. The other
+  // POST shapes (rename, re-own, re-team) ride along: they decide who a credential answers to,
+  // and splitting one path into gated and ungated halves by body shape is not a boundary anyone
+  // can review.
+  ['/api/iam/machines', ['POST', 'DELETE']],
   ['/api/team/tokens', ['POST', 'DELETE']],
   ['/api/team/tokens/rotate', ['POST']],
   ['/api/team/repos', ['POST', 'DELETE']],
 ]
+
+/**
+ * Whether a step-up attempt must present the second factor rather than the password.
+ *
+ * A cookie thief who also captured the password (the common case — password managers and
+ * cookies both live in the same browser profile) would otherwise sail through step-up on the
+ * password alone, exactly as if MFA did not exist. Once an account has enrolled a second factor,
+ * step-up MUST be proven with it — for a manager and an owner alike, since both can now reset
+ * somebody else's password through this same grant. This never makes enrolment itself mandatory:
+ * an account with no second factor still steps up on its password, same as before.
+ */
+export function stepUpRequiresCode(mfaEnrolled: boolean): boolean {
+  return mfaEnrolled
+}
+
+/** Which credential actually proved the attempt. `null` when none did. */
+export type StepUpFactor = 'password' | 'totp' | 'recovery'
+
+/**
+ * The credential checks, injected: the decision below is about WHICH of them may be consulted,
+ * and that is the part worth testing without a database, a clock or a live TOTP secret.
+ */
+export interface StepUpVerifiers {
+  verifyPassword(password: string): Promise<boolean>
+  verifyTotp(code: string): boolean
+  /** Single-use — spends the code when it matches, exactly as the store does. */
+  consumeRecoveryCode(code: string): Promise<boolean>
+}
+
+export interface StepUpResult {
+  ok: boolean
+  factor: StepUpFactor | null
+}
+
+/**
+ * Decides a step-up attempt.
+ *
+ * Enrolled: the second factor is the ONLY thing consulted — the password is not merely rejected,
+ * it is never checked, which is what makes "a stolen cookie plus a stolen password" worthless
+ * here. The factor may be a live authenticator code OR one of the single-use recovery codes,
+ * the same pair login accepts: an owner who lost their phone can already sign in with a recovery
+ * code, and refusing it here would leave them signed in and unable to do anything that matters —
+ * no password reset, no credential, not even disabling MFA — with shell access to the central as
+ * the only way back.
+ *
+ * Not enrolled: the password, and nothing else. There is no secret a code could be checked
+ * against, so accepting one would be accepting anything.
+ */
+export async function proveStepUp(
+  attempt: { password?: string; code?: string },
+  mfaEnrolled: boolean,
+  v: StepUpVerifiers,
+): Promise<StepUpResult> {
+  const code = (attempt.code ?? '').trim()
+  if (stepUpRequiresCode(mfaEnrolled)) {
+    if (!code) return { ok: false, factor: null }
+    if (v.verifyTotp(code)) return { ok: true, factor: 'totp' }
+    if (await v.consumeRecoveryCode(code)) return { ok: true, factor: 'recovery' }
+    return { ok: false, factor: null }
+  }
+  const password = attempt.password ?? ''
+  if (!password) return { ok: false, factor: null }
+  return (await v.verifyPassword(password)) ? { ok: true, factor: 'password' } : { ok: false, factor: null }
+}
 
 export function requiresStepUp(method: string, pathname: string): boolean {
   const m = method.toUpperCase()
