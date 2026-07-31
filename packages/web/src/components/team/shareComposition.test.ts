@@ -152,7 +152,7 @@ test('re-opening a saved allowlist reconstructs the SAME drafts, and re-saving p
 function evaluateWizard(mode: ShareMode, repoOff: Set<string>, projectOff: Set<string>) {
   const submitted = resolveSubmittedRules(mode, TARGETS, PROJECT_TARGETS, repoOff, projectOff)
   const body = buildSubmitBody({
-    endpoint: 'https://central.example.com/', token: 't', org: 'o', label: '', mode, submitted,
+    endpoint: 'https://central.example.com/', token: 't', org: 'o', mode, submitted,
   })
   const rules = shareRulesOf(body.shareMode, body.sources)
   const shared: Record<string, boolean> = {}
@@ -193,7 +193,7 @@ test('wizard, allowlist default draft with an AMBIGUOUS repository never submits
   expect(repoOff.size).toBeGreaterThan(0) // the ambiguous repo really is forced OFF
   const submitted = resolveSubmittedRules('allowlist', targets, projectTargets, repoOff, new Set())
   const body = buildSubmitBody({
-    endpoint: 'https://c.example.com', token: 't', org: 'o', label: '', mode: 'allowlist', submitted,
+    endpoint: 'https://c.example.com', token: 't', org: 'o', mode: 'allowlist', submitted,
   })
   const rules = shareRulesOf(body.shareMode, body.sources)
   // Whatever is listed, the ambiguous folder's sessions must NOT be shared by it.

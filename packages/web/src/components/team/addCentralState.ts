@@ -46,6 +46,21 @@ export function canConnect(step: WizardStep, test: TestOutcome, dupe: DupeState)
   return step === 'rules' && canOpenRules(test, dupe)
 }
 
+/**
+ * Whether the identity step's SINGLE primary action may even attempt the
+ * `POST /api/team/test-connection` call — used by both the merged "Save" button (test, then on
+ * success advance to step 2) and the optional standalone "Test connection" affordance, so neither
+ * can fire a request in a case the other refuses. A token already claimed by a DIFFERENT
+ * connection must produce NO request at all (the product requirement this whole file exists to
+ * protect, per `resolveDupeState`'s doc comment) — `tokenInUse` is refused outright, never
+ * "tested and then blocked from continuing". An empty endpoint has nothing to test. A plain
+ * `duplicate` (the documented token-rotation path) is allowed through: testing the replacement
+ * token before rotating it in is exactly the point.
+ */
+export function canAttemptTest(endpoint: string, dupe: DupeState): boolean {
+  return endpoint.trim().length > 0 && dupe.kind !== 'tokenInUse'
+}
+
 // --- token unpacking --------------------------------------------------------------------------
 
 export interface UnpackedToken {
@@ -128,7 +143,6 @@ export interface ConnectSubmitBody {
   endpoint: string
   token: string
   org: string
-  label?: string
   shareMode: ShareMode
   sources: ShareSource[]
 }
@@ -154,10 +168,15 @@ function withNoRepoWidening(mode: ShareMode, keys: readonly string[]): string[] 
 }
 
 /**
- * The ONE request body this wizard ever produces — `{ endpoint, token, org, label?, shareMode,
- * sources }` for the single `POST /api/team/connections` that creates the connection AND commits
- * the rules together. `sources` is built from `submitted` (repo keys widened by
- * `withNoRepoWidening` in denylist mode) via `buildSourcesFromDraft`.
+ * The ONE request body this wizard ever produces — `{ endpoint, token, org, shareMode, sources }`
+ * for the single `POST /api/team/connections` that creates the connection AND commits the rules
+ * together. `sources` is built from `submitted` (repo keys widened by `withNoRepoWidening` in
+ * denylist mode) via `buildSourcesFromDraft`.
+ *
+ * No `label` — the wizard never collects one. The display name is set by the central on the
+ * minted token (`TeamConnection.label`'s own doc comment); a machine choosing its own name here
+ * would be exactly the invariant the product forbids. `ConnectionCard` falls back to the probed
+ * `machineName`, then a stored `label` from an older config, then the endpoint host.
  *
  * `submitted` is a `SubmittedRules`, i.e. the output of `resolveSubmittedRules` — NEVER the
  * wizard's two raw drafts. That distinction is the whole of a Critical review finding: the drafts
@@ -170,21 +189,17 @@ export function buildSubmitBody(input: {
   endpoint: string
   token: string
   org: string
-  label: string
   mode: ShareMode
   submitted: SubmittedRules
 }): ConnectSubmitBody {
   const endpoint = trimTrailingSlashes(input.endpoint.trim())
   const org = input.org.trim()
-  const label = input.label.trim()
   const widenedRepoKeys = withNoRepoWidening(input.mode, [...input.submitted.repoKeys])
-  const body: ConnectSubmitBody = {
+  return {
     endpoint,
     token: input.token,
     org,
     shareMode: input.mode,
     sources: buildSourcesFromDraft(new Set(widenedRepoKeys), input.submitted.projectPaths),
   }
-  if (label) body.label = label
-  return body
 }

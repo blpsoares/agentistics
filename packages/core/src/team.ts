@@ -54,7 +54,14 @@ export interface TeamConnection {
   sources?: ShareSource[]
   /** Member-side mirror of the central's cadence; the central still owns the floor. */
   pushIntervalSec?: number
-  /** Optional nickname for the card; falls back to the endpoint host. */
+  /** Optional nickname for the card; falls back to the endpoint host. WRITE-NOTHING from the web
+   *  UI — the display name is set by the CENTRAL on the minted token (`GET /api/team/whoami`'s
+   *  `machineName`), never by the machine itself, so nothing in `components/team/` may create or
+   *  edit this field anymore. It stays here, and is still READ, only because an older config (or
+   *  `agentop member connect --label`, a CLI-only flag that still POSTs a label at connect time)
+   *  may carry one; dropping the field outright would rename an existing card on upgrade. The
+   *  server's `PATCH /api/team/connections/:id { label }` route also still accepts it, but the web
+   *  UI is not, and must never become, a caller of that path. */
   label?: string
   /** ISO — deterministic card ordering. */
   addedAt?: string

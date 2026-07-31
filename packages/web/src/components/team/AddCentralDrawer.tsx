@@ -14,20 +14,28 @@ import {
   type PickerTab, type ShareMode,
 } from './sharePanelState'
 import {
-  unpackToken, canOpenRules, canConnect, resolveDupeState, computeDirty, buildSubmitBody,
-  buildDefaultDraft, type WizardStep, type TestOutcome,
+  unpackToken, canOpenRules, canConnect, canAttemptTest, resolveDupeState, computeDirty,
+  buildSubmitBody, buildDefaultDraft, type WizardStep, type TestOutcome,
 } from './addCentralState'
 
 /**
  * AddCentralDrawer.tsx — the two-step "add a central" wizard (Task 12, design doc §9.6), extended
  * by Plan 4 Tasks 6–7 with the same two-tab Projects/Repositories picker and the mode selector
- * `SharedReposPanel.tsx` uses.
+ * `SharedReposPanel.tsx` uses, and by the save-and-rename fix with a single-action step 1.
  *
- * Step 1 identifies the central (token/endpoint + a required successful test); step 2 is the SAME
- * picker, defaulted to share-everything. Both steps commit in exactly ONE
- * `POST /api/team/connections` carrying `{ endpoint, token, org, label?, shareMode, sources }` —
- * see `addCentralState.ts`'s docstring for why the connection is never created before the rules
- * are chosen.
+ * Step 1 identifies the central (token/endpoint); step 2 is the SAME picker, defaulted to
+ * share-everything. Both steps commit in exactly ONE `POST /api/team/connections` carrying
+ * `{ endpoint, token, org, shareMode, sources }` — see `addCentralState.ts`'s docstring for why
+ * the connection is never created before the rules are chosen.
+ *
+ * Step 1 no longer forces a SEPARATE "Test connection" click before "Continue" unlocks — the
+ * primary button (`handlePrimaryClick`) runs the test itself (`testing…` → the identity note →
+ * a brief `Success!` on the button) and only then advances to step 2, exactly the single action
+ * the product asked for. An explicit "Test connection" affordance stays for anyone who wants to
+ * check first without committing to move on; both actions share the same `canAttemptTest` guard,
+ * so a `tokenInUse` pairing fires NO request from either one. The step-2 gate itself
+ * (`canOpenRules`/`canConnect`) is unchanged — only WHO triggers the test changed, not what makes
+ * step 2 reachable.
  *
  * This file is layout plus fetches: the step machine, the token unpacking, the duplicate/conflict
  * decisions, the dirty computation and the exact submit body all live in `addCentralState.ts` and
@@ -74,9 +82,13 @@ export function AddCentralDrawer({
   const [step, setStep] = useState<WizardStep>('identity')
   const [tokenInput, setTokenInput] = useState('')
   const [endpoint, setEndpoint] = useState('')
-  const [label, setLabel] = useState('')
   const [test, setTest] = useState<TestOutcome>(null)
   const [testing, setTesting] = useState(false)
+  // The primary button's own transient word ('idle' → 'testing' → a brief 'success' flash before
+  // the step actually advances). Separate from `testing` (which also drives the standalone Test
+  // button) because the two can be mid-flight from different clicks and must not fight over one
+  // flag — only the primary button ever enters 'success'.
+  const [primaryPhase, setPrimaryPhase] = useState<'idle' | 'testing' | 'success'>('idle')
 
   const [draft, setDraft] = useState<Set<string> | null>(null)
   const [projectDraft, setProjectDraft] = useState<Set<string> | null>(null)
@@ -123,6 +135,7 @@ export function AddCentralDrawer({
 
   function resetTest() {
     setTest(null)
+    setPrimaryPhase('idle')
   }
 
   function handleTokenChange(v: string) {
@@ -136,9 +149,17 @@ export function AddCentralDrawer({
     resetTest()
   }
 
-  async function runTest() {
+  /** Runs the ONE test call and returns its outcome (also stored via `setTest`, for the inline
+   *  note). Callers decide what to do with the result — the standalone Test button just shows it;
+   *  `handlePrimaryClick` also uses it to decide whether to advance. Never called when
+   *  `canAttemptTest` is false: a `tokenInUse` pairing must fire no request from anywhere. */
+  async function runTest(): Promise<TestOutcome> {
     const trimmed = endpoint.trim()
-    if (!trimmed) { setTest({ ok: false, error: COPY.addEndpointRequired[lang] }); return }
+    if (!trimmed) {
+      const outcome: TestOutcome = { ok: false, error: COPY.addEndpointRequired[lang] }
+      setTest(outcome)
+      return outcome
+    }
     setTesting(true)
     setTest(null)
     try {
@@ -148,19 +169,48 @@ export function AddCentralDrawer({
         body: JSON.stringify({ endpoint: trimmed.replace(/\/+$/, ''), token: bareToken }),
       })
       const data = await res.json().catch(() => ({})) as { ok?: boolean; error?: string; user?: string; org?: string }
-      if (data.ok) setTest({ ok: true, user: data.user ?? '', org: data.org })
-      else setTest({ ok: false, error: data.error ?? COPY.couldNotIdentify[lang] })
+      const outcome: TestOutcome = data.ok
+        ? { ok: true, user: data.user ?? '', org: data.org }
+        : { ok: false, error: data.error ?? COPY.couldNotIdentify[lang] }
+      setTest(outcome)
+      return outcome
     } catch (err) {
-      setTest({ ok: false, error: err instanceof Error ? err.message : COPY.networkError[lang] })
+      const outcome: TestOutcome = { ok: false, error: err instanceof Error ? err.message : COPY.networkError[lang] }
+      setTest(outcome)
+      return outcome
     } finally {
       setTesting(false)
     }
   }
 
-  function goToRules() {
-    if (!canOpenRules(test, dupe)) return
-    setStep('rules')
+  /** The standalone "Test connection" affordance — checks the identity without committing to
+   *  step 2. Kept because some users want to verify before moving on; no longer required to reach
+   *  step 2 at all (see `handlePrimaryClick`). */
+  async function handleTestClick() {
+    if (!canAttemptTest(endpoint, dupe)) return
+    await runTest()
   }
+
+  /**
+   * The merged primary action (save-and-rename fix 1): one click, `testing…` → the identity note
+   * → a brief `Success!` on the button → step 2. `canAttemptTest` is checked FIRST — a token
+   * already claimed by another connection, or no endpoint typed, fires no request at all, the
+   * same guard `handleTestClick` uses. On failure the button returns to idle and the inline error
+   * (already rendered from `test`) explains what to fix; nothing is created either way — that
+   * still requires the step-2 Connect click, per `canConnect`.
+   */
+  async function handlePrimaryClick() {
+    if (!canAttemptTest(endpoint, dupe)) return
+    setPrimaryPhase('testing')
+    const outcome = await runTest()
+    if (canOpenRules(outcome, dupe)) {
+      setPrimaryPhase('success')
+      setTimeout(() => { setStep('rules'); setPrimaryPhase('idle') }, 450)
+    } else {
+      setPrimaryPhase('idle')
+    }
+  }
+
   function backToIdentity() {
     setStep('identity')
   }
@@ -204,7 +254,7 @@ export function AddCentralDrawer({
     setConnecting(true)
     setConnectErr(null)
     const body = buildSubmitBody({
-      endpoint, token: bareToken, org: test.org ?? '', label, mode, submitted,
+      endpoint, token: bareToken, org: test.org ?? '', mode, submitted,
     })
     try {
       const res = await fetch('/api/team/connections', {
@@ -227,8 +277,8 @@ export function AddCentralDrawer({
     setStep('identity')
     setTokenInput('')
     setEndpoint('')
-    setLabel('')
     setTest(null)
+    setPrimaryPhase('idle')
     setDraft(null)
     setProjectDraft(null)
     setMode('denylist')
@@ -264,12 +314,6 @@ export function AddCentralDrawer({
             onChange={handleEndpointChange}
             placeholder="https://central.example.com"
           />
-          <FieldInput
-            label={COPY.addLabelLabel[lang]}
-            sub={COPY.addLabelSub[lang]}
-            value={label}
-            onChange={setLabel}
-          />
 
           {dupe.kind === 'duplicate' && (
             <InlineNote tone="warn">{COPY.dupCentral[lang]}</InlineNote>
@@ -280,14 +324,17 @@ export function AddCentralDrawer({
             </InlineNote>
           )}
 
+          {/* The standalone check — optional, never required to reach step 2. Same
+             `canAttemptTest` guard as the primary button below, so a tokenInUse pairing fires no
+             request from either one. */}
           <div style={{ display: 'flex', gap: 8, marginTop: 4, flexDirection: isMobile ? 'column' : 'row' }}>
             <button
               type="button"
-              onClick={() => { void runTest() }}
-              disabled={testing || !endpoint.trim()}
-              style={{ ...actionBtnStyle(isMobile, 'secondary'), opacity: (testing || !endpoint.trim()) ? 0.5 : 1 }}
+              onClick={() => { void handleTestClick() }}
+              disabled={testing || !canAttemptTest(endpoint, dupe)}
+              style={{ ...actionBtnStyle(isMobile, 'secondary'), opacity: (testing || !canAttemptTest(endpoint, dupe)) ? 0.5 : 1 }}
             >
-              {testing
+              {testing && primaryPhase === 'idle'
                 ? <><Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> {COPY.testingConn[lang]}</>
                 : COPY.testConnBtn[lang]}
             </button>
@@ -305,14 +352,23 @@ export function AddCentralDrawer({
             )
           )}
 
+          {/* The merged primary action (save-and-rename fix 1): pressing this alone tests the
+             connection AND, on success, continues into step 2 — no separate "Test connection"
+             click is required to unlock it anymore. */}
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
             <button
               type="button"
-              onClick={goToRules}
-              disabled={!canOpenRules(test, dupe)}
-              style={{ ...actionBtnStyle(isMobile, 'primary'), opacity: canOpenRules(test, dupe) ? 1 : 0.45, cursor: canOpenRules(test, dupe) ? 'pointer' : 'not-allowed' }}
+              onClick={() => { void handlePrimaryClick() }}
+              disabled={primaryPhase !== 'idle' || !canAttemptTest(endpoint, dupe)}
+              style={{
+                ...actionBtnStyle(isMobile, 'primary'),
+                opacity: (primaryPhase === 'idle' && canAttemptTest(endpoint, dupe)) ? 1 : 0.6,
+                cursor: (primaryPhase === 'idle' && canAttemptTest(endpoint, dupe)) ? 'pointer' : 'not-allowed',
+              }}
             >
-              {COPY.continueBtn[lang]}
+              {primaryPhase === 'testing' && <><Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> {COPY.testingConn[lang]}</>}
+              {primaryPhase === 'success' && <><Check size={14} /> {COPY.testSuccess[lang]}</>}
+              {primaryPhase === 'idle' && COPY.continueBtn[lang]}
             </button>
           </div>
         </div>

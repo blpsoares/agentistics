@@ -16,16 +16,6 @@ import { SharedReposPanel } from './SharedReposPanel'
  * 11–13 all add to the card and this is where that growth has room to land.
  */
 
-export function IconBtn({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button type="button" onClick={onClick} style={{
-      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24,
-      border: '1px solid var(--border)', borderRadius: 6, background: 'transparent',
-      color: 'var(--text-secondary)', cursor: 'pointer',
-    }}>{children}</button>
-  )
-}
-
 export function DisconnectButton({ lang, onClick, disabled, isMobile }: { lang: 'pt' | 'en'; onClick: () => void; disabled: boolean; isMobile: boolean }) {
   return (
     <button type="button" onClick={onClick} disabled={disabled} style={mobileBtn(disabled, true, isMobile)}>

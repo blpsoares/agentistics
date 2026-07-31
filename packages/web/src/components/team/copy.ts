@@ -357,14 +357,6 @@ export const COPY = {
     en: 'Central URL',
     pt: 'URL da central',
   },
-  addLabelLabel: {
-    en: 'Name (optional)',
-    pt: 'Nome (opcional)',
-  },
-  addLabelSub: {
-    en: 'Only for you — the central never sees it.',
-    pt: 'Só para você — a central nunca vê isso.',
-  },
   addRulesIntro: {
     en: 'Choose what this central may see. Nothing is sent until you finish — a repository you block here is never shared with it.',
     pt: 'Escolha o que esta central pode ver. Nada é enviado até você concluir — um repositório bloqueado aqui nunca é compartilhado com ela.',
@@ -391,18 +383,6 @@ export const COPY = {
     en: 'appears as',
     pt: 'aparece como',
   },
-  rename: {
-    en: 'Edit nickname',
-    pt: 'Editar apelido',
-  },
-  // Fix 6 (Plan 4 Task 1): the pencil edits a LOCAL nickname the central never sees, but sitting
-  // right next to the card title it used to read as "choose this machine's name" — which
-  // contradicts the design rule that the central owns the name. This is the pencil's tooltip/hint,
-  // stated so the nickname reads as clearly secondary to the central-given machine name.
-  nicknameHint: {
-    en: 'Nickname — only you see this. The central names the machine itself.',
-    pt: 'Apelido — só você vê isso. A própria central nomeia a máquina.',
-  },
   syncing: {
     en: 'Syncing…',
     pt: 'Sincronizando…',
@@ -425,7 +405,8 @@ export const COPY = {
   },
   // Fix 6 (Plan 4 Task 1): the name the CENTRAL gave this machine (the token's label), forwarded
   // by `handleProbeConnection` — distinct from `identityUser` (the account this token
-  // authenticates as) and from the purely-local nickname (`nicknameHint` below).
+  // authenticates as). There is no local nickname anymore (save-and-rename fix 2) — the machine
+  // may not name itself, so this is the only name shown.
   identityMachineName: {
     en: 'Machine name',
     pt: 'Nome da máquina',
@@ -470,6 +451,15 @@ export const COPY = {
   testingConn: {
     en: 'Testing…',
     pt: 'Testando…',
+  },
+  // The primary action's transient success state (save-and-rename fix 1): pressing "Continue" now
+  // tests the connection itself — this is the brief label between "Testing…" and the step
+  // actually advancing, so the click reads as one action with a visible outcome, not a silent
+  // jump. `testOkIdentity`/`testOkIdentityNoOrg` (the inline note) still state WHO answered; this
+  // is only the button's own momentary word.
+  testSuccess: {
+    en: 'Success!',
+    pt: 'Sucesso!',
   },
   testOkIdentity: {
     en: 'Connected as {user} ({org})',

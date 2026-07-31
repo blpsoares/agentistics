@@ -165,17 +165,6 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
     return counts
   }, [connections])
 
-  async function handleRename(id: string, label: string) {
-    await fetch(`/api/team/connections/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ label }),
-    }).catch(() => { /* local-only rename; a failed PATCH just leaves the stored label as-is */ })
-    // Re-read rather than splice: a failed PATCH must restore the stored label, and the label is
-    // what the hidden-repo badge names ("Hidden from 1 central · <label>").
-    await reloadAfterWrite()
-  }
-
   async function handleDisconnect(id: string) {
     const res = await fetch(`/api/team/connections/${encodeURIComponent(id)}`, { method: 'DELETE' })
     if (res.ok) await reloadAfterWrite()
@@ -294,7 +283,6 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
               otelEnabled={statusResp?.otelExportEnabled ?? false}
               duplicateHost={(duplicateHosts.get(hostOf(conn.endpoint)) ?? 0) > 1}
               lang={lang}
-              onRename={(id, label) => { void handleRename(id, label) }}
               onDisconnect={handleDisconnect}
               onSyncNow={handleSyncNow}
               onApplyRules={handleApplyRules}
