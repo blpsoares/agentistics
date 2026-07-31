@@ -202,15 +202,34 @@ export function ConnectionCard({
                 name" and contradicted the rule that the central owns the name (`displayLabel`
                 above, now driven by `identity.machineName`). Moved next to this secondary line
                 and given `COPY.nicknameHint` as its tooltip so it reads as clearly secondary.
+
+                Secondary is visual weight, not hit area: the icon stays 12px and visually quiet,
+                but the tappable box is 44×44 on mobile only (the same "small icon inside a large
+                invisible touch target" shape this card already uses for its chevron) — desktop
+                keeps the tight 20×20 box, since 44px there is what turns a control row into a row
+                of buttons.
               */}
+              {/* `span role="button"`, not a real `<button>` — this whole row sits inside the
+                 header's own `onClick={() => setExpanded(...)}` `<button>`, and a nested real
+                 button is invalid HTML that browsers repair by breaking the DOM structure. */}
               <span
                 role="button"
+                tabIndex={0}
                 aria-label={COPY.rename[lang]}
                 title={COPY.nicknameHint[lang]}
                 onClick={e => { e.stopPropagation(); setLabelDraft(conn.label ?? ''); setRenaming(true) }}
-                style={{ display: 'inline-flex', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 4, opacity: 0.6, flexShrink: 0 }}
+                onKeyDown={e => {
+                  if (e.key !== 'Enter' && e.key !== ' ') return
+                  e.preventDefault(); e.stopPropagation()
+                  setLabelDraft(conn.label ?? ''); setRenaming(true)
+                }}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: isMobile ? 44 : 20, height: isMobile ? 44 : 20,
+                  color: 'var(--text-tertiary)', cursor: 'pointer', opacity: 0.6, flexShrink: 0,
+                }}
               >
-                <Pencil size={10} />
+                <Pencil size={12} />
               </span>
             </div>
           )}
