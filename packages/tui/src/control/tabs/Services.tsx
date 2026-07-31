@@ -92,6 +92,7 @@ import type {
   ControlService,
   ControlStatus,
   RestartOption,
+  RuntimeId,
   ServiceId,
   StartOption,
 } from '../types'
@@ -175,7 +176,10 @@ type View =
   | { kind: 'archive'; suggested: ArchiveMode; then: StartOption | null }
   | { kind: 'connect'; step: ConnectStep; endpoint: string; token: string }
   | { kind: 'disconnect' }
-  | { kind: 'boot'; service: ServiceId }
+  /** `runtime` is the one that just started, when this came from a fresh start's boot question —
+   *  `enableBoot` needs it to write the matching unit. Absent for the manual "enable boot" action
+   *  row (offered while the service is down, with nothing running yet to name). */
+  | { kind: 'boot'; service: ServiceId; runtime?: RuntimeId }
 
 /**
  * What the detail region is showing instead of the facts: a question, or a task's output.
@@ -321,7 +325,10 @@ export function Services({
     setView({ kind: 'cockpit' })
     void run(() => host.start(option), option.label).then(res => {
       setView(res.ok && option.offersBoot
-        ? { kind: 'boot', service: option.runtime === 'central' ? 'central' : 'agentistics' }
+        // The runtime travels with the question: `enableBoot` needs it to pick the matching
+        // mechanism (a native systemd unit versus one that runs `docker compose … up -d`), and
+        // this is the one place that actually knows which one just started.
+        ? { kind: 'boot', service: option.runtime === 'central' ? 'central' : 'agentistics', runtime: option.runtime }
         : { kind: 'cockpit' })
     })
   }, [host, run])
@@ -349,11 +356,15 @@ export function Services({
    * would have been wrong the day a second runtime took a port.
    */
   const onStart = useCallback((option: StartOption) => {
-    if (option.how === 'fg') {
-      // Foreground cannot be awaited from inside a mounted Ink app: the server takes the tty, and
-      // it can only do that once we have unmounted and left the alternate screen. So the choice is
-      // reported as an exit — the same `'foreground'` sentinel `runStart()` has always returned —
-      // and the host starts the in-process server after the control center is gone.
+    // Only `local` foreground needs to leave the app: it is about to become THIS process's own
+    // foreground job, which can only happen once we have unmounted and left the alternate screen
+    // — the same `'foreground'` sentinel `runStart()` has always returned, after which the host
+    // starts the in-process server. A Docker (or native-central) foreground start is a plain CHILD
+    // this process can still supervise: `host.start()` runs it under `suspend()`, which hands the
+    // real tty to that child and returns control to the cockpit the moment it exits (Ctrl-C). It
+    // never needs — and must never trigger — the exit that would otherwise start the wrong thing
+    // (the native local server) in its place.
+    if (option.how === 'fg' && option.runtime === 'local') {
       return onExit({ kind: 'foreground' })
     }
     const blocker = option.blockedBy
@@ -1202,7 +1213,7 @@ export function Services({
               label={s.bootQuestion}
               yesLabel={s.yes}
               noLabel={s.no}
-              onAnswer={yes => onBoot(view.service, yes)}
+              onAnswer={yes => onBoot(view.service, view.runtime, yes)}
               onCancel={back}
               width={body}
               isActive={questionsLive}
@@ -1233,9 +1244,9 @@ export function Services({
     return void run(() => host.connect({ endpoint, token, org: value })).then(back)
   }
 
-  function onBoot(service: ServiceId, yes: boolean) {
+  function onBoot(service: ServiceId, runtime: RuntimeId | undefined, yes: boolean) {
     if (!yes) return back()
-    return void run(() => host.enableBoot(service)).then(back)
+    return void run(() => host.enableBoot(service, runtime)).then(back)
   }
 }
 

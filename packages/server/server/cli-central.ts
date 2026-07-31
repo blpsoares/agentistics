@@ -73,6 +73,16 @@ function findCentralScript(): string | null {
  */
 export interface CentralRunOptions {
   streamed?: boolean
+  /**
+   * Native `up` only: start detached instead of taking over the terminal.
+   *
+   * `runNativeCentral`'s normal `up` blocks in the foreground forever (Ctrl-C to stop) — the only
+   * shape it has ever had, because `agentop central up` on a real terminal is exactly that. The
+   * control center's "start in the background" option needs the other shape: return immediately,
+   * with the server running detached and its output going to a log file instead of this terminal.
+   * Ignored by every other action and by the Docker paths, which have their own `-d`.
+   */
+  detached?: boolean
 }
 
 /** stdio for a child, in the two modes: the user's terminal, or the control center's pane. */
@@ -525,6 +535,36 @@ async function runNativeCentral(
       `  • start:   agentop central up            (foreground — Ctrl-C to stop)\n` +
       `  • service: agentop autostart central     (run it as a background service)\n`,
     )
+    return 0
+  }
+
+  if (opts.detached) {
+    // The same re-invocation as the foreground path, but detached: `sh -c 'nohup … &'` so the
+    // child survives this process exiting, with its output going to a log file instead of a
+    // terminal nothing is watching. Mirrors `startBackground()` in cli-start.ts (the native
+    // `agentistics` server's own background start) for the same reason: a bare `stdio: 'ignore'`
+    // child is still killed when its parent's process group is signalled, and `nohup … &` inside
+    // a shell is what actually detaches it.
+    const log = join(homedir(), '.agentistics', 'agentop-central.log')
+    try {
+      await mkdir(dirname(log), { recursive: true })
+    } catch { /* best-effort — the spawn below still reports a failure if this truly matters */ }
+    try {
+      const child = Bun.spawn(
+        ['sh', '-c', `nohup ${JSON.stringify(process.execPath)} server >> ${JSON.stringify(log)} 2>&1 &`],
+        {
+          env: { ...process.env, ...env, PORT: port, AGENTISTICS_TEAM_CENTRAL: '1', SERVE_STATIC: '1' } as Record<string, string>,
+          stdin: 'ignore', stdout: 'ignore', stderr: 'ignore',
+        },
+      )
+      await child.exited
+    } catch (err) {
+      process.stderr.write(`Could not start native central: ${err instanceof Error ? err.message : String(err)}\n`)
+      return 1
+    }
+    process.stdout.write(`\nNative central (external DB) starting in the background on port ${port}.\n`)
+    await printAccessUrl(envFile)
+    process.stdout.write(`  logs: ${log}\n`)
     return 0
   }
 

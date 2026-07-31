@@ -162,7 +162,7 @@ Updates:
 
 Autostart:
   agentop autostart <mode> <enable|disable|status>
-    mode ∈ { server, central, watch }
+    mode ∈ { server, central, watch, machine }
     enable   Register + start the service at boot (also adds a terminal
              update-check hook to ~/.bashrc)
     disable  Stop and remove the service
@@ -539,7 +539,7 @@ if (command === 'autostart') {
   }
 
   if (!modeArg || !isAutostartMode(modeArg)) {
-    console.error(`Invalid mode: ${modeArg ?? '(none)'}. Expected one of: server, central, watch.\n`)
+    console.error(`Invalid mode: ${modeArg ?? '(none)'}. Expected one of: server, central, watch, machine.\n`)
     console.log(HELP)
     process.exit(1)
   }
@@ -584,7 +584,7 @@ if (command === 'restart') {
   }
   const { restartAutostart, isAutostartMode } = await import('../server/autostart.ts')
   if (!isAutostartMode(modeArg)) {
-    console.error(`Invalid mode: ${modeArg}. Expected one of: server, watch, central.\n`)
+    console.error(`Invalid mode: ${modeArg}. Expected one of: server, watch, central, machine.\n`)
     process.exit(1)
   }
   // The server is the mode this tool actually starts for you, and it starts it DETACHED, not as a
