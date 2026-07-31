@@ -185,27 +185,27 @@ test('resolveModeConfirmVariant names the direction of the switch so the confirm
 
 test('resolveSubmittedRepoKeys: denylist mode submits the raw denied set untouched', () => {
   const targets = [st({ key: 'a' }), st({ key: 'b' }), st({ key: 'c' })]
-  const submitted = resolveSubmittedRepoKeys('denylist', targets, new Set(['a']))
+  const submitted = resolveSubmittedRepoKeys('denylist', targets, new Set(['a']), [])
   expect([...submitted]).toEqual(['a'])
 })
 
 test('resolveSubmittedRepoKeys: allowlist mode submits the COMPLEMENT — what is switched ON, not off', () => {
   const targets = [st({ key: 'a' }), st({ key: 'b' }), st({ key: 'c' })]
   // 'a' is OFF (denied) -> under allowlist, only 'b' and 'c' (the ON/shared ones) are submitted.
-  const submitted = resolveSubmittedRepoKeys('allowlist', targets, new Set(['a']))
+  const submitted = resolveSubmittedRepoKeys('allowlist', targets, new Set(['a']), [])
   expect([...submitted].sort()).toEqual(['b', 'c'])
 })
 
 test('resolveSubmittedRepoKeys: allowlist "block all" (everything OFF) submits an EMPTY set, never everything', () => {
   const targets = [st({ key: 'a' }), st({ key: 'b' })]
-  const submitted = resolveSubmittedRepoKeys('allowlist', targets, new Set(['a', 'b']))
+  const submitted = resolveSubmittedRepoKeys('allowlist', targets, new Set(['a', 'b']), [])
   expect(submitted.size).toBe(0)
 })
 
 test('resolveSubmittedRepoKeys: allowlist mode never submits a locked repo — it is always OFF, so never in the complement', () => {
   const targets = [st({ key: 'a', conflictPaths: ['/shared'] }), st({ key: 'b' })]
   // 'a' is locked (conflictPaths) and therefore always a member of draftDenied.
-  const submitted = resolveSubmittedRepoKeys('allowlist', targets, new Set(['a']))
+  const submitted = resolveSubmittedRepoKeys('allowlist', targets, new Set(['a']), [])
   expect([...submitted]).toEqual(['b'])
 })
 
@@ -233,7 +233,7 @@ test('resolveSubmittedRepoKeys/resolveSubmittedProjectPaths + isEmptyAllowlist: 
   // it in) — the complement therefore correctly excludes it, and blocking everything ELSE leaves
   // the submitted set empty, tripping the refusal instead of silently allowing the locked repo.
   const targets = [st({ key: 'a', conflictPaths: ['/shared'] })]
-  const submittedRepoKeys = resolveSubmittedRepoKeys('allowlist', targets, new Set(['a']))
+  const submittedRepoKeys = resolveSubmittedRepoKeys('allowlist', targets, new Set(['a']), [])
   const submittedProjectPaths = resolveSubmittedProjectPaths('allowlist', [], new Set())
   expect(isEmptyAllowlist('allowlist', submittedRepoKeys, submittedProjectPaths)).toBe(true)
 })

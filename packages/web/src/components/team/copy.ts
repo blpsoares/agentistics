@@ -150,6 +150,20 @@ export const COPY = {
     en: 'Shared with this central ({n})',
     pt: 'Compartilhado com esta central ({n})',
   },
+  // A repository whose switch is ON while at least one project under it is OFF. Stated on the row
+  // so the two tabs cannot disagree: the Projects tab already shows those projects as blocked.
+  repoPartialSub: {
+    en: 'Partly shared — some projects in it are blocked.',
+    pt: 'Parcialmente compartilhado — alguns projetos dele estão bloqueados.',
+  },
+  // Under an allowlist a partly-shared repository is NOT listed as a repository at all (listing it
+  // would re-share the very projects switched off), so only the projects named today travel — a
+  // new folder cloned from it later is not shared until it is chosen. That is the fail-closed
+  // reading of "share only…", and the user has to be told, or the row reads as a plain ON.
+  repoPartialAllowSub: {
+    en: 'Partly shared — only the projects listed; a new folder in it is not shared automatically.',
+    pt: 'Parcialmente compartilhado — só os projetos listados; uma pasta nova dele não é compartilhada automaticamente.',
+  },
   sharingAll: {
     en: 'Sharing every repository on this machine, including new ones.',
     pt: 'Compartilhando todos os repositórios desta máquina, inclusive os novos.',
@@ -536,6 +550,13 @@ export const PLURAL_COPY = {
   blockedPill: {
     en: { one: '1 hidden', other: '{n} hidden' },
     pt: { one: '1 oculto', other: '{n} ocultos' },
+  },
+  // The collapsed card's pill in ALLOWLIST mode — the same count, framed the way that mode reads.
+  // `deniedCount` is `allowedCount` there (see `ruleCountsOf`), so the negative pill reported a
+  // connection sharing 3 of 40 repositories as "3 hidden".
+  allowedPill: {
+    en: { one: '1 shared', other: '{n} shared' },
+    pt: { one: '1 compartilhado', other: '{n} compartilhados' },
   },
   hiddenFromN: {
     en: { one: 'Hidden from 1 central', other: 'Hidden from {n} centrals' },

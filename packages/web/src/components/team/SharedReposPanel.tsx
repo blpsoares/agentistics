@@ -21,7 +21,7 @@ import {
   resolveInitialTab, sourcesToRepoKeys, sourcesToProjectPaths, buildSourcesFromDraft,
   computeSharedSummary, isEmptyAllowlist, modeChanged, resolveModeConfirmVariant,
   toggleProjectTarget, shareAllProjectsDraft, blockAllProjectsDraft,
-  buildProjectRows, resolveSubmittedRepoKeys, resolveSubmittedProjectPaths,
+  resolveSubmittedRules, partiallyDeniedRepoKeys, isProjectLocked,
   type PickerTab, type ShareMode, type ModeConfirmVariant,
 } from './sharePanelState'
 
@@ -101,15 +101,15 @@ export function SharedReposPanel({
     // The stored `sources` mean "blocked" under denylist but "allowed" under allowlist — the
     // draft's Set is always the mode-invariant "switch is OFF" shape (see the doc comment on
     // `resolveSubmittedRepoKeys`), so seeding it from an allowlist's stored keys needs the SAME
-    // complement conversion the submit path uses. The conversion is its own inverse (denylist:
-    // identity; allowlist: complement-of-complement is the original set), so the one function
-    // serves both directions — without it, re-opening an already-saved allowlist showed its
-    // ALLOWED repo sitting in the "Blocked" group, and toggling from there would have inverted it.
-    const storedProjectRows = buildProjectRows(projectTargets, storedProjectPaths, storedRepoKeys)
-    const seedRepoKeys = resolveSubmittedRepoKeys(storedMode, targets, storedRepoKeys)
-    const seedProjectPaths = resolveSubmittedProjectPaths(storedMode, storedProjectRows, storedProjectPaths)
-    setDraft(buildInitialDraft(targets, [...seedRepoKeys]))
-    setProjectDraft(new Set(seedProjectPaths))
+    // conversion the submit path uses — `resolveSubmittedRules`, both directions, one function.
+    // It is its own inverse (denylist: identity; allowlist: a repository is submitted only when
+    // no project under it is denied, and that same rule read backwards keeps a PARTLY-allowed
+    // repository switched ON with exactly its denied projects OFF). Without it, re-opening an
+    // already-saved allowlist showed its ALLOWED repo in the "Blocked" group, and toggling from
+    // there would have inverted it.
+    const seed = resolveSubmittedRules(storedMode, targets, projectTargets, storedRepoKeys, storedProjectPaths)
+    setDraft(buildInitialDraft(targets, [...seed.repoKeys]))
+    setProjectDraft(new Set(seed.projectPaths))
     setModeDraft(storedMode)
     setSearch('')
     setShowEmptyAllowlistWarning(false)
@@ -145,9 +145,13 @@ export function SharedReposPanel({
   // comment on `resolveSubmittedRepoKeys`), but the WIRE shape is not: `allowlist` stores the
   // OPPOSITE of what a denylist would. These are the sets actually submitted, computed ONCE per
   // render and shared by the empty-allowlist check and the submit call so they can never disagree.
-  const projectRows = buildProjectRows(projectTargets, projectDraftDenied, draftDenied)
-  const submittedRepoKeys = resolveSubmittedRepoKeys(effectiveMode, targets, draftDenied)
-  const submittedProjectPaths = resolveSubmittedProjectPaths(effectiveMode, projectRows, projectDraftDenied)
+  const submitted = resolveSubmittedRules(effectiveMode, targets, projectTargets, draftDenied, projectDraftDenied)
+  const { projectRows, repoKeys: submittedRepoKeys, projectPaths: submittedProjectPaths } = submitted
+  // Repositories that are, at most, PARTLY shared — at least one project under them is switched
+  // OFF. Rendered as such in the Repositories tab so the two tabs never disagree: under allowlist
+  // such a repository is deliberately NOT submitted as a repo source (its allowed paths travel
+  // individually), which a plain ON switch would misreport.
+  const partialRepoKeys = partiallyDeniedRepoKeys(projectRows)
 
   async function confirmApply() {
     setConfirmOpen(false)
@@ -201,8 +205,7 @@ export function SharedReposPanel({
                 isMobile={isMobile}
                 lang={lang}
                 onToggleRow={(target, nextShared) => {
-                  const locked = target.repoKey !== '' && draftDenied.has(target.repoKey)
-                  setProjectDraft(toggleProjectTarget(projectDraftDenied, target, nextShared, locked))
+                  setProjectDraft(toggleProjectTarget(projectDraftDenied, target, nextShared, isProjectLocked(target, draftDenied)))
                 }}
                 onShareAll={() => setProjectDraft(shareAllProjectsDraft(projectTargets))}
                 onBlockAll={() => setProjectDraft(blockAllProjectsDraft(projectTargets))}
@@ -220,6 +223,8 @@ export function SharedReposPanel({
                 onShowAllMobile={() => setShowAllMobile(true)}
                 isMobile={isMobile}
                 lang={lang}
+                mode={effectiveMode}
+                partialRepoKeys={partialRepoKeys}
                 impactSessions={impact.sessions}
                 impactCost={impact.costUSD}
                 onToggleRow={(target, nextShared) => setDraft(toggleTarget(draftDenied, target, nextShared))}

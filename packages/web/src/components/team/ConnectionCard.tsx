@@ -10,7 +10,7 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { COPY, PLURAL_COPY, interpolate } from './copy'
 import { ConnectionIdentity, type ProbedIdentity } from './ConnectionIdentity'
 import type { ConnectionStatusEntry } from './statusTypes'
-import { isBrokenEndpoint, resolveCardState, showsApplyQueuedBanner, resolveWritesDisabled, DOT } from './cardState'
+import { isBrokenEndpoint, resolveCardState, resolveRulePill, showsApplyQueuedBanner, resolveWritesDisabled, DOT } from './cardState'
 import { resolveCardActionsHidden, type ApplyPhase } from './repoPanelState'
 import {
   IconBtn, DisconnectButton, mobileBtn, StatusLine, ResyncStrip, RepoPanelSlot,
@@ -152,7 +152,9 @@ export function ConnectionCard({
     )
   }
 
-  const deniedCount = status?.deniedCount ?? 0
+  // Polarity follows the connection's MODE — see `resolveRulePill`. Same shared-positive
+  // discipline the expanded read view already follows.
+  const rulePill = resolveRulePill(status)
   const disableWrites = resolveWritesDisabled(state, syncing, disconnecting, applyPhase)
 
   return (
@@ -237,14 +239,20 @@ export function ConnectionCard({
             </div>
           )}
         </div>
-        {deniedCount > 0 && (
+        {rulePill && (
           <span style={{
             display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999,
-            background: 'color-mix(in srgb, var(--anthropic-orange) 15%, transparent)',
-            color: 'var(--anthropic-orange)', fontSize: 11, fontWeight: 700, flexShrink: 0,
+            background: rulePill.tone === 'allow'
+              ? 'color-mix(in srgb, var(--accent-green) 15%, transparent)'
+              : 'color-mix(in srgb, var(--anthropic-orange) 15%, transparent)',
+            color: rulePill.tone === 'allow' ? 'var(--accent-green)' : 'var(--anthropic-orange)',
+            fontSize: 11, fontWeight: 700, flexShrink: 0,
           }}>
-            <EyeOff size={11} />
-            {interpolate(plural(PLURAL_COPY.blockedPill[lang], deniedCount), { n: deniedCount })}
+            {rulePill.tone === 'allow' ? <Check size={11} /> : <EyeOff size={11} />}
+            {interpolate(
+              plural(rulePill.tone === 'allow' ? PLURAL_COPY.allowedPill[lang] : PLURAL_COPY.blockedPill[lang], rulePill.count),
+              { n: rulePill.count },
+            )}
           </span>
         )}
         {expanded ? <ChevronDown size={20} style={{ flexShrink: 0 }} /> : <ChevronRight size={20} style={{ flexShrink: 0 }} />}

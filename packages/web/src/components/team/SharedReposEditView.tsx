@@ -116,10 +116,16 @@ export function bulkBtnStyle(isMobile: boolean): CSSProperties {
 
 export function EditView({
   targets, draftDenied, diff, search, onSearch, showStale, onToggleStale, showAllMobile, onShowAllMobile,
-  isMobile, lang, impactSessions, impactCost, onToggleRow, onShareAll, onBlockAll,
+  isMobile, lang, mode, partialRepoKeys, impactSessions, impactCost, onToggleRow, onShareAll, onBlockAll,
 }: {
   targets: ShareTarget[]
   draftDenied: Set<string>
+  /** The current draft mode — a PARTLY-shared repository means something stricter under an
+   *  allowlist (it does not travel as a repository at all), so the row says so in that mode. */
+  mode: ShareMode
+  /** Repo keys with at least one project switched OFF in the other tab (`partiallyDeniedRepoKeys`).
+   *  A row that is itself denied ignores this — it renders in the Blocked group either way. */
+  partialRepoKeys: ReadonlySet<string>
   diff: ReturnType<typeof diffDraft>
   search: string
   onSearch: (v: string) => void
@@ -178,8 +184,8 @@ export function EditView({
         display: 'flex', flexDirection: 'column', gap: 10,
         ...(isMobile ? {} : { maxHeight: 360, overflowY: 'auto' }),
       }}>
-        {blocked.length > 0 && <RowGroup label={interpolate(COPY.groupBlocked[lang], { n: grouped.blocked.length })} rows={blocked} lang={lang} onToggleRow={onToggleRow} />}
-        {shared.length > 0 && <RowGroup label={interpolate(COPY.groupShared[lang], { n: grouped.shared.length })} rows={shared} lang={lang} onToggleRow={onToggleRow} />}
+        {blocked.length > 0 && <RowGroup label={interpolate(COPY.groupBlocked[lang], { n: grouped.blocked.length })} rows={blocked} lang={lang} mode={mode} partialRepoKeys={partialRepoKeys} onToggleRow={onToggleRow} />}
+        {shared.length > 0 && <RowGroup label={interpolate(COPY.groupShared[lang], { n: grouped.shared.length })} rows={shared} lang={lang} mode={mode} partialRepoKeys={partialRepoKeys} onToggleRow={onToggleRow} />}
       </div>
 
       {isMobile && !showAllMobile && shownCount < totalLiveCount && (
@@ -220,10 +226,12 @@ export function EditView({
   )
 }
 
-function RowGroup({ label, rows, lang, onToggleRow }: {
+function RowGroup({ label, rows, lang, mode, partialRepoKeys, onToggleRow }: {
   label: string
   rows: EffectiveRow[]
   lang: 'pt' | 'en'
+  mode: ShareMode
+  partialRepoKeys: ReadonlySet<string>
   onToggleRow: (target: ShareTarget, nextShared: boolean) => void
 }) {
   const pt = lang === 'pt'
@@ -234,11 +242,14 @@ function RowGroup({ label, rows, lang, onToggleRow }: {
       </div>
       {rows.map(r => {
         const t = r.target
+        const partial = !r.denied && partialRepoKeys.has(t.key)
         const sub = r.locked
           ? COPY.mixedRepoWarn[lang]
-          : t.kind === 'none'
-            ? COPY.noRepoSub[lang]
-            : `${interpolate(plural(PLURAL_COPY.sessionsN[lang], t.sessions), { n: t.sessions })}${t.lastActive ? ` · ${interpolate(COPY.lastActiveT[lang], { t: relTime(t.lastActive, pt) })}` : ''}`
+          : partial
+            ? (mode === 'allowlist' ? COPY.repoPartialAllowSub[lang] : COPY.repoPartialSub[lang])
+            : t.kind === 'none'
+              ? COPY.noRepoSub[lang]
+              : `${interpolate(plural(PLURAL_COPY.sessionsN[lang], t.sessions), { n: t.sessions })}${t.lastActive ? ` · ${interpolate(COPY.lastActiveT[lang], { t: relTime(t.lastActive, pt) })}` : ''}`
         return (
           // `flexWrap: 'wrap'` — the row div is a block-level flex container (width = its parent's,
           // not shrink-to-fit), and `RowSwitch`'s button already claims the full row via its own

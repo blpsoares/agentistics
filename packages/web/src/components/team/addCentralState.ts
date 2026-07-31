@@ -2,7 +2,7 @@ import type { TeamConnection, ShareSource } from '@agentistics/core'
 import { NO_REPO_KEY, normalizeEndpointKey, unpackConnectToken } from '@agentistics/core'
 import type { ShareTarget } from '../../lib/shareRepos'
 import { shareAllDraft } from './repoPanelState'
-import { buildSourcesFromDraft, type ShareMode } from './sharePanelState'
+import { buildSourcesFromDraft, type ShareMode, type SubmittedRules } from './sharePanelState'
 
 /**
  * addCentralState.ts — the pure decisions behind `AddCentralDrawer.tsx` (Task 12, design doc §9.6).
@@ -156,8 +156,15 @@ function withNoRepoWidening(mode: ShareMode, keys: readonly string[]): string[] 
 /**
  * The ONE request body this wizard ever produces — `{ endpoint, token, org, label?, shareMode,
  * sources }` for the single `POST /api/team/connections` that creates the connection AND commits
- * the rules together. `sources` is built from the step-2 repo/project drafts (repo keys widened by
+ * the rules together. `sources` is built from `submitted` (repo keys widened by
  * `withNoRepoWidening` in denylist mode) via `buildSourcesFromDraft`.
+ *
+ * `submitted` is a `SubmittedRules`, i.e. the output of `resolveSubmittedRules` — NEVER the
+ * wizard's two raw drafts. That distinction is the whole of a Critical review finding: the drafts
+ * mean "this switch is OFF" in both modes, while an allowlist's `sources` mean the OPPOSITE, so
+ * passing them straight through sent the central the one repository the user had just hidden and
+ * nothing else. Taking the converted struct (not two loose Sets) is what makes the correct call
+ * the obvious one at the call site.
  */
 export function buildSubmitBody(input: {
   endpoint: string
@@ -165,19 +172,18 @@ export function buildSubmitBody(input: {
   org: string
   label: string
   mode: ShareMode
-  repoKeys: ReadonlySet<string>
-  projectPaths: ReadonlySet<string>
+  submitted: SubmittedRules
 }): ConnectSubmitBody {
   const endpoint = trimTrailingSlashes(input.endpoint.trim())
   const org = input.org.trim()
   const label = input.label.trim()
-  const widenedRepoKeys = withNoRepoWidening(input.mode, [...input.repoKeys])
+  const widenedRepoKeys = withNoRepoWidening(input.mode, [...input.submitted.repoKeys])
   const body: ConnectSubmitBody = {
     endpoint,
     token: input.token,
     org,
     shareMode: input.mode,
-    sources: buildSourcesFromDraft(new Set(widenedRepoKeys), input.projectPaths),
+    sources: buildSourcesFromDraft(new Set(widenedRepoKeys), input.submitted.projectPaths),
   }
   if (label) body.label = label
   return body

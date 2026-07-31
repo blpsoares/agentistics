@@ -10,7 +10,8 @@ import { EditView, ProjectEditView, ModeSelector, PickerTabs } from './SharedRep
 import { diffDraft, toggleTarget, shareAllDraft, blockAllDraft } from './repoPanelState'
 import {
   resolveInitialTab, toggleProjectTarget, shareAllProjectsDraft, blockAllProjectsDraft,
-  isEmptyAllowlist, type PickerTab, type ShareMode,
+  isEmptyAllowlist, isProjectLocked, partiallyDeniedRepoKeys, resolveSubmittedRules,
+  type PickerTab, type ShareMode,
 } from './sharePanelState'
 import {
   unpackToken, canOpenRules, canConnect, resolveDupeState, computeDirty, buildSubmitBody,
@@ -106,6 +107,16 @@ export function AddCentralDrawer({
   const emptyStored = useMemo(() => new Set<string>(), [])
   const diff = diffDraft(draftDenied, emptyStored)
   const projectDiff = diffDraft(projectDraftDenied, emptyStored)
+  // The two drafts always mean "this switch is OFF" — the WIRE shape does not (see
+  // `resolveSubmittedRules`). Computed ONCE and shared by the empty-allowlist gate and the submit
+  // body, exactly as `SharedReposPanel` does: passing the raw drafts into either of them made a
+  // wizard-created allowlist store the one repository the user had just switched OFF, and nothing
+  // else.
+  const submitted = useMemo(
+    () => resolveSubmittedRules(mode, targets, projectTargets, draftDenied, projectDraftDenied),
+    [mode, targets, projectTargets, draftDenied, projectDraftDenied],
+  )
+  const partialRepoKeys = useMemo(() => partiallyDeniedRepoKeys(submitted.projectRows), [submitted])
 
   const bareToken = useMemo(() => unpackToken(tokenInput).token, [tokenInput])
   const dupe = resolveDupeState(connections, endpoint, bareToken)
@@ -167,8 +178,7 @@ export function AddCentralDrawer({
     setRulesTouched(true)
   }
   function onToggleProjectRow(target: ProjectTarget, nextShared: boolean) {
-    const locked = target.repoKey !== '' && draftDenied.has(target.repoKey)
-    setProjectDraft(toggleProjectTarget(projectDraftDenied, target, nextShared, locked))
+    setProjectDraft(toggleProjectTarget(projectDraftDenied, target, nextShared, isProjectLocked(target, draftDenied)))
     setRulesTouched(true)
   }
   function onShareAllProjects() {
@@ -187,15 +197,14 @@ export function AddCentralDrawer({
 
   async function handleConnect() {
     if (!canConnect(step, test, dupe) || !test?.ok) return
-    if (isEmptyAllowlist(mode, draftDenied, projectDraftDenied)) {
+    if (isEmptyAllowlist(mode, submitted.repoKeys, submitted.projectPaths)) {
       setShowEmptyAllowlistWarning(true)
       return
     }
     setConnecting(true)
     setConnectErr(null)
     const body = buildSubmitBody({
-      endpoint, token: bareToken, org: test.org ?? '', label,
-      mode, repoKeys: draftDenied, projectPaths: projectDraftDenied,
+      endpoint, token: bareToken, org: test.org ?? '', label, mode, submitted,
     })
     try {
       const res = await fetch('/api/team/connections', {
@@ -350,6 +359,8 @@ export function AddCentralDrawer({
               onShowAllMobile={() => setShowAllMobile(true)}
               isMobile={isMobile}
               lang={lang}
+              mode={mode}
+              partialRepoKeys={partialRepoKeys}
               impactSessions={0}
               impactCost={0}
               onToggleRow={onToggleRow}

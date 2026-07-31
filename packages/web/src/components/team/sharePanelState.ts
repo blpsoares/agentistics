@@ -84,6 +84,31 @@ export interface EffectiveProjectRow {
 }
 
 /**
+ * The repo-tab ROW a project belongs to. `ProjectTarget.repoKey` is `''` for a project with no
+ * known remote, but that project's sessions are not in a nameless bucket on the server: with no
+ * remote of their own and none learnable from their path, `share-rules.ts`'s `repoKeyOf` resolves
+ * them to the `NO_REPO_KEY` sentinel — the repo tab's own "No repository" row. So the two tabs
+ * only agree once that mapping is applied, and it must be applied in EVERY place that relates the
+ * two dimensions (the lock below, and `partiallyDeniedRepoKeys`), or the disagreement reappears
+ * with a different shape: blocking "No repository" left every remote-less project rendering ON,
+ * and "Block all" in the Projects tab left `none:` on an allowlist, re-sharing exactly those
+ * sessions through the repo dimension.
+ */
+export function projectRepoBucket(target: Pick<ProjectTarget, 'repoKey'>): string {
+  return target.repoKey || NO_REPO_KEY
+}
+
+/** Whether a project row is locked by the repo tab's draft. The ONE definition — the panel and the
+ *  add-central wizard both call it for their row toggles, so a project can never be togglable in
+ *  one surface and locked in the other. */
+export function isProjectLocked(
+  target: Pick<ProjectTarget, 'repoKey'>,
+  draftRepoKeys: ReadonlySet<string>,
+): boolean {
+  return draftRepoKeys.has(projectRepoBucket(target))
+}
+
+/**
  * `draftRepoKeys` is the SAME Set the repo tab's own draft holds — passing it through here (rather
  * than re-deriving it from a stored snapshot) is what makes a toggle in one tab show up as a lock
  * in the other on the very next render, with no extra plumbing.
@@ -94,10 +119,20 @@ export function buildProjectRows(
   draftRepoKeys: ReadonlySet<string>,
 ): EffectiveProjectRow[] {
   return targets.map(target => {
-    const locked = target.repoKey !== '' && draftRepoKeys.has(target.repoKey)
+    const locked = isProjectLocked(target, draftRepoKeys)
     const denied = locked || draftProjectPaths.has(target.key)
     return { target, denied, locked }
   })
+}
+
+/** Every repo-tab row that has at least one DENIED project row under it — the repositories that
+ *  are, at most, PARTLY shared. Includes a fully-denied repository (all of its project rows are
+ *  locked, hence denied); callers that render the "partial" hint filter those out by their own
+ *  `denied` flag, and the submit path excludes them either way. */
+export function partiallyDeniedRepoKeys(projectRows: readonly EffectiveProjectRow[]): Set<string> {
+  const out = new Set<string>()
+  for (const row of projectRows) if (row.denied) out.add(projectRepoBucket(row.target))
+  return out
 }
 
 // --- draft -> submitted sources (mode-aware conversion) -----------------------------------------
@@ -128,9 +163,22 @@ export function resolveSubmittedRepoKeys(
   mode: ShareMode,
   targets: readonly ShareTarget[],
   draftDenied: ReadonlySet<string>,
+  projectRows: readonly EffectiveProjectRow[],
 ): Set<string> {
   if (mode === 'denylist') return new Set(draftDenied)
-  return new Set(targets.filter(t => !draftDenied.has(t.key)).map(t => t.key))
+  // The server evaluates the submitted sources with an OR (`matchesAnySource`). Under a DENYLIST
+  // that OR means "deny wins", which is what makes two independent per-dimension complements
+  // correct there. Under an ALLOWLIST the same OR means "share wins" — so a repository submitted
+  // as allowed re-shares every project under it, and a project the user switched OFF in the other
+  // tab is shared anyway. A repository may therefore only travel as a `repo` source when NO
+  // project under it is denied; a partly-allowed one travels as its individual `project` sources
+  // instead (which `resolveSubmittedProjectPaths` already produces).
+  //
+  // The cost is that a NEW worktree of a partly-allowed repository is not shared automatically —
+  // the correct fail-closed reading of "share only…", and what the Repositories tab states on the
+  // row (`COPY.repoPartialAllowSub`) so the two tabs never disagree in the other direction.
+  const partial = partiallyDeniedRepoKeys(projectRows)
+  return new Set(targets.filter(t => !draftDenied.has(t.key) && !partial.has(t.key)).map(t => t.key))
 }
 
 export function resolveSubmittedProjectPaths(
@@ -140,6 +188,42 @@ export function resolveSubmittedProjectPaths(
 ): Set<string> {
   if (mode === 'denylist') return new Set(projectDraftDenied)
   return new Set(projectRows.filter(r => !r.denied).map(r => r.target.key))
+}
+
+export interface SubmittedRules {
+  /** The project rows the two tabs render — also the input the repo conversion needs, so it is
+   *  returned rather than rebuilt by the caller (rebuilding it from different drafts is precisely
+   *  how the two dimensions drifted apart). */
+  projectRows: EffectiveProjectRow[]
+  repoKeys: Set<string>
+  projectPaths: Set<string>
+}
+
+/**
+ * The WHOLE draft → wire conversion, in one place: the two mode-invariant "switch is OFF" drafts
+ * become the `sources` this mode actually stores. Every surface that submits rules — the
+ * per-connection panel AND the add-central wizard — must go through this, and so must every test
+ * that claims something about what a central will receive.
+ *
+ * This exists because the two halves were composed by hand at each call site: the panel composed
+ * them correctly for one dimension and not across the two, and the wizard submitted the raw draft
+ * unconverted, which under `allowlist` sent the central the one repository the user had HIDDEN and
+ * nothing else. Both were invisible to per-function tests, because each function was right on its
+ * own.
+ */
+export function resolveSubmittedRules(
+  mode: ShareMode,
+  targets: readonly ShareTarget[],
+  projectTargets: readonly ProjectTarget[],
+  repoDraftDenied: ReadonlySet<string>,
+  projectDraftDenied: ReadonlySet<string>,
+): SubmittedRules {
+  const projectRows = buildProjectRows(projectTargets, projectDraftDenied, repoDraftDenied)
+  return {
+    projectRows,
+    repoKeys: resolveSubmittedRepoKeys(mode, targets, repoDraftDenied, projectRows),
+    projectPaths: resolveSubmittedProjectPaths(mode, projectRows, projectDraftDenied),
+  }
 }
 
 /** A no-op on a locked row — its switch renders disabled, but a stray call must not silently
