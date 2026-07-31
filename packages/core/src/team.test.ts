@@ -416,6 +416,119 @@ test('migrateTeamConfig: a NON-empty connections array wins over a stale flat mi
   expect(out.endpoint).toBe('http://real:48080')
 })
 
+// ---------------------------------------------------------------------------
+// Plan 4 Task 2 — typed sources + shareMode. `deniedRepos` becomes a read-only migration
+// source; `sources`/`shareMode` are the shape every version from here on writes.
+// ---------------------------------------------------------------------------
+
+test('migrateTeamConfig: a legacy deniedRepos list becomes typed repo sources under denylist mode', () => {
+  const out = migrateTeamConfig({
+    mode: 'member',
+    connections: [{
+      id: 'c_aaaaaaaaaaaa', endpoint: 'http://c:48080', org: 'default', user: 'u', token: 't',
+      deniedRepos: ['github.com/o/one', 'github.com/o/two'],
+    }],
+  })
+  expect(out.connections).toHaveLength(1)
+  const conn = out.connections[0]!
+  expect(conn.shareMode).toBe('denylist')
+  expect(conn.sources).toEqual([
+    { type: 'repo', value: 'github.com/o/one' },
+    { type: 'repo', value: 'github.com/o/two' },
+  ])
+  // The legacy field is kept, read-only, so an older binary or a container sharing
+  // ~/.agentistics keeps working against the same config.
+  expect(conn.deniedRepos).toEqual(['github.com/o/one', 'github.com/o/two'])
+})
+
+test('migrateTeamConfig: NO_REPO_KEY in deniedRepos becomes the typed `none` source', () => {
+  const out = migrateTeamConfig({
+    mode: 'member',
+    connections: [{
+      id: 'c_aaaaaaaaaaaa', endpoint: 'http://c:48080', org: 'default', user: 'u', token: 't',
+      deniedRepos: [NO_REPO_KEY],
+    }],
+  })
+  expect(out.connections[0]!.sources).toEqual([{ type: 'none', value: '' }])
+  expect(out.connections[0]!.shareMode).toBe('denylist')
+})
+
+test('migrateTeamConfig: a legacy deniedRepos=[] migrates to sources=[] under denylist (share everything)', () => {
+  const out = migrateTeamConfig({
+    mode: 'member',
+    connections: [{ id: 'c_aaaaaaaaaaaa', endpoint: 'http://c:48080', org: 'default', user: 'u', token: 't', deniedRepos: [] }],
+  })
+  expect(out.connections[0]!.sources).toEqual([])
+  expect(out.connections[0]!.shareMode).toBe('denylist')
+})
+
+test('migrateTeamConfig: idempotent — 100 calls over the same legacy input produce identical output', () => {
+  const raw = {
+    mode: 'member',
+    connections: [{
+      id: 'c_aaaaaaaaaaaa', endpoint: 'http://c:48080', org: 'default', user: 'u', token: 't',
+      deniedRepos: ['github.com/o/one', NO_REPO_KEY],
+    }],
+  }
+  const first = JSON.stringify(migrateTeamConfig(raw))
+  for (let i = 0; i < 100; i++) {
+    expect(JSON.stringify(migrateTeamConfig(raw))).toBe(first)
+  }
+})
+
+test('migrateTeamConfig: re-migrating an already-migrated (typed) config leaves it untouched', () => {
+  const already = {
+    mode: 'member' as const,
+    connections: [{
+      id: 'c_aaaaaaaaaaaa', endpoint: 'http://c:48080', org: 'default', user: 'u', token: 't',
+      deniedRepos: [] as string[],
+      shareMode: 'allowlist' as const,
+      sources: [{ type: 'project' as const, value: '/home/u/proj' }],
+    }],
+  }
+  const out = migrateTeamConfig(already)
+  expect(out.connections[0]!.shareMode).toBe('allowlist')
+  expect(out.connections[0]!.sources).toEqual([{ type: 'project', value: '/home/u/proj' }])
+})
+
+test('migrateTeamConfig: shareMode absent on an already-migrated entry reads as denylist, never inverted', () => {
+  const out = migrateTeamConfig({
+    mode: 'member',
+    connections: [{
+      id: 'c_aaaaaaaaaaaa', endpoint: 'http://c:48080', org: 'default', user: 'u', token: 't',
+      deniedRepos: [], sources: [{ type: 'repo', value: 'github.com/o/one' }],
+    }],
+  })
+  expect(out.connections[0]!.shareMode).toBe('denylist')
+  expect(out.connections[0]!.sources).toEqual([{ type: 'repo', value: 'github.com/o/one' }])
+})
+
+test('migrateTeamConfig: a legacy flat member config (no connections array at all) still defaults sources/mode', () => {
+  const out = migrateTeamConfig({
+    mode: 'member', endpoint: 'https://central.example:48080/', org: 'acme',
+    user: 'lucas', token: 'abc123',
+  })
+  expect(out.connections).toHaveLength(1)
+  expect(out.connections[0]!.shareMode).toBe('denylist')
+  expect(out.connections[0]!.sources).toEqual([])
+})
+
+test('normalizeTeamConfig: the legacy flat mirror keeps working when sources/shareMode are present', () => {
+  const withOne = normalizeTeamConfig({
+    mode: 'solo',
+    connections: [{
+      id: 'c_aaaaaaaaaaaa', endpoint: 'http://c:48080', org: 'acme', user: 'lucas', token: 'tok',
+      deniedRepos: [], shareMode: 'allowlist', sources: [{ type: 'repo', value: 'github.com/o/one' }],
+    }],
+  })
+  expect(withOne.endpoint).toBe('http://c:48080')
+  expect(withOne.org).toBe('acme')
+  expect(withOne.user).toBe('lucas')
+  expect(withOne.token).toBe('tok')
+  expect(withOne.connections[0]!.shareMode).toBe('allowlist')
+  expect(withOne.connections[0]!.sources).toEqual([{ type: 'repo', value: 'github.com/o/one' }])
+})
+
 test('legacyConnectionId needs no node:crypto — deterministic, well-formed and input-sensitive', () => {
   expect(legacyConnectionId('http://c:48080', 't')).toMatch(/^c_[a-f0-9]{12}$/)
   expect(legacyConnectionId('http://c:48080', 't')).toBe(legacyConnectionId('http://c:48080', 't'))

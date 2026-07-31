@@ -16,6 +16,16 @@ import { HARNESS_ORDER } from './types'
  *  "block unattributed work" into "block nothing": a fail-open privacy bug. */
 export const NO_REPO_KEY = '__no_repo__'
 
+/** What a rule can be keyed on: a repository (canonical remote key), a project (its path), or
+ *  the `none` bucket — sessions that resolve to no repository at all. */
+export type ShareSourceType = 'repo' | 'project' | 'none'
+
+export interface ShareSource {
+  type: ShareSourceType
+  /** Canonical repo key, or the project path, or '' for the `none` bucket. */
+  value: string
+}
+
 export interface TeamConnection {
   /** Local, opaque, filesystem-safe handle. NEVER sent to a central. */
   id: string
@@ -28,8 +38,16 @@ export interface TeamConnection {
   user: string
   /** Bearer secret (never logged). May be '' against an open/legacy central. */
   token: string
-  /** DENYLIST of canonical repo keys, plus NO_REPO_KEY. [] = share everything. */
+  /** LEGACY. DENYLIST of canonical repo keys, plus NO_REPO_KEY. [] = share everything. Still
+   *  read by the migration below; never written by this version onward — write `sources` +
+   *  `shareMode` instead. */
   deniedRepos: string[]
+  /** 'denylist' (share everything except `sources`) | 'allowlist' (share only `sources`).
+   *  ABSENT reads as 'denylist' — every config that predates this field already behaves as a
+   *  denylist, and defaulting to anything else would silently invert live privacy rules. */
+  shareMode?: 'denylist' | 'allowlist'
+  /** The typed rule list. Replaces `deniedRepos`, which is kept as a read migration source. */
+  sources?: ShareSource[]
   /** Member-side mirror of the central's cadence; the central still owns the floor. */
   pushIntervalSec?: number
   /** Optional nickname for the card; falls back to the endpoint host. */
@@ -140,7 +158,11 @@ export function normalizeEndpointKey(url: string): string {
 /** Force `mode` from connections.length, stamp the schema, and rebuild the legacy mirror.
  *  Pure — returns a new object with a new array. */
 export function normalizeTeamConfig(cfg: TeamConfig): TeamConfig {
-  const connections = cfg.connections.map(c => ({ ...c, deniedRepos: [...c.deniedRepos] }))
+  const connections = cfg.connections.map(c => ({
+    ...c,
+    deniedRepos: [...c.deniedRepos],
+    ...(c.sources ? { sources: c.sources.map(s => ({ ...s })) } : {}),
+  }))
   const first = connections[0]
   return {
     schema: 2,
@@ -152,6 +174,29 @@ export function normalizeTeamConfig(cfg: TeamConfig): TeamConfig {
     token: first?.token ?? '',
     ...(first?.pushIntervalSec !== undefined ? { pushIntervalSec: first.pushIntervalSec } : {}),
   }
+}
+
+const SHARE_SOURCE_TYPES = new Set<ShareSourceType>(['repo', 'project', 'none'])
+
+/** `shareMode` absent (or junk) reads as `'denylist'` — every config that predates this field is
+ *  already a denylist, and defaulting to anything else would silently invert live privacy rules. */
+function migrateShareMode(entry: Partial<TeamConnection> & Record<string, unknown>): 'denylist' | 'allowlist' {
+  return entry.shareMode === 'allowlist' ? 'allowlist' : 'denylist'
+}
+
+/** Derive the typed `sources` list. An entry that already carries `sources` is trusted as-is
+ *  (sanitized); one that doesn't is migrated from the legacy `deniedRepos` denylist, mapping
+ *  `NO_REPO_KEY` to the typed `none` bucket. Pure. */
+function migrateSources(entry: Partial<TeamConnection> & Record<string, unknown>, deniedRepos: string[]): ShareSource[] {
+  if (Array.isArray(entry.sources)) {
+    return (entry.sources as unknown[])
+      .filter((s): s is ShareSource =>
+        !!s && typeof s === 'object' &&
+        SHARE_SOURCE_TYPES.has((s as ShareSource).type) &&
+        typeof (s as ShareSource).value === 'string')
+      .map(s => ({ type: s.type, value: s.value }))
+  }
+  return deniedRepos.map(v => v === NO_REPO_KEY ? { type: 'none' as const, value: '' } : { type: 'repo' as const, value: v })
 }
 
 /**
@@ -178,13 +223,16 @@ export function migrateTeamConfig(raw: unknown): TeamConfig {
       while (seenId.has(id)) id = connectionId()
       seenId.add(id)
       seenEndpoint.add(endpoint)
+      const deniedRepos = Array.isArray(entry.deniedRepos) ? entry.deniedRepos.filter(x => typeof x === 'string') : []
       connections.push({
         id,
         endpoint,
         org: typeof entry.org === 'string' && entry.org ? entry.org : 'default',
         user: typeof entry.user === 'string' ? entry.user : '',
         token: typeof entry.token === 'string' ? entry.token : '',
-        deniedRepos: Array.isArray(entry.deniedRepos) ? entry.deniedRepos.filter(x => typeof x === 'string') : [],
+        deniedRepos,
+        shareMode: migrateShareMode(entry),
+        sources: migrateSources(entry, deniedRepos),
         ...(typeof entry.pushIntervalSec === 'number' ? { pushIntervalSec: entry.pushIntervalSec } : {}),
         ...(typeof entry.label === 'string' ? { label: entry.label } : {}),
         ...(typeof entry.addedAt === 'string' ? { addedAt: entry.addedAt } : {}),
@@ -220,6 +268,8 @@ export function migrateTeamConfig(raw: unknown): TeamConfig {
         user: typeof r.user === 'string' ? r.user : '',
         token,
         deniedRepos: [],
+        shareMode: 'denylist',
+        sources: [],
         ...(typeof r.pushIntervalSec === 'number' ? { pushIntervalSec: r.pushIntervalSec } : {}),
       }],
     })
