@@ -1465,8 +1465,10 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     if (url.pathname.startsWith('/api/team/connections/') && req.method === 'PATCH') {
       const id = url.pathname.slice('/api/team/connections/'.length)
       const { handlePatchConnection } = await import('./team-connections')
+      // handlePatchConnection notifies internally (its own `deps.notify`), and only when the
+      // write actually changed something — a blind trigger here on every 200 would also wake
+      // dashboards for a no-op PATCH (e.g. re-sending the same label).
       const res = await handlePatchConnection(req, id)
-      if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })
