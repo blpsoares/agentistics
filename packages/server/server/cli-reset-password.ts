@@ -17,6 +17,7 @@
 import { randomBytes } from 'node:crypto'
 import { TEAM_CENTRAL } from './config'
 import { hashPassword } from './passwords'
+import { closeMongo } from './mongo'
 
 /** A readable, high-entropy temporary password (~95 bits) — it is typed once, then changed. */
 function tempPassword(): string {
@@ -131,4 +132,8 @@ export async function runResetPassword(args: string[]): Promise<void> {
     (clearedMfa ? '\n  Two-factor was DISABLED — enrol again after signing in.\n' : '') +
     '========================================================\n\n',
   )
+  // Without this the process never exits: the work is done and the banner written, but an open
+  // driver keeps the loop alive, and a killed process discards its block-buffered stdout — so the
+  // command looks like it printed nothing at all.
+  await closeMongo()
 }

@@ -40,6 +40,23 @@ FROM oven/bun:1-slim AS runner
 
 WORKDIR /app
 
+# The unprivileged user, created FIRST so this layer caches forever.
+#
+# It used to be the LAST instruction, and it did `chown -R … /data /app`. Both halves were
+# expensive in a way that does not show up until you measure it: the layer sat after
+# `COPY --from=builder`, so every source change re-ran it, and `chown -R` over /app walks
+# node_modules — ~90 seconds of build time. Worse, a layer records whole files, not metadata
+# diffs: rewriting the ownership of every file made this single layer a 370MB duplicate of the
+# image below it (1.11GB total for a ~700MB image).
+#
+# Ownership is now set where it belongs — as the files are copied (`COPY --chown`), which costs
+# nothing — and /app itself stays root-owned. The app reads its own code and writes only /data,
+# so not owning its code is the property we want anyway.
+RUN groupadd --system --gid 10001 agentistics \
+ && useradd  --system --uid 10001 --gid agentistics --home-dir /data --shell /usr/sbin/nologin agentistics \
+ && mkdir -p /data/.agentistics \
+ && chown -R agentistics:agentistics /data
+
 # The TLS trust store, installed EXPLICITLY rather than inherited from the base image.
 #
 # A central talks to Mongo over TLS (Atlas is `mongodb+srv://…`, certificate-verified). The base
@@ -73,21 +90,16 @@ COPY packages/tui/stubs               ./packages/tui/stubs
 # and git hooks are irrelevant in the runtime image).
 RUN bun install --frozen-lockfile --production --ignore-scripts
 
-# Copy built source + generated embed
-COPY --from=builder /app/packages ./packages
+# Copy built source + generated embed. --chown does in the copy what a later `chown -R` would
+# have done in a whole extra layer.
+COPY --from=builder --chown=agentistics:agentistics /app/packages ./packages
 
 # agentistics runs on port 47291; expose it
 EXPOSE 47291
 
-# Run unprivileged. The app only ever reads its own code and writes /data, so root buys
-# nothing and costs everything if a process is ever compromised. HOME=/data because the
-# server resolves its writable data dir (~/.agentistics) from it.
-# groupadd/useradd (passwd), not addgroup/adduser: the bun runtime image is
-# debian-slim, which ships passwd but NOT the adduser package.
-RUN groupadd --system --gid 10001 agentistics \
- && useradd  --system --uid 10001 --gid agentistics --home-dir /data --shell /usr/sbin/nologin agentistics \
- && mkdir -p /data/.agentistics \
- && chown -R agentistics:agentistics /data /app
+# Run unprivileged: root buys nothing here and costs everything if a process is ever
+# compromised. HOME=/data because the server resolves its writable data dir (~/.agentistics)
+# from it. (The user itself is created at the top of this stage — see the note there.)
 USER agentistics
 
 # SERVE_STATIC=1: server.ts will serve the embedded frontend on the same port.

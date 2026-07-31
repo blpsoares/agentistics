@@ -1,7 +1,11 @@
+# `node_modules` alone matches the ROOT entry only — Docker patterns are not recursive — so
+# every workspace's node_modules was still being sent (packages/web's is 20MB).
 node_modules
+**/node_modules
 .git
 .claude
 dist
+**/dist
 **/embedded-dist.generated.ts
 docs/superpowers
 *.log

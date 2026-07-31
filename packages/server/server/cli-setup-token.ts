@@ -11,6 +11,7 @@
  * `agentop central setup-token` exec it there), not on the host.
  */
 import { generateBootstrapToken } from './bootstrap'
+import { closeMongo } from './mongo'
 import { TEAM_CENTRAL } from './config'
 
 /**
@@ -65,4 +66,5 @@ export async function runSetupToken(): Promise<void> {
     '  Keep it secret. It is shown only once.\n' +
     '========================================================\n\n',
   )
+  await closeMongo()
 }
