@@ -27,11 +27,18 @@ const DOMAIN = 'stepup-grant'
  * on purpose — the point is to gate the damage, not to make the dashboard tiresome.
  *
  * PATCH on an account is included because that is where role and team memberships are edited:
- * promoting an account is as dangerous as deleting one.
+ * promoting an account is as dangerous as deleting one. POST on an account is included because
+ * an account IS a credential — a quiet extra owner is the escalation this exists to bound.
+ *
+ * CREATING a team is deliberately NOT here. It destroys nothing and grants nobody anything: an
+ * empty team is a label until an account is put in it, and putting one in goes through the
+ * account PATCH above, which is gated. Asking for the password to name a team is the kind of
+ * prompt that teaches people to type their password without reading why — which makes every
+ * OTHER prompt weaker. Gate the damage, not the paperwork.
  */
 const PROTECTED: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ['/api/iam/accounts', ['POST', 'PATCH', 'DELETE']],
-  ['/api/iam/teams', ['POST', 'DELETE']],
+  ['/api/iam/teams', ['DELETE']],
   ['/api/team/tokens', ['POST', 'DELETE']],
   ['/api/team/tokens/rotate', ['POST']],
   ['/api/team/repos', ['POST', 'DELETE']],

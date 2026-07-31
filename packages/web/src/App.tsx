@@ -1123,8 +1123,6 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
         {/* Self-service change-password modal */}
         {pwOpen && <ChangePasswordSelf lang={lang} onClose={() => setPwOpen(false)} />}
       {mfaOpen && <MfaSetup lang={lang} onClose={() => setMfaOpen(false)} />}
-      {/* Mounted once: stepUpFetch opens this on demand when the server demands re-auth. */}
-      <StepUpPrompt lang={lang} />
 
         {/* Thin divider between account and actions */}
         {principal && <div style={{ height: 1, background: 'var(--border)', marginBottom: 10 }} />}
@@ -2795,6 +2793,12 @@ export default function AppLayout() {
 
       {/* Global notification toasts (auto-dismiss with an exit animation; history in the bell) */}
       <NotificationToasts lang={lang} />
+
+      {/* Mounted once, at the ROOT: stepUpFetch opens this whenever the server demands re-auth,
+          and every page can trigger that. It used to live inside SideNav — desktop-only chrome —
+          so on a phone the prompter was never registered at all and a protected action just
+          failed with the 403 nobody could answer. */}
+      <StepUpPrompt lang={lang} />
     </div>
   )
 }

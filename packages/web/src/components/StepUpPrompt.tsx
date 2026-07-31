@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ShieldAlert, AlertCircle } from 'lucide-react'
 import type { Lang } from '@agentistics/core'
 import { setStepUpPrompter } from '../lib/stepup'
@@ -55,7 +56,10 @@ export function StepUpPrompt({ lang }: { lang: Lang }) {
     finish(useCode ? { code: value.trim() } : { password: value })
   }
 
-  return (
+  // Portalled to <body>: a z-index only competes INSIDE its stacking context, so rendering in
+  // place left this at the mercy of whatever positioned ancestor happened to enclose it. The
+  // portal is what makes the z-index below mean what it says.
+  return createPortal(
     <div onClick={() => finish(null)} style={overlay}>
       <form onClick={e => e.stopPropagation()} onSubmit={submit} style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
@@ -100,13 +104,23 @@ export function StepUpPrompt({ lang }: { lang: Lang }) {
           </button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
+/**
+ * Above EVERY surface that can ask for it. This prompt is always raised BY something already on
+ * screen — a settings drawer (2000), a modal (9999/10000), a popover (99999) — so any value that
+ * merely looks large is a bug waiting for the one caller that outranks it. It was 1100, i.e.
+ * behind the very drawer whose "create team" button opened it: the action appeared to hang while
+ * the password box sat underneath, invisible.
+ */
+const Z_STEPUP = 2_000_000
+
 const overlay: React.CSSProperties = {
   position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex',
-  alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: 16,
+  alignItems: 'center', justifyContent: 'center', zIndex: Z_STEPUP, padding: 16,
 }
 const card: React.CSSProperties = {
   width: '100%', maxWidth: 360, background: 'var(--bg-card)', border: '1px solid var(--border)',

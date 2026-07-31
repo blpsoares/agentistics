@@ -29,6 +29,13 @@ describe('requiresStepUp', () => {
     expect(requiresStepUp('PATCH', '/api/iam/accounts')).toBe(true)
   })
 
+  it('does not demand it for CREATING a team — nothing is destroyed and nobody is granted anything', () => {
+    // An empty team is a label; membership is an account edit, which IS gated (below). A prompt
+    // here trains people to type their password on sight, devaluing the prompts that matter.
+    expect(requiresStepUp('POST', '/api/iam/teams')).toBe(false)
+    expect(requiresStepUp('PATCH', '/api/iam/accounts')).toBe(true)
+  })
+
   it('does not demand it for reads', () => {
     expect(requiresStepUp('GET', '/api/iam/accounts')).toBe(false)
     expect(requiresStepUp('GET', '/api/team/tokens')).toBe(false)
