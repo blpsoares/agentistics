@@ -46,6 +46,19 @@ is missing).
 > their own account, invited by the owner. `up` prints the token for you; otherwise read it with
 > `docker compose -p team-mode logs app | grep -A6 "OWNER SETUP"`.
 
+> **Forgot the owner password?** There is no e-mail-based reset — a self-hosted central has no
+> mail server, and a reset link it cannot deliver would be worse than none. Recovery is at the
+> host, where whoever runs it already holds the database:
+>
+> ```bash
+> ./central.sh reset-password --email you@example.com      # run without --email to list accounts
+> ./central.sh reset-password --email you@example.com --clear-mfa   # also lost the 2FA device
+> ```
+>
+> It prints a one-time password, forces a change at the next sign-in, and signs out every
+> existing session for that account.
+
+
 > Name it `central.env`, **not** `.env`. A plain `.env` is auto-loaded by `bun run dev`
 > (a developer's local/member instance) and would make that instance wrongly think it is
 > the central. Using `central.env` keeps the two roles cleanly separated.
@@ -105,6 +118,8 @@ Navigate to `http://<your-host>:<APP_PORT>` (default: `http://localhost:48080`).
 | `./central.sh status` | Show container + health status |
 | `./central.sh down` | Stop and remove the containers — **keeps** the Mongo data volume |
 | `./central.sh pull` | Rebuild from a fresh base image (run `git pull` first) |
+| `./central.sh setup-token` | Reissue the one-time OWNER setup token (refused once an owner exists) |
+| `./central.sh reset-password --email <address>` | Reset an account's password — the recovery path for a locked-out owner. `--clear-mfa` also drops its second factor |
 | `./central.sh help` | Print the usage summary |
 
 Override the defaults with env vars: `PROJECT=... ENV_FILE=... ./central.sh up`.
@@ -135,6 +150,8 @@ The actions map one-to-one:
 | `./central.sh status` | `agentop central status` | Show container + health status |
 | `./central.sh down` | `agentop central down` | Stop + remove containers (keeps the data volume) |
 | `./central.sh pull` | `agentop central pull` | Pull a fresh image and recreate |
+| `./central.sh setup-token` | `agentop central setup-token` | Reissue the one-time owner setup token |
+| `./central.sh reset-password …` | `agentop central reset-password …` | Reset an account's password from the host |
 
 ```bash
 agentop central up        # first time offers the interactive init, then deploys

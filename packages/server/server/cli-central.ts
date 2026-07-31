@@ -29,7 +29,7 @@ import { input, confirm, select } from './cli-ui'
 import { createChunkSink, pumpStream } from './cli-stream'
 
 /** The central.sh subcommands this handler forwards / implements. */
-export const CENTRAL_ACTIONS = ['up', 'init', 'down', 'logs', 'status', 'restart', 'pull', 'setup-token'] as const
+export const CENTRAL_ACTIONS = ['up', 'init', 'down', 'logs', 'status', 'restart', 'pull', 'setup-token', 'reset-password'] as const
 export type CentralAction = (typeof CENTRAL_ACTIONS)[number]
 
 export function isCentralAction(value: string): value is CentralAction {
@@ -146,7 +146,7 @@ export async function runCentral(
 
   const script = findCentralScript()
   if (script) return runCentralRepo(script, action, extraArgs, opts)
-  return runCentralStandalone(action, opts)
+  return runCentralStandalone(action, extraArgs, opts)
 }
 
 // ---------------------------------------------------------------------------
@@ -485,6 +485,7 @@ async function loadEnvFile(envFile: string): Promise<Record<string, string>> {
 async function runNativeCentral(
   envFile: string,
   action: CentralAction,
+  extraArgs: string[] = [],
   opts: CentralRunOptions = {},
 ): Promise<number> {
   const env = await loadEnvFile(envFile)
@@ -505,9 +506,9 @@ async function runNativeCentral(
 
   // A native central has no container to exec into, but this process CAN reach the external DB
   // once it holds central.env — so run the token reissue right here.
-  if (action === 'setup-token') {
+  if (action === 'setup-token' || action === 'reset-password') {
     try {
-      const proc = Bun.spawn([process.execPath, 'setup-token'], {
+      const proc = Bun.spawn([process.execPath, action, ...extraArgs], {
         env: { ...process.env, ...env, AGENTISTICS_TEAM_CENTRAL: '1' } as Record<string, string>,
         stdin: 'inherit', stdout: 'inherit', stderr: 'inherit',
       })
@@ -549,7 +550,7 @@ async function runNativeCentral(
  * `docker compose`; with an external DB (Atlas/remote) it runs the binary NATIVELY (no Docker).
  * Mirrors central.sh's commands.
  */
-async function runCentralStandalone(action: CentralAction, opts: CentralRunOptions = {}): Promise<number> {
+async function runCentralStandalone(action: CentralAction, extraArgs: string[] = [], opts: CentralRunOptions = {}): Promise<number> {
   const envFile = join(STANDALONE_DIR, 'central.env')
   const composeFile = join(STANDALONE_DIR, 'docker-compose.yml')
 
@@ -588,7 +589,7 @@ async function runCentralStandalone(action: CentralAction, opts: CentralRunOptio
   // External DB → run natively (no Docker); bundled → Docker compose.
   const mongoUrl = (await readEnvValue(envFile, 'MONGO_URL')) ?? ''
   if (!isBundledMongo(mongoUrl)) {
-    return runNativeCentral(envFile, action, opts)
+    return runNativeCentral(envFile, action, extraArgs, opts)
   }
 
   try {
@@ -624,6 +625,12 @@ async function runCentralStandalone(action: CentralAction, opts: CentralRunOptio
     case 'setup-token':
       // Inside the container: that is where MONGO_URL resolves.
       return runCompose(envFile, composeFile, ['exec', '-T', 'app', 'bun', 'run', 'packages/server/bin/cli.ts', 'setup-token'], opts)
+    case 'reset-password':
+      return runCompose(
+        envFile, composeFile,
+        ['exec', '-T', 'app', 'bun', 'run', 'packages/server/bin/cli.ts', 'reset-password', ...extraArgs],
+        opts,
+      )
     case 'pull': {
       const code = await runCompose(envFile, composeFile, ['pull'], opts)
       if (code === 0) return runCompose(envFile, composeFile, ['up', '-d', '--force-recreate'], opts)

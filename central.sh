@@ -21,6 +21,9 @@
 #   setup-token
 #             Reissue the one-time OWNER setup token, for when the boot that printed it
 #             has scrolled away or its log rotated. Refused once an owner exists.
+#   reset-password --email <address> [--password <new>] [--clear-mfa]
+#             Reset an account's password from the host. This is the ONLY way back in for a
+#             locked-out last owner. Run without --email to list the accounts.
 #   down      Stop and remove the containers (KEEPS the data volume)
 #   pull      Rebuild from a fresh base image (git pull first, then this)
 #   help      Show this message
@@ -329,6 +332,11 @@ case "$cmd" in
   setup-token)
     # Same reason as doctor: the database is only reachable from inside the compose network.
     compose exec -T app bun run packages/server/bin/cli.ts setup-token
+    ;;
+  reset-password)
+    # The recovery path when the last owner is locked out — there is no e-mail-based reset,
+    # and this central has no mail server to send one through. Same in-container reason.
+    compose exec -T app bun run packages/server/bin/cli.ts reset-password "${@:2}"
     ;;
   down)
     # Note: no `-v` — the Mongo data volume is preserved. Add it manually only

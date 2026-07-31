@@ -13,7 +13,7 @@ import { getMongoDb } from './mongo'
 
 export type AuditAction =
   | 'login.success' | 'login.failure' | 'login.mfa_challenge' | 'login.mfa_failure'
-  | 'logout' | 'password.change'
+  | 'logout' | 'password.change' | 'password.reset_cli'
   | 'mfa.enable' | 'mfa.disable' | 'mfa.recovery_used'
   | 'account.create' | 'account.update' | 'account.delete'
   | 'team.create' | 'team.update' | 'team.delete'

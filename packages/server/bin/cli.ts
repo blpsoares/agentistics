@@ -68,6 +68,10 @@ Commands:
                 strict public bar before opening a tunnel
   setup-token   Reissue the one-time OWNER setup token (central only; run it where the
                 central runs: ./central.sh setup-token, or agentop central setup-token)
+  reset-password
+                Reset an account's password from the host (central only) — the recovery
+                path when the last owner is locked out. --email <address>, optional
+                --password <new> and --clear-mfa
 
 Options:
   --help, -h       Show this help message
@@ -108,12 +112,14 @@ Setup:
     The control center's Setup tab asks the same questions.
 
 Central:
-  agentop central <up|init|down|logs|status|restart|pull|setup-token>
+  agentop central <up|init|down|logs|status|restart|pull|setup-token|reset-password>
     Manage the team central via Docker. In a repo checkout it uses central.sh; from the
     standalone binary it pulls the published image (ghcr.io/blpsoares/agentistics) and
     materializes a compose in ~/.agentistics/central — no clone required.
     setup-token reissues the one-time OWNER setup token (for when the boot that printed it
     scrolled away), running where the database is reachable. Refused once an owner exists.
+    reset-password --email <address> resets an account's password from the host — there is no
+    e-mail-based reset, so this is how a locked-out last owner gets back in.
 
 Member (a machine may belong to several centrals at once):
   agentop member connect --endpoint <url> --token <token> [--org <org>] [--label <name>]
@@ -672,6 +678,9 @@ if (command === 'server' || command === 'start' || !command) {
 } else if (command === 'setup-token') {
   const { runSetupToken } = await import('../server/cli-setup-token.ts')
   await runSetupToken()
+} else if (command === 'reset-password') {
+  const { runResetPassword } = await import('../server/cli-reset-password.ts')
+  await runResetPassword(args)
 } else {
   console.error(`Unknown command: ${command}\n`)
   console.log(HELP)
