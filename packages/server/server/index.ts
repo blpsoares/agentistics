@@ -1658,12 +1658,10 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         const { randomBytes } = await import('node:crypto')
         const { generateEnvFile } = await import('./deploy')
 
-        const password = randomBytes(24).toString('hex')
         const sessionSecret = randomBytes(32).toString('hex')
         const mongoUrl = 'mongodb://mongo:27017/?replicaSet=rs0'
 
         const env = generateEnvFile({
-          password,
           sessionSecret,
           mongoUrl,
           mongoDb: 'agentistics',
@@ -1676,7 +1674,6 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         return new Response(JSON.stringify({
           env,
           command: 'docker compose --env-file central.env up -d',
-          password,
           sessionSecret,
         }), {
           status: 200,

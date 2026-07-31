@@ -20,9 +20,12 @@ describe('buildCentralEnv', () => {
     expect(env.BIND_IP).toBe('0.0.0.0')
     expect(env.AGENTISTICS_TEAM_ORG).toBe('default')
     expect(env.AGENTISTICS_TEAM_CENTRAL).toBe('1')
-    // hex(24) → 48 hex chars, hex(32) → 64 hex chars.
-    expect(env.AGENTISTICS_TEAM_PASSWORD).toMatch(/^[0-9a-f]{48}$/)
+    // hex(32) → 64 hex chars.
     expect(env.AGENTISTICS_TEAM_SESSION_SECRET).toMatch(/^[0-9a-f]{64}$/)
+    // No shared dashboard password: a central authenticates ACCOUNTS, and the owner account is
+    // created in the browser with the one-time setup token. Writing one here is what made the
+    // setup wizard ask for a "team password" that no longer gates anything.
+    expect(env.AGENTISTICS_TEAM_PASSWORD).toBeUndefined()
     // Ingest token defaults to empty (teams use per-member minted tokens).
     expect(env.AGENTISTICS_TEAM_INGEST_TOKEN).toBe('')
     expect(env.AGENTISTICS_CENTRAL_USER).toBe('')
@@ -34,7 +37,6 @@ describe('buildCentralEnv', () => {
     const env = parseEnv(buildCentralEnv({
       port: '9000',
       org: 'acme',
-      password: 'my-pass',
       sessionSecret: 'my-secret',
       ingestToken: 'shared-tok',
       bind: '100.64.0.5',
@@ -42,7 +44,6 @@ describe('buildCentralEnv', () => {
     expect(env.APP_PORT).toBe('9000')
     expect(env.BIND_IP).toBe('100.64.0.5')
     expect(env.AGENTISTICS_TEAM_ORG).toBe('acme')
-    expect(env.AGENTISTICS_TEAM_PASSWORD).toBe('my-pass')
     expect(env.AGENTISTICS_TEAM_SESSION_SECRET).toBe('my-secret')
     expect(env.AGENTISTICS_TEAM_INGEST_TOKEN).toBe('shared-tok')
   })
@@ -50,7 +51,6 @@ describe('buildCentralEnv', () => {
   test('two calls generate distinct secrets', () => {
     const a = parseEnv(buildCentralEnv())
     const b = parseEnv(buildCentralEnv())
-    expect(a.AGENTISTICS_TEAM_PASSWORD).not.toBe(b.AGENTISTICS_TEAM_PASSWORD)
     expect(a.AGENTISTICS_TEAM_SESSION_SECRET).not.toBe(b.AGENTISTICS_TEAM_SESSION_SECRET)
   })
 })

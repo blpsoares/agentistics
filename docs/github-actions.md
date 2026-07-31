@@ -190,6 +190,6 @@ repo's CI data).
   `Authorization: Bearer`; treat it like any secret.
 - A repo must be **registered** (allowlisted) on the central before either path is accepted — a
   valid OIDC token for an unregistered repo is rejected (403).
-- On a public central, always set a strong `AGENTISTICS_TEAM_PASSWORD` + a separate
-  `AGENTISTICS_TEAM_SESSION_SECRET`, and prefer the ingest-only pattern above so the dashboard is
-  never the exposed surface.
+- On a public central, set a strong `AGENTISTICS_TEAM_SESSION_SECRET` (the dashboard itself is
+  gated by accounts — there is no shared password to set), and prefer the ingest-only pattern
+  above so the dashboard is never the exposed surface.

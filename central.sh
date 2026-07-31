@@ -110,6 +110,41 @@ print_access_url() {
   else
     echo "  http://$bind:$port"
   fi
+  print_owner_setup_hint "$port"
+}
+
+# First boot has no owner account yet: say what the browser is about to ask for, and where the
+# one-time setup token is. Best-effort — a central that is slow or unreachable simply prints
+# nothing (curl may be absent; never let this fail `up`).
+print_owner_setup_hint() {
+  local port="$1" body="" i=0
+  command -v curl >/dev/null 2>&1 || return 0
+  while [ "$i" -lt 20 ]; do
+    body="$(curl -fsS --max-time 2 "http://localhost:$port/api/iam/status" 2>/dev/null || true)"
+    [ -n "$body" ] && break
+    i=$((i + 1))
+    sleep 1
+  done
+  case "$body" in
+    *'"needsBootstrap":true'*) ;;
+    *) return 0 ;;
+  esac
+  local token
+  # The banner prints the token alone on its line; the last one wins (a re-issued token).
+  token="$(docker compose -p "$PROJECT" logs --no-color app 2>/dev/null \
+    | grep -oE '\b[0-9a-f]{48}\b' | tail -1 || true)"
+  echo
+  echo "First boot — no owner account exists yet."
+  echo "  Open the dashboard above: it asks you to CREATE THE OWNER ACCOUNT (name, e-mail, password)"
+  echo "  plus the one-time setup token the central printed to its log."
+  echo
+  if [ -n "$token" ]; then
+    echo "  setup token: $token"
+  else
+    echo "  Read it with: docker compose -p $PROJECT logs app | grep -A6 'OWNER SETUP'"
+  fi
+  echo
+  echo "  There is no shared team password — everyone else gets their own account, invited by the owner."
 }
 
 # ── Interactive helpers ──────────────────────────────────────────────────────
@@ -160,12 +195,14 @@ init_env() {
   echo "Setting up $ENV_FILE — press Enter to accept the [default] / auto-generate."
   echo
 
-  local port org password secret ingest ts_ip extra_bind
+  local port org secret ingest ts_ip extra_bind
   # 48080 by default — a member/dev instance uses 47291, so the central takes a distinct
   # port to avoid colliding with a local agentistics on the same machine.
   port="$(ask 'Host port (APP_PORT)' '48080')"
   org="$(ask 'Org name (AGENTISTICS_TEAM_ORG)' 'default')"
-  password="$(ask_secret 'Admin password (AGENTISTICS_TEAM_PASSWORD)' 'openssl rand -hex 24')"
+  # No dashboard password is asked for or written: a central authenticates ACCOUNTS. The owner
+  # account is created in the browser on first boot, with the one-time setup token the server
+  # prints to its log. AGENTISTICS_TEAM_PASSWORD is the legacy pre-accounts gate.
   secret="$(ask_secret 'Session secret (AGENTISTICS_TEAM_SESSION_SECRET)' 'openssl rand -hex 32')"
 
   # Optional ingest token (a shared secret). Most teams leave this blank and use per-member
@@ -211,7 +248,6 @@ MONGO_DB=agentistics
 AGENTISTICS_TEAM_CENTRAL=1
 AGENTISTICS_TEAM_ORG=$org
 
-AGENTISTICS_TEAM_PASSWORD=$password
 AGENTISTICS_TEAM_SESSION_SECRET=$secret
 AGENTISTICS_TEAM_INGEST_TOKEN=$ingest
 AGENTISTICS_CENTRAL_USER=
@@ -221,7 +257,8 @@ EOF
   echo
   echo "Wrote $ENV_FILE (chmod 600)."
   echo "  Bind: ${extra_bind:-0.0.0.0}"
-  echo "  Keep the password — share it with your team to log in to the dashboard."
+  echo "  No dashboard password is set here — on first boot the browser asks you to create the"
+  echo "  OWNER account, using the one-time setup token the central prints to its log."
   echo
 }
 

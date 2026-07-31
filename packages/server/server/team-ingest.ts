@@ -133,7 +133,16 @@ export async function handleTeamLeave(req: Request): Promise<Response> {
   const legacyAuthed = TEAM_INGEST_TOKEN && bearer !== null && constantTimeEqual(bearer, TEAM_INGEST_TOKEN)
   let open = false
   if (!TEAM_PASSWORD && !TEAM_INGEST_TOKEN) {
-    try { open = !(await hasAnyTokens()) } catch { /* DB down → not open */ }
+    try {
+      // Same condition as the ingest fallback, INCLUDING the owner check: a central is "never
+      // set up" only while it has no IAM owner either. Without that clause a bootstrapped
+      // central that simply has not minted a machine token yet would accept an anonymous,
+      // self-declared {org,user} delete. (Before accounts, TEAM_PASSWORD was always generated
+      // and closed this by accident; it no longer is.)
+      const { hasAnyOwner } = await import('./accounts')
+      const [hasTokens, bootstrapped] = await Promise.all([hasAnyTokens(), hasAnyOwner()])
+      open = !hasTokens && !bootstrapped
+    } catch { /* DB down → not open */ }
   }
   if (!legacyAuthed && !open) {
     return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: JSON_HEADERS })

@@ -245,8 +245,8 @@ export function DeployCentral({ pt }: { pt: boolean }) {
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
             {pt
-              ? 'Gera um central.env com senha e segredo de sessão únicos + o comando para subir o Docker.'
-              : 'Generates a central.env with a one-time password + session secret and the command to start Docker.'}
+              ? 'Gera um central.env com um segredo de sessão único + o comando para subir o Docker. A conta de owner é criada no navegador, no primeiro acesso.'
+              : 'Generates a central.env with a one-time session secret and the command to start Docker. The owner account is created in the browser on first access.'}
           </div>
         </div>
       </div>
@@ -321,8 +321,8 @@ export function DeployCentral({ pt }: { pt: boolean }) {
             <AlertTriangle size={14} style={{ color: '#f97316', flexShrink: 0, marginTop: 1 }} />
             <div style={{ fontSize: 12, color: '#f97316', lineHeight: 1.5, fontWeight: 500 }}>
               {pt
-                ? 'Este central.env contém uma senha e um segredo de sessão gerados uma única vez. Salve-os agora — eles não serão exibidos novamente.'
-                : 'This central.env contains a one-time generated password and session secret. Save them now — they will not be shown again.'}
+                ? 'Este central.env contém um segredo de sessão gerado uma única vez. Salve-o agora — ele não será exibido novamente. Ao subir, o central imprime no log um token de setup de uso único: use-o no navegador para criar a conta de owner.'
+                : 'This central.env contains a one-time generated session secret. Save it now — it will not be shown again. On first boot the central prints a one-time setup token to its log: use it in the browser to create the owner account.'}
             </div>
           </div>
 

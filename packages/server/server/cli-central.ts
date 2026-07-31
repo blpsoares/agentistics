@@ -260,8 +260,6 @@ const hex = (bytes: number) => randomBytes(bytes).toString('hex')
 export interface CentralEnvOpts {
   port?: string
   org?: string
-  /** When omitted, a random password is generated. */
-  password?: string
   /** When omitted, a random session secret is generated. */
   sessionSecret?: string
   ingestToken?: string
@@ -287,14 +285,19 @@ export function looksLikeMongoUri(raw: string): boolean {
 
 /**
  * Build the central.env contents (pure). Applies defaults (port 48080, org 'default',
- * bind 0.0.0.0) and auto-generates the admin password + session secret when not supplied.
+ * bind 0.0.0.0) and auto-generates the session secret when not supplied.
  * Kept side-effect-free (except crypto randomness) so it is unit-testable.
+ *
+ * NO shared dashboard password is generated: a central authenticates ACCOUNTS
+ * (owner → members), created on first boot through the one-time setup token the server
+ * prints to its log. `AGENTISTICS_TEAM_PASSWORD` is the legacy pre-accounts gate and is not
+ * part of this flow — writing one only makes the operator believe it is a credential they
+ * need to keep and share.
  */
 export function buildCentralEnv(opts: CentralEnvOpts = {}): string {
   const port = opts.port || '48080'
   const bind = opts.bind || '0.0.0.0'
   const org = opts.org || 'default'
-  const password = opts.password || hex(24)
   const sessionSecret = opts.sessionSecret || hex(32)
   const ingest = opts.ingestToken ?? ''
   const mongoUrl = opts.mongoUrl?.trim() || BUNDLED_MONGO_URL
@@ -306,7 +309,6 @@ export function buildCentralEnv(opts: CentralEnvOpts = {}): string {
     `MONGO_DB=agentistics\n` +
     `AGENTISTICS_TEAM_CENTRAL=1\n` +
     `AGENTISTICS_TEAM_ORG=${org}\n` +
-    `AGENTISTICS_TEAM_PASSWORD=${password}\n` +
     `AGENTISTICS_TEAM_SESSION_SECRET=${sessionSecret}\n` +
     `AGENTISTICS_TEAM_INGEST_TOKEN=${ingest}\n` +
     `AGENTISTICS_CENTRAL_USER=\n`
@@ -351,9 +353,6 @@ async function initEnv(envFile: string): Promise<void> {
   process.stdout.write(`\nSetting up ${envFile} — press Enter to accept the [default] / auto-generate.\n\n`)
   const port = await input('Host port (APP_PORT)', { default: '48080' })
   const org = await input('Org name (AGENTISTICS_TEAM_ORG)', { default: 'default' })
-  const passIn = await input('Admin password (Enter to auto-generate)', { default: '' })
-  const password = passIn || hex(24)
-  if (!passIn) process.stdout.write(`  -> generated password: ${password}\n`)
   const bind = await input('Bind IP (BIND_IP, blank = 0.0.0.0 all interfaces)', { default: '0.0.0.0' })
 
   // Database: bundled Docker Mongo, or an external URI (Atlas/remote) → runs natively, no Docker.
@@ -374,12 +373,13 @@ async function initEnv(envFile: string): Promise<void> {
     process.stdout.write('  -> external DB: the central will run natively (no Docker, no local Mongo).\n')
   }
 
-  const env = buildCentralEnv({ port, org, password, bind, mongoUrl })
+  const env = buildCentralEnv({ port, org, bind, mongoUrl })
   await writeFile(envFile, env, 'utf-8')
   await chmod(envFile, 0o600).catch(() => {})
   process.stdout.write(
     `\nWrote ${envFile} (chmod 600).\n` +
-    `  Keep the admin password — share it with your team to log in to the dashboard.\n\n`,
+    `  No dashboard password is set here — the first thing you do in the browser is create the\n` +
+    `  OWNER account, using the one-time setup token the central prints on its first boot.\n\n`,
   )
 }
 
@@ -405,6 +405,60 @@ async function printAccessUrl(envFile: string): Promise<void> {
     process.stdout.write('  Members connect to a reachable address of this host (LAN/Tailscale IP) on that port.\n')
   } else {
     process.stdout.write(`  http://${bind}:${port}\n`)
+  }
+  if (await needsOwnerSetup(port)) {
+    const token = await readSetupTokenFromLogs()
+    process.stdout.write(
+      `\nFirst boot — no owner account exists yet.\n` +
+      `  Open the dashboard above: it asks you to CREATE THE OWNER ACCOUNT (name, e-mail, password)\n` +
+      `  plus the one-time setup token the central printed to its log.\n` +
+      (token
+        ? `\n  setup token: ${token}\n`
+        : `\n  Read it with: docker compose -p ${PROJECT} logs app | grep -A6 "OWNER SETUP"\n`) +
+      `\n  There is no shared team password — everyone else gets their own account, invited by the owner.\n`,
+    )
+  }
+}
+
+/**
+ * The one-time setup token the server printed to its log, or null.
+ * Best-effort: no Docker, no logs, or a rotated/consumed banner just yields the command hint.
+ */
+async function readSetupTokenFromLogs(): Promise<string | null> {
+  try {
+    const proc = Bun.spawn(['docker', 'compose', '-p', PROJECT, 'logs', '--no-color', 'app'], {
+      stdout: 'pipe',
+      stderr: 'ignore',
+    })
+    const text = await new Response(proc.stdout).text()
+    await proc.exited
+    // The banner prints the token alone on its line; take the LAST one (a re-issued token wins).
+    const matches = [...text.matchAll(/^\s*(?:\S+\s+\|)?\s*([0-9a-f]{48})\s*$/gm)]
+    return matches.length > 0 ? matches[matches.length - 1]![1]! : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * True when the central is up and still has no owner account (first boot).
+ * Best-effort and BOUNDED: a central that is slow to answer, or answers something unexpected,
+ * simply prints no setup hint — it must never make `up` hang or fail.
+ */
+async function needsOwnerSetup(port: string): Promise<boolean> {
+  const deadline = Date.now() + 20_000
+  for (;;) {
+    try {
+      const res = await fetch(`http://localhost:${port}/api/iam/status`, {
+        signal: AbortSignal.timeout(2_000),
+      })
+      if (res.ok) {
+        const body = (await res.json()) as { needsBootstrap?: unknown }
+        return body.needsBootstrap === true
+      }
+    } catch { /* not listening yet */ }
+    if (Date.now() >= deadline) return false
+    await new Promise(r => setTimeout(r, 1_000))
   }
 }
 

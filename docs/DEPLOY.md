@@ -36,24 +36,28 @@ detects your Tailscale IP for the bind, and writes `central.env` with `chmod 600
 bun run init:central     # or: ./central.sh init
 ```
 
-You'll be prompted for the port, org name, admin password, session secret, an optional
-ingest token, and the bind interface. `bun run up:central` runs this automatically the
-first time (when `central.env` is missing).
+You'll be prompted for the port, org name, session secret, an optional ingest token, and the
+bind interface. `bun run up:central` runs this automatically the first time (when `central.env`
+is missing).
+
+> **There is no team/dashboard password.** A central authenticates **accounts**: on first boot it
+> has none, so it prints a **one-time setup token** to its log and the dashboard opens on the
+> "create the owner account" screen (name, e-mail, password + that token). Everyone else gets
+> their own account, invited by the owner. `up` prints the token for you; otherwise read it with
+> `docker compose -p team-mode logs app | grep -A6 "OWNER SETUP"`.
 
 > Name it `central.env`, **not** `.env`. A plain `.env` is auto-loaded by `bun run dev`
 > (a developer's local/member instance) and would make that instance wrongly think it is
 > the central. Using `central.env` keeps the two roles cleanly separated.
 
-> **Security note**: `AGENTISTICS_TEAM_SESSION_SECRET` is always separate from the password —
-> there is no fallback, and a value equal to the password refuses to boot. If the password is
-> ever leaked, an attacker still cannot forge session cookies
-> as long as the session secret is unknown.
+> **Security note**: `AGENTISTICS_TEAM_SESSION_SECRET` signs session cookies and is never derived
+> from any password — a value equal to the legacy `AGENTISTICS_TEAM_PASSWORD` refuses to boot.
+> An account password being leaked still does not let an attacker forge session cookies.
 
 **Manual alternative** — copy the example and edit it yourself:
 
 ```bash
 cp .env.example central.env
-openssl rand -hex 24   # → AGENTISTICS_TEAM_PASSWORD
 openssl rand -hex 32   # → AGENTISTICS_TEAM_SESSION_SECRET
 ```
 
@@ -193,8 +197,8 @@ agentop central up        # runs the central natively in the FOREGROUND (Ctrl-C 
 | `MONGO_DB` | `agentistics` | MongoDB database name |
 | `AGENTISTICS_TEAM_CENTRAL` | `1` | Enable central aggregator mode (always `1` in Docker) |
 | `AGENTISTICS_TEAM_ORG` | `default` | Organisation namespace for team sessions |
-| `AGENTISTICS_TEAM_PASSWORD` | _(required)_ | Dashboard login password |
-| `AGENTISTICS_TEAM_SESSION_SECRET` | _(generated)_ | HMAC key for session cookies. Leave empty and the central generates a random one and persists it. It **never** falls back to the password — setting it equal to `AGENTISTICS_TEAM_PASSWORD` refuses to boot |
+| `AGENTISTICS_TEAM_PASSWORD` | _(unset)_ | **Legacy, pre-accounts shared password. Do not set it on a new central** — it does not gate a central's `/api` routes (accounts do) and only makes the setup look like it needs a shared credential |
+| `AGENTISTICS_TEAM_SESSION_SECRET` | _(generated)_ | HMAC key for session cookies. Leave empty and the central generates a random one and persists it. It **never** falls back to a password — setting it equal to `AGENTISTICS_TEAM_PASSWORD` refuses to boot |
 | `AGENTISTICS_EXPOSURE` | `lan` on a central | `local` \| `lan` \| `public`. `public` permanently revokes the local-shell, local-chat, host-transcript and MCP-admin routes and requires every owner to hold a second factor. An unrecognised value fails closed to `public`. See [docs/exposure.md](exposure.md) |
 | `AGENTISTICS_ALLOW_LOCAL_SHELL` | _(unset)_ | Re-enables those host-power routes on a `lan` central. **Ignored on `public`** |
 | `AGENTISTICS_TRUST_PROXY` | _(unset)_ | Believe `CF-Connecting-IP` / `X-Forwarded-For` for rate limiting and audit logging. Set to `1` **only** when a proxy that rewrites them is the sole way in |
