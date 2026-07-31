@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import { Loader2, EyeOff, Check } from 'lucide-react'
 import type { SessionMeta, ModelUsage, ShareSource } from '@agentistics/core'
 import { NO_REPO_KEY, fmtCost } from '@agentistics/core'
@@ -10,7 +10,7 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { COPY, PLURAL_COPY, interpolate } from './copy'
 import type { CardState } from './cardState'
 import type { ConnectionStatusEntry } from './statusTypes'
-import { EditView, ProjectEditView, ModeSelector, PickerTabs } from './SharedReposEditView'
+import { SharingRulesPicker } from './SharingRulesPicker'
 import {
   buildInitialDraft, canEditRepos, computeApplyImpact, diffDraft, hasProvenPrehistory,
   isDirty, normalizeDenied, resolveApplyBanner, resolveConfirmVariant,
@@ -187,60 +187,38 @@ export function SharedReposPanel({
         canEdit={canEditRepos(cardState, phase)}
         labels={{ edit: COPY.editRules[lang], save: COPY.saveRules[lang], cancel: COPY.cancel[lang] }}
         editChildren={
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <ModeSelector mode={effectiveMode} onChange={setModeDraft} lang={lang} isMobile={isMobile} />
-            <PickerTabs tab={tab} onChange={setTab} lang={lang} isMobile={isMobile} />
-            {tab === 'projects' ? (
-              <ProjectEditView
-                targets={projectTargets}
-                draftDenied={projectDraftDenied}
-                draftRepoKeys={draftDenied}
-                diff={projectDiff}
-                search={search}
-                onSearch={setSearch}
-                showStale={showStale}
-                onToggleStale={() => setShowStale(v => !v)}
-                showAllMobile={showAllMobile}
-                onShowAllMobile={() => setShowAllMobile(true)}
-                isMobile={isMobile}
-                lang={lang}
-                onToggleRow={(target, nextShared) => {
-                  setProjectDraft(toggleProjectTarget(projectDraftDenied, target, nextShared, isProjectLocked(target, draftDenied)))
-                }}
-                onShareAll={() => setProjectDraft(shareAllProjectsDraft(projectTargets))}
-                onBlockAll={() => setProjectDraft(blockAllProjectsDraft(projectTargets))}
-              />
-            ) : (
-              <EditView
-                targets={targets}
-                draftDenied={draftDenied}
-                diff={diff}
-                search={search}
-                onSearch={setSearch}
-                showStale={showStale}
-                onToggleStale={() => setShowStale(v => !v)}
-                showAllMobile={showAllMobile}
-                onShowAllMobile={() => setShowAllMobile(true)}
-                isMobile={isMobile}
-                lang={lang}
-                mode={effectiveMode}
-                partialRepoKeys={partialRepoKeys}
-                impactSessions={impact.sessions}
-                impactCost={impact.costUSD}
-                onToggleRow={(target, nextShared) => setDraft(toggleTarget(draftDenied, target, nextShared))}
-                onShareAll={() => setDraft(shareAllDraft(targets))}
-                onBlockAll={() => setDraft(blockAllDraft(targets))}
-              />
-            )}
-            {showEmptyAllowlistWarning && (
-              <div style={{
-                padding: '8px 12px', borderRadius: 7, fontSize: 11.5, color: 'var(--anthropic-orange)',
-                background: 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)',
-              }}>
-                {COPY.emptyAllowlistWarning[lang]}
-              </div>
-            )}
-          </div>
+          <SharingRulesPicker
+            mode={effectiveMode}
+            onModeChange={setModeDraft}
+            tab={tab}
+            onTabChange={setTab}
+            lang={lang}
+            isMobile={isMobile}
+            targets={targets}
+            projectTargets={projectTargets}
+            draftDenied={draftDenied}
+            projectDraftDenied={projectDraftDenied}
+            diff={diff}
+            projectDiff={projectDiff}
+            partialRepoKeys={partialRepoKeys}
+            search={search}
+            onSearch={setSearch}
+            showStale={showStale}
+            onToggleStale={() => setShowStale(v => !v)}
+            showAllMobile={showAllMobile}
+            onShowAllMobile={() => setShowAllMobile(true)}
+            impactSessions={impact.sessions}
+            impactCost={impact.costUSD}
+            showEmptyAllowlistWarning={showEmptyAllowlistWarning}
+            onToggleRow={(target, nextShared) => setDraft(toggleTarget(draftDenied, target, nextShared))}
+            onShareAll={() => setDraft(shareAllDraft(targets))}
+            onBlockAll={() => setDraft(blockAllDraft(targets))}
+            onToggleProjectRow={(target, nextShared) => {
+              setProjectDraft(toggleProjectTarget(projectDraftDenied, target, nextShared, isProjectLocked(target, draftDenied)))
+            }}
+            onShareAllProjects={() => setProjectDraft(shareAllProjectsDraft(projectTargets))}
+            onBlockAllProjects={() => setProjectDraft(blockAllProjectsDraft(projectTargets))}
+          />
         }
       >
         <ReadView
@@ -313,7 +291,22 @@ export function buildConfirmMessage(
  * chips invert to what IS listed — shared-positive, never a "hidden" chip for an allowlist, which
  * would read backwards (everything not listed is what's hidden, and that set is usually huge).
  */
-function ReadView({ targets, projectTargets, storedDenied, storedProjectPaths, mode, sessions, status, lang, otelEnabled }: {
+/** Fix (product owner live test): a hidden repo/project used to render as an amber-filled chip,
+ *  the same tone `EditView`'s locked-row copy uses — a hidden entry needed its own, clearly
+ *  negative treatment. Outlined (transparent fill, red border) rather than filled, reusing the
+ *  app's existing danger variable (`--accent-red`, the same one `ConnectionCard`'s broken-endpoint
+ *  state uses) rather than a new hex value; the `EyeOff` icon stays so meaning is never carried by
+ *  colour alone. Exported so `SharedReposPanel.test.ts` can assert on it directly. */
+export function hiddenChipStyle(): CSSProperties {
+  return {
+    display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: '100%', padding: '2px 8px', borderRadius: 999,
+    background: 'transparent', border: '1px solid var(--accent-red)',
+    color: 'var(--accent-red)', fontSize: 11, fontWeight: 600,
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  }
+}
+
+export function ReadView({ targets, projectTargets, storedDenied, storedProjectPaths, mode, sessions, status, lang, otelEnabled }: {
   targets: ShareTarget[]
   projectTargets: ProjectTarget[]
   storedDenied: Set<string>
@@ -373,17 +366,14 @@ function ReadView({ targets, projectTargets, storedDenied, storedProjectPaths, m
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {chips.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--anthropic-orange)', letterSpacing: '0.02em' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent-red)', letterSpacing: '0.02em' }}>
             {interpolate(COPY.hiddenBlockTitle[lang], { n: chips.length })}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {chips.map(c => (
-              <span key={c.key} title={c.title} style={{
-                display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: '100%', padding: '2px 8px', borderRadius: 999,
-                background: 'color-mix(in srgb, var(--anthropic-orange) 15%, transparent)',
-                color: 'var(--anthropic-orange)', fontSize: 11, fontWeight: 600,
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              }}><EyeOff size={10} style={{ flexShrink: 0 }} />{c.label}</span>
+              <span key={c.key} title={c.title} style={hiddenChipStyle()}>
+                <EyeOff size={10} style={{ flexShrink: 0 }} />{c.label}
+              </span>
             ))}
           </div>
         </div>
