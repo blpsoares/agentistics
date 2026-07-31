@@ -1,10 +1,15 @@
 // packages/server/server/iam-view.test.ts
 import { test, expect, describe, it } from 'bun:test'
-import { canSeeMemberNames, publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships, authorizeAccountPatch } from './iam-view'
+import { canSeeMemberNames, publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships, authorizeAccountPatch, mfaDisableAllowed } from './iam-view'
 import type { AccountDoc, Principal } from './iam-types'
 
 const owner: Principal = { accountId: 'o1', role: 'owner', memberships: [] }
 const mgrA: Principal = { accountId: 'm1', role: 'member', memberships: [{ teamId: 'A', role: 'manager' }] }
+
+test('mfaDisableAllowed: never for an owner, always for a member — MFA is mandatory for owners and not the UI\'s choice', () => {
+  expect(mfaDisableAllowed('owner')).toBe(false)
+  expect(mfaDisableAllowed('member')).toBe(true)
+})
 
 test('canManageMachine: owner any; manager if managing ANY of the machine teams; owner-account always', () => {
   expect(canManageMachine(owner, { teamIds: ['X', 'Y'] })).toBe(true)

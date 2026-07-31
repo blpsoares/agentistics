@@ -914,7 +914,7 @@ function MobileBottomNav({
       </nav>
 
       {pwOpen && <ChangePasswordSelf lang={lang} onClose={() => setPwOpen(false)} />}
-      {mfaOpen && <MfaSetup lang={lang} onClose={() => setMfaOpen(false)} />}
+      {mfaOpen && <MfaSetup lang={lang} onClose={() => setMfaOpen(false)} canDisable={principal?.role !== 'owner'} />}
     </>
   )
 }
@@ -1129,7 +1129,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
 
         {/* Self-service change-password modal */}
         {pwOpen && <ChangePasswordSelf lang={lang} onClose={() => setPwOpen(false)} />}
-      {mfaOpen && <MfaSetup lang={lang} onClose={() => setMfaOpen(false)} />}
+      {mfaOpen && <MfaSetup lang={lang} onClose={() => setMfaOpen(false)} canDisable={principal?.role !== 'owner'} />}
 
         {/* Thin divider between account and actions */}
         {principal && <div style={{ height: 1, background: 'var(--border)', marginBottom: 10 }} />}
@@ -2002,7 +2002,7 @@ export default function AppLayout() {
   // Central: account-based IAM gate (bootstrap → login → app).
   if (teamSession.central) {
     if (iam === undefined) return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
-    if (iam.needsBootstrap) return <OwnerSetup onDone={() => { reloadIam(); refetch() }} />
+    if (iam.needsBootstrap) return <OwnerSetup lang={lang} onDone={() => { reloadIam(); refetch() }} />
     if (!iam.authed) return <Login onAuthed={() => { reloadIam(); refetch() }} />
     if (iam.account?.mustChangePassword) return <ChangePassword onDone={() => { reloadIam(); refetch() }} />
     // An owner owes a second factor. The gate in index.ts is already refusing everything else,

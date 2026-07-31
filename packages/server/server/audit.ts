@@ -14,7 +14,7 @@ import { getMongoDb } from './mongo'
 export type AuditAction =
   | 'login.success' | 'login.failure' | 'login.mfa_challenge' | 'login.mfa_failure'
   | 'logout' | 'password.change' | 'password.reset_cli'
-  | 'mfa.enable' | 'mfa.disable' | 'mfa.recovery_used' | 'mfa.recovery_regenerated'
+  | 'mfa.enable' | 'mfa.disable' | 'mfa.disable_refused' | 'mfa.recovery_used' | 'mfa.recovery_regenerated'
   | 'password.recover' | 'password.recover_failure' | 'password.reset_requested'
   | 'account.create' | 'account.update' | 'account.delete'
   // An admin (owner OR manager) resetting SOMEONE ELSE's password — kept distinct from
