@@ -18,6 +18,9 @@
 #   doctor    Run the exposure preflight INSIDE the container, where central.env is
 #             the live environment and the database is reachable. Add --exposed to
 #             check against the strict public bar before opening a tunnel.
+#   setup-token
+#             Reissue the one-time OWNER setup token, for when the boot that printed it
+#             has scrolled away or its log rotated. Refused once an owner exists.
 #   down      Stop and remove the containers (KEEPS the data volume)
 #   pull      Rebuild from a fresh base image (git pull first, then this)
 #   help      Show this message
@@ -322,6 +325,10 @@ case "$cmd" in
     # environment AND where MongoDB is reachable, so the owner-MFA and token checks
     # can actually run instead of reporting "could not verify".
     compose exec -T app bun run packages/server/bin/cli.ts doctor "${@:2}"
+    ;;
+  setup-token)
+    # Same reason as doctor: the database is only reachable from inside the compose network.
+    compose exec -T app bun run packages/server/bin/cli.ts setup-token
     ;;
   down)
     # Note: no `-v` — the Mongo data volume is preserved. Add it manually only

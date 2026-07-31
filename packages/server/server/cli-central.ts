@@ -29,7 +29,7 @@ import { input, confirm, select } from './cli-ui'
 import { createChunkSink, pumpStream } from './cli-stream'
 
 /** The central.sh subcommands this handler forwards / implements. */
-export const CENTRAL_ACTIONS = ['up', 'init', 'down', 'logs', 'status', 'restart', 'pull'] as const
+export const CENTRAL_ACTIONS = ['up', 'init', 'down', 'logs', 'status', 'restart', 'pull', 'setup-token'] as const
 export type CentralAction = (typeof CENTRAL_ACTIONS)[number]
 
 export function isCentralAction(value: string): value is CentralAction {
@@ -503,6 +503,21 @@ async function runNativeCentral(
     return 1
   }
 
+  // A native central has no container to exec into, but this process CAN reach the external DB
+  // once it holds central.env — so run the token reissue right here.
+  if (action === 'setup-token') {
+    try {
+      const proc = Bun.spawn([process.execPath, 'setup-token'], {
+        env: { ...process.env, ...env, AGENTISTICS_TEAM_CENTRAL: '1' } as Record<string, string>,
+        stdin: 'inherit', stdout: 'inherit', stderr: 'inherit',
+      })
+      return await proc.exited
+    } catch (err) {
+      process.stderr.write(`Could not reissue the setup token: ${err instanceof Error ? err.message : String(err)}\n`)
+      return 1
+    }
+  }
+
   if (action !== 'up') {
     process.stdout.write(
       `\nThis central uses an EXTERNAL database, so it runs NATIVELY (no Docker).\n` +
@@ -606,6 +621,9 @@ async function runCentralStandalone(action: CentralAction, opts: CentralRunOptio
     case 'down':
       // No `-v` — the Mongo data volume is preserved.
       return runCompose(envFile, composeFile, ['down'], opts)
+    case 'setup-token':
+      // Inside the container: that is where MONGO_URL resolves.
+      return runCompose(envFile, composeFile, ['exec', '-T', 'app', 'bun', 'run', 'packages/server/bin/cli.ts', 'setup-token'], opts)
     case 'pull': {
       const code = await runCompose(envFile, composeFile, ['pull'], opts)
       if (code === 0) return runCompose(envFile, composeFile, ['up', '-d', '--force-recreate'], opts)

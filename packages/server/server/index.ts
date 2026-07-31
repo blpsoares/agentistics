@@ -197,9 +197,12 @@ if (TEAM_CENTRAL) {
             '========================================================\n',
           )
         } else {
+          // Deliberately NOT reissued here: a boot that minted a second token would silently
+          // invalidate one the operator may still be holding. Name the command that does it.
           console.log(
-            '\n[agentistics] Owner setup pending — a setup token was already issued ' +
-            '(see earlier logs). Restart with the DB reset, or reissue later via the CLI.\n',
+            '\n[agentistics] Owner setup pending — a setup token was already issued (see earlier\n' +
+            '  logs). Lost it? Reissue with:  ./central.sh setup-token\n' +
+            '  (standalone: agentop central setup-token)\n',
           )
         }
       }
