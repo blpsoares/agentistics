@@ -1,10 +1,23 @@
 // team-agent.ts — central-side WebSocket agent registry (Phase 7)
 //
-// Maintains a live map of member → connected ServerWebSocket sockets, and
+// Maintains a live map of machine → connected ServerWebSocket sockets, and
 // tracks presence/liveness (ping/pong RTT) for the team dashboard. On-demand
 // chat retrieval over this channel has been removed — the central never
 // requests or views member chat (see GET /api/team/session-chat, which is
 // now a 410 in index.ts).
+//
+// Keyed by `memberId` (the token hash), NOT by the resolved `user` display name. `memberId` is
+// the machine's own stable identity — the same key sessions and stats already use — and it is
+// unique per machine by construction. `user` is not: two ownerless machines both carry
+// `user: ''` (see team-tokens.ts `machineUserFor`), and even for an owned machine `user` is a
+// mutable display name shared across every machine of that owner. Keying the live registry by
+// `user` made two machines share ONE presence signal whenever their `user` matched — for a real
+// person's fleet that was the intended fold (see `foldPresenceByUser` in team-presence.ts, which
+// still folds machine-level presence up to a per-person view on purpose), but for two unrelated
+// ownerless machines it silently merged their online/offline state: one connecting made the
+// other read online too. `memberId` never collides, so the registry itself can no longer make
+// that mistake — any folding by `user` now happens strictly downstream, over already-correct
+// per-machine facts.
 
 import type { ServerWebSocket } from 'bun'
 
@@ -15,9 +28,8 @@ import type { ServerWebSocket } from 'bun'
 /** Data attached to each server-side WebSocket via server.upgrade(req, { data }) */
 export interface AgentSocketData {
   user: string
-  /** The MACHINE behind this socket (token hash). Presence is per person — a member is online while
-   *  any of their machines is — but a live-session snapshot describes one machine's processes, so
-   *  `team-live` keys by this and never by `user`. */
+  /** The MACHINE behind this socket (token hash) — its stable identity, and the key this whole
+   *  registry is organized by. `team-live` also keys by this and never by `user`. */
   memberId: string
   isAgent?: boolean
 }
@@ -26,20 +38,20 @@ export interface AgentSocketData {
 // Registry
 // ---------------------------------------------------------------------------
 
-/** user → set of connected member sockets */
+/** memberId (machine) → set of connected sockets. */
 const agentSockets = new Map<string, Set<ServerWebSocket<AgentSocketData>>>()
 
-/** Users that have EVER held a live socket this run — so once a member's WS drops we can
+/** Machines that have EVER held a live socket this run — so once a machine's WS drops we can
  *  trust that signal (offline after a short grace) instead of waiting out the heartbeat. */
 const everHadSocket = new Set<string>()
-/** user → ms epoch when their LAST socket dropped (cleared on reconnect). */
+/** memberId → ms epoch when its LAST socket dropped (cleared on reconnect). */
 const lastDropAt = new Map<string, number>()
-/** user → ms epoch of the last "member connected" notification, to suppress reconnect spam. */
+/** memberId → ms epoch of the last "member connected" notification, to suppress reconnect spam. */
 const lastConnectNotifyAt = new Map<string, number>()
-/** Don't re-announce the same member connecting more than once per this window. */
+/** Don't re-announce the same machine connecting more than once per this window. */
 const CONNECT_NOTIFY_THROTTLE_MS = 5 * 60_000
 
-/** Grace after a socket drops before the member counts as offline — absorbs the brief WS
+/** Grace after a socket drops before the machine counts as offline — absorbs the brief WS
  *  reconnect gap (backoff starts at 1s) without flickering, while still flipping fast on a kill. */
 const SOCKET_GRACE_MS = 8_000
 
@@ -95,22 +107,25 @@ function stopPingLoop(): void {
 // ---------------------------------------------------------------------------
 
 export function registerAgent(ws: ServerWebSocket<AgentSocketData>): void {
-  const { user } = ws.data
-  // Was this member offline (no live socket) before this connection?
-  const wasOffline = !agentSockets.has(user) || agentSockets.get(user)!.size === 0
-  if (!agentSockets.has(user)) agentSockets.set(user, new Set())
-  agentSockets.get(user)!.add(ws)
+  const { user, memberId } = ws.data
+  // Was this machine offline (no live socket) before this connection?
+  const wasOffline = !agentSockets.has(memberId) || agentSockets.get(memberId)!.size === 0
+  if (!agentSockets.has(memberId)) agentSockets.set(memberId, new Set())
+  agentSockets.get(memberId)!.add(ws)
   sockState.set(ws, { latencyMs: null, awaitingPong: false, pingSentAt: 0, missed: 0 })
-  everHadSocket.add(user)
-  lastDropAt.delete(user) // reconnected → clear the drop marker
+  everHadSocket.add(memberId)
+  lastDropAt.delete(memberId) // reconnected → clear the drop marker
   ensurePingLoop()
   onPresenceChange?.()
 
   // Announce a genuine connect on the central (throttled so a flapping reconnect never spams).
+  // The throttle key is the machine (memberId), not `user`: two machines sharing a `user` (a
+  // real person's fleet, or two ownerless machines sharing `''`) must not suppress each other's
+  // connect notification.
   if (wasOffline) {
     const now = Date.now()
-    if (now - (lastConnectNotifyAt.get(user) ?? 0) > CONNECT_NOTIFY_THROTTLE_MS) {
-      lastConnectNotifyAt.set(user, now)
+    if (now - (lastConnectNotifyAt.get(memberId) ?? 0) > CONNECT_NOTIFY_THROTTLE_MS) {
+      lastConnectNotifyAt.set(memberId, now)
       void import('./sse').then(m => m.broadcastNotification({
         type: 'info', code: 'central.member_connected', meta: { user },
       })).catch(() => { /* best-effort */ })
@@ -119,24 +134,21 @@ export function registerAgent(ws: ServerWebSocket<AgentSocketData>): void {
 }
 
 export function unregisterAgent(ws: ServerWebSocket<AgentSocketData>): void {
-  const { user, memberId } = ws.data
+  const { memberId } = ws.data
   sockState.delete(ws)
-  const sockets = agentSockets.get(user)
+  const sockets = agentSockets.get(memberId)
   if (!sockets) { if (sockState.size === 0) stopPingLoop(); return }
   sockets.delete(ws)
-  // A clean disconnect means nothing on THAT MACHINE is open any more — drop its live report now
-  // instead of leaving stale rows on the dashboard until the TTL expires. Scoped to the machine,
-  // not the person: one laptop going to sleep must not blank out the desktop still working.
-  const machineGone = ![...sockets].some(s => s.data.memberId === memberId)
-  if (machineGone) {
-    void import('./team-live').then(m => m.clearMemberLive(memberId)).catch(() => { /* best-effort */ })
-  }
+  // Every socket in this set already belongs to THIS machine (the map is keyed by memberId), so
+  // an empty set means nothing on it is open any more — drop its live report now instead of
+  // leaving stale rows on the dashboard until the TTL expires.
   if (sockets.size === 0) {
-    agentSockets.delete(user)
-    // Record the drop; after the grace, the member counts as offline. Fire a presence update
+    void import('./team-live').then(m => m.clearMemberLive(memberId)).catch(() => { /* best-effort */ })
+    agentSockets.delete(memberId)
+    // Record the drop; after the grace, the machine counts as offline. Fire a presence update
     // AT grace-expiry so the dashboard flips without waiting for its next poll.
-    lastDropAt.set(user, Date.now())
-    setTimeout(() => { if (!agentSockets.has(user)) onPresenceChange?.() }, SOCKET_GRACE_MS + 250)
+    lastDropAt.set(memberId, Date.now())
+    setTimeout(() => { if (!agentSockets.has(memberId)) onPresenceChange?.() }, SOCKET_GRACE_MS + 250)
   }
   if (sockState.size === 0) stopPingLoop()
   onPresenceChange?.()
@@ -152,26 +164,26 @@ export function onAgentPong(ws: ServerWebSocket<AgentSocketData>): void {
 }
 
 export interface PresenceSignal {
-  /** true when the member has ≥1 live socket right now. */
+  /** true when the machine has ≥1 live socket right now. */
   online: boolean
   /** best (lowest) observed WS latency in ms, or null if no live socket / no ping yet. */
   latencyMs: number | null
-  /** true when the member has held a live socket this run (its WS is the authoritative signal). */
+  /** true when the machine has held a live socket this run (its WS is the authoritative signal). */
   everHadSocket: boolean
-  /** whether the member is within the reconnect grace after its last socket dropped. */
+  /** whether the machine is within the reconnect grace after its last socket dropped. */
   inDropGrace: boolean
 }
 
 /**
- * Per-member socket presence signals, keyed by resolved user. Includes members that are
+ * Per-machine socket presence signals, keyed by `memberId`. Includes machines that are
  * connected now AND those that have disconnected (so team-presence can decide offline vs
  * a heartbeat fallback). `now` lets the caller share one clock across the snapshot.
  */
 export function getPresenceSignals(now = Date.now()): Map<string, PresenceSignal> {
   const out = new Map<string, PresenceSignal>()
-  const users = new Set<string>([...agentSockets.keys(), ...everHadSocket])
-  for (const user of users) {
-    const socks = agentSockets.get(user)
+  const ids = new Set<string>([...agentSockets.keys(), ...everHadSocket])
+  for (const id of ids) {
+    const socks = agentSockets.get(id)
     const online = !!socks && socks.size > 0
     let latency: number | null = null
     if (online) {
@@ -180,11 +192,11 @@ export function getPresenceSignals(now = Date.now()): Map<string, PresenceSignal
         if (st?.latencyMs != null) latency = latency == null ? st.latencyMs : Math.min(latency, st.latencyMs)
       }
     }
-    const dropAt = lastDropAt.get(user)
-    out.set(user, {
+    const dropAt = lastDropAt.get(id)
+    out.set(id, {
       online,
       latencyMs: latency,
-      everHadSocket: everHadSocket.has(user),
+      everHadSocket: everHadSocket.has(id),
       inDropGrace: !online && dropAt != null && now - dropAt <= SOCKET_GRACE_MS,
     })
   }
@@ -228,10 +240,12 @@ export function onAgentMessage(
   } catch { /* ignore malformed frames */ }
 }
 
-/** Push a JSON message to every live socket of a member (by resolved user). Best-effort — dead
- *  sockets are skipped. Used by the central to notify a machine of admin actions (e.g. rename). */
-export function notifyMember(user: string, payload: Record<string, unknown>): void {
-  const socks = agentSockets.get(user)
+/** Push a JSON message to every live socket of ONE machine (by `memberId`). Best-effort — dead
+ *  sockets are skipped. Used by the central to notify a machine of admin actions (e.g. rename,
+ *  reassign) — keyed by `memberId` rather than `user` so the message reaches ONLY the machine it
+ *  is about, never a sibling machine that happens to share the same owner display name. */
+export function notifyMember(memberId: string, payload: Record<string, unknown>): void {
+  const socks = agentSockets.get(memberId)
   if (!socks || socks.size === 0) return
   const msg = JSON.stringify(payload)
   for (const ws of socks) {

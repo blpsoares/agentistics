@@ -862,8 +862,11 @@ export async function handleMachines(req: Request): Promise<Response> {
 
     const visible = principal.role === 'owner' ? all : all.filter(m => canManageMachine(principal, m))
 
-    // Enrich with presence (keyed by user, mirroring the members panel).
-    const presence = await import('./team-presence').then(m => m.computePresence()).catch(() => ({} as Record<string, { online: boolean; latencyMs: number | null }>))
+    // Enrich with presence keyed by MACHINE id (memberId) — never by `user`. Two machines can
+    // share (or both lack) a `user`, most sharply for two ownerless machines, which both carry
+    // `user: ''`; the person-level `computePresence()` intentionally folds several machines under
+    // one key, which is exactly what this row-per-machine list must not do.
+    const presence = await import('./team-presence').then(m => m.computeMachinePresence()).catch(() => ({} as Record<string, { online: boolean; latencyMs: number | null }>))
 
     const enriched = visible.map(m => {
       // Resolve every owner account the caller may actually see (no cross-scope name/email leak).
@@ -876,8 +879,8 @@ export async function handleMachines(req: Request): Promise<Response> {
         owners,
         // Back-compat: primary owner's name/email for any caller still reading the flat fields.
         ...(owners[0] ? { accountName: owners[0].name, accountEmail: owners[0].email } : {}),
-        online: presence[m.user]?.online ?? false,
-        latencyMs: presence[m.user]?.latencyMs ?? null,
+        online: presence[m.id]?.online ?? false,
+        latencyMs: presence[m.id]?.latencyMs ?? null,
       }
     })
 
@@ -915,7 +918,7 @@ export async function handleMachines(req: Request): Promise<Response> {
       try {
         const actor = (await getAccount(principal.accountId))?.name ?? 'an admin'
         const { notifyMember } = await import('./team-agent')
-        notifyMember(machine.user, { type: 'reassigned', account: nextUser ?? null, actor })
+        notifyMember(machine.id, { type: 'reassigned', account: nextUser ?? null, actor })
       } catch { /* best-effort — the identity still reflects via whoami */ }
       return json({ ok: true })
     }
@@ -934,7 +937,7 @@ export async function handleMachines(req: Request): Promise<Response> {
       try {
         const actor = (await getAccount(principal.accountId))?.name ?? 'an admin'
         const { notifyMember } = await import('./team-agent')
-        notifyMember(machine.user, { type: 'renamed', name: newName, actor })
+        notifyMember(machine.id, { type: 'renamed', name: newName, actor })
       } catch { /* best-effort — the name still reflects via whoami */ }
       return json({ ok: true })
     }
