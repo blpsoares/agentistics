@@ -32,7 +32,7 @@ import { limiter, RULES, tooManyRequests } from './rate-limit'
 import { validatePasswordPolicy } from './password-policy'
 import { writeAudit } from './audit'
 import { readJsonLimited, LIMITS } from './limits'
-import { signStepUp, stepUpRequiresCode, STEPUP_TTL_MS } from './stepup'
+import { signStepUp, stepUpRequiresCode, proveStepUp, STEPUP_TTL_MS } from './stepup'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
 
@@ -215,10 +215,15 @@ export async function handleIamLoginMfa(req: Request): Promise<Response> {
 /**
  * POST /api/iam/stepup  Body: { password?, code? }
  * Re-authenticates the CURRENT session and returns a short-lived grant for destructive
- * operations (see stepup.ts). Accepts the account password, or a TOTP code when enrolled —
- * either proves presence, and an account with a second factor should be able to use it.
+ * operations (see stepup.ts). Which credential is demanded is decided by `proveStepUp`: the
+ * second factor alone once enrolled (a live authenticator code or a single-use recovery code),
+ * the password otherwise.
+ *
+ * The refusal names the factor it wanted (`mfaRequired`). That is not an oracle — the caller is
+ * already authenticated as this account and can read the same fact from GET /api/iam/mfa — and
+ * without it the dialog asks an enrolled user for their password, refuses it, and closes.
  */
-export async function handleStepUp(req: Request): Promise<Response> {
+export async function handleStepUp(req: Request, ip = 'unknown'): Promise<Response> {
   const session = await getPrincipalSession(req)
   if (!session) return json({ ok: false, error: 'unauthorized' }, 401)
   const account = await getAccount(session.principal.accountId)
@@ -239,22 +244,24 @@ export async function handleStepUp(req: Request): Promise<Response> {
   if (!verdict.allowed) return tooManyRequests(verdict.retryAfterSec)
 
   const mfa = await getMfa(account._id)
-  let ok = false
   // Once a second factor is enrolled, step-up MUST be proven with it — for a manager and an
   // owner equally (stepUpRequiresCode takes no role parameter at all). A stolen cookie plus a
-  // stolen password must not be enough to step up an MFA-enrolled account; only a live code will.
-  if (stepUpRequiresCode(!!mfa)) {
-    ok = !!mfa && !!code && verifyTotp(mfa.secret, code, Math.floor(Date.now() / 1000))
-  } else if (password) {
-    ok = await verifyPassword(password, account.passwordHash)
-  }
-  if (!ok) {
+  // stolen password must not be enough to step up an MFA-enrolled account.
+  const proof = await proveStepUp({ password, code }, !!mfa, {
+    verifyPassword: pw => verifyPassword(pw, account.passwordHash),
+    verifyTotp: c => !!mfa && verifyTotp(mfa.secret, c, Math.floor(Date.now() / 1000)),
+    consumeRecoveryCode: c => consumeRecoveryCode(account._id, hashRecoveryCode(c)),
+  })
+  if (!proof.ok) {
     limiter.fail(key, RULES.login)
-    void writeAudit({ action: 'stepup.failure', ip: 'unknown', actorId: account._id })
-    return json({ ok: false, error: 'invalid credentials' }, 401)
+    void writeAudit({ action: 'stepup.failure', ip, actorId: account._id })
+    return json({ ok: false, error: 'invalid credentials', mfaRequired: stepUpRequiresCode(!!mfa) }, 401)
   }
   limiter.reset(key)
-  void writeAudit({ action: 'stepup.granted', ip: 'unknown', actorId: account._id })
+  // A spent recovery code is a fact an incident review needs: it is the moment an account stopped
+  // being protected by the authenticator that is supposed to hold it.
+  if (proof.factor === 'recovery') void writeAudit({ action: 'mfa.recovery_used', ip, actorId: account._id })
+  void writeAudit({ action: 'stepup.granted', ip, actorId: account._id, meta: { factor: proof.factor } })
 
   const token = signStepUp(
     account._id,
@@ -266,13 +273,28 @@ export async function handleStepUp(req: Request): Promise<Response> {
 }
 
 /**
+ * Proves the second factor of an ALREADY-ENROLLED account: a live authenticator code, or one of
+ * the single-use recovery codes. Same pair login accepts, and for the same reason — a lost phone
+ * must not be the end of the account. `proveStepUp` holds the rule; this only supplies the
+ * verifiers.
+ */
+async function proveSecondFactor(accountId: string, secret: string, code: string): Promise<{ ok: boolean; usedRecovery: boolean }> {
+  const proof = await proveStepUp({ code }, true, {
+    verifyPassword: async () => false, // unreachable: enrolled accounts never take a password here
+    verifyTotp: c => verifyTotp(secret, c, Math.floor(Date.now() / 1000)),
+    consumeRecoveryCode: c => consumeRecoveryCode(accountId, hashRecoveryCode(c)),
+  })
+  return { ok: proof.ok, usedRecovery: proof.factor === 'recovery' }
+}
+
+/**
  * MFA enrolment, all authenticated and all acting on the CALLER's own account:
  *   GET    /api/iam/mfa        → { enabled }
  *   POST   /api/iam/mfa/start  → { secret, otpauthUri }  (generated, not yet active)
  *   POST   /api/iam/mfa/enable { secret, code } → { recoveryCodes } shown exactly once
  *   DELETE /api/iam/mfa        { code } → disables
  */
-export async function handleMfa(req: Request, pathname: string): Promise<Response> {
+export async function handleMfa(req: Request, pathname: string, ip = 'unknown'): Promise<Response> {
   const principal = await getPrincipal(req)
   if (!principal) return json({ error: 'unauthorized' }, 401)
   const account = await getAccount(principal.accountId)
@@ -307,7 +329,7 @@ export async function handleMfa(req: Request, pathname: string): Promise<Respons
     }
     const recoveryCodes = generateRecoveryCodes()
     await enableMfa(account._id, secret, recoveryCodes.map(hashRecoveryCode))
-    void writeAudit({ action: 'mfa.enable', ip: 'unknown', actorId: account._id })
+    void writeAudit({ action: 'mfa.enable', ip, actorId: account._id })
     // Every session that authenticated with the password alone is now under-authenticated.
     await bumpSessionVersion(account._id)
     const cookie = makePrincipalSessionCookieHeader(account._id, account.sessionVersion + 1)
@@ -331,14 +353,16 @@ export async function handleMfa(req: Request, pathname: string): Promise<Respons
     const mfa = await getMfa(account._id)
     if (!mfa) return json({ error: 'mfa not enabled' }, 400)
     const nowSec = Math.floor(Date.now() / 1000)
-    if (!verifyTotp(mfa.secret, code, nowSec)) {
+    const proof = await proveSecondFactor(account._id, mfa.secret, code)
+    if (!proof.ok) {
       const skew = totpSkewSteps(mfa.secret, code, nowSec)
       if (skew !== null) return json({ error: 'clock_skew', skewSeconds: skew * TOTP_STEP_SECONDS }, 401)
       return json({ error: 'invalid code' }, 401)
     }
+    if (proof.usedRecovery) void writeAudit({ action: 'mfa.recovery_used', ip, actorId: account._id })
     const recoveryCodes = generateRecoveryCodes()
     await enableMfa(account._id, mfa.secret, recoveryCodes.map(hashRecoveryCode))
-    void writeAudit({ action: 'mfa.recovery_regenerated', ip: 'unknown', actorId: account._id })
+    void writeAudit({ action: 'mfa.recovery_regenerated', ip, actorId: account._id })
     return json({ ok: true, recoveryCodes })
   }
 
@@ -351,13 +375,17 @@ export async function handleMfa(req: Request, pathname: string): Promise<Respons
     const mfa = await getMfa(account._id)
     if (!mfa) return json({ ok: true })
     const nowSec = Math.floor(Date.now() / 1000)
-    if (!verifyTotp(mfa.secret, code, nowSec)) {
+    // A recovery code is accepted here too — it is precisely the "my authenticator is gone" case,
+    // and demanding the missing device to disable the missing device is a closed loop.
+    const proof = await proveSecondFactor(account._id, mfa.secret, code)
+    if (!proof.ok) {
       const skew = totpSkewSteps(mfa.secret, code, nowSec)
       if (skew !== null) return json({ error: 'clock_skew', skewSeconds: skew * TOTP_STEP_SECONDS }, 401)
       return json({ error: 'invalid code' }, 401)
     }
+    if (proof.usedRecovery) void writeAudit({ action: 'mfa.recovery_used', ip, actorId: account._id })
     await disableMfa(account._id)
-    void writeAudit({ action: 'mfa.disable', ip: 'unknown', actorId: account._id })
+    void writeAudit({ action: 'mfa.disable', ip, actorId: account._id })
     return json({ ok: true })
   }
 
@@ -644,7 +672,7 @@ function parseMachineRequests(machines: unknown, single: unknown): { name: strin
 /**
  * /api/iam/accounts — GET list (scoped), POST create, DELETE remove. Self-guarding.
  */
-export async function handleAccounts(req: Request): Promise<Response> {
+export async function handleAccounts(req: Request, ip = 'unknown'): Promise<Response> {
   const principal = await getPrincipal(req)
   if (!principal) return json({ error: 'unauthorized' }, 401)
 
@@ -695,7 +723,7 @@ export async function handleAccounts(req: Request): Promise<Response> {
     const firstToken = machineTokens[0]?.token
     void writeAudit({
       action: 'account.create',
-      ip: 'unknown',
+      ip,
       actorId: principal.accountId,
       targetId: account._id,
       meta: { role: account.role, email: account.email },
@@ -763,11 +791,11 @@ export async function handleAccounts(req: Request): Promise<Response> {
       // whatever request was open for it, whether or not they came in through the list.
       const { closeResetRequests } = await import('./reset-requests')
       await closeResetRequests(target._id, principal.accountId, 'done', new Date()).catch(() => 0)
-      void writeAudit({ action: 'password.reset_admin', ip: 'unknown', actorId: principal.accountId, targetId: target._id })
+      void writeAudit({ action: 'password.reset_admin', ip, actorId: principal.accountId, targetId: target._id })
     } else {
       void writeAudit({
         action: 'account.update',
-        ip: 'unknown',
+        ip,
         actorId: principal.accountId,
         targetId: target._id,
         meta: { fields: Object.keys(patch) },
@@ -799,7 +827,7 @@ export async function handleAccounts(req: Request): Promise<Response> {
     // Detach the deleted account from any machines it owned — the machines survive, they just lose
     // the dead owner relation (no orphaned accountId left dangling).
     await detachAccountFromAllMachines(id).catch(() => {})
-    void writeAudit({ action: 'account.delete', ip: 'unknown', actorId: principal.accountId, targetId: id })
+    void writeAudit({ action: 'account.delete', ip, actorId: principal.accountId, targetId: id })
     return json({ ok: true })
   }
 
@@ -857,7 +885,7 @@ export async function handleTeams(req: Request): Promise<Response> {
  * /api/iam/machines — GET list (scoped), POST add-to-account (gated). Self-guarding.
  * Owner sees/manages all; a manager only their team's machines.
  */
-export async function handleMachines(req: Request): Promise<Response> {
+export async function handleMachines(req: Request, ip = 'unknown'): Promise<Response> {
   const principal = await getPrincipal(req)
   if (!principal) return json({ error: 'unauthorized' }, 401)
   if (req.method === 'GET') {
@@ -931,7 +959,7 @@ export async function handleMachines(req: Request): Promise<Response> {
         const { notifyMember } = await import('./team-agent')
         notifyMember(machine.user, { type: 'reassigned', account: nextUser ?? null, actor })
       } catch { /* best-effort — the identity still reflects via whoami */ }
-      void writeAudit({ action: 'machine.update', ip: 'unknown', actorId: principal.accountId, targetId: ownerId, meta: { field: 'owners' } })
+      void writeAudit({ action: 'machine.update', ip, actorId: principal.accountId, targetId: ownerId, meta: { field: 'owners' } })
       return json({ ok: true })
     }
     // Rename a machine (scoped): { renameId, name }. Updates the token label; the new name
@@ -951,7 +979,7 @@ export async function handleMachines(req: Request): Promise<Response> {
         const { notifyMember } = await import('./team-agent')
         notifyMember(machine.user, { type: 'renamed', name: newName, actor })
       } catch { /* best-effort — the name still reflects via whoami */ }
-      void writeAudit({ action: 'machine.update', ip: 'unknown', actorId: principal.accountId, targetId: renameId, meta: { field: 'name' } })
+      void writeAudit({ action: 'machine.update', ip, actorId: principal.accountId, targetId: renameId, meta: { field: 'name' } })
       return json({ ok: true })
     }
     // Rotate a machine's token (scoped): { rotateId } → new plaintext token once. Lets an admin OR
@@ -963,7 +991,7 @@ export async function handleMachines(req: Request): Promise<Response> {
       if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
       const token = await rotateToken(rotateId)
       if (token === null) return json({ error: 'machine not found' }, 404)
-      void writeAudit({ action: 'token.rotate', ip: 'unknown', actorId: principal.accountId, targetId: rotateId })
+      void writeAudit({ action: 'token.rotate', ip, actorId: principal.accountId, targetId: rotateId })
       return json({ token: packConnectToken(token, (await getCentralConfig()).publicUrl) }, 200)
     }
     // Reassign a machine to another team (scoped): { reassignId, teamId }. Must manage BOTH the
@@ -1023,7 +1051,7 @@ export async function handleMachines(req: Request): Promise<Response> {
         ]
       }
       await setMachineTeamsAndExclusions(reassignId, next, [...new Set(nextExcluded)])
-      void writeAudit({ action: 'machine.update', ip: 'unknown', actorId: principal.accountId, targetId: reassignId, meta: { field: 'teams' } })
+      void writeAudit({ action: 'machine.update', ip, actorId: principal.accountId, targetId: reassignId, meta: { field: 'teams' } })
       return json({ ok: true })
     }
     // Mint a new machine: { name, accountIds?: string[], teamId?: string }.
@@ -1061,7 +1089,7 @@ export async function handleMachines(req: Request): Promise<Response> {
       ? ((await getAccount(accountIds[0]))?.name ?? name)
       : name
     const { token } = await mintMachine({ machineName: name, user, accountIds, teamIds })
-    void writeAudit({ action: 'token.mint', ip: 'unknown', actorId: principal.accountId, meta: { name } })
+    void writeAudit({ action: 'token.mint', ip, actorId: principal.accountId, meta: { name } })
     return json({ token: packConnectToken(token, (await getCentralConfig()).publicUrl) }, 201)
   }
   if (req.method === 'DELETE') {
@@ -1084,7 +1112,7 @@ export async function handleMachines(req: Request): Promise<Response> {
       const { deleteMemberWorkflows } = await import('./team-workflows')
       await deleteMemberWorkflows(id)
     } catch { /* best-effort; token already revoked */ }
-    void writeAudit({ action: 'token.revoke', ip: 'unknown', actorId: principal.accountId, targetId: id })
+    void writeAudit({ action: 'token.revoke', ip, actorId: principal.accountId, targetId: id })
     return json({ ok: deleted })
   }
   return json({ error: 'method not allowed' }, 405)

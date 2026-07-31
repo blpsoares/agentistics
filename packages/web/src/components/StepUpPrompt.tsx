@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom'
 import { ShieldAlert, AlertCircle } from 'lucide-react'
 import type { Lang } from '@agentistics/core'
 import { setStepUpPrompter } from '../lib/stepup'
+import type { StepUpAsk } from '../lib/stepup'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { Revealable, REVEAL_PAD } from './PasswordReveal'
 
 /**
@@ -10,14 +12,19 @@ import { Revealable, REVEAL_PAD } from './PasswordReveal'
  * opens it on demand through the prompter registered here, so no call site has to know it
  * exists — they just use stepUpFetch instead of fetch.
  *
- * Accepts either the account password or a TOTP code: an account with a second factor should be
- * able to prove presence with the thing already in their hand.
+ * The FACTOR is not the user's choice: once an account has a second factor enrolled the server
+ * takes nothing else, so the dialog opens straight into code mode and does not offer a password
+ * it knows will be refused. A refused answer reopens the dialog saying so — closing silently on
+ * a 401 is what made this look like a button that does nothing.
  */
 export function StepUpPrompt({ lang }: { lang: Lang }) {
   const pt = lang === 'pt'
+  const isMobile = useIsMobile()
   const [open, setOpen] = useState(false)
   const [value, setValue] = useState('')
   const [useCode, setUseCode] = useState(false)
+  // Enrolled: the password is not an option here, so the "use password instead" escape is hidden.
+  const [codeOnly, setCodeOnly] = useState(false)
   const [shown, setShown] = useState(false)
   const [error, setError] = useState(false)
   const resolver = useRef<((v: { password?: string; code?: string } | null) => void) | null>(null)
@@ -32,8 +39,12 @@ export function StepUpPrompt({ lang }: { lang: Lang }) {
   }, [])
 
   useEffect(() => {
-    setStepUpPrompter(() => new Promise(resolve => {
+    setStepUpPrompter((ask: StepUpAsk) => new Promise(resolve => {
       resolver.current = resolve
+      setCodeOnly(ask.needsCode)
+      setUseCode(ask.needsCode)
+      setError(ask.retry)
+      setValue('')
       setOpen(true)
       setTimeout(() => inputRef.current?.focus(), 50)
     }))
@@ -71,9 +82,13 @@ export function StepUpPrompt({ lang }: { lang: Lang }) {
           </span>
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '8px 0 14px' }}>
-          {pt
-            ? 'Esta ação apaga dados ou emite uma credencial. Confirme com sua senha para continuar.'
-            : 'This action deletes data or mints a credential. Confirm with your password to continue.'}
+          {codeOnly
+            ? (pt
+              ? 'Esta ação apaga dados ou emite uma credencial. Confirme com o código do autenticador — ou um código de recuperação, se você não tiver o aplicativo.'
+              : 'This action deletes data or mints a credential. Confirm with your authenticator code — or a recovery code, if you no longer have the app.')
+            : (pt
+              ? 'Esta ação apaga dados ou emite uma credencial. Confirme com sua senha para continuar.'
+              : 'This action deletes data or mints a credential. Confirm with your password to continue.')}
         </div>
         <Revealable shown={shown} onToggle={() => setShown(v => !v)} lang={lang} disabled={useCode}>
           <input
@@ -82,7 +97,8 @@ export function StepUpPrompt({ lang }: { lang: Lang }) {
             value={value}
             onChange={e => { setValue(e.target.value); setError(false) }}
             placeholder={useCode ? '123456' : '••••••••'}
-            style={{ ...input, paddingRight: useCode ? 11 : REVEAL_PAD }}
+            autoComplete={useCode ? 'one-time-code' : 'current-password'}
+            style={{ ...input, paddingRight: useCode ? 11 : REVEAL_PAD, ...(isMobile ? { minHeight: TOUCH } : null) }}
           />
         </Revealable>
         {error && (
@@ -90,16 +106,20 @@ export function StepUpPrompt({ lang }: { lang: Lang }) {
             <AlertCircle size={13} /> {pt ? 'Não confere.' : 'Does not match.'}
           </div>
         )}
-        <button type="submit" disabled={!value.trim()} style={{ ...primaryBtn, opacity: value.trim() ? 1 : 0.5 }}>
+        <button type="submit" disabled={!value.trim()} style={{ ...primaryBtn, ...(isMobile ? { minHeight: TOUCH } : null), opacity: value.trim() ? 1 : 0.5 }}>
           {pt ? 'Confirmar' : 'Confirm'}
         </button>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 10 }}>
-          <button type="button" onClick={() => { setUseCode(v => !v); setValue('') }} style={linkBtn}>
-            {useCode
-              ? (pt ? 'Usar a senha' : 'Use password')
-              : (pt ? 'Usar código do autenticador' : 'Use authenticator code')}
-          </button>
-          <button type="button" onClick={() => finish(null)} style={linkBtn}>
+        <div style={{ display: 'flex', justifyContent: codeOnly ? 'flex-end' : 'space-between', gap: 8, marginTop: 10 }}>
+          {/* Offered only when the password is genuinely accepted — an enrolled account that
+              typed it would simply be refused, which is the failure this dialog had. */}
+          {!codeOnly && (
+            <button type="button" onClick={() => { setUseCode(v => !v); setValue('') }} style={{ ...linkBtn, ...(isMobile ? touchLink : null) }}>
+              {useCode
+                ? (pt ? 'Usar a senha' : 'Use password')
+                : (pt ? 'Usar código do autenticador' : 'Use authenticator code')}
+            </button>
+          )}
+          <button type="button" onClick={() => finish(null)} style={{ ...linkBtn, ...(isMobile ? touchLink : null) }}>
             {pt ? 'Cancelar' : 'Cancel'}
           </button>
         </div>
@@ -117,6 +137,10 @@ export function StepUpPrompt({ lang }: { lang: Lang }) {
  * the password box sat underneath, invisible.
  */
 const Z_STEPUP = 2_000_000
+
+/** Minimum comfortable touch target — applied on mobile ONLY; on a pointer it just bloats the card. */
+const TOUCH = 44
+const touchLink: React.CSSProperties = { minHeight: TOUCH, display: 'inline-flex', alignItems: 'center' }
 
 const overlay: React.CSSProperties = {
   position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex',
