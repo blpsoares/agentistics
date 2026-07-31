@@ -477,6 +477,106 @@ export async function handleRecover(req: Request, ip = 'unknown'): Promise<Respo
 }
 
 /**
+ * POST /api/iam/reset-request — PUBLIC. Body: { email, reason? }
+ *
+ * A member who cannot sign in asks the people who can already reset them. It grants nothing and
+ * changes nothing: it writes a row and rings a bell. The reset itself stays where it was, behind
+ * the account PATCH and its step-up.
+ *
+ * Always answers `{ ok: true }`. An honest 404 here would tell an anonymous caller which
+ * e-mails have accounts, and the whole point of the endpoint is that anyone can reach it.
+ */
+export async function handleResetRequest(req: Request, ip = 'unknown'): Promise<Response> {
+  const parsedBody = await readJsonLimited<unknown>(req, LIMITS.bodyBytes)
+  if (!parsedBody.ok) {
+    return json({ ok: false, error: parsedBody.error }, parsedBody.error === 'too_large' ? 413 : 400)
+  }
+  const b = parsedBody.value as Record<string, unknown>
+  const email = typeof b.email === 'string' ? b.email : ''
+
+  const key = `reset-req:${normalizeEmail(email)}`
+  const verdict = limiter.blocked(key)
+  if (!verdict.allowed) return tooManyRequests(verdict.retryAfterSec)
+
+  const account = await findAccountByEmail(email)
+  if (!account) {
+    // Costs the caller an attempt, so the endpoint cannot be walked through an address list at
+    // speed, and says nothing about the outcome.
+    limiter.fail(key, RULES.login)
+    void writeAudit({ action: 'password.reset_requested', ip, meta: { email: normalizeEmail(email), known: false } })
+    return json({ ok: true })
+  }
+
+  const { openResetRequest, normalizeReason } = await import('./reset-requests')
+  const reason = normalizeReason(b.reason)
+  const isNew = await openResetRequest({
+    accountId: account._id,
+    email: account.email,
+    name: account.name,
+    reason,
+    now: new Date(),
+  })
+  void writeAudit({ action: 'password.reset_requested', ip, targetId: account._id, meta: { known: true, duplicate: !isNew } })
+
+  if (isNew) {
+    try {
+      const { broadcastNotification } = await import('./sse')
+      // Deliberately anonymous. Notifications go to every connected dashboard, and who forgot
+      // their password is not everybody's business; the name, the reason and the button live
+      // behind the authenticated list, visible only to those who could act on it anyway.
+      broadcastNotification({ type: 'info', code: 'iam.reset_requested' })
+    } catch { /* the row is what matters; the bell is a courtesy */ }
+  }
+  return json({ ok: true })
+}
+
+/**
+ * GET /api/iam/reset-requests — the open queue, scoped to what the caller could act on.
+ * DELETE /api/iam/reset-requests?id=… — dismiss one without resetting anything.
+ *
+ * Scope is `canDeleteAccount`, the same authority that already governs resetting somebody's
+ * password: an owner sees all of them, a manager sees the user-members of the teams they manage.
+ * A request nobody may act on is not shown to anybody — it waits for an owner.
+ */
+export async function handleResetRequests(req: Request, url: URL): Promise<Response> {
+  const principal = await getPrincipal(req)
+  if (!principal) return json({ error: 'unauthorized' }, 401)
+  const { listOpenResetRequests, closeResetRequests, getResetRequest } = await import('./reset-requests')
+
+  if (req.method === 'GET') {
+    const open = await listOpenResetRequests()
+    const visible = []
+    for (const r of open) {
+      const target = await getAccount(r.accountId)
+      if (target && canDeleteAccount(principal, target)) {
+        visible.push({
+          id: r._id,
+          accountId: r.accountId,
+          email: r.email,
+          name: r.name,
+          reason: r.reason,
+          createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt),
+          status: r.status,
+        })
+      }
+    }
+    return json({ requests: visible })
+  }
+
+  if (req.method === 'DELETE') {
+    const id = url.searchParams.get('id') ?? ''
+    const doc = await getResetRequest(id)
+    if (!doc) return json({ error: 'not found' }, 404)
+    const target = await getAccount(doc.accountId)
+    if (!target || !canDeleteAccount(principal, target)) return json({ error: 'forbidden' }, 403)
+    await closeResetRequests(doc.accountId, principal.accountId, 'dismissed', new Date())
+    return json({ ok: true })
+  }
+
+  return json({ error: 'not found' }, 404)
+}
+
+/**
  * POST /api/iam/change-password  Body: { currentPassword?, newPassword }
  * Self-service password change. currentPassword is required UNLESS the account is flagged
  * mustChangePassword (forced first-login change). Bumps sessionVersion to invalidate old
@@ -653,7 +753,13 @@ export async function handleAccounts(req: Request): Promise<Response> {
     if (Object.keys(patch).length === 0) return json({ error: 'nothing to update' }, 400)
     await updateAccount(target._id, patch)
     // A password reset invalidates the target's existing sessions (forces re-login → first change).
-    if (b.resetPassword === true) await bumpSessionVersion(target._id)
+    if (b.resetPassword === true) {
+      await bumpSessionVersion(target._id)
+      // The queue must not disagree with reality: whoever just reset this account answered
+      // whatever request was open for it, whether or not they came in through the list.
+      const { closeResetRequests } = await import('./reset-requests')
+      await closeResetRequests(target._id, principal.accountId, 'done', new Date()).catch(() => 0)
+    }
 
     const updated = await getAccount(target._id)
     return json({

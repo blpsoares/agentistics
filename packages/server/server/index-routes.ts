@@ -25,6 +25,9 @@ export const AUTH_PUBLIC = new Set([
   '/api/iam/login',
   // Forgot-password for an owner: proven with the second factor, so no session exists yet.
   '/api/iam/recover',
+  // A member who cannot sign in asking to BE reset. Grants nothing, changes nothing, and
+  // answers identically for an address that has no account.
+  '/api/iam/reset-request',
   // Second login stage: the caller holds a challenge, not yet a session.
   '/api/iam/login/mfa',
   '/api/iam/logout',

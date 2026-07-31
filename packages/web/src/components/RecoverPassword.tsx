@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { AlertCircle, KeyRound } from 'lucide-react'
+import { AlertCircle, KeyRound, MailQuestion } from 'lucide-react'
 import { Field } from './Login'
 
 /**
@@ -15,6 +15,12 @@ import { Field } from './Login'
  * which is the failure a user cannot otherwise diagnose.
  */
 export function RecoverPassword({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+  const [asking, setAsking] = useState(false)
+  if (asking) return <RequestReset onBack={() => setAsking(false)} onCancel={onCancel} />
+  return <OwnerRecovery onDone={onDone} onCancel={onCancel} onAsk={() => setAsking(true)} />
+}
+
+function OwnerRecovery({ onDone, onCancel, onAsk }: { onDone: () => void; onCancel: () => void; onAsk: () => void }) {
   const [email, setEmail] = useState('')
   const [code, setCode] = useState('')
   const [password, setPassword] = useState('')
@@ -87,10 +93,13 @@ export function RecoverPassword({ onDone, onCancel }: { onDone: () => void; onCa
         style={{ width: '100%', marginTop: 8, padding: '7px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
         Back to sign in
       </button>
-      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 14, lineHeight: 1.6 }}>
-        Not an owner? Ask an owner (or a manager of your team) to reset your password — they can do
-        it from the accounts settings. Lost the authenticator <i>and</i> the codes? The password can
-        be reset from the machine itself with <code>agentop central reset-password</code>.
+      <button type="button" onClick={onAsk}
+        style={{ width: '100%', marginTop: 12, padding: '6px 14px', borderRadius: 8, border: 'none', background: 'transparent', color: 'var(--text-tertiary)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+        No authenticator? Ask an admin to reset it
+      </button>
+      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 12, lineHeight: 1.6 }}>
+        Lost the authenticator <i>and</i> the recovery codes? An owner's password can still be
+        reset from the machine itself with <code>agentop central reset-password</code>.
       </div>
     </Shell>
   )
@@ -124,5 +133,77 @@ function Primary({ children, disabled, onClick }: { children: React.ReactNode; d
       style={{ width: '100%', padding: '9px 14px', borderRadius: 8, border: '1px solid var(--anthropic-orange)', background: disabled ? 'var(--bg-elevated)' : 'var(--anthropic-orange-dim)', color: disabled ? 'var(--text-tertiary)' : 'var(--anthropic-orange)', fontSize: 13, fontWeight: 600, cursor: disabled ? 'default' : 'pointer', fontFamily: 'inherit' }}>
       {children}
     </button>
+  )
+}
+
+/**
+ * The member's side: ask the people who can already reset this account to do it.
+ *
+ * It grants nothing, so it can afford to be friendly — and it must not be more informative than
+ * it is: the server answers the same whether or not the address has an account, and this screen
+ * says the same back. Telling the visitor "no such user" would turn the form into a directory.
+ */
+function RequestReset({ onBack, onCancel }: { onBack: () => void; onCancel: () => void }) {
+  const [email, setEmail] = useState('')
+  const [reason, setReason] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [sent, setSent] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!email.trim() || submitting) return
+    setSubmitting(true); setError(null)
+    try {
+      const res = await fetch('/api/iam/reset-request', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), reason: reason.trim() || undefined }),
+      })
+      if (res.status === 429) { setError('Too many requests — wait a few minutes and try again.'); return }
+      setSent(true)
+    } catch { setError('Network error — try again.') } finally { setSubmitting(false) }
+  }
+
+  if (sent) {
+    return (
+      <Shell>
+        <Head icon={<MailQuestion size={18} />} title="Request sent" />
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '10px 0 16px', lineHeight: 1.6 }}>
+          If that address has an account, the people who can reset it now see your request. They
+          will give you a temporary password — you will be asked to choose a new one when you
+          sign in with it.
+        </div>
+        <Primary onClick={onCancel}>Back to sign in</Primary>
+      </Shell>
+    )
+  }
+
+  return (
+    <Shell onSubmit={submit}>
+      <Head icon={<MailQuestion size={18} />} title="Ask for a reset" />
+      <div style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '8px 0 16px', lineHeight: 1.6 }}>
+        An owner — or a manager of your team — can reset your password. This tells them you need it.
+      </div>
+      <Field label="Email" type="email" value={email} onChange={setEmail} disabled={submitting} />
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-tertiary)', marginBottom: 5 }}>
+          Reason (optional)
+        </div>
+        <textarea value={reason} onChange={e => setReason(e.target.value.slice(0, 280))} disabled={submitting}
+          rows={3} placeholder="New phone, lost the codes…"
+          style={{ width: '100%', boxSizing: 'border-box', padding: '8px 11px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, color: 'var(--text-primary)', outline: 'none', fontFamily: 'inherit', resize: 'vertical' }} />
+        <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)', marginTop: 4 }}>{reason.length}/280</div>
+      </div>
+      {error && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#ef4444', marginBottom: 12 }}>
+          <AlertCircle size={13} /> {error}
+        </div>
+      )}
+      <Primary disabled={!email.trim() || submitting}>{submitting ? 'Sending…' : 'Send request'}</Primary>
+      <button type="button" onClick={onBack}
+        style={{ width: '100%', marginTop: 8, padding: '7px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+        Back
+      </button>
+    </Shell>
   )
 }

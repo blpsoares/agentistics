@@ -31,6 +31,8 @@ describe('public route allowlist', () => {
       // FACTOR before it changes anything, rate-limits per account, and answers identically for
       // an unknown e-mail, a non-owner and a wrong code.
       '/api/iam/recover',
+      // Asking to be reset: writes a row for an admin to look at, and nothing else.
+      '/api/iam/reset-request',
       '/api/iam/status',
       '/api/team/agent',
       '/api/team/forget',

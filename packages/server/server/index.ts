@@ -156,6 +156,7 @@ if (TEAM_CENTRAL) {
       const { backfillTokenTeamIds, purgeUnknownTeamsFromMachines } = await import('./team-tokens')
       const { backfillRepoTeamIds } = await import('./team-repos')
       await ensureAccountIndexes()
+      await (await import('./reset-requests')).ensureResetRequestIndexes().catch(() => {})
       // Convert any date still stored as a STRING into a BSON Date. Runs before everything that
       // reads a timestamp, is idempotent (a migrated DB matches no documents), and never throws —
       // a central must still boot when it cannot run. See mongo-dates.ts.
@@ -1292,6 +1293,24 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleStepUp } = await import('./iam-handlers')
       const res = await handleStepUp(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/reset-request' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleResetRequest } = await import('./iam-handlers')
+      const res = await handleResetRequest(req, clientIp)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/reset-requests') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleResetRequests } = await import('./iam-handlers')
+      const res = await handleResetRequests(req, url)
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })

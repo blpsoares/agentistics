@@ -15,7 +15,7 @@ export type AuditAction =
   | 'login.success' | 'login.failure' | 'login.mfa_challenge' | 'login.mfa_failure'
   | 'logout' | 'password.change' | 'password.reset_cli'
   | 'mfa.enable' | 'mfa.disable' | 'mfa.recovery_used' | 'mfa.recovery_regenerated'
-  | 'password.recover' | 'password.recover_failure'
+  | 'password.recover' | 'password.recover_failure' | 'password.reset_requested'
   | 'account.create' | 'account.update' | 'account.delete'
   | 'team.create' | 'team.update' | 'team.delete'
   | 'token.mint' | 'token.rotate' | 'token.revoke'

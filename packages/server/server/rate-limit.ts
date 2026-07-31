@@ -63,7 +63,7 @@ export const RULES: Record<'login' | 'loginAttempts' | 'token' | 'api' | 'ingest
 
 /** Routes where a wrong guess is the attack: credentials and bearer tokens. */
 const LOGIN_PATHS = new Set([
-  '/api/iam/login', '/api/iam/login/mfa', '/api/team/login', '/api/iam/bootstrap', '/api/iam/recover',
+  '/api/iam/login', '/api/iam/login/mfa', '/api/team/login', '/api/iam/bootstrap', '/api/iam/recover', '/api/iam/reset-request',
 ])
 const TOKEN_PATHS = new Set(['/api/team/whoami', '/api/team/agent'])
 
