@@ -809,3 +809,74 @@ describe('validateShareSources — a source the API accepts must be one enforcem
       .toEqual({ sources: [noneSrc(), repoSrc('github.com/o/r')] })
   })
 })
+
+// ---------------------------------------------------------------------------
+// Live-refresh: PATCH /api/team/connections/:id must notify open dashboards on a REAL change
+// (label or rules), and must NOT wake every connected dashboard on a no-op. The notifier is
+// injected (`deps.notify`) so this is asserted without touching the real SSE machinery.
+// ---------------------------------------------------------------------------
+
+describe('handlePatchConnection — live-refresh notify', () => {
+  it('notifies after a real rules change, once the write has committed', async () => {
+    const stored = conn('c_aaaaaaaaaaaa', { sources: [] })
+    const { state, deps } = fakeStore({ schema: 2, mode: 'member', connections: [stored] })
+    let notifyCalls = 0
+    let sourcesAtNotifyTime: unknown
+    const notify = () => {
+      notifyCalls++
+      // The write must be visible to a reader BEFORE the notify fires — a client that refetches
+      // on receiving it must never see the old state.
+      sourcesAtNotifyTime = state.config.connections[0]!.sources
+    }
+
+    const res = await handlePatchConnection(patchReq({ sources: [repoSrc('github.com/o/x')] }), 'c_aaaaaaaaaaaa', { ...deps, notify })
+    expect(res.status).toBe(200)
+    expect(notifyCalls).toBe(1)
+    // The zero→non-zero transition (§4.2) also adds the `none` bucket — the point of this
+    // assertion is only that the notify callback observes the COMMITTED write, not the pre-image.
+    expect(sourcesAtNotifyTime).toEqual([repoSrc('github.com/o/x'), noneSrc()])
+  })
+
+  it('notifies after a real label change', async () => {
+    const stored = conn('c_aaaaaaaaaaaa', { label: 'old-name' })
+    const { deps } = fakeStore({ schema: 2, mode: 'member', connections: [stored] })
+    let notifyCalls = 0
+    const notify = () => { notifyCalls++ }
+
+    const res = await handlePatchConnection(patchReq({ label: 'new-name' }), 'c_aaaaaaaaaaaa', { ...deps, notify })
+    expect(res.status).toBe(200)
+    expect(notifyCalls).toBe(1)
+  })
+
+  it('does NOT notify when the requested label is identical to the stored one (no-op)', async () => {
+    const stored = conn('c_aaaaaaaaaaaa', { label: 'same-name' })
+    const { deps } = fakeStore({ schema: 2, mode: 'member', connections: [stored] })
+    let notifyCalls = 0
+    const notify = () => { notifyCalls++ }
+
+    const res = await handlePatchConnection(patchReq({ label: 'same-name' }), 'c_aaaaaaaaaaaa', { ...deps, notify })
+    expect(res.status).toBe(200)
+    expect(notifyCalls).toBe(0)
+  })
+
+  it('does NOT notify when the requested sources are identical to the stored ones (no-op)', async () => {
+    const stored = conn('c_aaaaaaaaaaaa', { shareMode: 'denylist', sources: [repoSrc('github.com/o/x')] })
+    const { deps } = fakeStore({ schema: 2, mode: 'member', connections: [stored] })
+    let notifyCalls = 0
+    const notify = () => { notifyCalls++ }
+
+    const res = await handlePatchConnection(patchReq({ sources: [repoSrc('github.com/o/x')] }), 'c_aaaaaaaaaaaa', { ...deps, notify })
+    expect(res.status).toBe(200)
+    expect(notifyCalls).toBe(0)
+  })
+
+  it('does NOT notify when the connection is unknown (the write never happened)', async () => {
+    const { deps } = fakeStore({ schema: 2, mode: 'member', connections: [] })
+    let notifyCalls = 0
+    const notify = () => { notifyCalls++ }
+
+    const res = await handlePatchConnection(patchReq({ label: 'x' }), 'c_aaaaaaaaaaaa', { ...deps, notify })
+    expect(res.status).toBe(404)
+    expect(notifyCalls).toBe(0)
+  })
+})

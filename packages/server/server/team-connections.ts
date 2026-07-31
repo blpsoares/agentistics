@@ -526,6 +526,16 @@ function nudgeAfterRulesChange(connId: string): void {
   void pushNow(connId).catch(() => { /* best-effort */ })
 }
 
+/** Best-effort, fire-and-forget local dashboard refresh (§ live-refresh): tells every connected
+ *  SSE client on THIS machine to re-fetch, so the Settings panel reflects a sharing-rules edit or
+ *  a label rename immediately instead of on the next poll. Dynamic import mirrors the rest of this
+ *  file's fire-and-forget nudges (`nudgeSocket`, `nudgeAfterInsert`) — `sse.ts` is a heavier,
+ *  request-handling module and this keeps it out of the load path of every other route. Never
+ *  throws, never delays the response. */
+function notifyLocalDashboards(): void {
+  void import('./sse').then(m => m.triggerSseNotification()).catch(() => { /* best-effort */ })
+}
+
 /** PATCH /api/team/connections/:id — { label?, shareMode?, sources? } (a legacy { deniedRepos? }
  *  body is still accepted and converted — see `parseRulesFromBody`) — read-modify-write that entry
  *  only. A rules change (either field present) applies `resolveShareRules`'s zero→non-zero
@@ -536,15 +546,26 @@ function nudgeAfterRulesChange(connId: string): void {
  *  `{ ok, queued: true }` when a rules change was accepted, so the caller knows the removal (if
  *  any) is now running server-side rather than applied synchronously.
  *
+ *  Live-refresh: `deps.notify` fires ONLY when the write actually changed something the machine's
+ *  own dashboards show — the resolved rules signature differs from what was stored (`rulesActuallyChanged`,
+ *  via `rulesSignature` — not merely "a rules field was present in the body", which
+ *  `resolveShareRules` accepts even when it resolves back to the same set), or the label's value
+ *  actually differs. A request that re-sends the same label or the same source list is a no-op and
+ *  must not wake every dashboard watching this machine. It fires AFTER `_updateTeamConfig` has
+ *  resolved (the write is committed), never before — a client that refetches on receiving it must
+ *  see the new state, not the old one.
+ *
  *  `deps` is injectable for tests — the defaults write the developer's real
- *  `~/.agentistics/preferences.json` and kick a real push cycle, neither of which a test may do. */
+ *  `~/.agentistics/preferences.json`, kick a real push cycle, and notify real SSE clients, none of
+ *  which a test may do. */
 export async function handlePatchConnection(
   req: Request,
   rawId: string,
-  deps: { updateTeamConfig?: typeof updateTeamConfig; nudge?: (connId: string) => void } = {},
+  deps: { updateTeamConfig?: typeof updateTeamConfig; nudge?: (connId: string) => void; notify?: () => void } = {},
 ): Promise<Response> {
   const _updateTeamConfig = deps.updateTeamConfig ?? updateTeamConfig
   const _nudge = deps.nudge ?? nudgeAfterRulesChange
+  const _notify = deps.notify ?? notifyLocalDashboards
   let id: string
   try {
     id = safeConnId(rawId)
@@ -559,6 +580,7 @@ export async function handlePatchConnection(
 
   let found = false
   let rulesChanged = false
+  let somethingChanged = false
   try {
     await _updateTeamConfig((current: TeamConfig) => {
       const existing = current.connections.find(c => c.id === id)
@@ -574,9 +596,17 @@ export async function handlePatchConnection(
         shareMode = resolved.mode
         sources = resolved.sources
         rulesChanged = true
+        // The route always runs the §6.1 reconcile cycle when a rules field was PRESENT (safe —
+        // an extra no-op cycle is harmless), but a live-refresh notification is a different cost
+        // (it wakes every open dashboard on this machine) and must be gated on a REAL difference.
+        if (rulesSignature(shareMode, sources) !== rulesSignature(existing.shareMode, existing.sources)) {
+          somethingChanged = true
+        }
       }
+      const newLabel = body.label !== undefined ? (body.label || undefined) : existing.label
+      if (body.label !== undefined && newLabel !== existing.label) somethingChanged = true
       const connections = current.connections.map(c => c.id === id
-        ? { ...c, ...(body.label !== undefined ? { label: body.label || undefined } : {}), shareMode, sources }
+        ? { ...c, ...(body.label !== undefined ? { label: newLabel } : {}), shareMode, sources }
         : c)
       return normalizeTeamConfig({ ...defaultTeam(), mode: 'member', connections })
     })
@@ -586,6 +616,8 @@ export async function handlePatchConnection(
   }
 
   if (!found) return json({ error: 'unknown connection' }, 404)
+  // Notify only once the write above has resolved — the client's refetch must observe it.
+  if (somethingChanged) _notify()
   if (rulesChanged) {
     _nudge(id)
     return json({ ok: true, queued: true })

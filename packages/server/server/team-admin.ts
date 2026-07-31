@@ -16,6 +16,13 @@ import { getTeamCollection } from './mongo'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
 
+/** Best-effort, fire-and-forget local dashboard refresh (§ live-refresh). Dynamic import mirrors
+ *  `team-connections.ts`'s own nudges — `sse.ts` is a heavier, request-handling module and this
+ *  keeps it out of the load path of every other route. Never throws, never delays the response. */
+function notifyLocalDashboards(): void {
+  void import('./sse').then(m => m.triggerSseNotification()).catch(() => { /* best-effort */ })
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/team/members
 // ---------------------------------------------------------------------------
@@ -54,8 +61,20 @@ export async function handleMembers(_req: Request): Promise<Response> {
  * Mint a new ingest token. Returns the plaintext token once.
  * Body: { user: string; label: string }
  * Response: { token: string }  — store it now; it is not saved server-side.
+ *
+ * Live-refresh: notifies this machine's own connected dashboards once the mint has actually
+ * succeeded — a new machine used to appear on the Team Members panel only on its next poll,
+ * unlike revoke/rotate/rename, which already refresh immediately.
+ *
+ * `deps` is injectable for tests — the defaults hit the real `~/.agentistics`-adjacent Mongo
+ * collection (`mintToken`) and the real SSE machinery (`notify`), neither of which a test may do.
  */
-export async function handleMintToken(req: Request): Promise<Response> {
+export async function handleMintToken(
+  req: Request,
+  deps: { mintToken?: typeof mintToken; notify?: () => void } = {},
+): Promise<Response> {
+  const _mintToken = deps.mintToken ?? mintToken
+  const _notify = deps.notify ?? notifyLocalDashboards
   let body: unknown
   try {
     body = await req.json()
@@ -84,7 +103,8 @@ export async function handleMintToken(req: Request): Promise<Response> {
   }
 
   try {
-    const token = await mintToken(user, label)
+    const token = await _mintToken(user, label)
+    _notify()
     return new Response(JSON.stringify({ token }), {
       status: 200,
       headers: JSON_CT,
