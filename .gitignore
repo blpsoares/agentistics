@@ -72,3 +72,4 @@ central.env.*
 # git worktrees created by the harness
 .claude/worktrees/
 /report.md
+/notes.md
