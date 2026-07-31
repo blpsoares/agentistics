@@ -17,8 +17,14 @@ export type AuditAction =
   | 'mfa.enable' | 'mfa.disable' | 'mfa.recovery_used' | 'mfa.recovery_regenerated'
   | 'password.recover' | 'password.recover_failure' | 'password.reset_requested'
   | 'account.create' | 'account.update' | 'account.delete'
+  // An admin (owner OR manager) resetting SOMEONE ELSE's password — kept distinct from
+  // 'password.change' (self-service) so an incident review can tell them apart at a glance.
+  | 'password.reset_admin'
   | 'team.create' | 'team.update' | 'team.delete'
   | 'token.mint' | 'token.rotate' | 'token.revoke'
+  // A machine's name, owner accounts, or team links changed — distinct from mint/rotate/revoke,
+  // which touch the credential itself.
+  | 'machine.update'
   | 'repo.register' | 'repo.unregister'
   | 'config.update' | 'bootstrap.consume'
   | 'capability.denied' | 'authz.denied' | 'rate.blocked'

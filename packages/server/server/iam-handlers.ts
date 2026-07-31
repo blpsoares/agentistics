@@ -25,14 +25,14 @@ import { TEAM_SESSION_SECRET } from './config'
 import { CAPS } from './exposure'
 import { generateSecret, otpauthUri, verifyTotp, generateRecoveryCodes, hashRecoveryCode, totpSkewSteps, TOTP_STEP_SECONDS } from './totp'
 import { getMfa, isMfaEnabled, enableMfa, disableMfa, consumeRecoveryCode } from './mfa-store'
-import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, canAssignMemberships } from './iam-view'
+import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, authorizeAccountPatch } from './iam-view'
 import type { AccountDoc, Membership, Role } from './iam-types'
 import { normalizeEmail } from './iam-types'
 import { limiter, RULES, tooManyRequests } from './rate-limit'
 import { validatePasswordPolicy } from './password-policy'
 import { writeAudit } from './audit'
 import { readJsonLimited, LIMITS } from './limits'
-import { signStepUp, STEPUP_TTL_MS } from './stepup'
+import { signStepUp, stepUpRequiresCode, STEPUP_TTL_MS } from './stepup'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
 
@@ -238,10 +238,13 @@ export async function handleStepUp(req: Request): Promise<Response> {
   const verdict = limiter.blocked(key)
   if (!verdict.allowed) return tooManyRequests(verdict.retryAfterSec)
 
+  const mfa = await getMfa(account._id)
   let ok = false
-  if (code) {
-    const mfa = await getMfa(account._id)
-    ok = !!mfa && verifyTotp(mfa.secret, code, Math.floor(Date.now() / 1000))
+  // Once a second factor is enrolled, step-up MUST be proven with it — for a manager and an
+  // owner equally (stepUpRequiresCode takes no role parameter at all). A stolen cookie plus a
+  // stolen password must not be enough to step up an MFA-enrolled account; only a live code will.
+  if (stepUpRequiresCode(!!mfa)) {
+    ok = !!mfa && !!code && verifyTotp(mfa.secret, code, Math.floor(Date.now() / 1000))
   } else if (password) {
     ok = await verifyPassword(password, account.passwordHash)
   }
@@ -690,6 +693,13 @@ export async function handleAccounts(req: Request): Promise<Response> {
       machineTokens.push({ name: m.name, token: packConnectToken(token, centralUrl) })
     }
     const firstToken = machineTokens[0]?.token
+    void writeAudit({
+      action: 'account.create',
+      ip: 'unknown',
+      actorId: principal.accountId,
+      targetId: account._id,
+      meta: { role: account.role, email: account.email },
+    })
     return json({
       account: publicAccount(account),
       ...(firstToken ? { machineTokens, machineToken: firstToken } : {}),
@@ -705,22 +715,24 @@ export async function handleAccounts(req: Request): Promise<Response> {
     const target = await getAccount(id)
     if (!target) return json({ error: 'not found' }, 404)
 
-    const isOwner = principal.role === 'owner'
-    const isSelf = target._id === principal.accountId
+    const memberships = b.memberships !== undefined ? parseMemberships(b.memberships) : undefined
+    const resetPassword = b.resetPassword === true
 
-    // Authz:
-    //  - self: rename only (password via change-password; you can't alter your own memberships/role).
-    //  - owner: may edit anyone; memberships only apply to member accounts (reject on owner targets).
-    //  - manager: only targets they may delete (user-members in managed teams) — canDeleteAccount
-    //    already rejects owner targets for them.
-    if (isSelf) {
-      if (b.memberships !== undefined || b.resetPassword === true) return json({ error: 'forbidden' }, 403)
-    } else if (isOwner) {
-      if (target.role === 'owner' && b.memberships !== undefined) {
-        return json({ error: 'forbidden' }, 403)
-      }
-    } else if (!canDeleteAccount(principal, target)) {
-      return json({ error: 'forbidden' }, 403)
+    // Single gate for both the account-info edit and the admin password reset — see
+    // authorizeAccountPatch's doc comment for the exact scope (self / owner / manager rules).
+    // It never sees a `role` field at all, so escalating a target's global role through this
+    // endpoint is not merely refused, it is inexpressible.
+    const authz = authorizeAccountPatch(principal, target, { name: typeof b.name === 'string' ? b.name : undefined, memberships, resetPassword })
+    if (!authz.ok) return json({ error: authz.error }, 403)
+
+    // An admin resetting SOMEONE ELSE's password is rate-limited per ACTOR (soft backoff, same
+    // shape as the login/stepup limiters) — this is a guessable-adjacent, high-impact action, and
+    // the generic per-IP ceiling in index.ts is not enough to bound how many accounts one
+    // compromised manager session could reset in a burst.
+    if (resetPassword) {
+      const resetKey = `admin-reset:${principal.accountId}`
+      const verdict = limiter.check(resetKey, RULES.login, Date.now())
+      if (!verdict.allowed) return tooManyRequests(verdict.retryAfterSec)
     }
 
     const patch: Partial<Pick<AccountDoc, 'name' | 'memberships' | 'passwordHash' | 'mustChangePassword'>> = {}
@@ -731,20 +743,12 @@ export async function handleAccounts(req: Request): Promise<Response> {
       patch.name = name
     }
 
-    if (b.memberships !== undefined) {
-      const memberships = parseMemberships(b.memberships)
-      // A manager may assign EITHER role (user or manager) but only inside teams they manage —
-      // delegating within your own team is not escalation. Assigning into an unmanaged team is.
-      // Unlike creation, EDIT may reduce to an empty set (removing a member from the manager's only
-      // team is allowed — the entry gate already proved every current membership was in scope).
-      if (!isOwner && memberships.length > 0 && !canAssignMemberships(principal, memberships)) {
-        return json({ error: 'forbidden' }, 403)
-      }
+    if (memberships !== undefined) {
       patch.memberships = memberships
     }
 
     let tempPassword: string | undefined
-    if (b.resetPassword === true) {
+    if (resetPassword) {
       tempPassword = randomBytes(12).toString('hex') // 24 hex chars
       patch.passwordHash = await hashPassword(tempPassword)
       patch.mustChangePassword = true
@@ -753,12 +757,21 @@ export async function handleAccounts(req: Request): Promise<Response> {
     if (Object.keys(patch).length === 0) return json({ error: 'nothing to update' }, 400)
     await updateAccount(target._id, patch)
     // A password reset invalidates the target's existing sessions (forces re-login → first change).
-    if (b.resetPassword === true) {
+    if (resetPassword) {
       await bumpSessionVersion(target._id)
       // The queue must not disagree with reality: whoever just reset this account answered
       // whatever request was open for it, whether or not they came in through the list.
       const { closeResetRequests } = await import('./reset-requests')
       await closeResetRequests(target._id, principal.accountId, 'done', new Date()).catch(() => 0)
+      void writeAudit({ action: 'password.reset_admin', ip: 'unknown', actorId: principal.accountId, targetId: target._id })
+    } else {
+      void writeAudit({
+        action: 'account.update',
+        ip: 'unknown',
+        actorId: principal.accountId,
+        targetId: target._id,
+        meta: { fields: Object.keys(patch) },
+      })
     }
 
     const updated = await getAccount(target._id)
@@ -786,6 +799,7 @@ export async function handleAccounts(req: Request): Promise<Response> {
     // Detach the deleted account from any machines it owned — the machines survive, they just lose
     // the dead owner relation (no orphaned accountId left dangling).
     await detachAccountFromAllMachines(id).catch(() => {})
+    void writeAudit({ action: 'account.delete', ip: 'unknown', actorId: principal.accountId, targetId: id })
     return json({ ok: true })
   }
 
@@ -917,6 +931,7 @@ export async function handleMachines(req: Request): Promise<Response> {
         const { notifyMember } = await import('./team-agent')
         notifyMember(machine.user, { type: 'reassigned', account: nextUser ?? null, actor })
       } catch { /* best-effort — the identity still reflects via whoami */ }
+      void writeAudit({ action: 'machine.update', ip: 'unknown', actorId: principal.accountId, targetId: ownerId, meta: { field: 'owners' } })
       return json({ ok: true })
     }
     // Rename a machine (scoped): { renameId, name }. Updates the token label; the new name
@@ -936,6 +951,7 @@ export async function handleMachines(req: Request): Promise<Response> {
         const { notifyMember } = await import('./team-agent')
         notifyMember(machine.user, { type: 'renamed', name: newName, actor })
       } catch { /* best-effort — the name still reflects via whoami */ }
+      void writeAudit({ action: 'machine.update', ip: 'unknown', actorId: principal.accountId, targetId: renameId, meta: { field: 'name' } })
       return json({ ok: true })
     }
     // Rotate a machine's token (scoped): { rotateId } → new plaintext token once. Lets an admin OR
@@ -947,6 +963,7 @@ export async function handleMachines(req: Request): Promise<Response> {
       if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
       const token = await rotateToken(rotateId)
       if (token === null) return json({ error: 'machine not found' }, 404)
+      void writeAudit({ action: 'token.rotate', ip: 'unknown', actorId: principal.accountId, targetId: rotateId })
       return json({ token: packConnectToken(token, (await getCentralConfig()).publicUrl) }, 200)
     }
     // Reassign a machine to another team (scoped): { reassignId, teamId }. Must manage BOTH the
@@ -1006,6 +1023,7 @@ export async function handleMachines(req: Request): Promise<Response> {
         ]
       }
       await setMachineTeamsAndExclusions(reassignId, next, [...new Set(nextExcluded)])
+      void writeAudit({ action: 'machine.update', ip: 'unknown', actorId: principal.accountId, targetId: reassignId, meta: { field: 'teams' } })
       return json({ ok: true })
     }
     // Mint a new machine: { name, accountIds?: string[], teamId?: string }.
@@ -1043,6 +1061,7 @@ export async function handleMachines(req: Request): Promise<Response> {
       ? ((await getAccount(accountIds[0]))?.name ?? name)
       : name
     const { token } = await mintMachine({ machineName: name, user, accountIds, teamIds })
+    void writeAudit({ action: 'token.mint', ip: 'unknown', actorId: principal.accountId, meta: { name } })
     return json({ token: packConnectToken(token, (await getCentralConfig()).publicUrl) }, 201)
   }
   if (req.method === 'DELETE') {
@@ -1065,6 +1084,7 @@ export async function handleMachines(req: Request): Promise<Response> {
       const { deleteMemberWorkflows } = await import('./team-workflows')
       await deleteMemberWorkflows(id)
     } catch { /* best-effort; token already revoked */ }
+    void writeAudit({ action: 'token.revoke', ip: 'unknown', actorId: principal.accountId, targetId: id })
     return json({ ok: deleted })
   }
   return json({ error: 'method not allowed' }, 405)

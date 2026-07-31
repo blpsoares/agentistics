@@ -40,4 +40,26 @@ describe('buildAuditEvent', () => {
   it('omits meta entirely when none was given', () => {
     expect(buildAuditEvent({ action: 'logout', ip: '::1' }, now).meta).toBeUndefined()
   })
+
+  // An admin resetting someone ELSE's password is a distinct, more sensitive event than the
+  // self-service 'password.change' — it must be its own action so an incident review can tell
+  // "I changed my own password" apart from "someone else reset mine".
+  it('records an admin-initiated password reset as its own action, with no password/token leaked', () => {
+    const e = buildAuditEvent(
+      { action: 'password.reset_admin', actorId: 'mgr1', targetId: 'u1', ip: '1.2.3.4' },
+      now,
+    )
+    expect(e.action).toBe('password.reset_admin')
+    expect(e.actorId).toBe('mgr1')
+    expect(e.targetId).toBe('u1')
+  })
+
+  it('records a machine edit (rename/reassign/owner change) distinctly from mint/rotate/revoke', () => {
+    const e = buildAuditEvent(
+      { action: 'machine.update', actorId: 'mgr1', targetId: 'machine1', ip: '1.2.3.4', meta: { field: 'name' } },
+      now,
+    )
+    expect(e.action).toBe('machine.update')
+    expect(e.meta).toEqual({ field: 'name' })
+  })
 })

@@ -44,6 +44,20 @@ const PROTECTED: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ['/api/team/repos', ['POST', 'DELETE']],
 ]
 
+/**
+ * Whether a step-up attempt must present the second factor rather than the password.
+ *
+ * A cookie thief who also captured the password (the common case — password managers and
+ * cookies both live in the same browser profile) would otherwise sail through step-up on the
+ * password alone, exactly as if MFA did not exist. Once an account has enrolled a second factor,
+ * step-up MUST be proven with it — for a manager and an owner alike, since both can now reset
+ * somebody else's password through this same grant. This never makes enrolment itself mandatory:
+ * an account with no second factor still steps up on its password, same as before.
+ */
+export function stepUpRequiresCode(mfaEnrolled: boolean): boolean {
+  return mfaEnrolled
+}
+
 export function requiresStepUp(method: string, pathname: string): boolean {
   const m = method.toUpperCase()
   for (const [prefix, methods] of PROTECTED) {

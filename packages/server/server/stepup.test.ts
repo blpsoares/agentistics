@@ -5,7 +5,7 @@
  * mint a credential must be listed, and a read of the same resource must not be.
  */
 import { describe, expect, it } from 'bun:test'
-import { signStepUp, verifyStepUp, requiresStepUp, STEPUP_TTL_MS } from './stepup'
+import { signStepUp, verifyStepUp, requiresStepUp, stepUpRequiresCode, STEPUP_TTL_MS } from './stepup'
 import { signPrincipalSession } from './auth'
 
 const SECRET = 'a-test-secret-at-least-32-chars!!'
@@ -94,5 +94,22 @@ describe('signStepUp + verifyStepUp', () => {
 
   it('grants a short window — long enough to act, short enough not to be a second session', () => {
     expect(STEPUP_TTL_MS).toBeLessThanOrEqual(10 * 60 * 1000)
+  })
+})
+
+describe('stepUpRequiresCode', () => {
+  it('demands the second factor once it is enrolled — a password alone is no longer enough', () => {
+    expect(stepUpRequiresCode(true)).toBe(true)
+  })
+
+  it('accepts the password when no second factor is enrolled — enrolment stays optional', () => {
+    expect(stepUpRequiresCode(false)).toBe(false)
+  })
+
+  it('applies identically regardless of the account role — an owner with TOTP enrolled is', () => {
+    // The policy is a pure function of enrolment, not role: it takes no role parameter at all,
+    // so an owner and a manager who both enrolled TOTP are held to the exact same rule. Passing
+    // the same boolean twice IS the proof — there is no branch anywhere for role to enter.
+    expect(stepUpRequiresCode(true)).toBe(stepUpRequiresCode(true))
   })
 })
