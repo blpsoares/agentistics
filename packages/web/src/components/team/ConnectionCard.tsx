@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, EyeOff, Pencil, Loader2, Check, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, EyeOff, Loader2, Check } from 'lucide-react'
 import type { SessionMeta, TeamConnection, ModelUsage, ShareSource } from '@agentistics/core'
 import type { ArchiveMode } from '../ArchiveConsentModal'
 import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
@@ -13,7 +13,7 @@ import type { ConnectionStatusEntry } from './statusTypes'
 import { isBrokenEndpoint, resolveCardState, resolveRulePill, showsApplyQueuedBanner, resolveWritesDisabled, DOT } from './cardState'
 import { resolveCardActionsHidden, type ApplyPhase } from './repoPanelState'
 import {
-  IconBtn, DisconnectButton, mobileBtn, StatusLine, ResyncStrip, RepoPanelSlot,
+  DisconnectButton, mobileBtn, StatusLine, ResyncStrip, RepoPanelSlot,
 } from './ConnectionCardParts'
 
 export interface ConnectionCardProps {
@@ -36,7 +36,6 @@ export interface ConnectionCardProps {
    *  name into the primary label (`acme:48080 · lucas`), the only thing that tells them apart. */
   duplicateHost: boolean
   lang: 'pt' | 'en'
-  onRename: (id: string, label: string) => void
   onDisconnect: (id: string) => Promise<void>
   onSyncNow: (id: string) => Promise<void>
   onApplyRules: (id: string, mode: ShareMode, sources: ShareSource[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
@@ -44,13 +43,11 @@ export interface ConnectionCardProps {
 
 export function ConnectionCard({
   conn, status, archiveMode, shareTargets, projectTargets, sessions, modelUsage, otelEnabled, duplicateHost, lang,
-  onRename, onDisconnect, onSyncNow, onApplyRules,
+  onDisconnect, onSyncNow, onApplyRules,
 }: ConnectionCardProps) {
   const isMobile = useIsMobile()
   const [expanded, setExpanded] = useState(false)
   const [identity, setIdentity] = useState<ProbedIdentity | null>(null)
-  const [renaming, setRenaming] = useState(false)
-  const [labelDraft, setLabelDraft] = useState(conn.label ?? '')
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
@@ -109,11 +106,6 @@ export function ConnectionCard({
   // probe route) IS "the name the central gave the machine", so it now wins over `org`.
   const displayLabel = conn.label
     ?? (duplicateHost ? `${host} · ${identity?.machineName ?? conn.user ?? '—'}` : (identity?.machineName ?? identity?.org ?? host))
-
-  function commitRename() {
-    onRename(conn.id, labelDraft.trim())
-    setRenaming(false)
-  }
 
   async function handleSyncNow() {
     if (syncing) return
@@ -175,69 +167,19 @@ export function ConnectionCard({
           ? <Loader2 size={10} style={{ color: 'var(--anthropic-orange)', animation: 'spin 1s linear infinite', flexShrink: 0 }} />
           : <StatusDot state={DOT[state]} />}
         <div style={{ minWidth: 0, flex: '1 1 auto' }}>
-          {renaming ? (
-            <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input
-                autoFocus
-                value={labelDraft}
-                onChange={e => setLabelDraft(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenaming(false) }}
-                style={{
-                  padding: '4px 8px', borderRadius: 6, border: '1px solid var(--anthropic-orange)',
-                  background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'inherit',
-                }}
-              />
-              <IconBtn onClick={commitRename}><Check size={13} /></IconBtn>
-              <IconBtn onClick={() => setRenaming(false)}><X size={13} /></IconBtn>
-            </div>
-          ) : (
-            <span style={{
-              display: 'block', fontSize: 14, fontWeight: 600, color: 'var(--text-primary)',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>
-              {displayLabel}
-            </span>
-          )}
-          {!renaming && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: 'var(--text-tertiary)' }}>
-              <span>{COPY.appearsAs[lang]} <strong style={{ color: 'var(--text-secondary)' }}>{conn.user || '—'}</strong></span>
-              {/*
-                Fix 6 (Plan 4 Task 1): the pencil edits a LOCAL nickname the central never sees —
-                it used to sit right beside the bold title, which read as "choose this machine's
-                name" and contradicted the rule that the central owns the name (`displayLabel`
-                above, now driven by `identity.machineName`). Moved next to this secondary line
-                and given `COPY.nicknameHint` as its tooltip so it reads as clearly secondary.
-
-                Secondary is visual weight, not hit area: the icon stays 12px and visually quiet,
-                but the tappable box is 44×44 on mobile only (the same "small icon inside a large
-                invisible touch target" shape this card already uses for its chevron) — desktop
-                keeps the tight 20×20 box, since 44px there is what turns a control row into a row
-                of buttons.
-              */}
-              {/* `span role="button"`, not a real `<button>` — this whole row sits inside the
-                 header's own `onClick={() => setExpanded(...)}` `<button>`, and a nested real
-                 button is invalid HTML that browsers repair by breaking the DOM structure. */}
-              <span
-                role="button"
-                tabIndex={0}
-                aria-label={COPY.rename[lang]}
-                title={COPY.nicknameHint[lang]}
-                onClick={e => { e.stopPropagation(); setLabelDraft(conn.label ?? ''); setRenaming(true) }}
-                onKeyDown={e => {
-                  if (e.key !== 'Enter' && e.key !== ' ') return
-                  e.preventDefault(); e.stopPropagation()
-                  setLabelDraft(conn.label ?? ''); setRenaming(true)
-                }}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  width: isMobile ? 44 : 20, height: isMobile ? 44 : 20,
-                  color: 'var(--text-tertiary)', cursor: 'pointer', opacity: 0.6, flexShrink: 0,
-                }}
-              >
-                <Pencil size={12} />
-              </span>
-            </div>
-          )}
+          {/* Fix (save-and-rename): the machine cannot name itself — no pencil, no rename
+             control. `displayLabel` is the name the CENTRAL gave this machine
+             (`identity.machineName`, from the probe), falling back to a stored `label` (an
+             older config, or one the CLI's `--label` flag set) and then the endpoint host. */}
+          <span style={{
+            display: 'block', fontSize: 14, fontWeight: 600, color: 'var(--text-primary)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {displayLabel}
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: 'var(--text-tertiary)' }}>
+            <span>{COPY.appearsAs[lang]} <strong style={{ color: 'var(--text-secondary)' }}>{conn.user || '—'}</strong></span>
+          </div>
         </div>
         {rulePill && (
           <span style={{

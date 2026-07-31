@@ -178,9 +178,4 @@ describe('Plan 4 Task 1, fix 6 — the machine name is distinct from the local n
     expect(COPY.identityMachineName.en.toLowerCase()).toContain('machine')
     expect(COPY.identityMachineName.pt.toLowerCase()).toContain('máquina')
   })
-
-  test('nicknameHint states the nickname is local-only, never seen by the central', () => {
-    expect(COPY.nicknameHint.en.toLowerCase()).toMatch(/only you|nickname/)
-    expect(COPY.nicknameHint.pt.toLowerCase()).toMatch(/só você|apelido/)
-  })
 })

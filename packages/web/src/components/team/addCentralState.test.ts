@@ -3,8 +3,8 @@ import { NO_REPO_KEY, packConnectToken, type TeamConnection } from '@agentistics
 import type { ShareTarget } from '../../lib/shareRepos'
 import { toggleTarget } from './repoPanelState'
 import {
-  unpackToken, canOpenRules, canConnect, resolveDupeState, computeDirty, buildSubmitBody,
-  buildDefaultDraft, type TestOutcome, type DupeState,
+  unpackToken, canOpenRules, canConnect, canAttemptTest, resolveDupeState, computeDirty,
+  buildSubmitBody, buildDefaultDraft, type TestOutcome, type DupeState,
 } from './addCentralState'
 
 function conn(over: Partial<TeamConnection>): TeamConnection {
@@ -71,6 +71,35 @@ test('Connect is reachable from step 2 only once the same gate that unlocked it 
   expect(canConnect('rules', OK, { kind: 'tokenInUse', existing: conn({}) })).toBe(false)
 })
 
+// --- 2b. the merged "Save tests, then continues" action — one primary button, no separate ------
+//        required "Test connection" click; a tokenInUse pairing still fires NO request at all.
+
+test('the primary action may attempt a test once an endpoint is typed and the token is not claimed elsewhere', () => {
+  expect(canAttemptTest('https://central.example.com', NONE_DUPE)).toBe(true)
+})
+
+test('an empty endpoint blocks the attempt — nothing to test yet', () => {
+  expect(canAttemptTest('', NONE_DUPE)).toBe(false)
+  expect(canAttemptTest('   ', NONE_DUPE)).toBe(false)
+})
+
+test('a token already in use blocks the attempt outright — no request may fire for this pairing', () => {
+  const dupe: DupeState = { kind: 'tokenInUse', existing: conn({}) }
+  expect(canAttemptTest('https://central.example.com', dupe)).toBe(false)
+})
+
+test('a plain duplicate endpoint (token rotation) does not block the attempt', () => {
+  const dupe: DupeState = { kind: 'duplicate', existing: conn({}) }
+  expect(canAttemptTest('https://central.example.com', dupe)).toBe(true)
+})
+
+test('a successful test through the merged action still unlocks step 2 via the same gate', () => {
+  // The merged action runs the test, then re-checks the SAME canOpenRules gate used by the old
+  // separate "Continue" button — success advances, failure (or a since-changed dupe) does not.
+  expect(canOpenRules(OK, NONE_DUPE)).toBe(true)
+  expect(canOpenRules(ERR, NONE_DUPE)).toBe(false)
+})
+
 // --- 3. duplicate endpoint detected by the SAME normalized-endpoint rule ------------------------
 
 test('a duplicate endpoint is detected case- and trailing-slash-insensitively', () => {
@@ -115,28 +144,21 @@ test('re-adding the SAME endpoint with the SAME token it already owns is a dupli
 
 // --- 5. the submit body --------------------------------------------------------------------------
 
-test('the submit body carries exactly endpoint/token/org/shareMode/sources, trailing-slash-trimmed, label omitted when blank', () => {
+test('the submit body carries exactly endpoint/token/org/shareMode/sources, trailing-slash-trimmed — no label field, ever', () => {
   const body = buildSubmitBody({
-    endpoint: 'https://central.example.com/', token: 'sekrit', org: 'acme', label: '',
+    endpoint: 'https://central.example.com/', token: 'sekrit', org: 'acme',
     mode: 'denylist', submitted: { projectRows: [], repoKeys: new Set(), projectPaths: new Set() },
   })
   expect(body).toEqual({
     endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme',
     shareMode: 'denylist', sources: [],
   })
-})
-
-test('the submit body includes label when non-blank', () => {
-  const body = buildSubmitBody({
-    endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme', label: '  Prod  ',
-    mode: 'denylist', submitted: { projectRows: [], repoKeys: new Set(), projectPaths: new Set() },
-  })
-  expect(body.label).toBe('Prod')
+  expect('label' in body).toBe(false)
 })
 
 test('denylist sources widen in NO_REPO_KEY the moment anything is blocked, even if it was never explicitly chosen', () => {
   const body = buildSubmitBody({
-    endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme', label: '',
+    endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme',
     mode: 'denylist', submitted: { projectRows: [], repoKeys: new Set(['github.com/org/repo']), projectPaths: new Set() },
   })
   const values = new Set(body.sources.map(s => s.type === 'none' ? NO_REPO_KEY : s.value))
@@ -145,7 +167,7 @@ test('denylist sources widen in NO_REPO_KEY the moment anything is blocked, even
 
 test('sources stays [] when nothing is blocked', () => {
   const body = buildSubmitBody({
-    endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme', label: '',
+    endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme',
     mode: 'denylist', submitted: { projectRows: [], repoKeys: new Set(), projectPaths: new Set() },
   })
   expect(body.sources).toEqual([])
@@ -153,7 +175,7 @@ test('sources stays [] when nothing is blocked', () => {
 
 test('the none source is never duplicated when NO_REPO_KEY was already explicitly chosen', () => {
   const body = buildSubmitBody({
-    endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme', label: '',
+    endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme',
     mode: 'denylist', submitted: { projectRows: [], repoKeys: new Set(['github.com/org/repo', NO_REPO_KEY]), projectPaths: new Set() },
   })
   expect(body.sources.filter(s => s.type === 'none').length).toBe(1)
@@ -161,7 +183,7 @@ test('the none source is never duplicated when NO_REPO_KEY was already explicitl
 
 test('allowlist mode never widens in NO_REPO_KEY — an empty allowlist must stay empty, not silently share nothing extra', () => {
   const body = buildSubmitBody({
-    endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme', label: '',
+    endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme',
     mode: 'allowlist', submitted: { projectRows: [], repoKeys: new Set(['github.com/org/repo']), projectPaths: new Set() },
   })
   expect(body.sources.some(s => s.type === 'none')).toBe(false)
@@ -170,7 +192,7 @@ test('allowlist mode never widens in NO_REPO_KEY — an empty allowlist must sta
 
 test('project sources round-trip into the submit body alongside repo sources', () => {
   const body = buildSubmitBody({
-    endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme', label: '',
+    endpoint: 'https://central.example.com', token: 'sekrit', org: 'acme',
     mode: 'denylist', submitted: { projectRows: [], repoKeys: new Set(), projectPaths: new Set(['/home/user/app']) },
   })
   expect(body.sources).toContainEqual({ type: 'project', value: '/home/user/app' })
