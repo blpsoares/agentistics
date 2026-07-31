@@ -628,7 +628,9 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
                               }}
                             />
                             <div style={{ fontSize: 10, color: 'var(--text-tertiary)', paddingLeft: 32, paddingBottom: 4, opacity: 0.7 }}>
-                              {m.user}
+                              {/* A machine with no owner account carries no `user` — say so instead
+                                  of rendering a blank line under its name. */}
+                              {m.user || (lang === 'pt' ? 'sem dono' : 'no owner')}
                             </div>
                           </div>
                         )

@@ -1,12 +1,12 @@
 /**
- * team-tokens.test.ts — unit tests for the pure helper in team-tokens.ts.
+ * team-tokens.test.ts — unit tests for the pure helpers in team-tokens.ts.
  *
- * Only hashToken is tested here (no Mongo required — pure function).
+ * Only hashToken and machineUserFor are tested here (no Mongo required — pure functions).
  * Run with: bun test packages/server/server/team-tokens.test.ts
  */
 
 import { describe, expect, it } from 'bun:test'
-import { hashToken } from './team-tokens'
+import { hashToken, machineUserFor } from './team-tokens'
 
 describe('hashToken', () => {
   it('returns a 64-character hex string (SHA-256)', () => {
@@ -44,5 +44,25 @@ describe('hashToken', () => {
     const hash = hashToken(fakeToken)
     expect(hash).toHaveLength(64)
     expect(hash).toMatch(/^[0-9a-f]{64}$/)
+  })
+})
+
+describe('machineUserFor', () => {
+  it('returns the owner name unchanged when a machine has an owner', () => {
+    expect(machineUserFor('Alice')).toBe('Alice')
+  })
+
+  it('returns an empty string for an ownerless machine — never a fallback name', () => {
+    expect(machineUserFor(undefined)).toBe('')
+    expect(machineUserFor(null)).toBe('')
+  })
+
+  it('never falls back to a machine\'s own name — this is the exact bug being fixed: a machine with no owner is not a person', () => {
+    // The regression this guards: minting/reassigning ownership used to fall back to the
+    // machine's own `label`/`machineName` when there was no owner account, which made an
+    // ownerless machine surface as a "member" under its own name (filters, MembersPage, the
+    // MachinesSettings table). A caller must never pass the machine name as the fallback here.
+    const machineName = 'Alice\'s laptop'
+    expect(machineUserFor(undefined)).not.toBe(machineName)
   })
 })

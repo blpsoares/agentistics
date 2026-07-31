@@ -730,8 +730,12 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                     </span>
                   }
                   fields={[
+                    // Owner is the machine's only person-facing identity — the raw push-identity
+                    // `user` field used to be shown here too, under a redundant "User" row; for an
+                    // ownerless machine that duplicated the machine's own name and read as if the
+                    // machine WERE a person ("User: <machine name>"). Owner already says "—" /
+                    // "no account" when there is none, so the extra row added nothing but the bug.
                     { label: pt ? 'Conta' : 'Owner', value: v.ownerDisplay },
-                    { label: pt ? 'Usuário' : 'User', value: m.user },
                     // The card has vertical room the table cell did not, so print every team
                     // instead of the desktop's truncated chip + "+N" pill.
                     { label: pt ? 'Time' : 'Team', value: v.teamNames.length === 0 ? '—' : v.teamNames.join(', ') },
@@ -771,7 +775,6 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                 </th>
                 <th style={th}>{pt ? 'Máquina' : 'Machine'}</th>
                 <th style={th}>{pt ? 'Conta' : 'Owner'}</th>
-                <th style={th}>{pt ? 'Usuário' : 'User'}</th>
                 <th style={th}>{pt ? 'Time' : 'Team'}</th>
                 <th style={th}>Status</th>
                 <th style={th}>{pt ? 'Último acesso' : 'Last seen'}</th>
@@ -803,7 +806,6 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                         <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{ownerEmailDisplay}</span>
                       </div>
                     </td>
-                    <td style={td}>{m.user}</td>
                     <td style={td}>
                       {(() => {
                         const ids = machineTeamIds(m)

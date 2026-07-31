@@ -531,7 +531,7 @@ export default function TeamsSettings() {
                             onChange={on => toggleIdPick(setNewMachineIds, m.id, on)}
                             label={m.machineName}
                           />
-                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', paddingLeft: 24 }}>{m.accountName ?? m.user}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', paddingLeft: 24 }}>{m.accountName ?? (pt ? 'sem conta' : 'no account')}</div>
                         </div>
                       </div>
                     ))}
@@ -725,7 +725,7 @@ export default function TeamsSettings() {
                           )}
                         </span>
                         <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                          {m.accountName ? `${m.accountName} — ${m.accountEmail}` : m.user} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
+                          {m.accountName ? `${m.accountName} — ${m.accountEmail}` : (pt ? 'sem conta' : 'no account')} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
                         </span>
                       </div>
                       <button type="button" style={{ ...ghostBtn, padding: '5px 10px', color: '#ef4444', fontSize: 11.5 }} onClick={() => setConfirm({ kind: 'machine', id: m.id, label: m.machineName })}>
@@ -762,7 +762,7 @@ export default function TeamsSettings() {
                                 onChange={on => toggleIdPick(setAddMachineIds, m.id, on)}
                                 label={m.machineName}
                               />
-                              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', paddingLeft: 24 }}>{m.accountName ?? m.user}</div>
+                              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', paddingLeft: 24 }}>{m.accountName ?? (pt ? 'sem conta' : 'no account')}</div>
                             </div>
                           </div>
                         ))}
@@ -797,7 +797,7 @@ export default function TeamsSettings() {
                     )}
                   </span>
                   <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                    {m.accountName ? `${m.accountName} — ${m.accountEmail}` : m.user} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
+                    {m.accountName ? `${m.accountName} — ${m.accountEmail}` : (pt ? 'sem conta' : 'no account')} · {m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never')}
                   </span>
                 </div>
               ))}
