@@ -81,11 +81,15 @@ export async function runResetPassword(args: string[]): Promise<void> {
   }
 
   const explicit = flag(args, 'password')
-  if (explicit !== undefined && explicit.length < 12) {
-    // The dashboard enforces a policy on passwords people choose; a value handed in on a command
-    // line skips that check, so refuse the obviously weak ones rather than silently accepting.
-    process.stderr.write('--password must be at least 12 characters.\n')
-    process.exit(1)
+  if (explicit !== undefined) {
+    // The SAME policy the dashboard applies, not a weaker length check: a password set here is a
+    // real account password, and a rule that holds only on one of the two doors is not a rule.
+    const { validatePasswordPolicy } = await import('./password-policy')
+    const policy = validatePasswordPolicy(explicit, { email: account.email, name: account.name })
+    if (!policy.ok) {
+      process.stderr.write(`--password rejected: ${policy.error}.\n`)
+      process.exit(1)
+    }
   }
   const password = explicit ?? tempPassword()
 
