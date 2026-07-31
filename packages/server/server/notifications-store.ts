@@ -30,6 +30,10 @@
 
 import { join } from 'path'
 import { AGENTISTICS_DATA_DIR, TEAM_CENTRAL } from './config'
+import { subjectVisibleTo, type NotificationSubject, type NotificationAuthorityContext } from './notifications-authority'
+import type { Principal } from './iam-types'
+
+export type { NotificationSubject } from './notifications-authority'
 
 export type NotificationType = 'error' | 'warning' | 'info' | 'success'
 
@@ -70,6 +74,11 @@ export interface StoredNotification {
   title?: string
   message?: string
   ts: number
+  /** What this notification is ABOUT — a machine, team, account or tag. Absent means
+   *  instance-wide (see `notifications-authority.ts`). A row written before this field existed
+   *  has none, and is treated exactly the same way: instance-wide, scoped only by the other rules
+   *  (`hiddenFor`, `CODES_NAMING_A_PERSON`) — never retroactively hidden. */
+  subject?: NotificationSubject
   /** Viewers who have read it. Absent/empty = unread by everyone. */
   readBy?: string[]
   /** Viewers who dismissed it. The row stays for everyone else. */
@@ -97,6 +106,9 @@ export interface NotificationInput {
   meta?: Record<string, unknown>
   title?: string
   message?: string
+  /** Set by the emitter when the notification is about a specific machine/team/account/tag —
+   *  see `notifications-authority.ts`. Omit for a genuinely instance-wide notification. */
+  subject?: NotificationSubject
 }
 
 /** Who is asking, and what they are allowed to see. */
@@ -108,6 +120,15 @@ export interface Viewer {
   /** True when the instance has accounts (a central): dismissing hides per-account instead of
    *  deleting, because one person's dismissal must not erase everyone else's copy. */
   multiTenant: boolean
+  /**
+   * Present only for a viewer backed by a real `Principal` (an authenticated account on a
+   * central) — the role/team entitlement `subjectVisibleTo` checks a notification's `subject`
+   * against. Absent for `localViewer` (a solo/member machine has no accounts to scope against,
+   * so its one user sees everything, exactly as before this field existed) and for any caller
+   * that constructs a bare `Viewer` without it — which must never happen for a real central
+   * account, or every subject-scoped notification silently reaches them regardless of role.
+   */
+  entitlement?: { principal: Principal; ctx: NotificationAuthorityContext }
 }
 
 /** The viewer for an instance with no accounts — the machine's own user, who sees everything. */
@@ -182,6 +203,7 @@ export async function readNotificationsFrom(path: string): Promise<StoredNotific
 export function visibleTo(n: StoredNotification, viewer: Viewer): boolean {
   if ((n.hiddenFor ?? []).includes(viewer.id)) return false
   if (n.code && CODES_NAMING_A_PERSON.has(n.code) && !viewer.canSeeNames) return false
+  if (viewer.entitlement && !subjectVisibleTo(viewer.entitlement.principal, n.subject, viewer.entitlement.ctx)) return false
   return true
 }
 
@@ -238,7 +260,7 @@ export async function addNotificationTo(
     const key = keyOf(n)
     const dupe = items.find(x => keyOf(x) === key)
     const next = dupe
-      ? [{ ...dupe, ts: now, readBy: [], hiddenFor: [] }, ...items.filter(x => x.id !== dupe.id)]
+      ? [{ ...dupe, ts: now, readBy: [], hiddenFor: [], subject: n.subject }, ...items.filter(x => x.id !== dupe.id)]
       : [{ id: nextId(), ts: now, readBy: [], hiddenFor: [], ...n }, ...items]
     await writeTo(path, next)
     return projectFor(next.slice(0, MAX_ITEMS), viewer)

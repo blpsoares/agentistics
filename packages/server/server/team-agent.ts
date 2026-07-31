@@ -95,7 +95,7 @@ function stopPingLoop(): void {
 // ---------------------------------------------------------------------------
 
 export function registerAgent(ws: ServerWebSocket<AgentSocketData>): void {
-  const { user } = ws.data
+  const { user, memberId } = ws.data
   // Was this member offline (no live socket) before this connection?
   const wasOffline = !agentSockets.has(user) || agentSockets.get(user)!.size === 0
   if (!agentSockets.has(user)) agentSockets.set(user, new Set())
@@ -113,6 +113,10 @@ export function registerAgent(ws: ServerWebSocket<AgentSocketData>): void {
       lastConnectNotifyAt.set(user, now)
       void import('./sse').then(m => m.broadcastNotification({
         type: 'info', code: 'central.member_connected', meta: { user },
+        // This machine's own owner-account(s) and a manager of any of its teams — matches who
+        // may already manage the machine (`canManageMachine`); a plain user on an unrelated team
+        // never learns this laptop came online.
+        subject: { kind: 'machine', id: memberId },
       })).catch(() => { /* best-effort */ })
     }
   }

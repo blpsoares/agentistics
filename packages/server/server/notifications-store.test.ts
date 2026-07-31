@@ -6,6 +6,8 @@ import {
   readNotificationsFrom, addNotificationTo, markAllReadIn, dismissNotificationIn,
   clearNotificationsIn, listNotificationsFor, localViewer, MAX_ITEMS, type Viewer,
 } from './notifications-store'
+import type { NotificationAuthorityContext } from './notifications-authority'
+import type { Principal } from './iam-types'
 
 /** A central account: per-account read/dismiss state. */
 const account = (id: string, canSeeNames = true): Viewer => ({ id, canSeeNames, multiTenant: true })
@@ -13,6 +15,12 @@ const alice = account('acct-alice')
 const bob = account('acct-bob')
 /** A plain user on a central: may not see who else uses the instance. */
 const plain = account('acct-plain', false)
+
+/** A viewer scoped by subject entitlement — a manager/user account with a real `Principal` behind
+ *  it, plus the DB context `subjectVisibleTo` needs. */
+function scopedViewer(principal: Principal, ctx: NotificationAuthorityContext, canSeeNames = true): Viewer {
+  return { id: principal.accountId, canSeeNames, multiTenant: true, entitlement: { principal, ctx } }
+}
 
 let dir = ''
 let file = ''
@@ -314,5 +322,74 @@ describe('notifications that name a person', () => {
     await markAllReadIn(file, plain)
     // The manager's badge is untouched by someone who never saw the row.
     expect((await listNotificationsFor(file, alice))[0]!.read).toBe(false)
+  })
+})
+
+describe('subject scoping (role/team entitlement)', () => {
+  const owner: Principal = { accountId: 'owner-1', role: 'owner', memberships: [] }
+  const manager: Principal = { accountId: 'mgr-1', role: 'member', memberships: [{ teamId: 'team-a', role: 'manager' }] }
+  const teamUser: Principal = { accountId: 'user-1', role: 'member', memberships: [{ teamId: 'team-a', role: 'user' }] }
+  const outsider: Principal = { accountId: 'user-2', role: 'member', memberships: [{ teamId: 'team-b', role: 'user' }] }
+
+  const ctx: NotificationAuthorityContext = {
+    machines: {
+      'machine-team-a': { teamIds: ['team-a'] },
+      'machine-owned-by-user-1': { accountIds: ['user-1'] },
+    },
+    accountMemberships: {
+      'user-1': [{ teamId: 'team-a', role: 'user' }],
+    },
+    readableTagIds: new Set(),
+  }
+
+  test('the owner sees a machine-scoped notification for a team it does not belong to', async () => {
+    await addNotificationTo(file, { type: 'info', code: 'x', subject: { kind: 'machine', id: 'machine-team-a' } })
+    expect(await listNotificationsFor(file, scopedViewer(owner, ctx))).toHaveLength(1)
+  })
+
+  test('a manager of the machine\'s team sees it; an outside manager does not', async () => {
+    await addNotificationTo(file, { type: 'info', code: 'x', subject: { kind: 'machine', id: 'machine-team-a' } })
+    expect(await listNotificationsFor(file, scopedViewer(manager, ctx))).toHaveLength(1)
+    expect(await listNotificationsFor(file, scopedViewer(outsider, ctx))).toHaveLength(0)
+  })
+
+  test('a plain user sees a notification about THEIR OWN machine, not a teammate\'s', async () => {
+    await addNotificationTo(file, { type: 'info', code: 'x', subject: { kind: 'machine', id: 'machine-owned-by-user-1' } })
+    expect(await listNotificationsFor(file, scopedViewer(teamUser, ctx))).toHaveLength(1)
+    // A manager of the same team, but not the machine's owner and it names no team either — still
+    // sees it only via team management (this machine has no teamIds, only an owner account).
+    expect(await listNotificationsFor(file, scopedViewer(manager, ctx))).toHaveLength(0)
+  })
+
+  test('a notification about an account is visible to a manager of one of its teams, not a stranger', async () => {
+    await addNotificationTo(file, { type: 'info', code: 'x', subject: { kind: 'account', id: 'user-1' } })
+    expect(await listNotificationsFor(file, scopedViewer(manager, ctx))).toHaveLength(1)
+    expect(await listNotificationsFor(file, scopedViewer(outsider, ctx))).toHaveLength(0)
+    // The account itself always sees a notification about itself.
+    expect(await listNotificationsFor(file, scopedViewer(teamUser, ctx))).toHaveLength(1)
+  })
+
+  test('a notification with no subject reaches everyone regardless of entitlement', async () => {
+    await addNotificationTo(file, { type: 'info', code: 'app.update_available' })
+    expect(await listNotificationsFor(file, scopedViewer(outsider, ctx))).toHaveLength(1)
+  })
+
+  test('a legacy/unattributed row (no subject at all) is not retroactively hidden from anyone the other rules already let through', async () => {
+    await writeFile(file, JSON.stringify({
+      version: 1,
+      items: [{ id: 'legacy', ts: 5, type: 'info', code: 'app.update_available', readBy: [], hiddenFor: [] }],
+    }))
+    expect(await listNotificationsFor(file, scopedViewer(outsider, ctx))).toHaveLength(1)
+  })
+
+  test('an unresolvable subject (id missing from the context) fails closed for a non-owner', async () => {
+    await addNotificationTo(file, { type: 'info', code: 'x', subject: { kind: 'machine', id: 'ghost-machine' } })
+    expect(await listNotificationsFor(file, scopedViewer(manager, ctx))).toHaveLength(0)
+    expect(await listNotificationsFor(file, scopedViewer(owner, ctx))).toHaveLength(1)
+  })
+
+  test('a viewer with no entitlement context (e.g. localViewer) still sees everything — no regression', async () => {
+    await addNotificationTo(file, { type: 'info', code: 'x', subject: { kind: 'machine', id: 'ghost-machine' } })
+    expect(await listNotificationsFor(file, localViewer)).toHaveLength(1)
   })
 })

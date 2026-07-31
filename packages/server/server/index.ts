@@ -40,6 +40,7 @@ import { writeAudit, ensureAuditIndexes, listAudit } from './audit'
 import { safeError } from './errors'
 import { LIMITS } from './limits'
 import { canSeeMemberNames } from './iam-view'
+import { buildNotificationAuthorityContext } from './notifications-context'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -594,7 +595,15 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         // is always null — that instance has exactly one user, represented by `localViewer`.
         const principal = await getPrincipal(req)
         const viewer = principal
-          ? { id: principal.accountId, canSeeNames: canSeeMemberNames(principal), multiTenant: true }
+          ? {
+              id: principal.accountId,
+              canSeeNames: canSeeMemberNames(principal),
+              multiTenant: true,
+              // Role/team scoping (owner sees all; a manager sees their teams' subjects; a plain
+              // user sees their own machines and teams) — see notifications-authority.ts. Built
+              // fresh per request, same as `canSeeMemberNames` above.
+              entitlement: { principal, ctx: await buildNotificationAuthorityContext() },
+            }
           : localViewer
 
         if (req.method === 'GET') {

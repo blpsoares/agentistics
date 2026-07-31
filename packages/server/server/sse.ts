@@ -8,6 +8,7 @@ import { invalidateCache } from './data'
 import { mirrorFile } from './archive'
 import { getEnabledAdapters } from './adapters/types'
 import { addStoredNotification } from './notifications-store'
+import type { NotificationSubject } from './notifications-authority'
 
 export type SseController = ReadableStreamDefaultController<Uint8Array>
 
@@ -34,6 +35,9 @@ export function broadcastNotification(n: {
   meta?: Record<string, unknown>
   title?: string
   message?: string
+  /** What this notification is about, for role/team scoping on a central — see
+   *  notifications-authority.ts. Omit for a genuinely instance-wide notification. */
+  subject?: NotificationSubject
 }) {
   // Persist FIRST, and independently of whether anyone is listening: a notification raised while
   // no dashboard is open (or only a phone that is asleep) still belongs in the history. Clients
