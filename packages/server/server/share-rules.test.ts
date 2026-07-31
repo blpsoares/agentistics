@@ -126,7 +126,7 @@ test('non-Claude sessions obey the same rule', () => {
 test('a remote-less non-Claude session in a denied folder is dropped via the index', () => {
   const idx = buildPathRepoIndex([s({ session_id: 'claude1', project_path: '/repo', git_remote: 'github.com/o/secret' })])
   const codex = s({ session_id: 'codex1', harness: 'codex', project_path: '/repo' })
-  expect(sessionShared(codex, normalizeDenied(['github.com/o/secret']), idx)).toBe(false)
+  expect(sessionShared(codex, denyRepo('github.com/o/secret'), idx)).toBe(false)
 })
 
 test('a conflicting path fails CLOSED — denied if ANY remote under it is denied', () => {
@@ -135,7 +135,122 @@ test('a conflicting path fails CLOSED — denied if ANY remote under it is denie
     s({ session_id: 'b', project_path: '/ws', git_remote: 'github.com/o/secret' }),
   ])
   const inPublic = s({ session_id: 'c', project_path: '/ws', git_remote: 'github.com/o/public' })
-  expect(sessionShared(inPublic, normalizeDenied(['github.com/o/secret']), idx)).toBe(false)
+  expect(sessionShared(inPublic, denyRepo('github.com/o/secret'), idx)).toBe(false)
+})
+
+// --- Task 3: the predicate learns projects and allowlist mode ---
+
+/** Builds a `ShareRules` object the way a caller would, keyed as `${type}:${value}`. */
+function rules(mode: 'denylist' | 'allowlist', entries: Array<{ type: 'repo' | 'project' | 'none'; value?: string }>): { mode: 'denylist' | 'allowlist'; sources: Set<string> } {
+  const sources = new Set<string>()
+  for (const e of entries) sources.add(`${e.type}:${e.value ?? ''}`)
+  return { mode, sources }
+}
+function denyRepo(...values: string[]) { return rules('denylist', values.map(value => ({ type: 'repo' as const, value }))) }
+function allowRepo(...values: string[]) { return rules('allowlist', values.map(value => ({ type: 'repo' as const, value }))) }
+function denyProject(...values: string[]) { return rules('denylist', values.map(value => ({ type: 'project' as const, value }))) }
+function allowProject(...values: string[]) { return rules('allowlist', values.map(value => ({ type: 'project' as const, value }))) }
+function denyNone() { return rules('denylist', [{ type: 'none' as const }]) }
+function allowNone() { return rules('allowlist', [{ type: 'none' as const }]) }
+
+test('THE HEADLINE ALLOWLIST INVARIANT: an allowlist with an empty source set shares NOTHING', () => {
+  const rulesEmpty = rules('allowlist', [])
+  expect(rulesEmpty.sources.size).toBe(0)
+  const withRepo = s({ session_id: 'a', git_remote: 'github.com/o/r' })
+  const noRepo = s({ session_id: 'b' })
+  expect(sessionShared(withRepo, rulesEmpty)).toBe(false)
+  expect(sessionShared(noRepo, rulesEmpty)).toBe(false)
+})
+
+test('a project rule denies its exact project_path, and allows it in allowlist mode', () => {
+  const inProject = s({ session_id: 'a', project_path: '/work/app' })
+  const elsewhere = s({ session_id: 'b', project_path: '/work/other' })
+  expect(sessionShared(inProject, denyProject('/work/app'))).toBe(false)
+  expect(sessionShared(elsewhere, denyProject('/work/app'))).toBe(true)
+  expect(sessionShared(inProject, allowProject('/work/app'))).toBe(true)
+  expect(sessionShared(elsewhere, allowProject('/work/app'))).toBe(false)
+})
+
+test('a project rule catches a remote-less session (no repo to key on at all)', () => {
+  const remoteLess = s({ session_id: 'a', project_path: '/loose/folder', git_remote: undefined })
+  expect(sessionShared(remoteLess, denyProject('/loose/folder'))).toBe(false)
+  expect(sessionShared(remoteLess, allowProject('/loose/folder'))).toBe(true)
+  // A DIFFERENT project is untouched by the rule.
+  const other = s({ session_id: 'b', project_path: '/other/folder', git_remote: undefined })
+  expect(sessionShared(other, denyProject('/loose/folder'))).toBe(true)
+  expect(sessionShared(other, allowProject('/loose/folder'))).toBe(false)
+})
+
+test('a repo rule catches a session whose project was never named elsewhere (the worktree case)', () => {
+  // No PathRepoIndex at all: the session carries its OWN remote directly, so repoKeyOf never
+  // needs the index to resolve it. This is the everyday case of a repo cloned into a brand new
+  // worktree path nobody has seen before.
+  const freshWorktree = s({ session_id: 'a', project_path: '/tmp/worktree-created-today', git_remote: 'github.com/o/secret' })
+  expect(sessionShared(freshWorktree, denyRepo('github.com/o/secret'))).toBe(false)
+  expect(sessionShared(freshWorktree, allowRepo('github.com/o/secret'))).toBe(true)
+})
+
+test('a repo rule also catches a remote-less session THROUGH the path index (worktree resolved via a sibling session)', () => {
+  const idx = buildPathRepoIndex([s({ session_id: 'seed', project_path: '/ws', git_remote: 'github.com/o/secret' })])
+  const noRemote = s({ session_id: 'a', project_path: '/ws', git_remote: undefined })
+  expect(sessionShared(noRemote, denyRepo('github.com/o/secret'), idx)).toBe(false)
+  expect(sessionShared(noRemote, allowRepo('github.com/o/secret'), idx)).toBe(true)
+})
+
+test('the `none` bucket matches only a session that resolves to no repository at all', () => {
+  const noRepo = s({ session_id: 'a', git_remote: undefined })
+  const withRepo = s({ session_id: 'b', git_remote: 'github.com/o/r' })
+  expect(sessionShared(noRepo, denyNone())).toBe(false)
+  expect(sessionShared(withRepo, denyNone())).toBe(true)
+  expect(sessionShared(noRepo, allowNone())).toBe(true)
+  expect(sessionShared(withRepo, allowNone())).toBe(false)
+})
+
+test('DENY WINS ACROSS DIMENSIONS in denylist mode: a blocked repo denies even when the project is not listed', () => {
+  const inBlockedRepo = s({ session_id: 'a', project_path: '/some/unlisted/path', git_remote: 'github.com/o/secret' })
+  // Only a repo source is denied; nothing names this session's project at all.
+  expect(sessionShared(inBlockedRepo, denyRepo('github.com/o/secret'))).toBe(false)
+})
+
+test('in allowlist mode, matching EITHER an allowed repo or an allowed project is enough', () => {
+  const viaRepo = s({ session_id: 'a', project_path: '/unlisted', git_remote: 'github.com/o/allowed' })
+  const viaProject = s({ session_id: 'b', project_path: '/allowed/path', git_remote: 'github.com/o/other' })
+  const allowBoth = rules('allowlist', [{ type: 'repo', value: 'github.com/o/allowed' }, { type: 'project', value: '/allowed/path' }])
+  expect(sessionShared(viaRepo, allowBoth)).toBe(true)
+  expect(sessionShared(viaProject, allowBoth)).toBe(true)
+})
+
+test('a session matching nothing: denylist shares it, allowlist withholds it — the two AGREE only in the direction each defines', () => {
+  const untouched = s({ session_id: 'a', project_path: '/nowhere', git_remote: 'github.com/o/unrelated' })
+  const someRule = rules('denylist', [{ type: 'repo', value: 'github.com/o/other' }])
+  const someAllow = rules('allowlist', [{ type: 'repo', value: 'github.com/o/other' }])
+  expect(sessionShared(untouched, someRule)).toBe(true)
+  expect(sessionShared(untouched, someAllow)).toBe(false)
+})
+
+test('conflictPaths survives, denylist direction: shared only if EVERY repo under the path is undenied', () => {
+  const idx = buildPathRepoIndex([
+    s({ session_id: 'seedA', project_path: '/ws', git_remote: 'github.com/o/public' }),
+    s({ session_id: 'seedB', project_path: '/ws', git_remote: 'github.com/o/secret' }),
+  ])
+  const inPublic = s({ session_id: 'c', project_path: '/ws', git_remote: 'github.com/o/public' })
+  // The session's OWN remote is fine, but a sibling repo sharing its path is denied.
+  expect(sessionShared(inPublic, denyRepo('github.com/o/secret'), idx)).toBe(false)
+  // Neither conflicting repo is denied: shared.
+  expect(sessionShared(inPublic, denyRepo('github.com/o/unrelated'), idx)).toBe(true)
+})
+
+test('conflictPaths survives, allowlist direction: shared only if ALL repos under the path are allowed', () => {
+  const idx = buildPathRepoIndex([
+    s({ session_id: 'seedA', project_path: '/ws', git_remote: 'github.com/o/public' }),
+    s({ session_id: 'seedB', project_path: '/ws', git_remote: 'github.com/o/secret' }),
+  ])
+  const inPublic = s({ session_id: 'c', project_path: '/ws', git_remote: 'github.com/o/public' })
+  // Only the session's own remote is allowed; the sibling repo under the same path is not —
+  // the ambiguity must fail closed, not open.
+  expect(sessionShared(inPublic, allowRepo('github.com/o/public'), idx)).toBe(false)
+  // Both conflicting repos allowed: shared.
+  expect(sessionShared(inPublic, allowRepo('github.com/o/public', 'github.com/o/secret'), idx)).toBe(true)
 })
 
 test('withUnresolvedDenied adds the sentinel only once restrictions exist, idempotently', () => {
