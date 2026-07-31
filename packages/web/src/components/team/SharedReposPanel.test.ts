@@ -1,6 +1,7 @@
 import { test, expect } from 'bun:test'
-import { buildConfirmMessage } from './SharedReposPanel'
+import { buildConfirmMessage, hiddenChipStyle, ReadView } from './SharedReposPanel'
 import { COPY } from './copy'
+import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
 
 /**
  * SharedReposPanel.test.ts — covers the one piece of `SharedReposPanel.tsx` worth testing outside
@@ -67,4 +68,77 @@ test('modeVariant "toDenylist" appends the denylist-switch consequence, never th
   const msg = buildConfirmMessage('generic', null, { sessions: 0, costUSD: 0 }, 'toDenylist', 'en')
   expect(msg).toContain(COPY.modeConfirmToDenylist.en)
   expect(msg).not.toContain(COPY.modeConfirmToAllowlist.en)
+})
+
+// --- product owner live test: hidden entries read RED (outlined), not amber ----------------------
+
+test('hiddenChipStyle is an outlined (transparent-fill, red-bordered) chip using the app\'s existing danger variable, not a new hex value', () => {
+  const style = hiddenChipStyle()
+  expect(style.background).toBe('transparent')
+  expect(style.border).toContain('var(--accent-red)')
+  expect(style.color).toBe('var(--accent-red)')
+  // never the old amber treatment
+  expect(style.border).not.toContain('anthropic-orange')
+  expect(style.color).not.toContain('anthropic-orange')
+})
+
+/** `ReadView` holds no hooks — a plain function of its props — so it can be called directly and
+ *  its returned element tree walked like a shallow render, the same technique
+ *  `SharingRulesPicker.test.tsx` uses. */
+function collectSpans(el: unknown, out: { props: Record<string, unknown> }[] = []): { props: Record<string, unknown> }[] {
+  if (!el || typeof el !== 'object') return out
+  const node = el as { type?: unknown; props?: { children?: unknown } }
+  if (node.type === 'span') out.push(node as { props: Record<string, unknown> })
+  const kids = node.props?.children
+  const list = Array.isArray(kids) ? kids : kids !== undefined ? [kids] : []
+  for (const k of list) collectSpans(k, out)
+  return out
+}
+
+const repoTarget: ShareTarget = {
+  key: 'github.com/acme/api', kind: 'repo', name: 'acme/api', host: 'github.com',
+  sessions: 3, lastActive: '', orphan: false, conflictPaths: [],
+}
+const projectTarget: ProjectTarget = {
+  key: '/home/acme/api', kind: 'project', name: 'api', path: '/home/acme/api',
+  repoKey: 'github.com/acme/api', sessions: 3, lastActive: '', locked: false,
+}
+
+test('denylist read view marks a hidden repo with the red/outlined chip style, not the old amber fill', () => {
+  const el = ReadView({
+    targets: [repoTarget], projectTargets: [], storedDenied: new Set([repoTarget.key]),
+    storedProjectPaths: new Set(), mode: 'denylist', sessions: [], status: undefined, lang: 'en', otelEnabled: false,
+  })
+  const spans = collectSpans(el)
+  expect(spans.length).toBeGreaterThan(0)
+  for (const span of spans) {
+    expect(span.props.style).toEqual(hiddenChipStyle())
+  }
+})
+
+test('allowlist read view never applies the hidden/red treatment to its allowed entries — those chips mean the opposite', () => {
+  const el = ReadView({
+    targets: [repoTarget], projectTargets: [], storedDenied: new Set([repoTarget.key]),
+    storedProjectPaths: new Set(), mode: 'allowlist', sessions: [], status: undefined, lang: 'en', otelEnabled: false,
+  })
+  const spans = collectSpans(el)
+  expect(spans.length).toBeGreaterThan(0)
+  for (const span of spans) {
+    expect(span.props.style).not.toEqual(hiddenChipStyle())
+    const style = span.props.style as Record<string, unknown>
+    expect(String(style.color)).toContain('accent-green')
+    expect(String(style.color)).not.toContain('accent-red')
+  }
+})
+
+test('a project-dimension hidden entry gets the same red/outlined treatment as a hidden repo', () => {
+  const el = ReadView({
+    targets: [], projectTargets: [projectTarget], storedDenied: new Set(),
+    storedProjectPaths: new Set([projectTarget.key]), mode: 'denylist', sessions: [], status: undefined, lang: 'en', otelEnabled: false,
+  })
+  const spans = collectSpans(el)
+  expect(spans.length).toBeGreaterThan(0)
+  for (const span of spans) {
+    expect(span.props.style).toEqual(hiddenChipStyle())
+  }
 })

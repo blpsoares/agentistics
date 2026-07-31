@@ -6,7 +6,7 @@ import { FieldInput } from '../../pages/settings/primitives'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { buildShareTargets, buildProjectTargets, hostOf, type ServerProject, type ProjectTarget } from '../../lib/shareRepos'
 import { COPY, interpolate } from './copy'
-import { EditView, ProjectEditView, ModeSelector, PickerTabs } from './SharedReposEditView'
+import { SharingRulesPicker } from './SharingRulesPicker'
 import { diffDraft, toggleTarget, shareAllDraft, blockAllDraft } from './repoPanelState'
 import {
   resolveInitialTab, toggleProjectTarget, shareAllProjectsDraft, blockAllProjectsDraft,
@@ -325,53 +325,34 @@ export function AddCentralDrawer({
             {COPY.addRulesIntro[lang]}
           </div>
 
-          <ModeSelector mode={mode} onChange={onModeChange} lang={lang} isMobile={isMobile} />
-          <PickerTabs tab={tab} onChange={setTab} lang={lang} isMobile={isMobile} />
-
-          {tab === 'projects' ? (
-            <ProjectEditView
-              targets={projectTargets}
-              draftDenied={projectDraftDenied}
-              draftRepoKeys={draftDenied}
-              diff={projectDiff}
-              search={search}
-              onSearch={setSearch}
-              showStale={showStale}
-              onToggleStale={() => setShowStale(v => !v)}
-              showAllMobile={showAllMobile}
-              onShowAllMobile={() => setShowAllMobile(true)}
-              isMobile={isMobile}
-              lang={lang}
-              onToggleRow={onToggleProjectRow}
-              onShareAll={onShareAllProjects}
-              onBlockAll={onBlockAllProjects}
-            />
-          ) : (
-            <EditView
-              targets={targets}
-              draftDenied={draftDenied}
-              diff={diff}
-              search={search}
-              onSearch={setSearch}
-              showStale={showStale}
-              onToggleStale={() => setShowStale(v => !v)}
-              showAllMobile={showAllMobile}
-              onShowAllMobile={() => setShowAllMobile(true)}
-              isMobile={isMobile}
-              lang={lang}
-              mode={mode}
-              partialRepoKeys={partialRepoKeys}
-              impactSessions={0}
-              impactCost={0}
-              onToggleRow={onToggleRow}
-              onShareAll={onShareAll}
-              onBlockAll={onBlockAll}
-            />
-          )}
-
-          {showEmptyAllowlistWarning && (
-            <InlineNote tone="error">{COPY.emptyAllowlistWarning[lang]}</InlineNote>
-          )}
+          <SharingRulesPicker
+            mode={mode}
+            onModeChange={onModeChange}
+            tab={tab}
+            onTabChange={setTab}
+            lang={lang}
+            isMobile={isMobile}
+            targets={targets}
+            projectTargets={projectTargets}
+            draftDenied={draftDenied}
+            projectDraftDenied={projectDraftDenied}
+            diff={diff}
+            projectDiff={projectDiff}
+            partialRepoKeys={partialRepoKeys}
+            search={search}
+            onSearch={setSearch}
+            showStale={showStale}
+            onToggleStale={() => setShowStale(v => !v)}
+            showAllMobile={showAllMobile}
+            onShowAllMobile={() => setShowAllMobile(true)}
+            showEmptyAllowlistWarning={showEmptyAllowlistWarning}
+            onToggleRow={onToggleRow}
+            onShareAll={onShareAll}
+            onBlockAll={onBlockAll}
+            onToggleProjectRow={onToggleProjectRow}
+            onShareAllProjects={onShareAllProjects}
+            onBlockAllProjects={onBlockAllProjects}
+          />
 
           {connectErr && <InlineNote tone="error">{connectErr}</InlineNote>}
 
