@@ -136,6 +136,13 @@ export const COPY = {
     en: 'Shared repositories',
     pt: 'Repositórios compartilhados',
   },
+  // Fix 1 (Plan 4 Task 1): the read view used to put the HIDDEN chips directly under a heading
+  // that said "shared" — two polarities in one box. This is the chip block's own explicit label,
+  // separate from the plain-text shared count below it.
+  hiddenBlockTitle: {
+    en: 'Hidden from this central ({n})',
+    pt: 'Ocultos desta central ({n})',
+  },
   sharingAll: {
     en: 'Sharing every repository on this machine, including new ones.',
     pt: 'Compartilhando todos os repositórios desta máquina, inclusive os novos.',
@@ -172,9 +179,12 @@ export const COPY = {
     en: 'No repository',
     pt: 'Sem repositório',
   },
+  // Fix 4 (Plan 4 Task 1): "no repository" read as opaque on its own ("todos os Projetos sem git?
+  // sessões sem git em pastas soltas?"). Names both halves of what it covers: a folder that isn't
+  // a git repository, AND every session from a CLI that records no remote at all.
   noRepoSub: {
-    en: "Sessions with no detected git remote — including sessions from CLIs that don't record one. Blocked automatically when you block anything else.",
-    pt: 'Sessões sem remote git detectado — inclusive de CLIs que não registram um. Bloqueadas automaticamente quando você bloqueia qualquer outra coisa.',
+    en: "Sessions with no git remote: a folder that isn't a git repository, or any session from a CLI that doesn't record one (Codex, Gemini, Kimi, Antigravity). Blocked automatically when you block anything else.",
+    pt: 'Sessões sem remote git: pasta que não é um repositório git, ou qualquer sessão de um CLI que não registra um remote (Codex, Gemini, Kimi, Antigravity). Bloqueadas automaticamente quando você bloqueia qualquer outra coisa.',
   },
   mixedRepoWarn: {
     en: "This folder contains more than one repository, so sessions in it can't be split. It is blocked as a whole.",
@@ -192,13 +202,16 @@ export const COPY = {
     en: 'Apply sharing rules?',
     pt: 'Aplicar regras de compartilhamento?',
   },
+  // Fix 2 (Plan 4 Task 1): rewritten as "right now" / "can't be undone" — every fact the old copy
+  // stated is kept verbatim (already-sent data has been seen; the pre-boundary aggregate cannot be
+  // split by repository), only the structure and phrasing changed. Do not drop a fact here.
   applyConfirmBody: {
-    en: 'The sessions you are blocking are deleted from this central right away. Anything already sent has been seen — whoever runs this central can tell that data was removed, and what it was.',
-    pt: 'As sessões que você está bloqueando são apagadas desta central imediatamente. O que já foi enviado já foi visto — quem opera a central consegue perceber que algo foi removido, e o quê.',
+    en: "Right now: the sessions you're blocking are deleted from this central immediately. This part can't be undone: anything already sent has already been seen — whoever runs this central can tell that data was removed, and what it was.",
+    pt: 'Agora: as sessões que você está bloqueando são apagadas desta central imediatamente. Isso não pode ser desfeito: o que já foi enviado já foi visto — quem opera a central consegue perceber que algo foi removido, e o quê.',
   },
   applyConfirmStats: {
-    en: 'Your totals stay whole. Claude has already summarised everything up to {boundary} into a single aggregate ({n} sessions) that cannot be split by repository — if a blocked repository was active back then, that volume stays in it and no rule can remove it. Everything after {boundary} is filtered exactly, and stays filtered as Claude summarises it.',
-    pt: 'Seus totais continuam completos. O Claude já resumiu tudo até {boundary} num agregado único ({n} sessões) que não pode ser separado por repositório — se um repositório bloqueado teve atividade naquele período, esse volume fica lá e nenhuma regra o remove. Depois de {boundary} o filtro é exato, e continua valendo conforme o Claude vai resumindo.',
+    en: "Also can't be undone: Claude already summarised everything up to {boundary} into one aggregate ({n} sessions) that can't be split by repository — if a blocked repository was active back then, that volume stays in your totals on this central and no rule can remove it. Everything after {boundary} is filtered exactly, and stays filtered as Claude keeps summarising it.",
+    pt: 'Também não pode ser desfeito: o Claude já resumiu tudo até {boundary} num agregado único ({n} sessões) que não pode ser separado por repositório — se um repositório bloqueado teve atividade naquele período, esse volume continua nos seus totais nesta central e nenhuma regra o remove. Depois de {boundary} o filtro é exato, e continua valendo conforme o Claude for resumindo.',
   },
   applyConfirmStatsProven: {
     en: 'One or more repositories you are blocking have sessions before {boundary}. Their volume from that period stays in the aggregate and cannot be removed.',
@@ -217,10 +230,13 @@ export const COPY = {
     pt: 'Atualizando os totais desta central…',
   },
   /** The apply window BEFORE the first post-apply poll has said anything — the PATCH has returned
-   *  but no `resync` (and no `pendingRules`) has been observed yet. Never a success sentence. */
+   *  but no `resync` (and no `pendingRules`) has been observed yet. Never a success sentence.
+   *  Fix 5 (Plan 4 Task 1): `handlePatchConnection` already calls `pushNow` the instant rules
+   *  change, but nothing on screen said so — this wording makes the sync itself visible instead of
+   *  adding a second control. */
   applyingWait: {
-    en: 'Applying the rules…',
-    pt: 'Aplicando as regras…',
+    en: 'Sending the new rules to the central…',
+    pt: 'Enviando as novas regras para a central…',
   },
   applyingSafeToLeave: {
     en: 'You can leave this page — this continues in the background.',
@@ -237,8 +253,8 @@ export const COPY = {
    *  `done` — has no number at all. Stating an invented one on the confirmation of a privacy
    *  action is the same dishonesty the `null`-means-unknowable rule exists to prevent. */
   applyOk: {
-    en: 'Rules applied',
-    pt: 'Regras aplicadas',
+    en: 'Rules applied — sent to the central',
+    pt: 'Regras aplicadas — enviadas à central',
   },
   applyErr: {
     en: 'Could not apply the rules',
@@ -351,8 +367,16 @@ export const COPY = {
     pt: 'aparece como',
   },
   rename: {
-    en: 'Rename',
-    pt: 'Renomear',
+    en: 'Edit nickname',
+    pt: 'Editar apelido',
+  },
+  // Fix 6 (Plan 4 Task 1): the pencil edits a LOCAL nickname the central never sees, but sitting
+  // right next to the card title it used to read as "choose this machine's name" — which
+  // contradicts the design rule that the central owns the name. This is the pencil's tooltip/hint,
+  // stated so the nickname reads as clearly secondary to the central-given machine name.
+  nicknameHint: {
+    en: 'Nickname — only you see this. The central names the machine itself.',
+    pt: 'Apelido — só você vê isso. A própria central nomeia a máquina.',
   },
   syncing: {
     en: 'Syncing…',
@@ -373,6 +397,13 @@ export const COPY = {
   identityOrg: {
     en: 'Organization',
     pt: 'Organização',
+  },
+  // Fix 6 (Plan 4 Task 1): the name the CENTRAL gave this machine (the token's label), forwarded
+  // by `handleProbeConnection` — distinct from `identityUser` (the account this token
+  // authenticates as) and from the purely-local nickname (`nicknameHint` below).
+  identityMachineName: {
+    en: 'Machine name',
+    pt: 'Nome da máquina',
   },
   identityLatency: {
     en: 'Latency',

@@ -6,6 +6,10 @@ export interface ProbedIdentity {
   ok: boolean
   user?: string
   org?: string
+  /** The name the CENTRAL gave this machine (the token's label) — forwarded by
+   *  `handleProbeConnection` (Plan 4 Task 1, fix 6). Distinct from `user`, the account this token
+   *  authenticates as, and from the connection's purely-local nickname (`conn.label`). */
+  machineName?: string
   latencyMs?: number
   error?: string
 }
@@ -20,13 +24,9 @@ export interface ProbedIdentity {
  * delete the old `editing`/`userTouched`/`editingInitialized` ref machinery from `TeamSettings.tsx`
  * — there is no in-place edit state to guard here at all.
  *
- * Note on `identity.org`: the probe route (`handleProbeConnection` in `team-connections.ts`) calls
- * the same `whoamiVerify` the connect flow uses, which only extracts `{ user, org }` from the
- * central's `/api/team/whoami` response — that response CAN also carry `team`/`email`/
- * `machineName`, but the probe route does not forward them. So the "team" name in the card header
- * (`conn.label ?? identity.team ?? hostOf(endpoint)`, per the design doc) is served here from
- * `org` — the closest identity fact this route actually exposes — until the probe route is
- * extended to forward the rest.
+ * `identity.machineName` is what `ConnectionCard.tsx`'s title prefers over `identity.org` (a
+ * fixed org constant, not machine-specific) — it is "the name the central gave the machine" the
+ * user actually expects to see there.
  */
 export function ConnectionIdentity({
   connId, endpoint, expanded, lang, onResolved,
@@ -82,6 +82,7 @@ export function ConnectionIdentity({
       )}
       {!loading && identity?.ok && (
         <>
+          {identity.machineName && <Row label={COPY.identityMachineName[lang]} value={identity.machineName} />}
           <Row label={COPY.identityUser[lang]} value={identity.user || '—'} />
           <Row label={COPY.identityOrg[lang]} value={identity.org || '—'} />
           {identity.latencyMs != null && <Row label={COPY.identityLatency[lang]} value={`${identity.latencyMs}ms`} />}

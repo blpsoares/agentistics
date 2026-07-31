@@ -1,6 +1,7 @@
-import type { SessionMeta } from '@agentistics/core'
+import type { Lang, SessionMeta } from '@agentistics/core'
 import { NO_REPO_KEY, normalizeGitRemote, repoShortName } from '@agentistics/core'
 import { canonicalRepoKey, type ShareTarget } from '../../lib/shareRepos'
+import { fmtDateLocalized } from '../../lib/dateFormat'
 import type { ConnectionStatusEntry } from './statusTypes'
 import type { CardState } from './cardState'
 
@@ -271,6 +272,9 @@ export function resolveConfirmVariant(hasProven: boolean, boundary: string | nul
 // --- the honesty rule: null boundary / null prehistorySessions state no number -------------------
 
 export interface StatsCopyVars {
+  /** Already formatted in the viewer's locale (`fmtDateLocalized`) — never the raw `yyyy-MM-dd`
+   *  the server stores. Fix 3 (Plan 4 Task 1): the confirm modal and `statsNote` used to
+   *  interpolate the raw string verbatim (`2026-07-20`). */
   boundary: string
   n: number
 }
@@ -280,9 +284,42 @@ export interface StatsCopyVars {
  * the clause" — whenever either input is unknowable, so the caller never interpolates an invented
  * number into `statsNote`/`applyConfirmStats`.
  */
-export function statsCopyVars(boundary: string | null, prehistorySessions: number | null): StatsCopyVars | null {
+export function statsCopyVars(boundary: string | null, prehistorySessions: number | null, lang: Lang): StatsCopyVars | null {
   if (boundary === null || prehistorySessions === null) return null
-  return { boundary, n: prehistorySessions }
+  return { boundary: fmtDateLocalized(boundary, lang), n: prehistorySessions }
+}
+
+// --- fix 1: the read view separates "hidden from this central" from "shared" ---------------------
+
+export interface ReadViewSummary {
+  /** Every key the STORED denylist carries, including a stale/orphaned one with zero current
+   *  sessions — this is what the hidden-block heading counts (Plan 4 Task 1, fix 1), because a
+   *  chip for a repository that produces nothing right now is still hiding something real: the
+   *  rule stays in force if that repository comes back. */
+  hiddenCount: number
+  /** Live targets (current sessions > 0) that are NOT denied. */
+  sharedCount: number
+  /** Live targets, denied or not — the denominator for "{sharedCount} of {totalLive} shared". */
+  totalLive: number
+}
+
+export function resolveReadViewSummary(targets: readonly ShareTarget[], storedDenied: ReadonlySet<string>): ReadViewSummary {
+  const liveTargets = targets.filter(t => t.sessions > 0)
+  const sharedCount = liveTargets.filter(t => !storedDenied.has(t.key)).length
+  return { hiddenCount: storedDenied.size, sharedCount, totalLive: liveTargets.length }
+}
+
+// --- fix 6: the repo panel reports its own edit-mode state to the card -----------------------------
+
+/**
+ * Whether the card's Disconnect / Sync now actions should be hidden entirely (not merely
+ * disabled) — for the whole time the repo panel's edit view is open. They are unrelated to the
+ * edit in progress and one of them is destructive, so showing them next to an in-progress,
+ * unsaved rules edit invites acting on the wrong thing. Trivial on purpose — it exists so the
+ * decision has a name and a unit test, the same reasoning `isApplyBusy`/`canEditRepos` follow.
+ */
+export function resolveCardActionsHidden(repoPanelEditing: boolean): boolean {
+  return repoPanelEditing
 }
 
 // --- the post-save banner (progress / done / error / queued) -----------------------------------

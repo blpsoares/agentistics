@@ -1,12 +1,13 @@
 import { test, expect } from 'bun:test'
 import { NO_REPO_KEY } from '@agentistics/core'
 import type { ShareTarget } from '../../lib/shareRepos'
+import { fmtDateLocalized } from '../../lib/dateFormat'
 import type { ConnectionStatusEntry } from './statusTypes'
 import {
   buildInitialDraft, toggleTarget, shareAllDraft, blockAllDraft, synthesizeMissingDenied,
   buildRows, groupRows, diffDraft, isDirty, keepVisibleKeys, computeApplyImpact,
   hasProvenPrehistory, resolveConfirmVariant, statsCopyVars, isLocked,
-  isApplyBusy, canEditRepos, resolveApplyBanner,
+  isApplyBusy, canEditRepos, resolveApplyBanner, resolveReadViewSummary, resolveCardActionsHidden,
   type DraftDiff,
 } from './repoPanelState'
 
@@ -237,12 +238,56 @@ test('an unknown (null) boundary never selects the proven variant, even if hasPr
 // --- 9. null boundary / null prehistorySessions produce copy inputs that state no number ---------
 
 test('statsCopyVars omits the clause (returns null) whenever boundary or prehistorySessions is unknowable', () => {
-  expect(statsCopyVars(null, 5)).toBeNull()
-  expect(statsCopyVars('2026-06-01', null)).toBeNull()
-  expect(statsCopyVars(null, null)).toBeNull()
-  expect(statsCopyVars('2026-06-01', 5)).toEqual({ boundary: '2026-06-01', n: 5 })
+  expect(statsCopyVars(null, 5, 'en')).toBeNull()
+  expect(statsCopyVars('2026-06-01', null, 'en')).toBeNull()
+  expect(statsCopyVars(null, null, 'en')).toBeNull()
+  expect(statsCopyVars('2026-06-01', 5, 'en')).toEqual({ boundary: fmtDateLocalized('2026-06-01', 'en'), n: 5 })
   // A real 0 is a legitimate, renderable value — it must never be treated as unknowable.
-  expect(statsCopyVars('2026-06-01', 0)).toEqual({ boundary: '2026-06-01', n: 0 })
+  expect(statsCopyVars('2026-06-01', 0, 'en')).toEqual({ boundary: fmtDateLocalized('2026-06-01', 'en'), n: 0 })
+})
+
+// --- fix 3: the boundary is formatted in the viewer's locale, never the raw yyyy-MM-dd -----------
+
+test('statsCopyVars formats the boundary in the viewer locale, never as the raw machine string', () => {
+  const en = statsCopyVars('2026-07-20', 3, 'en')
+  const pt = statsCopyVars('2026-07-20', 3, 'pt')
+  expect(en).not.toBeNull()
+  expect(pt).not.toBeNull()
+  expect(en?.boundary).not.toBe('2026-07-20')
+  expect(pt?.boundary).not.toBe('2026-07-20')
+  expect(en?.boundary).toBe(fmtDateLocalized('2026-07-20', 'en'))
+  expect(pt?.boundary).toBe(fmtDateLocalized('2026-07-20', 'pt'))
+  // Month names differ pt vs en — a real locale switch, not just passthrough.
+  expect(en?.boundary).not.toBe(pt?.boundary)
+})
+
+// --- fix 1: the read view separates "hidden from this central" (every stored denial, including
+// stale ones with zero current sessions) from "shared" (live targets only) ------------------------
+
+test('resolveReadViewSummary counts every stored denial as hidden (including stale), and shares only live non-denied targets', () => {
+  const targets = [
+    t({ key: 'a', sessions: 3 }),
+    t({ key: 'b', sessions: 5 }),
+    t({ key: 'gone', sessions: 0 }), // stale — denied but no longer produces sessions
+  ]
+  const stored = new Set(['a', 'gone'])
+  const summary = resolveReadViewSummary(targets, stored)
+  expect(summary.hiddenCount).toBe(2)
+  expect(summary.sharedCount).toBe(1)
+  expect(summary.totalLive).toBe(2)
+})
+
+test('resolveReadViewSummary reports zero hidden and every live target shared when nothing is denied', () => {
+  const targets = [t({ key: 'a', sessions: 2 }), t({ key: 'b', sessions: 1 })]
+  const summary = resolveReadViewSummary(targets, new Set())
+  expect(summary).toEqual({ hiddenCount: 0, sharedCount: 2, totalLive: 2 })
+})
+
+// --- fix 6: the repo panel reports its own edit-mode state so the card can hide two actions -------
+
+test('resolveCardActionsHidden hides Disconnect/Sync now for the whole time the repo panel is editing, and only then', () => {
+  expect(resolveCardActionsHidden(true)).toBe(true)
+  expect(resolveCardActionsHidden(false)).toBe(false)
 })
 
 // --- review fix (Important 2): the write guard covers the FULL apply duration, not just resync ---

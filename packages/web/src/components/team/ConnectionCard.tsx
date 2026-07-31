@@ -10,7 +10,7 @@ import { COPY, PLURAL_COPY, interpolate } from './copy'
 import { ConnectionIdentity, type ProbedIdentity } from './ConnectionIdentity'
 import type { ConnectionStatusEntry } from './statusTypes'
 import { isBrokenEndpoint, resolveCardState, showsApplyQueuedBanner, resolveWritesDisabled, DOT } from './cardState'
-import type { ApplyPhase } from './repoPanelState'
+import { resolveCardActionsHidden, type ApplyPhase } from './repoPanelState'
 import {
   IconBtn, DisconnectButton, mobileBtn, StatusLine, ResyncStrip, RepoPanelSlot,
 } from './ConnectionCardParts'
@@ -60,6 +60,10 @@ export function ConnectionCard({
   // effects below live here for the same reason — the card polls status whether it is expanded or
   // not, so an apply started and then collapsed still resolves.
   const [applyPhase, setApplyPhase] = useState<ApplyPhase>('idle')
+  // Fix 6 (Plan 4 Task 1): whether the repo panel's edit view is open, lifted here for the same
+  // reason `applyPhase` is — the panel unmounts on collapse, so the card (which stays mounted)
+  // owns it, and hides Disconnect / Sync now for as long as it is true.
+  const [repoEditing, setRepoEditing] = useState(false)
   const resyncSeenRef = useRef(false)
   const statusRef = useRef(status)
   useEffect(() => { statusRef.current = status }, [status])
@@ -97,8 +101,11 @@ export function ConnectionCard({
   const host = hostOf(conn.endpoint)
   const centralLabel = conn.label ?? host
 
+  // Fix 6 (Plan 4 Task 1): the title used to prefer `identity.org` — a fixed org constant, not
+  // machine-specific — over the machine's own name. `identity.machineName` (forwarded from the
+  // probe route) IS "the name the central gave the machine", so it now wins over `org`.
   const displayLabel = conn.label
-    ?? (duplicateHost ? `${host} · ${conn.user || '—'}` : (identity?.org ?? host))
+    ?? (duplicateHost ? `${host} · ${identity?.machineName ?? conn.user ?? '—'}` : (identity?.machineName ?? identity?.org ?? host))
 
   function commitRename() {
     onRename(conn.id, labelDraft.trim())
@@ -179,23 +186,34 @@ export function ConnectionCard({
               <IconBtn onClick={() => setRenaming(false)}><X size={13} /></IconBtn>
             </div>
           ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {displayLabel}
-              </span>
+            <span style={{
+              display: 'block', fontSize: 14, fontWeight: 600, color: 'var(--text-primary)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {displayLabel}
+            </span>
+          )}
+          {!renaming && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: 'var(--text-tertiary)' }}>
+              <span>{COPY.appearsAs[lang]} <strong style={{ color: 'var(--text-secondary)' }}>{conn.user || '—'}</strong></span>
+              {/*
+                Fix 6 (Plan 4 Task 1): the pencil edits a LOCAL nickname the central never sees —
+                it used to sit right beside the bold title, which read as "choose this machine's
+                name" and contradicted the rule that the central owns the name (`displayLabel`
+                above, now driven by `identity.machineName`). Moved next to this secondary line
+                and given `COPY.nicknameHint` as its tooltip so it reads as clearly secondary.
+              */}
               <span
                 role="button"
                 aria-label={COPY.rename[lang]}
+                title={COPY.nicknameHint[lang]}
                 onClick={e => { e.stopPropagation(); setLabelDraft(conn.label ?? ''); setRenaming(true) }}
-                style={{ display: 'inline-flex', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 4 }}
+                style={{ display: 'inline-flex', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 4, opacity: 0.6, flexShrink: 0 }}
               >
-                <Pencil size={12} />
+                <Pencil size={10} />
               </span>
             </div>
           )}
-          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>
-            {COPY.appearsAs[lang]} <strong style={{ color: 'var(--text-secondary)' }}>{conn.user || '—'}</strong>
-          </div>
         </div>
         {deniedCount > 0 && (
           <span style={{
@@ -247,27 +265,34 @@ export function ConnectionCard({
             onApplyRules={onApplyRules}
             phase={applyPhase}
             onPhase={setApplyPhase}
+            editing={repoEditing}
+            onEditingChange={setRepoEditing}
           />
 
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', flexDirection: isMobile ? 'column' : 'row' }}>
-            <button
-              type="button"
-              onClick={() => { void handleSyncNow() }}
-              disabled={disableWrites}
-              style={mobileBtn(disableWrites, false, isMobile)}
-            >
-              {syncing ? <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> : null}
-              {COPY.syncNow[lang]}
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirmOpen(true)}
-              disabled={disableWrites}
-              style={mobileBtn(disableWrites, true, isMobile)}
-            >
-              {COPY.disconnect[lang]}
-            </button>
-          </div>
+          {/* Fix 6 (Plan 4 Task 1): hidden — not merely disabled — for the whole time the repo
+             panel's edit view is open. Both are unrelated to the edit in progress, and Disconnect
+             is destructive: it must not sit next to an in-progress, unsaved rules edit. */}
+          {!resolveCardActionsHidden(repoEditing) && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', flexDirection: isMobile ? 'column' : 'row' }}>
+              <button
+                type="button"
+                onClick={() => { void handleSyncNow() }}
+                disabled={disableWrites}
+                style={mobileBtn(disableWrites, false, isMobile)}
+              >
+                {syncing ? <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> : null}
+                {COPY.syncNow[lang]}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmOpen(true)}
+                disabled={disableWrites}
+                style={mobileBtn(disableWrites, true, isMobile)}
+              >
+                {COPY.disconnect[lang]}
+              </button>
+            </div>
+          )}
         </div>
       )}
 

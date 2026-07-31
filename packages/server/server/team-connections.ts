@@ -184,6 +184,9 @@ interface WhoamiResult {
   ok: boolean
   user?: string
   org?: string
+  /** The token's own label, i.e. the name the CENTRAL gave this machine when the token was minted
+   *  — distinct from `user`, the account this token authenticates as. */
+  machineName?: string
   error?: string
 }
 
@@ -204,9 +207,14 @@ async function whoamiVerify(endpoint: string, token: string): Promise<WhoamiResu
     } catch {
       return { ok: false, error: `central returned an invalid response (HTTP ${res.status})` }
     }
-    const b = body as { ok?: unknown; user?: unknown; org?: unknown }
+    const b = body as { ok?: unknown; user?: unknown; org?: unknown; machineName?: unknown }
     if (b && b.ok === true && typeof b.user === 'string') {
-      return { ok: true, user: b.user, org: typeof b.org === 'string' ? b.org : undefined }
+      return {
+        ok: true,
+        user: b.user,
+        org: typeof b.org === 'string' ? b.org : undefined,
+        machineName: typeof b.machineName === 'string' ? b.machineName : undefined,
+      }
     }
     return { ok: false, error: 'the central rejected this token' }
   } catch (err) {
@@ -520,6 +528,10 @@ interface ProbeResult {
   latencyMs: number
   user?: string
   org?: string
+  /** Forwarded from `whoamiVerify` — the central's own name for this machine (the token's
+   *  `label`), so the connection card can show it instead of misreading `user` (the account name)
+   *  as the machine's identity. */
+  machineName?: string
   error?: string
 }
 
@@ -542,7 +554,7 @@ export async function handleProbeConnection(_req: Request, rawId: string): Promi
   const who = await whoamiVerify(endpoint, conn.token)
   const latencyMs = Date.now() - t0
   const result: ProbeResult = who.ok
-    ? { ok: true, latencyMs, user: who.user, org: who.org }
+    ? { ok: true, latencyMs, user: who.user, org: who.org, machineName: who.machineName }
     : { ok: false, latencyMs, error: who.error }
   return json(result)
 }

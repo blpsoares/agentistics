@@ -120,3 +120,50 @@ describe('the apply-success banner (review fix Important 4)', () => {
     expect(Object.keys(PLURAL_COPY)).not.toContain('applyOk')
   })
 })
+
+describe('Plan 4 Task 1, fix 2 — the confirm copy is rewritten in plain language but drops no fact', () => {
+  test('applyConfirmBody still states that already-sent data has been seen by the central operator', () => {
+    expect(COPY.applyConfirmBody.en.toLowerCase()).toContain('seen')
+    expect(COPY.applyConfirmBody.pt.toLowerCase()).toContain('visto')
+  })
+
+  test('applyConfirmStats still states the pre-boundary aggregate cannot be split by repository', () => {
+    expect(COPY.applyConfirmStats.en.toLowerCase()).toMatch(/split/)
+    expect(COPY.applyConfirmStats.pt.toLowerCase()).toMatch(/separad/)
+  })
+
+  test('statsNote still states the same pre-boundary limitation shown in the read view', () => {
+    expect(COPY.statsNote.en.toLowerCase()).toMatch(/split/)
+    expect(COPY.statsNote.pt.toLowerCase()).toMatch(/separ/)
+  })
+})
+
+describe('Plan 4 Task 1, fix 1 — the hidden-block heading is explicit and carries its own count', () => {
+  test('hiddenBlockTitle names "hidden"/"oculto" explicitly, with a {n} placeholder for the count', () => {
+    expect(COPY.hiddenBlockTitle.en.toLowerCase()).toContain('hidden')
+    expect(COPY.hiddenBlockTitle.pt.toLowerCase()).toContain('ocult')
+    expect(COPY.hiddenBlockTitle.en).toContain('{n}')
+    expect(COPY.hiddenBlockTitle.pt).toContain('{n}')
+  })
+})
+
+describe('Plan 4 Task 1, fix 4 — "no repository" names what it actually covers', () => {
+  test('noRepoSub names the CLIs that record no remote, not just "a CLI"', () => {
+    for (const name of ['Codex', 'Gemini', 'Kimi']) {
+      expect(COPY.noRepoSub.en).toContain(name)
+      expect(COPY.noRepoSub.pt).toContain(name)
+    }
+  })
+})
+
+describe('Plan 4 Task 1, fix 6 — the machine name is distinct from the local nickname', () => {
+  test('identityMachineName exists and is distinct wording from the account/user row', () => {
+    expect(COPY.identityMachineName.en.toLowerCase()).toContain('machine')
+    expect(COPY.identityMachineName.pt.toLowerCase()).toContain('máquina')
+  })
+
+  test('nicknameHint states the nickname is local-only, never seen by the central', () => {
+    expect(COPY.nicknameHint.en.toLowerCase()).toMatch(/only you|nickname/)
+    expect(COPY.nicknameHint.pt.toLowerCase()).toMatch(/só você|apelido/)
+  })
+})

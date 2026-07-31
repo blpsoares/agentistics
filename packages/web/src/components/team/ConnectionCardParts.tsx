@@ -91,7 +91,7 @@ export function ResyncStrip({ resync, lang }: { resync: ResyncProgress; lang: 'p
  */
 export function RepoPanelSlot({
   connId, deniedRepos, state, status, archiveMode, shareTargets, sessions, modelUsage, otelEnabled,
-  lang, onApplyRules, phase, onPhase,
+  lang, onApplyRules, phase, onPhase, editing, onEditingChange,
 }: {
   connId: string
   deniedRepos: string[]
@@ -108,6 +108,10 @@ export function RepoPanelSlot({
    *  transitions into it (Important 2). */
   phase: ApplyPhase
   onPhase: (phase: ApplyPhase) => void
+  /** Also owned by the CARD (fix 6, Plan 4 Task 1) — whether the panel's edit view is open, so
+   *  Disconnect / Sync now can be hidden for the whole time an edit is in progress. */
+  editing: boolean
+  onEditingChange: (editing: boolean) => void
 }) {
   const mode = resolveRepoPanelMode(state, status?.centralTooOld ?? false, archiveMode)
   if (mode === 'hidden') return null // nothing can be removed until the token works
@@ -133,6 +137,8 @@ export function RepoPanelSlot({
       onApply={onApplyRules}
       phase={phase}
       onPhase={onPhase}
+      editing={editing}
+      onEditingChange={onEditingChange}
     />
   )
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Loader2, EyeOff } from 'lucide-react'
 import type { SessionMeta, ModelUsage } from '@agentistics/core'
 import { NO_REPO_KEY, fmtCost } from '@agentistics/core'
 import type { ShareTarget } from '../../lib/shareRepos'
@@ -13,7 +13,7 @@ import type { ConnectionStatusEntry } from './statusTypes'
 import { EditView } from './SharedReposEditView'
 import {
   buildInitialDraft, canEditRepos, computeApplyImpact, diffDraft, hasProvenPrehistory,
-  isDirty, normalizeDenied, resolveApplyBanner, resolveConfirmVariant,
+  isDirty, normalizeDenied, resolveApplyBanner, resolveConfirmVariant, resolveReadViewSummary,
   shareAllDraft, blockAllDraft, statsCopyVars, synthesizeMissingDenied, toggleTarget,
   type ApplyPhase,
 } from './repoPanelState'
@@ -50,20 +50,22 @@ export interface SharedReposPanelProps {
    *  AND the wait for the server's resync to first become visible on a poll) must outlive that. */
   phase: ApplyPhase
   onPhase: (phase: ApplyPhase) => void
+  /** Fix 6 (Plan 4 Task 1): whether this panel's edit view is open, CONTROLLED by `ConnectionCard`
+   *  — same reasoning as `phase`/`onPhase` above. The card stays mounted while collapsed and needs
+   *  this to hide its Disconnect / Sync now actions for the whole time an edit is in progress. */
+  editing: boolean
+  onEditingChange: (editing: boolean) => void
 }
 
 export function SharedReposPanel({
   connId, deniedRepos, cardState, status, shareTargets, sessions, modelUsage, otelEnabled, lang,
-  onApply, phase, onPhase,
+  onApply, phase, onPhase, editing, onEditingChange,
 }: SharedReposPanelProps) {
   const isMobile = useIsMobile()
   const noRepoLabel = COPY.noRepoTitle[lang]
   const targets = synthesizeMissingDenied(shareTargets, deniedRepos, noRepoLabel)
   const storedDenied = normalizeDenied(deniedRepos)
-  const liveTargets = targets.filter(t => t.sessions > 0)
-  const sharedCount = liveTargets.filter(t => !storedDenied.has(t.key)).length
 
-  const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<Set<string> | null>(null)
   const [search, setSearch] = useState('')
   const [showStale, setShowStale] = useState(false)
@@ -73,11 +75,11 @@ export function SharedReposPanel({
   function startEdit() {
     setDraft(buildInitialDraft(targets, deniedRepos))
     setSearch('')
-    setEditing(true)
+    onEditingChange(true)
   }
   function cancelEdit() {
     setDraft(null)
-    setEditing(false)
+    onEditingChange(false)
   }
 
   const draftDenied = draft ?? storedDenied
@@ -86,13 +88,13 @@ export function SharedReposPanel({
   const impact = computeApplyImpact(sessions, targets, diff, rate)
   const hasProven = hasProvenPrehistory(sessions, diff, status?.boundary ?? null)
   const variant = resolveConfirmVariant(hasProven, status?.boundary ?? null)
-  const stats = statsCopyVars(status?.boundary ?? null, status?.prehistorySessions ?? null)
+  const stats = statsCopyVars(status?.boundary ?? null, status?.prehistorySessions ?? null, lang)
 
   async function confirmApply() {
     setConfirmOpen(false)
     const outcome = await onApply(connId, [...draftDenied]).catch(() => ({ ok: false as const }))
     if (!outcome.ok) { onPhase('error'); return }
-    setEditing(false)
+    onEditingChange(false)
     setDraft(null)
     onPhase(outcome.queued ? 'waiting' : 'done')
   }
@@ -130,8 +132,7 @@ export function SharedReposPanel({
           />
         }
       >
-        <ReadView targets={targets} storedDenied={storedDenied} sharedCount={sharedCount} total={liveTargets.length}
-          status={status} lang={lang} otelEnabled={otelEnabled} />
+        <ReadView targets={targets} storedDenied={storedDenied} status={status} lang={lang} otelEnabled={otelEnabled} />
       </Section>
 
       {banner && <ApplyBanner banner={banner} status={status} lang={lang} />}
@@ -173,40 +174,54 @@ export function buildConfirmMessage(
   return parts.join(' ')
 }
 
-function ReadView({ targets, storedDenied, sharedCount, total, status, lang, otelEnabled }: {
+/**
+ * Fix 1 (Plan 4 Task 1): the read view used to put the HIDDEN chips directly under
+ * `COPY.sharedRepos` — two polarities stacked in one box ("Shared repositories" heading, an amber
+ * chip block of the ones that are NOT shared, right underneath it). The hidden block now carries
+ * its own explicit label with a count (`hiddenBlockTitle`), and the shared count is separate plain
+ * text below it — never inside the same visual block.
+ */
+function ReadView({ targets, storedDenied, status, lang, otelEnabled }: {
   targets: ShareTarget[]
   storedDenied: Set<string>
-  sharedCount: number
-  total: number
   status: ConnectionStatusEntry | undefined
   lang: 'pt' | 'en'
   otelEnabled: boolean
 }) {
-  const stats = statsCopyVars(status?.boundary ?? null, status?.prehistorySessions ?? null)
+  const stats = statsCopyVars(status?.boundary ?? null, status?.prehistorySessions ?? null, lang)
+  const summary = resolveReadViewSummary(targets, storedDenied)
   const chips = [...storedDenied].map(key => {
     const t = targets.find(x => x.key === key)
     const label = key === NO_REPO_KEY ? COPY.noRepoTitle[lang] : (t ? t.name : key)
-    return { key, label, title: key === NO_REPO_KEY ? label : key }
+    // The "no repository" chip's tooltip states what it actually covers (fix 4) instead of just
+    // repeating its own label — a hover on the chip is the only place this fact reaches the read
+    // view, since the fuller explanation otherwise lives only in the edit view's row.
+    return { key, label, title: key === NO_REPO_KEY ? COPY.noRepoSub[lang] : key }
   }).sort((a, b) => a.label.localeCompare(b.label))
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {chips.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {chips.map(c => (
-            <span key={c.key} title={c.title} style={{
-              display: 'inline-block', maxWidth: '100%', padding: '2px 8px', borderRadius: 999,
-              background: 'color-mix(in srgb, var(--anthropic-orange) 15%, transparent)',
-              color: 'var(--anthropic-orange)', fontSize: 11, fontWeight: 600,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>{c.label}</span>
-          ))}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--anthropic-orange)', letterSpacing: '0.02em' }}>
+            {interpolate(COPY.hiddenBlockTitle[lang], { n: summary.hiddenCount })}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {chips.map(c => (
+              <span key={c.key} title={c.title} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: '100%', padding: '2px 8px', borderRadius: 999,
+                background: 'color-mix(in srgb, var(--anthropic-orange) 15%, transparent)',
+                color: 'var(--anthropic-orange)', fontSize: 11, fontWeight: 600,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}><EyeOff size={10} style={{ flexShrink: 0 }} />{c.label}</span>
+            ))}
+          </div>
         </div>
       )}
       <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
         {storedDenied.size === 0
           ? COPY.sharingAll[lang]
-          : interpolate(plural(PLURAL_COPY.nShared[lang], sharedCount), { n: sharedCount, total })}
+          : interpolate(plural(PLURAL_COPY.nShared[lang], summary.sharedCount), { n: summary.sharedCount, total: summary.totalLive })}
       </div>
       <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{COPY.newRepoNote[lang]}</div>
       {storedDenied.size > 0 && stats && (

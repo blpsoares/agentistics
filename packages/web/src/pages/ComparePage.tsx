@@ -1,13 +1,12 @@
 import React, { useMemo } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { GitCompare } from 'lucide-react'
-import { format as formatDate } from 'date-fns'
-import { ptBR } from 'date-fns/locale'
 import type { AppContext } from '../lib/app-context'
 import type { HarnessId, Lang } from '@agentistics/core'
 import { fmt, fmtCost, formatModel, t } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
 import { computeFilteredHarnessSummaries } from '../hooks/useData'
+import { fmtDateLocalized } from '../lib/dateFormat'
 
 interface HarnessAgg {
   harness: HarnessId
@@ -17,16 +16,6 @@ interface HarnessAgg {
   outputTokens: number
   costUSD: number
   lastActive: string | null
-}
-
-/** Format a raw date string (ISO or yyyy-MM-dd), localized by language. Returns '—' when invalid. */
-function fmtDateLocalized(raw: string | null | undefined, lang: Lang): string {
-  if (!raw) return '—'
-  const d = new Date(raw)
-  if (Number.isNaN(d.getTime())) return '—'
-  return lang === 'pt'
-    ? formatDate(d, 'dd MMM yyyy', { locale: ptBR })
-    : formatDate(d, 'MMM d, yyyy')
 }
 
 function NACell({ lang }: { lang: Lang }) {
