@@ -109,83 +109,24 @@ export function repoKeyOf(
 }
 
 /**
- * A rule set as `sessionShared` consumes it: a mode plus the sources it applies to, each keyed
- * as `${type}:${value}` — `repo:<canonical key>`, `project:<project_path>`, or the fixed
- * `none:` bucket (value is always `''` for that type). Building this Set is the caller's job
- * (e.g. from `ShareSource[]`); this module only ever reads it.
- */
-export interface ShareRules {
-  mode: 'denylist' | 'allowlist'
-  sources: ReadonlySet<string>
-}
-
-/** The `repo` / `none` source key for a resolved repo bucket. Never `repo:${NO_REPO_KEY}` —
- *  the `none` dimension is a distinct type from a repo whose value happens to be the sentinel. */
-function repoSourceKey(key: RepoKey): string {
-  return key === NO_REPO_KEY ? 'none:' : `repo:${key}`
-}
-
-/** The `project` source key for a project path. */
-function projectSourceKey(path: string): string {
-  return `project:${path}`
-}
-
-/** Whether a session matches ANY source, on either dimension. Path ambiguity (`conflictPaths`)
- *  is handled by the caller, one repo key at a time — it is a repo-dimension concern only. */
-function matchesAnySource(
-  s: Pick<SessionMeta, 'git_remote' | 'project_path'>,
-  sources: ReadonlySet<string>,
-  index?: PathRepoIndex,
-): boolean {
-  if (sources.has(repoSourceKey(repoKeyOf(s, index)))) return true
-  if (s.project_path && sources.has(projectSourceKey(s.project_path))) return true
-  return false
-}
-
-/**
- * A session is shared according to `rules.mode`:
- * - **denylist**: shared iff it matches NO source, AND — when its directory is known to hold
- *   more than one repo — none of those repos is a denied source either.
- * - **allowlist**: shared iff it matches SOME source, AND — same ambiguous-directory case —
- *   every repo that could be behind that path is an allowed source too.
+ * A session is shared when its own key is not denied AND — when its directory is known to
+ * hold more than one repo — no remote under that directory is denied.
  *
  * `scanProjectDir` stamps one remote on every session of a directory and `getProjectGitStats`
  * even scans one level of subdirectories for workspace folders, so a workspace holding a
  * shared and a blocked repo would otherwise ship the blocked repo's `first_prompt` and
- * `title` under the shared key. Annotating the ambiguity and sharing anyway is a fail-open —
- * hence the conflict check runs in BOTH modes, fail-closed each time.
+ * `title` under the shared key. Annotating the ambiguity and sharing anyway is a fail-open.
  */
 export function sessionShared(
   s: Pick<SessionMeta, 'git_remote' | 'project_path'>,
-  rules: ShareRules,
+  denied: ReadonlySet<RepoKey>,
   index?: PathRepoIndex,
 ): boolean {
-  const { mode, sources } = rules
+  if (denied.size === 0) return true
+  if (denied.has(repoKeyOf(s, index))) return false
   const conflict = index?.conflicts.get(s.project_path)
-
-  if (mode === 'allowlist') {
-    // Empty sources means nothing is listed — the reading that leaks is "no restriction".
-    if (sources.size === 0) return false
-    if (!matchesAnySource(s, sources, index)) return false
-    if (conflict) for (const key of conflict) if (!sources.has(repoSourceKey(key))) return false
-    return true
-  }
-
-  // denylist
-  if (sources.size === 0) return true
-  if (matchesAnySource(s, sources, index)) return false
-  if (conflict) for (const key of conflict) if (sources.has(repoSourceKey(key))) return false
+  if (conflict) for (const key of conflict) if (denied.has(key)) return false
   return true
-}
-
-/** The legacy denylist-of-repo-keys shape, adapted into a `ShareRules` for `sessionShared`.
- *  Every existing caller in this file (and every caller outside it, unchanged by this task)
- *  still passes a plain `ReadonlySet<RepoKey>` denylist — this is the one place that gets
- *  translated into the new `${type}:${value}` keying, so their behavior is inherited exactly. */
-function denylistRules(denied: ReadonlySet<RepoKey>): ShareRules {
-  const sources = new Set<string>()
-  for (const key of denied) sources.add(repoSourceKey(key))
-  return { mode: 'denylist', sources }
 }
 
 export function filterShared<T extends Pick<SessionMeta, 'git_remote' | 'project_path'>>(
@@ -194,8 +135,7 @@ export function filterShared<T extends Pick<SessionMeta, 'git_remote' | 'project
   index?: PathRepoIndex,
 ): T[] {
   if (denied.size === 0) return [...sessions]
-  const rules = denylistRules(denied)
-  return sessions.filter(s => sessionShared(s, rules, index))
+  return sessions.filter(s => sessionShared(s, denied, index))
 }
 
 /**
@@ -261,9 +201,8 @@ export function deniedSessionIds(
 ): Set<string> {
   const out = new Set<string>()
   if (denied.size === 0) return out
-  const rules = denylistRules(denied)
   for (const s of sessions) {
-    if (s.session_id && !sessionShared(s, rules, index)) out.add(s.session_id)
+    if (s.session_id && !sessionShared(s, denied, index)) out.add(s.session_id)
   }
   return out
 }
@@ -626,11 +565,10 @@ export function deniedTouchesPrehistory(
 ): boolean | null {
   if (boundary === null) return null
   if (boundary === '' || denied.size === 0) return false
-  const rules = denylistRules(denied)
   for (const s of allStored) {
     const day = sessionDay(s)
     if (day === null || day >= boundary) continue
-    if (!sessionShared(s, rules, index)) return true
+    if (!sessionShared(s, denied, index)) return true
   }
   return false
 }
