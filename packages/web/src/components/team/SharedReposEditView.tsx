@@ -148,11 +148,13 @@ function RowGroup({ label, rows, lang, onToggleRow }: {
       </div>
       {rows.map(r => {
         const t = r.target
-        const sub = r.locked
-          ? COPY.mixedRepoWarn[lang]
-          : t.kind === 'none'
-            ? COPY.noRepoSub[lang]
-            : `${interpolate(plural(PLURAL_COPY.sessionsN[lang], t.sessions), { n: t.sessions })}${t.lastActive ? ` · ${interpolate(COPY.lastActiveT[lang], { t: relTime(t.lastActive, pt) })}` : ''}`
+        const sub = r.locked && t.kind === 'none'
+          ? COPY.lockedNoRepoWarn[lang]
+          : r.locked
+            ? COPY.mixedRepoWarn[lang]
+            : t.kind === 'none'
+              ? COPY.noRepoSub[lang]
+              : `${interpolate(plural(PLURAL_COPY.sessionsN[lang], t.sessions), { n: t.sessions })}${t.lastActive ? ` · ${interpolate(COPY.lastActiveT[lang], { t: relTime(t.lastActive, pt) })}` : ''}`
         return (
           // `flexWrap: 'wrap'` — the row div is a block-level flex container (width = its parent's,
           // not shrink-to-fit), and `RowSwitch`'s button already claims the full row via its own
