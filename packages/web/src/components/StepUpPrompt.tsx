@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { ShieldAlert, AlertCircle } from 'lucide-react'
 import type { Lang } from '@agentistics/core'
 import { setStepUpPrompter } from '../lib/stepup'
+import { Revealable, REVEAL_PAD } from './PasswordReveal'
 
 /**
  * Re-authentication dialog for destructive operations. Mounted once by App; `stepUpFetch`
@@ -16,6 +17,7 @@ export function StepUpPrompt({ lang }: { lang: Lang }) {
   const [open, setOpen] = useState(false)
   const [value, setValue] = useState('')
   const [useCode, setUseCode] = useState(false)
+  const [shown, setShown] = useState(false)
   const [error, setError] = useState(false)
   const resolver = useRef<((v: { password?: string; code?: string } | null) => void) | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -69,14 +71,16 @@ export function StepUpPrompt({ lang }: { lang: Lang }) {
             ? 'Esta ação apaga dados ou emite uma credencial. Confirme com sua senha para continuar.'
             : 'This action deletes data or mints a credential. Confirm with your password to continue.'}
         </div>
-        <input
-          ref={inputRef}
-          type={useCode ? 'text' : 'password'}
-          value={value}
-          onChange={e => { setValue(e.target.value); setError(false) }}
-          placeholder={useCode ? '123456' : '••••••••'}
-          style={input}
-        />
+        <Revealable shown={shown} onToggle={() => setShown(v => !v)} lang={lang} disabled={useCode}>
+          <input
+            ref={inputRef}
+            type={useCode || shown ? 'text' : 'password'}
+            value={value}
+            onChange={e => { setValue(e.target.value); setError(false) }}
+            placeholder={useCode ? '123456' : '••••••••'}
+            style={{ ...input, paddingRight: useCode ? 11 : REVEAL_PAD }}
+          />
+        </Revealable>
         {error && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#ef4444', marginBottom: 10 }}>
             <AlertCircle size={13} /> {pt ? 'Não confere.' : 'Does not match.'}

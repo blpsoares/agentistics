@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { AlertCircle, LogIn, ShieldCheck } from 'lucide-react'
+import { Revealable, REVEAL_PAD } from './PasswordReveal'
 
 /** Central account login (email + password). Posts /api/iam/login; the server sets the session cookie. */
 export function Login({ onAuthed }: { onAuthed: () => void }) {
@@ -124,18 +125,28 @@ function MfaChallenge({ challenge, onAuthed, onCancel }: {
   )
 }
 
-/** Shared labelled input used by Login + OwnerSetup. */
+/** Shared labelled input used by Login + OwnerSetup + both change-password flows. */
 export function Field({ label, type, value, onChange, inputRef, disabled }: {
   label: string; type: string; value: string; onChange: (v: string) => void
   inputRef?: React.RefObject<HTMLInputElement | null>; disabled?: boolean
 }) {
+  // A password field gets a reveal: these forms are where a typo costs the most (owner setup
+  // confirms a password you will need to sign in with, and a wrong one is only discovered later).
+  const isPassword = type === 'password'
+  const [shown, setShown] = useState(false)
+  const effectiveType = isPassword && shown ? 'text' : type
+  const field = (
+    <input ref={inputRef} type={effectiveType} value={value} onChange={e => onChange(e.target.value)} disabled={disabled}
+      style={{ width: '100%', boxSizing: 'border-box', padding: '8px 11px', paddingRight: isPassword ? REVEAL_PAD : 11, background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, color: 'var(--text-primary)', outline: 'none', fontFamily: 'inherit' }}
+      onFocus={e => { e.currentTarget.style.borderColor = 'var(--anthropic-orange)' }}
+      onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }} />
+  )
   return (
     <div style={{ marginBottom: 14 }}>
       <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-tertiary)', marginBottom: 5 }}>{label}</div>
-      <input ref={inputRef} type={type} value={value} onChange={e => onChange(e.target.value)} disabled={disabled}
-        style={{ width: '100%', boxSizing: 'border-box', padding: '8px 11px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, color: 'var(--text-primary)', outline: 'none', fontFamily: 'inherit' }}
-        onFocus={e => { e.currentTarget.style.borderColor = 'var(--anthropic-orange)' }}
-        onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }} />
+      {isPassword
+        ? <Revealable shown={shown} onToggle={() => setShown(v => !v)}>{field}</Revealable>
+        : field}
     </div>
   )
 }

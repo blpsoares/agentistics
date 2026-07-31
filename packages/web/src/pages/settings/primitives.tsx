@@ -1,6 +1,7 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { Pencil, Check, AlertTriangle, Info, ChevronDown } from 'lucide-react'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { RevealButton, REVEAL_PAD } from '../../components/PasswordReveal'
 
 // ScopeNote
 // A subtle info banner explaining WHICH resources the signed-in account can see on a governance
@@ -523,12 +524,16 @@ export function FieldInput({
   placeholder?: string
   disabled?: boolean
 }) {
+  // A hidden field the user cannot proof-read is where a mistyped token or password becomes a
+  // failure somewhere else entirely; the reveal is the same control every other form here uses.
+  const [shown, setShown] = useState(false)
   return (
     <div style={{ marginBottom: 14 }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 2 }}>{label}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 5 }}>{sub}</div>}
+      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
       <input
-        type={type}
+        type={type === 'password' && shown ? 'text' : type}
         value={value}
         placeholder={placeholder}
         onChange={e => onChange(e.target.value)}
@@ -537,6 +542,7 @@ export function FieldInput({
         style={{
           width: '100%', boxSizing: 'border-box',
           padding: '7px 10px',
+          ...(type === 'password' ? { paddingRight: REVEAL_PAD } : null),
           background: 'var(--bg-elevated)',
           border: '1px solid var(--border)',
           borderRadius: 7,
@@ -550,6 +556,8 @@ export function FieldInput({
         onFocus={e => { if (!disabled) e.currentTarget.style.borderColor = 'var(--anthropic-orange)' }}
         onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
       />
+      {type === 'password' && <RevealButton shown={shown} onToggle={() => setShown(v => !v)} />}
+      </div>
     </div>
   )
 }

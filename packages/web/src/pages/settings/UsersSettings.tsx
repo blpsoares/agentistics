@@ -7,6 +7,7 @@ import { SectionHeader, Section, Checkbox, Select, ConfirmModal, RecordCard, Rec
 import { Drawer } from './Drawer'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { stepUpFetch } from '../../lib/stepup'
+import { Revealable, REVEAL_PAD } from '../../components/PasswordReveal'
 
 interface Team { _id: string; name: string }
 interface Membership { teamId: string; role: 'manager' | 'user' }
@@ -878,8 +879,14 @@ export default function UsersSettings() {
         </Field>
         <Field label={pt ? 'Senha (8+)' : 'Password (8+)'}>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <input style={{ ...input, flex: 1 }} type={pwVisible ? 'text' : 'password'} value={ap}
-              onChange={e => setAp(e.target.value)} placeholder="••••••••" />
+            {/* `pwVisible` existed here already, but only the Generate button ever set it — there
+                was no way to look at a password you typed yourself. */}
+            <div style={{ flex: 1 }}>
+              <Revealable shown={pwVisible} onToggle={() => setPwVisible(v => !v)} lang={lang}>
+                <input style={{ ...input, width: '100%', paddingRight: REVEAL_PAD }} type={pwVisible ? 'text' : 'password'} value={ap}
+                  onChange={e => setAp(e.target.value)} placeholder="••••••••" />
+              </Revealable>
+            </div>
             <button type="button" style={ghostBtn} title={pt ? 'Gerar senha aleatória' : 'Generate random password'}
               onClick={() => { const p = generatePassword(16); setAp(p); setPwVisible(true) }}>
               <Dice5 size={13} /> {pt ? 'Gerar' : 'Generate'}
