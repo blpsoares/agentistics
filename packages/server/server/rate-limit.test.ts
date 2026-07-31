@@ -72,28 +72,81 @@ describe('evaluate', () => {
 })
 
 describe('registerFailure', () => {
-  it('doubles the block on each strike when backoff is on', () => {
-    let b: Bucket = { count: 0, windowStart: t0, strikes: 0, blockedUntil: 0 }
-    b = registerFailure(b, rule, t0)
+  const fresh = (): Bucket => ({ count: 0, windowStart: t0, strikes: 0, blockedUntil: 0, fails: 0, failWindowStart: t0 })
+
+  it('does NOT block before the allowance is spent — a typo is not an attack', () => {
+    // The whole point: rule.limit failures are free. This used to block on the first one, so an
+    // owner who mistyped their password twice was locked out for half an hour.
+    let b = fresh()
+    for (let i = 1; i < rule.limit; i++) {
+      b = registerFailure(b, rule, t0 + i * 1000)
+      expect(b.blockedUntil).toBe(0)
+      expect(evaluate(b, rule, t0 + i * 1000 + 1).allowed).toBe(true)
+    }
+  })
+
+  it('blocks once the allowance IS spent', () => {
+    let b = fresh()
+    for (let i = 0; i < rule.limit; i++) b = registerFailure(b, rule, t0 + i * 1000)
+    expect(b.blockedUntil).toBeGreaterThan(t0)
+    expect(evaluate(b, rule, t0 + rule.limit * 1000).allowed).toBe(false)
+  })
+
+  it('doubles the block on each further round of failures when backoff is on', () => {
+    const spend = (b: Bucket, at: number): Bucket => {
+      for (let i = 0; i < rule.limit; i++) b = registerFailure(b, rule, at)
+      return b
+    }
+    let b = spend(fresh(), t0)
     const first = b.blockedUntil - t0
-    b = registerFailure(b, rule, t0)
-    const second = b.blockedUntil - t0
-    expect(second).toBe(first * 2)
+    b = spend(b, t0)
+    expect(b.blockedUntil - t0).toBe(first * 2)
   })
 
   it('keeps a flat block when backoff is off', () => {
     const flat: RateRule = { ...rule, backoff: false }
-    let b: Bucket = { count: 0, windowStart: t0, strikes: 0, blockedUntil: 0 }
-    b = registerFailure(b, flat, t0)
+    const spend = (b: Bucket, at: number): Bucket => {
+      for (let i = 0; i < flat.limit; i++) b = registerFailure(b, flat, at)
+      return b
+    }
+    let b = spend(fresh(), t0)
     const first = b.blockedUntil - t0
-    b = registerFailure(b, flat, t0)
+    b = spend(b, t0)
     expect(b.blockedUntil - t0).toBe(first)
   })
 
   it('caps the block at 24h', () => {
-    let b: Bucket = { count: 0, windowStart: t0, strikes: 0, blockedUntil: 0 }
-    for (let i = 0; i < 40; i++) b = registerFailure(b, rule, t0)
+    let b = fresh()
+    for (let i = 0; i < 40 * rule.limit; i++) b = registerFailure(b, rule, t0)
     expect(b.blockedUntil - t0).toBeLessThanOrEqual(24 * 60 * 60 * 1000)
+  })
+
+  it('forgets the failures once the window passes, so mistakes do not accumulate for ever', () => {
+    let b = fresh()
+    for (let i = 0; i < rule.limit - 1; i++) b = registerFailure(b, rule, t0)
+    // One more, a full window later: it opens a fresh tally instead of tipping the old one over.
+    b = registerFailure(b, rule, t0 + rule.windowMs + 1)
+    expect(b.blockedUntil).toBe(0)
+  })
+
+  it('decays the strike history after a quiet day, so backoff punishes a burst and not a memory', () => {
+    const spend = (b: Bucket, at: number): Bucket => {
+      for (let i = 0; i < rule.limit; i++) b = registerFailure(b, rule, at)
+      return b
+    }
+    let b = spend(fresh(), t0)
+    const first = b.blockedUntil - t0
+    const muchLater = t0 + 25 * 60 * 60 * 1000
+    b = spend(b, muchLater)
+    expect(b.blockedUntil - muchLater).toBe(first) // back to the base block, not double
+  })
+
+  it('clears the failure tally when a served block expires', () => {
+    let b = fresh()
+    for (let i = 0; i < rule.limit; i++) b = registerFailure(b, rule, t0)
+    const after = evaluate(b, rule, b.blockedUntil + 1)
+    expect(after.allowed).toBe(true)
+    expect(after.next.fails).toBe(0)
   })
 })
 
@@ -141,11 +194,15 @@ describe('RULES', () => {
 })
 
 describe('rateRuleFor', () => {
-  it('puts every credential endpoint under the login rule', () => {
-    expect(rateRuleFor('/api/iam/login')).toBe(RULES.login)
-    expect(rateRuleFor('/api/iam/login/mfa')).toBe(RULES.login)
-    expect(rateRuleFor('/api/team/login')).toBe(RULES.login)
-    expect(rateRuleFor('/api/iam/bootstrap')).toBe(RULES.login)
+  it('puts every credential endpoint under the per-IP ATTEMPT rule', () => {
+    // The path-level rule counts calls; the failure allowance (RULES.login) is applied per
+    // ACCOUNT inside the handler. They are different questions and must not share a number —
+    // matching them meant the attempt ceiling ran out exactly when the failure one did.
+    expect(rateRuleFor('/api/iam/login')).toBe(RULES.loginAttempts)
+    expect(rateRuleFor('/api/iam/login/mfa')).toBe(RULES.loginAttempts)
+    expect(rateRuleFor('/api/team/login')).toBe(RULES.loginAttempts)
+    expect(rateRuleFor('/api/iam/bootstrap')).toBe(RULES.loginAttempts)
+    expect(RULES.loginAttempts.limit).toBeGreaterThan(RULES.login.limit)
   })
 
   it('puts bearer-token endpoints under the token rule', () => {

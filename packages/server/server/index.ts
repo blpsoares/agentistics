@@ -334,7 +334,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       const key = rule === RULES.api ? `ip:${clientIp}:api` : `ip:${clientIp}:${url.pathname}`
       const verdict = limiter.check(key, rule)
       if (!verdict.allowed) {
-        if (rule === RULES.login) void writeAudit({ action: 'rate.blocked', ip: clientIp, meta: { path: url.pathname } })
+        if (rule === RULES.loginAttempts) void writeAudit({ action: 'rate.blocked', ip: clientIp, meta: { path: url.pathname } })
         const res = tooManyRequests(verdict.retryAfterSec)
         const headers = new Headers(res.headers)
         for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
