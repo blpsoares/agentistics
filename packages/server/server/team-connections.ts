@@ -13,8 +13,8 @@
  * Never logs a token, a TeamConnection, or a whole preferences object.
  */
 
-import type { TeamConnection, TeamConfig } from '@agentistics/core'
-import { connectionId, defaultTeam, normalizeTeamConfig, normalizeEndpointKey } from '@agentistics/core'
+import type { TeamConnection, TeamConfig, ShareSource, ShareSourceType } from '@agentistics/core'
+import { connectionId, defaultTeam, normalizeTeamConfig, normalizeEndpointKey, NO_REPO_KEY } from '@agentistics/core'
 import { readPreferences, updateTeamConfig, PreferencesLockTimeoutError } from './preferences'
 import { safeConnId } from './config'
 import { readJsonLimited, LIMITS } from './limits'
@@ -25,7 +25,7 @@ import {
 import type { ForgetProgress } from './team-forget-client'
 import { loadRulesState } from './team-rules'
 import {
-  normalizeDenied, hasRestrictions, withUnresolvedDenied, denialSignature,
+  sourcesRestrict, withUnresolvedSources, rulesSignature, emptyRulesSignature, normalizeSources,
   attributionBoundary, prehistoryCount,
 } from './share-rules'
 
@@ -56,15 +56,85 @@ export interface ConnectionBody {
   token: string
   org?: string
   label?: string
-  deniedRepos?: string[]
+  /** 'denylist' (share everything except `sources`) | 'allowlist' (share only `sources`).
+   *  Absent means "not specified in this request" — NOT "denylist": on an update, absence keeps
+   *  whatever mode the connection already has (see `resolveShareRules`). */
+  shareMode?: 'denylist' | 'allowlist'
+  /** The typed rule list. A legacy `deniedRepos: string[]` body is accepted too (an older client)
+   *  and converted into this shape by `parseRulesFromBody` — downstream code never sees
+   *  `deniedRepos` again. */
+  sources?: ShareSource[]
 }
 
-/** Pure: is `v` an array of strings? Used to validate `deniedRepos` on both bodies below —
- *  junk (a bare string, a number, an object, a mixed-type array) is rejected outright rather than
- *  filtered down to whatever happened to be a string, which would silently accept a malformed
- *  request instead of 400ing it. */
+/** Pure: is `v` an array of strings? Used to validate a legacy `deniedRepos` body — junk (a bare
+ *  string, a number, an object, a mixed-type array) is rejected outright rather than filtered down
+ *  to whatever happened to be a string, which would silently accept a malformed request instead of
+ *  400ing it. */
 function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every(x => typeof x === 'string')
+}
+
+const SHARE_SOURCE_TYPES = new Set<ShareSourceType>(['repo', 'project', 'none'])
+/** Generous but bounded — a rule list this size already indicates a malformed or adversarial
+ *  request; a real picker never approaches it (mirrors `team-forget.ts`'s `MAX_FORGET_IDS`). */
+const MAX_SOURCES = 2000
+
+/** TOTAL validator for a `ShareSource[]`: every entry must be `{type, value}` with a known type
+ *  and a string value, and the list must not exceed `MAX_SOURCES`. ANY invalid entry — a bad type,
+ *  a non-string value, a bare string instead of an object — rejects the WHOLE list rather than
+ *  silently dropping it: a rules body is a privacy control, and a partial application of it is a
+ *  fail-open, not a best-effort parse. */
+function validateShareSources(v: unknown): ShareSource[] | { error: string } {
+  if (!Array.isArray(v)) return { error: 'sources must be an array' }
+  if (v.length > MAX_SOURCES) return { error: `sources must not exceed ${MAX_SOURCES} entries` }
+  const out: ShareSource[] = []
+  for (const entry of v) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return { error: 'each source must be an object with type and value' }
+    }
+    const e = entry as Record<string, unknown>
+    if (typeof e.type !== 'string' || !SHARE_SOURCE_TYPES.has(e.type as ShareSourceType)) {
+      return { error: `unknown source type ${JSON.stringify(e.type)}` }
+    }
+    if (typeof e.value !== 'string') return { error: 'source value must be a string' }
+    out.push({ type: e.type as ShareSourceType, value: e.value })
+  }
+  return out
+}
+
+/** Convert a legacy `deniedRepos: string[]` body into typed sources — the request-boundary
+ *  counterpart of `@agentistics/core`'s `migrateSources` (which does the same conversion in the
+ *  read path for a connection already on disk). Duplicated rather than imported because that
+ *  function is private to the shape migration and this is a different one-shot conversion. */
+function legacyDeniedReposToSources(deniedRepos: readonly string[]): ShareSource[] {
+  return deniedRepos.map(v => v === NO_REPO_KEY ? { type: 'none' as const, value: '' } : { type: 'repo' as const, value: v })
+}
+
+/** The rules half of a POST/PATCH body — `{shareMode?, sources?}`, or the legacy `{deniedRepos?}`
+ *  shape converted into it. Pure. Total: any junk in EITHER shape is a 400, never a partial
+ *  application. Accepting `shareMode` alone (no `sources`) is legitimate — a pure mode switch that
+ *  keeps whatever the connection already has (see `resolveShareRules`). */
+function parseRulesFromBody(r: Record<string, unknown>): { shareMode?: 'denylist' | 'allowlist'; sources?: ShareSource[] } | { error: string } {
+  let shareMode: 'denylist' | 'allowlist' | undefined
+  if ('shareMode' in r && r.shareMode !== undefined) {
+    if (r.shareMode !== 'denylist' && r.shareMode !== 'allowlist') {
+      return { error: 'shareMode must be "denylist" or "allowlist"' }
+    }
+    shareMode = r.shareMode
+  }
+
+  if ('sources' in r && r.sources !== undefined) {
+    const sources = validateShareSources(r.sources)
+    if ('error' in sources) return sources
+    return { shareMode, sources }
+  }
+
+  if ('deniedRepos' in r && r.deniedRepos !== undefined) {
+    if (!isStringArray(r.deniedRepos)) return { error: 'deniedRepos must be an array of strings' }
+    return { shareMode, sources: legacyDeniedReposToSources(r.deniedRepos) }
+  }
+
+  return { shareMode }
 }
 
 /** Validate + normalize the POST /api/team/connections body. Pure. */
@@ -82,23 +152,22 @@ export function validateConnectionBody(raw: unknown): ConnectionBody | { error: 
   const token = typeof r.token === 'string' ? r.token : ''
   const org = typeof r.org === 'string' && r.org.trim() ? r.org.trim() : undefined
   const label = typeof r.label === 'string' && r.label.trim() ? r.label.trim() : undefined
-  let deniedRepos: string[] | undefined
-  if ('deniedRepos' in r && r.deniedRepos !== undefined) {
-    if (!isStringArray(r.deniedRepos)) return { error: 'deniedRepos must be an array of strings' }
-    deniedRepos = r.deniedRepos
-  }
-  return { endpoint, token, org, label, deniedRepos }
+  const rules = parseRulesFromBody(r)
+  if ('error' in rules) return rules
+  return { endpoint, token, org, label, shareMode: rules.shareMode, sources: rules.sources }
 }
 
 export interface PatchBody {
   label?: string
-  deniedRepos?: string[]
+  shareMode?: 'denylist' | 'allowlist'
+  sources?: ShareSource[]
 }
 
 /** Validate the PATCH /api/team/connections/:id body. Pure. An empty string label is a
  *  legitimate "clear the label" — the card then falls back to the endpoint host for display. An
- *  empty `deniedRepos` array is likewise legitimate — the explicit "un-block everything" shape.
- *  At least one of the two fields must be present, or there is nothing to update. */
+ *  empty `sources` array is likewise legitimate — the explicit "un-block everything" shape in
+ *  denylist mode (in allowlist mode it is the explicit "share nothing" shape). At least one of
+ *  label/shareMode/sources must be present, or there is nothing to update. */
 export function validatePatchBody(raw: unknown): PatchBody | { error: string } {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { error: 'invalid JSON body' }
   const r = raw as Record<string, unknown>
@@ -107,28 +176,47 @@ export function validatePatchBody(raw: unknown): PatchBody | { error: string } {
     if (typeof r.label !== 'string') return { error: 'label must be a string' }
     out.label = r.label.trim()
   }
-  if ('deniedRepos' in r && r.deniedRepos !== undefined) {
-    if (!isStringArray(r.deniedRepos)) return { error: 'deniedRepos must be an array of strings' }
-    out.deniedRepos = r.deniedRepos
-  }
-  if (out.label === undefined && out.deniedRepos === undefined) {
-    return { error: 'nothing to update — provide label and/or deniedRepos' }
+  const rules = parseRulesFromBody(r)
+  if ('error' in rules) return rules
+  if (rules.shareMode !== undefined) out.shareMode = rules.shareMode
+  if (rules.sources !== undefined) out.sources = rules.sources
+
+  if (out.label === undefined && out.shareMode === undefined && out.sources === undefined) {
+    return { error: 'nothing to update — provide label, shareMode and/or sources' }
   }
   return out
 }
 
 /**
  * The zero→non-zero transition rule (§4.2), applied HERE and nowhere else — the result is what
- * gets PERSISTED, so `NO_REPO_KEY` lands in the stored list and the picker renders it pre-blocked;
- * only an explicit later edit removes it. An already-restricted connection's edit is honoured
- * AS-IS (no forced re-add of the sentinel), which is also what makes repeated application from the
- * same starting point idempotent: `previous` reflects what is already persisted, so applying the
- * rule twice against an unchanged `previous` yields the same `requested` handling both times.
+ * gets PERSISTED, so the `none` bucket lands in the stored list and the picker renders it
+ * pre-blocked; only an explicit later edit removes it, and ONLY in denylist mode (Task 4: in
+ * allowlist mode the unattributed bucket is already hidden by default like everything not
+ * explicitly listed, so `withUnresolvedSources` is a no-op there). An already-restricted
+ * connection's edit is honoured AS-IS (no forced re-add of the sentinel), which is also what makes
+ * repeated application from the same starting point idempotent: `previous` reflects what is
+ * already persisted, so applying the rule twice against an unchanged `previous` yields the same
+ * `requested` handling both times.
+ *
+ * `requested.mode`/`requested.sources` are each independently optional — a PATCH may change only
+ * the mode (keep the list) or only the list (keep the mode), exactly like a body that specifies
+ * only one of `shareMode`/`sources`.
  */
-export function resolveDeniedRepos(previous: readonly string[] | undefined, requested: readonly string[]): string[] {
-  const wasRestricted = hasRestrictions(previous)
-  if (!wasRestricted && hasRestrictions(requested)) return withUnresolvedDenied(requested)
-  return [...requested]
+export function resolveShareRules(
+  previous: { mode: 'denylist' | 'allowlist'; sources: readonly ShareSource[] } | undefined,
+  requested: { mode?: 'denylist' | 'allowlist'; sources?: readonly ShareSource[] },
+): { mode: 'denylist' | 'allowlist'; sources: ShareSource[] } {
+  const prevMode = previous?.mode ?? 'denylist'
+  const prevSources = previous?.sources ?? []
+  const mode = requested.mode ?? prevMode
+  const sources = requested.sources ?? prevSources
+
+  const wasRestricted = sourcesRestrict(prevMode, prevSources)
+  const willBeRestricted = sourcesRestrict(mode, sources)
+  const finalSources = (!wasRestricted && willBeRestricted)
+    ? withUnresolvedSources(mode, [...sources])
+    : [...sources]
+  return { mode, sources: finalSources }
 }
 
 export type ConnectionUpsertDecision =
@@ -321,28 +409,33 @@ export async function addOrUpdateConnection(
           // never be silently overridden by whoami on every reconnect.
           org: body.org ?? who.org ?? existing.org,
           user: who.user ?? existing.user,
-          // id, label AND deniedRepos are preserved on an update (a reconnect/token-rotation),
-          // never overwritten from the body — the rules editor is the only writer of an EXISTING
-          // connection's denylist (PATCH), so a body.deniedRepos here is silently ignored rather
-          // than reset to it.
+          // id, label, shareMode AND sources are preserved on an update (a reconnect/token-
+          // rotation), never overwritten from the body — the rules editor is the only writer of
+          // an EXISTING connection's rules (PATCH), so a body.shareMode/sources here is silently
+          // ignored rather than reset to it.
         }
         outcome = { action: 'update', connId: existing.id }
         const connections = current.connections.map(c => (c.id === existing.id ? updated : c))
         return normalizeTeamConfig({ ...defaultTeam(), mode: 'member', connections })
       }
       const id = connectionId()
+      // R10: the rules travel in the SAME create as the rest of the connection, committed inside
+      // this one updateTeamConfig transaction — nudgeAfterInsert() below only runs once it
+      // resolves, so the uploader can never see this connection before its rules exist and push
+      // the entire unfiltered history first. The zero→non-zero transition (§4.2) applies here
+      // too: `previous` is undefined (a brand-new connection has no prior state).
+      const rules = resolveShareRules(undefined, { mode: body.shareMode, sources: body.sources ?? [] })
       const created: TeamConnection = {
         id,
         endpoint: body.endpoint,
         token: body.token,
         org: body.org ?? who.org ?? 'default',
         user: who.user ?? '',
-        // R10: deniedRepos travels in the SAME create as the rest of the connection, committed
-        // inside this one updateTeamConfig transaction — nudgeAfterInsert() below only runs once
-        // it resolves, so the uploader can never see this connection before its rules exist and
-        // push the entire unfiltered history first. The zero→non-zero transition (§4.2) applies
-        // here too: `previous` is undefined (a brand-new connection has no prior state).
-        deniedRepos: resolveDeniedRepos(undefined, body.deniedRepos ?? []),
+        // LEGACY, never written meaningfully from this version onward — see `TeamConnection`'s
+        // own docstring. The field stays required by the type, so it is initialized empty here.
+        deniedRepos: [],
+        shareMode: rules.mode,
+        sources: rules.sources,
         addedAt: new Date().toISOString(),
         ...(body.label !== undefined ? { label: body.label } : {}),
       }
@@ -402,12 +495,15 @@ function nudgeAfterRulesChange(connId: string): void {
   void pushNow(connId).catch(() => { /* best-effort */ })
 }
 
-/** PATCH /api/team/connections/:id — { label?, deniedRepos? } — read-modify-write that entry
- *  only. A `deniedRepos` change applies `resolveDeniedRepos`'s zero→non-zero transition against
- *  the entry's OWN previous list (never a global default) and, once persisted, triggers the §6.1
- *  reconcile cycle for this connection. Returns `{ ok, queued: true }` when a rules change was
- *  accepted, so the caller knows the removal (if any) is now running server-side rather than
- *  applied synchronously. */
+/** PATCH /api/team/connections/:id — { label?, shareMode?, sources? } (a legacy { deniedRepos? }
+ *  body is still accepted and converted — see `parseRulesFromBody`) — read-modify-write that entry
+ *  only. A rules change (either field present) applies `resolveShareRules`'s zero→non-zero
+ *  transition against the entry's OWN previous mode/sources (never a global default) and, once
+ *  persisted, triggers the §6.1 reconcile cycle for this connection — switching denylist↔allowlist
+ *  goes through the exact same path as editing the list, because `resolveShareRules` treats a mode
+ *  change and a sources change identically (Task 4: no special-cased shrink path). Returns
+ *  `{ ok, queued: true }` when a rules change was accepted, so the caller knows the removal (if
+ *  any) is now running server-side rather than applied synchronously. */
 export async function handlePatchConnection(req: Request, rawId: string): Promise<Response> {
   let id: string
   try {
@@ -428,13 +524,19 @@ export async function handlePatchConnection(req: Request, rawId: string): Promis
       const existing = current.connections.find(c => c.id === id)
       if (!existing) return undefined
       found = true
-      let deniedRepos = existing.deniedRepos
-      if (body.deniedRepos !== undefined) {
-        deniedRepos = resolveDeniedRepos(existing.deniedRepos, body.deniedRepos)
+      let shareMode = existing.shareMode
+      let sources = existing.sources
+      if (body.shareMode !== undefined || body.sources !== undefined) {
+        const resolved = resolveShareRules(
+          { mode: existing.shareMode ?? 'denylist', sources: existing.sources ?? [] },
+          { mode: body.shareMode, sources: body.sources },
+        )
+        shareMode = resolved.mode
+        sources = resolved.sources
         rulesChanged = true
       }
       const connections = current.connections.map(c => c.id === id
-        ? { ...c, ...(body.label !== undefined ? { label: body.label || undefined } : {}), deniedRepos }
+        ? { ...c, ...(body.label !== undefined ? { label: body.label || undefined } : {}), shareMode, sources }
         : c)
       return normalizeTeamConfig({ ...defaultTeam(), mode: 'member', connections })
     })
@@ -559,6 +661,34 @@ export async function handleProbeConnection(_req: Request, rawId: string): Promi
   return json(result)
 }
 
+/** `shareMode` + a per-dimension COUNT — never the source values themselves (§6.4: the full list
+ *  is same-origin-only, via `GET /api/preferences`). Denylist reports the two dimensions
+ *  separately (`deniedRepos` folds in the `none` bucket, same as the legacy `deniedCount`);
+ *  allowlist reports one combined `allowedCount`, because there the two dimensions are simply
+ *  "what's on the list" rather than "what's blocked, by kind". */
+export interface RuleCounts {
+  shareMode: 'denylist' | 'allowlist'
+  deniedRepos: number
+  deniedProjects: number
+  allowedCount: number
+}
+
+/** Build `RuleCounts` from a connection's stored mode + typed sources. Pure. `mode` absent/junk
+ *  reads as `'denylist'`, the same default `shareRulesOf` applies. Counts are of the NORMALIZED
+ *  (canonicalized, deduped) source set — junk entries never inflate a count. */
+export function ruleCountsOf(mode: 'denylist' | 'allowlist' | undefined, sources: readonly ShareSource[] | undefined): RuleCounts {
+  const shareMode: 'denylist' | 'allowlist' = mode === 'allowlist' ? 'allowlist' : 'denylist'
+  const keys = normalizeSources(sources)
+  if (shareMode === 'allowlist') return { shareMode, deniedRepos: 0, deniedProjects: 0, allowedCount: keys.size }
+  let deniedRepos = 0
+  let deniedProjects = 0
+  for (const k of keys) {
+    if (k.startsWith('project:')) deniedProjects++
+    else deniedRepos++ // 'repo:*' and the fixed 'none:' bucket both count as the repo dimension
+  }
+  return { shareMode, deniedRepos, deniedProjects, allowedCount: 0 }
+}
+
 export interface ConnectionStatusEntry {
   id: string
   endpoint: string
@@ -568,12 +698,21 @@ export interface ConnectionStatusEntry {
   lastSuccessAt: number | null
   errKind: 'auth' | 'net' | null
   latencyMs: number | null
-  /** Size of the stored denylist (including NO_REPO_KEY). NEVER the list itself — see the class
-   *  docstring above `handleTeamStatus`: the full list is same-origin-only, via /api/preferences. */
+  /** 'denylist' (share everything except the sources below) | 'allowlist' (share only them).
+   *  Never absent on the wire — `ruleCountsOf`'s same default as `shareRulesOf`. */
+  shareMode: 'denylist' | 'allowlist'
+  /** Denylist-mode counts (repo+none sources, project sources). Always 0 in allowlist mode —
+   *  see `allowedCount` there instead. NEVER the values themselves. */
+  deniedRepos: number
+  deniedProjects: number
+  /** Allowlist-mode count of everything listed. Always 0 in denylist mode. */
+  allowedCount: number
+  /** LEGACY, kept for existing clients: the total normalized source count regardless of mode —
+   *  `deniedRepos + deniedProjects` in denylist mode, `allowedCount` in allowlist mode. */
   deniedCount: number
-  /** From the STORED list (`hasRestrictions`), never from uploader/push-cycle state — a
+  /** From the STORED mode + sources (`sourcesRestrict`), never from uploader/push-cycle state — a
    *  connection whose rules were just saved is restricted immediately, even before its first
-   *  cycle has run. */
+   *  cycle has run. Allowlist mode is ALWAYS restricted, even with an empty source list. */
   restricted: boolean
   /** The day after Claude's own rollup watermark — the local honesty marker from §4.4/§5.9.
    *  Shared across every connection (it describes THIS machine's stats-cache, not a connection),
@@ -608,7 +747,7 @@ export interface ConnectionLocalFacts {
   canForget: boolean
   resync: ForgetProgress | null
   /** This connection's persisted `RulesState.rulesHash` (team-rules.ts) — `''` when no rules
-   *  cycle has ever run for it, which reads as `denialSignature([])` (never as "changed"), the
+   *  cycle has ever run for it, which reads as `emptyRulesSignature()` (never as "changed"), the
    *  same rule `planRulesReconcile` itself follows. */
   rulesHash: string
 }
@@ -619,16 +758,19 @@ export interface ConnectionLocalFacts {
  * (and the rest of §5.9's honesty markers) can be asserted directly, without `readPreferences()`,
  * `getPushContext()` or any of `team-uploader.ts`'s per-connection singletons in the test.
  *
- * Never includes `token` or the denylist's contents — only `deniedCount`. See the class docstring
- * above `handleTeamStatus`.
+ * Never includes `token` or the rule VALUES — only counts (`ruleCountsOf`, `deniedCount`). See the
+ * class docstring above `handleTeamStatus`.
  */
 export function buildConnectionStatusEntry(
   conn: TeamConnection,
   uploaderStatus: UploaderStatus,
   local: ConnectionLocalFacts,
 ): ConnectionStatusEntry {
-  const prevHash = local.rulesHash ? local.rulesHash : denialSignature([])
-  const pendingRules = denialSignature(conn.deniedRepos) !== prevHash
+  const prevHash = local.rulesHash ? local.rulesHash : emptyRulesSignature()
+  // Covers mode AND sources (Task 4) — a mode switch alone must read as pending exactly like an
+  // edited list, since `rulesSignature` folds the mode in.
+  const pendingRules = rulesSignature(conn.shareMode, conn.sources) !== prevHash
+  const counts = ruleCountsOf(conn.shareMode, conn.sources)
   // `conn.authFailedAt` is the DURABLE mark (survives a server restart; team-uploader.ts's
   // in-memory `_pushErrKind` does not) — it must win over the in-memory uploader status so a
   // freshly-restarted process still reports "unauthorized" for a connection marked before the
@@ -643,8 +785,12 @@ export function buildConnectionStatusEntry(
     lastSuccessAt: uploaderStatus.lastSuccessAt,
     errKind,
     latencyMs: uploaderStatus.latencyMs,
-    deniedCount: normalizeDenied(conn.deniedRepos).size,
-    restricted: hasRestrictions(conn.deniedRepos),
+    shareMode: counts.shareMode,
+    deniedRepos: counts.deniedRepos,
+    deniedProjects: counts.deniedProjects,
+    allowedCount: counts.allowedCount,
+    deniedCount: counts.shareMode === 'allowlist' ? counts.allowedCount : counts.deniedRepos + counts.deniedProjects,
+    restricted: sourcesRestrict(conn.shareMode, conn.sources),
     boundary: local.boundary,
     prehistorySessions: local.prehistorySessions,
     canForget: local.canForget,
@@ -708,8 +854,9 @@ export function otelExportEnabled(): boolean {
  * (`getUploaderStatus`, populated by the uploader's own push cycle, latency included) — never
  * makes its own blocking network call. The previous single-connection handler did a fresh
  * ~4s-timeout probe on every call while the frontend polls every 5s, which with two offline
- * centrals alone exceeds its own poll interval. Never returns a token, and never the contents of
- * `deniedRepos` — only `deniedCount` (§6.4: the full list is same-origin-only, via
+ * centrals alone exceeds its own poll interval. Never returns a token, and never the rule VALUES
+ * — only `shareMode` and per-dimension counts (`deniedRepos`/`deniedProjects`/`allowedCount`;
+ * `deniedCount` kept for existing clients) (§6.4: the full list is same-origin-only, via
  * `GET /api/preferences`). `boundary`/`prehistorySessions` are local honesty markers (§4.4) that
  * exist on this route and nowhere on the wire to a central. `otelExportEnabled` is likewise
  * local-only and machine-wide (never per-connection) — the repository picker's `otelWarn` reads

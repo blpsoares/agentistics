@@ -1,10 +1,12 @@
 import { test, expect } from 'bun:test'
 import { NO_REPO_KEY, normalizeGitRemote } from '@agentistics/core'
-import type { SessionMeta, WorkflowRun, HarnessId } from '@agentistics/core'
+import type { SessionMeta, WorkflowRun, HarnessId, ShareSource } from '@agentistics/core'
 import {
   canonicalRepoKey, normalizeDenied, buildPathRepoIndex, repoKeyOf, sessionShared,
   filterShared, deniedSessionIds, sharedSessionIds, filterSharedWorkflows,
   withUnresolvedDenied, denialSignature, hasRestrictions,
+  normalizeSources, shareRulesOf, sourcesRestrict, withUnresolvedSources,
+  rulesSignature, emptyRulesSignature, filterSharedRules, deniedSessionIdsRules,
 } from './share-rules'
 
 function s(over: Partial<SessionMeta> & { session_id: string }): SessionMeta {
@@ -919,4 +921,109 @@ test('non-Claude sessions in the store do not trip the precondition', () => {
   const all = [...storeSessions(), s({ session_id: 'cx', harness: 'codex', start_time: localAt('2026-06-25', 9), user_message_count: 4 })]
   const out = buildSplitStatsCache({ real: realCache(), allStored: all, shared: all, boundary: '2026-06-23', sealed: {} })
   expect(out).not.toBeNull()
+})
+
+// ---------------------------------------------------------------------------
+// Task 4 — the typed-source shape (mode + ShareSource[])
+// ---------------------------------------------------------------------------
+
+const repoSrc = (value: string): ShareSource => ({ type: 'repo', value })
+const projectSrc = (value: string): ShareSource => ({ type: 'project', value })
+const noneSrc = (): ShareSource => ({ type: 'none', value: '' })
+
+test('normalizeSources canonicalizes repo values and folds "none" to a fixed key', () => {
+  const out = normalizeSources([repoSrc('https://github.com/Acme/API.git'), repoSrc('git@github.com:acme/api.git'), noneSrc()])
+  expect(out).toEqual(new Set(['repo:github.com/acme/api', 'none:']))
+})
+
+test('normalizeSources keeps project paths verbatim, as their own dimension', () => {
+  const out = normalizeSources([projectSrc('/home/alice/work/repo')])
+  expect(out).toEqual(new Set(['project:/home/alice/work/repo']))
+})
+
+test('normalizeSources drops junk (unresolvable repo, blank project path)', () => {
+  const out = normalizeSources([repoSrc(''), projectSrc(''), { type: 'repo', value: 123 as unknown as string }])
+  expect(out.size).toBe(0)
+})
+
+test('shareRulesOf: mode absent/junk reads as denylist, same default as migrateTeamConfig', () => {
+  expect(shareRulesOf(undefined, [repoSrc('github.com/o/r')]).mode).toBe('denylist')
+  expect(shareRulesOf('bogus' as never, []).mode).toBe('denylist')
+  expect(shareRulesOf('allowlist', []).mode).toBe('allowlist')
+})
+
+test('sourcesRestrict: allowlist is ALWAYS a restriction, even empty', () => {
+  expect(sourcesRestrict('allowlist', [])).toBe(true)
+  expect(sourcesRestrict('allowlist', [repoSrc('github.com/o/r')])).toBe(true)
+})
+
+test('sourcesRestrict: denylist is a restriction only once it names a source', () => {
+  expect(sourcesRestrict('denylist', [])).toBe(false)
+  expect(sourcesRestrict(undefined, undefined)).toBe(false)
+  expect(sourcesRestrict('denylist', [repoSrc('github.com/o/r')])).toBe(true)
+})
+
+test('withUnresolvedSources: denylist mode auto-adds the none bucket exactly once', () => {
+  expect(withUnresolvedSources('denylist', [])).toEqual([])
+  expect(withUnresolvedSources('denylist', [repoSrc('github.com/o/r')])).toEqual([repoSrc('github.com/o/r'), noneSrc()])
+  const already = [repoSrc('github.com/o/r'), noneSrc()]
+  expect(withUnresolvedSources('denylist', already)).toEqual(already)
+})
+
+test('withUnresolvedSources: allowlist mode never adds the none bucket — nothing to add', () => {
+  expect(withUnresolvedSources('allowlist', [])).toEqual([])
+  expect(withUnresolvedSources('allowlist', [repoSrc('github.com/o/r')])).toEqual([repoSrc('github.com/o/r')])
+})
+
+test('rulesSignature covers the mode — same sources, different mode, different signature', () => {
+  const sources = [repoSrc('github.com/o/r')]
+  expect(rulesSignature('denylist', sources)).not.toBe(rulesSignature('allowlist', sources))
+})
+
+test('rulesSignature is order/case/normalization independent, like denialSignature', () => {
+  const a = rulesSignature('denylist', [repoSrc('github.com/o/r1'), repoSrc('github.com/o/r2')])
+  const b = rulesSignature('denylist', [repoSrc('GitHub.com/O/r2'), repoSrc('github.com/O/R1')])
+  expect(a).toBe(b)
+})
+
+test('emptyRulesSignature is rulesSignature(denylist, [])', () => {
+  expect(emptyRulesSignature()).toBe(rulesSignature('denylist', []))
+})
+
+test('filterSharedRules / deniedSessionIdsRules: allowlist with an empty source set shares nothing', () => {
+  const sessions = [s({ session_id: 'a', project_path: '/p/a', git_remote: 'https://github.com/o/r' })]
+  const rules = shareRulesOf('allowlist', [])
+  expect(filterSharedRules(sessions, rules)).toEqual([])
+  expect(deniedSessionIdsRules(sessions, rules)).toEqual(new Set(['a']))
+})
+
+test('filterSharedRules / deniedSessionIdsRules: a project rule catches a remote-less session', () => {
+  const sessions = [s({ session_id: 'a', project_path: '/p/a', git_remote: '' })]
+  const denylistRules = shareRulesOf('denylist', [projectSrc('/p/a')])
+  expect(filterSharedRules(sessions, denylistRules)).toEqual([])
+  expect(deniedSessionIdsRules(sessions, denylistRules)).toEqual(new Set(['a']))
+
+  const allowlistRules = shareRulesOf('allowlist', [projectSrc('/p/a')])
+  expect(filterSharedRules(sessions, allowlistRules)).toEqual(sessions)
+  expect(deniedSessionIdsRules(sessions, allowlistRules)).toEqual(new Set())
+})
+
+test('filterSharedRules / deniedSessionIdsRules: a repo rule catches a session whose project was never named', () => {
+  const sessions = [s({ session_id: 'a', project_path: '', git_remote: 'https://github.com/o/secret' })]
+  const rules = shareRulesOf('denylist', [repoSrc('github.com/o/secret')])
+  expect(filterSharedRules(sessions, rules)).toEqual([])
+  expect(deniedSessionIdsRules(sessions, rules)).toEqual(new Set(['a']))
+})
+
+test('deny wins across dimensions in denylist mode: a blocked repo denies even if the project is not listed', () => {
+  const sessions = [s({ session_id: 'a', project_path: '/p/a', git_remote: 'https://github.com/o/secret' })]
+  const rules = shareRulesOf('denylist', [repoSrc('github.com/o/secret')])
+  expect(deniedSessionIdsRules(sessions, rules)).toEqual(new Set(['a']))
+})
+
+test('in allowlist mode, matching either an allowed repo or an allowed project is enough', () => {
+  const byRepo = s({ session_id: 'r', project_path: '/p/other', git_remote: 'https://github.com/o/allowed' })
+  const byProject = s({ session_id: 'p', project_path: '/p/allowed', git_remote: 'https://github.com/o/other' })
+  const rules = shareRulesOf('allowlist', [repoSrc('github.com/o/allowed'), projectSrc('/p/allowed')])
+  expect(deniedSessionIdsRules([byRepo, byProject], rules)).toEqual(new Set())
 })

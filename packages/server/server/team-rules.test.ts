@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionMeta, WorkflowRun, StatsCache } from '@agentistics/core'
 import { planRulesReconcile, emptyRulesState, loadRulesState, saveRulesState } from './team-rules'
-import { denialSignature, deniedDeltaByDay, attributionBoundary, buildPathRepoIndex } from './share-rules'
+import { rulesSignature, deniedDeltaByDay, attributionBoundary, buildPathRepoIndex } from './share-rules'
+import type { ShareSource } from '@agentistics/core'
 import { __setTeamConnDirForTests, TEAM_CONN_DIR } from './config'
 
 const s = (id: string, remote: string): SessionMeta => ({
@@ -20,7 +21,12 @@ function run(runId: string, sessionId: string): WorkflowRun {
   }
 }
 
+function reposToSources(repos: readonly string[]): ShareSource[] {
+  return repos.map(v => ({ type: 'repo' as const, value: v }))
+}
+
 const base = {
+  mode: 'denylist' as const,
   sentRunIds: [] as string[], workflows: [] as WorkflowRun[],
   real: { lastComputedDate: '2026-07-01', dailyActivity: [], totalSessions: 0, hourCounts: {} } as unknown as StatsCache,
   prev: emptyRulesState(),
@@ -30,7 +36,7 @@ describe('planRulesReconcile', () => {
   it('asks to forget exactly the sessions that are BOTH sent and denied', () => {
     const sessions = [s('a', 'github.com/o/pub'), s('b', 'github.com/o/secret')]
     const plan = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/secret'],
+      ...base, sources: reposToSources(['github.com/o/secret']),
       sentHashes: { a: 'h1', b: 'h2' }, storedSessions: sessions, liveSessions: sessions,
     })
     expect(plan.forgetIds).toEqual(['b'])
@@ -39,7 +45,7 @@ describe('planRulesReconcile', () => {
   // R4, the one that costs data: a session missing from the store is NOT a denied session.
   it('never asks to forget a session that is merely absent from the store', () => {
     const plan = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/secret'],
+      ...base, sources: reposToSources(['github.com/o/secret']),
       sentHashes: { a: 'h1', gone: 'h2' },
       storedSessions: [s('a', 'github.com/o/pub')], liveSessions: [s('a', 'github.com/o/pub')],
     })
@@ -48,7 +54,7 @@ describe('planRulesReconcile', () => {
 
   it('returns an empty plan when the store is empty, whatever the denylist says', () => {
     const plan = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/secret'],
+      ...base, sources: reposToSources(['github.com/o/secret']),
       sentHashes: { a: 'h1' }, storedSessions: [], liveSessions: [],
     })
     expect(plan.forgetIds).toEqual([])
@@ -58,36 +64,36 @@ describe('planRulesReconcile', () => {
   // R19: upgrade day must not become a fleet-wide removal.
   it('treats a missing rulesHash as "no restrictions", not as a change', () => {
     const plan = planRulesReconcile({
-      ...base, deniedRepos: [], sentHashes: {}, storedSessions: [s('a', 'github.com/o/pub')],
+      ...base, sources: reposToSources([]), sentHashes: {}, storedSessions: [s('a', 'github.com/o/pub')],
       liveSessions: [s('a', 'github.com/o/pub')], prev: { ...emptyRulesState(), rulesHash: '' },
     })
     expect(plan.rulesChanged).toBe(false)
-    expect(plan.next.rulesHash).toBe(denialSignature([]))
+    expect(plan.next.rulesHash).toBe(rulesSignature('denylist', []))
   })
 
   it('reports rulesChanged when the denylist changed, and not on a reorder or case variant', () => {
     const sessions = [s('a', 'github.com/o/pub')]
     const prevWithRule = {
       ...emptyRulesState(),
-      rulesHash: denialSignature(['github.com/o/r1', 'github.com/o/r2']),
+      rulesHash: rulesSignature('denylist', reposToSources(['github.com/o/r1', 'github.com/o/r2'])),
     }
 
     const changed = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/r1'],
+      ...base, sources: reposToSources(['github.com/o/r1']),
       sentHashes: {}, storedSessions: sessions, liveSessions: sessions,
       prev: prevWithRule,
     })
     expect(changed.rulesChanged).toBe(true)
 
     const reordered = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/r2', 'github.com/o/r1'],
+      ...base, sources: reposToSources(['github.com/o/r2', 'github.com/o/r1']),
       sentHashes: {}, storedSessions: sessions, liveSessions: sessions,
       prev: prevWithRule,
     })
     expect(reordered.rulesChanged).toBe(false)
 
     const caseVariant = planRulesReconcile({
-      ...base, deniedRepos: ['GitHub.com/O/R1', 'github.com/o/R2'],
+      ...base, sources: reposToSources(['GitHub.com/O/R1', 'github.com/o/R2']),
       sentHashes: {}, storedSessions: sessions, liveSessions: sessions,
       prev: prevWithRule,
     })
@@ -98,7 +104,7 @@ describe('planRulesReconcile', () => {
     const sessions = [s('a', 'github.com/o/pub'), s('b', 'github.com/o/secret')]
     const workflows = [run('r1', 'a'), run('r2', 'b'), run('r3', 'unsent')]
     const plan = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/secret'],
+      ...base, sources: reposToSources(['github.com/o/secret']),
       sentHashes: {}, sentRunIds: ['r1', 'r2'], workflows,
       storedSessions: sessions, liveSessions: sessions,
     })
@@ -114,7 +120,7 @@ describe('planRulesReconcile', () => {
     const denied = ['github.com/o/secret']
 
     const first = planRulesReconcile({
-      ...base, deniedRepos: denied, sentHashes: {},
+      ...base, sources: reposToSources(denied), sentHashes: {},
       storedSessions: sessions, liveSessions: sessions,
     })
     // Still inside the decomposable window: pending holds the day, nothing sealed yet.
@@ -124,7 +130,7 @@ describe('planRulesReconcile', () => {
     // Now Claude's own watermark has advanced past 07-20 — the day has crossed into prehistory.
     const advancedReal = { ...base.real, lastComputedDate: '2026-07-21' } as StatsCache
     const second = planRulesReconcile({
-      ...base, deniedRepos: denied, sentHashes: {},
+      ...base, sources: reposToSources(denied), sentHashes: {},
       storedSessions: sessions, liveSessions: sessions,
       real: advancedReal, prev: first.next,
     })
@@ -134,7 +140,7 @@ describe('planRulesReconcile', () => {
     // on 07-20 to the store must not change the frozen seal for that day.
     const grownSessions = [...sessions, { ...s('c', 'github.com/o/secret'), start_time: '2026-07-20T12:00:00.000Z' }]
     const third = planRulesReconcile({
-      ...base, deniedRepos: denied, sentHashes: {},
+      ...base, sources: reposToSources(denied), sentHashes: {},
       storedSessions: grownSessions, liveSessions: grownSessions,
       real: advancedReal, prev: second.next,
     })
@@ -153,7 +159,7 @@ describe('planRulesReconcile', () => {
 
     // Present in liveSessions but absent from storedSessions: DOES contribute to the delta.
     const liveContributes = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/secret'], sentHashes: {},
+      ...base, sources: reposToSources(['github.com/o/secret']), sentHashes: {},
       storedSessions: [pub], liveSessions: [pub, liveOnlyDenied],
     })
     expect(liveContributes.next.pending['2026-07-20']?.sessionCount).toBe(1)
@@ -161,7 +167,7 @@ describe('planRulesReconcile', () => {
     // Present in storedSessions but absent from liveSessions: does NOT contribute — the ledger
     // is measured against the array `real` was actually built from.
     const storeOnlyExcluded = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/secret'], sentHashes: {},
+      ...base, sources: reposToSources(['github.com/o/secret']), sentHashes: {},
       storedSessions: [pub, storeOnlyDenied], liveSessions: [pub],
     })
     expect(storeOnlyExcluded.next.pending['2026-07-20']).toBeUndefined()
@@ -179,7 +185,7 @@ describe('planRulesReconcile', () => {
       pending: { '2019-12-31': { sessionCount: 5, messageCount: 0, toolCallCount: 0, tokensByModel: {}, usageByModel: {}, hourCounts: {} } },
     }
     const plan = planRulesReconcile({
-      ...base, real: null, deniedRepos: ['github.com/o/secret'], sentHashes: {},
+      ...base, real: null, sources: reposToSources(['github.com/o/secret']), sentHashes: {},
       storedSessions: sessions, liveSessions: sessions, prev: prevWithPending,
     })
     expect(plan.next.boundary).toBeNull()
@@ -193,7 +199,7 @@ describe('planRulesReconcile', () => {
     const sessions = [s('a', 'github.com/o/pub'), s('b', 'github.com/o/secret')]
     const workflows = [run('r1', 'b'), run('r2', 'gone')]
     const plan = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/secret'],
+      ...base, sources: reposToSources(['github.com/o/secret']),
       sentHashes: {}, sentRunIds: ['r1', 'r2'], workflows,
       storedSessions: sessions, liveSessions: sessions,
     })
@@ -212,7 +218,7 @@ describe('planRulesReconcile', () => {
     const index = buildPathRepoIndex([seedSession])
 
     const plan = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/secret'], sentHashes: { b: 'h1' },
+      ...base, sources: reposToSources(['github.com/o/secret']), sentHashes: { b: 'h1' },
       storedSessions: [target], liveSessions: [target], index,
     })
     expect(plan.forgetIds).toEqual(['b'])
@@ -224,9 +230,9 @@ describe('planRulesReconcile', () => {
   it('a growing denylist reports rulesChanged=true with an empty forgetIds when nothing sent is actually denied', () => {
     const sessions = [s('a', 'github.com/o/pub')]
     const plan = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/unrelated'],
+      ...base, sources: reposToSources(['github.com/o/unrelated']),
       sentHashes: { a: 'h1' }, storedSessions: sessions, liveSessions: sessions,
-      prev: { ...emptyRulesState(), rulesHash: denialSignature([]) },
+      prev: { ...emptyRulesState(), rulesHash: rulesSignature('denylist', []) },
     })
     expect(plan.rulesChanged).toBe(true)
     expect(plan.forgetIds).toEqual([])
@@ -249,7 +255,7 @@ describe('planRulesReconcile — an empty store suppresses the forget plan, neve
 
   it("measures the denied delta from liveSessions with an empty store (the archiveMode: 'off' shape)", () => {
     const plan = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/secret'],
+      ...base, sources: reposToSources(['github.com/o/secret']),
       sentHashes: {},
       storedSessions: [],            // loadConsolidated() is permanently empty in this mode
       liveSessions: [pub, denied],   // …while the live array is complete
@@ -265,7 +271,7 @@ describe('planRulesReconcile — an empty store suppresses the forget plan, neve
 
   it('seals that day once the watermark crosses it, still with an empty store', () => {
     const first = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/secret'],
+      ...base, sources: reposToSources(['github.com/o/secret']),
       sentHashes: {}, storedSessions: [], liveSessions: [pub, denied],
     })
     expect(first.next.pending['2026-07-20']?.sessionCount).toBe(1)
@@ -273,7 +279,7 @@ describe('planRulesReconcile — an empty store suppresses the forget plan, neve
     // The watermark moves past 07-20 — the day becomes undecomposable rollup, and the only thing
     // that can still reduce its row is the seal taken while it was measurable.
     const second = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/secret'],
+      ...base, sources: reposToSources(['github.com/o/secret']),
       sentHashes: {}, storedSessions: [], liveSessions: [pub, denied],
       real: { lastComputedDate: '2026-07-21', dailyActivity: [], totalSessions: 0, hourCounts: {} } as unknown as StatsCache,
       prev: first.next,
@@ -287,16 +293,16 @@ describe('planRulesReconcile — an empty store suppresses the forget plan, neve
     // the hash may advance. Without this the status route reports `pendingRules: true` forever on
     // a machine whose rules ARE being enforced.
     const clean = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/secret'],
+      ...base, sources: reposToSources(['github.com/o/secret']),
       sentHashes: {}, storedSessions: [], liveSessions: [pub, denied],
     })
-    expect(clean.next.rulesHash).toBe(denialSignature(['github.com/o/secret']))
+    expect(clean.next.rulesHash).toBe(rulesSignature('denylist', reposToSources(['github.com/o/secret'])))
 
     // But a non-empty sent-state means session documents ARE on the central that this empty store
     // cannot classify. Advancing the hash there would suppress re-detection with the data still
     // in place — rule 1's hazard in reverse. `pendingRules` stays true, which is the truth.
     const stranded = planRulesReconcile({
-      ...base, deniedRepos: ['github.com/o/secret'],
+      ...base, sources: reposToSources(['github.com/o/secret']),
       sentHashes: { b: 'h2' }, storedSessions: [], liveSessions: [pub, denied],
     })
     expect(stranded.next.rulesHash).toBe('')
@@ -337,7 +343,7 @@ describe('loadRulesState / saveRulesState', () => {
 
   it('round-trips a saved state', async () => {
     const state = {
-      rulesHash: denialSignature(['github.com/o/r']),
+      rulesHash: rulesSignature('denylist', reposToSources(['github.com/o/r'])),
       sharedIds: ['a', 'b'],
       boundary: '2026-07-02',
       sealed: { '2026-07-01': { sessionCount: 1, messageCount: 0, toolCallCount: 0, tokensByModel: {}, usageByModel: {}, hourCounts: {} } },

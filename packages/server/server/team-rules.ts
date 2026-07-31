@@ -11,16 +11,17 @@
  * Two rules cost real data if inverted, both encoded in `planRulesReconcile`:
  *
  * 1. The trigger is DENIAL, never ABSENCE. `forgetIds` is exactly
- *    `keys(sentHashes) ∩ deniedSessionIds(...)`. An earlier draft read "a sent key no longer in
- *    the shared set" as "the session became denied" — but `loadConsolidated()` swallows every
+ *    `keys(sentHashes) ∩ deniedSessionIdsRules(...)`. An earlier draft read "a sent key no longer
+ *    in the shared set" as "the session became denied" — but `loadConsolidated()` swallows every
  *    error and returns empty, the store is written non-atomically from the same process, and a
  *    container can start before its bind mount is ready. That version asks the central to delete
  *    perfectly valid sessions and drops them from the sent-state, so they are never pushed again:
  *    silent, permanent, one-directional data loss, invisible on both ends. As a second belt,
  *    `planRulesReconcile` returns an empty plan whenever `storedSessions.length === 0`.
- * 2. A missing `rulesHash` counts as `denialSignature([])`, never as "changed". Treating
- *    `undefined !== denialSignature([])` as a change would make the entire fleet run a removal
- *    against its central on upgrade day, simultaneously.
+ * 2. A missing `rulesHash` counts as `emptyRulesSignature()` (mode 'denylist', no sources), never
+ *    as "changed" — covering the mode too (Task 4) is exactly what makes a denylist→allowlist
+ *    switch trip this detector like any other rules edit. Treating a missing hash as a change
+ *    would make the entire fleet run a removal against its central on upgrade day, simultaneously.
  *
  * Why this file's state is its own file, not part of the sent-state or the sync signature: the
  * sync-signature path (`reconcileSyncState` in team-uploader.ts) CLEARS the sent-state on a
@@ -32,11 +33,11 @@
  * exactly as they are in reality.
  */
 
-import type { SessionMeta, WorkflowRun, StatsCache } from '@agentistics/core'
+import type { SessionMeta, WorkflowRun, StatsCache, ShareSource } from '@agentistics/core'
 import {
-  deniedSessionIds, denialSignature, deniedDeltaByDay, advanceSeal, attributionBoundary,
-  sharedSessionIds, normalizeDenied, filterShared,
-  type PathRepoIndex, type DeniedLedger, type RepoKey,
+  deniedDeltaByDay, advanceSeal, attributionBoundary, sharedSessionIds,
+  shareRulesOf, rulesSignature, emptyRulesSignature, filterSharedRules, deniedSessionIdsRules,
+  type PathRepoIndex, type DeniedLedger, type ShareRules,
 } from './share-rules'
 import { teamRulesFile } from './config'
 import { safeReadJson } from './utils'
@@ -51,7 +52,7 @@ export interface RulesState {
 }
 
 /** The state before any rules have ever been evaluated for a connection. `rulesHash: ''` is the
- *  "missing" sentinel — `planRulesReconcile` treats it as `denialSignature([])`, never as a
+ *  "missing" sentinel — `planRulesReconcile` treats it as `emptyRulesSignature()`, never as a
  *  change (rule 2 above). `boundary: ''` mirrors `attributionBoundary`'s "nothing rolled up yet"
  *  reading, which is the correct default before a real StatsCache has ever been seen. */
 export function emptyRulesState(): RulesState {
@@ -112,12 +113,12 @@ export async function saveRulesState(connId: string, state: RulesState): Promise
  */
 export function computeLedger(input: {
   liveSessions: readonly SessionMeta[]
-  denied: ReadonlySet<RepoKey>
+  rules: ShareRules
   index?: PathRepoIndex
   real: StatsCache | null
   prev: { sealed: DeniedLedger; pending: DeniedLedger }
 }): { sealed: DeniedLedger; pending: DeniedLedger; boundary: string | null } {
-  const { liveSessions, denied, index, real, prev } = input
+  const { liveSessions, rules, index, real, prev } = input
   const boundary = real ? attributionBoundary(real) : null
   if (real === null) {
     // No real StatsCache this cycle means no watermark to test against — `boundary` is `null`,
@@ -128,7 +129,7 @@ export function computeLedger(input: {
     // untouched instead of measuring anything this cycle.
     return { sealed: prev.sealed, pending: prev.pending, boundary }
   }
-  const sharedLive = filterShared(liveSessions, denied, index)
+  const sharedLive = filterSharedRules(liveSessions, rules, index)
   const fresh = deniedDeltaByDay(liveSessions, sharedLive, boundary)
   return { ...advanceSeal(prev, fresh, boundary), boundary }
 }
@@ -159,10 +160,11 @@ export interface RulesPlan {
  *   the fresh rules hash, the current shared-id set, the attribution boundary, and the seal
  *   ledger advanced past whatever day just crossed it.
  * - `rulesChanged`: whether the denylist differs from what was last persisted (rule 2: a missing
- *   `prev.rulesHash` reads as `denialSignature([])`, never as a change).
+ *   `prev.rulesHash` reads as `emptyRulesSignature()`, never as a change).
  */
 export function planRulesReconcile(input: {
-  deniedRepos: readonly string[] | undefined
+  mode: 'denylist' | 'allowlist' | undefined
+  sources: readonly ShareSource[] | undefined
   sentHashes: Readonly<Record<string, string>>
   sentRunIds: readonly string[]
   storedSessions: readonly SessionMeta[]
@@ -172,15 +174,15 @@ export function planRulesReconcile(input: {
   real: StatsCache | null
   prev: RulesState
 }): RulesPlan {
-  const { deniedRepos, sentHashes, sentRunIds, storedSessions, liveSessions, index, real, prev } = input
+  const { mode, sources, sentHashes, sentRunIds, storedSessions, liveSessions, index, real, prev } = input
 
-  const rulesHash = denialSignature(deniedRepos)
-  const prevHash = prev.rulesHash ? prev.rulesHash : denialSignature([])
+  const rulesHash = rulesSignature(mode, sources)
+  const prevHash = prev.rulesHash ? prev.rulesHash : emptyRulesSignature()
   const rulesChanged = rulesHash !== prevHash
 
-  const denied = normalizeDenied(deniedRepos)
+  const rules = shareRulesOf(mode, sources)
   // The ledger half, shared verbatim with the manual-push path — see `computeLedger`.
-  const { sealed, pending, boundary } = computeLedger({ liveSessions, denied, index, real, prev })
+  const { sealed, pending, boundary } = computeLedger({ liveSessions, rules, index, real, prev })
 
   // R4 / the second belt: an empty store proves nothing about the denylist. Never derive a
   // FORGET PLAN from it — that is rule 1's data-loss hazard, and it stays gated here.
@@ -213,7 +215,7 @@ export function planRulesReconcile(input: {
     }
   }
 
-  const deniedIds = deniedSessionIds(storedSessions, denied, index)
+  const deniedIds = deniedSessionIdsRules(storedSessions, rules, index)
 
   // The trigger is DENIAL, never absence (rule 1): intersect what was actually sent with what is
   // actually denied. A sent id that simply isn't in storedSessions this cycle is untouched.
@@ -229,7 +231,7 @@ export function planRulesReconcile(input: {
   // sharedIds (persisted in `next`) describes what THIS CONNECTION currently pushes as session
   // documents, which is the store — `pushOnceDetailed` filters `ctx.storedSessions`, never
   // `liveSessions`, for the session-document half of a push.
-  const sharedStored = filterShared(storedSessions, denied, index)
+  const sharedStored = filterSharedRules(storedSessions, rules, index)
   const sharedIds = [...sharedSessionIds(sharedStored)].sort()
 
   const next: RulesState = { rulesHash, sharedIds, boundary, sealed, pending }
