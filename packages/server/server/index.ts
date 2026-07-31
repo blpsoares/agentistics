@@ -219,8 +219,12 @@ maybeSpawnWatcher()
 // Periodic best-effort re-check so a long-running daemon surfaces new releases
 // without a page reload (broadcasts an SSE notification when an update appears).
 try { startVersionRecheck() } catch (err) { console.warn('[version] recheck failed to start:', String(err)) }
-ensureNayChat(PORT).catch(err => console.error('[nay-chat] failed to initialize:', err))
-ensureClaudeChat().catch(err => console.error('[claude-chat] failed to initialize:', err))
+// `err.message`, not the error object: Bun renders a thrown Error here with a source snippet and
+// a full stack, so one optional side feature failing to start printed ten lines that read like the
+// server itself had crashed. The message is what a reader can act on; the stack belongs to a bug
+// report, not to every boot.
+ensureNayChat(PORT).catch(err => console.warn('[nay-chat] failed to initialize:', err instanceof Error ? err.message : String(err)))
+ensureClaudeChat().catch(err => console.warn('[claude-chat] failed to initialize:', err instanceof Error ? err.message : String(err)))
 
 
 // ---------------------------------------------------------------------------
