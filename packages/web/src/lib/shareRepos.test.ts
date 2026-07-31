@@ -1,10 +1,10 @@
 import { test, expect } from 'bun:test'
 import {
-  buildShareTargets, countDenied, hostOf, plural, buildDeniedRepoLabels,
+  buildShareTargets, countDenied, hostOf, plural, buildDeniedRepoLabels, buildProjectTargets,
   type ShareTarget, type ServerProject, type DeniedRepoSource,
 } from './shareRepos'
 import type { SessionMeta } from '@agentistics/core'
-import { NO_REPO_KEY } from '@agentistics/core'
+import { NO_REPO_KEY, formatProjectName } from '@agentistics/core'
 
 function s(over: Partial<SessionMeta>): SessionMeta {
   return {
@@ -276,4 +276,79 @@ test('a connection sharing everything (empty deniedRepos) contributes nothing', 
 
 test('no connections at all is an empty map, not a throw', () => {
   expect(buildDeniedRepoLabels([]).size).toBe(0)
+})
+
+// --- buildProjectTargets (Plan 4 Task 5) --------------------------------------------------------
+
+test('every project in the input list gets a row, keyed and named exactly as the project filter would', () => {
+  const projects = [project('/home/user/app-a'), project('/home/user/app-b')]
+  const sessions = [
+    s({ session_id: '1', project_path: '/home/user/app-a', start_time: '2026-01-01T00:00:00.000Z' }),
+  ]
+  const targets = buildProjectTargets(sessions, projects, [])
+  expect(new Set(targets.map(t => t.key))).toEqual(new Set(['/home/user/app-a', '/home/user/app-b']))
+  const a = targets.find(t => t.key === '/home/user/app-a')!
+  expect(a.name).toBe(formatProjectName('/home/user/app-a'))
+  // A project with no sessions in THIS list still gets a row (zero sessions), matching the filter,
+  // which lists every known project regardless of the currently active filter.
+  const b = targets.find(t => t.key === '/home/user/app-b')!
+  expect(b.sessions).toBe(0)
+})
+
+test('a project with no git remote has repoKey "" and is never locked', () => {
+  const projects = [project('/home/user/no-git')]
+  const sessions = [s({ session_id: '1', project_path: '/home/user/no-git', start_time: '2026-01-01T00:00:00.000Z' })]
+  const targets = buildProjectTargets(sessions, projects, [])
+  const t = targets.find(x => x.key === '/home/user/no-git')!
+  expect(t.repoKey).toBe('')
+  expect(t.locked).toBe(false)
+})
+
+test('a project under a blocked repo (resolved via its own gitRemote) reports locked: true', () => {
+  const projects = [project('/home/user/api', 'github.com/acme/api')]
+  const sessions = [s({ session_id: '1', project_path: '/home/user/api', git_remote: 'github.com/acme/api', start_time: '2026-01-01T00:00:00.000Z' })]
+  const targets = buildProjectTargets(sessions, projects, ['github.com/acme/api'])
+  const t = targets.find(x => x.key === '/home/user/api')!
+  expect(t.repoKey).toBe('github.com/acme/api')
+  expect(t.locked).toBe(true)
+})
+
+test('a project resolves its repo via the project record\'s own gitRemote even with no session carrying one', () => {
+  const projects = [project('/home/user/viaproj', 'github.com/acme/viaproj')]
+  const sessions = [s({ session_id: '1', project_path: '/home/user/viaproj', start_time: '2026-01-01T00:00:00.000Z' })]
+  const targets = buildProjectTargets(sessions, projects, ['github.com/acme/viaproj'])
+  const t = targets.find(x => x.key === '/home/user/viaproj')!
+  expect(t.repoKey).toBe('github.com/acme/viaproj')
+  expect(t.locked).toBe(true)
+})
+
+test('a project not blocked (its repo is not in deniedRepoKeys) reports locked: false', () => {
+  const projects = [project('/home/user/api', 'github.com/acme/api')]
+  const sessions = [s({ session_id: '1', project_path: '/home/user/api', git_remote: 'github.com/acme/api', start_time: '2026-01-01T00:00:00.000Z' })]
+  const targets = buildProjectTargets(sessions, projects, [])
+  expect(targets.find(x => x.key === '/home/user/api')!.locked).toBe(false)
+})
+
+test('buildProjectTargets orders sessions-desc then name asc', () => {
+  const projects = [project('/a'), project('/b'), project('/c')]
+  const sessions = [
+    s({ session_id: '1', project_path: '/a', start_time: '2026-01-01T00:00:00.000Z' }),
+    s({ session_id: '2', project_path: '/b', start_time: '2026-01-01T00:00:00.000Z' }),
+    s({ session_id: '3', project_path: '/b', start_time: '2026-01-02T00:00:00.000Z' }),
+  ]
+  const targets = buildProjectTargets(sessions, projects, [])
+  expect(targets.map(t => t.key)).toEqual(['/b', '/a', '/c'])
+})
+
+test('buildProjectTargets does not mutate its inputs', () => {
+  const projects = [project('/a', 'github.com/org/a')]
+  const sessions = [s({ session_id: '1', project_path: '/a', git_remote: 'github.com/org/a', start_time: '2026-01-01T00:00:00.000Z' })]
+  const denied = ['github.com/org/a']
+  const projectsCopy = JSON.parse(JSON.stringify(projects))
+  const sessionsCopy = JSON.parse(JSON.stringify(sessions))
+  const deniedCopy = JSON.parse(JSON.stringify(denied))
+  buildProjectTargets(sessions, projects, denied)
+  expect(projects).toEqual(projectsCopy)
+  expect(sessions).toEqual(sessionsCopy)
+  expect(denied).toEqual(deniedCopy)
 })
