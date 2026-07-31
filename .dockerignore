@@ -19,3 +19,7 @@ grafana/
 coverage/
 *.lcov
 *.tsbuildinfo
+
+# Agent scratch — see the note in .gitignore. Excluded here so writing a review
+# package never busts the build cache.
+.superpowers
