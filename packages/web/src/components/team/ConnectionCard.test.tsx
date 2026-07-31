@@ -1,7 +1,9 @@
 import { test, expect } from 'bun:test'
 import {
   resolveCardState, resolveRepoPanelMode, showsApplyQueuedBanner, isBrokenEndpoint,
+  resolveWritesDisabled,
 } from './cardState'
+import { canEditRepos, type ApplyPhase } from './repoPanelState'
 import { resolvePanelBranch } from './ConnectionsPanel'
 import type { ConnectionStatusEntry } from './statusTypes'
 
@@ -115,4 +117,38 @@ test('empty list: connections.length === 0 (and not still loading)', () => {
 
 test('still loading: connections === null, distinct from a genuinely empty list', () => {
   expect(resolvePanelBranch(null, null)).toBe('loading')
+})
+
+// --- review fix (Important 2): the apply write-guard survives collapsing the card ---------------
+
+/**
+ * The panel used to OWN the apply phase and report it upward through `onBusyChange`, whose unmount
+ * cleanup fired `onBusyChange(false)`. Collapsing the card unmounts the panel, so the guard fell
+ * open and Edit / Sync now / Disconnect all became live again during the very window the guard
+ * exists to cover — and re-expanding remounted the panel at `phase: 'idle'`.
+ *
+ * The fix makes the CARD (which stays mounted while collapsed) own the phase, so
+ * `resolveWritesDisabled` takes the phase and nothing about whether the panel is mounted: there is
+ * no input a collapse could change, which is the property asserted below.
+ */
+test('collapsing and re-expanding the card mid-apply leaves the writes disabled', () => {
+  // An apply is in flight (PATCH returned, resync not yet visible on a poll).
+  const phase: ApplyPhase = 'waiting'
+  expect(resolveWritesDisabled('connected', false, false, phase)).toBe(true)
+  // Collapse: the panel unmounts. The guard's inputs are unchanged, so it stays closed…
+  expect(resolveWritesDisabled('connected', false, false, phase)).toBe(true)
+  // …and re-expanding renders the panel from that same phase — Edit is still locked, not 'idle'.
+  expect(canEditRepos('connected', phase)).toBe(false)
+  // Sanity: the guard really does open again once the apply finishes.
+  expect(resolveWritesDisabled('connected', false, false, 'idle')).toBe(false)
+  expect(canEditRepos('connected', 'idle')).toBe(true)
+})
+
+test('resolveWritesDisabled closes for every write-blocking reason, and only those', () => {
+  expect(resolveWritesDisabled('resyncing', false, false, 'idle')).toBe(true)
+  expect(resolveWritesDisabled('connected', true, false, 'idle')).toBe(true)  // sync now in flight
+  expect(resolveWritesDisabled('connected', false, true, 'idle')).toBe(true)  // disconnecting
+  expect(resolveWritesDisabled('connected', false, false, 'submitting')).toBe(true)
+  expect(resolveWritesDisabled('offline', false, false, 'idle')).toBe(false)
+  expect(resolveWritesDisabled('connected', false, false, 'error')).toBe(false)
 })

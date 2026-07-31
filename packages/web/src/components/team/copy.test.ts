@@ -108,3 +108,15 @@ describe('interpolate()', () => {
     expect(interpolate('{known} and {unknown}', { known: 'x' })).toBe('x and {unknown}')
   })
 })
+
+describe('the apply-success banner (review fix Important 4)', () => {
+  test('states no session count — a confirmation for a privacy action never invents a number', () => {
+    // It used to render `plural(PLURAL_COPY.applyOk, 1)`, i.e. "Rules applied — 1 session re-sent"
+    // for every apply regardless of what happened. Neither number the client holds means "sessions
+    // re-sent" (`resync.total` is the forget count; `impact.sessions` is a pre-submit estimate) and
+    // on the no-resync path there is no number at all — so the copy states none.
+    expect(COPY.applyOk.en).not.toMatch(/\{n\}|\d/)
+    expect(COPY.applyOk.pt).not.toMatch(/\{n\}|\d/)
+    expect(Object.keys(PLURAL_COPY)).not.toContain('applyOk')
+  })
+})

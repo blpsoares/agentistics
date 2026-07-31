@@ -1,5 +1,6 @@
 import type { ArchiveMode } from '../ArchiveConsentModal'
 import type { ConnectionStatusEntry } from './statusTypes'
+import { isApplyBusy, type ApplyPhase } from './repoPanelState'
 
 /**
  * cardState.ts — the pure decisions behind `ConnectionCard.tsx`'s state table (design doc §9.5).
@@ -65,6 +66,27 @@ export function resolveRepoPanelMode(
  *  contradictory messages ("queued" and "in progress") at once. */
 export function showsApplyQueuedBanner(state: CardState, pendingRules: boolean | undefined): boolean {
   return Boolean(pendingRules) && state !== 'resyncing'
+}
+
+/**
+ * The card's write guard (`Sync now` / `Disconnect`, and via `canEditRepos` the panel's own Edit).
+ *
+ * Review fix (Important 2): the apply phase is owned by the CARD, which stays mounted while
+ * collapsed — it used to live inside the repository panel and be reported upward through an
+ * `onBusyChange` effect whose UNMOUNT cleanup fired `onBusyChange(false)`. Collapsing the card
+ * unmounts that panel, so the guard fell OPEN during the exact window it exists to cover, and
+ * re-expanding remounted the panel at `phase: 'idle'`. That is a fail-open reset of a fail-closed
+ * guard: a stuck-busy card is recoverable with a reload, a second apply racing the server's own
+ * forget/push sequence is not. Note the signature takes no "panel mounted" input — there is
+ * nothing a collapse can change here.
+ */
+export function resolveWritesDisabled(
+  state: CardState,
+  syncing: boolean,
+  disconnecting: boolean,
+  phase: ApplyPhase,
+): boolean {
+  return state === 'resyncing' || syncing || disconnecting || isApplyBusy(phase)
 }
 
 export function relTime(iso: string | number, pt: boolean): string {

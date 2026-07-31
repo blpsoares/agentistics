@@ -292,9 +292,17 @@ export type ApplyBanner = 'progress' | 'done' | 'error' | 'queued' | null
 
 /**
  * While `waiting` (the PATCH itself succeeded, the server's forget/push sequence may still be
- * running), a live `resync` always wins — the progress strip. Once it clears, an unreachable
- * central (`pendingRules`) reports `queued`, NEVER `done`: reporting success on an apply that has
- * not actually reached the central is the worst outcome this feature can produce.
+ * running), a live `resync` always wins — the progress strip. An unreachable central
+ * (`pendingRules`) reports `queued`, NEVER `done`: reporting success on an apply that has not
+ * actually reached the central is the worst outcome this feature can produce.
+ *
+ * Review fix (Important 1): the fall-through is `'progress'`, never `'done'`. `phase` becomes
+ * `'waiting'` the instant the PATCH resolves, while `status` is still the PREVIOUS poll's entry —
+ * taken BEFORE the PATCH, so `resync === null` and `pendingRules === false` even for an offline
+ * central. Returning `'done'` there rendered the green "Rules applied" banner for up to a full
+ * poll interval before the truth arrived (and contradicted the card, which renders the orange
+ * queued banner from the same stale `status.pendingRules`). Only `SharedReposPanel`'s two effects
+ * promote to `'done'`, and both check `pendingRules` first.
  */
 export function resolveApplyBanner(phase: ApplyPhase, status: ConnectionStatusEntry | undefined): ApplyBanner {
   if (phase === 'error') return 'error'
@@ -302,7 +310,7 @@ export function resolveApplyBanner(phase: ApplyPhase, status: ConnectionStatusEn
   if (phase !== 'waiting') return null
   if (status?.resync != null) return 'progress'
   if (status?.pendingRules) return 'queued'
-  return 'done'
+  return 'progress'
 }
 
 // --- the write guard: the FULL duration of an apply, not just the server-reported half ----------

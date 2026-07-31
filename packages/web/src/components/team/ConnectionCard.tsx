@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, EyeOff, Pencil, Loader2, Check, X } from 'lucide-react'
 import type { SessionMeta, TeamConnection, ModelUsage } from '@agentistics/core'
 import type { ArchiveMode } from '../ArchiveConsentModal'
@@ -9,7 +9,8 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { COPY, PLURAL_COPY, interpolate } from './copy'
 import { ConnectionIdentity, type ProbedIdentity } from './ConnectionIdentity'
 import type { ConnectionStatusEntry } from './statusTypes'
-import { isBrokenEndpoint, resolveCardState, showsApplyQueuedBanner, DOT } from './cardState'
+import { isBrokenEndpoint, resolveCardState, showsApplyQueuedBanner, resolveWritesDisabled, DOT } from './cardState'
+import type { ApplyPhase } from './repoPanelState'
 import {
   IconBtn, DisconnectButton, mobileBtn, StatusLine, ResyncStrip, RepoPanelSlot,
 } from './ConnectionCardParts'
@@ -50,12 +51,46 @@ export function ConnectionCard({
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
-  // Mirrors the repository picker's own submitting/waiting phase (§ "the one way to genuinely
-  // lose data here") — Disconnect and Sync now must stay disabled for the WHOLE apply, not just
-  // the PATCH round-trip: the gap between the PATCH returning and the server's resync first
-  // becoming visible to this card's poll is exactly when a second write would race the server's
-  // own forget/push sequence.
-  const [applyBusy, setApplyBusy] = useState(false)
+  // The repository picker's apply phase lives HERE, not in the picker (Important 2): the picker
+  // renders inside `{expanded && …}`, so collapsing the card unmounted it and reset the guard to
+  // "not busy" — fail-open — in the middle of the very apply it protects. Disconnect and Sync now
+  // must stay disabled for the WHOLE apply, not just the PATCH round-trip: the gap between the
+  // PATCH returning and the server's resync first becoming visible to this card's poll is exactly
+  // when a second write would race the server's own forget/push sequence. The phase-advancing
+  // effects below live here for the same reason — the card polls status whether it is expanded or
+  // not, so an apply started and then collapsed still resolves.
+  const [applyPhase, setApplyPhase] = useState<ApplyPhase>('idle')
+  const resyncSeenRef = useRef(false)
+  const statusRef = useRef(status)
+  useEffect(() => { statusRef.current = status }, [status])
+
+  // Watches every poll tick while waiting: a live resync always wins, and once one has been SEEN
+  // its later clearing is what promotes the banner to 'done' — never the mere absence of one.
+  useEffect(() => {
+    if (applyPhase !== 'waiting') return
+    if (status?.resync != null) { resyncSeenRef.current = true; return }
+    if (resyncSeenRef.current) setApplyPhase('done')
+  }, [status, applyPhase])
+
+  // A grace window for the case nothing ever needed reconciling (no resync ever appears) — an
+  // unreachable central (`pendingRules`) is NOT that case, and must keep showing `queued`, never a
+  // false `done`. Runs ONCE per entering 'waiting', independent of the poll cadence.
+  useEffect(() => {
+    if (applyPhase !== 'waiting') return
+    resyncSeenRef.current = false
+    const t = setTimeout(() => {
+      if (resyncSeenRef.current) return
+      if (statusRef.current?.pendingRules) return
+      setApplyPhase('done')
+    }, 6000)
+    return () => clearTimeout(t)
+  }, [applyPhase])
+
+  useEffect(() => {
+    if (applyPhase !== 'done') return
+    const t = setTimeout(() => setApplyPhase('idle'), 6000)
+    return () => clearTimeout(t)
+  }, [applyPhase])
 
   const state = resolveCardState(status)
   const brokenEndpoint = isBrokenEndpoint(conn.endpoint)
@@ -108,7 +143,7 @@ export function ConnectionCard({
   }
 
   const deniedCount = status?.deniedCount ?? 0
-  const disableWrites = state === 'resyncing' || syncing || disconnecting || applyBusy
+  const disableWrites = resolveWritesDisabled(state, syncing, disconnecting, applyPhase)
 
   return (
     <div style={{
@@ -210,7 +245,8 @@ export function ConnectionCard({
             otelEnabled={otelEnabled}
             lang={lang}
             onApplyRules={onApplyRules}
-            onBusyChange={setApplyBusy}
+            phase={applyPhase}
+            onPhase={setApplyPhase}
           />
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', flexDirection: isMobile ? 'column' : 'row' }}>

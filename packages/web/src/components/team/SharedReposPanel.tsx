@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import type { SessionMeta, ModelUsage } from '@agentistics/core'
 import { NO_REPO_KEY, fmtCost } from '@agentistics/core'
@@ -13,7 +13,7 @@ import type { ConnectionStatusEntry } from './statusTypes'
 import { EditView } from './SharedReposEditView'
 import {
   buildInitialDraft, canEditRepos, computeApplyImpact, diffDraft, hasProvenPrehistory,
-  isApplyBusy, isDirty, normalizeDenied, resolveApplyBanner, resolveConfirmVariant,
+  isDirty, normalizeDenied, resolveApplyBanner, resolveConfirmVariant,
   shareAllDraft, blockAllDraft, statsCopyVars, synthesizeMissingDenied, toggleTarget,
   type ApplyPhase,
 } from './repoPanelState'
@@ -44,17 +44,17 @@ export interface SharedReposPanelProps {
    *  actually changed) so the panel knows whether to wait for `status.resync` at all. Throws (or
    *  resolves false) on failure — the caller decides what "failed" means for its own transport. */
   onApply: (connId: string, deniedRepos: string[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
-  /** Reported true for the WHOLE apply — the PATCH round-trip and the wait for the server's
-   *  resync to first become visible on the next poll — so the CARD (which owns Disconnect/Sync
-   *  now) can disable them for the real duration, not only while `state === 'resyncing'` (a
-   *  server-reported fact the client only learns on the next poll tick, which misses both the
-   *  round-trip itself and the gap before the resync becomes visible). */
-  onBusyChange: (busy: boolean) => void
+  /** The apply phase is a CONTROLLED prop, owned by `ConnectionCard` — see `resolveWritesDisabled`
+   *  (Important 2). This panel lives inside the card's `{expanded && …}`, so anything it owns dies
+   *  when the card is collapsed; the write guard that covers the whole apply (the PATCH round-trip
+   *  AND the wait for the server's resync to first become visible on a poll) must outlive that. */
+  phase: ApplyPhase
+  onPhase: (phase: ApplyPhase) => void
 }
 
 export function SharedReposPanel({
   connId, deniedRepos, cardState, status, shareTargets, sessions, modelUsage, otelEnabled, lang,
-  onApply, onBusyChange,
+  onApply, phase, onPhase,
 }: SharedReposPanelProps) {
   const isMobile = useIsMobile()
   const noRepoLabel = COPY.noRepoTitle[lang]
@@ -69,48 +69,6 @@ export function SharedReposPanel({
   const [showStale, setShowStale] = useState(false)
   const [showAllMobile, setShowAllMobile] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
-  const [phase, setPhase] = useState<ApplyPhase>('idle')
-
-  const resyncSeenRef = useRef(false)
-  const statusRef = useRef(status)
-  useEffect(() => { statusRef.current = status }, [status])
-
-  // Watches every poll tick while waiting: a live resync always wins, and once one has been SEEN
-  // its later clearing is what promotes the banner to 'done' — never the mere absence of one.
-  useEffect(() => {
-    if (phase !== 'waiting') return
-    if (status?.resync != null) { resyncSeenRef.current = true; return }
-    if (resyncSeenRef.current) setPhase('done')
-  }, [status, phase])
-
-  // A grace window for the case nothing ever needed reconciling (no resync ever appears) — an
-  // unreachable central (`pendingRules`) is NOT that case, and must keep showing `queued`, never a
-  // false `done`. Runs ONCE per entering 'waiting', independent of the poll cadence.
-  useEffect(() => {
-    if (phase !== 'waiting') return
-    resyncSeenRef.current = false
-    const t = setTimeout(() => {
-      if (resyncSeenRef.current) return
-      if (statusRef.current?.pendingRules) return
-      setPhase('done')
-    }, 6000)
-    return () => clearTimeout(t)
-  }, [phase])
-
-  useEffect(() => {
-    if (phase !== 'done') return
-    const t = setTimeout(() => setPhase('idle'), 6000)
-    return () => clearTimeout(t)
-  }, [phase])
-
-  // Reports "busy" for the whole apply — 'submitting' (the PATCH itself) AND 'waiting' (PATCH
-  // returned, resync not yet confirmed) — never only one of the two, and resets on unmount so a
-  // collapsed card never leaves the parent believing an apply is still running.
-  useEffect(() => {
-    onBusyChange(isApplyBusy(phase))
-    return () => onBusyChange(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase])
 
   function startEdit() {
     setDraft(buildInitialDraft(targets, deniedRepos))
@@ -133,10 +91,10 @@ export function SharedReposPanel({
   async function confirmApply() {
     setConfirmOpen(false)
     const outcome = await onApply(connId, [...draftDenied]).catch(() => ({ ok: false as const }))
-    if (!outcome.ok) { setPhase('error'); return }
+    if (!outcome.ok) { onPhase('error'); return }
     setEditing(false)
     setDraft(null)
-    setPhase(outcome.queued ? 'waiting' : 'done')
+    onPhase(outcome.queued ? 'waiting' : 'done')
   }
 
   const banner = resolveApplyBanner(phase, status)
@@ -184,7 +142,7 @@ export function SharedReposPanel({
         message={buildConfirmMessage(variant, stats, impact, lang)}
         confirmLabel={COPY.applyConfirmBtn[lang]}
         cancelLabel={COPY.cancel[lang]}
-        onConfirm={() => { setPhase('submitting'); void confirmApply() }}
+        onConfirm={() => { onPhase('submitting'); void confirmApply() }}
         onCancel={() => setConfirmOpen(false)}
       />
     </div>
@@ -265,10 +223,14 @@ function ReadView({ targets, storedDenied, sharedCount, total, status, lang, ote
 }
 
 function ApplyBanner({ banner, status, lang }: { banner: 'progress' | 'done' | 'error' | 'queued'; status: ConnectionStatusEntry | undefined; lang: 'pt' | 'en' }) {
-  if (banner === 'progress' && status?.resync) {
-    const text = status.resync.phase === 'forget'
-      ? interpolate(COPY.applyingForget[lang], { done: status.resync.done, total: status.resync.total })
-      : COPY.applyingPush[lang]
+  if (banner === 'progress') {
+    // No resync visible yet means the first post-apply poll has not landed — a neutral "applying"
+    // sentence, never the green success one (Important 1).
+    const text = !status?.resync
+      ? COPY.applyingWait[lang]
+      : status.resync.phase === 'forget'
+        ? interpolate(COPY.applyingForget[lang], { done: status.resync.done, total: status.resync.total })
+        : COPY.applyingPush[lang]
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11.5, color: 'var(--text-tertiary)' }}>
         <span><Loader2 size={11} style={{ verticalAlign: '-1px', animation: 'spin 1s linear infinite', marginRight: 4 }} />{text}</span>
@@ -277,7 +239,7 @@ function ApplyBanner({ banner, status, lang }: { banner: 'progress' | 'done' | '
     )
   }
   if (banner === 'done') {
-    return <div style={{ fontSize: 11.5, color: 'var(--accent-green)' }}>{plural(PLURAL_COPY.applyOk[lang], 1)}</div>
+    return <div style={{ fontSize: 11.5, color: 'var(--accent-green)' }}>{COPY.applyOk[lang]}</div>
   }
   if (banner === 'error') {
     return <div style={{ fontSize: 11.5, color: 'var(--accent-red)' }}>{COPY.applyErr[lang]}</div>

@@ -25,6 +25,31 @@ export function resolvePanelBranch(loadErr: string | null, connections: TeamConn
   return 'list'
 }
 
+/**
+ * The rules write, as a sequence — exported so it can be asserted directly (this project has no
+ * React-rendering test infrastructure; see `ConnectionCard.test.tsx`'s note).
+ *
+ * Review fix (Critical): the panel used to store WHAT IT SENT. The server does not persist that —
+ * `resolveDeniedRepos` (`packages/server/server/team-connections.ts`) applies
+ * `withUnresolvedDenied` on the zero→non-zero transition and adds `NO_REPO_KEY`, while the PATCH
+ * response carries only `{ ok, queued }`. The optimistic splice therefore diverged from the truth
+ * immediately (the card's own badge, fed by the server's `deniedCount`, said one more than the
+ * panel listed), and the NEXT save — built from that stale draft, with `wasRestricted` now true so
+ * the server honours the list as-is — silently dropped `NO_REPO_KEY`, re-opening every
+ * unattributed session to that central. So: PATCH, then RE-READ preferences, exactly as the
+ * add-central drawer's `onConnected` path already does.
+ */
+export async function applyRulesSequence(
+  patch: () => Promise<Response | null>,
+  reload: () => Promise<void>,
+): Promise<{ ok: true; queued: boolean } | { ok: false }> {
+  const res = await patch().catch(() => null)
+  if (!res || !res.ok) return { ok: false }
+  const body = await res.json().catch(() => ({ queued: false })) as { queued?: boolean }
+  await reload()
+  return { ok: true, queued: Boolean(body.queued) }
+}
+
 export interface ConnectionsPanelProps {
   sessions: SessionMeta[]
   /** MUST be the unfiltered project list — see `buildShareTargets`'s own docstring: a filtered
@@ -34,6 +59,12 @@ export interface ConnectionsPanelProps {
    *  usage, same source every other blended-cost consumer in the app uses. */
   modelUsage: Record<string, ModelUsage>
   lang: 'pt' | 'en'
+  /** Fired after EVERY successful `/api/preferences` re-read, i.e. after every write this panel
+   *  performs (connect, rules apply, rename, disconnect). Review fix (Important 3): the app's
+   *  hidden-repository badge (`AppContext.deniedRepoLabels`) is built in a mount-only effect, so
+   *  without this it kept claiming "Hidden from 1 central" after the rule — or the whole
+   *  connection — was gone. Wired once here rather than at the badge's two call sites. */
+  onConnectionsChanged?: () => void
 }
 
 /**
@@ -42,7 +73,7 @@ export interface ConnectionsPanelProps {
  * `/api/team/status` poller shared by every card (never one poller per card), and the
  * `shareTargets` memo Task 11's picker will consume.
  */
-export function ConnectionsPanel({ sessions, projects, modelUsage, lang }: ConnectionsPanelProps) {
+export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConnectionsChanged }: ConnectionsPanelProps) {
   const isMobile = useIsMobile()
   const [connections, setConnections] = useState<TeamConnection[] | null>(null)
   const [archiveMode, setArchiveMode] = useState<ArchiveMode | null>(null)
@@ -76,6 +107,14 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang }: Conne
     } catch (err) {
       if (alive) setLoadErr(err instanceof Error ? err.message : String(err))
     }
+  }
+
+  /** The ONE post-write path: re-read the server's persisted state, then tell the app that the
+   *  connection list changed. Every write below goes through this — a hand-spliced local update
+   *  is what Critical 1 (rules) was, and what left the hidden-repo badge stale (Important 3). */
+  async function reloadAfterWrite() {
+    await reloadPreferences(true)
+    onConnectionsChanged?.()
   }
 
   // ONE poller for the whole panel — N cards must never mean N intervals hitting the route.
@@ -124,12 +163,14 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang }: Conne
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ label }),
     }).catch(() => { /* local-only rename; a failed PATCH just leaves the stored label as-is */ })
-    setConnections(prev => (prev ?? []).map(c => (c.id === id ? { ...c, label: label || undefined } : c)))
+    // Re-read rather than splice: a failed PATCH must restore the stored label, and the label is
+    // what the hidden-repo badge names ("Hidden from 1 central · <label>").
+    await reloadAfterWrite()
   }
 
   async function handleDisconnect(id: string) {
     const res = await fetch(`/api/team/connections/${encodeURIComponent(id)}`, { method: 'DELETE' })
-    if (res.ok) setConnections(prev => (prev ?? []).filter(c => c.id !== id))
+    if (res.ok) await reloadAfterWrite()
   }
 
   /**
@@ -138,15 +179,14 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang }: Conne
    * poll (`status.resync`). Never looped, never followed by a direct call to any forget endpoint.
    */
   async function handleApplyRules(id: string, deniedRepos: string[]): Promise<{ ok: true; queued: boolean } | { ok: false }> {
-    const res = await fetch(`/api/team/connections/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deniedRepos }),
-    }).catch(() => null)
-    if (!res || !res.ok) return { ok: false }
-    const body = await res.json().catch(() => ({ queued: false })) as { queued?: boolean }
-    setConnections(prev => (prev ?? []).map(c => (c.id === id ? { ...c, deniedRepos } : c)))
-    return { ok: true, queued: Boolean(body.queued) }
+    return applyRulesSequence(
+      () => fetch(`/api/team/connections/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deniedRepos }),
+      }),
+      reloadAfterWrite,
+    )
   }
 
   async function handleSyncNow(id: string) {
@@ -208,7 +248,7 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang }: Conne
       <AddCentralDrawer
         open={addOpen}
         onClose={() => setAddOpen(false)}
-        onConnected={() => { void reloadPreferences(true) }}
+        onConnected={() => { void reloadAfterWrite() }}
         connections={connections}
         sessions={sessions}
         projects={projects}

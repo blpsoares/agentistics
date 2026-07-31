@@ -127,4 +127,9 @@ export interface AppContext {
    *  treated exactly like an empty map (no hidden-repo badges), never as "not yet loaded" vs.
    *  "definitely nothing hidden" — there is no meaningful distinction a badge needs to draw here. */
   deniedRepoLabels?: Map<string, string[]>
+  /** Re-reads the connection list and rebuilds `deniedRepoLabels`. Called by `ConnectionsPanel`
+   *  after every write (connect / rules apply / rename / disconnect) so the hidden-repo badge can
+   *  never keep claiming "Hidden from N centrals" after the rule is gone. OPTIONAL for the same
+   *  reason `deniedRepoLabels` is — every page consumes `AppContext`. */
+  refreshDeniedRepoLabels?: () => void
 }

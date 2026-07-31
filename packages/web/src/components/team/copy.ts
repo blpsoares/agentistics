@@ -216,6 +216,12 @@ export const COPY = {
     en: "Updating this central's totals…",
     pt: 'Atualizando os totais desta central…',
   },
+  /** The apply window BEFORE the first post-apply poll has said anything — the PATCH has returned
+   *  but no `resync` (and no `pendingRules`) has been observed yet. Never a success sentence. */
+  applyingWait: {
+    en: 'Applying the rules…',
+    pt: 'Aplicando as regras…',
+  },
   applyingSafeToLeave: {
     en: 'You can leave this page — this continues in the background.',
     pt: 'Você pode sair desta página — isso continua em segundo plano.',
@@ -223,6 +229,16 @@ export const COPY = {
   applyingDone: {
     en: 'Done — re-syncing finished',
     pt: 'Pronto — ressincronização concluída',
+  },
+  /** Deliberately COUNT-FREE. The banner used to render `plural(PLURAL_COPY.applyOk, 1)` — "1
+   *  session re-sent" for every apply, whatever actually happened. Neither number the client holds
+   *  means "sessions re-sent" (`status.resync.total` is the FORGET count, `impact.sessions` a
+   *  pre-submit estimate of what the rule removes), and the no-resync path — the grace-window
+   *  `done` — has no number at all. Stating an invented one on the confirmation of a privacy
+   *  action is the same dishonesty the `null`-means-unknowable rule exists to prevent. */
+  applyOk: {
+    en: 'Rules applied',
+    pt: 'Regras aplicadas',
   },
   applyErr: {
     en: 'Could not apply the rules',
@@ -449,9 +465,5 @@ export const PLURAL_COPY = {
       one: '1 repositório bloqueado sem sessões nesta máquina',
       other: '{n} repositórios bloqueados sem sessões nesta máquina',
     },
-  },
-  applyOk: {
-    en: { one: 'Rules applied — 1 session re-sent', other: 'Rules applied — {n} sessions re-sent' },
-    pt: { one: 'Regras aplicadas — 1 sessão reenviada', other: 'Regras aplicadas — {n} sessões reenviadas' },
   },
 } satisfies Record<string, PluralCopyEntry>

@@ -31,7 +31,7 @@ export default function ConnectionSettings() {
       ) : isCentral ? (
         <CentralAdminPanel lang={lang} presence={ctx.data.presence} />
       ) : (
-        <ConnectionsPanel sessions={ctx.data.sessions} projects={ctx.data.projects} modelUsage={ctx.data.statsCache.modelUsage} lang={lang} />
+        <ConnectionsPanel sessions={ctx.data.sessions} projects={ctx.data.projects} modelUsage={ctx.data.statsCache.modelUsage} lang={lang} onConnectionsChanged={ctx.refreshDeniedRepoLabels} />
       )}
     </div>
   )

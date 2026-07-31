@@ -1,11 +1,12 @@
 import { test, expect } from 'bun:test'
 import { NO_REPO_KEY } from '@agentistics/core'
 import type { ShareTarget } from '../../lib/shareRepos'
+import type { ConnectionStatusEntry } from './statusTypes'
 import {
   buildInitialDraft, toggleTarget, shareAllDraft, blockAllDraft, synthesizeMissingDenied,
   buildRows, groupRows, diffDraft, isDirty, keepVisibleKeys, computeApplyImpact,
   hasProvenPrehistory, resolveConfirmVariant, statsCopyVars, isLocked,
-  isApplyBusy, canEditRepos,
+  isApplyBusy, canEditRepos, resolveApplyBanner,
   type DraftDiff,
 } from './repoPanelState'
 
@@ -264,4 +265,42 @@ test('canEditRepos is false while resyncing (server-reported) AND for the whole 
   expect(canEditRepos('connected', 'idle')).toBe(true)
   expect(canEditRepos('offline', 'done')).toBe(true)
   expect(canEditRepos('offline', 'error')).toBe(true)
+})
+
+// --- review fix (Important 1): the `waiting` fall-through is PROGRESS, never a premature `done` --
+
+function statusEntry(over: Partial<ConnectionStatusEntry> = {}): ConnectionStatusEntry {
+  return {
+    id: 'c_1', endpoint: 'https://central.example', org: 'default', user: 'alice',
+    lastSuccessAt: null, errKind: null, latencyMs: null,
+    deniedCount: 0, restricted: false, boundary: null, prehistorySessions: null,
+    canForget: true, centralTooOld: false, resync: null, pendingRules: false,
+    ...over,
+  }
+}
+
+test('waiting with a STALE status (the poll taken BEFORE the PATCH) reports progress, never a green done', () => {
+  // `phase` flips to 'waiting' the instant the PATCH resolves, while `status` is still the previous
+  // poll's entry — resync null, pendingRules false. Returning 'done' here told the user the
+  // repository was hidden up to 5s before the first post-apply poll could contradict it.
+  expect(resolveApplyBanner('waiting', statusEntry())).toBe('progress')
+})
+
+test('waiting with NO status at all (no poll has landed yet) reports progress, never done', () => {
+  expect(resolveApplyBanner('waiting', undefined)).toBe('progress')
+})
+
+test('waiting with a live resync reports progress, and an unreachable central reports queued', () => {
+  expect(resolveApplyBanner('waiting', statusEntry({ resync: { phase: 'forget', done: 1, total: 4 } }))).toBe('progress')
+  expect(resolveApplyBanner('waiting', statusEntry({ pendingRules: true }))).toBe('queued')
+  // A live resync wins over pendingRules — one message, and it is the one with real progress in it.
+  expect(resolveApplyBanner('waiting', statusEntry({ pendingRules: true, resync: { phase: 'push', done: 0, total: 0 } }))).toBe('progress')
+})
+
+test('only the explicit done/error phases produce their banners, and idle produces none', () => {
+  // 'done' is set exclusively by SharedReposPanel's two effects, which check pendingRules first.
+  expect(resolveApplyBanner('done', statusEntry())).toBe('done')
+  expect(resolveApplyBanner('error', statusEntry())).toBe('error')
+  expect(resolveApplyBanner('idle', statusEntry())).toBeNull()
+  expect(resolveApplyBanner('submitting', statusEntry())).toBeNull()
 })

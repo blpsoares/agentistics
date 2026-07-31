@@ -7,7 +7,7 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { buildShareTargets, hostOf, type ServerProject } from '../../lib/shareRepos'
 import { COPY, interpolate } from './copy'
 import { EditView } from './SharedReposEditView'
-import { diffDraft, keepVisibleKeys, toggleTarget, shareAllDraft, blockAllDraft } from './repoPanelState'
+import { diffDraft, toggleTarget, shareAllDraft, blockAllDraft } from './repoPanelState'
 import {
   unpackToken, canOpenRules, canConnect, resolveDupeState, computeDirty, buildSubmitBody,
   buildDefaultDraft, type WizardStep, type TestOutcome,

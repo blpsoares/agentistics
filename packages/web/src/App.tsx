@@ -1331,6 +1331,18 @@ export default function AppLayout() {
   // Populated from the same /api/preferences load `archiveChoice` uses below; empty map (never
   // undefined) so every consumer can read it without an extra "not loaded yet" branch.
   const [deniedRepoLabels, setDeniedRepoLabels] = useState<Map<string, string[]>>(new Map())
+  /** Re-reads the connection list so the hidden-repo badge follows the rules instead of freezing at
+   *  whatever they were on page load. The preferences effect below is mount-only and this is an
+   *  SPA, so un-blocking a repository (or disconnecting the central entirely) used to leave
+   *  `/repositories` still claiming "Hidden from 1 central" until a manual reload — told hidden,
+   *  not hidden. Fired by `ConnectionsPanel`'s `onConnectionsChanged` after EVERY write it makes,
+   *  which is the single source both `RepositoriesList` and `RepoDetailPage` read through. */
+  const refreshDeniedRepoLabels = useCallback(() => {
+    fetch('/api/preferences')
+      .then(r => (r.ok ? r.json() : null))
+      .then(prefs => { if (prefs) setDeniedRepoLabels(buildDeniedRepoLabels(readTeamConnections(prefs))) })
+      .catch(() => { /* a failed refresh keeps the last-known map — never wipes the badges */ })
+  }, [])
   const chooseArchive = useCallback((mode: ArchiveMode) => {
     setArchiveChoice(mode)
     fetch('/api/preferences', {
@@ -2473,6 +2485,7 @@ export default function AppLayout() {
           teams: teamsList,
           machines: machinesList,
           deniedRepoLabels,
+          refreshDeniedRepoLabels,
         }} />
       </main>
 

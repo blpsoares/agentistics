@@ -5,6 +5,7 @@ import type { ArchiveMode } from '../ArchiveConsentModal'
 import type { ShareTarget } from '../../lib/shareRepos'
 import { COPY, interpolate } from './copy'
 import { relTime, resolveRepoPanelMode, type CardState } from './cardState'
+import type { ApplyPhase } from './repoPanelState'
 import type { ConnectionStatusEntry, ResyncProgress } from './statusTypes'
 import { SharedReposPanel } from './SharedReposPanel'
 
@@ -90,7 +91,7 @@ export function ResyncStrip({ resync, lang }: { resync: ResyncProgress; lang: 'p
  */
 export function RepoPanelSlot({
   connId, deniedRepos, state, status, archiveMode, shareTargets, sessions, modelUsage, otelEnabled,
-  lang, onApplyRules, onBusyChange,
+  lang, onApplyRules, phase, onPhase,
 }: {
   connId: string
   deniedRepos: string[]
@@ -103,9 +104,10 @@ export function RepoPanelSlot({
   otelEnabled: boolean
   lang: 'pt' | 'en'
   onApplyRules: (connId: string, deniedRepos: string[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
-  /** Reported true for the whole apply (PATCH round-trip AND the wait for the server's resync to
-   *  first become visible), so the card can disable Disconnect/Sync now for its real duration. */
-  onBusyChange: (busy: boolean) => void
+  /** Owned by the CARD, which stays mounted while collapsed — the panel below only reports
+   *  transitions into it (Important 2). */
+  phase: ApplyPhase
+  onPhase: (phase: ApplyPhase) => void
 }) {
   const mode = resolveRepoPanelMode(state, status?.centralTooOld ?? false, archiveMode)
   if (mode === 'hidden') return null // nothing can be removed until the token works
@@ -129,7 +131,8 @@ export function RepoPanelSlot({
       otelEnabled={otelEnabled}
       lang={lang}
       onApply={onApplyRules}
-      onBusyChange={onBusyChange}
+      phase={phase}
+      onPhase={onPhase}
     />
   )
 }
