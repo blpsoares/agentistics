@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { NO_REPO_KEY, normalizeGitRemote } from '@agentistics/core'
+import { NO_REPO_KEY, normalizeGitRemote, bucketSharedBy } from '@agentistics/core'
 import type { SessionMeta, WorkflowRun, HarnessId, ShareSource } from '@agentistics/core'
 import {
   canonicalRepoKey, normalizeDenied, buildPathRepoIndex, repoKeyOf, sessionShared,
@@ -1125,4 +1125,69 @@ test('the alias folding that guards filterShared guards the live channel too', (
   // Denied under a different SSH/case spelling of the same remote.
   const out = filterLiveShared(snap, LIVE_SESSIONS, denylistRules(normalizeDenied(['git@github.com:Acme/Secret.git'])), liveIndex())
   expect(out.liveSessionIds).toEqual([])
+})
+
+// --- the cross-check that keeps THIS file the single source of the sharing semantics ------------
+//
+// `@agentistics/core`'s `bucketSharedBy` answers the same question one BUCKET at a time, so that
+// the reverse warning (a sibling's announced rules withholding a repository the user is about to
+// start sharing) can be evaluated in the browser bundle, which may never import this module. That
+// is a second implementation, and a second implementation of a privacy rule is exactly how a
+// picker ends up confidently contradicting what the uploader actually does. This test is the
+// guard: every combination below must come out identical on both sides.
+
+test('bucketSharedBy agrees with sessionShared on every mode x dimension x bucket combination', () => {
+  const API = 'https://github.com/acme/api'
+  const WEB = 'git@github.com:Acme/Web.git'
+  const sourceSets: ShareSource[][] = [
+    [],
+    [{ type: 'repo', value: API }],
+    [{ type: 'repo', value: WEB }],
+    [{ type: 'project', value: '/home/a/api' }],
+    [{ type: 'none', value: '' }],
+    [{ type: 'repo', value: API }, { type: 'project', value: '/home/a/web' }],
+    [{ type: 'repo', value: 'not a remote at all' }],
+  ]
+  // Each bucket is stated twice: as the (git_remote, project_path) pair `sessionShared` consumes,
+  // and as the (repoKey, projectPath) pair a picker row names.
+  const buckets: { remote: string; path: string }[] = [
+    { remote: API, path: '/home/a/api' },
+    { remote: WEB, path: '/home/a/web' },
+    { remote: API, path: '' },
+    { remote: '', path: '/home/a/api' },
+    { remote: '', path: '' },
+    { remote: 'https://github.com/acme/untouched', path: '/home/a/untouched' },
+  ]
+
+  let sharedSeen = 0
+  let withheldSeen = 0
+  let compared = 0
+  for (const mode of ['denylist', 'allowlist'] as const) {
+    for (const sources of sourceSets) {
+      for (const b of buckets) {
+        const viaSession = sessionShared(
+          { git_remote: b.remote, project_path: b.path },
+          shareRulesOf(mode, sources),
+        )
+        const viaBucket = bucketSharedBy(
+          // A session with no resolvable remote lands in the unattributed bucket, which a picker
+          // row names with the sentinel — `repoKeyOf` is what makes that mapping this file's, not
+          // the caller's.
+          { repoKey: repoKeyOf({ git_remote: b.remote, project_path: b.path }), projectPath: b.path },
+          { shareMode: mode, sources },
+        )
+        expect(`${mode}|${JSON.stringify(sources)}|${b.remote}|${b.path}|${viaBucket}`)
+          .toBe(`${mode}|${JSON.stringify(sources)}|${b.remote}|${b.path}|${viaSession}`)
+        compared++
+        if (viaSession) sharedSeen++
+        else withheldSeen++
+      }
+    }
+  }
+  // Without these the loop above would pass just as happily over an empty table, or over one that
+  // only ever produced `true` on both sides — the two shapes of vacuous test this repo has shipped
+  // before.
+  expect(compared).toBe(2 * sourceSets.length * buckets.length)
+  expect(sharedSeen).toBeGreaterThan(0)
+  expect(withheldSeen).toBeGreaterThan(0)
 })
