@@ -1692,6 +1692,42 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       return new Response(res.body, { status: res.status, headers })
     }
 
+    // /api/team/keys — the sealed-envelope public-key directory (CENTRAL). Minted-token-only
+    // inside the handler, scoped to the token's owner accounts. Public keys only; the private half
+    // never leaves the machine that generated it. See envelope-routes.ts.
+    if (url.pathname === '/api/team/keys' && (req.method === 'GET' || req.method === 'POST')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleEnvelopeKeys } = await import('./envelope-routes')
+      const res = await handleEnvelopeKeys(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // /api/team/envelopes — the sealed mailbox (CENTRAL): deposit for the account's other
+    // machines, fetch mine, delete on acknowledgement. The central stores ciphertext and routing
+    // metadata only, and cannot open any of it.
+    if (url.pathname === '/api/team/envelopes' && (req.method === 'GET' || req.method === 'POST' || req.method === 'DELETE')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleEnvelopes } = await import('./envelope-routes')
+      const res = await handleEnvelopes(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // /api/team/proposals — LOCAL, same-origin: the restriction proposals this machine has
+    // received and decrypted, and the dismissal of one. Reading them changes nothing; APPLYING one
+    // is the ordinary PATCH /api/team/connections/:id the user's click performs, never a server
+    // path triggered by a message arriving (see envelope-inbox.ts).
+    if (url.pathname === '/api/team/proposals' && (req.method === 'GET' || req.method === 'DELETE')) {
+      const { handleProposals } = await import('./envelope-proposals')
+      const res = await handleProposals(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
     // POST /api/team/leave-central — member proxy: tells the central to drop this member's
     // data, then the web resets the local config to solo. Keeps the token server-side.
     if (url.pathname === '/api/team/leave-central' && req.method === 'POST') {

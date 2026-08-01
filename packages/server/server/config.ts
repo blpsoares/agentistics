@@ -217,3 +217,25 @@ export function teamRulesFile(connId: string): string {
 export function teamForgetFile(connId: string): string {
   return join(TEAM_CONN_DIR, `team-forget-${safeConnId(connId)}.json`)
 }
+
+/** This machine's sealed-envelope keypair. The PRIVATE half lives here and NOWHERE else — never in
+ *  preferences.json (which is served, redacted, over `GET /api/preferences`), never in an audit
+ *  event, never in a log line. Written 0600. Machine-wide, not per connection: the same machine
+ *  identity faces every central, which is what lets one pin work across them. */
+export function envelopeKeyFile(): string {
+  return join(TEAM_CONN_DIR, 'envelope-key.json')
+}
+
+/** machineId → the peer public key this machine PINNED on first sight, per connection. Per
+ *  connection because a machine id is only meaningful within one central: the same id string from
+ *  two different centrals is two different machines, and sharing one pin map across them would let
+ *  one central's key set trigger a "changed key" refusal against another's. */
+export function envelopePinsFile(connId: string): string {
+  return join(TEAM_CONN_DIR, `envelope-pins-${safeConnId(connId)}.json`)
+}
+
+/** Decrypted, NOT-YET-APPLIED restriction proposals received from sibling machines, per
+ *  connection. A proposal sits here until the user acts on it — see envelope-inbox.ts. */
+export function envelopeInboxFile(connId: string): string {
+  return join(TEAM_CONN_DIR, `envelope-inbox-${safeConnId(connId)}.json`)
+}

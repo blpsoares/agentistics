@@ -21,6 +21,11 @@ export const AUTH_PUBLIC = new Set([
   // owner accounts. Returns repository KEYS and the caller's own machines' names — never a
   // session, never another account.
   '/api/team/account-repos',
+  // The sealed-envelope channel: both Bearer-authenticated inside their handlers and scoped to the
+  // token's owner accounts. `/keys` serves public keys only; `/envelopes` serves ciphertext the
+  // central cannot open, scoped to the recipient the token proves.
+  '/api/team/keys',
+  '/api/team/envelopes',
   '/api/team/policy',
   '/api/team/whoami',
   '/api/team/agent',

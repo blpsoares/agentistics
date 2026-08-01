@@ -301,6 +301,46 @@ export const COPY = {
     en: 'no linked repository',
     pt: 'sem repositório vinculado',
   },
+  proposalTitle: {
+    en: '{name} restricted repositories for this central',
+    pt: '{name} restringiu repositórios nesta central',
+  },
+  proposalDenylist: {
+    en: 'It now hides:',
+    pt: 'Agora oculta:',
+  },
+  proposalAllowlist: {
+    en: 'It now shares only:',
+    pt: 'Agora compartilha apenas:',
+  },
+  proposalNoSources: {
+    en: 'nothing',
+    pt: 'nada',
+  },
+  proposalNotApplied: {
+    en: 'Nothing has changed on this machine. Rules are per machine — apply it only if you want the same here.',
+    pt: 'Nada mudou nesta máquina. As regras são por máquina — aplique apenas se quiser o mesmo aqui.',
+  },
+  proposalApply: {
+    en: 'Apply here',
+    pt: 'Aplicar aqui',
+  },
+  proposalDismiss: {
+    en: 'Dismiss',
+    pt: 'Dispensar',
+  },
+  keyChangedTitle: {
+    en: 'A machine\'s key changed — messages from it were not opened',
+    pt: 'A chave de uma máquina mudou — as mensagens dela não foram abertas',
+  },
+  keyChangedBody: {
+    en: 'The key published for {name} is not the one this machine pinned. That is either a reinstall or someone substituting a key on the central, and this machine cannot tell which — so nothing from it was decrypted. Compare the fingerprints on both machines before continuing.',
+    pt: 'A chave publicada para {name} não é a que esta máquina fixou. Isso é uma reinstalação ou alguém substituindo uma chave na central, e esta máquina não sabe qual — então nada dela foi descriptografado. Compare as impressões digitais nas duas máquinas antes de continuar.',
+  },
+  keyChangedDismiss: {
+    en: 'I checked — clear this warning',
+    pt: 'Já verifiquei — limpar este aviso',
+  },
   statsNote: {
     en: 'Filtered exactly after {boundary}. Earlier days ({n} sessions) were already summarised by Claude into one aggregate that no rule can split.',
     pt: 'Filtrado com exatidão depois de {boundary}. Os dias anteriores ({n} sessões) já foram resumidos pelo Claude num agregado único que nenhuma regra separa.',

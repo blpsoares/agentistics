@@ -18,6 +18,7 @@ import { resolveCardActionsHidden, type ApplyPhase } from './repoPanelState'
 import {
   DisconnectButton, mobileBtn, StatusLine, ResyncStrip, RepoPanelSlot,
 } from './ConnectionCardParts'
+import { ProposalsSection, type ProposalView, type KeyWarningView } from './ProposalsSection'
 
 export interface ConnectionCardProps {
   conn: TeamConnection
@@ -42,11 +43,18 @@ export interface ConnectionCardProps {
   onDisconnect: (id: string) => Promise<void>
   onSyncNow: (id: string) => Promise<void>
   onApplyRules: (id: string, mode: ShareMode, sources: ShareSource[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
+  /** Sealed-envelope proposals received from this account's other machines, and the alarm raised
+   *  when a peer's published key stopped matching the pinned one. Both default to empty, so a
+   *  central too old for the mailbox simply renders nothing. */
+  proposals?: ProposalView[]
+  keyWarnings?: KeyWarningView[]
+  onDismissProposal?: (connId: string, body: { proposalId?: string; keyWarningMachineId?: string }) => Promise<void>
 }
 
 export function ConnectionCard({
   conn, status, archiveMode, shareTargets, projectTargets, sessions, modelUsage, otelEnabled, duplicateHost, lang,
   onDisconnect, onSyncNow, onApplyRules,
+  proposals = [], keyWarnings = [], onDismissProposal,
 }: ConnectionCardProps) {
   const isMobile = useIsMobile()
   const [expanded, setExpanded] = useState(false)
@@ -238,6 +246,18 @@ export function ConnectionCard({
                 ))}
               </ul>
             </div>
+          )}
+
+          {onDismissProposal && (
+            <ProposalsSection
+              connId={conn.id}
+              proposals={proposals}
+              keyWarnings={keyWarnings}
+              lang={lang}
+              disabled={disableWrites}
+              onApply={onApplyRules}
+              onDismiss={onDismissProposal}
+            />
           )}
 
           {state === 'resyncing' && status?.resync && <ResyncStrip resync={status.resync} lang={lang} />}

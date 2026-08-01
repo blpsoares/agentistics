@@ -246,6 +246,69 @@ Scope: the route is minted-token-only and scoped to the token's **owner accounts
 (`listSiblingMachines`), never by team and never globally — a token with no owner account sees only
 itself. CI and repo tokens are excluded.
 
+### 8.2 The sealed envelope — telling the other machines, through a central that cannot read it
+
+§8.1 lets a machine *detect* the problem. Telling the account's OTHER machines is the opposite
+direction, and it cannot be done without something crossing the central. So it crosses encrypted.
+
+**Construction** (`envelope-crypto.ts`, composed from standard primitives, nothing invented):
+
+```
+E            = fresh X25519 keypair, one per message
+dh1          = X25519(E.priv,      recipient.pub)     confidentiality + freshness
+dh2          = X25519(sender.priv, recipient.pub)     sender authenticity
+key          = HKDF-SHA256(ikm = dh1 ‖ dh2, salt = E.pub ‖ recipient.pub, info = header)
+ciphertext   = AES-256-GCM(key, random 12-byte iv, aad = the full header)
+```
+
+This is the Noise `X` / X3DH-style composition. The ephemeral DH means the same rule set never
+seals to the same bytes twice. The static-static DH is the **authenticator**: only a holder of the
+sender's private key can produce a `dh2` the recipient reproduces. A signature was rejected
+deliberately — it would prove authorship to anyone who ever obtained the plaintext, whereas the DH
+authenticator is verifiable only by the intended recipient, and two machines of one account need no
+transferable proof of what they told each other. The whole header is the GCM AAD, so the central
+cannot re-address, relabel or re-date an envelope it relays.
+
+**Key distribution and its honest limit.** Each machine generates its keypair locally and publishes
+only the public half (`POST /api/team/keys`, authenticated by its existing minted token). Nothing to
+type, working the moment a second machine joins — which is what the product required.
+
+> **A central that actively substitutes a public key at the moment a machine first sees a peer can
+> read that peer's envelopes.** No fully automatic scheme closes this: two parties whose only
+> channel is the adversary cannot bootstrap a secret without a pre-shared secret or out-of-band
+> verification.
+
+What is done instead:
+
+- **Pin on first sight.** The first time B sees A's key it stores it (`envelope-keys.ts`). If it
+  ever changes, B **refuses to decrypt** — it does not guess between a reinstall and an attack —
+  raises a red alarm on the connection card and a `member.peer_key_changed` notification, and
+  **leaves the envelope on the central** so resolving the key does not cost the message. A sender
+  likewise refuses to seal *to* a changed key. The pin is per connection: the same machine id on two
+  centrals is two different machines.
+- **Show the fingerprint.** `GET /api/team/proposals` returns this machine's own fingerprint and
+  each pinned peer's, so a user who cares can compare two machines they own. Never required.
+
+**What the central inevitably learns, and this is not implied away:** that a machine deposited a
+sealed envelope, when, for whom, and how big it was. Since the channel carries only rule changes,
+"an envelope exists" ≈ "that machine changed its rules" — which the scoped delete
+(`POST /api/team/forget`) arriving at the same instant already reveals, so it concedes nothing new.
+It does **not** reveal which repository, in which direction, or whether the peer acted on it.
+
+**Propose, never apply.** A decrypted message NEVER changes the receiving machine's rules. It is
+stored as a proposal (`envelope-inbox.ts`), raises a notification, and waits for an explicit click
+that runs the ordinary `PATCH /api/team/connections/:id` — the same validated path a hand-edited
+rule takes. There is no apply endpoint anywhere on the server, and `envelope-client.test.ts` asserts
+that the inbox module exposes no such function: a machine that silently reconfigures another
+because a message arrived would be a remote-control channel, and this is not one.
+
+**Mailbox scoping.** Deposit/fetch/ack are minted-token-only. The SENDER is stamped from the token,
+never read from the body; the RECIPIENT must be a machine of the caller's own account
+(`allowedRecipients`), so the mailbox is not a write primitive against strangers; a refused
+recipient is silently skipped rather than named, because naming it would answer "does this machine
+belong to my account". Retention is bounded by age and per-recipient count. The private key never
+leaves the machine, never enters a log, an audit event or any response body.
+
 ## 9. Verifying it yourself
 
 Each control has tests next to it; these are the ones worth reading first:

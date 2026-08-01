@@ -129,6 +129,8 @@ export const DATE_FIELDS: readonly DateFieldSpec[] = [
   // The `config` collection holds the bootstrap doc (createdAt/consumedAt); the `team` doc in
   // the same collection has no dates, and a field-scoped update simply never matches it.
   { collection: 'config', fields: ['createdAt', 'consumedAt'] },
+  { collection: 'machineKeys', fields: ['updatedAt'] },
+  { collection: 'envelopes', fields: ['createdAt'] },
 ]
 
 /**
@@ -197,7 +199,7 @@ export function convertArrayFieldStage(field: string): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 
 /** Bump when DATE_FIELDS gains a field, so an already-migrated deployment re-runs for the new one. */
-export const DATE_MIGRATION_VERSION = 1
+export const DATE_MIGRATION_VERSION = 2
 
 const MIGRATION_COLLECTION = 'config'
 const MIGRATION_DOC_ID = 'migrations'

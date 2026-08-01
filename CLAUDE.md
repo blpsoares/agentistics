@@ -65,6 +65,14 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── team-ingest.ts       → POST /api/team/ingest → upsert + triggerSseNotification (real-time central)
   ├── team-source.ts / team-admin.ts → central-side team read for buildApiResponse + members-panel admin routes
   ├── team-uploader.ts     → member→central push: sent-state, sync-signature auto-reconcile, push-on-change (notifyDataChanged), auto-reset on revoke, /api/team/status pill
+  ├── account-repos.ts     → **pure**: buildAccountRepoList (central grouping) + findStillShared (the MACHINE-side intersection). A machine asks the central what repositories it holds FOR ITS ACCOUNT (`GET /api/team/account-repos`, team-account-repos.ts) — a question naming no repository and carrying no rule — and compares locally, so it learns a sibling still shares a repo it hid without disclosing anything
+  ├── team-elsewhere.ts    → member side of that: TTL-throttled fetch + cache → ConnectionStatusEntry.elsewhere (same-origin) → the orange banner on the connection card
+  ├── envelope-crypto.ts   → **pure** sealed envelope: X25519 (ephemeral + static-static DH) → HKDF-SHA256 → AES-256-GCM, whole header as AAD. `open` refuses a sender key that differs from the PINNED one BEFORE decrypting — that check, not the cipher, is what makes key substitution visible
+  ├── envelope-message.ts  → **pure**: the one message kind (a restriction proposal) + decidePin (trust on first use)
+  ├── envelope-keys.ts     → this machine's keypair (0600, never logged/audited/returned) + per-connection peer pins
+  ├── envelope-store.ts / envelope-routes.ts → central `machineKeys` + `envelopes` collections and /api/team/keys + /api/team/envelopes. Sender stamped from the token; recipient must be a machine of the caller's own ACCOUNT (`allowedRecipients`)
+  ├── envelope-client.ts   → member: publish key, pin peers, seal on a rules change, collect + decrypt. Never applies anything
+  ├── envelope-inbox.ts / envelope-proposals.ts → decrypted, NOT-YET-APPLIED proposals + GET/DELETE /api/team/proposals. **There is deliberately no apply path**: applying is the ordinary PATCH /api/team/connections/:id a user's click performs
   ├── team-watch.ts        → central watches the team collection → SSE refresh (fallback)
   ├── team-repos.ts        → central repo registry (`repos` collection): registerRepo (mints a repo-bound CI token + records name/remote; re-register rotates), listRepos, unregisterRepo
   ├── ci-push.ts           → `agentop ci-push`: one-shot push of an ephemeral GitHub Actions runner's ~/.claude metrics to a central; prefers keyless OIDC (fetches the runner's id-token), falls back to a static token; never fails the CI job on a push error

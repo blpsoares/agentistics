@@ -25,6 +25,7 @@ import {
 import type { ForgetProgress } from './team-forget-client'
 import { loadRulesState } from './team-rules'
 import { getElsewhere, scheduleElsewhereCheck, checkElsewhereNow } from './team-elsewhere'
+import { announceRestrictionNow, scheduleEnvelopeSync } from './envelope-client'
 import type { ElsewhereRepo } from './account-repos'
 import {
   sourcesRestrict, withUnresolvedSources, rulesSignature, emptyRulesSignature, normalizeSources,
@@ -568,12 +569,14 @@ export async function handlePatchConnection(
     nudge?: (connId: string) => void
     notify?: () => void
     checkElsewhere?: (connId: string) => void
+    announce?: (connId: string) => void
   } = {},
 ): Promise<Response> {
   const _updateTeamConfig = deps.updateTeamConfig ?? updateTeamConfig
   const _nudge = deps.nudge ?? nudgeAfterRulesChange
   const _notify = deps.notify ?? notifyLocalDashboards
   const _checkElsewhere = deps.checkElsewhere ?? checkElsewhereNow
+  const _announce = deps.announce ?? announceRestrictionNow
   let id: string
   try {
     id = safeConnId(rawId)
@@ -631,6 +634,10 @@ export async function handlePatchConnection(
     // (question unchanged, see account-repos.ts) and recompute the warning without waiting out
     // the status route's TTL.
     _checkElsewhere(id)
+    // Tell this account's OTHER machines, sealed to each of them (Part 2). Fire-and-forget and
+    // entirely optional: an older central has no mailbox, and the local warning above covers the
+    // case regardless.
+    _announce(id)
     _nudge(id)
     return json({ ok: true, queued: true })
   }
@@ -960,7 +967,11 @@ export function otelExportEnabled(): boolean {
  */
 export async function handleTeamStatus(
   _req: Request,
-  deps: { readPreferences?: typeof readPreferences; scheduleElsewhere?: (conn: TeamConnection) => void } = {},
+  deps: {
+    readPreferences?: typeof readPreferences
+    scheduleElsewhere?: (conn: TeamConnection) => void
+    scheduleEnvelopes?: (conn: TeamConnection) => void
+  } = {},
 ): Promise<Response> {
   const prefs = await (deps.readPreferences ?? readPreferences)()
   const team = prefs.team
@@ -992,6 +1003,8 @@ export async function handleTeamStatus(
     // Background, TTL-throttled (`ELSEWHERE_TTL_MS`) and never awaited: the poller must not block
     // on a central, and a stale answer is the correct thing to render while a fresh one lands.
     ;(deps.scheduleElsewhere ?? scheduleElsewhereCheck)(c)
+    // Collect sealed mail on the same background, TTL-throttled principle (ENVELOPE_POLL_MS).
+    ;(deps.scheduleEnvelopes ?? scheduleEnvelopeSync)(c)
     const rules = await loadRulesState(c.id)
     return buildConnectionStatusEntry(c, uploaderStatus, {
       boundary,
