@@ -45,6 +45,16 @@ export interface ConnectionStatusEntry {
   centralTooOld: boolean
   resync: ResyncProgress | null
   pendingRules: boolean
+  /** Repositories this machine hides that ANOTHER machine of the same account still sends to this
+   *  central. Computed locally by the machine (see `server/account-repos.ts`) — the central is
+   *  never told what is restricted here. Absent on an older server build. */
+  elsewhere?: ElsewhereRepo[]
+}
+
+/** One repository still shared by a sibling machine, with the names of those machines. */
+export interface ElsewhereRepo {
+  repo: string
+  machines: string[]
 }
 
 export interface TeamStatusResponse {

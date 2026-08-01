@@ -289,6 +289,90 @@ export const COPY = {
     en: 'Rules saved. The central is unreachable — they will be applied on the next successful sync.',
     pt: 'Regras salvas. A central está inacessível — elas serão aplicadas no próximo envio bem-sucedido.',
   },
+  elsewhereTitle: {
+    en: 'Another of your machines still shares this',
+    pt: 'Outra máquina sua ainda compartilha isto',
+  },
+  elsewhereBody: {
+    en: 'These repositories are hidden here, but this central still receives them from another machine signed in to your account. Repository rules are per machine — apply them there too.',
+    pt: 'Estes repositórios estão ocultos aqui, mas esta central ainda os recebe de outra máquina conectada à sua conta. As regras de repositório são por máquina — aplique-as lá também.',
+  },
+  elsewhereNoRepo: {
+    en: 'no linked repository',
+    pt: 'sem repositório vinculado',
+  },
+  proposalTitle: {
+    en: '{name} restricted repositories for this central',
+    pt: '{name} restringiu repositórios nesta central',
+  },
+  proposalDenylist: {
+    en: 'It now hides:',
+    pt: 'Agora oculta:',
+  },
+  proposalAllowlist: {
+    en: 'It now shares only:',
+    pt: 'Agora compartilha apenas:',
+  },
+  proposalNoSources: {
+    en: 'nothing',
+    pt: 'nada',
+  },
+  proposalNotApplied: {
+    en: 'Nothing has changed on this machine. Rules are per machine — apply it only if you want the same here.',
+    pt: 'Nada mudou nesta máquina. As regras são por máquina — aplique apenas se quiser o mesmo aqui.',
+  },
+  proposalApply: {
+    en: 'Apply here',
+    pt: 'Aplicar aqui',
+  },
+  proposalDismiss: {
+    en: 'Dismiss',
+    pt: 'Dispensar',
+  },
+  peersTitle: {
+    en: 'Machines that receive your rules',
+    pt: 'Máquinas que recebem suas regras',
+  },
+  peersBody: {
+    en: 'Each of these machines of your account can read the sharing rules this machine sends. The central hands over these keys, so if you do not recognise a machine, compare its fingerprint with the one that machine shows for itself.',
+    pt: 'Cada uma destas máquinas da sua conta consegue ler as regras de compartilhamento que esta máquina envia. A central fornece essas chaves — se você não reconhece uma máquina, compare a impressão digital com a que aquela máquina mostra de si mesma.',
+  },
+  peersSelf: {
+    en: 'This machine',
+    pt: 'Esta máquina',
+  },
+  proposalAge: {
+    en: 'Sent {age}',
+    pt: 'Enviado {age}',
+  },
+  ageJustNow: {
+    en: 'just now',
+    pt: 'agora mesmo',
+  },
+  ageHours: {
+    en: '{n}h ago',
+    pt: 'há {n}h',
+  },
+  ageDays: {
+    en: '{n} day(s) ago',
+    pt: 'há {n} dia(s)',
+  },
+  proposalStale: {
+    en: 'This is not recent. Check with that machine before applying it.',
+    pt: 'Isto não é recente. Confirme com aquela máquina antes de aplicar.',
+  },
+  keyChangedTitle: {
+    en: 'A machine\'s key changed — messages from it were not opened',
+    pt: 'A chave de uma máquina mudou — as mensagens dela não foram abertas',
+  },
+  keyChangedBody: {
+    en: 'The key published for {name} is not the one this machine pinned. That is either a reinstall or someone substituting a key on the central, and this machine cannot tell which — so nothing from it was decrypted. Compare the fingerprints on both machines before continuing.',
+    pt: 'A chave publicada para {name} não é a que esta máquina fixou. Isso é uma reinstalação ou alguém substituindo uma chave na central, e esta máquina não sabe qual — então nada dela foi descriptografado. Compare as impressões digitais nas duas máquinas antes de continuar.',
+  },
+  keyChangedDismiss: {
+    en: 'I checked — clear this warning',
+    pt: 'Já verifiquei — limpar este aviso',
+  },
   statsNote: {
     en: 'Filtered exactly after {boundary}. Earlier days ({n} sessions) were already summarised by Claude into one aggregate that no rule can split.',
     pt: 'Filtrado com exatidão depois de {boundary}. Os dias anteriores ({n} sessões) já foram resumidos pelo Claude num agregado único que nenhuma regra separa.',

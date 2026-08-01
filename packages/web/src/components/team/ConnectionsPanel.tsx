@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Plus } from 'lucide-react'
 import type { SessionMeta, TeamConnection, TeamConfig, ModelUsage, ShareSource } from '@agentistics/core'
 import { readTeamConnections } from '@agentistics/core'
@@ -11,6 +11,19 @@ import { ConnectionCard } from './ConnectionCard'
 import { AddCentralDrawer } from './AddCentralDrawer'
 import type { ShareMode } from './sharePanelState'
 import type { TeamStatusResponse, ConnectionStatusEntry } from './statusTypes'
+import type { ProposalView, KeyWarningView, PeerFingerprint } from './ProposalsSection'
+
+/** `GET /api/team/proposals` — this machine's own decrypted sealed-envelope inbox, same-origin. */
+export interface ProposalsResponse {
+  ok: boolean
+  me?: { publicKey: string; fingerprint: string }
+  connections?: {
+    connId: string
+    proposals?: ProposalView[]
+    keyWarnings?: KeyWarningView[]
+    peers?: { machineId: string; machineName: string; fingerprint: string }[]
+  }[]
+}
 
 /** The two panel-level rows of the state table (§9.5) that are NOT per-card: an `/api/preferences`
  *  load failure shows the error panel and never renders the list at all (even if a previous poll
@@ -133,6 +146,45 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
     const id = setInterval(load, 5_000)
     return () => { alive = false; clearInterval(id) }
   }, [])
+
+  // A second, slower poller for this machine's sealed-envelope inbox. Same "one poller for the
+  // whole panel" rule as the status one above: N cards must never mean N intervals.
+  const [proposalsResp, setProposalsResp] = useState<ProposalsResponse | null>(null)
+  const loadProposals = useCallback(async () => {
+    try {
+      const r = await fetch('/api/team/proposals')
+      if (!r.ok) return
+      setProposalsResp(await r.json() as ProposalsResponse)
+    } catch { /* keep the last-known inbox */ }
+  }, [])
+  useEffect(() => {
+    void loadProposals()
+    const id = setInterval(() => { void loadProposals() }, 30_000)
+    return () => clearInterval(id)
+  }, [loadProposals])
+
+  const inboxById = useMemo(() => {
+    const map: Record<string, { proposals: ProposalView[]; keyWarnings: KeyWarningView[]; peers: PeerFingerprint[] }> = {}
+    for (const e of proposalsResp?.connections ?? []) {
+      map[e.connId] = { proposals: e.proposals ?? [], keyWarnings: e.keyWarnings ?? [], peers: e.peers ?? [] }
+    }
+    return map
+  }, [proposalsResp])
+
+  const handleDismissProposal = useCallback(async (
+    connId: string,
+    body: { proposalId?: string; keyWarningMachineId?: string },
+  ) => {
+    try {
+      await fetch('/api/team/proposals', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connId, ...body }),
+      })
+    } finally {
+      await loadProposals()
+    }
+  }, [loadProposals])
 
   const statusById = useMemo(() => {
     const map: Record<string, ConnectionStatusEntry> = {}
@@ -286,6 +338,11 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
               onDisconnect={handleDisconnect}
               onSyncNow={handleSyncNow}
               onApplyRules={handleApplyRules}
+              proposals={inboxById[conn.id]?.proposals ?? []}
+              keyWarnings={inboxById[conn.id]?.keyWarnings ?? []}
+              peers={inboxById[conn.id]?.peers ?? []}
+              selfFingerprint={proposalsResp?.me?.fingerprint ?? ''}
+              onDismissProposal={handleDismissProposal}
             />
           ))}
         </div>

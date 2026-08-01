@@ -21,6 +21,10 @@ const EXACT: ReadonlyMap<string, keyof Capabilities> = new Map<string, keyof Cap
   ['/api/mcp-list', 'mcpAdmin'],
   ['/api/mcp-action', 'mcpAdmin'],
   ['/api/projects-list', 'localTranscripts'],
+  // Returns this machine's decrypted sibling messages — a peer's FULL source list, plus its own
+  // key fingerprints. Strictly more sensitive than /api/team/status, which deliberately exposes
+  // only counts, so it is host-local data and must be unreachable on an exposed instance.
+  ['/api/team/proposals', 'localTranscripts'],
 ])
 
 /** Prefix (no trailing slash) → capability. Matches `<prefix>` and `<prefix>/…` only. */

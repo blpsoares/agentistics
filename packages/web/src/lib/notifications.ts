@@ -59,6 +59,18 @@ export const NOTIFICATION_TEXT: Record<string, { pt: Localized; en: Localized }>
   // Raised once per retroactive removal (never once per cycle — the uploader guards the
   // transition), so a rules change that takes several cycles to land is one "removing" toast and
   // one "done", not a stream of them.
+  'member.rules_proposed': {
+    pt: { title: 'Outra máquina sua restringiu repositórios', message: '{name} enviou {count} proposta(s) de regra para {central}. Nada mudou aqui — abra a conexão para decidir.' },
+    en: { title: 'Another of your machines restricted repositories', message: '{name} sent {count} rule proposal(s) for {central}. Nothing changed here — open the connection to decide.' },
+  },
+  'member.peer_pinned': {
+    pt: { title: 'Nova máquina receberá suas regras', message: '{count} nova(s) máquina(s) da sua conta em {central} passará(ão) a receber suas regras de compartilhamento: {name}. Se você não reconhece, confira as impressões digitais nas configurações da conexão.' },
+    en: { title: 'A new machine will receive your rules', message: '{count} new machine(s) of your account on {central} will now receive your sharing rules: {name}. If you do not recognise it, check the fingerprints in the connection settings.' },
+  },
+  'member.peer_key_changed': {
+    pt: { title: 'A chave de uma máquina mudou', message: 'A chave publicada para {name} em {central} não é a que esta máquina fixou. Nada foi descriptografado. Compare as impressões digitais nas duas máquinas.' },
+    en: { title: "A machine's key changed", message: 'The key published for {name} on {central} is not the one this machine pinned. Nothing was decrypted. Compare the fingerprints on both machines.' },
+  },
   'member.resync_started': {
     pt: { title: 'Removendo dados da central', message: 'Removendo {count} sessão(ões) de {central} conforme as novas regras de repositório.' },
     en: { title: 'Removing data from the central', message: 'Removing {count} session(s) from {central} to match the new repository rules.' },

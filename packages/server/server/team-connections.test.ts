@@ -436,7 +436,7 @@ function statusEntry(id: string, extra?: Partial<ConnectionStatusEntry>): Connec
     lastSuccessAt: null, errKind: null, latencyMs: null,
     shareMode: 'denylist', deniedRepos: 0, deniedProjects: 0, allowedCount: 0,
     deniedCount: 0, restricted: false, boundary: null, prehistorySessions: null,
-    canForget: false, centralTooOld: true, resync: null, pendingRules: false,
+    canForget: false, centralTooOld: true, resync: null, pendingRules: false, elsewhere: [],
     ...extra,
   }
 }
@@ -447,7 +447,7 @@ describe('buildConnectionStatusEntry — the per-connection status shape (§5.9,
   it('restricted comes from the STORED sources, never from uploader state — a connection with no cycle yet is still restricted', () => {
     const c = conn('c_a', { sources: [repoSrc('github.com/o/r'), noneSrc()] })
     const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
-      boundary: null, prehistorySessions: null, canForget: false, resync: null, rulesHash: '',
+      boundary: null, prehistorySessions: null, canForget: false, resync: null, rulesHash: '', elsewhere: [],
     })
     expect(entry.restricted).toBe(true)
     expect(entry.deniedCount).toBe(2)
@@ -460,7 +460,7 @@ describe('buildConnectionStatusEntry — the per-connection status shape (§5.9,
   it('an unrestricted connection reports restricted:false and deniedCount:0', () => {
     const c = conn('c_a', { sources: [] })
     const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
-      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '',
+      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '', elsewhere: [],
     })
     expect(entry.restricted).toBe(false)
     expect(entry.deniedCount).toBe(0)
@@ -469,7 +469,7 @@ describe('buildConnectionStatusEntry — the per-connection status shape (§5.9,
   it('allowlist mode reports allowedCount and is ALWAYS restricted, even with an empty list', () => {
     const c = conn('c_a', { shareMode: 'allowlist', sources: [repoSrc('github.com/o/r'), projectSrc('/p/a')] })
     const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
-      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '',
+      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '', elsewhere: [],
     })
     expect(entry.shareMode).toBe('allowlist')
     expect(entry.allowedCount).toBe(2)
@@ -480,14 +480,14 @@ describe('buildConnectionStatusEntry — the per-connection status shape (§5.9,
 
     const empty = conn('c_b', { shareMode: 'allowlist', sources: [] })
     expect(buildConnectionStatusEntry(empty, NEVER_RAN, {
-      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '',
+      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '', elsewhere: [],
     }).restricted).toBe(true)
   })
 
   it('denylist mode splits deniedRepos and deniedProjects separately', () => {
     const c = conn('c_a', { sources: [repoSrc('github.com/o/r'), projectSrc('/p/a'), projectSrc('/p/b')] })
     const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
-      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '',
+      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '', elsewhere: [],
     })
     expect(entry.deniedRepos).toBe(1)
     expect(entry.deniedProjects).toBe(2)
@@ -496,7 +496,7 @@ describe('buildConnectionStatusEntry — the per-connection status shape (§5.9,
   it('never leaks the sources themselves — only the counts', () => {
     const c = conn('c_a', { sources: [repoSrc('github.com/secret/repo'), noneSrc()] })
     const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
-      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '',
+      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '', elsewhere: [],
     })
     expect(JSON.stringify(entry)).not.toContain('secret')
     expect((entry as unknown as Record<string, unknown>).sources).toBeUndefined()
@@ -506,23 +506,23 @@ describe('buildConnectionStatusEntry — the per-connection status shape (§5.9,
   it('never leaks the token', () => {
     const c = conn('c_a', { token: 'super-secret-token' })
     const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
-      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '',
+      boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '', elsewhere: [],
     })
     expect(JSON.stringify(entry)).not.toContain('super-secret-token')
   })
 
   it('centralTooOld is the complement of canForget, and a network flap cannot flip it — it is passed in verbatim', () => {
     const c = conn('c_a')
-    expect(buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: false, resync: null, rulesHash: '' }).centralTooOld).toBe(true)
-    expect(buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '' }).centralTooOld).toBe(false)
+    expect(buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: false, resync: null, rulesHash: '', elsewhere: [] }).centralTooOld).toBe(true)
+    expect(buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '', elsewhere: [] }).centralTooOld).toBe(false)
   })
 
   it('boundary and prehistorySessions pass through the local honesty markers verbatim, including null (unknowable) vs 0', () => {
     const c = conn('c_a')
-    const withUnknown = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '' })
+    const withUnknown = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '', elsewhere: [] })
     expect(withUnknown.boundary).toBeNull()
     expect(withUnknown.prehistorySessions).toBeNull()
-    const withZero = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: '', prehistorySessions: 0, canForget: true, resync: null, rulesHash: '' })
+    const withZero = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: '', prehistorySessions: 0, canForget: true, resync: null, rulesHash: '', elsewhere: [] })
     expect(withZero.boundary).toBe('')
     expect(withZero.prehistorySessions).toBe(0)
   })
@@ -531,7 +531,7 @@ describe('buildConnectionStatusEntry — the per-connection status shape (§5.9,
     const c = conn('c_a')
     const entry = buildConnectionStatusEntry(c, NEVER_RAN, {
       boundary: null, prehistorySessions: null, canForget: true,
-      resync: { phase: 'forget', done: 40, total: 120 }, rulesHash: '',
+      resync: { phase: 'forget', done: 40, total: 120 }, rulesHash: '', elsewhere: [],
     })
     expect(entry.resync).toEqual({ phase: 'forget', done: 40, total: 120 })
   })
@@ -540,7 +540,7 @@ describe('buildConnectionStatusEntry — the per-connection status shape (§5.9,
     const c = conn('c_a', { sources: [repoSrc('github.com/o/r'), noneSrc()] })
     // rulesHash '' reads as emptyRulesSignature() (team-rules.ts rule 2) — the persisted state has
     // never seen ANY rules, so the current one (non-empty) is a pending change.
-    const entry = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '' })
+    const entry = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '', elsewhere: [] })
     expect(entry.pendingRules).toBe(true)
   })
 
@@ -548,7 +548,7 @@ describe('buildConnectionStatusEntry — the per-connection status shape (§5.9,
     const c = conn('c_a', { sources: [] })
     // Empty sources in denylist mode match the '' sentinel (both read as emptyRulesSignature()) —
     // nothing pending for a connection that was never restricted.
-    const entry = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '' })
+    const entry = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: '', elsewhere: [] })
     expect(entry.pendingRules).toBe(false)
   })
 
@@ -556,7 +556,7 @@ describe('buildConnectionStatusEntry — the per-connection status shape (§5.9,
     const sources = [repoSrc('github.com/o/r')]
     const c = conn('c_a', { shareMode: 'allowlist', sources })
     const prevHash = rulesSignature('denylist', sources)
-    const entry = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: prevHash })
+    const entry = buildConnectionStatusEntry(c, NEVER_RAN, { boundary: null, prehistorySessions: null, canForget: true, resync: null, rulesHash: prevHash, elsewhere: [] })
     expect(entry.pendingRules).toBe(true)
   })
 })

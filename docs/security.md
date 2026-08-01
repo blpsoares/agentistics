@@ -228,6 +228,137 @@ than this:**
    connection does not stop that repo's GitHub Actions runs or OTel metrics from reaching the same
    central by a different path.
 
+### 8.1 Rules are per machine, and how a machine finds out
+
+Sharing rules live on the machine that declares them. Restricting a repository on one laptop does
+nothing on a second laptop signed in to the same account, which will keep pushing it.
+
+A machine detects that situation **without disclosing anything**. It calls
+`GET /api/team/account-repos`, which returns the distinct repositories the central holds *for the
+caller's own account* and which of that account's machines pushed each one. The request names no
+repository and carries no rule — it is byte-identical whether the caller just restricted something
+or is idly refreshing — and the response is data the account already owns and can already read from
+its dashboard. The comparison against the private rules happens **on the machine**
+(`server/account-repos.ts`, `findStillShared`); the central never learns the outcome. The result is
+the orange banner on the connection card naming the repository and the sibling machine.
+
+Scope: the route is minted-token-only and scoped to the token's **owner accounts**
+(`listSiblingMachines`), never by team and never globally — a token with no owner account sees only
+itself. CI and repo tokens are excluded.
+
+### 8.2 The sealed envelope — telling the other machines, through a central that cannot read it
+
+§8.1 lets a machine *detect* the problem. Telling the account's OTHER machines is the opposite
+direction, and it cannot be done without something crossing the central. So it crosses encrypted.
+
+**Construction** (`envelope-crypto.ts`, composed from standard primitives, nothing invented):
+
+```
+E            = fresh X25519 keypair, one per message
+dh1          = X25519(E.priv,      recipient.pub)     confidentiality + freshness
+dh2          = X25519(sender.priv, recipient.pub)     sender authenticity
+key          = HKDF-SHA256(ikm = dh1 ‖ dh2, salt = E.pub ‖ recipient.pub, info = header)
+ciphertext   = AES-256-GCM(key, random 12-byte iv, aad = the full header)
+```
+
+This is the Noise `X` / X3DH-style composition. The ephemeral DH means the same rule set never
+seals to the same bytes twice. The static-static DH is the **authenticator**: only a holder of the
+sender's private key can produce a `dh2` the recipient reproduces. A signature was rejected
+deliberately — it would prove authorship to anyone who ever obtained the plaintext, whereas the DH
+authenticator is verifiable only by the intended recipient, and two machines of one account need no
+transferable proof of what they told each other. The whole header is the GCM AAD, so the central
+cannot re-address, relabel or re-date an envelope it relays.
+
+**The recipient checks the header it authenticated.** Binding sender, recipient, instance and time
+into the AAD proves the central cannot *rewrite* them; it says nothing about the central *choosing*
+the routing fields it reports beside the ciphertext. `open()` therefore requires the caller to state
+the sender the transport claimed, this machine's own id, and the connection's instanceId, and
+refuses on any disagreement **before** any key agreement. The sender's pin is looked up by the id
+**inside the seal**, never the one supplied beside it. Without this, a central could publish a
+directory entry under a machine id it invented pointing at a real peer's key, then relay that peer's
+genuine envelopes under the invented identity: pin matches, GCM verifies, and the proposal is filed
+as authored by a machine that does not exist under a display name the central chose.
+
+**Replay is refused by memory, not by freshness alone.** Every opened envelope's digest — SHA-256 of
+`ciphertext ‖ tag`, never the central's own envelope id, which it mints and can vary — is persisted
+in the inbox and **is not cleared by dismissing a proposal**. Ignoring a proposal is therefore
+permanent. Without it, a pre-restriction envelope (`denylist` with no sources = share everything)
+could be replayed after the sender tightened up, offering the user a one-click downgrade.
+`createdAt` is additionally bounded (`ENVELOPE_FRESH_MS`, 7 days, with an hour of clock skew) as the
+backstop against a central withholding an envelope and delivering it much later. Days rather than
+minutes is deliberate: the mailbox exists *because* peers are offline, so a minutes-wide window
+would drop exactly the messages the channel was built to deliver. The card also renders the
+proposal's age and calls out anything over a day old.
+
+**Key distribution and its honest limit.** Each machine generates its keypair locally and publishes
+only the public half (`POST /api/team/keys`, authenticated by its existing minted token). Nothing to
+type, working the moment a second machine joins — which is what the product required.
+
+> **A central that publishes a public key it controls, under any machine id, reads that channel.**
+> This is not a narrow first-sight race. The central does not need to *substitute* an existing key:
+> it can simply **invent a machine** at any time under a key it holds. A peer that never existed has
+> no prior key to contradict, so trust-on-first-use accepts it, and from that moment every
+> restriction message is encrypted to the central as well as to the real siblings. No fully
+> automatic scheme closes this: two parties whose only channel is the adversary cannot bootstrap a
+> secret without a pre-shared secret or out-of-band verification.
+
+What is done instead — the point of every item below is that trust can be established
+automatically, but never **silently**:
+
+- **Pin on first sight.** The first time B sees A's key it stores it (`envelope-keys.ts`). If it
+  ever changes, B **refuses to decrypt** — it does not guess between a reinstall and an attack —
+  raises a red alarm on the connection card and a `member.peer_key_changed` notification, and
+  **leaves the envelope on the central** so resolving the key does not cost the message. A sender
+  likewise refuses to seal *to* a changed key. The pin is per connection: the same machine id on two
+  centrals is two different machines.
+- **A sender must be in the directory.** An envelope from a machine the key directory did not just
+  list is refused outright, pinned or not. This closes the cheaper twin of the fabricated-peer
+  attack: rather than *publishing* a peer (which is announced, below), a central can *omit* one and
+  seal under an id it invented — no directory entry means no pin, and an unpinned sender would
+  otherwise skip the pin comparison entirely and be filed as an apply-ready proposal with no
+  notification at all. There is no legitimate race, because a sender publishes its own key before
+  it deposits.
+- **Announce every new pin.** The first time a peer is pinned — including a fabricated one — the
+  connection card and a `member.peer_pinned` notification name it: "a new machine of your account
+  will now receive your sharing rules". Same alarm class as a changed key. Silent
+  trust-establishment *is* the exposure, so this is the mitigation for the limit above, not a
+  nicety.
+- **Show the fingerprints.** The expanded connection card lists this machine's own fingerprint and
+  every pinned peer's, so a user who cares can compare two machines they own. Never required.
+- **One bad key cannot disable the channel.** A directory entry whose key cannot be used is skipped
+  and counted, not thrown — an unguarded `seal()` in the peer loop would have let a central publish
+  one junk key and silently stop every sibling from ever being told anything.
+
+**What the central inevitably learns, and this is not implied away:** that a machine deposited a
+sealed envelope, when, for whom, and how big it was. Since the channel carries only rule changes,
+"an envelope exists" ≈ "that machine changed its rules" — which the scoped delete
+(`POST /api/team/forget`) arriving at the same instant already reveals, so it concedes nothing new.
+It does **not** reveal which repository, in which direction, or whether the peer acted on it.
+
+**Propose, never apply.** A decrypted message NEVER changes the receiving machine's rules. It is
+stored as a proposal (`envelope-inbox.ts`), raises a notification, and waits for an explicit click
+that runs the ordinary `PATCH /api/team/connections/:id` — the same validated path a hand-edited
+rule takes. There is no apply endpoint anywhere on the server, and `envelope-client.test.ts` asserts
+that the inbox module exposes no such function: a machine that silently reconfigures another
+because a message arrived would be a remote-control channel, and this is not one.
+
+**One keypair per machine, not per central.** A machine publishes the same public key to every
+central it connects to, so two centrals comparing notes can confirm they are looking at the same
+physical machine. That is accepted rather than fixed: the machine already presents the same
+`git_remote` set and the same statsCache shape to both, so per-connection keys would not make it
+unlinkable, only harder to reason about. An envelope still cannot cross centrals — the instanceId is
+bound into the AAD and re-checked on arrival.
+
+**Mailbox scoping.** Deposit/fetch/ack are minted-token-only. The SENDER is stamped from the token,
+never read from the body; the RECIPIENT must be a machine of the caller's own account
+(`allowedRecipients`), so the mailbox is not a write primitive against strangers; a refused
+recipient is silently skipped rather than named, because naming it would answer "does this machine
+belong to my account". Retention is bounded by age (in step with the recipient's freshness window) and per-recipient
+count, and revoking a machine's token drops its published key and all of its mail. The private key
+never leaves the machine, never enters a log, an audit event or any response body.
+`GET /api/team/proposals` returns a sibling's full source list, so it is registered in
+`capability-guard.ts` and is unreachable on an internet-exposed instance.
+
 ## 9. Verifying it yourself
 
 Each control has tests next to it; these are the ones worth reading first:

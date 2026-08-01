@@ -103,7 +103,7 @@ describe('array helpers', () => {
 describe('DATE_FIELDS', () => {
   test('covers every collection that stores a timestamp', () => {
     const names = DATE_FIELDS.map(s => s.collection)
-    for (const c of ['sessions', 'workflows', 'tokens', 'accounts', 'teams', 'tags', 'repos', 'memberStats', 'config', 'audit']) {
+    for (const c of ['sessions', 'workflows', 'tokens', 'accounts', 'teams', 'tags', 'repos', 'memberStats', 'config', 'audit', 'machineKeys', 'envelopes']) {
       expect(names).toContain(c)
     }
   })

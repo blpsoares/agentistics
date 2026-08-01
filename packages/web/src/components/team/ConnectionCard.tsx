@@ -10,11 +10,15 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { COPY, PLURAL_COPY, interpolate } from './copy'
 import { ConnectionIdentity, type ProbedIdentity } from './ConnectionIdentity'
 import type { ConnectionStatusEntry } from './statusTypes'
-import { isBrokenEndpoint, resolveCardState, resolveRulePill, showsApplyQueuedBanner, resolveWritesDisabled, DOT } from './cardState'
+import {
+  isBrokenEndpoint, resolveCardState, resolveRulePill, showsApplyQueuedBanner, resolveWritesDisabled,
+  showsElsewhereWarning, elsewhereLine, DOT,
+} from './cardState'
 import { resolveCardActionsHidden, type ApplyPhase } from './repoPanelState'
 import {
   DisconnectButton, mobileBtn, StatusLine, ResyncStrip, RepoPanelSlot,
 } from './ConnectionCardParts'
+import { ProposalsSection, type ProposalView, type KeyWarningView, type PeerFingerprint } from './ProposalsSection'
 
 export interface ConnectionCardProps {
   conn: TeamConnection
@@ -39,11 +43,21 @@ export interface ConnectionCardProps {
   onDisconnect: (id: string) => Promise<void>
   onSyncNow: (id: string) => Promise<void>
   onApplyRules: (id: string, mode: ShareMode, sources: ShareSource[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
+  /** Sealed-envelope proposals received from this account's other machines, and the alarm raised
+   *  when a peer's published key stopped matching the pinned one. Both default to empty, so a
+   *  central too old for the mailbox simply renders nothing. */
+  proposals?: ProposalView[]
+  keyWarnings?: KeyWarningView[]
+  /** Pinned peers with fingerprints, and this machine's own — the documented out-of-band check. */
+  peers?: PeerFingerprint[]
+  selfFingerprint?: string
+  onDismissProposal?: (connId: string, body: { proposalId?: string; keyWarningMachineId?: string }) => Promise<void>
 }
 
 export function ConnectionCard({
   conn, status, archiveMode, shareTargets, projectTargets, sessions, modelUsage, otelEnabled, duplicateHost, lang,
   onDisconnect, onSyncNow, onApplyRules,
+  proposals = [], keyWarnings = [], peers = [], selfFingerprint = '', onDismissProposal,
 }: ConnectionCardProps) {
   const isMobile = useIsMobile()
   const [expanded, setExpanded] = useState(false)
@@ -211,6 +225,44 @@ export function ConnectionCard({
             }}>
               {COPY.applyQueued[lang]}
             </div>
+          )}
+
+          {showsElsewhereWarning(status?.elsewhere) && (
+            <div
+              role="status"
+              style={{
+                padding: '10px 12px', borderRadius: 7, fontSize: 11.5, lineHeight: 1.5,
+                color: 'var(--anthropic-orange)',
+                background: 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)',
+                display: 'flex', flexDirection: 'column', gap: 6,
+              }}
+            >
+              <strong style={{ fontSize: 12 }}>{COPY.elsewhereTitle[lang]}</strong>
+              <span style={{ color: 'var(--text-secondary)' }}>{COPY.elsewhereBody[lang]}</span>
+              <ul style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {(status?.elsewhere ?? []).map(e => (
+                  // `overflowWrap` and not `nowrap`: a repo key plus two machine names overflows a
+                  // 390px card, and the page body must never scroll horizontally.
+                  <li key={e.repo} style={{ overflowWrap: 'anywhere' }}>
+                    {elsewhereLine(e, COPY.elsewhereNoRepo[lang])}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {onDismissProposal && (
+            <ProposalsSection
+              connId={conn.id}
+              proposals={proposals}
+              keyWarnings={keyWarnings}
+              peers={peers}
+              selfFingerprint={selfFingerprint}
+              lang={lang}
+              disabled={disableWrites}
+              onApply={onApplyRules}
+              onDismiss={onDismissProposal}
+            />
           )}
 
           {state === 'resyncing' && status?.resync && <ResyncStrip resync={status.resync} lang={lang} />}
