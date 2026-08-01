@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, EyeOff, Loader2, Check } from 'lucide-react'
-import type { SessionMeta, TeamConnection, ModelUsage, ShareSource } from '@agentistics/core'
+import type { SessionMeta, TeamConnection, ModelUsage, ShareSource, SiblingRuleFact } from '@agentistics/core'
 import type { ArchiveMode } from '../ArchiveConsentModal'
 import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
 import type { ShareMode } from './sharePanelState'
@@ -50,6 +50,9 @@ export interface ConnectionCardProps {
   keyWarnings?: KeyWarningView[]
   /** Pinned peers with fingerprints, and this machine's own — the documented out-of-band check. */
   peers?: PeerFingerprint[]
+  /** What each sibling machine last announced about its OWN rules. Read by the rules picker to
+   *  warn BEFORE this machine starts sharing something a sibling deliberately withholds. */
+  siblingRules?: SiblingRuleFact[]
   selfFingerprint?: string
   onDismissProposal?: (connId: string, body: { proposalId?: string; keyWarningMachineId?: string }) => Promise<void>
 }
@@ -57,7 +60,7 @@ export interface ConnectionCardProps {
 export function ConnectionCard({
   conn, status, archiveMode, shareTargets, projectTargets, sessions, modelUsage, otelEnabled, duplicateHost, lang,
   onDisconnect, onSyncNow, onApplyRules,
-  proposals = [], keyWarnings = [], peers = [], selfFingerprint = '', onDismissProposal,
+  proposals = [], keyWarnings = [], peers = [], siblingRules = [], selfFingerprint = '', onDismissProposal,
 }: ConnectionCardProps) {
   const isMobile = useIsMobile()
   const [expanded, setExpanded] = useState(false)
@@ -288,6 +291,7 @@ export function ConnectionCard({
             modelUsage={modelUsage}
             otelEnabled={otelEnabled}
             lang={lang}
+            siblingRules={siblingRules}
             onApplyRules={onApplyRules}
             phase={applyPhase}
             onPhase={setApplyPhase}

@@ -4,6 +4,8 @@ import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
 import { plural } from '../../lib/shareRepos'
 import { RowSwitch } from '../../pages/settings/primitives'
 import { COPY, PLURAL_COPY, interpolate } from './copy'
+import { WithheldBadge } from './SiblingWithheldBadge'
+import type { WithholdingMachine } from './siblingWarnings'
 import { relTime } from './cardState'
 import {
   buildRows, groupRows, keepVisibleKeys, diffDraft, type EffectiveRow,
@@ -116,7 +118,8 @@ export function bulkBtnStyle(isMobile: boolean): CSSProperties {
 
 export function EditView({
   targets, draftDenied, diff, search, onSearch, showStale, onToggleStale, showAllMobile, onShowAllMobile,
-  isMobile, lang, mode, partialRepoKeys, impactSessions, impactCost, onToggleRow, onShareAll, onBlockAll,
+  isMobile, lang, mode, partialRepoKeys, impactSessions, impactCost, withheldBy, onToggleRow,
+  onShareAll, onBlockAll,
 }: {
   targets: ShareTarget[]
   draftDenied: Set<string>
@@ -137,6 +140,9 @@ export function EditView({
   lang: 'pt' | 'en'
   impactSessions: number
   impactCost: number
+  /** Row key → the sibling machines that withhold it (`siblingWarnings.ts`). Absent key = nothing
+   *  announced about that row, which is NOT the same as "nobody restricts it". */
+  withheldBy?: ReadonlyMap<string, WithholdingMachine[]>
   onToggleRow: (target: ShareTarget, nextShared: boolean) => void
   onShareAll: () => void
   onBlockAll: () => void
@@ -184,8 +190,8 @@ export function EditView({
         display: 'flex', flexDirection: 'column', gap: 10,
         ...(isMobile ? {} : { maxHeight: 360, overflowY: 'auto' }),
       }}>
-        {blocked.length > 0 && <RowGroup label={interpolate(COPY.groupBlocked[lang], { n: grouped.blocked.length })} rows={blocked} lang={lang} mode={mode} partialRepoKeys={partialRepoKeys} onToggleRow={onToggleRow} />}
-        {shared.length > 0 && <RowGroup label={interpolate(COPY.groupShared[lang], { n: grouped.shared.length })} rows={shared} lang={lang} mode={mode} partialRepoKeys={partialRepoKeys} onToggleRow={onToggleRow} />}
+        {blocked.length > 0 && <RowGroup label={interpolate(COPY.groupBlocked[lang], { n: grouped.blocked.length })} rows={blocked} lang={lang} mode={mode} partialRepoKeys={partialRepoKeys} withheldBy={withheldBy} onToggleRow={onToggleRow} />}
+        {shared.length > 0 && <RowGroup label={interpolate(COPY.groupShared[lang], { n: grouped.shared.length })} rows={shared} lang={lang} mode={mode} partialRepoKeys={partialRepoKeys} withheldBy={withheldBy} onToggleRow={onToggleRow} />}
       </div>
 
       {isMobile && !showAllMobile && shownCount < totalLiveCount && (
@@ -226,12 +232,13 @@ export function EditView({
   )
 }
 
-function RowGroup({ label, rows, lang, mode, partialRepoKeys, onToggleRow }: {
+function RowGroup({ label, rows, lang, mode, partialRepoKeys, withheldBy, onToggleRow }: {
   label: string
   rows: EffectiveRow[]
   lang: 'pt' | 'en'
   mode: ShareMode
   partialRepoKeys: ReadonlySet<string>
+  withheldBy?: ReadonlyMap<string, WithholdingMachine[]>
   onToggleRow: (target: ShareTarget, nextShared: boolean) => void
 }) {
   const pt = lang === 'pt'
@@ -278,6 +285,7 @@ function RowGroup({ label, rows, lang, mode, partialRepoKeys, onToggleRow }: {
                 background: 'var(--bg-elevated)', color: 'var(--text-tertiary)', border: '1px solid var(--border)',
               }}>{t.host}</span>
             )}
+            <WithheldBadge machines={withheldBy?.get(t.key)} lang={lang} dimension="repo" />
           </div>
         )
       })}
@@ -289,7 +297,7 @@ function RowGroup({ label, rows, lang, mode, partialRepoKeys, onToggleRow }: {
 
 export function ProjectEditView({
   targets, draftDenied, draftRepoKeys, diff, search, onSearch, showStale, onToggleStale, showAllMobile, onShowAllMobile,
-  isMobile, lang, onToggleRow, onShareAll, onBlockAll,
+  isMobile, lang, withheldBy, onToggleRow, onShareAll, onBlockAll,
 }: {
   targets: ProjectTarget[]
   draftDenied: Set<string>
@@ -305,6 +313,8 @@ export function ProjectEditView({
   onShowAllMobile: () => void
   isMobile: boolean
   lang: 'pt' | 'en'
+  /** Row key → the sibling machines that withhold it. Same contract as `EditView`'s. */
+  withheldBy?: ReadonlyMap<string, WithholdingMachine[]>
   onToggleRow: (target: ProjectTarget, nextShared: boolean) => void
   onShareAll: () => void
   onBlockAll: () => void
@@ -352,8 +362,8 @@ export function ProjectEditView({
         display: 'flex', flexDirection: 'column', gap: 10,
         ...(isMobile ? {} : { maxHeight: 360, overflowY: 'auto' }),
       }}>
-        {blocked.length > 0 && <ProjectRowGroup label={interpolate(COPY.groupBlocked[lang], { n: grouped.blocked.length })} rows={blocked} lang={lang} onToggleRow={onToggleRow} />}
-        {shared.length > 0 && <ProjectRowGroup label={interpolate(COPY.groupShared[lang], { n: grouped.shared.length })} rows={shared} lang={lang} onToggleRow={onToggleRow} />}
+        {blocked.length > 0 && <ProjectRowGroup label={interpolate(COPY.groupBlocked[lang], { n: grouped.blocked.length })} rows={blocked} lang={lang} withheldBy={withheldBy} onToggleRow={onToggleRow} />}
+        {shared.length > 0 && <ProjectRowGroup label={interpolate(COPY.groupShared[lang], { n: grouped.shared.length })} rows={shared} lang={lang} withheldBy={withheldBy} onToggleRow={onToggleRow} />}
       </div>
 
       {isMobile && !showAllMobile && shownCount < totalLiveCount && (
@@ -385,10 +395,11 @@ export function ProjectEditView({
   )
 }
 
-function ProjectRowGroup({ label, rows, lang, onToggleRow }: {
+function ProjectRowGroup({ label, rows, lang, withheldBy, onToggleRow }: {
   label: string
   rows: EffectiveProjectRow[]
   lang: 'pt' | 'en'
+  withheldBy?: ReadonlyMap<string, WithholdingMachine[]>
   onToggleRow: (target: ProjectTarget, nextShared: boolean) => void
 }) {
   const pt = lang === 'pt'
@@ -419,6 +430,7 @@ function ProjectRowGroup({ label, rows, lang, onToggleRow }: {
               disabled={r.locked}
               dimmed={r.denied}
             />
+            <WithheldBadge machines={withheldBy?.get(t.key)} lang={lang} dimension="project" />
           </div>
         )
       })}

@@ -112,7 +112,14 @@ describe('GET /api/team/proposals — the response shape is declared, not spread
       const { writeInbox } = await import('./envelope-inbox')
       const { handleProposals } = await import('./envelope-proposals')
       const connId = 'c_cccccccccccc'
-      await writeInbox(connId, { proposals: [], keyWarnings: [], openedDigests: ['deadbeef'] })
+      await writeInbox(connId, {
+        proposals: [], keyWarnings: [], openedDigests: ['deadbeef'],
+        siblingRules: [{
+          machineId: 'peer-1', machineName: 'laptop-b', shareMode: 'denylist',
+          sources: [{ type: 'repo', value: 'github.com/acme/api' }],
+          at: '2026-07-31T10:00:00.000Z', receivedAt: '2026-07-31T10:00:05.000Z',
+        }],
+      })
 
       // A stub preferences read — this test must never touch the developer's real ~/.agentistics.
       const res = await handleProposals(new Request('http://localhost/api/team/proposals'), {
@@ -121,7 +128,11 @@ describe('GET /api/team/proposals — the response shape is declared, not spread
         ] } }),
       })
       const body = await res.json() as { connections: Record<string, unknown>[] }
-      expect(Object.keys(body.connections[0]!).sort()).toEqual(['connId', 'keyWarnings', 'peers', 'proposals'])
+      expect(Object.keys(body.connections[0]!).sort())
+        .toEqual(['connId', 'keyWarnings', 'peers', 'proposals', 'siblingRules'])
+      // The standing facts DO travel — they are what the reverse warning reads — while the replay
+      // memory still does not: this route ships what its consumer needs, never the whole store.
+      expect(JSON.stringify(body)).toContain('github.com/acme/api')
       expect(JSON.stringify(body)).not.toContain('deadbeef')
     } finally {
       await rm(dir, { recursive: true, force: true })

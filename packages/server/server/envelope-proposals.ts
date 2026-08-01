@@ -60,6 +60,12 @@ export async function handleProposals(
           connId: c.id,
           proposals: inbox.proposals,
           keyWarnings: inbox.keyWarnings,
+          // The standing FACTS behind the reverse warning — what each sibling last announced about
+          // its own rules. No new disclosure: a proposal already carries a sibling's full source
+          // list, and this route is already same-origin and capability-guarded for exactly that
+          // reason. It is listed separately because it OUTLIVES the proposal (a dismissal removes
+          // the offer, never the knowledge).
+          siblingRules: inbox.siblingRules,
           // Public keys only — the fingerprint affordance for a user who wants to compare two
           // machines they own. Never the pinned key itself, and never this machine's private half.
           peers: await pinnedPeers(c.id),
