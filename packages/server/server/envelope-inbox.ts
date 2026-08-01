@@ -24,6 +24,14 @@ import { dirname } from 'node:path'
 /** Bounded so a peer (or a central replaying deposits) cannot grow this file without limit. */
 export const MAX_PROPOSALS = 20
 
+/**
+ * How many opened-envelope digests to remember. This is the ANTI-REPLAY memory, and it is the
+ * reason it must be bigger than the proposal list by an order of magnitude: a digest has to
+ * outlive the proposal it produced, and outlive that proposal's DISMISSAL, or a central could
+ * resurrect a dismissed message simply by serving the same bytes again.
+ */
+export const MAX_OPENED_DIGESTS = 500
+
 export interface Proposal {
   /** The central's envelope id — the dedup key, so a re-delivered envelope is not a second card. */
   id: string
@@ -46,10 +54,30 @@ export interface KeyWarning {
 export interface InboxState {
   proposals: Proposal[]
   keyWarnings: KeyWarning[]
+  /**
+   * `envelopeDigest` of every envelope this machine has already opened, newest first.
+   *
+   * Keyed on the SEALED BYTES, not on the central's envelope id: the central mints that id and can
+   * vary it, so deduplicating on it would let the same message be re-delivered as new forever.
+   * Deliberately NOT cleared by `dismissProposal` — the whole point is that a decision to ignore a
+   * proposal survives the sender (or the central) sending it again.
+   */
+  openedDigests: string[]
 }
 
 export function emptyInbox(): InboxState {
-  return { proposals: [], keyWarnings: [] }
+  return { proposals: [], keyWarnings: [], openedDigests: [] }
+}
+
+/** PURE. Whether these sealed bytes have been opened before on this connection. */
+export function hasOpened(state: Pick<InboxState, 'openedDigests'>, digest: string): boolean {
+  return state.openedDigests.includes(digest)
+}
+
+/** PURE. Remember freshly opened envelopes, newest first, bounded. */
+export function recordOpened(existing: readonly string[], digests: readonly string[]): string[] {
+  const fresh = digests.filter(d => !existing.includes(d))
+  return [...fresh, ...existing].slice(0, MAX_OPENED_DIGESTS)
 }
 
 /**
@@ -75,7 +103,10 @@ function sanitize(raw: unknown): InboxState {
   const r = raw as Record<string, unknown>
   const proposals = Array.isArray(r.proposals) ? (r.proposals as Proposal[]).filter(isProposal) : []
   const keyWarnings = Array.isArray(r.keyWarnings) ? (r.keyWarnings as KeyWarning[]).filter(isWarning) : []
-  return { proposals: proposals.slice(0, MAX_PROPOSALS), keyWarnings }
+  const openedDigests = Array.isArray(r.openedDigests)
+    ? (r.openedDigests as unknown[]).filter((d): d is string => typeof d === 'string' && d !== '').slice(0, MAX_OPENED_DIGESTS)
+    : []
+  return { proposals: proposals.slice(0, MAX_PROPOSALS), keyWarnings, openedDigests }
 }
 
 function isProposal(p: unknown): p is Proposal {

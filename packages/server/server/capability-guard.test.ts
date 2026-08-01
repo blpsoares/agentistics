@@ -37,6 +37,7 @@ describe('routeCapability', () => {
     expect(routeCapability('/api/copilot-sessions/y')).toBe('localTranscripts')
     expect(routeCapability('/api/nay-sessions')).toBe('localTranscripts')
     expect(routeCapability('/api/projects-list')).toBe('localTranscripts')
+    expect(routeCapability('/api/team/proposals')).toBe('localTranscripts')
   })
 
   it('maps the mcp admin routes', () => {

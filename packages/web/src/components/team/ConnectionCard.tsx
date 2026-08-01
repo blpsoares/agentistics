@@ -18,7 +18,7 @@ import { resolveCardActionsHidden, type ApplyPhase } from './repoPanelState'
 import {
   DisconnectButton, mobileBtn, StatusLine, ResyncStrip, RepoPanelSlot,
 } from './ConnectionCardParts'
-import { ProposalsSection, type ProposalView, type KeyWarningView } from './ProposalsSection'
+import { ProposalsSection, type ProposalView, type KeyWarningView, type PeerFingerprint } from './ProposalsSection'
 
 export interface ConnectionCardProps {
   conn: TeamConnection
@@ -48,13 +48,16 @@ export interface ConnectionCardProps {
    *  central too old for the mailbox simply renders nothing. */
   proposals?: ProposalView[]
   keyWarnings?: KeyWarningView[]
+  /** Pinned peers with fingerprints, and this machine's own — the documented out-of-band check. */
+  peers?: PeerFingerprint[]
+  selfFingerprint?: string
   onDismissProposal?: (connId: string, body: { proposalId?: string; keyWarningMachineId?: string }) => Promise<void>
 }
 
 export function ConnectionCard({
   conn, status, archiveMode, shareTargets, projectTargets, sessions, modelUsage, otelEnabled, duplicateHost, lang,
   onDisconnect, onSyncNow, onApplyRules,
-  proposals = [], keyWarnings = [], onDismissProposal,
+  proposals = [], keyWarnings = [], peers = [], selfFingerprint = '', onDismissProposal,
 }: ConnectionCardProps) {
   const isMobile = useIsMobile()
   const [expanded, setExpanded] = useState(false)
@@ -253,6 +256,8 @@ export function ConnectionCard({
               connId={conn.id}
               proposals={proposals}
               keyWarnings={keyWarnings}
+              peers={peers}
+              selfFingerprint={selfFingerprint}
               lang={lang}
               disabled={disableWrites}
               onApply={onApplyRules}

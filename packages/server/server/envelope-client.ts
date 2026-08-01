@@ -12,10 +12,13 @@
  * on. The local warning (Part 1, `team-elsewhere.ts`) works without any of this.
  */
 import type { TeamConnection, ShareSource } from '@agentistics/core'
-import { seal, open } from './envelope-crypto'
+import { seal, open, peekEnvelope, envelopeDigest } from './envelope-crypto'
 import { encodeRestrictionMessage, decodeRestrictionMessage, type RestrictionMessage } from './envelope-message'
 import { loadOrCreateKeypair, pinPeerKey, pinnedKeyFor } from './envelope-keys'
-import { readInbox, writeInbox, mergeProposals, mergeKeyWarnings, type Proposal, type KeyWarning } from './envelope-inbox'
+import {
+  readInbox, writeInbox, mergeProposals, mergeKeyWarnings, hasOpened, recordOpened,
+  type Proposal, type KeyWarning,
+} from './envelope-inbox'
 import { selfMachineId } from './team-elsewhere'
 
 const TIMEOUT_MS = 8_000
@@ -101,12 +104,23 @@ export function parsePeers(raw: unknown): PeerKey[] {
  *
  * Returns how many envelopes the central accepted.
  */
+export interface SendResult {
+  /** Envelopes the central accepted. */
+  stored: number
+  /** Peers skipped because their published key changed, or because it could not be used at all. */
+  skipped: number
+  /** Peers pinned for the FIRST time by this call — every one of them will now receive this
+   *  machine's rules, so each is announced (see `announceNewPeers`). */
+  newPeers: { machineId: string; machineName: string }[]
+}
+
 export async function sendRestriction(
   conn: TeamConnection,
   instanceId: string,
   deps: EnvelopeDeps = {},
-): Promise<number> {
-  if (!conn.token || !instanceId) return 0
+): Promise<SendResult> {
+  const empty: SendResult = { stored: 0, skipped: 0, newPeers: [] }
+  if (!conn.token || !instanceId) return empty
   const kp = await loadOrCreateKeypair()
   const me = selfMachineId(conn.token)
   const peers = await publishAndFetchPeers(conn, deps)
@@ -122,27 +136,71 @@ export async function sendRestriction(
   const plaintext = encodeRestrictionMessage(message)
 
   const envelopes: { recipientMachineId: string; envelope: unknown }[] = []
+  const newPeers: { machineId: string; machineName: string }[] = []
+  let skipped = 0
   for (const peer of peers) {
     if (peer.machineId === me) continue
     const decision = await pinPeerKey(conn.id, peer.machineId, peer.publicKey)
-    if (decision === 'changed') continue
-    envelopes.push({
-      recipientMachineId: peer.machineId,
-      envelope: seal({
-        plaintext,
-        senderMachineId: me,
-        senderPrivateKey: kp.privateKey,
-        senderPublicKey: kp.publicKey,
+    if (decision === 'changed') { skipped++; continue }
+    if (decision === 'new') newPeers.push({ machineId: peer.machineId, machineName: peer.machineName })
+    try {
+      envelopes.push({
         recipientMachineId: peer.machineId,
-        recipientPublicKey: peer.publicKey,
-        createdAt: now.toISOString(),
-      }),
-    })
+        envelope: seal({
+          plaintext,
+          senderMachineId: me,
+          senderPrivateKey: kp.privateKey,
+          senderPublicKey: kp.publicKey,
+          recipientMachineId: peer.machineId,
+          recipientPublicKey: peer.publicKey,
+          instanceId,
+          createdAt: now.toISOString(),
+        }),
+      })
+    } catch {
+      // ONE unusable directory entry must not stop every OTHER sibling from being told. `seal`
+      // throws on a key it cannot decode, and this loop used to be unguarded inside a
+      // fire-and-forget caller — so a central publishing a single junk `publicKey` silently
+      // disabled the whole channel, with no error and nothing different in the UI. That is a free,
+      // undetectable off-switch handed to the party this feature defends against.
+      skipped++
+    }
   }
-  if (envelopes.length === 0) return 0
+  announceNewPeers(conn, newPeers, deps)
+  if (envelopes.length === 0) return { stored: 0, skipped, newPeers }
   const res = await call(conn, '/api/team/envelopes', { method: 'POST', body: { envelopes } }, deps)
-  const stored = (res as { stored?: unknown } | null)?.stored
-  return typeof stored === 'number' ? stored : 0
+  const storedCount = (res as { stored?: unknown } | null)?.stored
+  return { stored: typeof storedCount === 'number' ? storedCount : 0, skipped, newPeers }
+}
+
+/**
+ * Announce every peer pinned for the FIRST time.
+ *
+ * This is the control for the attack the pin alone does not cover: a central does not need to
+ * SUBSTITUTE a key at a racy first sight, it can simply INVENT a machine under a key it holds, at
+ * any time. A fabricated peer has no prior key to contradict, so trust-on-first-use accepts it —
+ * and from then on every restriction message is encrypted to the central as well as to the real
+ * siblings. Nothing can stop the pin being taken automatically (that is the product requirement),
+ * so the mitigation is that it can never be taken SILENTLY: each new peer is named, with its
+ * fingerprint, in the same alarm class as a changed key.
+ */
+function announceNewPeers(
+  conn: TeamConnection,
+  newPeers: readonly { machineId: string; machineName: string }[],
+  deps: EnvelopeDeps,
+): void {
+  if (newPeers.length === 0) return
+  const notify = deps.notify ?? realNotify
+  notify({
+    type: 'warning',
+    code: 'member.peer_pinned',
+    meta: {
+      connectionId: conn.id,
+      central: conn.label || conn.endpoint,
+      count: newPeers.length,
+      name: newPeers.map(p => p.machineName).join(', '),
+    },
+  })
 }
 
 interface WireEnvelope {
@@ -168,6 +226,12 @@ function parseInbound(raw: unknown): WireEnvelope[] {
 export interface ReceiveResult {
   proposals: number
   keyWarnings: number
+  /** Peers pinned for the first time by this call — announced, never silent. */
+  newPeers: number
+  /** Envelopes refused because the transport's routing did not match the sealed header, the
+   *  envelope was for another central, it was outside the freshness window, or it had already been
+   *  opened. Reported so a central quietly poisoning the channel is visible in a log. */
+  refused: number
 }
 
 /**
@@ -179,42 +243,82 @@ export interface ReceiveResult {
  * being left there). An envelope from a peer whose key CHANGED is deliberately NOT acked: it stays
  * on the central so that resolving the key situation does not cost the user the message.
  */
-export async function receiveEnvelopes(conn: TeamConnection, deps: EnvelopeDeps = {}): Promise<ReceiveResult> {
-  if (!conn.token) return { proposals: 0, keyWarnings: 0 }
+export async function receiveEnvelopes(
+  conn: TeamConnection,
+  instanceId: string,
+  deps: EnvelopeDeps = {},
+): Promise<ReceiveResult> {
+  const empty: ReceiveResult = { proposals: 0, keyWarnings: 0, newPeers: 0, refused: 0 }
+  if (!conn.token || !instanceId) return empty
   const kp = await loadOrCreateKeypair()
+  const me = selfMachineId(conn.token)
   const peers = await publishAndFetchPeers(conn, deps)
   const names = new Map(peers.map(p => [p.machineId, p.machineName]))
   // Pin every peer we can see BEFORE opening anything: the pin must be established from the key
   // directory, not from whatever key an envelope happens to carry.
   const changed = new Set<string>()
+  const newPeers: { machineId: string; machineName: string }[] = []
   for (const peer of peers) {
-    if (await pinPeerKey(conn.id, peer.machineId, peer.publicKey) === 'changed') changed.add(peer.machineId)
+    const decision = await pinPeerKey(conn.id, peer.machineId, peer.publicKey)
+    if (decision === 'changed') changed.add(peer.machineId)
+    if (decision === 'new') newPeers.push({ machineId: peer.machineId, machineName: peer.machineName })
   }
+  announceNewPeers(conn, newPeers, deps)
 
   const inbound = parseInbound(await call(conn, '/api/team/envelopes', { method: 'GET' }, deps))
   const now = (deps.now ?? (() => new Date()))()
+  const state = await readInbox(conn.id)
   const fresh: Proposal[] = []
   const warnings: KeyWarning[] = []
   const ack: string[] = []
+  const openedNow: string[] = []
+  let refused = 0
 
   for (const item of inbound) {
-    const pinned = await pinnedKeyFor(conn.id, item.senderMachineId)
-    const opened = open({ envelope: item.envelope, recipientPrivateKey: kp.privateKey, pinnedSenderPublicKey: pinned })
+    const header = peekEnvelope(item.envelope)
+    if (!header) { ack.push(item.id); refused++; continue }
+
+    // REPLAY. Keyed on the sealed bytes, never on `item.id` — the central mints that and can vary
+    // it, so an id-keyed check would let the same message be re-delivered as new forever. Checked
+    // against a memory that DISMISSAL DOES NOT CLEAR, so ignoring a proposal is permanent: without
+    // this, a pre-restriction envelope ("shares everything") could be replayed after the sender
+    // tightened up, offering the user a one-click downgrade.
+    const digest = envelopeDigest(header)
+    if (hasOpened(state, digest) || openedNow.includes(digest)) { ack.push(item.id); refused++; continue }
+
+    // The pin is looked up by the id INSIDE the seal, not by the one the transport supplied
+    // beside it — otherwise a central could aim a genuine envelope at whichever pin it liked by
+    // choosing the wrapper's id. `open` then holds the two to being equal.
+    const pinned = await pinnedKeyFor(conn.id, header.senderMachineId)
+    const opened = open({
+      envelope: item.envelope,
+      recipientPrivateKey: kp.privateKey,
+      pinnedSenderPublicKey: pinned,
+      expectedSenderMachineId: item.senderMachineId,
+      expectedRecipientMachineId: me,
+      expectedInstanceId: instanceId,
+      now,
+    })
     if (!opened.ok) {
       if (opened.reason === 'sender_key_changed') {
-        changed.add(item.senderMachineId)
+        changed.add(header.senderMachineId)
         continue // deliberately NOT acked — see the docblock
       }
       ack.push(item.id)
+      refused++
       continue
     }
+    openedNow.push(digest)
     const message = decodeRestrictionMessage(opened.plaintext)
     ack.push(item.id)
-    if (!message) continue
+    if (!message) { refused++; continue }
+    // Belt and braces on top of the AAD binding: the payload names the central it is about, and a
+    // payload that disagrees with the connection it arrived on is not a message for this central.
+    if (message.instanceId !== instanceId) { refused++; continue }
     fresh.push({
       id: item.id,
-      fromMachineId: item.senderMachineId,
-      fromMachineName: names.get(item.senderMachineId) ?? item.senderMachineId,
+      fromMachineId: header.senderMachineId,
+      fromMachineName: names.get(header.senderMachineId) ?? header.senderMachineId,
       shareMode: message.shareMode,
       sources: message.sources,
       at: message.at,
@@ -226,13 +330,13 @@ export async function receiveEnvelopes(conn: TeamConnection, deps: EnvelopeDeps 
     warnings.push({ machineId, machineName: names.get(machineId) ?? machineId, at: now.toISOString() })
   }
 
-  const state = await readInbox(conn.id)
   const nextProposals = mergeProposals(state.proposals, fresh)
   const nextWarnings = mergeKeyWarnings(state.keyWarnings, warnings)
+  const nextDigests = recordOpened(state.openedDigests, openedNow)
   const addedProposals = nextProposals.length - state.proposals.length
   const addedWarnings = nextWarnings.length - state.keyWarnings.length
-  if (addedProposals !== 0 || addedWarnings !== 0) {
-    await writeInbox(conn.id, { proposals: nextProposals, keyWarnings: nextWarnings })
+  if (addedProposals !== 0 || addedWarnings !== 0 || openedNow.length > 0) {
+    await writeInbox(conn.id, { proposals: nextProposals, keyWarnings: nextWarnings, openedDigests: nextDigests })
   }
   if (ack.length > 0) await call(conn, '/api/team/envelopes', { method: 'DELETE', body: { ids: ack } }, deps)
 
@@ -251,7 +355,7 @@ export async function receiveEnvelopes(conn: TeamConnection, deps: EnvelopeDeps 
       meta: { connectionId: conn.id, central: conn.label || conn.endpoint, name: warnings[0]?.machineName ?? '' },
     })
   }
-  return { proposals: addedProposals, keyWarnings: addedWarnings }
+  return { proposals: addedProposals, keyWarnings: addedWarnings, newPeers: newPeers.length, refused }
 }
 
 /**
@@ -284,7 +388,13 @@ export function scheduleEnvelopeSync(conn: TeamConnection, deps: EnvelopeDeps = 
   const last = _lastSync.get(conn.id) ?? 0
   if (now - last < ENVELOPE_POLL_MS) return
   _lastSync.set(conn.id, now)
-  void receiveEnvelopes(conn, deps).catch(() => { /* best-effort */ })
+  void (async () => {
+    // The instanceId identifies the central an envelope must have been sealed FOR. Without one
+    // there is nothing to check a message against, so nothing is opened.
+    const instanceId = await resolveInstanceId(conn, deps)
+    if (!instanceId) return
+    await receiveEnvelopes(conn, instanceId, deps)
+  })().catch(() => { /* best-effort */ })
 }
 
 /**

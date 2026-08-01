@@ -4,12 +4,15 @@ import {
   fingerprintOf,
   seal,
   open,
+  envelopeDigest,
   type SealedEnvelope,
 } from './envelope-crypto'
 
 const A = generateMachineKeypair() // sender
 const B = generateMachineKeypair() // recipient
 const C = generateMachineKeypair() // a third machine
+
+const NOW = new Date('2026-07-31T10:00:00.000Z')
 
 function sealAtoB(plaintext = 'hello', over: Partial<Parameters<typeof seal>[0]> = {}): SealedEnvelope {
   return seal({
@@ -19,6 +22,22 @@ function sealAtoB(plaintext = 'hello', over: Partial<Parameters<typeof seal>[0]>
     senderPublicKey: A.publicKey,
     recipientMachineId: 'machine-b',
     recipientPublicKey: B.publicKey,
+    instanceId: 'inst-1',
+    createdAt: NOW.toISOString(),
+    ...over,
+  })
+}
+
+/** The honest caller: every identity the transport claims is stated and therefore checked. */
+function openAsB(envelope: unknown, over: Partial<Parameters<typeof open>[0]> = {}) {
+  return open({
+    envelope,
+    recipientPrivateKey: B.privateKey,
+    pinnedSenderPublicKey: A.publicKey,
+    expectedSenderMachineId: 'machine-a',
+    expectedRecipientMachineId: 'machine-b',
+    expectedInstanceId: 'inst-1',
+    now: NOW,
     ...over,
   })
 }
@@ -69,17 +88,17 @@ describe('seal', () => {
 
 describe('open', () => {
   it('round-trips a message to the intended recipient', () => {
-    const res = open({ envelope: sealAtoB('restricted: acme/api'), recipientPrivateKey: B.privateKey, pinnedSenderPublicKey: A.publicKey })
+    const res = openAsB(sealAtoB('restricted: acme/api'))
     expect(res).toEqual({ ok: true, plaintext: 'restricted: acme/api' })
   })
 
   it('accepts a first-sight sender (no pin yet)', () => {
-    const res = open({ envelope: sealAtoB(), recipientPrivateKey: B.privateKey, pinnedSenderPublicKey: null })
+    const res = openAsB(sealAtoB(), { pinnedSenderPublicKey: null })
     expect(res.ok).toBe(true)
   })
 
   it('fails for the wrong recipient', () => {
-    const res = open({ envelope: sealAtoB(), recipientPrivateKey: C.privateKey, pinnedSenderPublicKey: A.publicKey })
+    const res = openAsB(sealAtoB(), { recipientPrivateKey: C.privateKey })
     expect(res).toEqual({ ok: false, reason: 'undecryptable' })
   })
 
@@ -87,7 +106,7 @@ describe('open', () => {
     const env = sealAtoB('hello')
     const bytes = Buffer.from(env.ciphertext, 'base64')
     bytes[0]! ^= 0xff
-    const res = open({ envelope: { ...env, ciphertext: bytes.toString('base64') }, recipientPrivateKey: B.privateKey, pinnedSenderPublicKey: A.publicKey })
+    const res = openAsB({ ...env, ciphertext: bytes.toString('base64') })
     expect(res).toEqual({ ok: false, reason: 'undecryptable' })
   })
 
@@ -95,7 +114,7 @@ describe('open', () => {
     const env = sealAtoB()
     const tag = Buffer.from(env.tag, 'base64')
     tag[0]! ^= 0xff
-    const res = open({ envelope: { ...env, tag: tag.toString('base64') }, recipientPrivateKey: B.privateKey, pinnedSenderPublicKey: A.publicKey })
+    const res = openAsB({ ...env, tag: tag.toString('base64') })
     expect(res).toEqual({ ok: false, reason: 'undecryptable' })
   })
 
@@ -106,9 +125,17 @@ describe('open', () => {
     for (const patched of [
       { ...env, senderMachineId: 'machine-c' },
       { ...env, recipientMachineId: 'machine-c' },
-      { ...env, createdAt: '1999-01-01T00:00:00.000Z' },
+      { ...env, createdAt: NOW.toISOString().replace('10:00', '10:01') },
+      { ...env, instanceId: 'inst-2' },
     ]) {
-      const res = open({ envelope: patched, recipientPrivateKey: B.privateKey, pinnedSenderPublicKey: A.publicKey })
+      // Stated as the values the transport claimed, so the failure is the SEAL breaking rather
+      // than an id comparison — the AAD property this test is about.
+      const res = openAsB(patched, {
+        expectedSenderMachineId: patched.senderMachineId,
+        expectedRecipientMachineId: patched.recipientMachineId,
+        expectedInstanceId: patched.instanceId,
+        now: new Date(patched.createdAt),
+      })
       expect(res.ok).toBe(false)
     }
   })
@@ -124,8 +151,10 @@ describe('open', () => {
       senderPublicKey: C.publicKey,
       recipientMachineId: 'machine-b',
       recipientPublicKey: B.publicKey,
+      instanceId: 'inst-1',
+      createdAt: NOW.toISOString(),
     })
-    const res = open({ envelope: impostor, recipientPrivateKey: B.privateKey, pinnedSenderPublicKey: A.publicKey })
+    const res = openAsB(impostor)
     expect(res).toEqual({ ok: false, reason: 'sender_key_changed' })
   })
 
@@ -139,19 +168,96 @@ describe('open', () => {
       senderPublicKey: C.publicKey,
       recipientMachineId: 'machine-b',
       recipientPublicKey: B.publicKey,
+      instanceId: 'inst-1',
+      createdAt: NOW.toISOString(),
     })
-    expect(open({ envelope: impostor, recipientPrivateKey: B.privateKey, pinnedSenderPublicKey: A.publicKey }).ok).toBe(false)
+    expect(openAsB(impostor).ok).toBe(false)
   })
 
   it('reports malformed input rather than throwing', () => {
     for (const junk of [null, undefined, 'nope', 42, {}, { v: 2 }, { ...sealAtoB(), ciphertext: 1 }]) {
-      const res = open({ envelope: junk, recipientPrivateKey: B.privateKey, pinnedSenderPublicKey: null })
+      const res = openAsB(junk, { pinnedSenderPublicKey: null })
       expect(res).toEqual({ ok: false, reason: 'malformed' })
     }
   })
 
   it('reports malformed rather than throwing on a junk recipient key', () => {
-    const res = open({ envelope: sealAtoB(), recipientPrivateKey: 'garbage', pinnedSenderPublicKey: null })
+    const res = openAsB(sealAtoB(), { recipientPrivateKey: 'garbage', pinnedSenderPublicKey: null })
     expect(res.ok).toBe(false)
+  })
+})
+
+// --- the authenticated header must be CONSULTED, not merely computed --------------------------
+//
+// Review CRITICAL 1: the seal binds sender, recipient, instance and time into the AAD, which
+// proves they cannot be rewritten in transit. That proves nothing on its own if the recipient
+// never compares them to what the TRANSPORT claimed — the central chooses the routing fields.
+
+describe('open — identity checks against the authenticated header', () => {
+  it('refuses when the transport names a different sender than the header does', () => {
+    // The central relays A's genuine bytes under a machine id it invented, whose directory entry
+    // it pointed at A's real public key. Pin matches, GCM verifies — and only this check catches it.
+    const res = openAsB(sealAtoB(), { expectedSenderMachineId: 'zzz' })
+    expect(res).toEqual({ ok: false, reason: 'sender_mismatch' })
+  })
+
+  it('refuses an envelope addressed to a different machine', () => {
+    const res = openAsB(sealAtoB(), { expectedRecipientMachineId: 'machine-c' })
+    expect(res).toEqual({ ok: false, reason: 'recipient_mismatch' })
+  })
+
+  it('refuses an envelope sealed for a different central', () => {
+    // Review IMPORTANT 1: the keypair is machine-wide, so central-2 could otherwise replay
+    // central-1's envelope and transplant its (typically more permissive) rules.
+    const res = openAsB(sealAtoB(), { expectedInstanceId: 'inst-2' })
+    expect(res).toEqual({ ok: false, reason: 'instance_mismatch' })
+  })
+
+  it('checks identity BEFORE any key agreement — a mismatch never reaches the cipher', () => {
+    // Junk key material would make decryption throw; the identity refusal must come first.
+    const res = openAsB(sealAtoB(), { expectedSenderMachineId: 'zzz', recipientPrivateKey: 'garbage' })
+    expect(res).toEqual({ ok: false, reason: 'sender_mismatch' })
+  })
+})
+
+describe('open — freshness', () => {
+  it('accepts an envelope from a peer that was offline for a few days', () => {
+    // The mailbox exists FOR offline peers; a minutes-wide window would drop legitimate messages.
+    const env = sealAtoB('hi', { createdAt: new Date(NOW.getTime() - 3 * 24 * 3600_000).toISOString() })
+    expect(openAsB(env).ok).toBe(true)
+  })
+
+  it('refuses an envelope older than the freshness window', () => {
+    const env = sealAtoB('hi', { createdAt: new Date(NOW.getTime() - 8 * 24 * 3600_000).toISOString() })
+    expect(openAsB(env)).toEqual({ ok: false, reason: 'stale' })
+  })
+
+  it('refuses an envelope dated far in the future', () => {
+    const env = sealAtoB('hi', { createdAt: new Date(NOW.getTime() + 5 * 3600_000).toISOString() })
+    expect(openAsB(env)).toEqual({ ok: false, reason: 'stale' })
+  })
+
+  it('tolerates ordinary clock skew between two machines', () => {
+    const env = sealAtoB('hi', { createdAt: new Date(NOW.getTime() + 5 * 60_000).toISOString() })
+    expect(openAsB(env).ok).toBe(true)
+  })
+
+  it('refuses an unparseable timestamp rather than treating it as fresh', () => {
+    const env = sealAtoB('hi', { createdAt: 'whenever' })
+    expect(openAsB(env, { expectedInstanceId: 'inst-1' })).toEqual({ ok: false, reason: 'stale' })
+  })
+})
+
+describe('envelopeDigest', () => {
+  it('is stable for the same envelope and differs between envelopes', () => {
+    const env = sealAtoB('x')
+    expect(envelopeDigest(env)).toBe(envelopeDigest({ ...env }))
+    expect(envelopeDigest(env)).not.toBe(envelopeDigest(sealAtoB('x')))
+  })
+
+  it('does not depend on any field the central controls outside the seal', () => {
+    // Keyed on ciphertext+tag, so re-minting the wrapper id cannot dodge replay detection.
+    const env = sealAtoB('x')
+    expect(envelopeDigest({ ...env, senderMachineId: 'rewritten' } as typeof env)).toBe(envelopeDigest(env))
   })
 })

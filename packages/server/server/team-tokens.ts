@@ -172,6 +172,14 @@ export async function mintToken(user: string, label: string, opts?: { repo?: str
 export async function revokeToken(id: string): Promise<boolean> {
   const col = await getTokensCollection()
   const result = await col.deleteOne({ _id: id })
+  // A revoked machine must also leave the sealed-envelope directory. `listSiblingMachines` already
+  // stops naming it as a peer (it reads this collection), so it can no longer be sealed TO — but
+  // an orphan public key and an undeliverable mailbox would otherwise sit there forever, and a key
+  // row nobody owns is a key row nobody would notice being reused.
+  if (result.deletedCount > 0) {
+    const { forgetMachineKeys } = await import('./envelope-store')
+    await forgetMachineKeys(id).catch(() => { /* best-effort: revocation itself has succeeded */ })
+  }
   return result.deletedCount > 0
 }
 

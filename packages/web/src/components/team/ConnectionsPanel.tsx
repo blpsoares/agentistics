@@ -164,9 +164,9 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
   }, [loadProposals])
 
   const inboxById = useMemo(() => {
-    const map: Record<string, { proposals: ProposalView[]; keyWarnings: KeyWarningView[] }> = {}
+    const map: Record<string, { proposals: ProposalView[]; keyWarnings: KeyWarningView[]; peers: { machineId: string; fingerprint: string }[] }> = {}
     for (const e of proposalsResp?.connections ?? []) {
-      map[e.connId] = { proposals: e.proposals ?? [], keyWarnings: e.keyWarnings ?? [] }
+      map[e.connId] = { proposals: e.proposals ?? [], keyWarnings: e.keyWarnings ?? [], peers: e.peers ?? [] }
     }
     return map
   }, [proposalsResp])
@@ -340,6 +340,8 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
               onApplyRules={handleApplyRules}
               proposals={inboxById[conn.id]?.proposals ?? []}
               keyWarnings={inboxById[conn.id]?.keyWarnings ?? []}
+              peers={inboxById[conn.id]?.peers ?? []}
+              selfFingerprint={proposalsResp?.me?.fingerprint ?? ''}
               onDismissProposal={handleDismissProposal}
             />
           ))}

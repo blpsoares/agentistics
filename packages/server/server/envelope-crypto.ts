@@ -36,6 +36,14 @@
  *
  * The whole header is the GCM additional-authenticated-data, so the central cannot re-address,
  * relabel or re-date an envelope it is relaying without destroying it.
+ *
+ * BINDING IS ONLY HALF THE JOB — THE RECIPIENT MUST COMPARE. An authenticated header proves the
+ * central could not REWRITE those fields; it says nothing about the central CHOOSING the fields it
+ * reports alongside the ciphertext. The transport hands over its own `senderMachineId`, the peer
+ * directory that produced the pin, and the connection this arrived on — so `open` REQUIRES the
+ * caller to state each of those and refuses on any disagreement with the sealed header, before any
+ * key agreement happens. An earlier revision computed this header and never consulted it, which
+ * let a central relay a genuine envelope under a machine id it had invented.
  */
 import {
   generateKeyPairSync, diffieHellman, createPublicKey, createPrivateKey,
@@ -52,6 +60,20 @@ const HKDF_PREFIX = 'agentistics-envelope-v1'
 
 const IV_BYTES = 12
 const KEY_BYTES = 32
+
+/**
+ * How old a sealed envelope may be when it is opened.
+ *
+ * Deliberately days and not minutes: the mailbox exists BECAUSE peers are offline, so a
+ * minutes-wide window would drop exactly the messages the channel was built to deliver — a laptop
+ * that was shut for the weekend. Freshness here is the backstop against a central WITHHOLDING an
+ * envelope and delivering it much later; the actual anti-replay control is the opened-digest set
+ * in `envelope-inbox.ts`, which is what makes a second delivery of the same bytes a no-op. Kept
+ * below the central's own retention (`ENVELOPE_MAX_AGE_MS` in envelope-store.ts) so the two agree.
+ */
+export const ENVELOPE_FRESH_MS = 7 * 24 * 60 * 60_000
+/** Tolerance for two machines' clocks disagreeing. Beyond it, a future date is a fabrication. */
+export const ENVELOPE_SKEW_MS = 60 * 60_000
 
 /**
  * A machine's long-term keypair, base64 DER. The PUBLIC half is SPKI (44 bytes) and is the only
@@ -72,6 +94,11 @@ export interface SealedEnvelope {
   senderPublicKey: string
   /** This message's ephemeral public key, base64 SPKI DER. */
   ephemeralPublicKey: string
+  /** The central this envelope is FOR. Bound into the AAD so an envelope sealed on one central
+   *  cannot be re-scoped onto another, and compared by `open` against the connection it arrived
+   *  on — the keypair is machine-wide, so without this a second central could replay the first
+   *  central's (typically more permissive) rule set. */
+  instanceId: string
   iv: string
   ciphertext: string
   tag: string
@@ -87,6 +114,14 @@ export type OpenResult =
   | { ok: false; reason: 'malformed' }
   /** Authenticated decryption failed: wrong recipient, tampered bytes, or a forged header. */
   | { ok: false; reason: 'undecryptable' }
+  /** The transport claimed a different sender than the sealed header names. */
+  | { ok: false; reason: 'sender_mismatch' }
+  /** Sealed for a different machine. */
+  | { ok: false; reason: 'recipient_mismatch' }
+  /** Sealed for a different central. */
+  | { ok: false; reason: 'instance_mismatch' }
+  /** Outside the freshness window — withheld and delivered late, or fabricated. */
+  | { ok: false; reason: 'stale' }
 
 export function generateMachineKeypair(): MachineKeypair {
   const { publicKey, privateKey } = generateKeyPairSync('x25519')
@@ -132,6 +167,7 @@ function headerBytes(env: Omit<SealedEnvelope, 'ciphertext' | 'tag' | 'iv'>): Bu
     env.recipientMachineId,
     env.senderPublicKey,
     env.ephemeralPublicKey,
+    env.instanceId,
     env.createdAt,
   ]), 'utf8')
 }
@@ -149,6 +185,7 @@ export function seal(input: {
   senderPublicKey: string
   recipientMachineId: string
   recipientPublicKey: string
+  instanceId: string
   createdAt?: string
 }): SealedEnvelope {
   const recipientDer = decodeKey(input.recipientPublicKey)
@@ -167,6 +204,7 @@ export function seal(input: {
     recipientMachineId: input.recipientMachineId,
     senderPublicKey: input.senderPublicKey,
     ephemeralPublicKey: ephemeralDer.toString('base64'),
+    instanceId: input.instanceId,
     createdAt: input.createdAt ?? new Date().toISOString(),
   }
   const aad = headerBytes(header)
@@ -187,14 +225,35 @@ export function seal(input: {
   }
 }
 
+/**
+ * Shape-validate an envelope WITHOUT any cryptography, so a caller can read the header it is about
+ * to have checked — specifically to look the sender's pin up by the id INSIDE the seal rather than
+ * by the one the transport supplied alongside it. Reading the header this way decides nothing: it
+ * only selects which pin `open` will then be held to.
+ */
+export function peekEnvelope(raw: unknown): SealedEnvelope | null {
+  return asEnvelope(raw)
+}
+
 function asEnvelope(raw: unknown): SealedEnvelope | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const e = raw as Record<string, unknown>
   if (e.v !== ENVELOPE_VERSION) return null
-  for (const k of ['senderMachineId', 'recipientMachineId', 'senderPublicKey', 'ephemeralPublicKey', 'iv', 'ciphertext', 'tag', 'createdAt']) {
+  for (const k of ['senderMachineId', 'recipientMachineId', 'senderPublicKey', 'ephemeralPublicKey', 'instanceId', 'iv', 'ciphertext', 'tag', 'createdAt']) {
     if (typeof e[k] !== 'string') return null
   }
   return e as unknown as SealedEnvelope
+}
+
+/**
+ * Digest of an envelope's SEALED BYTES (ciphertext + tag) — the replay key.
+ *
+ * Deliberately not the central's `id`: the central mints that field and can vary it at will, so
+ * deduplicating on it would let the same bytes be re-delivered as a "new" message forever. These
+ * two fields cannot be varied without the seal failing, so they identify the message itself.
+ */
+export function envelopeDigest(env: Pick<SealedEnvelope, 'ciphertext' | 'tag'>): string {
+  return createHash('sha256').update(`${env.ciphertext}\0${env.tag}`).digest('hex')
 }
 
 export function open(input: {
@@ -202,13 +261,37 @@ export function open(input: {
   recipientPrivateKey: string
   /** The key this machine has PINNED for the named sender, or `null` at first sight. */
   pinnedSenderPublicKey: string | null
+  /** REQUIRED. Who the TRANSPORT said sent this. Compared against the sealed header — the central
+   *  chooses this field, so leaving it unchecked lets it relay a genuine envelope under an
+   *  identity it invented. */
+  expectedSenderMachineId: string
+  /** REQUIRED. This machine's own id on that central. */
+  expectedRecipientMachineId: string
+  /** REQUIRED. The instanceId of the central this envelope arrived from. */
+  expectedInstanceId: string
+  /** Injectable clock for the freshness check. */
+  now?: Date
 }): OpenResult {
   const env = asEnvelope(input.envelope)
   if (!env) return { ok: false, reason: 'malformed' }
 
-  // BEFORE any cryptography: a sender key that is not the pinned one is refused outright. `dh2`
-  // would happily authenticate a substituted key against itself, so this comparison — not the
-  // cipher — is what makes key substitution visible.
+  // EVERYTHING BELOW HAPPENS BEFORE ANY KEY AGREEMENT. Each check compares a value the transport
+  // supplied against the same value sealed inside the AAD. The seal proves these fields were not
+  // rewritten; only these comparisons prove the message is the one the transport claims it is.
+  if (env.senderMachineId !== input.expectedSenderMachineId) return { ok: false, reason: 'sender_mismatch' }
+  if (env.recipientMachineId !== input.expectedRecipientMachineId) return { ok: false, reason: 'recipient_mismatch' }
+  if (env.instanceId !== input.expectedInstanceId) return { ok: false, reason: 'instance_mismatch' }
+
+  const now = (input.now ?? new Date()).getTime()
+  const created = Date.parse(env.createdAt)
+  // NaN (an unparseable date) fails both comparisons and reads as stale — never as fresh.
+  if (!(created <= now + ENVELOPE_SKEW_MS && created >= now - ENVELOPE_FRESH_MS)) {
+    return { ok: false, reason: 'stale' }
+  }
+
+  // A sender key that is not the pinned one is refused outright. `dh2` would happily authenticate
+  // a substituted key against itself, so this comparison — not the cipher — is what makes key
+  // substitution visible.
   if (input.pinnedSenderPublicKey !== null && input.pinnedSenderPublicKey !== env.senderPublicKey) {
     return { ok: false, reason: 'sender_key_changed' }
   }

@@ -7,9 +7,15 @@ import { __setTeamConnDirForTests } from './config'
 import { __resetEnvelopeKeysForTests, loadOrCreateKeypair, pinPeerKey, pinnedKeyFor } from './envelope-keys'
 import { generateMachineKeypair, seal } from './envelope-crypto'
 import { encodeRestrictionMessage } from './envelope-message'
-import { readInbox, mergeProposals, mergeKeyWarnings, MAX_PROPOSALS, type Proposal } from './envelope-inbox'
+import {
+  readInbox, writeInbox, mergeProposals, mergeKeyWarnings, recordOpened, hasOpened,
+  MAX_PROPOSALS, MAX_OPENED_DIGESTS, type Proposal,
+} from './envelope-inbox'
 import * as inboxModule from './envelope-inbox'
 import { sendRestriction, receiveEnvelopes, parsePeers } from './envelope-client'
+
+const INSTANCE = 'inst-1'
+const CONN_ID = 'c_aaaaaaaaaaaa'
 
 const TOKEN = 'member-token'
 const SELF = require('node:crypto').createHash('sha256').update(TOKEN).digest('hex') as string
@@ -82,9 +88,9 @@ describe('sendRestriction', () => {
   it('publishes only the PUBLIC key and seals the rules to each peer', async () => {
     const central = fakeCentral()
     const kp = await loadOrCreateKeypair()
-    const stored = await sendRestriction(conn(), 'inst-1', { fetch: central.fetch })
+    const res = await sendRestriction(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
 
-    expect(stored).toBe(1)
+    expect(res.stored).toBe(1)
     expect(central.published).toEqual([kp.publicKey])
     expect(central.published[0]).not.toBe(kp.privateKey)
     expect(central.deposited).toHaveLength(1)
@@ -102,40 +108,48 @@ describe('sendRestriction', () => {
   })
 
   it('skips a peer whose key changed — sealing to a substituted key would hand over the plaintext', async () => {
-    await pinPeerKey('c_aaaaaaaaaaaa', PEER_ID, generateMachineKeypair().publicKey)
+    await pinPeerKey(CONN_ID, PEER_ID, generateMachineKeypair().publicKey)
     const central = fakeCentral()
-    expect(await sendRestriction(conn(), 'inst-1', { fetch: central.fetch })).toBe(0)
+    const res = await sendRestriction(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+    expect(res.stored).toBe(0)
+    expect(res.skipped).toBe(1)
     expect(central.deposited).toEqual([])
   })
 
   it('does nothing without a token or an instanceId', async () => {
     const central = fakeCentral()
-    expect(await sendRestriction(conn({ token: '' }), 'inst-1', { fetch: central.fetch })).toBe(0)
-    expect(await sendRestriction(conn(), '', { fetch: central.fetch })).toBe(0)
+    expect((await sendRestriction(conn({ token: '' }), INSTANCE, { fetch: central.fetch, notify: () => {} })).stored).toBe(0)
+    expect((await sendRestriction(conn(), '', { fetch: central.fetch, notify: () => {} })).stored).toBe(0)
     expect(central.deposited).toEqual([])
   })
 
   it('an unreachable central is not an error', async () => {
     const dead = async () => { throw new Error('ECONNREFUSED') }
-    expect(await sendRestriction(conn(), 'inst-1', { fetch: dead })).toBe(0)
+    expect((await sendRestriction(conn(), INSTANCE, { fetch: dead, notify: () => {} })).stored).toBe(0)
   })
 })
 
-async function sealedFromPeer(plaintext: string, senderKeys = PEER, senderId = PEER_ID) {
+async function sealedFromPeer(
+  plaintext: string,
+  over: { senderKeys?: typeof PEER; senderId?: string; recipientMachineId?: string; instanceId?: string; createdAt?: string } = {},
+) {
   const me = await loadOrCreateKeypair()
+  const keys = over.senderKeys ?? PEER
   return seal({
     plaintext,
-    senderMachineId: senderId,
-    senderPrivateKey: senderKeys.privateKey,
-    senderPublicKey: senderKeys.publicKey,
-    recipientMachineId: SELF,
+    senderMachineId: over.senderId ?? PEER_ID,
+    senderPrivateKey: keys.privateKey,
+    senderPublicKey: keys.publicKey,
+    recipientMachineId: over.recipientMachineId ?? SELF,
     recipientPublicKey: me.publicKey,
+    instanceId: over.instanceId ?? INSTANCE,
+    ...(over.createdAt ? { createdAt: over.createdAt } : {}),
   })
 }
 
 const RULES_MSG = encodeRestrictionMessage({
   kind: 'restriction',
-  instanceId: 'inst-1',
+  instanceId: INSTANCE,
   shareMode: 'denylist',
   sources: [{ type: 'repo', value: 'github.com/acme/api' }],
   at: '2026-07-31T10:00:00.000Z',
@@ -146,28 +160,29 @@ describe('receiveEnvelopes', () => {
     const envelope = await sealedFromPeer(RULES_MSG)
     const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
     const notes: string[] = []
-    const res = await receiveEnvelopes(conn(), { fetch: central.fetch, notify: n => notes.push(n.code) })
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: n => notes.push(n.code) })
 
-    expect(res).toEqual({ proposals: 1, keyWarnings: 0 })
-    const inbox = await readInbox('c_aaaaaaaaaaaa')
+    expect(res.proposals).toBe(1)
+    expect(res.keyWarnings).toBe(0)
+    const inbox = await readInbox(CONN_ID)
     expect(inbox.proposals).toHaveLength(1)
     expect(inbox.proposals[0]!.fromMachineName).toBe('laptop-b')
     expect(inbox.proposals[0]!.sources).toEqual([{ type: 'repo', value: 'github.com/acme/api' }])
     expect(central.acked).toEqual(['e1'])
-    expect(notes).toEqual(['member.rules_proposed'])
+    expect(notes).toEqual(['member.peer_pinned', 'member.rules_proposed'])
   })
 
   it('refuses a sender whose key changed, warns, and does NOT acknowledge the envelope', async () => {
     // The peer was pinned to a different key first; the directory now advertises a new one.
-    await pinPeerKey('c_aaaaaaaaaaaa', PEER_ID, generateMachineKeypair().publicKey)
+    await pinPeerKey(CONN_ID, PEER_ID, generateMachineKeypair().publicKey)
     const envelope = await sealedFromPeer(RULES_MSG)
     const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
     const notes: string[] = []
-    const res = await receiveEnvelopes(conn(), { fetch: central.fetch, notify: n => notes.push(n.code) })
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: n => notes.push(n.code) })
 
     expect(res.proposals).toBe(0)
     expect(res.keyWarnings).toBe(1)
-    expect((await readInbox('c_aaaaaaaaaaaa')).proposals).toEqual([])
+    expect((await readInbox(CONN_ID)).proposals).toEqual([])
     // Left on the central so resolving the key does not cost the user the message.
     expect(central.acked).toEqual([])
     expect(notes).toEqual(['member.peer_key_changed'])
@@ -175,9 +190,9 @@ describe('receiveEnvelopes', () => {
 
   it('an impostor sealing under another machine\'s id is refused', async () => {
     const impostor = generateMachineKeypair()
-    const envelope = await sealedFromPeer(RULES_MSG, impostor, PEER_ID)
+    const envelope = await sealedFromPeer(RULES_MSG, { senderKeys: impostor })
     const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
-    const res = await receiveEnvelopes(conn(), { fetch: central.fetch, notify: () => {} })
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
     expect(res.proposals).toBe(0)
     expect(res.keyWarnings).toBe(1)
   })
@@ -185,20 +200,21 @@ describe('receiveEnvelopes', () => {
   it('acknowledges an undecryptable or unparseable envelope rather than looping on it forever', async () => {
     const envelope = await sealedFromPeer('not a restriction message')
     const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
-    const res = await receiveEnvelopes(conn(), { fetch: central.fetch, notify: () => {} })
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
     expect(res.proposals).toBe(0)
     expect(central.acked).toEqual(['e1'])
   })
 
   it('pins a first-sight peer from the DIRECTORY, not from an envelope', async () => {
     const central = fakeCentral()
-    await receiveEnvelopes(conn(), { fetch: central.fetch, notify: () => {} })
-    expect(await pinnedKeyFor('c_aaaaaaaaaaaa', PEER_ID)).toBe(PEER.publicKey)
+    await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+    expect(await pinnedKeyFor(CONN_ID, PEER_ID)).toBe(PEER.publicKey)
   })
 
   it('an older central (404 everywhere) is a quiet no-op', async () => {
     const old = async () => new Response('Not found', { status: 404 })
-    expect(await receiveEnvelopes(conn(), { fetch: old, notify: () => {} })).toEqual({ proposals: 0, keyWarnings: 0 })
+    expect(await receiveEnvelopes(conn(), INSTANCE, { fetch: old, notify: () => {} }))
+      .toEqual({ proposals: 0, keyWarnings: 0, newPeers: 0, refused: 0 })
   })
 })
 
@@ -213,11 +229,11 @@ describe('the inbox never applies anything', () => {
   it('receiving writes only to the inbox store — never to preferences', async () => {
     const envelope = await sealedFromPeer(RULES_MSG)
     const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
-    await receiveEnvelopes(conn(), { fetch: central.fetch, notify: () => {} })
+    await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
     // The proposal is stored as a PROPOSAL, carrying the sender — not merged into any rule set.
-    const inbox = await readInbox('c_aaaaaaaaaaaa')
+    const inbox = await readInbox(CONN_ID)
     expect(inbox.proposals[0]!.fromMachineId).toBe(PEER_ID)
-    expect(Object.keys(inbox).sort()).toEqual(['keyWarnings', 'proposals'])
+    expect(Object.keys(inbox).sort()).toEqual(['keyWarnings', 'openedDigests', 'proposals'])
   })
 })
 
@@ -226,7 +242,10 @@ describe('inbox merging', () => {
     id, fromMachineId: 'm', fromMachineName: 'm', shareMode: 'denylist', sources: [], at: 'a', receivedAt: 'r',
   })
 
-  it('deduplicates by envelope id — a re-sent proposal does not undo a dismissal', () => {
+  it('deduplicates a proposal that is still in the list', () => {
+    // NOTE: this is the "still present" case only. The DISMISSAL case cannot be expressed here —
+    // once dismissed the id is gone from the list, so this merge would re-insert it. That property
+    // belongs to the opened-digest memory and is asserted at the client level below.
     expect(mergeProposals([p('a')], [p('a')]).map(x => x.id)).toEqual(['a'])
   })
 
@@ -240,5 +259,153 @@ describe('inbox merging', () => {
   it('keeps one key warning per machine', () => {
     const w = { machineId: 'm1', machineName: 'a', at: 't1' }
     expect(mergeKeyWarnings([w], [{ ...w, at: 't2' }])).toEqual([w])
+  })
+})
+
+// --- what a HOSTILE central can try -----------------------------------------------------------
+//
+// Everything above assumes the central relays honestly. These do not. The central chooses the
+// directory, the routing fields beside each envelope, the envelope ids, and when to deliver.
+
+describe('receiveEnvelopes — a hostile central', () => {
+  it('refuses a genuine envelope relayed under a machine id the central invented', async () => {
+    // The attack the AAD alone does not stop: the central publishes {machineId:'zzz', name:'Laptop
+    // A', publicKey:<A's REAL key>}, B pins zzz→A.pub, and A's genuine bytes are served as
+    // senderMachineId:'zzz'. The pin matches and GCM verifies; only comparing the wrapper against
+    // the sealed header catches it.
+    const envelope = await sealedFromPeer(RULES_MSG)
+    const central = fakeCentral({
+      peers: [{ machineId: 'zzz', machineName: 'Laptop A', publicKey: PEER.publicKey }],
+      inbox: [{ id: 'e1', senderMachineId: 'zzz', envelope }],
+    })
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+    expect(res.proposals).toBe(0)
+    expect(res.refused).toBe(1)
+    expect((await readInbox(CONN_ID)).proposals).toEqual([])
+  })
+
+  it('refuses an envelope addressed to a different machine', async () => {
+    const envelope = await sealedFromPeer(RULES_MSG, { recipientMachineId: 'someone-else' })
+    const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+    expect(res.proposals).toBe(0)
+    expect(res.refused).toBe(1)
+  })
+
+  it('refuses an envelope sealed for a DIFFERENT central replayed onto this one', async () => {
+    // The keypair is machine-wide, so without the instance check central-2 could transplant
+    // central-1's (typically far more permissive) rule set into this machine's card.
+    const envelope = await sealedFromPeer(RULES_MSG, { instanceId: 'other-central' })
+    const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+    expect(res.proposals).toBe(0)
+    expect(res.refused).toBe(1)
+  })
+
+  it('refuses a payload whose named central disagrees with the connection it arrived on', async () => {
+    const mismatched = encodeRestrictionMessage({
+      kind: 'restriction', instanceId: 'other-central', shareMode: 'denylist', sources: [], at: '2026-07-31T10:00:00.000Z',
+    })
+    const envelope = await sealedFromPeer(mismatched)
+    const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+    expect(res.proposals).toBe(0)
+    expect(res.refused).toBe(1)
+  })
+
+  it('refuses an envelope withheld and delivered long after it was sealed', async () => {
+    const envelope = await sealedFromPeer(RULES_MSG, { createdAt: '2026-06-01T10:00:00.000Z' })
+    const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
+    const res = await receiveEnvelopes(conn(), INSTANCE, {
+      fetch: central.fetch, notify: () => {}, now: () => new Date('2026-07-31T10:00:00.000Z'),
+    })
+    expect(res.proposals).toBe(0)
+    expect(res.refused).toBe(1)
+  })
+
+  it('opens the same envelope only once, however the central re-labels it', async () => {
+    const envelope = await sealedFromPeer(RULES_MSG)
+    const first = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
+    expect((await receiveEnvelopes(conn(), INSTANCE, { fetch: first.fetch, notify: () => {} })).proposals).toBe(1)
+
+    // Same bytes, brand-new envelope id. Replay memory is keyed on the ciphertext, not the id.
+    const again = fakeCentral({ inbox: [{ id: 'DIFFERENT-ID', senderMachineId: PEER_ID, envelope }] })
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: again.fetch, notify: () => {} })
+    expect(res.proposals).toBe(0)
+    expect(res.refused).toBe(1)
+    expect((await readInbox(CONN_ID)).proposals).toHaveLength(1)
+  })
+
+  it('a DISMISSED proposal cannot be resurrected by re-sending it', async () => {
+    // The downgrade attack: replay a pre-restriction envelope ("shares everything") after the user
+    // has already looked at it and said no.
+    const envelope = await sealedFromPeer(RULES_MSG)
+    const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
+    await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+    const { dismissProposal } = await import('./envelope-inbox')
+    expect(await dismissProposal(CONN_ID, 'e1')).toBe(true)
+    expect((await readInbox(CONN_ID)).proposals).toEqual([])
+
+    const replay = fakeCentral({ inbox: [{ id: 'e2', senderMachineId: PEER_ID, envelope }] })
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: replay.fetch, notify: () => {} })
+    expect(res.proposals).toBe(0)
+    expect((await readInbox(CONN_ID)).proposals).toEqual([])
+  })
+
+  it('announces every peer pinned for the first time — a fabricated machine is never silent', async () => {
+    // A central need not SUBSTITUTE a key: it can invent a machine under a key it holds, and TOFU
+    // accepts it. Nothing can refuse it automatically, so it must be impossible to do quietly.
+    const central = fakeCentral({
+      peers: [{ machineId: 'fabricated', machineName: 'Definitely Your Laptop', publicKey: generateMachineKeypair().publicKey }],
+    })
+    const notes: { code: string; meta?: Record<string, unknown> }[] = []
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: n => notes.push(n) })
+    expect(res.newPeers).toBe(1)
+    expect(notes.map(n => n.code)).toEqual(['member.peer_pinned'])
+    expect(String(notes[0]!.meta!.name)).toContain('Definitely Your Laptop')
+  })
+})
+
+describe('sendRestriction — a hostile or broken directory', () => {
+  it('announces a newly pinned peer before it starts receiving the rules', async () => {
+    const central = fakeCentral()
+    const notes: string[] = []
+    const res = await sendRestriction(conn(), INSTANCE, { fetch: central.fetch, notify: n => notes.push(n.code) })
+    expect(res.newPeers.map(p => p.machineName)).toEqual(['laptop-b'])
+    expect(notes).toEqual(['member.peer_pinned'])
+  })
+
+  it('one junk key in the directory does not stop every OTHER sibling being told', async () => {
+    // A single unusable publicKey used to throw inside the peer loop, inside a fire-and-forget
+    // caller — a free, silent off-switch for the whole channel.
+    const central = fakeCentral({
+      peers: [
+        { machineId: 'broken', machineName: 'junk', publicKey: 'not-a-key' },
+        { machineId: PEER_ID, machineName: 'laptop-b', publicKey: PEER.publicKey },
+      ],
+    })
+    const res = await sendRestriction(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+    expect(res.stored).toBe(1)
+    expect(res.skipped).toBe(1)
+    expect(central.deposited.map(d => d.recipientMachineId)).toEqual([PEER_ID])
+  })
+})
+
+describe('replay memory', () => {
+  it('remembers newest-first and stays bounded', () => {
+    const many = Array.from({ length: MAX_OPENED_DIGESTS }, (_, i) => `d${i}`)
+    const next = recordOpened(many, ['fresh'])
+    expect(next[0]).toBe('fresh')
+    expect(next).toHaveLength(MAX_OPENED_DIGESTS)
+  })
+
+  it('does not re-add a digest it already holds', () => {
+    expect(recordOpened(['a'], ['a'])).toEqual(['a'])
+  })
+
+  it('survives a write/read round-trip, which is what makes a dismissal permanent', async () => {
+    await writeInbox(CONN_ID, { proposals: [], keyWarnings: [], openedDigests: ['abc'] })
+    expect(hasOpened(await readInbox(CONN_ID), 'abc')).toBe(true)
+    expect(hasOpened(await readInbox(CONN_ID), 'other')).toBe(false)
   })
 })

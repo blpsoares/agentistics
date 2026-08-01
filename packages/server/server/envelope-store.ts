@@ -43,7 +43,9 @@ export interface EnvelopeDoc {
 
 /** An undelivered envelope older than this is dropped: a machine that has not collected in a
  *  month is not going to act on a rule change from a month ago. */
-export const ENVELOPE_MAX_AGE_MS = 30 * 24 * 60 * 60_000
+/** Kept in step with `ENVELOPE_FRESH_MS` (envelope-crypto.ts): a recipient refuses anything older,
+ *  so storing it longer only keeps bytes nobody will ever open. */
+export const ENVELOPE_MAX_AGE_MS = 7 * 24 * 60 * 60_000
 /** Per recipient. Deposits past this evict the OLDEST, so a chatty sender cannot use the mailbox
  *  as unbounded storage on someone else's central. */
 export const ENVELOPE_MAX_PER_RECIPIENT = 100
@@ -143,6 +145,19 @@ export async function fetchEnvelopesFor(recipientMachineId: string): Promise<Sto
     envelope: d.envelope,
     createdAt: fromBsonDate(d.createdAt),
   }))
+}
+
+/**
+ * Drop a machine's published key and every envelope to or from it. Called when its token is
+ * revoked: the machine no longer exists, so neither should the key anyone would seal to nor the
+ * mail nobody will ever collect.
+ */
+export async function forgetMachineKeys(machineId: string): Promise<void> {
+  const [keys, envelopes] = await Promise.all([keysCollection(), envelopesCollection()])
+  await Promise.all([
+    keys.deleteOne({ _id: machineId }),
+    envelopes.deleteMany({ $or: [{ senderMachineId: machineId }, { recipientMachineId: machineId }] }),
+  ])
 }
 
 /** Acknowledge and delete. Scoped to the RECIPIENT: a machine can only ever delete its own mail,

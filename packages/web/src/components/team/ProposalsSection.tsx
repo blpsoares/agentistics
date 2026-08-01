@@ -30,10 +30,38 @@ export interface KeyWarningView {
   machineName: string
 }
 
+export interface PeerFingerprint {
+  machineId: string
+  fingerprint: string
+}
+
+/** Anything older than this is called out on the card. A rules change is a human-speed event, so a
+ *  proposal that has been in flight for a day is worth a second look before applying — the one
+ *  cue the user has against a central that withheld an envelope and delivered it late. */
+export const PROPOSAL_STALE_MS = 24 * 60 * 60_000
+
+/** PURE. A proposal's age as a short phrase, plus whether it is old enough to warn about. */
+export function proposalAge(at: string, now: number, lang: 'pt' | 'en'): { text: string; stale: boolean } {
+  const ts = Date.parse(at)
+  // An unreadable timestamp is treated as stale: it is one fewer thing the user can rely on, and
+  // reading it as "just now" would be the reassuring answer rather than the true one.
+  if (Number.isNaN(ts)) return { text: '', stale: true }
+  const elapsed = Math.max(0, now - ts)
+  const hours = Math.floor(elapsed / 3_600_000)
+  const stale = elapsed >= PROPOSAL_STALE_MS
+  if (hours < 1) return { text: COPY.ageJustNow[lang], stale }
+  if (hours < 24) return { text: interpolate(COPY.ageHours[lang], { n: hours }), stale }
+  return { text: interpolate(COPY.ageDays[lang], { n: Math.floor(hours / 24) }), stale }
+}
+
 export interface ProposalsSectionProps {
   connId: string
   proposals: ProposalView[]
   keyWarnings: KeyWarningView[]
+  /** Every peer this machine has pinned on this connection, with its fingerprint, plus this
+   *  machine's own — the out-of-band check against a central that published a key it controls. */
+  peers: PeerFingerprint[]
+  selfFingerprint: string
   lang: 'pt' | 'en'
   disabled: boolean
   onApply: (id: string, mode: ShareMode, sources: ShareSource[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
@@ -52,11 +80,14 @@ export function describeSources(sources: readonly ShareSource[], lang: 'pt' | 'e
     .join(', ')
 }
 
-export function ProposalsSection({ connId, proposals, keyWarnings, lang, disabled, onApply, onDismiss }: ProposalsSectionProps) {
+export function ProposalsSection({
+  connId, proposals, keyWarnings, peers, selfFingerprint, lang, disabled, onApply, onDismiss,
+}: ProposalsSectionProps) {
   const isMobile = useIsMobile()
   const [busy, setBusy] = useState<string | null>(null)
+  const now = Date.now()
 
-  if (proposals.length === 0 && keyWarnings.length === 0) return null
+  if (proposals.length === 0 && keyWarnings.length === 0 && peers.length === 0) return null
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -105,6 +136,15 @@ export function ProposalsSection({ connId, proposals, keyWarnings, lang, disable
             {' '}
             {describeSources(p.sources, lang)}
           </span>
+          {(() => {
+            const age = proposalAge(p.at, now, lang)
+            return (
+              <span style={{ fontSize: 10.5, color: age.stale ? 'var(--anthropic-orange)' : 'var(--text-tertiary)' }}>
+                {age.text ? interpolate(COPY.proposalAge[lang], { age: age.text }) : ''}
+                {age.stale ? ` ${COPY.proposalStale[lang]}` : ''}
+              </span>
+            )
+          })()}
           <span style={{ color: 'var(--text-tertiary)', fontSize: 10.5 }}>{COPY.proposalNotApplied[lang]}</span>
           <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 8 }}>
             <button
@@ -138,6 +178,28 @@ export function ProposalsSection({ connId, proposals, keyWarnings, lang, disable
           </div>
         </div>
       ))}
+      {peers.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <strong style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>{COPY.peersTitle[lang]}</strong>
+          <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{COPY.peersBody[lang]}</span>
+          <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {selfFingerprint && (
+              <li style={{ fontSize: 10.5, color: 'var(--text-tertiary)', overflowWrap: 'anywhere' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>{COPY.peersSelf[lang]}</span>
+                {' — '}
+                <code style={{ fontSize: 10.5 }}>{selfFingerprint}</code>
+              </li>
+            )}
+            {peers.map(peer => (
+              <li key={peer.machineId} style={{ fontSize: 10.5, color: 'var(--text-tertiary)', overflowWrap: 'anywhere' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>{peer.machineId.slice(0, 12)}</span>
+                {' — '}
+                <code style={{ fontSize: 10.5 }}>{peer.fingerprint}</code>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }

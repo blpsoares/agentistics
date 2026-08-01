@@ -329,6 +329,38 @@ export const COPY = {
     en: 'Dismiss',
     pt: 'Dispensar',
   },
+  peersTitle: {
+    en: 'Machines that receive your rules',
+    pt: 'Máquinas que recebem suas regras',
+  },
+  peersBody: {
+    en: 'Each of these machines of your account can read the sharing rules this machine sends. The central hands over these keys, so if you do not recognise a machine, compare its fingerprint with the one that machine shows for itself.',
+    pt: 'Cada uma destas máquinas da sua conta consegue ler as regras de compartilhamento que esta máquina envia. A central fornece essas chaves — se você não reconhece uma máquina, compare a impressão digital com a que aquela máquina mostra de si mesma.',
+  },
+  peersSelf: {
+    en: 'This machine',
+    pt: 'Esta máquina',
+  },
+  proposalAge: {
+    en: 'Sent {age}',
+    pt: 'Enviado {age}',
+  },
+  ageJustNow: {
+    en: 'just now',
+    pt: 'agora mesmo',
+  },
+  ageHours: {
+    en: '{n}h ago',
+    pt: 'há {n}h',
+  },
+  ageDays: {
+    en: '{n} day(s) ago',
+    pt: 'há {n} dia(s)',
+  },
+  proposalStale: {
+    en: 'This is not recent. Check with that machine before applying it.',
+    pt: 'Isto não é recente. Confirme com aquela máquina antes de aplicar.',
+  },
   keyChangedTitle: {
     en: 'A machine\'s key changed — messages from it were not opened',
     pt: 'A chave de uma máquina mudou — as mensagens dela não foram abertas',

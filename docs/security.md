@@ -269,16 +269,41 @@ authenticator is verifiable only by the intended recipient, and two machines of 
 transferable proof of what they told each other. The whole header is the GCM AAD, so the central
 cannot re-address, relabel or re-date an envelope it relays.
 
+**The recipient checks the header it authenticated.** Binding sender, recipient, instance and time
+into the AAD proves the central cannot *rewrite* them; it says nothing about the central *choosing*
+the routing fields it reports beside the ciphertext. `open()` therefore requires the caller to state
+the sender the transport claimed, this machine's own id, and the connection's instanceId, and
+refuses on any disagreement **before** any key agreement. The sender's pin is looked up by the id
+**inside the seal**, never the one supplied beside it. Without this, a central could publish a
+directory entry under a machine id it invented pointing at a real peer's key, then relay that peer's
+genuine envelopes under the invented identity: pin matches, GCM verifies, and the proposal is filed
+as authored by a machine that does not exist under a display name the central chose.
+
+**Replay is refused by memory, not by freshness alone.** Every opened envelope's digest — SHA-256 of
+`ciphertext ‖ tag`, never the central's own envelope id, which it mints and can vary — is persisted
+in the inbox and **is not cleared by dismissing a proposal**. Ignoring a proposal is therefore
+permanent. Without it, a pre-restriction envelope (`denylist` with no sources = share everything)
+could be replayed after the sender tightened up, offering the user a one-click downgrade.
+`createdAt` is additionally bounded (`ENVELOPE_FRESH_MS`, 7 days, with an hour of clock skew) as the
+backstop against a central withholding an envelope and delivering it much later. Days rather than
+minutes is deliberate: the mailbox exists *because* peers are offline, so a minutes-wide window
+would drop exactly the messages the channel was built to deliver. The card also renders the
+proposal's age and calls out anything over a day old.
+
 **Key distribution and its honest limit.** Each machine generates its keypair locally and publishes
 only the public half (`POST /api/team/keys`, authenticated by its existing minted token). Nothing to
 type, working the moment a second machine joins — which is what the product required.
 
-> **A central that actively substitutes a public key at the moment a machine first sees a peer can
-> read that peer's envelopes.** No fully automatic scheme closes this: two parties whose only
-> channel is the adversary cannot bootstrap a secret without a pre-shared secret or out-of-band
-> verification.
+> **A central that publishes a public key it controls, under any machine id, reads that channel.**
+> This is not a narrow first-sight race. The central does not need to *substitute* an existing key:
+> it can simply **invent a machine** at any time under a key it holds. A peer that never existed has
+> no prior key to contradict, so trust-on-first-use accepts it, and from that moment every
+> restriction message is encrypted to the central as well as to the real siblings. No fully
+> automatic scheme closes this: two parties whose only channel is the adversary cannot bootstrap a
+> secret without a pre-shared secret or out-of-band verification.
 
-What is done instead:
+What is done instead — the point of every item below is that trust can be established
+automatically, but never **silently**:
 
 - **Pin on first sight.** The first time B sees A's key it stores it (`envelope-keys.ts`). If it
   ever changes, B **refuses to decrypt** — it does not guess between a reinstall and an attack —
@@ -286,8 +311,16 @@ What is done instead:
   **leaves the envelope on the central** so resolving the key does not cost the message. A sender
   likewise refuses to seal *to* a changed key. The pin is per connection: the same machine id on two
   centrals is two different machines.
-- **Show the fingerprint.** `GET /api/team/proposals` returns this machine's own fingerprint and
-  each pinned peer's, so a user who cares can compare two machines they own. Never required.
+- **Announce every new pin.** The first time a peer is pinned — including a fabricated one — the
+  connection card and a `member.peer_pinned` notification name it: "a new machine of your account
+  will now receive your sharing rules". Same alarm class as a changed key. Silent
+  trust-establishment *is* the exposure, so this is the mitigation for the limit above, not a
+  nicety.
+- **Show the fingerprints.** The expanded connection card lists this machine's own fingerprint and
+  every pinned peer's, so a user who cares can compare two machines they own. Never required.
+- **One bad key cannot disable the channel.** A directory entry whose key cannot be used is skipped
+  and counted, not thrown — an unguarded `seal()` in the peer loop would have let a central publish
+  one junk key and silently stop every sibling from ever being told anything.
 
 **What the central inevitably learns, and this is not implied away:** that a machine deposited a
 sealed envelope, when, for whom, and how big it was. Since the channel carries only rule changes,
@@ -302,12 +335,22 @@ rule takes. There is no apply endpoint anywhere on the server, and `envelope-cli
 that the inbox module exposes no such function: a machine that silently reconfigures another
 because a message arrived would be a remote-control channel, and this is not one.
 
+**One keypair per machine, not per central.** A machine publishes the same public key to every
+central it connects to, so two centrals comparing notes can confirm they are looking at the same
+physical machine. That is accepted rather than fixed: the machine already presents the same
+`git_remote` set and the same statsCache shape to both, so per-connection keys would not make it
+unlinkable, only harder to reason about. An envelope still cannot cross centrals — the instanceId is
+bound into the AAD and re-checked on arrival.
+
 **Mailbox scoping.** Deposit/fetch/ack are minted-token-only. The SENDER is stamped from the token,
 never read from the body; the RECIPIENT must be a machine of the caller's own account
 (`allowedRecipients`), so the mailbox is not a write primitive against strangers; a refused
 recipient is silently skipped rather than named, because naming it would answer "does this machine
-belong to my account". Retention is bounded by age and per-recipient count. The private key never
-leaves the machine, never enters a log, an audit event or any response body.
+belong to my account". Retention is bounded by age (in step with the recipient's freshness window) and per-recipient
+count, and revoking a machine's token drops its published key and all of its mail. The private key
+never leaves the machine, never enters a log, an audit event or any response body.
+`GET /api/team/proposals` returns a sibling's full source list, so it is registered in
+`capability-guard.ts` and is unreachable on an internet-exposed instance.
 
 ## 9. Verifying it yourself
 
