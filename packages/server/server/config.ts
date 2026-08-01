@@ -32,14 +32,22 @@ export const ARCHIVE_ENABLED = process.env.AGENTISTICS_ARCHIVE !== '0'
 // read-only — so anything the app must persist (preferences, consolidate store, sync state)
 // belongs here, never under CLAUDE_DIR.
 export const AGENTISTICS_DATA_DIR = process.env.AGENTISTICS_DIR ?? join(HOME_DIR, '.agentistics')
-export const ARCHIVE_DIR = process.env.AGENTISTICS_ARCHIVE_DIR ?? join(HOME_DIR, '.agentistics', 'archive')
+// EVERY path below is derived from AGENTISTICS_DATA_DIR, never from HOME_DIR directly. They used
+// to be built from the home directory, so `AGENTISTICS_DIR` relocated preferences and the
+// connection state while the consolidate store, the archive and the workflow runs silently stayed
+// in the default location. An instance pointed at its own data dir — a second instance on one
+// host, a container with its own volume, a test rig — then READ AND PUSHED the sessions of
+// whatever profile it happened to run under, attributed to itself. Found by an end-to-end run in
+// which three isolated machines each pushed the same 108 sessions belonging to none of them.
+// Defaults are unchanged: with AGENTISTICS_DIR unset this is still ~/.agentistics/<...>.
+export const ARCHIVE_DIR = process.env.AGENTISTICS_ARCHIVE_DIR ?? join(AGENTISTICS_DATA_DIR, 'archive')
 export const ARCHIVE_PROJECTS_DIR = join(ARCHIVE_DIR, 'projects')
 export const ARCHIVE_SESSION_META_DIR = join(ARCHIVE_DIR, 'usage-data', 'session-meta')
 export const ARCHIVE_STATS_DIR = join(ARCHIVE_DIR, 'stats-cache')
-// Consolidated per-session metrics (mode 'consolidate'): ~/.agentistics/sessions/<id>.json
-export const CONSOLIDATED_DIR = join(HOME_DIR, '.agentistics', 'sessions')
-// Persisted workflow runs (survive Claude's transcript cleanup): ~/.agentistics/workflows/<runId>.json
-export const WORKFLOWS_STORE_DIR = join(HOME_DIR, '.agentistics', 'workflows')
+// Consolidated per-session metrics (mode 'consolidate'): <data dir>/sessions/<id>.json
+export const CONSOLIDATED_DIR = join(AGENTISTICS_DATA_DIR, 'sessions')
+// Persisted workflow runs (survive Claude's transcript cleanup): <data dir>/workflows/<runId>.json
+export const WORKFLOWS_STORE_DIR = join(AGENTISTICS_DATA_DIR, 'workflows')
 
 // ---------------------------------------------------------------------------
 // Team mode (Phase 1: folder union). When AGENTISTICS_TEAM=1 the server unions
@@ -47,7 +55,7 @@ export const WORKFLOWS_STORE_DIR = join(HOME_DIR, '.agentistics', 'workflows')
 // and tags each session with its owning user. Off by default (Solo behavior).
 // ---------------------------------------------------------------------------
 export const TEAM_MODE = process.env.AGENTISTICS_TEAM === '1'
-export const TEAM_DIR = process.env.AGENTISTICS_TEAM_DIR ?? join(HOME_DIR, '.agentistics', 'team')
+export const TEAM_DIR = process.env.AGENTISTICS_TEAM_DIR ?? join(AGENTISTICS_DATA_DIR, 'team')
 
 // ---------------------------------------------------------------------------
 // Phase 2 — central aggregator. When AGENTISTICS_TEAM_CENTRAL=1 the instance
@@ -126,11 +134,11 @@ export const TEAM_TLS = process.env.AGENTISTICS_TEAM_TLS === '1'
 // Team uploader — tracks which sessions have already been pushed to the central.
 // Override with AGENTISTICS_TEAM_SENT_FILE.
 // ---------------------------------------------------------------------------
-export const TEAM_SENT_FILE = process.env.AGENTISTICS_TEAM_SENT_FILE ?? join(HOME_DIR, '.agentistics', 'team-sent.json')
+export const TEAM_SENT_FILE = process.env.AGENTISTICS_TEAM_SENT_FILE ?? join(AGENTISTICS_DATA_DIR, 'team-sent.json')
 // Records the central "sync signature" (endpoint+token+instanceId) the sent-state was built
 // against. When it changes — new token, new central, or a wiped central DB — the uploader
 // clears the sent-state and re-pushes everything automatically.
-export const TEAM_SYNC_FILE = process.env.AGENTISTICS_TEAM_SYNC_FILE ?? join(HOME_DIR, '.agentistics', 'team-sync.json')
+export const TEAM_SYNC_FILE = process.env.AGENTISTICS_TEAM_SYNC_FILE ?? join(AGENTISTICS_DATA_DIR, 'team-sync.json')
 
 // ---------------------------------------------------------------------------
 // Other harnesses (Phase 1: Codex). Each adapter checks its own root.
