@@ -1,5 +1,6 @@
 import type { ArchiveMode } from '../ArchiveConsentModal'
-import type { ConnectionStatusEntry } from './statusTypes'
+import { NO_REPO_KEY, repoShortName } from '@agentistics/core'
+import type { ConnectionStatusEntry, ElsewhereRepo } from './statusTypes'
 import { isApplyBusy, type ApplyPhase } from './repoPanelState'
 
 /**
@@ -66,6 +67,25 @@ export function resolveRepoPanelMode(
  *  contradictory messages ("queued" and "in progress") at once. */
 export function showsApplyQueuedBanner(state: CardState, pendingRules: boolean | undefined): boolean {
   return Boolean(pendingRules) && state !== 'resyncing'
+}
+
+/**
+ * The "another machine of yours still sends this" warning. Rendered whenever the machine's own
+ * local intersection found something (`server/account-repos.ts`), independently of `pendingRules`
+ * and of a running resync: those describe THIS machine's own removal, which finishing changes
+ * nothing about a sibling that was never told. Suppressing it during a resync would hide the
+ * warning for exactly as long as the user is watching the card.
+ */
+export function showsElsewhereWarning(elsewhere: ElsewhereRepo[] | undefined): boolean {
+  return Array.isArray(elsewhere) && elsewhere.length > 0
+}
+
+/** How one still-shared repository reads on the card: a short repo name and the machines still
+ *  sending it. `NO_REPO_KEY` is not a remote and has no short name — it gets the caller's supplied
+ *  label for the "no linked repository" bucket instead. */
+export function elsewhereLine(entry: ElsewhereRepo, noRepoLabel: string): string {
+  const name = entry.repo === NO_REPO_KEY ? noRepoLabel : (repoShortName(entry.repo) || entry.repo)
+  return `${name} — ${entry.machines.join(', ')}`
 }
 
 /**

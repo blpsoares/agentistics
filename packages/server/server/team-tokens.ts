@@ -383,6 +383,35 @@ export async function mintMachine(input: { machineName: string; user: string; ac
 }
 
 /**
+ * The machines that share at least one owner ACCOUNT with `memberId`, itself included.
+ *
+ * This is the reach of every account-scoped machine-to-machine feature (the still-shared warning
+ * and the sealed-envelope mailbox), and it is deliberately by ACCOUNT and not by team: a team is a
+ * grouping of people, and telling a colleague's machine what this user restricts — or letting it
+ * read an envelope — is a different decision than telling the user's own second laptop.
+ *
+ * A token with no owner account (a loose/legacy machine) reaches nothing but itself: it cannot be
+ * proven to belong to anyone, and guessing in the permissive direction here would hand one
+ * stranger's machine the list of another's repositories.
+ *
+ * CI and repo tokens are excluded — an ephemeral runner is not a machine a person owns.
+ */
+export async function listSiblingMachines(memberId: string): Promise<{ id: string; name: string }[]> {
+  const col = await getTokensCollection()
+  const self = await col.findOne({ _id: memberId })
+  if (!self) return []
+  const owners = ownerIdsOf(self)
+  if (owners.length === 0) return [{ id: self._id, name: self.label || self.user || self._id }]
+  const docs = await col
+    .find({ accountIds: { $in: owners }, ci: { $ne: true }, repo: { $exists: false } })
+    .toArray()
+  const byId = new Map<string, { id: string; name: string }>()
+  for (const d of docs) byId.set(d._id, { id: d._id, name: d.label || d.user || d._id })
+  byId.set(self._id, { id: self._id, name: self.label || self.user || self._id })
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+}
+
+/**
  * List all machine tokens (excludes CI and repo tokens).
  * Returns machine records with the token hash as id (no plaintext).
  */

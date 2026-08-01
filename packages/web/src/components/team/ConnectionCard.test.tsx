@@ -1,7 +1,8 @@
 import { test, expect } from 'bun:test'
+import { NO_REPO_KEY } from '@agentistics/core'
 import {
   resolveCardState, resolveRepoPanelMode, showsApplyQueuedBanner, isBrokenEndpoint,
-  resolveWritesDisabled, resolveRulePill,
+  resolveWritesDisabled, resolveRulePill, showsElsewhereWarning, elsewhereLine,
 } from './cardState'
 import { canEditRepos, type ApplyPhase } from './repoPanelState'
 import { resolvePanelBranch } from './ConnectionsPanel'
@@ -172,4 +173,32 @@ test('allowlist: the same count is what is SHARED, never "hidden"', () => {
 test('no rules at all, and a never-polled connection, show no pill', () => {
   expect(resolveRulePill(status({ shareMode: 'denylist', deniedCount: 0 }))).toBeNull()
   expect(resolveRulePill(undefined)).toBeNull()
+})
+
+// --- the "another machine of yours still shares this" warning -----------------------------------
+
+test('the elsewhere warning is hidden when the list is empty, absent, or from an older server', () => {
+  expect(showsElsewhereWarning([])).toBe(false)
+  expect(showsElsewhereWarning(undefined)).toBe(false)
+})
+
+test('the elsewhere warning shows as soon as one sibling machine still sends a hidden repo', () => {
+  expect(showsElsewhereWarning([{ repo: 'github.com/acme/api', machines: ['laptop-b'] }])).toBe(true)
+})
+
+test('the elsewhere warning survives a running resync — finishing this machine\'s removal changes nothing about a sibling', () => {
+  // Deliberately independent of state/pendingRules, unlike showsApplyQueuedBanner.
+  expect(showsApplyQueuedBanner('resyncing', true)).toBe(false)
+  expect(showsElsewhereWarning([{ repo: 'r', machines: ['m'] }])).toBe(true)
+})
+
+test('a warning line names the short repo and every machine still sending it', () => {
+  expect(elsewhereLine({ repo: 'github.com/acme/api', machines: ['laptop-b', 'desktop'] }, 'none'))
+    .toBe('acme/api — laptop-b, desktop')
+})
+
+test('the no-repo bucket uses its label, never a bare sentinel key', () => {
+  const line = elsewhereLine({ repo: NO_REPO_KEY, machines: ['laptop-b'] }, 'no linked repository')
+  expect(line).toBe('no linked repository — laptop-b')
+  expect(line).not.toContain(NO_REPO_KEY)
 })

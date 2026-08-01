@@ -228,6 +228,24 @@ than this:**
    connection does not stop that repo's GitHub Actions runs or OTel metrics from reaching the same
    central by a different path.
 
+### 8.1 Rules are per machine, and how a machine finds out
+
+Sharing rules live on the machine that declares them. Restricting a repository on one laptop does
+nothing on a second laptop signed in to the same account, which will keep pushing it.
+
+A machine detects that situation **without disclosing anything**. It calls
+`GET /api/team/account-repos`, which returns the distinct repositories the central holds *for the
+caller's own account* and which of that account's machines pushed each one. The request names no
+repository and carries no rule — it is byte-identical whether the caller just restricted something
+or is idly refreshing — and the response is data the account already owns and can already read from
+its dashboard. The comparison against the private rules happens **on the machine**
+(`server/account-repos.ts`, `findStillShared`); the central never learns the outcome. The result is
+the orange banner on the connection card naming the repository and the sibling machine.
+
+Scope: the route is minted-token-only and scoped to the token's **owner accounts**
+(`listSiblingMachines`), never by team and never globally — a token with no owner account sees only
+itself. CI and repo tokens are excluded.
+
 ## 9. Verifying it yourself
 
 Each control has tests next to it; these are the ones worth reading first:

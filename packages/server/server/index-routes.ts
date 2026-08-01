@@ -17,6 +17,10 @@ export const AUTH_PUBLIC = new Set([
   '/api/team/ingest',
   '/api/team/leave',
   '/api/team/forget',
+  // Machine-to-machine, Bearer-authenticated inside the handler and scoped to the token's own
+  // owner accounts. Returns repository KEYS and the caller's own machines' names — never a
+  // session, never another account.
+  '/api/team/account-repos',
   '/api/team/policy',
   '/api/team/whoami',
   '/api/team/agent',

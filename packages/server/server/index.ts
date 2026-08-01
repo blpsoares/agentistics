@@ -1679,6 +1679,19 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       return new Response(res.body, { status: res.status, headers })
     }
 
+    // GET /api/team/account-repos — a member asks what repositories this central holds for ITS
+    // OWN ACCOUNT, so it can detect locally that a sibling machine still sends one it just hid.
+    // The request names no repository and carries no rule; the comparison happens on the caller.
+    // Minted-token-only, scoped to the token's owner accounts. See team-account-repos.ts.
+    if (url.pathname === '/api/team/account-repos' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleAccountRepos } = await import('./team-account-repos')
+      const res = await handleAccountRepos(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
     // POST /api/team/leave-central — member proxy: tells the central to drop this member's
     // data, then the web resets the local config to solo. Keeps the token server-side.
     if (url.pathname === '/api/team/leave-central' && req.method === 'POST') {

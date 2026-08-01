@@ -10,7 +10,10 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { COPY, PLURAL_COPY, interpolate } from './copy'
 import { ConnectionIdentity, type ProbedIdentity } from './ConnectionIdentity'
 import type { ConnectionStatusEntry } from './statusTypes'
-import { isBrokenEndpoint, resolveCardState, resolveRulePill, showsApplyQueuedBanner, resolveWritesDisabled, DOT } from './cardState'
+import {
+  isBrokenEndpoint, resolveCardState, resolveRulePill, showsApplyQueuedBanner, resolveWritesDisabled,
+  showsElsewhereWarning, elsewhereLine, DOT,
+} from './cardState'
 import { resolveCardActionsHidden, type ApplyPhase } from './repoPanelState'
 import {
   DisconnectButton, mobileBtn, StatusLine, ResyncStrip, RepoPanelSlot,
@@ -210,6 +213,30 @@ export function ConnectionCard({
               background: 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)',
             }}>
               {COPY.applyQueued[lang]}
+            </div>
+          )}
+
+          {showsElsewhereWarning(status?.elsewhere) && (
+            <div
+              role="status"
+              style={{
+                padding: '10px 12px', borderRadius: 7, fontSize: 11.5, lineHeight: 1.5,
+                color: 'var(--anthropic-orange)',
+                background: 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)',
+                display: 'flex', flexDirection: 'column', gap: 6,
+              }}
+            >
+              <strong style={{ fontSize: 12 }}>{COPY.elsewhereTitle[lang]}</strong>
+              <span style={{ color: 'var(--text-secondary)' }}>{COPY.elsewhereBody[lang]}</span>
+              <ul style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {(status?.elsewhere ?? []).map(e => (
+                  // `overflowWrap` and not `nowrap`: a repo key plus two machine names overflows a
+                  // 390px card, and the page body must never scroll horizontally.
+                  <li key={e.repo} style={{ overflowWrap: 'anywhere' }}>
+                    {elsewhereLine(e, COPY.elsewhereNoRepo[lang])}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 

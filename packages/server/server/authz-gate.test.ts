@@ -34,6 +34,7 @@ describe('public route allowlist', () => {
       // Asking to be reset: writes a row for an admin to look at, and nothing else.
       '/api/iam/reset-request',
       '/api/iam/status',
+      '/api/team/account-repos',
       '/api/team/agent',
       '/api/team/forget',
       '/api/team/ingest',

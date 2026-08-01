@@ -24,6 +24,8 @@ import {
 } from './team-uploader'
 import type { ForgetProgress } from './team-forget-client'
 import { loadRulesState } from './team-rules'
+import { getElsewhere, scheduleElsewhereCheck, checkElsewhereNow } from './team-elsewhere'
+import type { ElsewhereRepo } from './account-repos'
 import {
   sourcesRestrict, withUnresolvedSources, rulesSignature, emptyRulesSignature, normalizeSources,
   attributionBoundary, prehistoryCount, canonicalRepoKey,
@@ -561,11 +563,17 @@ function notifyLocalDashboards(): void {
 export async function handlePatchConnection(
   req: Request,
   rawId: string,
-  deps: { updateTeamConfig?: typeof updateTeamConfig; nudge?: (connId: string) => void; notify?: () => void } = {},
+  deps: {
+    updateTeamConfig?: typeof updateTeamConfig
+    nudge?: (connId: string) => void
+    notify?: () => void
+    checkElsewhere?: (connId: string) => void
+  } = {},
 ): Promise<Response> {
   const _updateTeamConfig = deps.updateTeamConfig ?? updateTeamConfig
   const _nudge = deps.nudge ?? nudgeAfterRulesChange
   const _notify = deps.notify ?? notifyLocalDashboards
+  const _checkElsewhere = deps.checkElsewhere ?? checkElsewhereNow
   let id: string
   try {
     id = safeConnId(rawId)
@@ -619,6 +627,10 @@ export async function handlePatchConnection(
   // Notify only once the write above has resolved — the client's refetch must observe it.
   if (somethingChanged) _notify()
   if (rulesChanged) {
+    // The moment the answer matters: the user has just restricted something, so ask the central
+    // (question unchanged, see account-repos.ts) and recompute the warning without waiting out
+    // the status route's TTL.
+    _checkElsewhere(id)
     _nudge(id)
     return json({ ok: true, queued: true })
   }
@@ -807,6 +819,13 @@ export interface ConnectionStatusEntry {
    *  sequence has not completed successfully since the denylist last changed. The UI must never
    *  report success while this is true. */
   pendingRules: boolean
+  /** Repositories THIS machine hides that a DIFFERENT machine of the same account still sends to
+   *  this central, computed locally by intersecting the central's account-scoped repository list
+   *  against these rules (`account-repos.ts`). Same-origin only, like the rest of this route: it
+   *  names the sibling machines, which is exactly what makes the warning actionable. Empty when
+   *  there is nothing to warn about, when the central is too old to answer, or before the first
+   *  check has run — all three are "no warning", and none is an error. */
+  elsewhere: ElsewhereRepo[]
 }
 
 /** The local facts `buildConnectionStatusEntry` cannot derive from `conn`/`uploaderStatus` alone —
@@ -818,6 +837,8 @@ export interface ConnectionLocalFacts {
   prehistorySessions: number | null
   canForget: boolean
   resync: ForgetProgress | null
+  /** The cached still-shared-elsewhere warning for this connection (`team-elsewhere.ts`). */
+  elsewhere: ElsewhereRepo[]
   /** This connection's persisted `RulesState.rulesHash` (team-rules.ts) — `''` when no rules
    *  cycle has ever run for it, which reads as `emptyRulesSignature()` (never as "changed"), the
    *  same rule `planRulesReconcile` itself follows. */
@@ -869,6 +890,7 @@ export function buildConnectionStatusEntry(
     centralTooOld: !local.canForget,
     resync: local.resync,
     pendingRules,
+    elsewhere: local.elsewhere,
   }
 }
 
@@ -938,7 +960,7 @@ export function otelExportEnabled(): boolean {
  */
 export async function handleTeamStatus(
   _req: Request,
-  deps: { readPreferences?: typeof readPreferences } = {},
+  deps: { readPreferences?: typeof readPreferences; scheduleElsewhere?: (conn: TeamConnection) => void } = {},
 ): Promise<Response> {
   const prefs = await (deps.readPreferences ?? readPreferences)()
   const team = prefs.team
@@ -967,12 +989,16 @@ export async function handleTeamStatus(
     // one definition of what that state looks like, so the shape can never drift between the
     // "never ran" and "ran" branches of this response.
     const uploaderStatus = byConn[c.id] ?? emptyStatusFor(c.id)
+    // Background, TTL-throttled (`ELSEWHERE_TTL_MS`) and never awaited: the poller must not block
+    // on a central, and a stale answer is the correct thing to render while a fresh one lands.
+    ;(deps.scheduleElsewhere ?? scheduleElsewhereCheck)(c)
     const rules = await loadRulesState(c.id)
     return buildConnectionStatusEntry(c, uploaderStatus, {
       boundary,
       prehistorySessions,
       canForget: connectionCanForget(c.id),
       resync: getResyncProgress(c.id),
+      elsewhere: getElsewhere(c.id),
       rulesHash: rules.rulesHash,
     })
   }))

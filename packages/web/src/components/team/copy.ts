@@ -289,6 +289,18 @@ export const COPY = {
     en: 'Rules saved. The central is unreachable — they will be applied on the next successful sync.',
     pt: 'Regras salvas. A central está inacessível — elas serão aplicadas no próximo envio bem-sucedido.',
   },
+  elsewhereTitle: {
+    en: 'Another of your machines still shares this',
+    pt: 'Outra máquina sua ainda compartilha isto',
+  },
+  elsewhereBody: {
+    en: 'These repositories are hidden here, but this central still receives them from another machine signed in to your account. Repository rules are per machine — apply them there too.',
+    pt: 'Estes repositórios estão ocultos aqui, mas esta central ainda os recebe de outra máquina conectada à sua conta. As regras de repositório são por máquina — aplique-as lá também.',
+  },
+  elsewhereNoRepo: {
+    en: 'no linked repository',
+    pt: 'sem repositório vinculado',
+  },
   statsNote: {
     en: 'Filtered exactly after {boundary}. Earlier days ({n} sessions) were already summarised by Claude into one aggregate that no rule can split.',
     pt: 'Filtrado com exatidão depois de {boundary}. Os dias anteriores ({n} sessões) já foram resumidos pelo Claude num agregado único que nenhuma regra separa.',
