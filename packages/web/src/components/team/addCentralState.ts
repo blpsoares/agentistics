@@ -173,10 +173,12 @@ function withNoRepoWidening(mode: ShareMode, keys: readonly string[]): string[] 
  * together. `sources` is built from `submitted` (repo keys widened by `withNoRepoWidening` in
  * denylist mode) via `buildSourcesFromDraft`.
  *
- * No `label` — the wizard never collects one. The display name is set by the central on the
+ * No `label` — the wizard never collects one. The MACHINE's name is set by the central on the
  * minted token (`TeamConnection.label`'s own doc comment); a machine choosing its own name here
- * would be exactly the invariant the product forbids. `ConnectionCard` falls back to the probed
- * `machineName`, then a stored `label` from an older config, then the endpoint host.
+ * would be exactly the invariant the product forbids. A `label` that does exist (an older config,
+ * or the CLI's `--label`) names the CENTRAL, never the machine: `ConnectionCard` titles the card
+ * with it and resolves the machine name from the probed `machineName`, falling back to the
+ * endpoint host and never to the label (`cardIdentity.ts`).
  *
  * `submitted` is a `SubmittedRules`, i.e. the output of `resolveSubmittedRules` — NEVER the
  * wizard's two raw drafts. That distinction is the whole of a Critical review finding: the drafts

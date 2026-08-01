@@ -54,7 +54,10 @@ export interface TeamConnection {
   sources?: ShareSource[]
   /** Member-side mirror of the central's cadence; the central still owns the floor. */
   pushIntervalSec?: number
-  /** Optional nickname for the card; falls back to the endpoint host. WRITE-NOTHING from the web
+  /** Optional nickname for THE CENTRAL this connection points at (the card's title); falls back to
+   *  the endpoint host. It never names, and may never mask, the MACHINE — the card resolves that
+   *  from the central's own `machineName` and otherwise from the host (`cardIdentity.ts`).
+   *  WRITE-NOTHING from the web
    *  UI — the display name is set by the CENTRAL on the minted token (`GET /api/team/whoami`'s
    *  `machineName`), never by the machine itself, so nothing in `components/team/` may create or
    *  edit this field anymore. It stays here, and is still READ, only because an older config (or

@@ -178,4 +178,19 @@ describe('Plan 4 Task 1, fix 6 — the machine name is distinct from the local n
     expect(COPY.identityMachineName.en.toLowerCase()).toContain('machine')
     expect(COPY.identityMachineName.pt.toLowerCase()).toContain('máquina')
   })
+
+  test('the collapsed card labels the machine and the account as two different things', () => {
+    for (const lang of ['en', 'pt'] as const) {
+      expect(COPY.cardMachine[lang]).not.toBe(COPY.cardUser[lang])
+      expect(COPY.cardMachine[lang].length).toBeGreaterThan(0)
+      expect(COPY.cardUser[lang].length).toBeGreaterThan(0)
+    }
+    expect(COPY.cardMachine.en.toLowerCase()).toContain('machine')
+    expect(COPY.cardMachine.pt.toLowerCase()).toContain('máquina')
+  })
+
+  test('the machine-name tooltip says WHO owns that name — the central, not this machine', () => {
+    expect(COPY.machineNameByCentral.en.toLowerCase()).toContain('central')
+    expect(COPY.machineNameByCentral.pt.toLowerCase()).toContain('central')
+  })
 })

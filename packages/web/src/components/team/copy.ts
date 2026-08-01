@@ -498,11 +498,25 @@ export const COPY = {
     en: 'Only computed session metrics (tokens, cost, duration) are pushed — no conversation content.',
     pt: 'Apenas métricas computadas (tokens, custo, duração) são enviadas — nenhum conteúdo de conversa.',
   },
-  // Added for Task 10 (the connection card list) — the design doc's §9.5 wording ("appears as
-  // <user>", the identity panel's read-only rows) was not yet in this table under Task 9.
-  appearsAs: {
-    en: 'appears as',
-    pt: 'aparece como',
+  // The collapsed card's meta row. It used to read `appears as <user>` — one unlabelled name where
+  // the MACHINE name belonged, next to a title that a local nickname could mask. Machine, central
+  // and account are three different things, so each is now labelled and shown as its own value.
+  cardMachine: {
+    en: 'Machine',
+    pt: 'Máquina',
+  },
+  cardUser: {
+    en: 'User',
+    pt: 'Usuário',
+  },
+  // Tooltips on the machine name — the one fact the card must never leave ambiguous.
+  machineNameByCentral: {
+    en: 'Name assigned by the central. Only the central can change it.',
+    pt: 'Nome definido pela central. Só a central pode alterá-lo.',
+  },
+  machineNamePending: {
+    en: 'The central has not reported a name for this machine yet — showing the endpoint host.',
+    pt: 'A central ainda não informou um nome para esta máquina — exibindo o host do endpoint.',
   },
   syncing: {
     en: 'Syncing…',
