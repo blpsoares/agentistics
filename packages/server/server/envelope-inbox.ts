@@ -15,7 +15,7 @@
  * (`envelope-keys.ts`). Those envelopes are never decrypted and are surfaced as an explicit alarm —
  * a reinstall and a central substituting a key are indistinguishable from here.
  */
-import type { ShareSource } from '@agentistics/core'
+import type { ShareSource, SiblingRuleFact } from '@agentistics/core'
 import { envelopeInboxFile } from './config'
 import { safeReadJson } from './utils'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -31,6 +31,13 @@ export const MAX_PROPOSALS = 20
  * resurrect a dismissed message simply by serving the same bytes again.
  */
 export const MAX_OPENED_DIGESTS = 500
+
+/**
+ * How many sibling machines' announced rules to remember. Keyed by machine id (a later
+ * announcement replaces that machine's previous one), so this bounds the number of MACHINES an
+ * account can have, not the number of messages they send.
+ */
+export const MAX_SIBLING_RULES = 50
 
 export interface Proposal {
   /** The central's envelope id — the dedup key, so a re-delivered envelope is not a second card. */
@@ -55,6 +62,21 @@ export interface InboxState {
   proposals: Proposal[]
   keyWarnings: KeyWarning[]
   /**
+   * What each sibling machine last ANNOUNCED about its own rules — the same envelope's payload,
+   * stored as a standing fact rather than as an offer.
+   *
+   * This is deliberately NOT the proposal list. A proposal says "apply this here too" and dies the
+   * moment the user dismisses it; the fact says "that machine withholds this repository" and must
+   * survive, because it is the only evidence the reverse warning can be built from. The central
+   * cannot supply it — a sibling that hides a repo simply leaves the central without it, and
+   * absence is ambiguous between "restricted" and "never cloned". So: `dismissProposal` touches
+   * `proposals` and nothing else, and `envelope-client.test.ts` asserts exactly that.
+   *
+   * Superseded per machine by `mergeSiblingFacts`, because each announcement is a full snapshot of
+   * that machine's rules — which is also how a sibling that LIFTS a restriction retracts the fact.
+   */
+  siblingRules: SiblingRuleFact[]
+  /**
    * `envelopeDigest` of every envelope this machine has already opened, newest first.
    *
    * Keyed on the SEALED BYTES, not on the central's envelope id: the central mints that id and can
@@ -66,7 +88,7 @@ export interface InboxState {
 }
 
 export function emptyInbox(): InboxState {
-  return { proposals: [], keyWarnings: [], openedDigests: [] }
+  return { proposals: [], keyWarnings: [], openedDigests: [], siblingRules: [] }
 }
 
 /** PURE. Whether these sealed bytes have been opened before on this connection. */
@@ -106,7 +128,19 @@ function sanitize(raw: unknown): InboxState {
   const openedDigests = Array.isArray(r.openedDigests)
     ? (r.openedDigests as unknown[]).filter((d): d is string => typeof d === 'string' && d !== '').slice(0, MAX_OPENED_DIGESTS)
     : []
-  return { proposals: proposals.slice(0, MAX_PROPOSALS), keyWarnings, openedDigests }
+  // Absent on every inbox written before this field existed — reads as "no facts", which is the
+  // correct starting point anyway: this machine only knows what siblings announced to IT.
+  const siblingRules = Array.isArray(r.siblingRules)
+    ? (r.siblingRules as SiblingRuleFact[]).filter(isSiblingFact).slice(0, MAX_SIBLING_RULES)
+    : []
+  return { proposals: proposals.slice(0, MAX_PROPOSALS), keyWarnings, openedDigests, siblingRules }
+}
+
+function isSiblingFact(f: unknown): f is SiblingRuleFact {
+  if (!f || typeof f !== 'object') return false
+  const o = f as Record<string, unknown>
+  return typeof o.machineId === 'string' && o.machineId !== ''
+    && (o.shareMode === 'denylist' || o.shareMode === 'allowlist') && Array.isArray(o.sources)
 }
 
 function isProposal(p: unknown): p is Proposal {
@@ -132,7 +166,11 @@ export async function writeInbox(connId: string, state: InboxState): Promise<voi
   await writeFile(path, JSON.stringify(state, null, 2), 'utf-8')
 }
 
-/** Remove one proposal — the user acted on it, or dismissed it. Idempotent. */
+/** Remove one proposal — the user acted on it, or dismissed it. Idempotent.
+ *
+ *  It removes the OFFER only. `siblingRules` is untouched on purpose: deciding not to apply a
+ *  sibling's rules here says nothing about whether that sibling still applies them there, and
+ *  erasing the fact would silently switch off the reverse warning for that repository. */
 export async function dismissProposal(connId: string, id: string): Promise<boolean> {
   const state = await readInbox(connId)
   const next = state.proposals.filter(p => p.id !== id)

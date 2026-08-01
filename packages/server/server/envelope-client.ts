@@ -11,13 +11,14 @@
  * unavailable this cycle, which must never break a push or surface as an error the user cannot act
  * on. The local warning (Part 1, `team-elsewhere.ts`) works without any of this.
  */
-import type { TeamConnection, ShareSource } from '@agentistics/core'
+import type { TeamConnection, ShareSource, SiblingRuleFact } from '@agentistics/core'
+import { mergeSiblingFacts } from '@agentistics/core'
 import { seal, open, peekEnvelope, envelopeDigest } from './envelope-crypto'
 import { encodeRestrictionMessage, decodeRestrictionMessage, type RestrictionMessage } from './envelope-message'
 import { loadOrCreateKeypair, pinPeerKey, pinnedKeyFor } from './envelope-keys'
 import {
   readInbox, writeInbox, mergeProposals, mergeKeyWarnings, hasOpened, recordOpened,
-  type Proposal, type KeyWarning,
+  MAX_SIBLING_RULES, type Proposal, type KeyWarning,
 } from './envelope-inbox'
 import { selfMachineId } from './team-elsewhere'
 
@@ -269,6 +270,9 @@ export async function receiveEnvelopes(
   const now = (deps.now ?? (() => new Date()))()
   const state = await readInbox(conn.id)
   const fresh: Proposal[] = []
+  // The same payloads, kept as standing FACTS rather than as offers — see `InboxState.siblingRules`.
+  // In arrival order: `mergeSiblingFacts` lets the later entry win, never the sender's clock.
+  const facts: SiblingRuleFact[] = []
   const warnings: KeyWarning[] = []
   const ack: string[] = []
   const openedNow: string[] = []
@@ -329,10 +333,22 @@ export async function receiveEnvelopes(
     // Belt and braces on top of the AAD binding: the payload names the central it is about, and a
     // payload that disagrees with the connection it arrived on is not a message for this central.
     if (message.instanceId !== instanceId) { refused++; continue }
+    const machineName = names.get(header.senderMachineId) ?? header.senderMachineId
     fresh.push({
       id: item.id,
       fromMachineId: header.senderMachineId,
-      fromMachineName: names.get(header.senderMachineId) ?? header.senderMachineId,
+      fromMachineName: machineName,
+      shareMode: message.shareMode,
+      sources: message.sources,
+      at: message.at,
+      receivedAt: now.toISOString(),
+    })
+    // Only envelopes that got this far — opened, decoded, and naming THIS central — become facts.
+    // Everything refused above is testimony this machine could not verify, and unverified
+    // testimony is not knowledge.
+    facts.push({
+      machineId: header.senderMachineId,
+      machineName,
       shareMode: message.shareMode,
       sources: message.sources,
       at: message.at,
@@ -347,10 +363,14 @@ export async function receiveEnvelopes(
   const nextProposals = mergeProposals(state.proposals, fresh)
   const nextWarnings = mergeKeyWarnings(state.keyWarnings, warnings)
   const nextDigests = recordOpened(state.openedDigests, openedNow)
+  const nextFacts = mergeSiblingFacts(state.siblingRules, facts).slice(0, MAX_SIBLING_RULES)
   const addedProposals = nextProposals.length - state.proposals.length
   const addedWarnings = nextWarnings.length - state.keyWarnings.length
   if (addedProposals !== 0 || addedWarnings !== 0 || openedNow.length > 0) {
-    await writeInbox(conn.id, { proposals: nextProposals, keyWarnings: nextWarnings, openedDigests: nextDigests })
+    await writeInbox(conn.id, {
+      proposals: nextProposals, keyWarnings: nextWarnings, openedDigests: nextDigests,
+      siblingRules: nextFacts,
+    })
   }
   if (ack.length > 0) await call(conn, '/api/team/envelopes', { method: 'DELETE', body: { ids: ack } }, deps)
 

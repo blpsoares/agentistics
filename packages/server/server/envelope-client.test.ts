@@ -233,7 +233,12 @@ describe('the inbox never applies anything', () => {
     // The proposal is stored as a PROPOSAL, carrying the sender — not merged into any rule set.
     const inbox = await readInbox(CONN_ID)
     expect(inbox.proposals[0]!.fromMachineId).toBe(PEER_ID)
-    expect(Object.keys(inbox).sort()).toEqual(['keyWarnings', 'openedDigests', 'proposals'])
+    // The exact key list is the review gate: a new field here is a new thing a received message
+    // writes on this machine, and it has to be a deliberate edit. `siblingRules` is the sender's
+    // announced rules kept as a FACT — still nothing this machine acts on by itself.
+    expect(Object.keys(inbox).sort()).toEqual(['keyWarnings', 'openedDigests', 'proposals', 'siblingRules'])
+    // And the local rules are untouched: the fact records what the SENDER does, never what we do.
+    expect(inbox.siblingRules[0]!.machineId).toBe(PEER_ID)
   })
 })
 
@@ -404,7 +409,7 @@ describe('replay memory', () => {
   })
 
   it('survives a write/read round-trip, which is what makes a dismissal permanent', async () => {
-    await writeInbox(CONN_ID, { proposals: [], keyWarnings: [], openedDigests: ['abc'] })
+    await writeInbox(CONN_ID, { proposals: [], keyWarnings: [], openedDigests: ['abc'], siblingRules: [] })
     expect(hasOpened(await readInbox(CONN_ID), 'abc')).toBe(true)
     expect(hasOpened(await readInbox(CONN_ID), 'other')).toBe(false)
   })
@@ -445,5 +450,82 @@ describe('receiveEnvelopes — a sender the directory never listed', () => {
     const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
     expect(res.proposals).toBe(1)
     expect(res.refused).toBe(0)
+  })
+})
+
+// --- the FACT, kept apart from the PROPOSAL ------------------------------------------------------
+//
+// One envelope produces two things with different lifetimes. The PROPOSAL is an offer ("apply this
+// here too") and dies when the user dismisses it. The FACT is knowledge ("that machine withholds
+// this repository") and must outlive that dismissal, because it is the only evidence the reverse
+// warning can be built from — the central has none, by design.
+
+describe('sibling rule facts', () => {
+  it('records the sender\'s announced rules as a fact beside the proposal', async () => {
+    const envelope = await sealedFromPeer(RULES_MSG)
+    const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
+    await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+
+    const inbox = await readInbox(CONN_ID)
+    expect(inbox.siblingRules).toHaveLength(1)
+    const fact = inbox.siblingRules[0]!
+    expect(fact.machineId).toBe(PEER_ID)
+    expect(fact.machineName).toBe('laptop-b')
+    expect(fact.shareMode).toBe('denylist')
+    expect(fact.sources).toEqual([{ type: 'repo', value: 'github.com/acme/api' }])
+    expect(fact.at).toBe('2026-07-31T10:00:00.000Z')
+    expect(fact.receivedAt).not.toBe('')
+  })
+
+  it('DISMISSING the proposal does not erase the fact — they are different statements', async () => {
+    const envelope = await sealedFromPeer(RULES_MSG)
+    const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
+    await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+    expect((await readInbox(CONN_ID)).proposals).toHaveLength(1)
+
+    const { dismissProposal } = await import('./envelope-inbox')
+    expect(await dismissProposal(CONN_ID, 'e1')).toBe(true)
+
+    const after = await readInbox(CONN_ID)
+    expect(after.proposals).toEqual([])
+    expect(after.siblingRules).toHaveLength(1)
+    expect(after.siblingRules[0]!.sources).toEqual([{ type: 'repo', value: 'github.com/acme/api' }])
+  })
+
+  it('a later announcement from the same machine SUPERSEDES the earlier fact', async () => {
+    const first = await sealedFromPeer(RULES_MSG)
+    await receiveEnvelopes(conn(), INSTANCE, {
+      fetch: fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope: first }] }).fetch,
+      notify: () => {},
+    })
+    const lifted = await sealedFromPeer(encodeRestrictionMessage({
+      kind: 'restriction', instanceId: INSTANCE, shareMode: 'denylist', sources: [],
+      at: '2026-08-01T10:00:00.000Z',
+    }))
+    await receiveEnvelopes(conn(), INSTANCE, {
+      fetch: fakeCentral({ inbox: [{ id: 'e2', senderMachineId: PEER_ID, envelope: lifted }] }).fetch,
+      notify: () => {},
+    })
+
+    const inbox = await readInbox(CONN_ID)
+    expect(inbox.siblingRules).toHaveLength(1)
+    // The sibling lifted its restriction, so the fact must retract — not accumulate beside the old one.
+    expect(inbox.siblingRules[0]!.sources).toEqual([])
+    expect(inbox.siblingRules[0]!.at).toBe('2026-08-01T10:00:00.000Z')
+  })
+
+  it('a refused envelope contributes no fact — testimony this machine could not verify is not knowledge', async () => {
+    const mismatched = encodeRestrictionMessage({
+      kind: 'restriction', instanceId: 'other-central', shareMode: 'allowlist', sources: [], at: '2026-07-31T10:00:00.000Z',
+    })
+    const envelope = await sealedFromPeer(mismatched)
+    const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
+    await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+    expect((await readInbox(CONN_ID)).siblingRules).toEqual([])
+  })
+
+  it('an inbox written before this field existed reads as no facts, never as a crash', async () => {
+    await writeInbox(CONN_ID, { proposals: [], keyWarnings: [], openedDigests: [] } as never)
+    expect((await readInbox(CONN_ID)).siblingRules).toEqual([])
   })
 })
