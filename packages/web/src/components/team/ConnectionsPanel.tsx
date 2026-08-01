@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Plus } from 'lucide-react'
-import type { SessionMeta, TeamConnection, TeamConfig, ModelUsage, ShareSource } from '@agentistics/core'
+import type { SessionMeta, TeamConnection, TeamConfig, ModelUsage, ShareSource, SiblingRuleFact } from '@agentistics/core'
 import { readTeamConnections } from '@agentistics/core'
 import type { ArchiveMode } from '../ArchiveConsentModal'
 import { resolveArchiveChoice } from '../../lib/archive'
@@ -22,6 +22,10 @@ export interface ProposalsResponse {
     proposals?: ProposalView[]
     keyWarnings?: KeyWarningView[]
     peers?: { machineId: string; machineName: string; fingerprint: string }[]
+    /** What each sibling machine last announced about its OWN rules — the standing facts behind
+     *  the reverse warning in the rules picker. Optional: a central on an older build omits it,
+     *  which must read as "nothing announced", never as an error. */
+    siblingRules?: SiblingRuleFact[]
   }[]
 }
 
@@ -164,9 +168,15 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
   }, [loadProposals])
 
   const inboxById = useMemo(() => {
-    const map: Record<string, { proposals: ProposalView[]; keyWarnings: KeyWarningView[]; peers: PeerFingerprint[] }> = {}
+    const map: Record<string, {
+      proposals: ProposalView[]; keyWarnings: KeyWarningView[]; peers: PeerFingerprint[]
+      siblingRules: SiblingRuleFact[]
+    }> = {}
     for (const e of proposalsResp?.connections ?? []) {
-      map[e.connId] = { proposals: e.proposals ?? [], keyWarnings: e.keyWarnings ?? [], peers: e.peers ?? [] }
+      map[e.connId] = {
+        proposals: e.proposals ?? [], keyWarnings: e.keyWarnings ?? [], peers: e.peers ?? [],
+        siblingRules: e.siblingRules ?? [],
+      }
     }
     return map
   }, [proposalsResp])
@@ -341,6 +351,7 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
               proposals={inboxById[conn.id]?.proposals ?? []}
               keyWarnings={inboxById[conn.id]?.keyWarnings ?? []}
               peers={inboxById[conn.id]?.peers ?? []}
+              siblingRules={inboxById[conn.id]?.siblingRules ?? []}
               selfFingerprint={proposalsResp?.me?.fingerprint ?? ''}
               onDismissProposal={handleDismissProposal}
             />

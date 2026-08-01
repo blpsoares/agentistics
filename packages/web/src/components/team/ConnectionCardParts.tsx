@@ -1,6 +1,6 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
-import type { SessionMeta, ModelUsage, ShareSource } from '@agentistics/core'
+import type { SessionMeta, ModelUsage, ShareSource, SiblingRuleFact } from '@agentistics/core'
 import type { ArchiveMode } from '../ArchiveConsentModal'
 import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
 import { COPY, interpolate } from './copy'
@@ -82,7 +82,7 @@ export function ResyncStrip({ resync, lang }: { resync: ResyncProgress; lang: 'p
  */
 export function RepoPanelSlot({
   connId, sources, shareMode, state, status, archiveMode, shareTargets, projectTargets, sessions,
-  modelUsage, otelEnabled, lang, onApplyRules, phase, onPhase, editing, onEditingChange,
+  modelUsage, otelEnabled, lang, siblingRules, onApplyRules, phase, onPhase, editing, onEditingChange,
 }: {
   connId: string
   sources: ShareSource[] | undefined
@@ -96,6 +96,8 @@ export function RepoPanelSlot({
   modelUsage: Record<string, ModelUsage>
   otelEnabled: boolean
   lang: 'pt' | 'en'
+  /** Siblings' announced rules — the reverse warning's only evidence. See `siblingWarnings.ts`. */
+  siblingRules?: SiblingRuleFact[]
   onApplyRules: (connId: string, mode: ShareMode, sources: ShareSource[]) => Promise<{ ok: true; queued: boolean } | { ok: false }>
   /** Owned by the CARD, which stays mounted while collapsed — the panel below only reports
    *  transitions into it (Important 2). */
@@ -129,6 +131,7 @@ export function RepoPanelSlot({
       modelUsage={modelUsage}
       otelEnabled={otelEnabled}
       lang={lang}
+      siblingRules={siblingRules}
       onApply={onApplyRules}
       phase={phase}
       onPhase={onPhase}

@@ -301,6 +301,26 @@ export const COPY = {
     en: 'no linked repository',
     pt: 'sem repositório vinculado',
   },
+  // The REVERSE of the three `elsewhere*` rows above. That warning is about data the central
+  // demonstrably holds; this one is about a sibling's own sealed testimony, which is a weaker kind
+  // of evidence — hence `siblingWithholdBestEffort`, which is the load-bearing row here and must
+  // never be dropped for space, softened, or moved out of sight of the list it qualifies.
+  siblingWithholdTitle: {
+    en: 'Another of your machines does not share this',
+    pt: 'Outra máquina sua não compartilha isto',
+  },
+  siblingWithholdBody: {
+    en: 'You are about to start sharing these with this central. Another machine signed in to your account has told this one that it withholds them. Rules are per machine — nothing changes there, and nothing here is blocked.',
+    pt: 'Você está prestes a começar a compartilhar isto com esta central. Outra máquina conectada à sua conta informou a esta que não os compartilha. As regras são por máquina — nada muda lá, e nada aqui é bloqueado.',
+  },
+  siblingWithholdBestEffort: {
+    en: 'This machine only knows what your other machines have announced to it, and only since encrypted machine-to-machine messages began. No warning here does not mean no machine restricts it.',
+    pt: 'Esta máquina só sabe o que as suas outras máquinas anunciaram a ela, e apenas desde que as mensagens criptografadas entre máquinas começaram. A ausência de aviso aqui não significa que nenhuma máquina restringe isto.',
+  },
+  siblingWithholdRow: {
+    en: 'not shared on {machines}',
+    pt: 'não compartilhado em {machines}',
+  },
   proposalTitle: {
     en: '{name} restricted repositories for this central',
     pt: '{name} restringiu repositórios nesta central',

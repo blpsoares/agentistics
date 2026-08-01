@@ -1,6 +1,6 @@
 import { useState, type CSSProperties } from 'react'
 import { Loader2, EyeOff, Check } from 'lucide-react'
-import type { SessionMeta, ModelUsage, ShareSource } from '@agentistics/core'
+import type { SessionMeta, ModelUsage, ShareSource, SiblingRuleFact } from '@agentistics/core'
 import { NO_REPO_KEY, fmtCost } from '@agentistics/core'
 import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
 import { plural } from '../../lib/shareRepos'
@@ -56,6 +56,9 @@ export interface SharedReposPanelProps {
    *  `otelExportEnabled` on `GET /api/team/status`, computed from `OTEL_EXPORTER_OTLP_ENDPOINT`). */
   otelEnabled: boolean
   lang: 'pt' | 'en'
+  /** What each sibling machine last announced about its OWN rules, from this machine's sealed
+   *  envelope inbox. The reverse warning's only sound evidence — see `siblingWarnings.ts`. */
+  siblingRules?: SiblingRuleFact[]
   /** The ONE write this panel performs. Resolves to whether the server queued a resync (something
    *  actually changed) so the panel knows whether to wait for `status.resync` at all. Throws (or
    *  resolves false) on failure — the caller decides what "failed" means for its own transport. */
@@ -75,7 +78,7 @@ export interface SharedReposPanelProps {
 
 export function SharedReposPanel({
   connId, sources, shareMode, cardState, status, shareTargets, projectTargets, sessions, modelUsage,
-  otelEnabled, lang, onApply, phase, onPhase, editing, onEditingChange,
+  otelEnabled, lang, siblingRules, onApply, phase, onPhase, editing, onEditingChange,
 }: SharedReposPanelProps) {
   const isMobile = useIsMobile()
   const noRepoLabel = COPY.noRepoTitle[lang]
@@ -210,6 +213,7 @@ export function SharedReposPanel({
             impactSessions={impact.sessions}
             impactCost={impact.costUSD}
             showEmptyAllowlistWarning={showEmptyAllowlistWarning}
+            siblingRules={siblingRules}
             onToggleRow={(target, nextShared) => setDraft(toggleTarget(draftDenied, target, nextShared))}
             onShareAll={() => setDraft(shareAllDraft(targets))}
             onBlockAll={() => setDraft(blockAllDraft(targets))}
