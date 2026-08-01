@@ -9,6 +9,7 @@ import { StatusDot, ConfirmModal } from '../../pages/settings/primitives'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { COPY, PLURAL_COPY, interpolate } from './copy'
 import { ConnectionIdentity, type ProbedIdentity } from './ConnectionIdentity'
+import { resolveCardIdentity } from './cardIdentity'
 import type { ConnectionStatusEntry } from './statusTypes'
 import {
   isBrokenEndpoint, resolveCardState, resolveRulePill, showsApplyQueuedBanner, resolveWritesDisabled,
@@ -116,13 +117,20 @@ export function ConnectionCard({
   const state = resolveCardState(status)
   const brokenEndpoint = isBrokenEndpoint(conn.endpoint)
   const host = hostOf(conn.endpoint)
+  // The typing target of the disconnect confirmation, deliberately the PLAIN name (never the
+  // `host · user` disambiguation `names.central` may carry) — it has to be typeable on a phone.
   const centralLabel = conn.label ?? host
 
-  // Fix 6 (Plan 4 Task 1): the title used to prefer `identity.org` — a fixed org constant, not
-  // machine-specific — over the machine's own name. `identity.machineName` (forwarded from the
-  // probe route) IS "the name the central gave the machine", so it now wins over `org`.
-  const displayLabel = conn.label
-    ?? (duplicateHost ? `${host} · ${identity?.machineName ?? conn.user ?? '—'}` : (identity?.machineName ?? identity?.org ?? host))
+  // Which name goes where is decided in ONE pure place — see `cardIdentity.ts`. The old inline
+  // ternary here preferred `conn.label`, a local nickname, over `identity.machineName`, the name
+  // the CENTRAL assigned this machine: the machine appeared to have renamed itself.
+  const names = resolveCardIdentity({
+    machineName: identity?.machineName,
+    label: conn.label,
+    host,
+    user: conn.user,
+    duplicateHost,
+  })
 
   async function handleSyncNow() {
     if (syncing) return
@@ -183,19 +191,40 @@ export function ConnectionCard({
         {state === 'resyncing'
           ? <Loader2 size={10} style={{ color: 'var(--anthropic-orange)', animation: 'spin 1s linear infinite', flexShrink: 0 }} />
           : <StatusDot state={DOT[state]} />}
-        <div style={{ minWidth: 0, flex: '1 1 auto' }}>
-          {/* Fix (save-and-rename): the machine cannot name itself — no pencil, no rename
-             control. `displayLabel` is the name the CENTRAL gave this machine
-             (`identity.machineName`, from the probe), falling back to a stored `label` (an
-             older config, or one the CLI's `--label` flag set) and then the endpoint host. */}
+        <div style={{ minWidth: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {/* The card's subject is the CONNECTION, so its title is the central: the local nickname
+             if one was ever set (CLI `--label`, or an older config), else the endpoint host. The
+             nickname names THAT CENTRAL and nothing else. */}
           <span style={{
             display: 'block', fontSize: 14, fontWeight: 600, color: 'var(--text-primary)',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
-            {displayLabel}
+            {names.central}
           </span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: 'var(--text-tertiary)' }}>
-            <span>{COPY.appearsAs[lang]} <strong style={{ color: 'var(--text-secondary)' }}>{conn.user || '—'}</strong></span>
+          {/* Machine and account are different things and are labelled as such. The machine's name
+             is READ-ONLY here — it is assigned by the central (`whoami`) and this machine may
+             neither write it nor mask it. It can be long ("Alienware 2 (teste da segunda
+             central)"), so it wraps inside its own box; the page body never scrolls sideways. */}
+          <div style={{
+            display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 10, rowGap: 2,
+            fontSize: 11.5, color: 'var(--text-tertiary)', minWidth: 0,
+          }}>
+            <span
+              style={{ minWidth: 0, overflowWrap: 'anywhere' }}
+              title={names.machineSource === 'central' ? COPY.machineNameByCentral[lang] : COPY.machineNamePending[lang]}
+            >
+              {COPY.cardMachine[lang]}{' '}
+              <strong style={{
+                fontWeight: 600,
+                color: names.machineSource === 'central' ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+              }}>
+                {names.machine}
+              </strong>
+            </span>
+            <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+              {COPY.cardUser[lang]}{' '}
+              <strong style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{names.user || '—'}</strong>
+            </span>
           </div>
         </div>
         {rulePill && (

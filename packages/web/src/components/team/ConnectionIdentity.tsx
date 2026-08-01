@@ -82,7 +82,15 @@ export function ConnectionIdentity({
       )}
       {!loading && identity?.ok && (
         <>
-          {identity.machineName && <Row label={COPY.identityMachineName[lang]} value={identity.machineName} />}
+          {/* Read-only, and said so: the central assigns this name and nothing on this machine may
+             write it. The whole point of the row is that it is NOT the local nickname. */}
+          {identity.machineName && (
+            <Row
+              label={COPY.identityMachineName[lang]}
+              hint={COPY.machineNameByCentral[lang]}
+              value={<span style={{ overflowWrap: 'anywhere' }}>{identity.machineName}</span>}
+            />
+          )}
           <Row label={COPY.identityUser[lang]} value={identity.user || '—'} />
           <Row label={COPY.identityOrg[lang]} value={identity.org || '—'} />
           {identity.latencyMs != null && <Row label={COPY.identityLatency[lang]} value={`${identity.latencyMs}ms`} />}
@@ -109,9 +117,9 @@ export function ConnectionIdentity({
   )
 }
 
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
+function Row({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 12 }}>
+    <div title={hint} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 12 }}>
       <span style={{ color: 'var(--text-tertiary)', flexShrink: 0, minWidth: 70 }}>{label}</span>
       <span style={{ color: 'var(--text-secondary)', minWidth: 0, flex: 1 }}>{value}</span>
     </div>
