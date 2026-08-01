@@ -409,3 +409,41 @@ describe('replay memory', () => {
     expect(hasOpened(await readInbox(CONN_ID), 'other')).toBe(false)
   })
 })
+
+describe('receiveEnvelopes — a sender the directory never listed', () => {
+  it('refuses a ghost machine: omitted from the directory, injected as the sender', async () => {
+    // The cheaper twin of the fabricated-peer attack. Rather than publishing a peer (which C2 now
+    // announces), the central publishes NOTHING and seals under its own keypair as a machine id it
+    // invented. No pin is ever taken, so `pinnedKeyFor` is null, `open` skips the pin comparison —
+    // and member.peer_pinned never fires, because there is nothing to pin.
+    const ghost = generateMachineKeypair()
+    const envelope = await sealedFromPeer(RULES_MSG, { senderKeys: ghost, senderId: 'ghost-machine' })
+    const central = fakeCentral({ peers: [], inbox: [{ id: 'e1', senderMachineId: 'ghost-machine', envelope }] })
+    const notes: string[] = []
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: n => notes.push(n.code) })
+
+    expect(res.proposals).toBe(0)
+    expect(res.refused).toBe(1)
+    expect((await readInbox(CONN_ID)).proposals).toEqual([])
+    expect(notes).toEqual([])
+  })
+
+  it('refuses an unpinned sender even when the directory lists OTHER machines', async () => {
+    const ghost = generateMachineKeypair()
+    const envelope = await sealedFromPeer(RULES_MSG, { senderKeys: ghost, senderId: 'ghost-machine' })
+    const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: 'ghost-machine', envelope }] })
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+    expect(res.proposals).toBe(0)
+    expect(res.refused).toBe(1)
+  })
+
+  it('still accepts a genuine first-sight sender, which the directory always lists', async () => {
+    // No legitimate race: publishAndFetchPeers publishes the sender's key before it deposits, so a
+    // real sender is in the directory the receiver just read.
+    const envelope = await sealedFromPeer(RULES_MSG)
+    const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+    expect(res.proposals).toBe(1)
+    expect(res.refused).toBe(0)
+  })
+})

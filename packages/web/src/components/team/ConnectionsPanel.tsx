@@ -11,7 +11,7 @@ import { ConnectionCard } from './ConnectionCard'
 import { AddCentralDrawer } from './AddCentralDrawer'
 import type { ShareMode } from './sharePanelState'
 import type { TeamStatusResponse, ConnectionStatusEntry } from './statusTypes'
-import type { ProposalView, KeyWarningView } from './ProposalsSection'
+import type { ProposalView, KeyWarningView, PeerFingerprint } from './ProposalsSection'
 
 /** `GET /api/team/proposals` — this machine's own decrypted sealed-envelope inbox, same-origin. */
 export interface ProposalsResponse {
@@ -21,7 +21,7 @@ export interface ProposalsResponse {
     connId: string
     proposals?: ProposalView[]
     keyWarnings?: KeyWarningView[]
-    peers?: { machineId: string; fingerprint: string }[]
+    peers?: { machineId: string; machineName: string; fingerprint: string }[]
   }[]
 }
 
@@ -164,7 +164,7 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
   }, [loadProposals])
 
   const inboxById = useMemo(() => {
-    const map: Record<string, { proposals: ProposalView[]; keyWarnings: KeyWarningView[]; peers: { machineId: string; fingerprint: string }[] }> = {}
+    const map: Record<string, { proposals: ProposalView[]; keyWarnings: KeyWarningView[]; peers: PeerFingerprint[] }> = {}
     for (const e of proposalsResp?.connections ?? []) {
       map[e.connId] = { proposals: e.proposals ?? [], keyWarnings: e.keyWarnings ?? [], peers: e.peers ?? [] }
     }

@@ -62,21 +62,35 @@ export async function publicKeyOnly(): Promise<{ publicKey: string; fingerprint:
   return { publicKey: kp.publicKey, fingerprint: fingerprintOf(kp.publicKey) }
 }
 
-type PinMap = Record<string, string>
+/** What is pinned for one peer. The NAME is display only and carries no authority — it is stored
+ *  so the fingerprint list can say "Laptop B" instead of a token-hash prefix, which is what the
+ *  "if you do not recognise a machine" instruction actually asks the user to read. */
+interface Pin {
+  publicKey: string
+  machineName: string
+}
+
+type PinMap = Record<string, Pin>
 
 async function readPins(connId: string): Promise<PinMap> {
   const raw = await safeReadJson<unknown>(envelopePinsFile(connId))
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
   const out: PinMap = {}
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof v === 'string' && v !== '') out[k] = v
+    // A bare string is the earlier on-disk form (key only, no name). Read it rather than discard
+    // it: dropping a pin would silently downgrade an established peer back to first sight.
+    if (typeof v === 'string' && v !== '') { out[k] = { publicKey: v, machineName: '' }; continue }
+    if (!v || typeof v !== 'object') continue
+    const o = v as Record<string, unknown>
+    if (typeof o.publicKey !== 'string' || o.publicKey === '') continue
+    out[k] = { publicKey: o.publicKey, machineName: typeof o.machineName === 'string' ? o.machineName : '' }
   }
   return out
 }
 
 /** The key pinned for a peer on this connection, or `null` at first sight. */
 export async function pinnedKeyFor(connId: string, machineId: string): Promise<string | null> {
-  return (await readPins(connId))[machineId] ?? null
+  return (await readPins(connId))[machineId]?.publicKey ?? null
 }
 
 /**
@@ -84,12 +98,25 @@ export async function pinnedKeyFor(connId: string, machineId: string): Promise<s
  * caller decides what that means. A `'changed'` decision NEVER overwrites the stored pin — the
  * whole point is that the old key stays the reference until a human resolves it.
  */
-export async function pinPeerKey(connId: string, machineId: string, publicKey: string): Promise<PinDecision> {
+export async function pinPeerKey(
+  connId: string,
+  machineId: string,
+  publicKey: string,
+  machineName = '',
+): Promise<PinDecision> {
   if (!machineId || !publicKey) return 'changed'
   const pins = await readPins(connId)
-  const decision = decidePin(pins[machineId], publicKey)
+  const decision = decidePin(pins[machineId]?.publicKey, publicKey)
   if (decision === 'new') {
-    pins[machineId] = publicKey
+    pins[machineId] = { publicKey, machineName }
+    await writePrivate(envelopePinsFile(connId), JSON.stringify(pins, null, 2))
+    return decision
+  }
+  // A machine can be RENAMED on the central, and a stale label in the fingerprint list is worse
+  // than none. Only the display name is refreshed, and only when it actually differs — never the
+  // key, and never a write per poll. The name is not authority: `decidePin` has already run.
+  if (decision === 'same' && machineName && pins[machineId]!.machineName !== machineName) {
+    pins[machineId] = { publicKey, machineName }
     await writePrivate(envelopePinsFile(connId), JSON.stringify(pins, null, 2))
   }
   return decision
@@ -97,9 +124,15 @@ export async function pinPeerKey(connId: string, machineId: string, publicKey: s
 
 /** Every pinned peer on a connection, with fingerprints — for the "compare two machines you own"
  *  affordance in the UI. Public keys only; there is nothing secret in this list. */
-export async function pinnedPeers(connId: string): Promise<{ machineId: string; fingerprint: string }[]> {
+export async function pinnedPeers(
+  connId: string,
+): Promise<{ machineId: string; machineName: string; fingerprint: string }[]> {
   const pins = await readPins(connId)
   return Object.entries(pins)
-    .map(([machineId, publicKey]) => ({ machineId, fingerprint: fingerprintOf(publicKey) }))
-    .sort((a, b) => a.machineId.localeCompare(b.machineId))
+    .map(([machineId, pin]) => ({
+      machineId,
+      machineName: pin.machineName,
+      fingerprint: fingerprintOf(pin.publicKey),
+    }))
+    .sort((a, b) => (a.machineName || a.machineId).localeCompare(b.machineName || b.machineId))
 }

@@ -42,18 +42,29 @@ export function parseDismissBody(raw: unknown): { ok: true; body: DismissBody } 
   return { ok: true, body: { connId: r.connId, proposalId, keyWarningMachineId } }
 }
 
-export async function handleProposals(req: Request): Promise<Response> {
+export async function handleProposals(
+  req: Request,
+  deps: { readPreferences?: typeof readPreferences } = {},
+): Promise<Response> {
   try {
     if (req.method === 'GET') {
-      const prefs = await readPreferences()
+      const prefs = await (deps.readPreferences ?? readPreferences)()
       const connections = prefs.team?.connections ?? []
-      const byConnection = await Promise.all(connections.map(async c => ({
-        connId: c.id,
-        ...(await readInbox(c.id)),
-        // Public keys only — the fingerprint affordance for a user who wants to compare two
-        // machines they own. Never the pinned key itself, and never this machine's private half.
-        peers: await pinnedPeers(c.id),
-      })))
+      const byConnection = await Promise.all(connections.map(async c => {
+        // Named fields, never a spread of the whole inbox: `openedDigests` is up to 500 hex
+        // strings per connection and the panel polls this every 30s. It is not secret, but a route
+        // must ship what its consumer needs, not whatever the store happens to hold — a spread
+        // silently exports every field a future revision adds to `InboxState`.
+        const inbox = await readInbox(c.id)
+        return {
+          connId: c.id,
+          proposals: inbox.proposals,
+          keyWarnings: inbox.keyWarnings,
+          // Public keys only — the fingerprint affordance for a user who wants to compare two
+          // machines they own. Never the pinned key itself, and never this machine's private half.
+          peers: await pinnedPeers(c.id),
+        }
+      }))
       return json({ ok: true, me: await publicKeyOnly(), connections: byConnection })
     }
 

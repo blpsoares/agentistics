@@ -50,9 +50,16 @@ import {
   hkdfSync, createCipheriv, createDecipheriv, randomBytes, createHash,
 } from 'node:crypto'
 
-/** Bumped only if the construction above changes. `open` refuses anything else outright rather
- *  than guessing at a format it does not know. */
-export const ENVELOPE_VERSION = 1
+/**
+ * Bumped whenever the SEALED STRUCT or the AAD changes — v2 added `instanceId` to both. `open`
+ * refuses any other version outright rather than guessing at a format it does not know.
+ *
+ * A version mismatch fails closed either way (the AAD differs, so GCM would reject it), but it is
+ * given its OWN reason rather than being folded into `undecryptable`: in a mixed-version fleet the
+ * machine on the older build is the one whose proposals silently vanish, and "this peer is running
+ * a different build" is a fact the user can act on, while "did not authenticate" reads as an attack.
+ */
+export const ENVELOPE_VERSION = 2
 
 /** Domain separation, so a key derived here can never collide with one derived by some other
  *  feature that happens to use the same primitives. */
@@ -112,6 +119,8 @@ export type OpenResult =
   | { ok: false; reason: 'sender_key_changed' }
   /** Not an envelope this build understands. */
   | { ok: false; reason: 'malformed' }
+  /** A valid envelope from a peer running a different build of this channel. */
+  | { ok: false; reason: 'version_mismatch' }
   /** Authenticated decryption failed: wrong recipient, tampered bytes, or a forged header. */
   | { ok: false; reason: 'undecryptable' }
   /** The transport claimed a different sender than the sealed header names. */
@@ -238,7 +247,9 @@ export function peekEnvelope(raw: unknown): SealedEnvelope | null {
 function asEnvelope(raw: unknown): SealedEnvelope | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const e = raw as Record<string, unknown>
-  if (e.v !== ENVELOPE_VERSION) return null
+  // Version is checked by the caller (so it can be REPORTED, not just dropped); shape is checked
+  // here for every version this build could be handed.
+  if (typeof e.v !== 'number') return null
   for (const k of ['senderMachineId', 'recipientMachineId', 'senderPublicKey', 'ephemeralPublicKey', 'instanceId', 'iv', 'ciphertext', 'tag', 'createdAt']) {
     if (typeof e[k] !== 'string') return null
   }
@@ -274,6 +285,7 @@ export function open(input: {
 }): OpenResult {
   const env = asEnvelope(input.envelope)
   if (!env) return { ok: false, reason: 'malformed' }
+  if (env.v !== ENVELOPE_VERSION) return { ok: false, reason: 'version_mismatch' }
 
   // EVERYTHING BELOW HAPPENS BEFORE ANY KEY AGREEMENT. Each check compares a value the transport
   // supplied against the same value sealed inside the AAD. The seal proves these fields were not

@@ -97,3 +97,34 @@ describe('parseDismissBody', () => {
     }
   })
 })
+
+describe('GET /api/team/proposals — the response shape is declared, not spread', () => {
+  it('ships the panel\'s fields and not the replay memory', async () => {
+    // `openedDigests` is up to 500 hex strings per connection and the panel polls every 30s. Not
+    // secret, but a spread of the whole store silently exports every field a future revision adds.
+    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = await mkdtemp(join(tmpdir(), 'agentistics-proposals-route-'))
+    try {
+      const { __setTeamConnDirForTests } = await import('./config')
+      __setTeamConnDirForTests(dir)
+      const { writeInbox } = await import('./envelope-inbox')
+      const { handleProposals } = await import('./envelope-proposals')
+      const connId = 'c_cccccccccccc'
+      await writeInbox(connId, { proposals: [], keyWarnings: [], openedDigests: ['deadbeef'] })
+
+      // A stub preferences read — this test must never touch the developer's real ~/.agentistics.
+      const res = await handleProposals(new Request('http://localhost/api/team/proposals'), {
+        readPreferences: async () => ({ team: { mode: 'member' as const, connections: [
+          { id: connId, endpoint: 'https://c.example', org: 'default', user: 'me', token: 't', deniedRepos: [] },
+        ] } }),
+      })
+      const body = await res.json() as { connections: Record<string, unknown>[] }
+      expect(Object.keys(body.connections[0]!).sort()).toEqual(['connId', 'keyWarnings', 'peers', 'proposals'])
+      expect(JSON.stringify(body)).not.toContain('deadbeef')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})

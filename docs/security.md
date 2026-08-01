@@ -311,6 +311,13 @@ automatically, but never **silently**:
   **leaves the envelope on the central** so resolving the key does not cost the message. A sender
   likewise refuses to seal *to* a changed key. The pin is per connection: the same machine id on two
   centrals is two different machines.
+- **A sender must be in the directory.** An envelope from a machine the key directory did not just
+  list is refused outright, pinned or not. This closes the cheaper twin of the fabricated-peer
+  attack: rather than *publishing* a peer (which is announced, below), a central can *omit* one and
+  seal under an id it invented — no directory entry means no pin, and an unpinned sender would
+  otherwise skip the pin comparison entirely and be filed as an apply-ready proposal with no
+  notification at all. There is no legitimate race, because a sender publishes its own key before
+  it deposits.
 - **Announce every new pin.** The first time a peer is pinned — including a fabricated one — the
   connection card and a `member.peer_pinned` notification name it: "a new machine of your account
   will now receive your sharing rules". Same alarm class as a changed key. Silent

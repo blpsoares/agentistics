@@ -261,3 +261,16 @@ describe('envelopeDigest', () => {
     expect(envelopeDigest({ ...env, senderMachineId: 'rewritten' } as typeof env)).toBe(envelopeDigest(env))
   })
 })
+
+describe('open — version', () => {
+  it('refuses a peer running a different build, with its own reason', () => {
+    // Folding this into `undecryptable` would read as an attack; in a mixed-version fleet the
+    // machine on the older build is exactly the one whose proposals silently vanish.
+    const res = openAsB({ ...sealAtoB(), v: 1 })
+    expect(res).toEqual({ ok: false, reason: 'version_mismatch' })
+  })
+
+  it('reports a non-numeric version as malformed', () => {
+    expect(openAsB({ ...sealAtoB(), v: 'two' })).toEqual({ ok: false, reason: 'malformed' })
+  })
+})

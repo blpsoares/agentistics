@@ -32,7 +32,15 @@ export interface KeyWarningView {
 
 export interface PeerFingerprint {
   machineId: string
+  /** As named by the central. Empty for a pin taken before names were stored. */
+  machineName: string
   fingerprint: string
+}
+
+/** PURE. What to call a peer in the fingerprint list. Falls back to a short id only when there is
+ *  genuinely no name — asking a user to "recognise" a token-hash prefix is asking nothing. */
+export function peerLabel(peer: PeerFingerprint): string {
+  return peer.machineName || peer.machineId.slice(0, 12)
 }
 
 /** Anything older than this is called out on the card. A rules change is a human-speed event, so a
@@ -192,7 +200,7 @@ export function ProposalsSection({
             )}
             {peers.map(peer => (
               <li key={peer.machineId} style={{ fontSize: 10.5, color: 'var(--text-tertiary)', overflowWrap: 'anywhere' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>{peer.machineId.slice(0, 12)}</span>
+                <span style={{ color: 'var(--text-secondary)' }}>{peerLabel(peer)}</span>
                 {' — '}
                 <code style={{ fontSize: 10.5 }}>{peer.fingerprint}</code>
               </li>

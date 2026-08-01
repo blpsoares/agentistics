@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test'
 import { NO_REPO_KEY } from '@agentistics/core'
-import { describeSources, proposalAge, PROPOSAL_STALE_MS } from './ProposalsSection'
+import { describeSources, proposalAge, peerLabel, PROPOSAL_STALE_MS } from './ProposalsSection'
 import { NOTIFICATION_TEXT, resolveNotification } from '../../lib/notifications'
 
 describe('describeSources', () => {
@@ -92,5 +92,17 @@ describe('the peer-pinned notification', () => {
     )
     expect(text.message).toContain('Laptop B')
     expect(text.message).not.toContain('{')
+  })
+})
+
+describe('peerLabel — the fingerprint list must name machines, not hashes', () => {
+  it('uses the machine name the central gave it', () => {
+    expect(peerLabel({ machineId: 'a'.repeat(64), machineName: 'Laptop B', fingerprint: 'x' })).toBe('Laptop B')
+  })
+
+  it('falls back to a short id only when there is genuinely no name', () => {
+    // "If you do not recognise a machine, compare its fingerprint" asks nothing of a user who is
+    // shown a token-hash prefix, so this is the last resort, not the default.
+    expect(peerLabel({ machineId: 'abcdef0123456789', machineName: '', fingerprint: 'x' })).toBe('abcdef012345')
   })
 })

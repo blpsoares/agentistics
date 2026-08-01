@@ -117,3 +117,37 @@ describe('pinnedPeers', () => {
     expect(await pinnedPeers(CONN)).toEqual([])
   })
 })
+
+describe('pinned peer names', () => {
+  it('stores the machine name alongside the key and returns it with the fingerprint', async () => {
+    await pinPeerKey(CONN, 'peer-1', 'K1', 'Laptop B')
+    const peers = await pinnedPeers(CONN)
+    expect(peers[0]!.machineName).toBe('Laptop B')
+    expect(peers[0]!.machineId).toBe('peer-1')
+  })
+
+  it('refreshes a renamed machine without touching the key', async () => {
+    await pinPeerKey(CONN, 'peer-1', 'K1', 'Old Name')
+    expect(await pinPeerKey(CONN, 'peer-1', 'K1', 'New Name')).toBe('same')
+    expect((await pinnedPeers(CONN))[0]!.machineName).toBe('New Name')
+    expect(await pinnedKeyFor(CONN, 'peer-1')).toBe('K1')
+  })
+
+  it('never lets a rename smuggle in a different key', async () => {
+    await pinPeerKey(CONN, 'peer-1', 'K1', 'Laptop B')
+    expect(await pinPeerKey(CONN, 'peer-1', 'K2', 'Laptop B')).toBe('changed')
+    expect(await pinnedKeyFor(CONN, 'peer-1')).toBe('K1')
+  })
+
+  it('reads a pin written in the earlier key-only form rather than dropping it', async () => {
+    // Dropping it would silently downgrade an established peer back to first sight.
+    const { writeFile, mkdir } = await import('node:fs/promises')
+    const { envelopePinsFile } = await import('./config')
+    const path = envelopePinsFile(CONN)
+    await mkdir(require('node:path').dirname(path), { recursive: true })
+    await writeFile(path, JSON.stringify({ 'peer-1': 'LEGACYKEY' }), 'utf-8')
+    expect(await pinnedKeyFor(CONN, 'peer-1')).toBe('LEGACYKEY')
+    expect(await pinPeerKey(CONN, 'peer-1', 'LEGACYKEY')).toBe('same')
+    expect(await pinPeerKey(CONN, 'peer-1', 'OTHER')).toBe('changed')
+  })
+})

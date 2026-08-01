@@ -140,7 +140,7 @@ export async function sendRestriction(
   let skipped = 0
   for (const peer of peers) {
     if (peer.machineId === me) continue
-    const decision = await pinPeerKey(conn.id, peer.machineId, peer.publicKey)
+    const decision = await pinPeerKey(conn.id, peer.machineId, peer.publicKey, peer.machineName)
     if (decision === 'changed') { skipped++; continue }
     if (decision === 'new') newPeers.push({ machineId: peer.machineId, machineName: peer.machineName })
     try {
@@ -259,7 +259,7 @@ export async function receiveEnvelopes(
   const changed = new Set<string>()
   const newPeers: { machineId: string; machineName: string }[] = []
   for (const peer of peers) {
-    const decision = await pinPeerKey(conn.id, peer.machineId, peer.publicKey)
+    const decision = await pinPeerKey(conn.id, peer.machineId, peer.publicKey, peer.machineName)
     if (decision === 'changed') changed.add(peer.machineId)
     if (decision === 'new') newPeers.push({ machineId: peer.machineId, machineName: peer.machineName })
   }
@@ -290,6 +290,20 @@ export async function receiveEnvelopes(
     // beside it — otherwise a central could aim a genuine envelope at whichever pin it liked by
     // choosing the wrapper's id. `open` then holds the two to being equal.
     const pinned = await pinnedKeyFor(conn.id, header.senderMachineId)
+
+    // MEMBERSHIP. An unpinned sender is only acceptable if the directory just listed it — and a
+    // pin is only ever taken from that directory, which is what makes every fabricated peer
+    // ANNOUNCED (`member.peer_pinned`). Without this check the cheaper attack is to OMIT the
+    // machine instead of publishing it: no directory entry means no pin, `open` then skips the pin
+    // comparison entirely, and an invented sender is filed as an apply-ready proposal with no
+    // notification at all. There is no legitimate race — `publishAndFetchPeers` publishes the
+    // sender's key BEFORE it deposits, so a genuine sender is always in the directory the
+    // receiver has just read.
+    if (pinned === null && !names.has(header.senderMachineId)) {
+      ack.push(item.id)
+      refused++
+      continue
+    }
     const opened = open({
       envelope: item.envelope,
       recipientPrivateKey: kp.privateKey,
