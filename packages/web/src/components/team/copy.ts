@@ -321,6 +321,23 @@ export const COPY = {
     en: 'not shared on {machines}',
     pt: 'não compartilhado em {machines}',
   },
+  // The PROJECT dimension is correlated across machines by FOLDER NAME, because the same project
+  // sits at a different path on each one. That is a heuristic — `api`, `web` and `docs` collide
+  // constantly — so these rows say "a project with this name" and never "this project". Softening
+  // that back into the definite article turns a helpful hint into a confident accusation that a
+  // colleague is withholding work they may never have had.
+  siblingWithholdTitleProject: {
+    en: 'Another of your machines does not share a project with this name',
+    pt: 'Outra máquina sua não compartilha um projeto com este nome',
+  },
+  siblingWithholdRowProject: {
+    en: 'a project with this name is not shared on {machines}',
+    pt: 'um projeto com este nome não é compartilhado em {machines}',
+  },
+  siblingWithholdProjectNote: {
+    en: 'The same project sits at a different path on each machine, so projects are matched by folder name. A project with the same name on another machine may not be the same project.',
+    pt: 'O mesmo projeto fica em um caminho diferente em cada máquina, então projetos são correspondidos pelo nome da pasta. Um projeto com o mesmo nome em outra máquina pode não ser o mesmo projeto.',
+  },
   proposalTitle: {
     en: '{name} restricted repositories for this central',
     pt: '{name} restringiu repositórios nesta central',

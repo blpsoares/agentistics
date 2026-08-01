@@ -185,7 +185,7 @@ describe('the reverse warning — a sibling withholds what this edit starts shar
     expect(textOf(el)).not.toContain(COPY.siblingWithholdTitle.en)
     // …but the row still carries the machine name, which is what makes it a WARNING and not a report.
     expect(findByType(childrenOf(el), EditView)!.props.withheldBy)
-      .toEqual(new Map([['github.com/acme/api', ['laptop-b']]]))
+      .toEqual(new Map([['github.com/acme/api', [{ name: 'laptop-b', paths: [] }]]]))
   })
 
   test('the projects tab is warned about too, and reads the PROJECT diff, not the repo one', () => {
@@ -193,9 +193,53 @@ describe('the reverse warning — a sibling withholds what this edit starts shar
       tab: 'projects', projectTargets: [API_PROJECT], siblingRules: LAPTOP_HIDES_API,
       projectDiff: startsSharing('/home/a/api'),
     })))
-    expect(text).toContain(COPY.siblingWithholdTitle.en)
+    expect(text).toContain(COPY.siblingWithholdTitleProject.en)
     expect(text).toContain('api')
     expect(text).toContain('laptop-b')
+  })
+
+  test('a project the sibling hides under a DIFFERENT path is warned about, naming that path', () => {
+    // The case the whole correction exists for: correlating by full path found nothing here.
+    const row: ProjectTarget = {
+      key: '/home/me/xpto/abc/projFicticio', kind: 'project', name: 'projFicticio',
+      path: '/home/me/xpto/abc/projFicticio', repoKey: '', sessions: 2, lastActive: '', locked: false,
+    }
+    const facts: SiblingRuleFact[] = [{
+      ...LAPTOP_HIDES_API[0]!, sources: [{ type: 'project', value: '/home/user/projFicticio' }],
+    }]
+    const text = textOf(SharingRulesPicker(baseProps({
+      tab: 'projects', projectTargets: [row], siblingRules: facts,
+      projectDiff: startsSharing('/home/me/xpto/abc/projFicticio'),
+    })))
+    expect(text).toContain('laptop-b')
+    expect(text).toContain('/home/user/projFicticio')
+  })
+
+  test('the projects tab says "a project with this name", never "this project", and explains why', () => {
+    const row: ProjectTarget = {
+      key: '/home/me/api', kind: 'project', name: 'api', path: '/home/me/api',
+      repoKey: '', sessions: 2, lastActive: '', locked: false,
+    }
+    const facts: SiblingRuleFact[] = [{
+      ...LAPTOP_HIDES_API[0]!, sources: [{ type: 'project', value: '/elsewhere/api' }],
+    }]
+    const text = textOf(SharingRulesPicker(baseProps({
+      tab: 'projects', projectTargets: [row], siblingRules: facts,
+      projectDiff: startsSharing('/home/me/api'),
+    })))
+    expect(text).toContain(COPY.siblingWithholdTitleProject.en)
+    expect(text).toContain(COPY.siblingWithholdProjectNote.en)
+    // The repo wording asserts an identity a folder-name match never established.
+    expect(text).not.toContain(COPY.siblingWithholdTitle.en)
+  })
+
+  test('the repos tab keeps the exact-key wording and does not carry the folder-name caveat', () => {
+    const text = textOf(SharingRulesPicker(baseProps({
+      tab: 'repos', targets: [API], siblingRules: LAPTOP_HIDES_API,
+      diff: startsSharing('github.com/acme/api'),
+    })))
+    expect(text).toContain(COPY.siblingWithholdTitle.en)
+    expect(text).not.toContain(COPY.siblingWithholdProjectNote.en)
   })
 
   test('the copy is rendered in the caller\'s language', () => {

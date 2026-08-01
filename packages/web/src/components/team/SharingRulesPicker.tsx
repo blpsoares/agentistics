@@ -78,7 +78,8 @@ export function SharingRulesPicker({
   // the summary block is about; the per-row badges below cover the before-you-decide half.
   const projectWarnings = siblingWarningsFor(siblingRules, projectTargets, projectBucket, new Set(projectDiff.removed))
   const repoWarnings = siblingWarningsFor(siblingRules, targets, repoBucket, new Set(diff.removed))
-  const warnings = tab === 'projects' ? projectWarnings : repoWarnings
+  const onProjects = tab === 'projects'
+  const warnings = onProjects ? projectWarnings : repoWarnings
   const repoWithheldBy = withholdMap(siblingRules, targets, repoBucket)
   const projectWithheldBy = withholdMap(siblingRules, projectTargets, projectBucket)
 
@@ -137,15 +138,24 @@ export function SharingRulesPicker({
           padding: '8px 12px', borderRadius: 7, fontSize: 11.5,
           background: 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)',
         }}>
-          <strong style={{ fontSize: 12, color: 'var(--anthropic-orange)' }}>{COPY.siblingWithholdTitle[lang]}</strong>
+          <strong style={{ fontSize: 12, color: 'var(--anthropic-orange)' }}>
+            {(onProjects ? COPY.siblingWithholdTitleProject : COPY.siblingWithholdTitle)[lang]}
+          </strong>
           <span style={{ color: 'var(--text-secondary)' }}>{COPY.siblingWithholdBody[lang]}</span>
           <ul style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 3 }}>
             {warnings.map(w => (
               <li key={w.key} style={{ color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>
-                {w.name} — {w.machines.join(', ')}
+                {/* The sibling's OWN path is shown when the announcement carried one: seeing
+                    `/home/user/projFicticio` beside your `/home/user/xpto/abc/projFicticio` is what
+                    settles the folder-name ambiguity in one glance. Never fabricated — a machine
+                    that withholds by omission simply has no path here. */}
+                {w.name} — {w.machines.map(m => m.paths.length > 0 ? `${m.name} (${m.paths.join(', ')})` : m.name).join(', ')}
               </li>
             ))}
           </ul>
+          {onProjects && (
+            <span style={{ color: 'var(--text-tertiary)' }}>{COPY.siblingWithholdProjectNote[lang]}</span>
+          )}
           {/* The load-bearing sentence: an absent warning is not a guarantee. Dropping it would
               turn a best-effort signal into an implied audit, which is the whole risk here. */}
           <span style={{ color: 'var(--text-tertiary)' }}>{COPY.siblingWithholdBestEffort[lang]}</span>

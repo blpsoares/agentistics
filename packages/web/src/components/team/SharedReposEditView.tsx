@@ -5,6 +5,7 @@ import { plural } from '../../lib/shareRepos'
 import { RowSwitch } from '../../pages/settings/primitives'
 import { COPY, PLURAL_COPY, interpolate } from './copy'
 import { WithheldBadge } from './SiblingWithheldBadge'
+import type { WithholdingMachine } from './siblingWarnings'
 import { relTime } from './cardState'
 import {
   buildRows, groupRows, keepVisibleKeys, diffDraft, type EffectiveRow,
@@ -141,7 +142,7 @@ export function EditView({
   impactCost: number
   /** Row key → the sibling machines that withhold it (`siblingWarnings.ts`). Absent key = nothing
    *  announced about that row, which is NOT the same as "nobody restricts it". */
-  withheldBy?: ReadonlyMap<string, string[]>
+  withheldBy?: ReadonlyMap<string, WithholdingMachine[]>
   onToggleRow: (target: ShareTarget, nextShared: boolean) => void
   onShareAll: () => void
   onBlockAll: () => void
@@ -237,7 +238,7 @@ function RowGroup({ label, rows, lang, mode, partialRepoKeys, withheldBy, onTogg
   lang: 'pt' | 'en'
   mode: ShareMode
   partialRepoKeys: ReadonlySet<string>
-  withheldBy?: ReadonlyMap<string, string[]>
+  withheldBy?: ReadonlyMap<string, WithholdingMachine[]>
   onToggleRow: (target: ShareTarget, nextShared: boolean) => void
 }) {
   const pt = lang === 'pt'
@@ -284,7 +285,7 @@ function RowGroup({ label, rows, lang, mode, partialRepoKeys, withheldBy, onTogg
                 background: 'var(--bg-elevated)', color: 'var(--text-tertiary)', border: '1px solid var(--border)',
               }}>{t.host}</span>
             )}
-            <WithheldBadge machines={withheldBy?.get(t.key)} lang={lang} />
+            <WithheldBadge machines={withheldBy?.get(t.key)} lang={lang} dimension="repo" />
           </div>
         )
       })}
@@ -313,7 +314,7 @@ export function ProjectEditView({
   isMobile: boolean
   lang: 'pt' | 'en'
   /** Row key → the sibling machines that withhold it. Same contract as `EditView`'s. */
-  withheldBy?: ReadonlyMap<string, string[]>
+  withheldBy?: ReadonlyMap<string, WithholdingMachine[]>
   onToggleRow: (target: ProjectTarget, nextShared: boolean) => void
   onShareAll: () => void
   onBlockAll: () => void
@@ -398,7 +399,7 @@ function ProjectRowGroup({ label, rows, lang, withheldBy, onToggleRow }: {
   label: string
   rows: EffectiveProjectRow[]
   lang: 'pt' | 'en'
-  withheldBy?: ReadonlyMap<string, string[]>
+  withheldBy?: ReadonlyMap<string, WithholdingMachine[]>
   onToggleRow: (target: ProjectTarget, nextShared: boolean) => void
 }) {
   const pt = lang === 'pt'
@@ -429,7 +430,7 @@ function ProjectRowGroup({ label, rows, lang, withheldBy, onToggleRow }: {
               disabled={r.locked}
               dimmed={r.denied}
             />
-            <WithheldBadge machines={withheldBy?.get(t.key)} lang={lang} />
+            <WithheldBadge machines={withheldBy?.get(t.key)} lang={lang} dimension="project" />
           </div>
         )
       })}

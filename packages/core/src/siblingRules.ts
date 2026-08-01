@@ -22,6 +22,26 @@
  * announced at all. The absence of a warning is therefore never proof that nobody restricts a
  * repository, and every surface that renders this must say so.
  *
+ * THE PROJECT DIMENSION IS CORRELATED BY FOLDER NAME, AND ONLY HERE. The same project lives at a
+ * different path on every machine — `/home/user/xpto/abc/projFicticio` on one,
+ * `/home/user/projFicticio` on another — so comparing full `project_path` strings across machines
+ * correlates almost nothing, and the warning would silently never fire for the case it exists for.
+ * `projectNameKey` is therefore the cross-machine key: final folder name, separators unified, case
+ * folded.
+ *
+ * THE LINE NOBODY MAY CROSS. `bucketSharedBy` stays EXACT and is what the cross-check holds to
+ * `sessionShared`: the stored rules keep matching the exact `project_path` they always have. If a
+ * local rule denying `/home/a/x/proj` started meaning "every project named proj", a live privacy
+ * rule would silently widen into paths the user never named — far worse than the bug this fixes.
+ * The basename is a CORRELATION key BETWEEN machines, never a rule semantic. `shareBucketKeys`
+ * (exact) and `crossMachineKeys` (correlation) are separate for that reason, and they must stay
+ * separate however tempting it looks to unify them.
+ *
+ * AND IT IS A HEURISTIC. `api`, `web`, `docs`, `backend` are not exotic names; two machines can
+ * hold genuinely different projects under one folder name. A match is EVIDENCE, not proof, which
+ * is why `siblingsWithholding` reports the sibling's own path when the announcement carries one,
+ * and why the UI must say "a project with this name" rather than "this project".
+ *
  * PURITY: no I/O, no dates read from the clock, no `preferences`. `siblingRules.test.ts` covers
  * the arithmetic; `share-rules.test.ts` (server) cross-checks `bucketSharedBy` against
  * `sessionShared`, which stays the single source of the sharing semantics.
@@ -120,6 +140,54 @@ export function shareBucketKeys(bucket: ShareBucket): string[] {
 }
 
 /**
+ * The CROSS-MACHINE correlation key for a project path: its final folder name, with `\\` unified
+ * to `/`, trailing separators stripped, and case folded.
+ *
+ * Case folding is deliberate and is the one judgement call here: WSL and Windows machines share
+ * these accounts, so `Projeto` and `projeto` are routinely the same project. The cost is that two
+ * sibling directories differing only in case collide on one machine — acceptable for a key that is
+ * already avowedly a heuristic, and the copy says so.
+ *
+ * Returns `''` for anything with no folder name (`''`, `/`, `C:\\`), and an empty key correlates
+ * with nothing — silence, never a match on emptiness.
+ */
+export function projectNameKey(path: string | null | undefined): string {
+  const unified = (path ?? '').trim().replace(/\\/g, '/')
+  const trimmed = unified.replace(/\/+$/, '')
+  const last = trimmed.slice(trimmed.lastIndexOf('/') + 1).trim()
+  // `C:` is a drive, not a folder — a path that reduced to one names no project.
+  if (!last || /^[A-Za-z]:$/.test(last)) return ''
+  return last.toLowerCase()
+}
+
+/**
+ * The bucket's keys for a CROSS-MACHINE comparison: the repo dimension unchanged (a normalized
+ * remote is already path-independent, and stays the authority there) and the project dimension
+ * keyed by folder name instead of by full path.
+ */
+function crossMachineKeys(bucket: ShareBucket): string[] {
+  const keys: string[] = []
+  const raw = bucket.repoKey ?? ''
+  if (raw === NO_REPO_KEY) keys.push('none:')
+  else {
+    const repo = foldRepoKey(normalizeGitRemote(raw))
+    if (repo) keys.push(`repo:${repo}`)
+  }
+  const name = projectNameKey(bucket.projectPath)
+  if (name) keys.push(`projectname:${name}`)
+  return keys
+}
+
+/** A source's key for the same comparison. `null` for junk, exactly as `sourceKeyOf`. */
+function crossMachineSourceKey(source: ShareSource): string | null {
+  if (source && source.type === 'project') {
+    const name = projectNameKey(typeof source.value === 'string' ? source.value : '')
+    return name ? `projectname:${name}` : null
+  }
+  return sourceKeyOf(source)
+}
+
+/**
  * Whether `rules` share the bucket. This is `sessionShared`'s decision restricted to a bucket the
  * caller names explicitly, so there is no ambiguous-directory case to fail closed on: deny wins
  * across dimensions in denylist mode, an allowlist shares only what it names, and an EMPTY
@@ -130,30 +198,73 @@ export function shareBucketKeys(bucket: ShareBucket): string[] {
  * warning here would make every warning less believable.
  */
 export function bucketSharedBy(bucket: ShareBucket, rules: AnnouncedRules): boolean {
-  const keys = shareBucketKeys(bucket)
-  if (keys.length === 0) return true
+  return sharedUnder(bucket, rules, shareBucketKeys, sourceKeyOf).shared
+}
+
+/** The mode arithmetic, over whichever keying the caller chose. `matched` names the sources that
+ *  produced the decision, so a caller can show the sibling's own path as evidence. */
+function sharedUnder(
+  bucket: ShareBucket,
+  rules: AnnouncedRules,
+  keysOf: (b: ShareBucket) => string[],
+  keyOfSource: (s: ShareSource) => string | null,
+): { shared: boolean; matched: ShareSource[] } {
+  const keys = keysOf(bucket)
+  if (keys.length === 0) return { shared: true, matched: [] }
   const declared = new Set<string>()
+  const matched: ShareSource[] = []
   for (const s of rules.sources ?? []) {
-    const key = sourceKeyOf(s)
-    if (key) declared.add(key)
+    const key = keyOfSource(s)
+    if (!key) continue
+    declared.add(key)
+    if (keys.includes(key)) matched.push(s)
   }
-  const named = keys.some(k => declared.has(k))
-  if (rules.shareMode === 'allowlist') return declared.size > 0 && named
-  return !named
+  const named = matched.length > 0
+  const shared = rules.shareMode === 'allowlist' ? declared.size > 0 && named : !named
+  return { shared, matched }
+}
+
+/** One sibling that withholds a bucket, and the evidence for saying so. */
+export interface SiblingWithholding {
+  machineId: string
+  machineName: string
+  /**
+   * The sibling's OWN project paths that correlate with this bucket by folder name.
+   *
+   * Empty in two honest cases: a repo-dimension match (no folder-name guess was involved) and a
+   * withholding by OMISSION — an allowlist that simply never names this project has no path to
+   * offer. Never invented: if the announcement does not carry a path, none is shown.
+   */
+  paths: string[]
 }
 
 /**
- * The siblings whose announced rules WITHHOLD this bucket — i.e. the machines that would have to
- * change for the whole account to agree. Sorted by display name so a poll never reorders the list
- * under the user's cursor.
+ * The siblings whose announced rules WITHHOLD this bucket — the machines that would have to change
+ * for the whole account to agree. Sorted by display name so a poll never reorders the list under
+ * the user's cursor.
+ *
+ * This is the CROSS-MACHINE comparison, so the project dimension is correlated by folder name (see
+ * this module's docstring). That cuts both ways and both are wanted: it finds a sibling hiding the
+ * same project under a different path, and it stops reporting an allowlist sibling that shares that
+ * project under its own path as though it were withholding it.
  */
-export function siblingsRestricting(
+export function siblingsWithholding(
   facts: readonly SiblingRuleFact[],
   bucket: ShareBucket,
-): SiblingRuleFact[] {
-  return facts
-    .filter(f => !bucketSharedBy(bucket, f))
-    .sort((a, b) => a.machineName.localeCompare(b.machineName) || a.machineId.localeCompare(b.machineId))
+): SiblingWithholding[] {
+  const out: SiblingWithholding[] = []
+  for (const f of facts) {
+    const { shared, matched } = sharedUnder(bucket, f, crossMachineKeys, crossMachineSourceKey)
+    if (shared) continue
+    const paths: string[] = []
+    for (const m of matched) {
+      if (m.type === 'project' && typeof m.value === 'string' && m.value && !paths.includes(m.value)) {
+        paths.push(m.value)
+      }
+    }
+    out.push({ machineId: f.machineId, machineName: f.machineName, paths })
+  }
+  return out.sort((a, b) => a.machineName.localeCompare(b.machineName) || a.machineId.localeCompare(b.machineId))
 }
 
 /**

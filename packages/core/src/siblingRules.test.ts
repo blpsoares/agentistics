@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test'
 import { NO_REPO_KEY } from './team'
 import type { ShareSource } from './team'
 import {
-  bucketSharedBy, siblingsRestricting, mergeSiblingFacts, shareBucketKeys,
+  bucketSharedBy, siblingsWithholding, mergeSiblingFacts, shareBucketKeys, projectNameKey,
   type SiblingRuleFact,
 } from './siblingRules'
 
@@ -80,12 +80,12 @@ test('only the siblings whose own announced rules withhold the bucket are report
     fact({ machineId: 'b', machineName: 'desktop', shareMode: 'denylist', sources: [repo('github.com/acme/web')] }),
     fact({ machineId: 'c', machineName: 'nuc', shareMode: 'allowlist', sources: [repo('github.com/acme/web')] }),
   ]
-  const hit = siblingsRestricting(facts, { repoKey: 'github.com/acme/api' })
+  const hit = siblingsWithholding(facts, { repoKey: 'github.com/acme/api' })
   expect(hit.map(f => f.machineName)).toEqual(['laptop', 'nuc'])
 })
 
 test('no facts means no warning — an empty inbox is not evidence that nobody restricts anything', () => {
-  expect(siblingsRestricting([], { repoKey: 'github.com/acme/api' })).toEqual([])
+  expect(siblingsWithholding([], { repoKey: 'github.com/acme/api' })).toEqual([])
 })
 
 test('the report is sorted by machine name so two machines never swap places between polls', () => {
@@ -93,7 +93,7 @@ test('the report is sorted by machine name so two machines never swap places bet
     fact({ machineId: 'z', machineName: 'zeta', shareMode: 'allowlist', sources: [] }),
     fact({ machineId: 'a', machineName: 'alpha', shareMode: 'allowlist', sources: [] }),
   ]
-  expect(siblingsRestricting(facts, { repoKey: 'github.com/acme/api' }).map(f => f.machineName))
+  expect(siblingsWithholding(facts, { repoKey: 'github.com/acme/api' }).map(f => f.machineName))
     .toEqual(['alpha', 'zeta'])
 })
 
@@ -110,9 +110,9 @@ test('a later announcement SUPERSEDES the earlier one from the same machine inst
 
 test('a sibling that LIFTS a restriction retracts the fact, because the message is a full snapshot', () => {
   const before = [fact({ machineId: 'a', shareMode: 'denylist', sources: [repo('github.com/acme/api')] })]
-  expect(siblingsRestricting(before, { repoKey: 'github.com/acme/api' })).toHaveLength(1)
+  expect(siblingsWithholding(before, { repoKey: 'github.com/acme/api' })).toHaveLength(1)
   const after = mergeSiblingFacts(before, [fact({ machineId: 'a', shareMode: 'denylist', sources: [] })])
-  expect(siblingsRestricting(after, { repoKey: 'github.com/acme/api' })).toEqual([])
+  expect(siblingsWithholding(after, { repoKey: 'github.com/acme/api' })).toEqual([])
 })
 
 test('two machines are two facts — superseding is per machine, never a global replace', () => {
@@ -130,4 +130,82 @@ test('within one batch the LAST announcement from a machine wins — arrival ord
   ])
   expect(after).toHaveLength(1)
   expect(after[0]!.sources).toEqual([repo('github.com/acme/second')])
+})
+
+// --- projectNameKey: the CROSS-MACHINE correlation key -------------------------------------------
+//
+// The same project lives at a different path on every machine — `/home/user/xpto/abc/proj` here,
+// `/home/user/proj` there — so correlating by full path correlates almost nothing. The final
+// folder name is the only thing the two have in common.
+
+test('the correlation key is the final folder name, whatever sits above it', () => {
+  expect(projectNameKey('/home/user/xpto/abc/projFicticio')).toBe('projficticio')
+  expect(projectNameKey('/home/user/projFicticio')).toBe('projficticio')
+  expect(projectNameKey('projFicticio')).toBe('projficticio')
+})
+
+test('Windows separators and trailing slashes normalize to the same key — WSL and Windows share accounts', () => {
+  expect(projectNameKey('C:\\Users\\me\\Projeto')).toBe('projeto')
+  expect(projectNameKey('/home/me/projeto/')).toBe('projeto')
+  expect(projectNameKey('/home/me/projeto///')).toBe('projeto')
+  expect(projectNameKey('C:\\Users\\me\\Projeto\\')).toBe('projeto')
+})
+
+test('case is folded — Projeto on Windows and projeto on Linux are one key', () => {
+  expect(projectNameKey('/home/me/Projeto')).toBe(projectNameKey('/mnt/c/dev/projeto'))
+})
+
+test('a path with no folder name yields no key, and no key correlates with anything', () => {
+  for (const junk of ['', '   ', '/', '//', '\\', 'C:\\', '   /   ']) {
+    expect(projectNameKey(junk)).toBe('')
+  }
+})
+
+// --- cross-machine matching ---------------------------------------------------------------------
+
+const OTHER_PATH: ShareSource = { type: 'project', value: '/home/user/projFicticio' }
+
+test('a sibling withholding the same project under a DIFFERENT path is found', () => {
+  const facts = [fact({ shareMode: 'denylist', sources: [OTHER_PATH] })]
+  const hit = siblingsWithholding(facts, { projectPath: '/home/user/xpto/abc/projFicticio' })
+  expect(hit).toHaveLength(1)
+  // And it reports the sibling's OWN path, which is what lets a human resolve the ambiguity.
+  expect(hit[0]!.paths).toEqual(['/home/user/projFicticio'])
+})
+
+test('a different folder name is not a match, however similar the path above it', () => {
+  const facts = [fact({ shareMode: 'denylist', sources: [{ type: 'project', value: '/home/user/other' }] })]
+  expect(siblingsWithholding(facts, { projectPath: '/home/user/projFicticio' })).toEqual([])
+})
+
+test('an allowlist sibling naming the project under its own path SHARES it — the fix cuts both ways', () => {
+  // Before basename correlation this was a false POSITIVE: the exact path was absent from the
+  // allowlist, so the sibling looked like it was withholding a project it actually shares.
+  const facts = [fact({ shareMode: 'allowlist', sources: [OTHER_PATH] })]
+  expect(siblingsWithholding(facts, { projectPath: '/home/user/xpto/abc/projFicticio' })).toEqual([])
+})
+
+test('a sibling withholding by OMISSION names no path — an allowlist has none to give, and none is invented', () => {
+  const facts = [fact({ shareMode: 'allowlist', sources: [{ type: 'project', value: '/home/user/something-else' }] })]
+  const hit = siblingsWithholding(facts, { projectPath: '/home/user/projFicticio' })
+  expect(hit).toHaveLength(1)
+  expect(hit[0]!.paths).toEqual([])
+})
+
+test('the repo dimension is untouched — normalizeGitRemote is already path-independent', () => {
+  const facts = [fact({ shareMode: 'denylist', sources: [repo('git@github.com:Acme/API.git')] })]
+  const hit = siblingsWithholding(facts, { repoKey: 'github.com/acme/api' })
+  expect(hit).toHaveLength(1)
+  // A repo match is not a folder-name guess, so there is no project path to show.
+  expect(hit[0]!.paths).toEqual([])
+})
+
+test('THE LINE: bucketSharedBy stays EXACT — a local rule never widens to every project of that name', () => {
+  // `sessionShared` and the stored rules keep matching the exact project_path they always did.
+  // If denying /home/a/x/proj started meaning "every project named proj", a live privacy rule
+  // would silently cover paths the user never named. Basename is a CORRELATION key between
+  // machines, never a rule semantic — so the exact predicate must NOT see these as equal.
+  const rules = { shareMode: 'denylist' as const, sources: [OTHER_PATH] }
+  expect(bucketSharedBy({ projectPath: '/home/user/xpto/abc/projFicticio' }, rules)).toBe(true)
+  expect(bucketSharedBy({ projectPath: '/home/user/projFicticio' }, rules)).toBe(false)
 })

@@ -11,13 +11,31 @@
  * `@agentistics/core`, cross-checked against the server's `sessionShared` in
  * `share-rules.test.ts`. Nothing in this file re-derives the sharing semantics.
  *
+ * PROJECTS CORRELATE BY FOLDER NAME, NOT BY PATH. The same project sits at
+ * `/home/user/xpto/abc/projFicticio` here and `/home/user/projFicticio` there, so comparing full
+ * paths across machines would make this warning silently never fire for projects. `@agentistics/
+ * core`'s `siblingsWithholding` keys the project dimension by folder name for the cross-machine
+ * comparison ONLY — the stored rules, and `sessionShared`, still match the exact path they always
+ * have. It is also a HEURISTIC (`api`, `web`, `docs` collide routinely), which is why each machine
+ * carries the sibling's OWN path when the announcement names one, and why the copy says "a project
+ * with this name".
+ *
  * TWO THINGS THIS DELIBERATELY DOES NOT DO. It never blocks: it produces rows for the UI to state,
  * and the user decides. And it never treats an empty result as a guarantee — this machine knows
  * only what siblings announced to it, and only since the channel began, which is why every surface
  * that renders these rows also prints the best-effort caveat.
  */
-import { siblingsRestricting, type ShareBucket, type SiblingRuleFact } from '@agentistics/core'
+import { siblingsWithholding, type ShareBucket, type SiblingRuleFact } from '@agentistics/core'
 import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
+
+/** One sibling that withholds a row, with whatever evidence the announcement carried. */
+export interface WithholdingMachine {
+  name: string
+  /** The sibling's OWN project paths that correlate with this row by folder name. Empty when the
+   *  match was on the repo dimension, or when the sibling withholds by omission (an allowlist has
+   *  no path to offer). Never invented. */
+  paths: string[]
+}
 
 /** One row the user is about to start sharing, and who withholds it. `machines` is never empty. */
 export interface SiblingWarning {
@@ -25,8 +43,8 @@ export interface SiblingWarning {
   key: string
   /** The row's display name, as the picker already prints it. */
   name: string
-  /** Sibling display names, deduplicated and sorted. */
-  machines: string[]
+  /** The withholding siblings, deduplicated by name and sorted. */
+  machines: WithholdingMachine[]
 }
 
 /** A repo-tab row names one dimension: its own bucket (`NO_REPO_KEY` included — that bucket is
@@ -55,10 +73,18 @@ export function projectBucket(t: ProjectTarget): ShareBucket {
 export function machinesWithholding(
   facts: readonly SiblingRuleFact[] | undefined,
   bucket: ShareBucket,
-): string[] {
-  const names = new Set<string>()
-  for (const f of siblingsRestricting(facts ?? [], bucket)) names.add(f.machineName)
-  return [...names].sort((a, b) => a.localeCompare(b))
+): WithholdingMachine[] {
+  // Deduplicated by display NAME (two machine ids can carry one label), merging their evidence
+  // rather than dropping one of them — the paths are the whole point of showing them.
+  const byName = new Map<string, Set<string>>()
+  for (const w of siblingsWithholding(facts ?? [], bucket)) {
+    const paths = byName.get(w.machineName) ?? new Set<string>()
+    for (const p of w.paths) paths.add(p)
+    byName.set(w.machineName, paths)
+  }
+  return [...byName.entries()]
+    .map(([name, paths]) => ({ name, paths: [...paths].sort((a, b) => a.localeCompare(b)) }))
+    .sort((a, b) => a.name.localeCompare(b.name))
 }
 
 /**
@@ -104,8 +130,8 @@ export function withholdMap<T extends { key: string }>(
   facts: readonly SiblingRuleFact[] | undefined,
   rows: readonly T[],
   bucketOf: (row: T) => ShareBucket,
-): Map<string, string[]> {
-  const map = new Map<string, string[]>()
+): Map<string, WithholdingMachine[]> {
+  const map = new Map<string, WithholdingMachine[]>()
   if (!facts || facts.length === 0) return map
   for (const row of rows) {
     const machines = machinesWithholding(facts, bucketOf(row))

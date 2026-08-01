@@ -8,6 +8,7 @@ import {
 import { WithheldBadge } from './SiblingWithheldBadge'
 
 const repo = (value: string): ShareSource => ({ type: 'repo', value })
+const m = (name: string, paths: string[] = []) => ({ name, paths })
 
 function fact(over: Partial<SiblingRuleFact> = {}): SiblingRuleFact {
   return {
@@ -58,7 +59,7 @@ test('names every sibling whose announced rules withhold the row, deduped and so
     fact({ machineId: 'a', machineName: 'air', shareMode: 'allowlist', sources: [repo('github.com/acme/other')] }),
     fact({ machineId: 'c', machineName: 'nuc', sources: [repo('github.com/acme/other')] }),
   ]
-  expect(machinesWithholding(facts, repoBucket(target()))).toEqual(['air', 'desktop'])
+  expect(machinesWithholding(facts, repoBucket(target())).map(m => m.name)).toEqual(['air', 'desktop'])
 })
 
 test('no announcements means no names — silence is not evidence that nobody restricts it', () => {
@@ -76,7 +77,7 @@ test('a machine announcing twice is one name, not two', () => {
     fact({ machineId: 'a', machineName: 'laptop', sources: [repo('github.com/acme/api')] }),
     fact({ machineId: 'b', machineName: 'laptop', sources: [repo('github.com/acme/api')] }),
   ]
-  expect(machinesWithholding(facts, repoBucket(target()))).toEqual(['laptop'])
+  expect(machinesWithholding(facts, repoBucket(target())).map(m => m.name)).toEqual(['laptop'])
 })
 
 // --- siblingWarningsFor ------------------------------------------------------------------------
@@ -89,7 +90,7 @@ test('only rows this edit STARTS SHARING are warned about', () => {
   expect(siblingWarningsFor(WITHHELD, rows, repoBucket, new Set())).toEqual([])
   // Now the user turns it on.
   expect(siblingWarningsFor(WITHHELD, rows, repoBucket, new Set(['github.com/acme/api'])))
-    .toEqual([{ key: 'github.com/acme/api', name: 'acme/api', machines: ['laptop-b'] }])
+    .toEqual([{ key: 'github.com/acme/api', name: 'acme/api', machines: [{ name: 'laptop-b', paths: [] }] }])
 })
 
 test('a row this edit starts sharing that NO sibling withholds produces no warning', () => {
@@ -114,14 +115,14 @@ test('warnings are ordered by row name so the list does not reshuffle between re
 test('the project dimension is warned about too, through its own bucket', () => {
   const rows = [project()]
   expect(siblingWarningsFor(WITHHELD, rows, projectBucket, new Set(['/home/a/api'])))
-    .toEqual([{ key: '/home/a/api', name: 'api', machines: ['laptop-b'] }])
+    .toEqual([{ key: '/home/a/api', name: 'api', machines: [{ name: 'laptop-b', paths: [] }] }])
 })
 
 // --- hasSiblingWarnings ------------------------------------------------------------------------
 
 test('the block shows only when there is something to say', () => {
   expect(hasSiblingWarnings([])).toBe(false)
-  expect(hasSiblingWarnings([{ key: 'k', name: 'n', machines: ['a'] }])).toBe(true)
+  expect(hasSiblingWarnings([{ key: 'k', name: 'n', machines: [{ name: 'a', paths: [] }] }])).toBe(true)
 })
 
 // --- withholdMap (the per-row badge, shown BEFORE the user touches the switch) -------------------
@@ -131,7 +132,7 @@ test('the per-row map covers every row a sibling withholds, whether or not the d
   const map = withholdMap(WITHHELD, rows, repoBucket)
   // The point of the badge is that it is visible BEFORE the decision, so it is not scoped to the
   // draft the way `siblingWarningsFor` is.
-  expect(map.get('github.com/acme/api')).toEqual(['laptop-b'])
+  expect(map.get('github.com/acme/api')).toEqual([{ name: 'laptop-b', paths: [] }])
   expect(map.has('github.com/acme/web')).toBe(false)
   expect(map.size).toBe(1)
 })
@@ -144,14 +145,14 @@ test('an empty inbox produces an empty map — no row is ever badged on a guess'
 // --- the row badge: renders nothing on silence, and never widens the row -------------------------
 
 test('the badge renders NOTHING when no machine was heard from — silence must be unrenderable', () => {
-  expect(WithheldBadge({ machines: undefined, lang: 'en' })).toBeNull()
-  expect(WithheldBadge({ machines: [], lang: 'en' })).toBeNull()
+  expect(WithheldBadge({ machines: undefined, lang: 'en', dimension: 'repo' })).toBeNull()
+  expect(WithheldBadge({ machines: [], lang: 'en', dimension: 'repo' })).toBeNull()
 })
 
 test('the badge names the machines, in the caller\'s language', () => {
-  const en = WithheldBadge({ machines: ['laptop-b', 'desktop'], lang: 'en' })
+  const en = WithheldBadge({ machines: [m('laptop-b'), m('desktop')], lang: 'en', dimension: 'repo' })
   expect(String((en as { props: { children: unknown } }).props.children)).toBe('not shared on laptop-b, desktop')
-  const pt = WithheldBadge({ machines: ['laptop-b'], lang: 'pt' })
+  const pt = WithheldBadge({ machines: [m('laptop-b')], lang: 'pt', dimension: 'repo' })
   expect(String((pt as { props: { children: unknown } }).props.children)).toBe('não compartilhado em laptop-b')
 })
 
@@ -160,11 +161,47 @@ test('the badge wraps instead of widening its row — a long machine list must n
   // shrink would not produce a scrollbar — it would silently vanish off the right edge, which is
   // worse. Hence: no `flexShrink: 0` (unlike the host pill beside it), and text that can break.
   const style = (WithheldBadge({
-    machines: ['a-very-long-machine-name-from-somebody-elses-desk', 'another-extremely-long-one'],
-    lang: 'en',
+    machines: [m('a-very-long-machine-name-from-somebody-elses-desk'), m('another-extremely-long-one')],
+    lang: 'en', dimension: 'project',
   }) as { props: { style: Record<string, unknown> } }).props.style
   expect(style.flexShrink).toBeUndefined()
   expect(style.overflowWrap).toBe('anywhere')
   expect(style.maxWidth).toBe('100%')
   expect(Object.keys(style).some(k => k === 'width' || k === 'minWidth')).toBe(false)
+})
+
+// --- the project dimension across machines -------------------------------------------------------
+//
+// The same project sits at a different path on every machine, so these rows correlate by FOLDER
+// NAME. That is a heuristic — `api`, `web` and `docs` collide constantly — so the evidence has to
+// travel with the claim.
+
+const HIDES_BY_OTHER_PATH: SiblingRuleFact[] = [
+  fact({ machineName: 'laptop-b', sources: [{ type: 'project', value: '/home/user/projFicticio' }] }),
+]
+
+test('a sibling hiding the same project under a DIFFERENT path is found, and names its own path', () => {
+  const row = project({ key: '/home/me/xpto/abc/projFicticio', path: '/home/me/xpto/abc/projFicticio', name: 'projFicticio', repoKey: '' })
+  expect(machinesWithholding(HIDES_BY_OTHER_PATH, projectBucket(row)))
+    .toEqual([{ name: 'laptop-b', paths: ['/home/user/projFicticio'] }])
+})
+
+test('the sibling path is what a human needs to resolve the ambiguity, so it reaches the warning list', () => {
+  const row = project({ key: '/home/me/xpto/abc/projFicticio', path: '/home/me/xpto/abc/projFicticio', name: 'projFicticio', repoKey: '' })
+  expect(siblingWarningsFor(HIDES_BY_OTHER_PATH, [row], projectBucket, new Set([row.key])))
+    .toEqual([{
+      key: '/home/me/xpto/abc/projFicticio', name: 'projFicticio',
+      machines: [{ name: 'laptop-b', paths: ['/home/user/projFicticio'] }],
+    }])
+})
+
+test('a different folder name is still not a match', () => {
+  const row = project({ key: '/home/me/other', path: '/home/me/other', name: 'other', repoKey: '' })
+  expect(machinesWithholding(HIDES_BY_OTHER_PATH, projectBucket(row))).toEqual([])
+})
+
+test('Windows and case differences correlate — WSL and Windows machines share these accounts', () => {
+  const facts = [fact({ machineName: 'win-box', sources: [{ type: 'project', value: 'C:\\Users\\me\\ProjFicticio\\' }] })]
+  const row = project({ key: '/home/me/projficticio', path: '/home/me/projficticio', name: 'projficticio', repoKey: '' })
+  expect(machinesWithholding(facts, projectBucket(row)).map(x => x.name)).toEqual(['win-box'])
 })
