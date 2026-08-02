@@ -112,6 +112,9 @@ export const NOTIFICATION_TEXT: Record<string, { pt: Localized; en: Localized }>
 /** Resolve a notification to display strings in the CURRENT language. Localizes by
  *  `code` (interpolating `meta`, e.g. an HTTP status) and falls back to the raw
  *  title/message baked in at creation time. */
+/** The codes whose `{name}` is another machine of this account — see the fallback below. */
+const PEER_CODES = new Set(['member.rules_proposed', 'member.peer_pinned', 'member.peer_key_changed'])
+
 export function resolveNotification(n: AppNotification, lang: 'pt' | 'en'): Localized {
   const loc = n.code ? NOTIFICATION_TEXT[n.code]?.[lang] : undefined
   const title = loc?.title ?? n.title ?? ''
@@ -138,6 +141,12 @@ export function resolveNotification(n: AppNotification, lang: 'pt' | 'en'): Loca
   }
   // Interpolate {name}/{actor} from meta (e.g. machine.renamed).
   if (message && n.meta?.name) message = message.replace('{name}', String(n.meta.name))
+  // The three sealed-envelope codes name another machine of this account, and that machine may
+  // have no name at all on the central. It is NEVER filled in with the machine id (sha256 of a
+  // token) and never left as a raw placeholder — it is said in words.
+  if (message && message.includes('{name}') && PEER_CODES.has(n.code ?? '')) {
+    message = message.replace(/\{name\}/g, lang === 'pt' ? 'uma máquina sem nome' : 'an unnamed machine')
+  }
   if (message && n.meta?.actor) message = message.replace('{actor}', String(n.meta.actor))
   // machine.reassigned carries the new owning account (empty when ownership was cleared).
   if (message && n.meta?.account !== undefined) {
@@ -149,6 +158,25 @@ export function resolveNotification(n: AppNotification, lang: 'pt' | 'en'): Loca
     message = `${message} (HTTP ${n.meta.status})`
   }
   return { title, message }
+}
+
+/**
+ * Where a notification LEADS, or `null` when it is only news.
+ *
+ * A notification about a decision the user has to make must reach that decision in one click —
+ * "another of your machines restricted repositories, open the connection to decide" is useless if
+ * the user then has to find the connection themselves. The three connection-scoped codes carry
+ * `meta.connectionId` already; the route opens that card with its notices modal up.
+ *
+ * PURE and total: an unknown code, or a known one that predates `connectionId`, leads nowhere
+ * rather than to a card that does not exist.
+ */
+export function notificationLink(n: Pick<AppNotification, 'code' | 'meta'>): string | null {
+  const NOTICE_CODES = new Set(['member.rules_proposed', 'member.peer_key_changed', 'member.peer_pinned'])
+  if (!n.code || !NOTICE_CODES.has(n.code)) return null
+  const id = String(n.meta?.connectionId ?? '').trim()
+  if (!id) return null
+  return `/settings/connection?conn=${encodeURIComponent(id)}&notices=1`
 }
 
 /**

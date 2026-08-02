@@ -1,11 +1,13 @@
-import { useState, type CSSProperties } from 'react'
-import { Loader2, EyeOff, Check } from 'lucide-react'
+import React, { useState, type CSSProperties } from 'react'
+import { Loader2, EyeOff, Check, ChevronDown, ChevronRight } from 'lucide-react'
 import type { SessionMeta, ModelUsage, ShareSource, SiblingRuleFact } from '@agentistics/core'
 import { NO_REPO_KEY, fmtCost } from '@agentistics/core'
 import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
 import { plural } from '../../lib/shareRepos'
 import { blendedCostPerToken } from '../../hooks/useData'
 import { Section, ConfirmModal } from '../../pages/settings/primitives'
+import Drawer from '../../pages/settings/Drawer'
+import { drawerBtn } from './ConnectionCardParts'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { COPY, PLURAL_COPY, interpolate } from './copy'
 import type { CardState } from './cardState'
@@ -183,13 +185,49 @@ export function SharedReposPanel({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <Section
         title={COPY.sharedRepos[lang]}
-        editing={editing}
+        // The editor is the DRAWER below — the same right-side panel the add-central wizard uses,
+        // with the same picker, the same reverse-warning badges and the same caveat. The section
+        // therefore never enters its own inline edit mode: one picker, one behaviour, one place to
+        // fix a bug. `editChildren` stays required by `Section`'s contract and is never rendered.
+        editing={false}
         onEdit={startEdit}
         onCancel={cancelEdit}
         onSave={attemptSave}
         canEdit={canEditRepos(cardState, phase)}
         labels={{ edit: COPY.editRules[lang], save: COPY.saveRules[lang], cancel: COPY.cancel[lang] }}
-        editChildren={
+        editChildren={null}
+      >
+        <ReadView
+          targets={targets}
+          projectTargets={projectTargets}
+          storedDenied={storedRepoKeys}
+          storedProjectPaths={storedProjectPaths}
+          mode={storedMode}
+          sessions={sessions}
+          status={status}
+          lang={lang}
+          otelEnabled={otelEnabled}
+        />
+      </Section>
+
+      <Drawer
+        open={editing}
+        title={COPY.sharedRepos[lang]}
+        onClose={cancelEdit}
+        dirty={dirty}
+        lang={lang}
+        footer={
+          <>
+            <button type="button" onClick={cancelEdit} style={drawerBtn(isMobile, 'secondary')}>
+              {COPY.cancel[lang]}
+            </button>
+            <button type="button" onClick={attemptSave} style={drawerBtn(isMobile, 'primary')}>
+              <Check size={14} /> {COPY.saveRules[lang]}
+            </button>
+          </>
+        }
+      >
+        {editing && (
           <SharingRulesPicker
             mode={effectiveMode}
             onModeChange={setModeDraft}
@@ -223,20 +261,8 @@ export function SharedReposPanel({
             onShareAllProjects={() => setProjectDraft(shareAllProjectsDraft(projectTargets))}
             onBlockAllProjects={() => setProjectDraft(blockAllProjectsDraft(projectTargets))}
           />
-        }
-      >
-        <ReadView
-          targets={targets}
-          projectTargets={projectTargets}
-          storedDenied={storedRepoKeys}
-          storedProjectPaths={storedProjectPaths}
-          mode={storedMode}
-          sessions={sessions}
-          status={status}
-          lang={lang}
-          otelEnabled={otelEnabled}
-        />
-      </Section>
+        )}
+      </Drawer>
 
       {banner && <ApplyBanner banner={banner} status={status} lang={lang} />}
 
@@ -387,15 +413,47 @@ export function ReadView({ targets, projectTargets, storedDenied, storedProjectP
           ? COPY.sharingAll[lang]
           : interpolate(plural(PLURAL_COPY.nShared[lang], summary.sharedCount), { n: summary.sharedCount, total: summary.totalLive })}
       </div>
-      <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{COPY.newRepoNote[lang]}</div>
-      {hasAnyRule && stats && (
-        <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-          {interpolate(COPY.statsNote[lang], { boundary: stats.boundary, n: stats.n })}
-        </div>
-      )}
-      {hasAnyRule && <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{COPY.ciNote[lang]}</div>}
+      <Caveats lang={lang}>
+        <div>{COPY.newRepoNote[lang]}</div>
+        {hasAnyRule && stats && (
+          <div>{interpolate(COPY.statsNote[lang], { boundary: stats.boundary, n: stats.n })}</div>
+        )}
+        {hasAnyRule && <div>{COPY.ciNote[lang]}</div>}
+      </Caveats>
+      {/* Stays OUT of the disclosure: it is a live warning about this machine's configuration, and
+         a warning nobody opens is a warning nobody reads. */}
       {hasAnyRule && otelEnabled && (
         <div style={{ fontSize: 11, color: 'var(--anthropic-orange)' }}>{COPY.otelWarn[lang]}</div>
+      )}
+    </div>
+  )
+}
+
+/** The standing caveats, one row folded. The text is unchanged — precision was never the problem;
+ *  four tertiary lines stacked under the thing they qualify was. */
+function Caveats({ lang, children }: { lang: 'pt' | 'en'; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false)
+  const isMobile = useIsMobile()
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        aria-expanded={open}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 5, alignSelf: 'flex-start', padding: 0,
+          minHeight: isMobile ? 44 : undefined,
+          border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'inherit',
+          fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'left',
+        }}
+      >
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        {COPY.caveatsToggle[lang]}
+      </button>
+      {open && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingLeft: 17, fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+          {children}
+        </div>
       )}
     </div>
   )

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Bell, AlertCircle, AlertTriangle, Info, CheckCircle2, Trash2, X } from 'lucide-react'
-import { useNotifications, markAllRead, clearNotifications, dismissNotification, resolveNotification, type NotificationType } from '../lib/notifications'
+import { useNotifications, markAllRead, clearNotifications, dismissNotification, resolveNotification, notificationLink, type NotificationType } from '../lib/notifications'
 import { useIsMobile } from '../hooks/useIsMobile'
 
 const ICON: Record<NotificationType, { color: string; Icon: typeof AlertCircle }> = {
@@ -31,6 +32,7 @@ export function NotificationBell({ lang, buttonStyle }: Props) {
   const pt = lang === 'pt'
   const notes = useNotifications()
   const isMobile = useIsMobile()
+  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const unread = notes.filter(n => !n.read).length
@@ -110,13 +112,22 @@ export function NotificationBell({ lang, buttonStyle }: Props) {
             notes.map(n => {
               const { color, Icon } = ICON[n.type]
               const { title, message } = resolveNotification(n, lang)
+              // A notification about a decision opens that decision — see `notificationLink`.
+              const link = notificationLink(n)
+              const go = () => { if (!link) return; setOpen(false); navigate(link) }
               return (
                 <div key={n.id} style={{
                   display: 'flex', alignItems: 'flex-start', gap: 9,
                   padding: '10px 12px', borderBottom: '1px solid var(--border)',
                 }}>
                   <Icon size={15} color={color} style={{ flexShrink: 0, marginTop: 1 }} />
-                  <div style={{ minWidth: 0, flex: 1 }}>
+                  <div
+                    role={link ? 'button' : undefined}
+                    tabIndex={link ? 0 : undefined}
+                    onClick={link ? go : undefined}
+                    onKeyDown={link ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go() } }) : undefined}
+                    style={{ minWidth: 0, flex: 1, cursor: link ? 'pointer' : undefined }}
+                  >
                     <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</div>
                     {message && (
                       <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 2, lineHeight: 1.45, wordBreak: 'break-word' }}>

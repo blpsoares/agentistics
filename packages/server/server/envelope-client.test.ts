@@ -147,7 +147,19 @@ async function sealedFromPeer(
   })
 }
 
+/** A sibling that hides something this machine does not — i.e. an announcement that actually asks
+ *  a question. An announcement adding nothing is a different case, covered below. */
 const RULES_MSG = encodeRestrictionMessage({
+  kind: 'restriction',
+  instanceId: INSTANCE,
+  shareMode: 'denylist',
+  sources: [{ type: 'repo', value: 'github.com/acme/api' }, { type: 'repo', value: 'github.com/acme/web' }],
+  at: '2026-07-31T10:00:00.000Z',
+})
+
+/** Byte-for-byte what this machine already applies — what a sibling announces right after applying
+ *  THIS machine's proposal. */
+const ECHO_MSG = encodeRestrictionMessage({
   kind: 'restriction',
   instanceId: INSTANCE,
   shareMode: 'denylist',
@@ -167,7 +179,9 @@ describe('receiveEnvelopes', () => {
     const inbox = await readInbox(CONN_ID)
     expect(inbox.proposals).toHaveLength(1)
     expect(inbox.proposals[0]!.fromMachineName).toBe('laptop-b')
-    expect(inbox.proposals[0]!.sources).toEqual([{ type: 'repo', value: 'github.com/acme/api' }])
+    expect(inbox.proposals[0]!.sources).toEqual([
+      { type: 'repo', value: 'github.com/acme/api' }, { type: 'repo', value: 'github.com/acme/web' },
+    ])
     expect(central.acked).toEqual(['e1'])
     expect(notes).toEqual(['member.peer_pinned', 'member.rules_proposed'])
   })
@@ -472,7 +486,9 @@ describe('sibling rule facts', () => {
     expect(fact.machineId).toBe(PEER_ID)
     expect(fact.machineName).toBe('laptop-b')
     expect(fact.shareMode).toBe('denylist')
-    expect(fact.sources).toEqual([{ type: 'repo', value: 'github.com/acme/api' }])
+    expect(fact.sources).toEqual([
+      { type: 'repo', value: 'github.com/acme/api' }, { type: 'repo', value: 'github.com/acme/web' },
+    ])
     expect(fact.at).toBe('2026-07-31T10:00:00.000Z')
     expect(fact.receivedAt).not.toBe('')
   })
@@ -489,7 +505,9 @@ describe('sibling rule facts', () => {
     const after = await readInbox(CONN_ID)
     expect(after.proposals).toEqual([])
     expect(after.siblingRules).toHaveLength(1)
-    expect(after.siblingRules[0]!.sources).toEqual([{ type: 'repo', value: 'github.com/acme/api' }])
+    expect(after.siblingRules[0]!.sources).toEqual([
+      { type: 'repo', value: 'github.com/acme/api' }, { type: 'repo', value: 'github.com/acme/web' },
+    ])
   })
 
   it('a later announcement from the same machine SUPERSEDES the earlier fact', async () => {
@@ -527,5 +545,65 @@ describe('sibling rule facts', () => {
   it('an inbox written before this field existed reads as no facts, never as a crash', async () => {
     await writeInbox(CONN_ID, { proposals: [], keyWarnings: [], openedDigests: [] } as never)
     expect((await readInbox(CONN_ID)).siblingRules).toEqual([])
+  })
+})
+
+describe('an announcement that adds nothing is not a proposal — the apply ping-pong', () => {
+  it('raises no card and no notification when the sibling announces rules this machine already has', async () => {
+    // Applying a proposal changes this machine's rules, which announces them back to the sibling,
+    // which could apply them, which announces again — forever. The announcement is right; turning
+    // it into a DECISION when there is nothing to decide is what loops.
+    const envelope = await sealedFromPeer(ECHO_MSG)
+    const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
+    const notes: string[] = []
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: n => notes.push(n.code) })
+
+    expect(res.proposals).toBe(0)
+    expect((await readInbox(CONN_ID)).proposals).toEqual([])
+    expect(notes).not.toContain('member.rules_proposed')
+    // Still dealt with: acknowledged and remembered, never re-offered as new.
+    expect(central.acked).toEqual(['e1'])
+  })
+
+  it('KEEPS the fact, so the reverse warning still knows the sibling withholds that repository', async () => {
+    const envelope = await sealedFromPeer(ECHO_MSG)
+    const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
+    await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+
+    const facts = (await readInbox(CONN_ID)).siblingRules
+    expect(facts).toHaveLength(1)
+    expect(facts[0]!.machineId).toBe(PEER_ID)
+    expect(facts[0]!.sources).toEqual([{ type: 'repo', value: 'github.com/acme/api' }])
+  })
+
+  it('still raises the card when the sibling restricts something new', async () => {
+    const envelope = await sealedFromPeer(RULES_MSG)
+    const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+    expect(res.proposals).toBe(1)
+  })
+})
+
+describe('a machine id is never dressed up as a machine name', () => {
+  it('parsePeers leaves an unnamed peer unnamed rather than naming it after its id', () => {
+    // `machineId` is sha256(token). Defaulting the NAME to it put a credential-derived string on
+    // the connection card — meaningless to a person, and another machine's internals. An unnamed
+    // machine is a fact; the UI says so in words.
+    const peers = parsePeers({ peers: [{ machineId: 'a'.repeat(64), publicKey: 'k' }] })
+    expect(peers).toHaveLength(1)
+    expect(peers[0]!.machineName).toBe('')
+  })
+
+  it('a proposal and its fact from an unnamed sender carry no id in the name field', async () => {
+    const envelope = await sealedFromPeer(RULES_MSG)
+    const central = fakeCentral({
+      peers: [{ machineId: PEER_ID, publicKey: PEER.publicKey }],
+      inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }],
+    })
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+    expect(res.proposals).toBe(1)
+    const inbox = await readInbox(CONN_ID)
+    expect(inbox.proposals[0]!.fromMachineName).toBe('')
+    expect(inbox.siblingRules[0]!.machineName).toBe('')
   })
 })

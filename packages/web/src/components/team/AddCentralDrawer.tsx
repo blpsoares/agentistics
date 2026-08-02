@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { Loader2, Check, AlertTriangle } from 'lucide-react'
 import type { SessionMeta, TeamConnection, ModelUsage } from '@agentistics/core'
 import Drawer from '../../pages/settings/Drawer'
@@ -6,6 +6,7 @@ import { FieldInput } from '../../pages/settings/primitives'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { buildShareTargets, buildProjectTargets, hostOf, type ServerProject, type ProjectTarget } from '../../lib/shareRepos'
 import { COPY, interpolate } from './copy'
+import { drawerBtn as actionBtnStyle } from './ConnectionCardParts'
 import { SharingRulesPicker } from './SharingRulesPicker'
 import { diffDraft, toggleTarget, shareAllDraft, blockAllDraft } from './repoPanelState'
 import {
@@ -41,18 +42,6 @@ import {
  * decisions, the dirty computation and the exact submit body all live in `addCentralState.ts` and
  * are unit-tested there.
  */
-
-function actionBtnStyle(isMobile: boolean, variant: 'primary' | 'secondary'): CSSProperties {
-  return {
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-    padding: isMobile ? '0 14px' : '8px 14px', minHeight: isMobile ? 44 : undefined,
-    width: isMobile ? '100%' : undefined,
-    borderRadius: 7, fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer',
-    ...(variant === 'primary'
-      ? { border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)' }
-      : { border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)' }),
-  }
-}
 
 export interface AddCentralDrawerProps {
   open: boolean

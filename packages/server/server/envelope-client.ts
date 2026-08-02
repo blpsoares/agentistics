@@ -12,7 +12,7 @@
  * on. The local warning (Part 1, `team-elsewhere.ts`) works without any of this.
  */
 import type { TeamConnection, ShareSource, SiblingRuleFact } from '@agentistics/core'
-import { mergeSiblingFacts } from '@agentistics/core'
+import { mergeSiblingFacts, proposalAddsNothing } from '@agentistics/core'
 import { seal, open, peekEnvelope, envelopeDigest } from './envelope-crypto'
 import { encodeRestrictionMessage, decodeRestrictionMessage, type RestrictionMessage } from './envelope-message'
 import { loadOrCreateKeypair, pinPeerKey, pinnedKeyFor } from './envelope-keys'
@@ -91,7 +91,11 @@ export function parsePeers(raw: unknown): PeerKey[] {
     if (typeof o.publicKey !== 'string' || o.publicKey === '') continue
     out.push({
       machineId: o.machineId,
-      machineName: typeof o.machineName === 'string' && o.machineName ? o.machineName : o.machineId,
+      // NEVER the id as a name. `machineId` is sha256(token) — derived from a credential and
+      // meaningless to a person — and a name defaulted to it is how it reached the connection card
+      // in the first place. An unnamed machine stays unnamed; the UI says so in words, beside the
+      // fingerprint that actually identifies it.
+      machineName: typeof o.machineName === 'string' ? o.machineName : '',
       publicKey: o.publicKey,
     })
   }
@@ -333,16 +337,30 @@ export async function receiveEnvelopes(
     // Belt and braces on top of the AAD binding: the payload names the central it is about, and a
     // payload that disagrees with the connection it arrived on is not a message for this central.
     if (message.instanceId !== instanceId) { refused++; continue }
-    const machineName = names.get(header.senderMachineId) ?? header.senderMachineId
-    fresh.push({
-      id: item.id,
-      fromMachineId: header.senderMachineId,
-      fromMachineName: machineName,
-      shareMode: message.shareMode,
-      sources: message.sources,
-      at: message.at,
-      receivedAt: now.toISOString(),
-    })
+    const machineName = names.get(header.senderMachineId) ?? ''
+    // AN ANNOUNCEMENT THAT WOULD ADD NOTHING HERE IS NOT A PROPOSAL. Applying one changes this
+    // machine's rules, which announces them back — so a sibling that applied this machine's
+    // proposal immediately offers it straight back, and each click starts the round trip again.
+    // The announcement is correct and must keep happening (a snapshot is how a lifted restriction
+    // is retracted); what is wrong is turning it into a DECISION when there is nothing to decide.
+    // `planProposalApply` answers exactly that, with the same arithmetic the apply itself uses.
+    //
+    // The FACT below is stored either way: "that machine withholds this" stays true whether or not
+    // there is anything left to apply here, and it is the reverse warning's only evidence.
+    if (!proposalAddsNothing(
+      { shareMode: conn.shareMode === 'allowlist' ? 'allowlist' : 'denylist', sources: conn.sources ?? [] },
+      { shareMode: message.shareMode, sources: message.sources },
+    )) {
+      fresh.push({
+        id: item.id,
+        fromMachineId: header.senderMachineId,
+        fromMachineName: machineName,
+        shareMode: message.shareMode,
+        sources: message.sources,
+        at: message.at,
+        receivedAt: now.toISOString(),
+      })
+    }
     // Only envelopes that got this far — opened, decoded, and naming THIS central — become facts.
     // Everything refused above is testimony this machine could not verify, and unverified
     // testimony is not knowledge.
@@ -357,7 +375,7 @@ export async function receiveEnvelopes(
   }
 
   for (const machineId of changed) {
-    warnings.push({ machineId, machineName: names.get(machineId) ?? machineId, at: now.toISOString() })
+    warnings.push({ machineId, machineName: names.get(machineId) ?? '', at: now.toISOString() })
   }
 
   const nextProposals = mergeProposals(state.proposals, fresh)

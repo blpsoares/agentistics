@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import type { SessionMeta, TeamConnection, TeamConfig, ModelUsage, ShareSource, SiblingRuleFact } from '@agentistics/core'
 import { readTeamConnections } from '@agentistics/core'
@@ -11,7 +12,7 @@ import { ConnectionCard } from './ConnectionCard'
 import { AddCentralDrawer } from './AddCentralDrawer'
 import type { ShareMode } from './sharePanelState'
 import type { TeamStatusResponse, ConnectionStatusEntry } from './statusTypes'
-import type { ProposalView, KeyWarningView, PeerFingerprint } from './ProposalsSection'
+import type { ProposalView, KeyWarningView, PeerFingerprint } from './proposalNotices'
 
 /** `GET /api/team/proposals` — this machine's own decrypted sealed-envelope inbox, same-origin. */
 export interface ProposalsResponse {
@@ -98,6 +99,20 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
   const [loadErr, setLoadErr] = useState<string | null>(null)
   const [statusResp, setStatusResp] = useState<TeamStatusResponse | null>(null)
   const [addOpen, setAddOpen] = useState(false)
+  // The bell's deep link (`notificationLink`): `?conn=<id>&notices=1` opens THAT card with its
+  // notices modal up. Read once into state and the query dropped, so a later manual close is not
+  // undone by the URL still asking for it.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [focusConnId, setFocusConnId] = useState<string | null>(null)
+  useEffect(() => {
+    const id = searchParams.get('conn')
+    if (!id || searchParams.get('notices') !== '1') return
+    setFocusConnId(id)
+    const next = new URLSearchParams(searchParams)
+    next.delete('conn')
+    next.delete('notices')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
 
   useEffect(() => {
     let alive = true
@@ -354,6 +369,7 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
               siblingRules={inboxById[conn.id]?.siblingRules ?? []}
               selfFingerprint={proposalsResp?.me?.fingerprint ?? ''}
               onDismissProposal={handleDismissProposal}
+              focusNotices={focusConnId === conn.id}
             />
           ))}
         </div>
