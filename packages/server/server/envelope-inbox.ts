@@ -15,7 +15,8 @@
  * (`envelope-keys.ts`). Those envelopes are never decrypted and are surfaced as an explicit alarm —
  * a reinstall and a central substituting a key are indistinguishable from here.
  */
-import type { ShareSource, SiblingRuleFact } from '@agentistics/core'
+import type { ShareSource, SiblingRuleFact, AnnouncedRules } from '@agentistics/core'
+import { proposalAddsNothing } from '@agentistics/core'
 import { envelopeInboxFile } from './config'
 import { safeReadJson } from './utils'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -131,6 +132,29 @@ export function mergeProposals(existing: readonly Proposal[], incoming: readonly
     out.push(p)
   }
   return out.slice(0, MAX_PROPOSALS)
+}
+
+/**
+ * PURE. The proposals that are still PENDING against the connection's CURRENT rules.
+ *
+ * `proposalAddsNothing` is checked when an envelope arrives, which decides whether it was ever a
+ * decision. It cannot decide whether it still is one: applying a proposal — or restricting the same
+ * rows by hand a week later — leaves the stored offer in place, arguing with itself ("this machine
+ * already restricts everything this proposal asks for") beside an Apply button that would do
+ * nothing. So the same arithmetic runs on the READ, against the rules as they are now.
+ *
+ * FILTERED, NEVER DELETED, and the asymmetry with `mergeProposals` is the point. A proposal
+ * superseded by its own sender is stale by construction — no later state makes it true again — and
+ * is dropped from the store. "Nothing left to apply" is a statement about the RECIPIENT's rules,
+ * which the user can lift at any time; a sibling only re-announces when ITS rules change, so
+ * deleting a satisfied proposal would silently spend the offer that lifting a local restriction
+ * ought to bring back.
+ */
+export function selectLiveProposals(
+  proposals: readonly Proposal[],
+  current: AnnouncedRules,
+): Proposal[] {
+  return proposals.filter(p => !proposalAddsNothing(current, { shareMode: p.shareMode, sources: p.sources }))
 }
 
 /** PURE. One warning per peer machine — a poll every few minutes must not become a warning list. */

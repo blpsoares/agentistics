@@ -16,7 +16,7 @@ import { safeConnId } from './config'
 import { readJsonLimited, LIMITS } from './limits'
 import { safeError } from './errors'
 import { PROFILE } from './exposure'
-import { readInbox, dismissProposal, dismissKeyWarning } from './envelope-inbox'
+import { readInbox, dismissProposal, dismissKeyWarning, selectLiveProposals } from './envelope-inbox'
 import { publicKeyOnly, pinnedPeers } from './envelope-keys'
 
 function json(body: unknown, status = 200): Response {
@@ -58,7 +58,13 @@ export async function handleProposals(
         const inbox = await readInbox(c.id)
         return {
           connId: c.id,
-          proposals: inbox.proposals,
+          // Re-evaluated against the rules AS THEY ARE NOW, not as they were when the envelope
+          // landed: a proposal this machine already satisfies is finished, not pending. Filtered
+          // here rather than pruned from the store — see `selectLiveProposals`.
+          proposals: selectLiveProposals(inbox.proposals, {
+            shareMode: c.shareMode === 'allowlist' ? 'allowlist' : 'denylist',
+            sources: c.sources ?? [],
+          }),
           keyWarnings: inbox.keyWarnings,
           // The standing FACTS behind the reverse warning — what each sibling last announced about
           // its own rules. No new disclosure: a proposal already carries a sibling's full source
