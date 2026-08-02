@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, EyeOff, Loader2, Check } from 'lucide-react'
+import { ChevronDown, ChevronRight, EyeOff, Loader2, Check, Bell } from 'lucide-react'
 import type { SessionMeta, TeamConnection, ModelUsage, ShareSource, SiblingRuleFact } from '@agentistics/core'
 import type { ArchiveMode } from '../ArchiveConsentModal'
 import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
@@ -19,7 +19,9 @@ import { resolveCardActionsHidden, type ApplyPhase } from './repoPanelState'
 import {
   DisconnectButton, mobileBtn, StatusLine, ResyncStrip, RepoPanelSlot,
 } from './ConnectionCardParts'
-import { ProposalsSection, type ProposalView, type KeyWarningView, type PeerFingerprint } from './ProposalsSection'
+import { PeersSection } from './PeersSection'
+import { NoticesModal } from './NoticesModal'
+import { noticeSummary, type ProposalView, type KeyWarningView, type PeerFingerprint } from './proposalNotices'
 
 export interface ConnectionCardProps {
   conn: TeamConnection
@@ -56,12 +58,16 @@ export interface ConnectionCardProps {
   siblingRules?: SiblingRuleFact[]
   selfFingerprint?: string
   onDismissProposal?: (connId: string, body: { proposalId?: string; keyWarningMachineId?: string }) => Promise<void>
+  /** Arrived here from the bell (`notificationLink`): open this card AND its notices modal, so a
+   *  notification about a decision reaches that decision in one click. */
+  focusNotices?: boolean
 }
 
 export function ConnectionCard({
   conn, status, archiveMode, shareTargets, projectTargets, sessions, modelUsage, otelEnabled, duplicateHost, lang,
   onDisconnect, onSyncNow, onApplyRules,
   proposals = [], keyWarnings = [], peers = [], siblingRules = [], selfFingerprint = '', onDismissProposal,
+  focusNotices = false,
 }: ConnectionCardProps) {
   const isMobile = useIsMobile()
   const [expanded, setExpanded] = useState(false)
@@ -82,6 +88,15 @@ export function ConnectionCard({
   // reason `applyPhase` is — the panel unmounts on collapse, so the card (which stays mounted)
   // owns it, and hides Disconnect / Sync now for as long as it is true.
   const [repoEditing, setRepoEditing] = useState(false)
+  const [noticesOpen, setNoticesOpen] = useState(false)
+  // Runs when the deep link names THIS card. Not a one-shot ref: the panel clears the query as
+  // soon as it reads it, so `focusNotices` going true is itself the single event.
+  useEffect(() => {
+    if (!focusNotices) return
+    setExpanded(true)
+    setNoticesOpen(true)
+  }, [focusNotices])
+
   const resyncSeenRef = useRef(false)
   const statusRef = useRef(status)
   useEffect(() => { statusRef.current = status }, [status])
@@ -173,12 +188,17 @@ export function ConnectionCard({
   // discipline the expanded read view already follows.
   const rulePill = resolveRulePill(status)
   const disableWrites = resolveWritesDisabled(state, syncing, disconnecting, applyPhase)
+  // The notices affordance: a decision another machine is waiting on must be reachable from the
+  // COLLAPSED card, not buried three sections into the expanded one. Its count is the whole state,
+  // and a changed key colours it as an alarm rather than a decision.
+  const notices = noticeSummary(proposals, keyWarnings)
 
   return (
     <div style={{
       border: `1px solid ${state === 'offline' ? 'var(--anthropic-orange)' : 'var(--border)'}`,
       borderRadius: 10, background: 'var(--bg-card)', overflow: 'hidden',
     }}>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
       <button
         type="button"
         onClick={() => setExpanded(v => !v)}
@@ -245,6 +265,26 @@ export function ConnectionCard({
         )}
         {expanded ? <ChevronDown size={20} style={{ flexShrink: 0 }} /> : <ChevronRight size={20} style={{ flexShrink: 0 }} />}
       </button>
+      {notices.total > 0 && onDismissProposal && (
+        <button
+          type="button"
+          onClick={() => setNoticesOpen(true)}
+          title={COPY.noticesBtn[lang]}
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+            flexShrink: 0, marginRight: 12,
+            minHeight: isMobile ? 44 : 30, padding: isMobile ? '0 12px' : '0 10px',
+            borderRadius: 999, fontFamily: 'inherit', fontSize: 11.5, fontWeight: 700, cursor: 'pointer',
+            border: `1px solid ${notices.tone === 'alarm' ? 'var(--accent-red)' : 'var(--anthropic-orange)'}`,
+            background: 'transparent',
+            color: notices.tone === 'alarm' ? 'var(--accent-red)' : 'var(--anthropic-orange)',
+          }}
+        >
+          <Bell size={12} />
+          {COPY.noticesBtn[lang]} {notices.total}
+        </button>
+      )}
+      </div>
 
       {expanded && (
         <div style={{ padding: '0 14px 14px', display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -283,20 +323,6 @@ export function ConnectionCard({
             </div>
           )}
 
-          {onDismissProposal && (
-            <ProposalsSection
-              connId={conn.id}
-              proposals={proposals}
-              keyWarnings={keyWarnings}
-              peers={peers}
-              selfFingerprint={selfFingerprint}
-              lang={lang}
-              disabled={disableWrites}
-              onApply={onApplyRules}
-              onDismiss={onDismissProposal}
-            />
-          )}
-
           {state === 'resyncing' && status?.resync && <ResyncStrip resync={status.resync} lang={lang} />}
 
           <ConnectionIdentity
@@ -306,6 +332,8 @@ export function ConnectionCard({
             lang={lang}
             onResolved={setIdentity}
           />
+
+          <PeersSection peers={peers} selfFingerprint={selfFingerprint} lang={lang} />
 
           <RepoPanelSlot
             connId={conn.id}
@@ -355,6 +383,19 @@ export function ConnectionCard({
         </div>
       )}
 
+      {onDismissProposal && (
+        <NoticesModal
+          open={noticesOpen}
+          onClose={() => setNoticesOpen(false)}
+          conn={conn}
+          proposals={proposals}
+          keyWarnings={keyWarnings}
+          lang={lang}
+          disabled={disableWrites}
+          onApply={onApplyRules}
+          onDismiss={onDismissProposal}
+        />
+      )}
       <ConfirmModal
         open={confirmOpen}
         title={interpolate(COPY.disconnectTitle[lang], { central: centralLabel })}

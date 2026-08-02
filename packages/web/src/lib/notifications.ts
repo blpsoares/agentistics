@@ -152,6 +152,25 @@ export function resolveNotification(n: AppNotification, lang: 'pt' | 'en'): Loca
 }
 
 /**
+ * Where a notification LEADS, or `null` when it is only news.
+ *
+ * A notification about a decision the user has to make must reach that decision in one click —
+ * "another of your machines restricted repositories, open the connection to decide" is useless if
+ * the user then has to find the connection themselves. The three connection-scoped codes carry
+ * `meta.connectionId` already; the route opens that card with its notices modal up.
+ *
+ * PURE and total: an unknown code, or a known one that predates `connectionId`, leads nowhere
+ * rather than to a card that does not exist.
+ */
+export function notificationLink(n: Pick<AppNotification, 'code' | 'meta'>): string | null {
+  const NOTICE_CODES = new Set(['member.rules_proposed', 'member.peer_key_changed', 'member.peer_pinned'])
+  if (!n.code || !NOTICE_CODES.has(n.code)) return null
+  const id = String(n.meta?.connectionId ?? '').trim()
+  if (!id) return null
+  return `/settings/connection?conn=${encodeURIComponent(id)}&notices=1`
+}
+
+/**
  * PERSISTENCE — the server is the source of truth.
  *
  * The history lives on the machine (or on the central) at ~/.agentistics/notifications*.json and

@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { COPY } from './copy'
 import { NO_REPO_KEY } from '@agentistics/core'
-import { describeSources, proposalAge, peerLabel, PROPOSAL_STALE_MS } from './ProposalsSection'
-import { NOTIFICATION_TEXT, resolveNotification } from '../../lib/notifications'
+import { describeSources, proposalAge, peerLabel, PROPOSAL_STALE_MS } from './proposalNotices'
+import { noticeSummary, proposalPlan } from './proposalNotices'
+import { NOTIFICATION_TEXT, resolveNotification, notificationLink } from '../../lib/notifications'
 
 describe('describeSources', () => {
   it('shows short repo names, never a raw sentinel', () => {
@@ -104,5 +108,84 @@ describe('peerLabel — the fingerprint list must name machines, not hashes', ()
     // "If you do not recognise a machine, compare its fingerprint" asks nothing of a user who is
     // shown a token-hash prefix, so this is the last resort, not the default.
     expect(peerLabel({ machineId: 'abcdef0123456789', machineName: '', fingerprint: 'x' })).toBe('abcdef012345')
+  })
+})
+
+describe('noticeSummary — the card\'s notices button', () => {
+  it('counts proposals and key warnings together', () => {
+    expect(noticeSummary([{}, {}], [{}])).toEqual({ total: 3, proposals: 2, keyWarnings: 1, tone: 'alarm' })
+  })
+
+  it('is an alarm only when a key changed; a proposal is a decision', () => {
+    expect(noticeSummary([{}], []).tone).toBe('decision')
+    expect(noticeSummary([], [{}]).tone).toBe('alarm')
+    expect(noticeSummary([], []).tone).toBe('none')
+  })
+
+  it('treats a missing list as zero — an older central sends neither', () => {
+    expect(noticeSummary(undefined, undefined).total).toBe(0)
+  })
+})
+
+describe('proposalPlan — what the Apply button actually sends', () => {
+  it('never sends the sibling\'s snapshot: this machine\'s own denials survive', () => {
+    const conn = { shareMode: 'denylist' as const, sources: [{ type: 'repo' as const, value: 'github.com/acme/secret' }] }
+    const plan = proposalPlan(conn, { shareMode: 'denylist', sources: [{ type: 'repo', value: 'github.com/acme/api' }] })
+    expect(plan.merged.sources.map(s => s.value).sort())
+      .toEqual(['github.com/acme/api', 'github.com/acme/secret'])
+    expect(plan.stopsSharing.map(s => s.value)).toEqual(['github.com/acme/api'])
+  })
+
+  it('reads a connection with no stored rules as a denylist that denies nothing', () => {
+    const plan = proposalPlan({}, { shareMode: 'denylist', sources: [{ type: 'repo', value: 'github.com/acme/api' }] })
+    expect(plan.merged).toEqual({ shareMode: 'denylist', sources: [{ type: 'repo', value: 'github.com/acme/api' }] })
+  })
+})
+
+describe('the notices modal wiring — the regression that started all this', () => {
+  const src = readFileSync(join(import.meta.dir, 'NoticesModal.tsx'), 'utf8')
+
+  it('applies the MERGED plan, never the proposal\'s own shareMode/sources', () => {
+    expect(src).toContain('onApply(conn.id, plan.merged.shareMode, plan.merged.sources)')
+    // The old call. Its return would replace this machine's rules with the sibling's.
+    expect(src).not.toContain('onApply(conn.id, p.shareMode, p.sources)')
+  })
+
+  it('states the widening case in the warning colour rather than doing it', () => {
+    expect(src).toContain('plan.wouldStartSharing')
+    expect(src).toContain('plan.widensEverythingUnlisted')
+    expect(src).toContain('anthropic-orange')
+  })
+})
+
+describe('the notices copy', () => {
+  for (const key of [
+    'noticesBtn', 'noticesTitle', 'noticesEmpty', 'proposalWouldHide', 'proposalNothingToApply',
+    'proposalWouldWiden', 'proposalWidensUnlisted', 'proposalHidesUnlisted', 'peersCount', 'peersShow',
+  ] as const) {
+    it(`${key} exists in EN and PT`, () => {
+      expect(COPY[key].en.length).toBeGreaterThan(0)
+      expect(COPY[key].pt.length).toBeGreaterThan(0)
+      expect(COPY[key].en).not.toBe(COPY[key].pt)
+    })
+  }
+
+  it('keeps the honesty guards verbatim — nothing changed here, and the best-effort caveat', () => {
+    expect(COPY.proposalNotApplied.en).toContain('Nothing has changed on this machine')
+    expect(COPY.keyChangedBody.en).toContain('nothing from it was decrypted')
+    expect(COPY.siblingWithholdRowProject.en).toContain('a project with this name')
+  })
+})
+
+describe('notificationLink — a decision must be one click away', () => {
+  it('sends the proposal notification to that connection\'s notices', () => {
+    expect(notificationLink({ code: 'member.rules_proposed', meta: { connectionId: 'c_1' } }))
+      .toBe('/settings/connection?conn=c_1&notices=1')
+  })
+
+  it('leads nowhere for news, or for a row persisted before connectionId existed', () => {
+    expect(notificationLink({ code: 'member.reconnected', meta: { connectionId: 'c_1' } })).toBeNull()
+    expect(notificationLink({ code: 'member.rules_proposed', meta: {} })).toBeNull()
+    expect(notificationLink({ code: undefined, meta: undefined })).toBeNull()
   })
 })

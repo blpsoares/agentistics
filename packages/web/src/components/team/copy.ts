@@ -358,6 +358,43 @@ export const COPY = {
     en: 'Nothing has changed on this machine. Rules are per machine — apply it only if you want the same here.',
     pt: 'Nada mudou nesta máquina. As regras são por máquina — aplique apenas se quiser o mesmo aqui.',
   },
+  // The card's notices affordance and the modal behind it. The card STATES the state; the
+  // explanation and the decision live in the modal.
+  noticesBtn: {
+    en: 'Notices',
+    pt: 'Avisos',
+  },
+  noticesTitle: {
+    en: 'Notices',
+    pt: 'Avisos',
+  },
+  noticesEmpty: {
+    en: 'Nothing waiting for you.',
+    pt: 'Nada esperando por você.',
+  },
+  // The useful sentence is the diff against YOUR rules, not a restatement of the sibling's.
+  proposalWouldHide: {
+    en: 'Applying it here stops sharing:',
+    pt: 'Aplicar aqui deixa de compartilhar:',
+  },
+  proposalNothingToApply: {
+    en: 'This machine already restricts everything this proposal asks for — there is nothing to apply.',
+    pt: 'Esta máquina já restringe tudo o que esta proposta pede — não há nada a aplicar.',
+  },
+  // The narrowing-only guarantee, stated where the decision is made. Applying can only ever hide
+  // more; anything the sibling shares and you hide stays hidden.
+  proposalWouldWiden: {
+    en: 'Applied exactly as sent it would start sharing {sources}, which this machine hides. It will not: applying can only hide more, never less.',
+    pt: 'Aplicada exatamente como enviada, ela passaria a compartilhar {sources}, que esta máquina oculta. Isso não acontecerá: aplicar só pode ocultar mais, nunca menos.',
+  },
+  proposalWidensUnlisted: {
+    en: 'Applied exactly as sent it would also share everything it does not list. It will not: applying can only hide more, never less.',
+    pt: 'Aplicada exatamente como enviada, ela também compartilharia tudo o que não lista. Isso não acontecerá: aplicar só pode ocultar mais, nunca menos.',
+  },
+  proposalHidesUnlisted: {
+    en: 'Afterwards only the listed sources stay shared with this central; everything else stops.',
+    pt: 'Depois, só as fontes listadas continuam compartilhadas com esta central; o resto para.',
+  },
   proposalApply: {
     en: 'Apply here',
     pt: 'Aplicar aqui',
@@ -371,8 +408,18 @@ export const COPY = {
     pt: 'Máquinas que recebem suas regras',
   },
   peersBody: {
-    en: 'Each of these machines of your account can read the sharing rules this machine sends. The central hands over these keys, so if you do not recognise a machine, compare its fingerprint with the one that machine shows for itself.',
-    pt: 'Cada uma destas máquinas da sua conta consegue ler as regras de compartilhamento que esta máquina envia. A central fornece essas chaves — se você não reconhece uma máquina, compare a impressão digital com a que aquela máquina mostra de si mesma.',
+    en: 'The central hands over these keys. If you do not recognise a machine, compare its fingerprint with the one that machine shows for itself.',
+    pt: 'A central fornece essas chaves. Se você não reconhece uma máquina, compare a impressão digital com a que aquela máquina mostra de si mesma.',
+  },
+  // The collapsed line: the FACT, one row. The explanation and the fingerprints live behind it —
+  // they are a verification tool used once, not standing information.
+  peersCount: {
+    en: '{n} machine(s) receive your rules',
+    pt: '{n} máquina(s) recebem suas regras',
+  },
+  peersShow: {
+    en: 'Fingerprints',
+    pt: 'Impressões digitais',
   },
   peersSelf: {
     en: 'This machine',
@@ -403,8 +450,8 @@ export const COPY = {
     pt: 'A chave de uma máquina mudou — as mensagens dela não foram abertas',
   },
   keyChangedBody: {
-    en: 'The key published for {name} is not the one this machine pinned. That is either a reinstall or someone substituting a key on the central, and this machine cannot tell which — so nothing from it was decrypted. Compare the fingerprints on both machines before continuing.',
-    pt: 'A chave publicada para {name} não é a que esta máquina fixou. Isso é uma reinstalação ou alguém substituindo uma chave na central, e esta máquina não sabe qual — então nada dela foi descriptografado. Compare as impressões digitais nas duas máquinas antes de continuar.',
+    en: 'The key published for {name} is not the one this machine pinned — a reinstall and a substituted key look the same from here, so nothing from it was decrypted. Compare the fingerprints on both machines.',
+    pt: 'A chave publicada para {name} não é a que esta máquina fixou — uma reinstalação e uma chave substituída são indistinguíveis daqui, então nada dela foi descriptografado. Compare as impressões digitais nas duas máquinas.',
   },
   keyChangedDismiss: {
     en: 'I checked — clear this warning',
