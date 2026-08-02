@@ -151,6 +151,13 @@ describe('the notices modal wiring — the regression that started all this', ()
     expect(src).not.toContain('onApply(conn.id, p.shareMode, p.sources)')
   })
 
+  it('renders the two lists with the two different sentences — never one for both', () => {
+    // `stopsSharing` may say "stops sharing"; `partlyRestricts` may only say "no longer listed",
+    // because sessions in those rows can still ship through the other dimension.
+    expect(src).toMatch(/COPY\.proposalWouldHide\[lang\][\s\S]{0,200}plan\.stopsSharing/)
+    expect(src).toMatch(/COPY\.proposalPartlyRestricts\[lang\][\s\S]{0,200}plan\.partlyRestricts/)
+  })
+
   it('states the widening case in the warning colour rather than doing it', () => {
     expect(src).toContain('plan.wouldStartSharing')
     expect(src).toContain('plan.widensEverythingUnlisted')
@@ -161,7 +168,8 @@ describe('the notices modal wiring — the regression that started all this', ()
 describe('the notices copy', () => {
   for (const key of [
     'noticesBtn', 'noticesTitle', 'noticesEmpty', 'proposalWouldHide', 'proposalNothingToApply',
-    'proposalWouldWiden', 'proposalWidensUnlisted', 'proposalHidesUnlisted', 'peersCount', 'peersShow',
+    'proposalWouldWiden', 'proposalWidensUnlisted', 'proposalHidesUnlisted', 'proposalPartlyRestricts',
+    'peersCount', 'peersShow',
   ] as const) {
     it(`${key} exists in EN and PT`, () => {
       expect(COPY[key].en.length).toBeGreaterThan(0)

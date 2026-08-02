@@ -51,14 +51,22 @@ describe('applying a proposal never removes an existing restriction', () => {
     it(`${c.name}: no bucket hidden here becomes shared`, () => {
       const plan = planProposalApply(c.current, c.proposal)
       // The property, stated over EVERY bucket either side names: what was hidden stays hidden.
-      let checked = 0
+      // The assertion is unconditional — a conditional one plus a loop-iteration count would pass
+      // over a table where `before` was never false, which proves nothing at all. So each bucket
+      // asserts the IMPLICATION itself, and the case is then required to contain hidden buckets.
+      let hidden = 0
+      let asserted = 0
       for (const bucket of BUCKETS) {
-        checked++
         const before = bucketSharedBy(bucket, c.current)
         const after = bucketSharedBy(bucket, plan.merged)
-        if (!before) expect(after).toBe(false)
+        if (!before) hidden++
+        expect(`${JSON.stringify(bucket)}|${!before && after}`).toBe(`${JSON.stringify(bucket)}|false`)
+        asserted++
       }
-      expect(checked).toBe(BUCKETS.length)
+      expect(asserted).toBe(BUCKETS.length)
+      // The guard that makes the property non-vacuous FOR THIS CASE: it really does start with
+      // something hidden, so "hidden stays hidden" has something to be about.
+      expect(hidden).toBeGreaterThan(0)
     })
   }
 
@@ -181,5 +189,62 @@ describe('proposalAddsNothing — the ping-pong predicate', () => {
       { shareMode: 'denylist', sources: [repo('https://github.com/Acme/API.git')] },
       { shareMode: 'denylist', sources: [repo('git@github.com:acme/api')] },
     )).toBe(true)
+  })
+})
+
+describe('stopsSharing is a statement, and it must be true', () => {
+  it('does not name a project that keeps shipping through its repository', () => {
+    // current allowlist [repo:api, project:/p]; the proposal denies /p. The merged allowlist drops
+    // /p — but every session in /p that belongs to `api` is STILL shared, matched on the repo
+    // dimension. Saying "applying stops sharing /p" is false, and false in the reassuring
+    // direction, at the exact moment the user is deciding.
+    const plan = planProposalApply(
+      { shareMode: 'allowlist', sources: [repo('github.com/acme/api'), proj('/p')] },
+      { shareMode: 'denylist', sources: [proj('/p')] },
+    )
+    expect(plan.merged.sources.map(s => s.value)).toEqual(['github.com/acme/api'])
+    expect(plan.stopsSharing).toEqual([])
+    // Not dropped — said in the words the arithmetic supports.
+    expect(plan.partlyRestricts.map(s => s.value)).toEqual(['/p'])
+  })
+
+  it('does not name a repository that keeps shipping through an allowed project', () => {
+    const plan = planProposalApply(
+      { shareMode: 'allowlist', sources: [repo('github.com/acme/api'), proj('/p')] },
+      { shareMode: 'denylist', sources: [repo('github.com/acme/api')] },
+    )
+    expect(plan.merged.sources.map(s => s.value)).toEqual(['/p'])
+    expect(plan.stopsSharing).toEqual([])
+  })
+
+  it('still names a row that genuinely goes from fully shared to fully hidden', () => {
+    const plan = planProposalApply(
+      { shareMode: 'denylist', sources: [] },
+      { shareMode: 'denylist', sources: [repo('github.com/acme/api'), proj('/p')] },
+    )
+    expect(plan.stopsSharing.map(s => `${s.type}:${s.value}`)).toEqual(['repo:github.com/acme/api', 'project:/p'])
+  })
+
+  it('demotes a row it cannot promise goes dark to the weaker list, never dropping it', () => {
+    // denylist [project:/p] + denylist [repo:api]: every session of `api` could already sit in /p,
+    // in which case nothing changes for it — the rules cannot say. So it is reported as newly
+    // restricted, not as "stops being shared".
+    const plan = planProposalApply(
+      { shareMode: 'denylist', sources: [proj('/p')] },
+      { shareMode: 'denylist', sources: [repo('github.com/acme/api')] },
+    )
+    expect(plan.stopsSharing).toEqual([])
+    expect(plan.partlyRestricts.map(s => s.value)).toEqual(['github.com/acme/api'])
+  })
+
+  it('stays silent when the rules cannot settle it — never a probable sentence', () => {
+    // current allowlist [project:/p] shares sessions of `api` only if they sit in /p, which the
+    // rules alone cannot say. Applying hides them either way, but "you will stop sharing api" may
+    // describe nothing at all, so it is not said.
+    const plan = planProposalApply(
+      { shareMode: 'allowlist', sources: [proj('/p')] },
+      { shareMode: 'allowlist', sources: [proj('/p'), repo('github.com/acme/api')] },
+    )
+    expect(plan.stopsSharing).toEqual([])
   })
 })

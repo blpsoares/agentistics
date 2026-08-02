@@ -385,6 +385,14 @@ export const COPY = {
     en: 'Applying it here stops sharing:',
     pt: 'Aplicar aqui deixa de compartilhar:',
   },
+  // Rows the merge restricts but whose outcome the rules alone cannot settle (a project dropped
+  // from an allowlist whose repository is still allowed). Weaker words on purpose — "stops sharing"
+  // would be a false statement in the reassuring direction, which is the one thing this feature
+  // exists to avoid.
+  proposalPartlyRestricts: {
+    en: 'No longer listed (sessions in these may still be shared through another rule):',
+    pt: 'Deixa de estar listado (sessões nestes podem continuar sendo compartilhadas por outra regra):',
+  },
   proposalNothingToApply: {
     en: 'This machine already restricts everything this proposal asks for — there is nothing to apply.',
     pt: 'Esta máquina já restringe tudo o que esta proposta pede — não há nada a aplicar.',

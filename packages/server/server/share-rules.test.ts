@@ -1217,7 +1217,16 @@ test('planProposalApply never shares a session the current rules already withhel
     s({ session_id: 'b', git_remote: SECRET, project_path: '/home/a/secret' }),
     s({ session_id: 'c', git_remote: '', project_path: '/home/a/none' }),
     s({ session_id: 'd', git_remote: '', project_path: '/home/a/secret' }),
+    // A workspace directory holding BOTH repos — this is what puts `sessionShared`'s
+    // ambiguous-directory clause (`PathRepoIndex.conflicts`) on the merge's path. Without it the
+    // table exercised only the unambiguous half, and the fail-closed conflict rule — the one part
+    // of the semantics `planProposalApply` deliberately does not model — was covered by reading
+    // rather than by running.
+    s({ session_id: 'e', git_remote: API, project_path: '/home/a/workspace' }),
+    s({ session_id: 'f', git_remote: SECRET, project_path: '/home/a/workspace' }),
   ]
+  const index = buildPathRepoIndex(sessions)
+  expect(index.conflicts.get('/home/a/workspace')?.size).toBe(2)
 
   let narrowed = 0
   let compared = 0
@@ -1225,8 +1234,8 @@ test('planProposalApply never shares a session the current rules already withhel
     for (const proposal of ruleSets) {
       const { merged } = planProposalApply(current, proposal)
       for (const session of sessions) {
-        const before = sessionShared(session, shareRulesOf(current.shareMode, current.sources))
-        const after = sessionShared(session, shareRulesOf(merged.shareMode, merged.sources))
+        const before = sessionShared(session, shareRulesOf(current.shareMode, current.sources), index)
+        const after = sessionShared(session, shareRulesOf(merged.shareMode, merged.sources), index)
         // The property. `after && !before` is the bug; `!after && before` is a legitimate narrowing.
         expect(`${session.session_id}|${after && !before}`).toBe(`${session.session_id}|false`)
         if (before && !after) narrowed++

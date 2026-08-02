@@ -148,6 +148,12 @@ export function NoticesModal({
                         <strong style={{ color: 'var(--accent-red)' }}>{describeSources(plan.stopsSharing, lang)}</strong>
                       </span>
                     )}
+                    {plan.partlyRestricts.length > 0 && (
+                      <span style={{ color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
+                        {COPY.proposalPartlyRestricts[lang]}{' '}
+                        <strong style={{ color: 'var(--text-primary)' }}>{describeSources(plan.partlyRestricts, lang)}</strong>
+                      </span>
+                    )}
                     {plan.hidesEverythingUnlisted && (
                       <span style={{ color: 'var(--text-secondary)' }}>{COPY.proposalHidesUnlisted[lang]}</span>
                     )}

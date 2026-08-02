@@ -18,6 +18,20 @@
  * Each of those is the exact intersection, not an approximation of it — so the merge loses nothing
  * the proposal asks for and gives up nothing the user already had.
  *
+ * WHAT A SOURCE DOES AND DOES NOT SAY ABOUT SESSIONS. A source names a bucket on ONE dimension
+ * (`project:/p` is every session in `/p`, whatever repository each belongs to) while `sessionShared`
+ * decides on BOTH, so rule-set membership is not the same question as "is this bucket shared".
+ * `stopsSharing` is therefore held to the joint reading — it names a row only when nothing of it
+ * ships afterwards and something did before — and rows the rules alone cannot settle are demoted to
+ * `partlyRestricts`, which the UI may only ever render as "no longer listed". Deciding this by
+ * membership once named a project that kept shipping through its repository: a false sentence, in
+ * the reassuring direction, at the moment of the decision.
+ *
+ * `sessionShared`'s ambiguous-directory clause (`PathRepoIndex.conflicts`) is deliberately not
+ * modelled here: it only ever REMOVES sharing, in both modes, and this module's inputs are rules
+ * rather than sessions. `share-rules.test.ts` exercises the merge THROUGH that clause so the
+ * narrowing property is checked against it mechanically rather than argued.
+ *
  * WHAT THE UI STILL HAS TO SAY. Narrowing-only is the default, never a silent rewrite of the
  * message: `wouldStartSharing` / `widensEverythingUnlisted` name precisely what applying the
  * proposal VERBATIM would have opened, so the difference between "what the sibling sent" and "what
@@ -44,6 +58,14 @@ export interface ProposalApplyPlan {
    * neither rule set names are covered by the two booleans below instead.
    */
   stopsSharing: ShareSource[]
+  /**
+   * Sources the merge newly restricts whose OUTCOME the rules alone cannot settle — the row stops
+   * being listed, but sessions in it may still be shared through the other dimension (a project
+   * dropped from an allowlist whose repository is still allowed). Kept apart from `stopsSharing`
+   * because they carry different sentences: this one may only ever be rendered as "no longer
+   * listed", never as "stops being shared".
+   */
+  partlyRestricts: ShareSource[]
   /**
    * Sources this machine currently hides that applying the proposal VERBATIM would start sharing.
    * Non-empty means the sibling's snapshot is more permissive here than the user's own rules — the
@@ -82,10 +104,44 @@ function pick(list: readonly ShareSource[] | undefined, keep: (key: string) => b
   return out
 }
 
-/** Whether a rule set shares the bucket keyed `key`. The membership half of `sessionShared`, for a
- *  bucket the caller has already named — no ambiguous-directory case to fail closed on. */
-function sharesKey(mode: 'denylist' | 'allowlist', keys: ReadonlySet<string>, key: string): boolean {
+/**
+ * A source names a bucket on ONE dimension only — `project:/p` is every session in `/p`, whatever
+ * repository each belongs to — and `sessionShared` decides on BOTH. So membership in the rule set
+ * is not the same question as "is this bucket shared", and the two predicates below are the honest
+ * ones. `hasOtherDimension` is what makes them so: a rule set naming the other dimension can share
+ * (allowlist) or deny (denylist) part of a bucket without naming it.
+ *
+ * Both are deliberately CERTAIN, never probable — they answer only when the rules settle it for
+ * every session of the bucket, and stay silent otherwise.
+ */
+function isProjectKey(key: string): boolean {
+  return key.startsWith('project:')
+}
+
+function hasOtherDimension(keys: ReadonlySet<string>, key: string): boolean {
+  const project = isProjectKey(key)
+  for (const k of keys) if (isProjectKey(k) !== project) return true
+  return false
+}
+
+/** Membership only: whether the rule set LISTS this bucket as shared on its own dimension. Never a
+ *  claim about the sessions in it — that is what the two predicates below are for. */
+function listedAsShared(mode: 'denylist' | 'allowlist', keys: ReadonlySet<string>, key: string): boolean {
   return mode === 'allowlist' ? keys.has(key) : !keys.has(key)
+}
+
+/** Every session of this bucket is shared — the rules cannot be hiding part of it elsewhere. */
+function definitelyShared(mode: 'denylist' | 'allowlist', keys: ReadonlySet<string>, key: string): boolean {
+  if (mode === 'allowlist') return keys.has(key)
+  // denylist: named → wholly denied; unnamed → shared unless the OTHER dimension denies part of it.
+  return !keys.has(key) && !hasOtherDimension(keys, key)
+}
+
+/** NO session of this bucket is shared. */
+function definitelyHidden(mode: 'denylist' | 'allowlist', keys: ReadonlySet<string>, key: string): boolean {
+  if (mode === 'denylist') return keys.has(key)
+  // allowlist: unnamed → hidden, unless the OTHER dimension allows part of it back in.
+  return !keys.has(key) && !hasOtherDimension(keys, key)
 }
 
 function modeOf(rules: AnnouncedRules): 'denylist' | 'allowlist' {
@@ -138,15 +194,31 @@ export function planProposalApply(current: AnnouncedRules, proposal: AnnouncedRu
 
   const mergedKeys = keySet(merged.sources)
   const stopsSharing: ShareSource[] = []
+  const partlyRestricts: ShareSource[] = []
   const wouldStartSharing: ShareSource[] = []
   const seen = new Set<string>()
   for (const s of [...(current.sources ?? []), ...(proposal.sources ?? [])]) {
     const key = shareSourceKey(s)
     if (!key || seen.has(key)) continue
     seen.add(key)
-    const sharedNow = sharesKey(curMode, curKeys, key)
-    if (sharedNow && !sharesKey(merged.shareMode, mergedKeys, key)) stopsSharing.push(s)
-    if (!sharedNow && sharesKey(propMode, propKeys, key)) wouldStartSharing.push(s)
+    // "Applying stops sharing X" is only true when NOTHING of X ships afterwards and something did
+    // before. Deciding it by membership alone named a project that keeps shipping through its
+    // repository — a false sentence, in the reassuring direction, at the moment of the decision.
+    if (definitelyShared(curMode, curKeys, key) && definitelyHidden(merged.shareMode, mergedKeys, key)) {
+      stopsSharing.push(s)
+    } else if (listedAsShared(curMode, curKeys, key) && !listedAsShared(merged.shareMode, mergedKeys, key)) {
+      // The merge does restrict this row — it just cannot promise the row goes dark, because the
+      // other dimension may still carry some of it. Said in weaker words rather than dropped: the
+      // user is choosing, and "nothing here changes" would be its own false statement.
+      partlyRestricts.push(s)
+    }
+    // The warning is the mirror, and its uncertainty falls the other way ON PURPOSE: it fires when
+    // this machine certainly hides the bucket and applying verbatim would share ANY of it. A
+    // warning shown for a case that might not arise costs a sentence; one withheld costs the user
+    // the only notice that the sibling's snapshot is more permissive than their own rules.
+    if (definitelyHidden(curMode, curKeys, key) && !definitelyHidden(propMode, propKeys, key)) {
+      wouldStartSharing.push(s)
+    }
   }
 
   const changesNothing = merged.shareMode === curMode
@@ -156,6 +228,7 @@ export function planProposalApply(current: AnnouncedRules, proposal: AnnouncedRu
   return {
     merged,
     stopsSharing,
+    partlyRestricts,
     wouldStartSharing,
     widensEverythingUnlisted: curMode === 'allowlist' && propMode === 'denylist',
     hidesEverythingUnlisted: curMode === 'denylist' && merged.shareMode === 'allowlist',
