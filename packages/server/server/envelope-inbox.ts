@@ -104,13 +104,33 @@ export function recordOpened(existing: readonly string[], digests: readonly stri
 
 /**
  * PURE. Merge freshly decrypted proposals into the stored ones: newest first, deduplicated by
- * envelope id, capped. A repeat of an id already present is DROPPED rather than refreshed — the
- * user's decision not to act on a proposal must not be undone by the sender re-sending it.
+ * envelope id, SUPERSEDED per sending machine, capped. A repeat of an id already present is
+ * DROPPED rather than refreshed — the user's decision not to act on a proposal must not be undone
+ * by the sender re-sending it.
+ *
+ * SUPERSEDE PER MACHINE, for the same reason `mergeSiblingFacts` does it: each envelope carries a
+ * machine's WHOLE rule set, so a newer announcement from that machine does not add a second
+ * decision, it replaces the one that was pending. Two cards titled "Alienware restricted
+ * repositories for this central" is that bug, and the older of the two is stale by construction.
+ *
+ * Order is ARRIVAL order — fresh first, then the stored list, newest first — and never the sender's
+ * `at`: that is the sender's clock, display-only everywhere else in this channel, and a peer whose
+ * clock ran backwards must not be able to make its stale rules outrank its current ones.
  */
 export function mergeProposals(existing: readonly Proposal[], incoming: readonly Proposal[]): Proposal[] {
   const seen = new Set(existing.map(p => p.id))
   const fresh = incoming.filter(p => !seen.has(p.id))
-  return [...fresh, ...existing].slice(0, MAX_PROPOSALS)
+  const byMachine = new Set<string>()
+  const out: Proposal[] = []
+  for (const p of [...fresh, ...existing]) {
+    // A proposal with no sender id cannot be superseded by anything — it is kept on its own id.
+    if (p.fromMachineId) {
+      if (byMachine.has(p.fromMachineId)) continue
+      byMachine.add(p.fromMachineId)
+    }
+    out.push(p)
+  }
+  return out.slice(0, MAX_PROPOSALS)
 }
 
 /** PURE. One warning per peer machine — a poll every few minutes must not become a warning list. */
