@@ -393,10 +393,6 @@ export const COPY = {
     en: 'No longer listed (sessions in these may still be shared through another rule):',
     pt: 'Deixa de estar listado (sessões nestes podem continuar sendo compartilhadas por outra regra):',
   },
-  proposalNothingToApply: {
-    en: 'This machine already restricts everything this proposal asks for — there is nothing to apply.',
-    pt: 'Esta máquina já restringe tudo o que esta proposta pede — não há nada a aplicar.',
-  },
   // The narrowing-only guarantee, stated where the decision is made. Applying can only ever hide
   // more; anything the sibling shares and you hide stays hidden.
   proposalWouldWiden: {
@@ -414,6 +410,69 @@ export const COPY = {
   proposalApply: {
     en: 'Apply here',
     pt: 'Aplicar aqui',
+  },
+  // THE TABLE. The question a person opening this screen actually has is "which repositories are
+  // hidden, and from which machines" — not "what did each of my machines send me". One row per
+  // restricted bucket, the machines named in the row.
+  restrictionsTitle: {
+    en: 'Not shared with this central',
+    pt: 'Não compartilhado com esta central',
+  },
+  restrictionsSubtitle: {
+    en: 'One row per repository or project a machine of this account withholds, and where the restriction is applied.',
+    pt: 'Uma linha por repositório ou projeto que alguma máquina desta conta não compartilha, e onde a restrição está aplicada.',
+  },
+  restrictionsEmpty: {
+    en: 'No machine of this account withholds anything from this central — as far as this one has been told.',
+    pt: 'Nenhuma máquina desta conta oculta algo desta central — até onde esta máquina foi informada.',
+  },
+  colBucket: {
+    en: 'Repository / project',
+    pt: 'Repositório / projeto',
+  },
+  colRestrictedOn: {
+    en: 'Restricted on',
+    pt: 'Restrito em',
+  },
+  colAction: {
+    en: 'Here',
+    pt: 'Aqui',
+  },
+  rowSharedOn: {
+    en: 'still shared on {machines}',
+    pt: 'ainda compartilhado em {machines}',
+  },
+  rowAppliedHere: {
+    en: 'Applied',
+    pt: 'Aplicado',
+  },
+  // A project row this machine cannot express: the sibling announced its OWN path, and a rule must
+  // name the exact path it denies. Never guessed at when two local folders share the name.
+  rowNoLocalProject: {
+    en: 'No project with this name here',
+    pt: 'Nenhum projeto com este nome aqui',
+  },
+  rowTagRepo: {
+    en: 'repo',
+    pt: 'repo',
+  },
+  rowTagProject: {
+    en: 'project',
+    pt: 'projeto',
+  },
+  // An allowlist machine hides everything it does not list, which no row can enumerate.
+  restrictionsAllowlistNote: {
+    en: '{machines} share only what they list, so anything not named above is withheld there too.',
+    pt: '{machines} compartilham apenas o que listam, então tudo o que não está nomeado acima também é ocultado lá.',
+  },
+  // The remaining per-proposal strip: one line per machine with an offer still open.
+  proposalStripTitle: {
+    en: '{name} announced rules you have not applied here',
+    pt: '{name} anunciou regras que você não aplicou aqui',
+  },
+  proposalApplyAll: {
+    en: 'Apply all',
+    pt: 'Aplicar tudo',
   },
   proposalDismiss: {
     en: 'Dismiss',

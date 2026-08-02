@@ -168,9 +168,13 @@ describe('the notices modal wiring — the regression that started all this', ()
 
 describe('the notices copy', () => {
   for (const key of [
-    'noticesBtn', 'noticesTitle', 'noticesEmpty', 'proposalWouldHide', 'proposalNothingToApply',
+    'noticesBtn', 'noticesTitle', 'noticesEmpty', 'proposalWouldHide',
     'proposalWouldWiden', 'proposalWidensUnlisted', 'proposalHidesUnlisted', 'proposalPartlyRestricts',
     'peersCount', 'peersShow',
+    // The table that replaced the wall of per-proposal prose.
+    'restrictionsTitle', 'restrictionsSubtitle', 'restrictionsEmpty', 'colBucket', 'colRestrictedOn',
+    'colAction', 'rowSharedOn', 'rowAppliedHere', 'rowNoLocalProject', 'restrictionsAllowlistNote',
+    'proposalStripTitle', 'proposalApplyAll',
   ] as const) {
     it(`${key} exists in EN and PT`, () => {
       expect(COPY[key].en.length).toBeGreaterThan(0)

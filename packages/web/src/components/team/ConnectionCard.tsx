@@ -395,6 +395,10 @@ export function ConnectionCard({
           conn={conn}
           proposals={proposals}
           keyWarnings={keyWarnings}
+          // The standing FACTS are the table's rows, and this machine's own project paths are what
+          // make a project row actionable here (a rule must name the exact local path).
+          siblingRules={siblingRules}
+          localProjects={projectTargets.map(p => p.path)}
           lang={lang}
           disabled={disableWrites}
           onApply={onApplyRules}
