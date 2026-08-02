@@ -9,6 +9,8 @@ import { Drawer } from './Drawer'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { stepUpFetch } from '../../lib/stepup'
 import { Revealable, REVEAL_PAD } from '../../components/PasswordReveal'
+import { validateAccountDraft, showsTeamlessHint, type AccountDraft } from './accountForm'
+import type { IamScope } from '@agentistics/core'
 
 interface Team { _id: string; name: string }
 interface Membership { teamId: string; role: 'manager' | 'user' }
@@ -190,6 +192,20 @@ export default function UsersSettings() {
   const [copied, setCopied] = useState<string | null>(null)
   const [copyFailed, setCopyFailed] = useState<string | null>(null)
 
+  // The create drawer as the PURE rule sees it. `me` absent degrades to a scope that can create
+  // nothing, exactly as `viewerIsOwner` / `managedTeamIds` above already degrade.
+  const viewerScope: IamScope = { role: me?.role ?? 'member', memberships: me?.memberships ?? [] }
+  const accountDraft: AccountDraft = {
+    scope: viewerScope,
+    accountType,
+    name: an,
+    email: ae,
+    password: ap,
+    // An owner-type account carries no team scope at all; a blank row is not a membership.
+    memberships: accountType === 'owner' ? [] : rows.filter(r => r.teamId),
+  }
+  const teamlessHint = showsTeamlessHint(accountDraft)
+
   // edit drawer
   const [editOpen, setEditOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
@@ -229,7 +245,11 @@ export default function UsersSettings() {
   const [confirmReset, setConfirmReset] = useState(false)
 
   function openAccountDrawer() {
-    setAn(''); setAe(''); setAp(''); setAccountType('member'); setRows([{ teamId: '', role: 'user' }])
+    // An owner opens on NO row at all — a form that starts with a blank team row implies a team is
+    // expected, and for an owner none is. A manager, who must place the account inside a team they
+    // manage, opens on the one row they have to fill.
+    setAn(''); setAe(''); setAp(''); setAccountType('member')
+    setRows(viewerIsOwner ? [] : [{ teamId: '', role: 'user' }])
     setMachineRows([]); setNewTagIds([]); setAccountErr(null)
     setMustChange(true); setPwVisible(false); setCreated(null); setCopied(null); setCopyFailed(null)
     setAccountOpen(true)
@@ -270,7 +290,10 @@ export default function UsersSettings() {
     setRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r))
   }
   function addRow() { setRows(rs => [...rs, { teamId: '', role: 'user' }]) }
-  function removeRow(i: number) { setRows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs) }
+  // No `length > 1` floor: an owner may create an account with no team, so the last row has to be
+  // removable. A manager who empties the list is stopped by `validateAccountDraft` with a sentence
+  // that says why — not by a disabled bin icon that says nothing.
+  function removeRow(i: number) { setRows(rs => rs.filter((_, idx) => idx !== i)) }
 
   function addMachineRow() { setMachineRows(rs => [...rs, { name: '', teamId: '' }]) }
   function removeMachineRow(i: number) { setMachineRows(rs => rs.filter((_, idx) => idx !== i)) }
@@ -279,18 +302,21 @@ export default function UsersSettings() {
   }
 
   async function createAccount() {
-    if (!an.trim() || !ae.trim() || ap.length < 8) {
+    const issue = validateAccountDraft(accountDraft)
+    if (issue === 'incomplete-fields') {
       setAccountErr(pt ? 'Preencha nome, email e senha (8+).' : 'Fill name, email and password (8+).')
       return
     }
-    let memberships: Membership[] = []
-    if (accountType === 'member') {
-      memberships = rows.filter(r => r.teamId)
-      if (memberships.length === 0) {
-        setAccountErr(pt ? 'Selecione ao menos um time.' : 'Select at least one team.')
-        return
-      }
+    if (issue === 'team-required') {
+      // Only a manager can reach this: an owner may create an account with no team at all. The
+      // sentence therefore says WHY, rather than repeating "select a team" at someone who is
+      // allowed to leave it blank.
+      setAccountErr(pt
+        ? 'Escolha um time que você gerencia — você só pode criar contas dentro do seu escopo.'
+        : 'Pick a team you manage — you can only create accounts inside your own scope.')
+      return
     }
+    const memberships: Membership[] = accountDraft.memberships
     const machines = machineRows.filter(m => m.name.trim()).map(m => ({ name: m.name.trim(), teamId: m.teamId || undefined }))
     const body: Record<string, unknown> = {
       name: an.trim(), email: ae.trim(), password: ap, role: accountType, memberships,
@@ -344,7 +370,9 @@ export default function UsersSettings() {
 
   async function openEditDrawer(a: Account) {
     setEditId(a.id); setEditIsOwner(a.role === 'owner'); setEn(a.name)
-    setERows(a.memberships.length ? a.memberships.map(m => ({ ...m })) : [{ teamId: '', role: 'user' }])
+    // The account's memberships as they are — including none. A synthetic blank row here made a
+    // teamless account look like one whose team was merely unsaved.
+    setERows(a.memberships.map(m => ({ ...m })))
     setEditErr(null); setTempPassword(null); setAddMachineName(''); setAddMachineTeam(''); setAddedMachineToken(null); setAddedMachineName(null)
     setRenamingMachineId(null); setRenameMachineValue('')
     setLinkMachineIds([]); setLinking(false)
@@ -366,14 +394,14 @@ export default function UsersSettings() {
   }
   function updateERow(i: number, patch: Partial<Membership>) { setERows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r)) }
   function addERow() { setERows(rs => [...rs, { teamId: '', role: 'user' }]) }
-  function removeERow(i: number) { setERows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs) }
+  // Same as removeRow: an account is allowed to end up in no team, so the last row must go.
+  function removeERow(i: number) { setERows(rs => rs.filter((_, idx) => idx !== i)) }
 
 
   /** What the edit drawer would change, per part. Drives the Save button's enabled state too. */
   function editDiff() {
     const nameChanged = en.trim() !== (editAccount?.name ?? '').trim()
-    const baseline = (editAccount && editAccount.memberships.length ? editAccount.memberships : [{ teamId: '', role: 'user' }])
-      .map(m => ({ t: m.teamId, r: m.role }))
+    const baseline = (editAccount?.memberships ?? []).map(m => ({ t: m.teamId, r: m.role }))
     const membershipsChanged = !editIsOwner
       && JSON.stringify(eRows.map(r => ({ t: r.teamId, r: r.role }))) !== JSON.stringify(baseline)
     const tagsChanged = sortedIds(eTagIds) !== sortedIds(currentTagIds)
@@ -454,9 +482,7 @@ export default function UsersSettings() {
   /** Reload every draft field from the account as it currently is. */
   function resetEditDrafts() {
     setEn(editAccount?.name ?? '')
-    setERows(editAccount && editAccount.memberships.length
-      ? editAccount.memberships.map(m => ({ teamId: m.teamId, role: m.role }))
-      : [{ teamId: '', role: 'user' }])
+    setERows((editAccount?.memberships ?? []).map(m => ({ teamId: m.teamId, role: m.role })))
     setETagIds(currentTagIds)
   }
 
@@ -1001,13 +1027,26 @@ export default function UsersSettings() {
                       options={roleOptions(viewerIsOwner || managedTeamIds.size > 0)}
                     />
                   </div>
-                  <button type="button" onClick={() => removeRow(i)} disabled={rows.length === 1}
-                    style={{ ...trashBtn, opacity: rows.length === 1 ? 0.35 : 1, cursor: rows.length === 1 ? 'not-allowed' : 'pointer' }}
+                  <button type="button" onClick={() => removeRow(i)}
+                    style={{ ...trashBtn, minWidth: isMobile ? 44 : undefined, minHeight: isMobile ? 44 : undefined, justifyContent: 'center' }}
                     aria-label={pt ? 'Remover time' : 'Remove team'}>
                     <Trash2 size={14} />
                   </button>
                 </div>
               ))}
+              {/* A teamless account is allowed and is not obvious — say what it costs, once, and
+                  never block on it. A manager never sees this: they get the scope error instead. */}
+              {teamlessHint && (
+                <p role="note" style={{
+                  fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5, margin: 0,
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                  borderRadius: 7, padding: '9px 11px',
+                }}>
+                  {pt
+                    ? 'Sem time: a conta fica invisível para todos os managers — só o owner da instância poderá enxergá-la e administrá-la. Você pode adicionar um time depois.'
+                    : 'No team: the account stays invisible to every manager — only the instance owner will be able to see and manage it. You can add a team later.'}
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -1276,8 +1315,8 @@ export default function UsersSettings() {
                       options={roleOptions(viewerIsOwner || managedTeamIds.size > 0)}
                     />
                   </div>
-                  <button type="button" onClick={() => removeERow(i)} disabled={eRows.length === 1}
-                    style={{ ...trashBtn, opacity: eRows.length === 1 ? 0.35 : 1, cursor: eRows.length === 1 ? 'not-allowed' : 'pointer' }}
+                  <button type="button" onClick={() => removeERow(i)}
+                    style={{ ...trashBtn, minWidth: isMobile ? 44 : undefined, minHeight: isMobile ? 44 : undefined, justifyContent: 'center' }}
                     aria-label={pt ? 'Remover time' : 'Remove team'}>
                     <Trash2 size={14} />
                   </button>
@@ -1302,7 +1341,13 @@ export default function UsersSettings() {
               ))}
             </div>
           ) : (
-            <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>—</span>
+            // A teamless account is a real state, not a missing value — say what it means rather
+            // than printing a dash that reads as "not loaded".
+            <span style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+              {pt
+                ? 'Nenhum time — só o owner da instância enxerga e administra esta conta.'
+                : 'No team — only the instance owner can see and manage this account.'}
+            </span>
           )}
         </Section>
 

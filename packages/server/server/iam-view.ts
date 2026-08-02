@@ -3,6 +3,7 @@
  * passwordHash) + account/team visibility & management capability checks.
  */
 import type { AccountDoc, Principal, Membership, Role } from './iam-types'
+import { canCreateAccountWith } from '@agentistics/core'
 import { fromBsonDate, fromBsonDateOrNull } from './mongo-dates'
 
 export interface PublicAccount {
@@ -44,12 +45,15 @@ export function accountVisibleTo(principal: Principal, account: AccountDoc): boo
   return account.memberships.some(m => managed.has(m.teamId))
 }
 
-/** Membership-scope check for creating/editing a MEMBER account: owner may assign any memberships;
- *  a manager may assign only user-role memberships in teams they manage (≥1). */
+/** Membership-scope check for creating/editing a MEMBER account: owner may assign any memberships
+ *  (including NONE); a manager may assign only user-role memberships in teams they manage (≥1).
+ *
+ *  The rule itself lives in `@agentistics/core` because the create FORM has to reach the same
+ *  answer before it sends — `packages/web` cannot import this module, and a second copy over there
+ *  is exactly what drifted (it demanded a team of everyone, owner included). This stays the
+ *  authority; it is now a delegation rather than a duplicate. */
 export function canCreateAccount(p: Principal, memberships: Membership[]): boolean {
-  if (p.role === 'owner') return true
-  const managed = managedTeams(p)
-  return memberships.length > 0 && memberships.every(m => m.role === 'user' && managed.has(m.teamId))
+  return canCreateAccountWith(p, memberships)
 }
 
 /** Deletion: owner may delete anyone (the last-owner guard lives in the handler); a manager may
