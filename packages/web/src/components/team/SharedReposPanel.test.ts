@@ -349,3 +349,108 @@ describe('the table\'s two sizes and its keyboard/mobile behaviour', () => {
     expect(src.match(/scope: 'selfRestricted'/g)?.length).toBeGreaterThanOrEqual(2)
   })
 })
+
+// --- it has to READ as a table ------------------------------------------------------------------
+//
+// It was already a `<table>` element and still did not look like one: a faint 10px heading with no
+// ground of its own, no frame, and cell padding tight enough that the rows ran together. Semantics
+// are what a screen reader gets; a header band, an outer frame and consistent cells are what an eye
+// gets, and the second one is what was missing. These assertions are about the SECOND.
+
+/** Depth-first: every element in the tree whose `type` is this intrinsic tag. */
+function tags(el: unknown, tag: string): { props: Record<string, unknown> }[] {
+  const out: { props: Record<string, unknown> }[] = []
+  const walk = (n: unknown): void => {
+    if (n === null || n === undefined || typeof n !== 'object') return
+    if (Array.isArray(n)) { n.forEach(walk); return }
+    const node = n as { type?: unknown; props?: Record<string, unknown> }
+    if (node.type === tag && node.props) out.push(node as { props: Record<string, unknown> })
+    if (node.props) walk(node.props.children)
+  }
+  walk(el)
+  return out
+}
+
+describe('the hidden-restrictions summary reads as a table, not as styled divs', () => {
+  const table = readFileSync(join(import.meta.dir, 'RestrictionMiniTable.tsx'), 'utf8')
+  const desktop = () => manyHidden(3, {
+    table: { page: 0, size: 5, onPage: () => {}, onSize: () => {}, onMaximize: () => {} },
+  })
+
+  it('has real column headers, and they are visually a BAND — distinct from the body', () => {
+    const head = tags(desktop(), 'thead')
+    expect(head.length).toBe(1)
+    const ths = tags(desktop(), 'th')
+    expect(ths.length).toBe(3)
+    for (const th of ths) {
+      // Semantics: the strongest signal for a screen reader, and free with a real <table>.
+      expect(th.props.scope).toBe('col')
+      const s = (th.props.style ?? {}) as Record<string, unknown>
+      // …and for an eye: its own ground plus a rule under it. A heading that shares the body's
+      // background is a first row, not a header.
+      expect(s.background).toBeTruthy()
+      expect(String(s.borderBottom ?? '')).toContain('solid')
+      expect(s.textTransform).toBe('uppercase')
+      // Generous enough not to feel cramped — the complaint that started this.
+      expect(String(s.padding ?? '')).toMatch(/\d/)
+    }
+  })
+
+  it('the three headers are the three columns, in both languages', () => {
+    for (const lang of ['en', 'pt'] as const) {
+      const ths = tags(manyHidden(3, {
+        lang,
+        table: { page: 0, size: 5, onPage: () => {}, onSize: () => {}, onMaximize: () => {} },
+      }), 'th')
+      expect(ths.map(t => t.props.children)).toEqual([
+        COPY.colHiddenWhat[lang], COPY.colHiddenOn[lang], COPY.colStillSharedOn[lang],
+      ])
+    }
+  })
+
+  it('columns align down the page — fixed layout with a declared width per column', () => {
+    // Every row its own little block is what made nothing line up. `table-layout: fixed` plus a
+    // width per column is what makes the second row's cells sit under the first's.
+    expect(table).toContain("tableLayout: 'fixed'")
+    for (const th of tags(desktop(), 'th')) {
+      expect(String((th.props.style as Record<string, unknown>).width ?? '')).toMatch(/%$/)
+    }
+    // The frame is what turns three aligned columns into one OBJECT on the card.
+    expect(/borderRadius:\s*\d+/.test(table)).toBe(true)
+    expect(table).toContain('TABLE_FRAME')
+  })
+
+  it('row separation is quiet, and it is hairlines OR zebra — never both', () => {
+    const bodyRows = tags(desktop(), 'tbody').flatMap(b => tags(b.props.children, 'tr'))
+    expect(bodyRows.length).toBe(3)
+    const styleOf = (r: { props: Record<string, unknown> }) => (r.props.style ?? {}) as Record<string, unknown>
+    const striped = bodyRows.filter(r => Boolean(styleOf(r).background))
+    const ruled = bodyRows.filter(r => Boolean(styleOf(r).borderTop))
+    expect(striped.length > 0 && ruled.length > 0).toBe(false)
+    expect(striped.length + ruled.length).toBeGreaterThan(0)
+  })
+
+  it('digits that stack are tabular — the "+N" column must not jitter row to row', () => {
+    expect(table).toContain("fontVariantNumeric: 'tabular-nums'")
+  })
+
+  it('a phone gets stacked cards and NO <table> at all', () => {
+    const phone = manyHidden(3, {
+      isMobile: true,
+      table: { page: 0, size: 5, onPage: () => {}, onSize: () => {}, onMaximize: () => {} },
+    })
+    expect(tags(phone, 'table').length).toBe(0)
+    expect(tags(phone, 'th').length).toBe(0)
+    // Same data, same order — the cards are a layout, never a different answer.
+    expect(texts(phone).join(' | ')).toContain('acme/r02')
+  })
+
+  it('keeps everything the previous round got right', () => {
+    // The dimension in words, the honest sentence when no sibling announced anything, and the
+    // truthful "+N" — none of them is decoration that a nicer table may drop.
+    const printed = texts(desktop()).join(' | ')
+    expect(printed).toContain(COPY.rowTagRepo.en)
+    expect(printed).toContain(COPY.rowNoOtherMachine.en)
+    expect(table).toContain('moreMachines')
+  })
+})

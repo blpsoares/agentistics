@@ -330,17 +330,30 @@ html, body {
   z-index: 40;
   left: 0;
   top: calc(100% + 6px);
+  /* A REAL width, and it has to be stated HERE. Out of flow means shrink-to-fit, and the
+   * containing block is `.ag-hint` — an inline-flex wrapper the width of a 13px icon. A
+   * `max-width: 100%` written on the element therefore capped the bubble at ~17px, which
+   * `overflow-wrap: anywhere` then satisfied by breaking inside words: one letter per line.
+   * The floor is in `ch` (a sentence needs COLUMNS, not pixels) and the ceiling is measured
+   * against the viewport, which is the only box that can honestly cap it. */
   width: max-content;
-  max-width: min(280px, 78vw);
-  padding: 8px 10px;
+  min-width: 26ch;
+  max-width: min(34rem, calc(100vw - 32px));
+  padding: 9px 11px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
   font-size: 11.5px;
-  line-height: 1.45;
+  line-height: 1.5;
   text-align: left;
   white-space: normal;
+  /* `overflow-wrap` INHERITS, and the picker rows set `anywhere` so a 60-character git remote can
+   * break. Stating both here is what stops that reaching into the bubble and shattering an
+   * ordinary sentence mid-word. */
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: none;
   /* `visibility` rather than `display`, so the box is measurable and transitions cleanly. */
   visibility: hidden;
   opacity: 0;
@@ -354,8 +367,10 @@ html, body {
   opacity: 1;
 }
 
-/* Near the right edge the box would otherwise push the page wide; anchor it to the right instead.
- * `#root` is `overflow-x: clip` on mobile, so an overflowing tooltip would silently disappear. */
+/* `#root` is `overflow-x: clip` on mobile, so a bubble that leaves the viewport does not even
+ * announce itself with a scrollbar — it simply disappears. The badge sits at the LEFT of its
+ * (wrapped) row, so the bubble opens rightward from there on BOTH branches: the old `right: 0`
+ * anchored it to a badge that is already near x=0 and pushed the box off the LEFT edge instead. */
 @media (max-width: 767px) {
   .ag-hint-btn {
     /* Touch target — 44px is the MOBILE number and is applied only here. */
@@ -363,8 +378,10 @@ html, body {
     min-height: 44px;
   }
   .ag-hint-body {
-    left: auto;
-    right: 0;
-    max-width: 78vw;
+    left: 0;
+    right: auto;
+    /* Narrower than the desktop floor, because at 390px 26ch is most of the screen already. */
+    min-width: 0;
+    max-width: calc(100vw - 48px);
   }
 }
