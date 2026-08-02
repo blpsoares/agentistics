@@ -1,3 +1,4 @@
+import { Info } from 'lucide-react'
 import { COPY, interpolate } from './copy'
 import type { WithholdingMachine } from './siblingWarnings'
 
@@ -7,10 +8,24 @@ import type { WithholdingMachine } from './siblingWarnings'
  * is flipped rather than after.
  *
  * It renders NOTHING when `machines` is absent or empty, and that is the whole contract: this
- * machine only knows what its siblings have announced to it, so "no badge" means "nothing was
- * announced about this row", never "no machine restricts it". The block-level warning in
- * `SharingRulesPicker` carries the sentence that says so; a badge has no room for it and must not
- * try to imply it.
+ * machine only knows what its siblings have announced to it, so "no icon" means "nothing was
+ * announced about this row", never "no machine restricts it". That is exactly why
+ * `siblingWithholdBestEffort` is inside the disclosure and not somewhere else on the screen — the
+ * sentence and its caveat are one statement, and the caveat is the half that stops the feature
+ * from misleading.
+ *
+ * WHY AN ICON AND NOT A PILL. It used to be an orange pill of text sitting directly under the row,
+ * a few pixels from the repository's host tag. Two objects of the same size and shape, one saying
+ * what the row IS and one cautioning about what the row WILL DO — read as the same kind of thing,
+ * so the caution stopped registering as one. The icon is now the standing signal and the sentence
+ * is disclosed on demand. It keeps the advisory colour (this IS advisory) and is always rendered,
+ * because a warning that has to be discovered before it can be seen is not a warning.
+ *
+ * Disclosure is CSS-only (`.ag-hint`, index.css): `:hover` for a pointer, `:focus-within` for the
+ * keyboard AND for touch, since tapping the button focuses it. No hooks, so this stays a plain
+ * function the tests can call directly, and no state that could be left open on a row that
+ * re-sorted underneath it. The button carries the full sentence as its `aria-label`, so a screen
+ * reader never depends on the visual disclosure at all.
  *
  * `dimension` picks the wording, and it is not cosmetic. Repositories correlate across machines on
  * a normalized remote — an exact key — so "not shared on X" is a statement of fact. Projects
@@ -27,21 +42,40 @@ export function WithheldBadge({ machines, lang, dimension }: {
 }) {
   if (!machines || machines.length === 0) return null
   const row = dimension === 'project' ? COPY.siblingWithholdRowProject : COPY.siblingWithholdRow
+  // A machine the central never named renders as words, never as a blank or an id.
+  const sentence = interpolate(row[lang], {
+    machines: machines.map(m => m.name || COPY.peerUnnamed[lang]).join(', '),
+  })
+  const caveat = COPY.siblingWithholdBestEffort[lang]
   return (
-    <span
-      // Not `flexShrink: 0` (unlike the host pill beside it): the machine names are variable and
-      // can be long, and the row is `flexWrap: 'wrap'`, so this must be allowed to take its own
-      // line on a 390px card instead of pushing the row past the viewport.
-      style={{
-        fontSize: 10, padding: '2px 6px', borderRadius: 999, maxWidth: '100%',
-        overflowWrap: 'anywhere',
-        background: 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
-        color: 'var(--anthropic-orange)',
-        border: '1px solid color-mix(in srgb, var(--anthropic-orange) 35%, transparent)',
-      }}
-    >
-      {/* A machine the central never named renders as words, never as a blank or an id. */}
-      {interpolate(row[lang], { machines: machines.map(m => m.name || COPY.peerUnnamed[lang]).join(', ') })}
+    <span className="ag-hint" style={{ flexShrink: 0, lineHeight: 0 }}>
+      <button
+        type="button"
+        className="ag-hint-btn"
+        // The full statement, caveat included, for anyone who never sees the disclosure.
+        aria-label={`${sentence} ${caveat}`}
+        title={`${sentence} ${caveat}`}
+        style={{
+          border: 'none', background: 'transparent', padding: 2, cursor: 'help',
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          color: 'var(--anthropic-orange)', fontFamily: 'inherit',
+        }}
+      >
+        <Info size={13} />
+      </button>
+      <span
+        className="ag-hint-body"
+        role="tooltip"
+        // The row is `flexWrap: 'wrap'` and `#root` is `overflow-x: clip`, so text that refused to
+        // break would not produce a scrollbar — it would silently vanish off the right edge. The
+        // body is positioned out of flow (index.css), so it can no longer widen its row at all,
+        // but it still has to wrap inside its own box on a 390px screen.
+        style={{ overflowWrap: 'anywhere', maxWidth: '100%' }}
+      >
+        <span style={{ display: 'block', color: 'var(--anthropic-orange)', fontWeight: 600 }}>{sentence}</span>
+        {/* Load-bearing: an absent warning is never proof that no machine restricts this row. */}
+        <span style={{ display: 'block', marginTop: 4, color: 'var(--text-tertiary)' }}>{caveat}</span>
+      </span>
     </span>
   )
 }

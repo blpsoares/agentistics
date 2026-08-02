@@ -6,6 +6,9 @@ import {
   withholdMap,
 } from './siblingWarnings'
 import { WithheldBadge } from './SiblingWithheldBadge'
+import { COPY } from './copy'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const repo = (value: string): ShareSource => ({ type: 'repo', value })
 const m = (name: string, paths: string[] = []) => ({ name, paths })
@@ -149,25 +152,91 @@ test('the badge renders NOTHING when no machine was heard from — silence must 
   expect(WithheldBadge({ machines: [], lang: 'en', dimension: 'repo' })).toBeNull()
 })
 
+/** The badge is now an icon plus a disclosed body; flatten it so the assertions read the text. */
+function badgeText(el: unknown): string {
+  const out: string[] = []
+  const walk = (n: unknown): void => {
+    if (n === null || n === undefined || n === false) return
+    if (typeof n === 'string' || typeof n === 'number') { out.push(String(n)); return }
+    if (Array.isArray(n)) { n.forEach(walk); return }
+    const props = (n as { props?: { children?: unknown } }).props
+    if (props) walk(props.children)
+  }
+  walk(el)
+  return out.join(' ')
+}
+
+/** Depth-first search for the first descendant matching a predicate. */
+function findNode(el: unknown, pred: (n: { props: Record<string, unknown> }) => boolean): { props: Record<string, unknown> } | null {
+  if (el === null || el === undefined || typeof el !== 'object') return null
+  if (Array.isArray(el)) {
+    for (const c of el) { const hit = findNode(c, pred); if (hit) return hit }
+    return null
+  }
+  const node = el as { props?: Record<string, unknown> }
+  if (node.props) {
+    if (pred(node as { props: Record<string, unknown> })) return node as { props: Record<string, unknown> }
+    return findNode(node.props.children, pred)
+  }
+  return null
+}
+
 test('the badge names the machines, in the caller\'s language', () => {
-  const en = WithheldBadge({ machines: [m('laptop-b'), m('desktop')], lang: 'en', dimension: 'repo' })
-  expect(String((en as { props: { children: unknown } }).props.children)).toBe('not shared on laptop-b, desktop')
-  const pt = WithheldBadge({ machines: [m('laptop-b')], lang: 'pt', dimension: 'repo' })
-  expect(String((pt as { props: { children: unknown } }).props.children)).toBe('não compartilhado em laptop-b')
+  expect(badgeText(WithheldBadge({ machines: [m('laptop-b'), m('desktop')], lang: 'en', dimension: 'repo' })))
+    .toContain('not shared on laptop-b, desktop')
+  expect(badgeText(WithheldBadge({ machines: [m('laptop-b')], lang: 'pt', dimension: 'repo' })))
+    .toContain('não compartilhado em laptop-b')
 })
 
-test('the badge wraps instead of widening its row — a long machine list must not scroll a 390px card', () => {
-  // The row is `flexWrap: 'wrap'` and `#root` is `overflow-x: clip`, so a badge that refused to
-  // shrink would not produce a scrollbar — it would silently vanish off the right edge, which is
-  // worse. Hence: no `flexShrink: 0` (unlike the host pill beside it), and text that can break.
-  const style = (WithheldBadge({
+test('the sentence is an ICON\'s disclosure, not a pill that reads like the row\'s own tag', () => {
+  // It sat inches from the repository host tag as a same-shaped orange pill, so a caution about
+  // what the switch WILL DO read as a label describing what the row IS.
+  const el = WithheldBadge({ machines: [m('laptop-b')], lang: 'en', dimension: 'repo' })
+  expect((el as { props: { className?: string } }).props.className).toBe('ag-hint')
+  // The standing signal is a focusable control, so the sentence is reachable without a pointer.
+  const btn = findNode(el, n => n.props.className === 'ag-hint-btn')
+  expect(btn).not.toBeNull()
+  expect(btn!.props.type).toBe('button')
+  // …and it must not depend on the visual disclosure at all.
+  expect(String(btn!.props['aria-label'])).toContain('not shared on laptop-b')
+})
+
+test('the best-effort caveat travels WITH the sentence, wherever the sentence goes', () => {
+  // An absent warning is never proof that no machine restricts a row. Moving the sentence into a
+  // smaller container must not be a reason to drop the clause that says so.
+  for (const lang of ['en', 'pt'] as const) {
+    const el = WithheldBadge({ machines: [m('laptop-b')], lang, dimension: 'repo' })
+    expect(badgeText(el)).toContain(COPY.siblingWithholdBestEffort[lang])
+    const btn = findNode(el, n => n.props.className === 'ag-hint-btn')
+    // Also on the accessible label — a screen reader gets the caveat too, not just the claim.
+    expect(String(btn!.props['aria-label'])).toContain(COPY.siblingWithholdBestEffort[lang])
+  }
+})
+
+test('the badge cannot widen its row — a long machine list must not scroll a 390px card', () => {
+  // The row is `flexWrap: 'wrap'` and `#root` is `overflow-x: clip`, so text that refused to break
+  // would not produce a scrollbar — it would silently vanish off the right edge, which is worse.
+  // The disclosure is now positioned out of flow (`.ag-hint-body`, index.css), so the row only
+  // ever contains the icon; the body still has to wrap inside its own box.
+  const el = WithheldBadge({
     machines: [m('a-very-long-machine-name-from-somebody-elses-desk'), m('another-extremely-long-one')],
     lang: 'en', dimension: 'project',
-  }) as { props: { style: Record<string, unknown> } }).props.style
-  expect(style.flexShrink).toBeUndefined()
+  })
+  const body = findNode(el, n => n.props.className === 'ag-hint-body')
+  expect(body).not.toBeNull()
+  const style = body!.props.style as Record<string, unknown>
   expect(style.overflowWrap).toBe('anywhere')
   expect(style.maxWidth).toBe('100%')
   expect(Object.keys(style).some(k => k === 'width' || k === 'minWidth')).toBe(false)
+
+  const css = readFileSync(join(import.meta.dir, '../../index.css'), 'utf8')
+  // Out of flow, or it is still a row-widening block of text.
+  expect(css).toContain('.ag-hint-body')
+  expect(/\.ag-hint-body\s*\{[^}]*position:\s*absolute/.test(css)).toBe(true)
+  // Reachable by keyboard and by touch, not hover alone.
+  expect(css).toContain('.ag-hint:focus-within > .ag-hint-body')
+  // 44px touch target, and only on mobile.
+  expect(/@media \(max-width: 767px\)\s*\{[^@]*min-height:\s*44px/.test(css)).toBe(true)
 })
 
 // --- the project dimension across machines -------------------------------------------------------

@@ -5,6 +5,7 @@ import { fmt, fmtCost, formatProjectName, NO_REPO_KEY } from '@agentistics/core'
 import type { RepoStat } from '../hooks/useData'
 import { canonicalRepoKey } from '../lib/shareRepos'
 import { PLURAL_COPY, interpolate, plural } from './team/copy'
+import { withheldMarkStyle } from './team/withheldStyle'
 
 interface Props {
   repos: RepoStat[]
@@ -33,13 +34,13 @@ function HiddenBadge({ labels, lang }: { labels: string[]; lang: 'pt' | 'en' }) 
       }}
       style={{
         display: 'flex', flexDirection: 'column', gap: 1, padding: '4px 8px', borderRadius: 7,
-        background: 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
+        background: withheldMarkStyle().background,
         cursor: 'pointer', minWidth: 0,
       }}
     >
       <span style={{
         display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700,
-        color: 'var(--anthropic-orange)',
+        color: withheldMarkStyle().color,
       }}>
         <EyeOff size={11} />
         {interpolate(plural(PLURAL_COPY.hiddenFromN[lang], labels.length), { n: labels.length })}

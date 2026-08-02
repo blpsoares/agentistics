@@ -11,6 +11,7 @@ import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatMode
 import { capable, HARNESS_LABELS, HARNESS_COLORS, DYNAMIC_WORKFLOWS_DOC } from '../lib/harness'
 import { canonicalRepoKey } from '../lib/shareRepos'
 import { PLURAL_COPY, interpolate, plural } from '../components/team/copy'
+import { withheldMarkStyle } from '../components/team/withheldStyle'
 import { DocLink } from '../components/DocLink'
 import { buildWorkflowSteps, groupRunsBySession } from '../lib/workflowSteps'
 import { useDerivedStats, computeMemberSummaries, type MemberSummary } from '../hooks/useData'
@@ -117,7 +118,7 @@ export default function RepoDetailPage() {
               onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/settings/connection') } }}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700,
-                color: 'var(--anthropic-orange)', background: 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
+                ...withheldMarkStyle(),
                 padding: '3px 8px', borderRadius: 6, cursor: 'pointer',
               }}
             >

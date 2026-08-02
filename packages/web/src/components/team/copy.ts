@@ -137,7 +137,9 @@ export const COPY = {
   },
   lastActiveT: {
     en: 'last active {t}',
-    pt: 'ativo há {t}',
+    // NOT 'ativo há {t}': relTime already returns 'há 1d' in PT, so the preposition belongs to the
+    // time, not to this row — the template carried it too and rendered 'ativo há há 1d'.
+    pt: 'ativo {t}',
   },
   centralsN: {
     en: '{n} centrals',
