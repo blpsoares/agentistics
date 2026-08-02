@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { NO_REPO_KEY, normalizeGitRemote, bucketSharedBy } from '@agentistics/core'
+import { NO_REPO_KEY, normalizeGitRemote, bucketSharedBy, planProposalApply } from '@agentistics/core'
 import type { SessionMeta, WorkflowRun, HarnessId, ShareSource } from '@agentistics/core'
 import {
   canonicalRepoKey, normalizeDenied, buildPathRepoIndex, repoKeyOf, sessionShared,
@@ -1190,4 +1190,52 @@ test('bucketSharedBy agrees with sessionShared on every mode x dimension x bucke
   expect(compared).toBe(2 * sourceSets.length * buckets.length)
   expect(sharedSeen).toBeGreaterThan(0)
   expect(withheldSeen).toBeGreaterThan(0)
+})
+
+// The same guard for the APPLY arithmetic (`planProposalApply`, `@agentistics/core`). It composes
+// two rule sets; `sessionShared` — this file — is what decides whether the composition actually
+// shares a session. The property is one sentence: applying a sibling's proposal may only ever
+// NARROW what this machine shares. Anything else is the button that hides things starting to share
+// something the user had chosen to hide.
+
+test('planProposalApply never shares a session the current rules already withheld', () => {
+  const API = 'https://github.com/acme/api'
+  const SECRET = 'git@github.com:Acme/Secret.git'
+  const ruleSets: { shareMode: 'denylist' | 'allowlist'; sources: ShareSource[] }[] = []
+  for (const mode of ['denylist', 'allowlist'] as const) {
+    for (const sources of [
+      [],
+      [{ type: 'repo', value: API }] as ShareSource[],
+      [{ type: 'repo', value: SECRET }] as ShareSource[],
+      [{ type: 'repo', value: API }, { type: 'repo', value: SECRET }] as ShareSource[],
+      [{ type: 'none', value: '' }] as ShareSource[],
+      [{ type: 'project', value: '/home/a/secret' }] as ShareSource[],
+    ]) ruleSets.push({ shareMode: mode, sources })
+  }
+  const sessions = [
+    s({ session_id: 'a', git_remote: API, project_path: '/home/a/api' }),
+    s({ session_id: 'b', git_remote: SECRET, project_path: '/home/a/secret' }),
+    s({ session_id: 'c', git_remote: '', project_path: '/home/a/none' }),
+    s({ session_id: 'd', git_remote: '', project_path: '/home/a/secret' }),
+  ]
+
+  let narrowed = 0
+  let compared = 0
+  for (const current of ruleSets) {
+    for (const proposal of ruleSets) {
+      const { merged } = planProposalApply(current, proposal)
+      for (const session of sessions) {
+        const before = sessionShared(session, shareRulesOf(current.shareMode, current.sources))
+        const after = sessionShared(session, shareRulesOf(merged.shareMode, merged.sources))
+        // The property. `after && !before` is the bug; `!after && before` is a legitimate narrowing.
+        expect(`${session.session_id}|${after && !before}`).toBe(`${session.session_id}|false`)
+        if (before && !after) narrowed++
+        compared++
+      }
+    }
+  }
+  // Not vacuous: the table is non-empty AND it really does narrow somewhere, so a `merged` that
+  // simply echoed `current` would not pass this.
+  expect(compared).toBe(ruleSets.length * ruleSets.length * sessions.length)
+  expect(narrowed).toBeGreaterThan(0)
 })

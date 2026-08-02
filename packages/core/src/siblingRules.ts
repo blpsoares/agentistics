@@ -109,7 +109,7 @@ function foldRepoKey(key: string): string {
  * fold and an unresolvable repo value being DROPPED rather than quietly collapsed into the `none:`
  * bucket — a source the server would ignore must not become a warning here.
  */
-function sourceKeyOf(source: ShareSource): string | null {
+export function shareSourceKey(source: ShareSource): string | null {
   if (!source || typeof source.value !== 'string') return null
   if (source.type === 'none') return 'none:'
   if (source.type === 'repo') {
@@ -178,13 +178,13 @@ function crossMachineKeys(bucket: ShareBucket): string[] {
   return keys
 }
 
-/** A source's key for the same comparison. `null` for junk, exactly as `sourceKeyOf`. */
+/** A source's key for the same comparison. `null` for junk, exactly as `shareSourceKey`. */
 function crossMachineSourceKey(source: ShareSource): string | null {
   if (source && source.type === 'project') {
     const name = projectNameKey(typeof source.value === 'string' ? source.value : '')
     return name ? `projectname:${name}` : null
   }
-  return sourceKeyOf(source)
+  return shareSourceKey(source)
 }
 
 /**
@@ -198,7 +198,7 @@ function crossMachineSourceKey(source: ShareSource): string | null {
  * warning here would make every warning less believable.
  */
 export function bucketSharedBy(bucket: ShareBucket, rules: AnnouncedRules): boolean {
-  return sharedUnder(bucket, rules, shareBucketKeys, sourceKeyOf).shared
+  return sharedUnder(bucket, rules, shareBucketKeys, shareSourceKey).shared
 }
 
 /** The mode arithmetic, over whichever keying the caller chose. `matched` names the sources that
