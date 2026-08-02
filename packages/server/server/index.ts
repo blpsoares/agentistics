@@ -20,7 +20,7 @@ import { listClaudeSessions, getClaudeSessionMessages, type ClaudeSessionSummary
 import { listCodexSessions, getCodexSessionMessages, type CodexSessionSummary, type CodexSessionMessage } from './codex-sessions'
 import { listGeminiSessions, getGeminiSessionMessages, type GeminiSessionSummary, type GeminiSessionMessage } from './gemini-sessions'
 import { listCopilotSessions, getCopilotSessionMessages, type CopilotSessionSummary, type CopilotSessionMessage } from './copilot-sessions'
-import { PROJECTS_DIR } from './config'
+import { PROJECTS_DIR, AGENTISTICS_DATA_DIR } from './config'
 import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
@@ -1490,6 +1490,22 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })
+    }
+
+    // GET /api/team/profile — which machine profile this server serves. `agentop member connect`
+    // prefers to hand a new connection to a running server (so it is picked up without a restart)
+    // but can only find one by PORT, and a machine's identity is its DATA DIR: a second profile
+    // (an isolated HOME / AGENTISTICS_DIR, or the Docker machine beside the native one) holding
+    // this port would otherwise be handed another machine's connection, token included. The CLI
+    // asks here first and delegates only on an exact match; a server too old to answer is treated
+    // as "not ours". The caller states the dir it means and gets back only yes/no — the route
+    // never discloses a filesystem path, so it stays harmless on an exposed central.
+    if (url.pathname === '/api/team/profile' && req.method === 'GET') {
+      const want = url.searchParams.get('dataDir') ?? ''
+      return new Response(JSON.stringify({ match: !!want && want === AGENTISTICS_DATA_DIR }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+      })
     }
 
     // Connection lifecycle — add/rotate, rename, delete, probe. See team-connections.ts for the

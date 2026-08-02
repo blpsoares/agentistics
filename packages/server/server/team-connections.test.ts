@@ -15,7 +15,7 @@ import { describe, it, expect, afterEach } from 'bun:test'
 import {
   validateConnectionBody, validatePatchBody, decideConnectionUpsert,
   aggregateConnectionStatuses, leaveConnectionById, resolveShareRules, ruleCountsOf,
-  buildConnectionStatusEntry, otelExportEnabled, addOrUpdateConnection, handlePatchConnection,
+  buildConnectionStatusEntry, otelExportEnabled, addOrUpdateConnection, handlePatchConnection, handleAddConnection,
   type ConnectionStatusEntry,
 } from './team-connections'
 import type { TeamConnection, TeamConfig, ShareSource } from '@agentistics/core'
@@ -61,6 +61,16 @@ describe('validateConnectionBody', () => {
       expect(out.org).toBe('acme')
       expect(out.label).toBe('Prod')
     }
+  })
+
+  it('carries the caller-declared dataDir through, and treats a blank one as absent', () => {
+    const withDir = validateConnectionBody({ endpoint: 'https://c.example.com', token: 't', dataDir: ' /home/a/.agentistics ' })
+    expect('error' in withDir).toBe(false)
+    if (!('error' in withDir)) expect(withDir.dataDir).toBe('/home/a/.agentistics')
+
+    const blank = validateConnectionBody({ endpoint: 'https://c.example.com', token: 't', dataDir: '   ' })
+    expect('error' in blank).toBe(false)
+    if (!('error' in blank)) expect(blank.dataDir).toBeUndefined()
   })
 
   it('treats a blank org/label as absent, not as an empty string', () => {
@@ -711,6 +721,37 @@ function fakeStore(initial: TeamConfig) {
   }
   return { state, deps: { updateTeamConfig, nudge: () => { /* no-op */ } } }
 }
+
+describe('handleAddConnection — a request meant for another machine profile is refused', () => {
+  const addReq = (body: unknown) =>
+    new Request('http://localhost/api/team/connections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  it('refuses a body whose dataDir is not this server\'s, without touching preferences', async () => {
+    // `agentop member connect` finds a local server by PORT alone. With a second machine profile
+    // running (an isolated HOME / AGENTISTICS_DIR, or the Docker machine beside the native one),
+    // that used to write one machine's connection — and its token — into the other's config,
+    // then report the connection count of the profile it had NOT written to.
+    const res = await handleAddConnection(
+      addReq({ endpoint: 'https://c.example.com', token: 't', dataDir: '/definitely/not/this/server/.agentistics' }),
+    )
+    expect(res.status).toBe(409)
+    const body = await res.json() as { error?: string; dataDir?: string }
+    expect(body.error).toBe('data_dir_mismatch')
+    // It says which profile DID answer, so the caller can tell the two apart.
+    expect(typeof body.dataDir).toBe('string')
+  })
+
+  it('does not refuse a body that declares no dataDir — a browser on the same origin', async () => {
+    // The guard must not turn the dashboard's own "add a central" into a 409; absence means
+    // "same profile by construction", never "mismatch".
+    const res = await handleAddConnection(addReq({ endpoint: 'not a url', token: 't' }))
+    expect(res.status).toBe(400) // rejected for the bad endpoint, i.e. it got past the guard
+  })
+})
 
 describe('handlePatchConnection — the legacy mirror stays consistent with sources (Critical 1)', () => {
   it('a second edit built from a re-read of preferences does not lose the first edit\'s rule', async () => {

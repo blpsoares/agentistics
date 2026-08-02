@@ -26,7 +26,7 @@
  */
 
 import { defaultTeam, normalizeEndpointKey, unpackConnectToken, type TeamConnection } from '@agentistics/core'
-import { PORT } from './config'
+import { PORT, AGENTISTICS_DATA_DIR } from './config'
 import { readPreferencesOrExit, type Preferences } from './preferences'
 import { cliStrings, resolveLang, type CliStrings } from './cli-i18n'
 
@@ -48,17 +48,47 @@ type ConnectResult =
   // must name that owner, not the endpoint the caller just tried to connect to).
   | { ok: false; reason: 'conflict' | 'other'; error: string; ownerEndpoint?: string }
 
+/** Does the server on this port serve THIS machine profile? Only an explicit `true` counts: an
+ *  older binary that 404s the route, an unreachable port and a malformed answer all mean "not
+ *  ours", so the caller writes its own preferences instead of handing them to a stranger. */
+async function localServerServesUs(): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `http://localhost:${PORT}/api/team/profile?dataDir=${encodeURIComponent(AGENTISTICS_DATA_DIR)}`,
+      { signal: AbortSignal.timeout(3_000) },
+    )
+    if (!res.ok) return false
+    const body = await res.json().catch(() => null) as { match?: unknown } | null
+    return body?.match === true
+  } catch {
+    return false
+  }
+}
+
 /** Try the local server's POST /api/team/connections first. `null` = no server reachable (a
  *  network failure, or a 404 — an OLDER local server binary that predates this route, which must
  *  fall back exactly like "no server" rather than hard-failing on a route that will never exist
- *  until the server itself is upgraded). Any OTHER answer (2xx or a real error status) is
- *  authoritative and is returned as-is, never silently bypassed. */
+ *  until the server itself is upgraded), or a server that serves a DIFFERENT machine profile. Any
+ *  OTHER answer (2xx or a real error status) is authoritative and is returned as-is, never
+ *  silently bypassed.
+ *
+ *  The server is found by PORT, but a machine profile IS its data dir: a second profile (an
+ *  isolated HOME / AGENTISTICS_DIR, or the Docker machine running beside the native one) can hold
+ *  the port this CLI would otherwise hand its connection — and its token — to, writing one
+ *  machine's identity into another machine's config while this process reports the connection
+ *  count of the profile it did NOT write to.
+ *
+ *  It is settled by ASKING the server, not by inferring locally: every local way of spotting an
+ *  overridden HOME reads $HOME somewhere along the way (`os.homedir()` returns it outright), so
+ *  the isolated profile ends up agreeing with itself. */
 async function connectViaLocalServer(body: { endpoint: string; token: string; org?: string; label?: string }): Promise<ConnectResult | null> {
+  if (!(await localServerServesUs())) return null
+
   try {
     const res = await fetch(`http://localhost:${PORT}/api/team/connections`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, dataDir: AGENTISTICS_DATA_DIR }),
       signal: AbortSignal.timeout(8_000),
     })
     if (res.status === 404) return null // an older server binary without this route — fall back
@@ -66,6 +96,8 @@ async function connectViaLocalServer(body: { endpoint: string; token: string; or
     if (res.ok && json?.ok && typeof json.id === 'string') {
       return { ok: true, action: json.action === 'update' ? 'update' : 'insert', connId: json.id }
     }
+    // Someone else's profile answered on this port — write our own preferences instead.
+    if (res.status === 409 && json?.error === 'data_dir_mismatch') return null
     return {
       ok: false,
       reason: res.status === 409 ? 'conflict' : 'other',

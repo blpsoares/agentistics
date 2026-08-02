@@ -16,7 +16,7 @@
 import type { TeamConnection, TeamConfig, ShareSource, ShareSourceType } from '@agentistics/core'
 import { connectionId, defaultTeam, normalizeTeamConfig, normalizeEndpointKey, normalizeGitRemote, NO_REPO_KEY } from '@agentistics/core'
 import { readPreferences, updateTeamConfig, PreferencesLockTimeoutError } from './preferences'
-import { safeConnId } from './config'
+import { safeConnId, AGENTISTICS_DATA_DIR } from './config'
 import { readJsonLimited, LIMITS } from './limits'
 import {
   removeConnection, getUploaderStatus, emptyStatusFor, reconcileUploaderNow, pushNow,
@@ -59,6 +59,10 @@ export interface ConnectionBody {
   token: string
   org?: string
   label?: string
+  /** The data directory the CALLER resolved for itself. `agentop member connect` sends it so this
+   *  server can refuse a request meant for a DIFFERENT machine profile — see
+   *  `handleAddConnection`. Absent for a browser (same origin, same profile by construction). */
+  dataDir?: string
   /** 'denylist' (share everything except `sources`) | 'allowlist' (share only `sources`).
    *  Absent means "not specified in this request" — NOT "denylist": on an update, absence keeps
    *  whatever mode the connection already has (see `resolveShareRules`). */
@@ -188,7 +192,8 @@ export function validateConnectionBody(raw: unknown): ConnectionBody | { error: 
   const label = typeof r.label === 'string' && r.label.trim() ? r.label.trim() : undefined
   const rules = parseRulesFromBody(r)
   if ('error' in rules) return rules
-  return { endpoint, token, org, label, shareMode: rules.shareMode, sources: rules.sources }
+  const dataDir = typeof r.dataDir === 'string' && r.dataDir.trim() ? r.dataDir.trim() : undefined
+  return { endpoint, token, org, label, dataDir, shareMode: rules.shareMode, sources: rules.sources }
 }
 
 export interface PatchBody {
@@ -507,6 +512,18 @@ export async function handleAddConnection(req: Request): Promise<Response> {
   if (!parsed.ok) return json({ error: parsed.error }, 400)
   const body = validateConnectionBody(parsed.value)
   if ('error' in body) return json({ error: body.error }, 400)
+
+  // `agentop member connect` prefers this route over writing preferences itself, so that a
+  // running server picks the new connection up without a restart. But it finds the server by
+  // PORT alone, and a machine profile is identified by its DATA DIR: with a second profile
+  // running (AGENTISTICS_DIR / an isolated HOME, or the Docker machine beside the native one),
+  // that lands one machine's connection — token and all — in another machine's config, silently,
+  // while the CLI reports the count of the profile it did NOT write to. A caller that states
+  // which profile it meant is answered only by that profile; everyone else falls back to writing
+  // its own preferences directly, under the cross-process lock.
+  if (body.dataDir && body.dataDir !== AGENTISTICS_DATA_DIR) {
+    return json({ error: 'data_dir_mismatch', dataDir: AGENTISTICS_DATA_DIR }, 409)
+  }
 
   const result = await addOrUpdateConnection(body)
   if (!result.ok) {
