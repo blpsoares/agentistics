@@ -5,7 +5,7 @@
  * mint a credential must be listed, and a read of the same resource must not be.
  */
 import { describe, expect, it } from 'bun:test'
-import { signStepUp, verifyStepUp, requiresStepUp, stepUpRequiresCode, proveStepUp, STEPUP_TTL_MS } from './stepup'
+import { signStepUp, verifyStepUp, requiresStepUp, stepUpRequiresCode, proveStepUp, STEPUP_TTL_MS, PROTECTED } from './stepup'
 import type { StepUpVerifiers } from './stepup'
 import { signPrincipalSession } from './auth'
 
@@ -18,21 +18,37 @@ describe('requiresStepUp', () => {
     expect(requiresStepUp('DELETE', '/api/iam/teams')).toBe(true)
   })
 
-  it('demands it for anything that mints or rotates a credential', () => {
-    expect(requiresStepUp('POST', '/api/team/tokens')).toBe(true)
-    expect(requiresStepUp('POST', '/api/team/tokens/rotate')).toBe(true)
-    expect(requiresStepUp('DELETE', '/api/team/tokens')).toBe(true)
-    // Registering a repo mints a repo-bound CI token as a side effect.
-    expect(requiresStepUp('POST', '/api/team/repos')).toBe(true)
+  it('demands it for changing a password — the credential the whole session rests on', () => {
+    expect(requiresStepUp('POST', '/api/iam/change-password')).toBe(true)
   })
 
-  it('covers the machines route, which mints/rotates/revokes the SAME token as /api/team/tokens', () => {
-    // POST mints a machine token (and rotates one via { rotateId }); DELETE revokes it. Both write
-    // the same `tokens` collection as the sibling route above, so leaving them ungated made the
-    // gate on that sibling a formality — a stolen cookie just used this door instead.
-    expect(requiresStepUp('POST', '/api/iam/machines')).toBe(true)
-    expect(requiresStepUp('DELETE', '/api/iam/machines')).toBe(true)
-    expect(requiresStepUp('GET', '/api/iam/machines')).toBe(false)
+  /**
+   * THE TABLE, EXACTLY. Read this list as the policy itself: adding a path here is a product
+   * decision, and a path that reappears without one fails this test rather than quietly costing
+   * every user a prompt.
+   */
+  it('protects exactly these operations and no others', () => {
+    expect(PROTECTED.map(([path, methods]) => [path, [...methods]])).toEqual([
+      ['/api/iam/accounts', ['POST', 'PATCH', 'DELETE']],
+      ['/api/iam/teams', ['DELETE']],
+      ['/api/iam/change-password', ['POST']],
+    ])
+  })
+
+  it('does NOT demand it for enrolling a machine or minting its token — that is routine, not damage', () => {
+    // Registering a machine is a daily operation on a growing fleet; a step-up prompt on it was
+    // pure friction, and a prompt people learn to clear on sight weakens every prompt that matters.
+    for (const [method, path] of [
+      ['POST', '/api/iam/machines'],
+      ['DELETE', '/api/iam/machines'],
+      ['POST', '/api/team/tokens'],
+      ['DELETE', '/api/team/tokens'],
+      ['POST', '/api/team/tokens/rotate'],
+      ['POST', '/api/team/repos'],
+      ['DELETE', '/api/team/repos/github.com%2Forg%2Frepo'],
+    ] as const) {
+      expect(requiresStepUp(method, path)).toBe(false)
+    }
   })
 
   it('demands it when an account is edited, since that includes role and memberships', () => {
@@ -59,12 +75,13 @@ describe('requiresStepUp', () => {
   })
 
   it('covers nested detail routes under a protected path', () => {
-    expect(requiresStepUp('DELETE', '/api/team/repos/github.com%2Forg%2Frepo')).toBe(true)
     expect(requiresStepUp('DELETE', '/api/iam/accounts/abc123')).toBe(true)
+    expect(requiresStepUp('DELETE', '/api/iam/teams/t1')).toBe(true)
   })
 
   it('is not fooled by a path that merely shares a prefix', () => {
-    expect(requiresStepUp('DELETE', '/api/team/tokensearch')).toBe(false)
+    expect(requiresStepUp('DELETE', '/api/iam/accountsearch')).toBe(false)
+    expect(requiresStepUp('POST', '/api/iam/change-password-reset')).toBe(false)
   })
 })
 

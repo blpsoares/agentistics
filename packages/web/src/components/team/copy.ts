@@ -108,6 +108,29 @@ export const COPY = {
     en: "This central rejected the token. Rotate it in the central's Machines panel, then run `agentop member connect` again with the new token.",
     pt: 'A central rejeitou o token. Rotacione-o no painel de Máquinas da central e rode `agentop member connect` de novo com o novo token.',
   },
+  // The informational "i" beside a card whose central is in a fault state. The card used to say
+  // something was wrong (a coloured border) without ever saying WHAT — these rows are that answer:
+  // which central, what state, and what the user can do about it.
+  statusInfoBtn: {
+    en: 'What is this status?',
+    pt: 'O que é este status?',
+  },
+  statusInfoCentral: {
+    en: 'Central',
+    pt: 'Central',
+  },
+  statusInfoState: {
+    en: 'Status',
+    pt: 'Status',
+  },
+  statusInfoWhat: {
+    en: 'What to do',
+    pt: 'O que fazer',
+  },
+  offlineHelp: {
+    en: 'This machine cannot reach this central right now. Check that the central is running and that {endpoint} is reachable from here. Nothing is lost — metrics keep being collected and are sent as soon as it answers again.',
+    pt: 'Esta máquina não está conseguindo alcançar esta central agora. Verifique se a central está no ar e se {endpoint} é alcançável daqui. Nada é perdido — as métricas continuam sendo coletadas e são enviadas assim que ela voltar a responder.',
+  },
   lastSync: {
     en: 'last sync {t}',
     pt: 'último envio {t}',
@@ -451,6 +474,13 @@ export const COPY = {
   rowNoLocalProject: {
     en: 'No project with this name here',
     pt: 'Nenhum projeto com este nome aqui',
+  },
+  // The card's hidden rows: what this machine knows about the OTHER machines, stated in words
+  // rather than left as an empty cell — "nothing announced" is not "nowhere else", and only the
+  // first of those two is something this machine can honestly say.
+  rowNoOtherMachine: {
+    en: 'No other machine of yours has announced this restriction',
+    pt: 'Nenhuma outra máquina sua anunciou esta restrição',
   },
   rowTagRepo: {
     en: 'repo',

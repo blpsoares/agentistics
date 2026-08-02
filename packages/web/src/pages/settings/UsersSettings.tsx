@@ -491,7 +491,7 @@ export default function UsersSettings() {
     if (!editId || !addMachineName.trim()) return
     const body: Record<string, unknown> = { accountId: editId, name: addMachineName.trim() }
     if (addMachineTeam) body.teamId = addMachineTeam
-    const res = await stepUpFetch('/api/iam/machines', {
+    const res = await fetch('/api/iam/machines', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
@@ -518,7 +518,7 @@ export default function UsersSettings() {
     let failed = false
     try {
       for (const id of linkMachineIds) {
-        const res = await stepUpFetch('/api/iam/machines', {
+        const res = await fetch('/api/iam/machines', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ownerId: id, accountIds: [editId] }),
         })
@@ -553,7 +553,7 @@ export default function UsersSettings() {
     if (!editId) return
     const m = linkedMachines.find(x => x.id === id)
     const owners = (m?.accountIds ?? (m?.accountId ? [m.accountId] : [])).filter(a => a !== editId)
-    const res = await stepUpFetch('/api/iam/machines', {
+    const res = await fetch('/api/iam/machines', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ownerId: id, accountIds: owners }),
     })
@@ -565,7 +565,7 @@ export default function UsersSettings() {
   }
 
   async function renameMachine(id: string, name: string) {
-    const res = await stepUpFetch('/api/iam/machines', {
+    const res = await fetch('/api/iam/machines', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ renameId: id, name }),
     })

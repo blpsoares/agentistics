@@ -2,9 +2,9 @@
  * stepup.ts — re-authentication for destructive operations ("sudo mode").
  *
  * A session cookie proves who you are; it does not prove you are still at the keyboard. Without
- * this, a stolen cookie inside its 12-hour idle window could delete accounts and mint machine
- * tokens with no further proof. Requiring a fresh password or TOTP for those operations does not
- * prevent the theft — it bounds what the theft is worth.
+ * this, a stolen cookie inside its 12-hour idle window could promote itself to owner or change the
+ * account's password with no further proof. Requiring a fresh password or TOTP for those
+ * operations does not prevent the theft — it bounds what the theft is worth.
  *
  * The grant is a short-lived HMAC token, bound to the account AND its session generation, so a
  * password change or a logout-all revokes any outstanding grant along with the session. It is
@@ -23,32 +23,38 @@ export const STEPUP_HEADER = 'x-stepup'
 const DOMAIN = 'stepup-grant'
 
 /**
- * Operations that destroy data or mint a credential. Read methods on the same paths are absent
- * on purpose — the point is to gate the damage, not to make the dashboard tiresome.
+ * WHERE THE SECOND FACTOR IS DEMANDED — three operations, and the reasoning for each.
  *
- * PATCH on an account is included because that is where role and team memberships are edited:
- * promoting an account is as dangerous as deleting one. POST on an account is included because
- * an account IS a credential — a quiet extra owner is the escalation this exists to bound.
+ * The list is short on purpose. A prompt people meet on routine work is a prompt they learn to
+ * clear without reading, and that habit is paid for by every OTHER prompt. So this gates the two
+ * things a stolen cookie could turn into permanent access, and nothing else.
  *
- * CREATING a team is deliberately NOT here. It destroys nothing and grants nobody anything: an
- * empty team is a label until an account is put in it, and putting one in goes through the
- * account PATCH above, which is gated. Asking for the password to name a team is the kind of
- * prompt that teaches people to type their password without reading why — which makes every
- * OTHER prompt weaker. Gate the damage, not the paperwork.
+ * - **Accounts (POST / PATCH / DELETE)** — role and team membership are assigned here, so this is
+ *   where a session becomes an owner. Gating the DELETE of an owner while leaving BECOMING one
+ *   open is not a boundary; an account IS a credential, and a quiet extra owner is exactly the
+ *   escalation this exists to bound.
+ * - **Teams (DELETE)** — it destroys data. CREATING one is deliberately absent: an empty team is a
+ *   label until an account is put in it, and putting one in goes through the account PATCH above.
+ * - **Changing a password (POST)** — it is the credential every session rests on, and it accepted
+ *   the current password alone, which a thief holding the browser profile usually also has. This
+ *   is the one place enrolled MFA turns "cookie plus password" back into nothing. The forced
+ *   first-login change goes through the same gate and is proven with the temporary password the
+ *   user just signed in with; `App.tsx` mounts the step-up prompt on that screen for that reason.
+ *
+ * DELIBERATELY NOT HERE, after review: `/api/iam/machines`, `/api/team/tokens`,
+ * `/api/team/tokens/rotate` and `/api/team/repos`. Enrolling a machine or a repository is routine
+ * work on a growing fleet — daily, expected, and reversible by revoking the token it minted. The
+ * prompt bought little and cost a lot of friction. What a machine token can reach is bounded by
+ * the account it belongs to, and moving an account between roles or teams is still gated above.
+ *
+ * Read methods are absent throughout: the point is to gate the damage, not the dashboard.
+ * `stepup.test.ts` asserts this table EXACTLY, so re-adding a path fails a test rather than
+ * quietly costing every user a prompt.
  */
-const PROTECTED: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
+export const PROTECTED: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ['/api/iam/accounts', ['POST', 'PATCH', 'DELETE']],
   ['/api/iam/teams', ['DELETE']],
-  // The machines route writes the same `tokens` collection as /api/team/tokens below: POST mints
-  // a machine token (and rotates one via { rotateId }), DELETE revokes it. Gating the sibling and
-  // not this one left the control with a door beside it, which is no control at all. The other
-  // POST shapes (rename, re-own, re-team) ride along: they decide who a credential answers to,
-  // and splitting one path into gated and ungated halves by body shape is not a boundary anyone
-  // can review.
-  ['/api/iam/machines', ['POST', 'DELETE']],
-  ['/api/team/tokens', ['POST', 'DELETE']],
-  ['/api/team/tokens/rotate', ['POST']],
-  ['/api/team/repos', ['POST', 'DELETE']],
+  ['/api/iam/change-password', ['POST']],
 ]
 
 /**

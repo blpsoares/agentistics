@@ -1,9 +1,10 @@
 import { test, expect, describe, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { buildConfirmMessage, hiddenChipStyle, ReadView } from './SharedReposPanel'
+import { buildConfirmMessage, ReadView } from './SharedReposPanel'
 import { COPY } from './copy'
 import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
+import { NO_REPO_KEY, type SiblingRuleFact } from '@agentistics/core'
 
 /**
  * SharedReposPanel.test.ts — covers the one piece of `SharedReposPanel.tsx` worth testing outside
@@ -72,17 +73,7 @@ test('modeVariant "toDenylist" appends the denylist-switch consequence, never th
   expect(msg).not.toContain(COPY.modeConfirmToAllowlist.en)
 })
 
-// --- product owner live test: hidden entries read RED (outlined), not amber ----------------------
-
-test('hiddenChipStyle is an outlined (transparent-fill, red-bordered) chip using the app\'s existing danger variable, not a new hex value', () => {
-  const style = hiddenChipStyle()
-  expect(style.background).toBe('transparent')
-  expect(style.border).toContain('var(--accent-red)')
-  expect(style.color).toBe('var(--accent-red)')
-  // never the old amber treatment
-  expect(style.border).not.toContain('anthropic-orange')
-  expect(style.color).not.toContain('anthropic-orange')
-})
+// --- the hidden block is a TABLE of what is not shared, and where else it is restricted --------
 
 /** `ReadView` holds no hooks — a plain function of its props — so it can be called directly and
  *  its returned element tree walked like a shallow render, the same technique
@@ -97,6 +88,17 @@ function collectSpans(el: unknown, out: { props: Record<string, unknown> }[] = [
   return out
 }
 
+/** Every string the tree would print, flattened — what the user can actually read. */
+function texts(el: unknown, out: string[] = []): string[] {
+  if (typeof el === 'string') { out.push(el); return out }
+  if (typeof el === 'number') { out.push(String(el)); return out }
+  if (!el || typeof el !== 'object') return out
+  const kids = (el as { props?: { children?: unknown } }).props?.children
+  const list = Array.isArray(kids) ? kids : kids !== undefined ? [kids] : []
+  for (const k of list) texts(k, out)
+  return out
+}
+
 const repoTarget: ShareTarget = {
   key: 'github.com/acme/api', kind: 'repo', name: 'acme/api', host: 'github.com',
   sessions: 3, lastActive: '', orphan: false, conflictPaths: [],
@@ -106,42 +108,93 @@ const projectTarget: ProjectTarget = {
   repoKey: 'github.com/acme/api', sessions: 3, lastActive: '', locked: false,
 }
 
-test('denylist read view marks a hidden repo with the red/outlined chip style, not the old amber fill', () => {
-  const el = ReadView({
-    targets: [repoTarget], projectTargets: [], storedDenied: new Set([repoTarget.key]),
-    storedProjectPaths: new Set(), mode: 'denylist', sessions: [], status: undefined, lang: 'en', otelEnabled: false,
-  })
-  const spans = collectSpans(el)
-  expect(spans.length).toBeGreaterThan(0)
-  for (const span of spans) {
-    expect(span.props.style).toEqual(hiddenChipStyle())
-  }
+const sibling = (over: Partial<SiblingRuleFact> & { machineId: string }): SiblingRuleFact => ({
+  machineName: over.machineId,
+  shareMode: 'denylist',
+  sources: [],
+  at: '2026-07-31T10:00:00.000Z',
+  receivedAt: '2026-07-31T10:00:05.000Z',
+  ...over,
 })
 
-test('allowlist read view never applies the hidden/red treatment to its allowed entries — those chips mean the opposite', () => {
-  const el = ReadView({
-    targets: [repoTarget], projectTargets: [], storedDenied: new Set([repoTarget.key]),
-    storedProjectPaths: new Set(), mode: 'allowlist', sessions: [], status: undefined, lang: 'en', otelEnabled: false,
+function denylistView(over: Partial<Parameters<typeof ReadView>[0]> = {}) {
+  return ReadView({
+    targets: [repoTarget], projectTargets: [projectTarget],
+    sources: [{ type: 'repo', value: repoTarget.key }],
+    storedDenied: new Set([repoTarget.key]), storedProjectPaths: new Set(),
+    mode: 'denylist', sessions: [], status: undefined, lang: 'en', otelEnabled: false,
+    siblingRules: [],
+    ...over,
   })
-  const spans = collectSpans(el)
-  expect(spans.length).toBeGreaterThan(0)
-  for (const span of spans) {
-    expect(span.props.style).not.toEqual(hiddenChipStyle())
-    const style = span.props.style as Record<string, unknown>
-    expect(String(style.color)).toContain('accent-green')
-    expect(String(style.color)).not.toContain('accent-red')
-  }
+}
+
+test('a hidden entry states WHAT it is: the name and its dimension, never one undifferentiated blob', () => {
+  const printed = texts(denylistView({
+    sources: [{ type: 'repo', value: repoTarget.key }, { type: 'project', value: projectTarget.path }],
+    storedDenied: new Set([repoTarget.key]), storedProjectPaths: new Set([projectTarget.path]),
+  }))
+  expect(printed).toContain('acme/api')
+  expect(printed).toContain(COPY.rowTagRepo.en)
+  expect(printed).toContain(COPY.rowTagProject.en)
 })
 
-test('a project-dimension hidden entry gets the same red/outlined treatment as a hidden repo', () => {
+test('a hidden entry names the OTHER machines the same restriction is applied on', () => {
+  const printed = texts(denylistView({
+    siblingRules: [
+      sibling({ machineId: 'm1', machineName: 'Alienware', sources: [{ type: 'repo', value: repoTarget.key }] }),
+      sibling({ machineId: 'm2', machineName: 'Laptop B', sources: [] }),
+    ],
+  }))
+  const line = printed.join(' | ')
+  expect(line).toContain(COPY.colRestrictedOn.en)
+  expect(line).toContain('Alienware')
+  // …and never a machine that does NOT restrict it: that would be the opposite claim.
+  expect(line).not.toContain('Laptop B')
+})
+
+test('a row with no sibling information SAYS so — an empty cell would read as "nowhere else"', () => {
+  const printed = texts(denylistView({ siblingRules: [] }))
+  expect(printed).toContain(COPY.rowNoOtherMachine.en)
+})
+
+test('nothing in the block is alarm-coloured: every entry is there because the user chose it', () => {
+  const spans = collectSpans(denylistView({
+    siblingRules: [sibling({ machineId: 'm1', machineName: 'Alienware', sources: [{ type: 'repo', value: repoTarget.key }] })],
+  }))
+  expect(spans.length).toBeGreaterThan(0)
+  let checked = 0
+  for (const span of spans) {
+    const style = JSON.stringify(span.props.style ?? {})
+    expect(style).not.toContain('accent-red')
+    expect(style).not.toContain('anthropic-orange')
+    checked++
+  }
+  expect(checked).toBe(spans.length)
+})
+
+test('the unattributed bucket reads as its label, never a raw sentinel key', () => {
+  const printed = texts(denylistView({
+    sources: [{ type: 'none', value: '' }],
+    storedDenied: new Set([NO_REPO_KEY]), storedProjectPaths: new Set(),
+  })).join(' | ')
+  expect(printed).toContain(COPY.noRepoTitle.en)
+  expect(printed).not.toContain(NO_REPO_KEY)
+})
+
+test('the allowlist read view keeps its own positive polarity — no "hidden" framing is forced on it', () => {
   const el = ReadView({
-    targets: [], projectTargets: [projectTarget], storedDenied: new Set(),
-    storedProjectPaths: new Set([projectTarget.key]), mode: 'denylist', sessions: [], status: undefined, lang: 'en', otelEnabled: false,
+    targets: [repoTarget], projectTargets: [],
+    sources: [{ type: 'repo', value: repoTarget.key }],
+    storedDenied: new Set([repoTarget.key]), storedProjectPaths: new Set(),
+    mode: 'allowlist', sessions: [], status: undefined, lang: 'en', otelEnabled: false, siblingRules: [],
   })
+  const printed = texts(el)
+  expect(printed.join(' ')).toContain('Shared with this central')
+  expect(printed.join(' ')).not.toContain('Hidden from this central')
   const spans = collectSpans(el)
   expect(spans.length).toBeGreaterThan(0)
   for (const span of spans) {
-    expect(span.props.style).toEqual(hiddenChipStyle())
+    expect(String((span.props.style as Record<string, unknown>)?.color ?? '')).not.toContain('accent-red')
   }
 })
 
@@ -162,5 +215,15 @@ describe('the rules editor is the drawer, not a bespoke inline panel', () => {
 
   it('the drawer guards unsaved rules on close, like every other drawer', () => {
     expect(src).toMatch(/dirty=\{dirty\}/)
+  })
+
+  it('the hidden block reuses the notices modal\'s builder — one implementation, two surfaces', () => {
+    expect(src).toContain('buildRestrictionTable')
+    expect(src).toContain("scope: 'selfRestricted'")
+    // The chips, and the alarm colour that carried their whole meaning, are gone for good.
+    expect(src).not.toContain('hiddenChipStyle')
+    expect(src).not.toContain('EyeOff')
+    // The honesty guard the sibling column needs, stated where it qualifies something.
+    expect(src).toContain('COPY.siblingWithholdBestEffort[lang]')
   })
 })

@@ -3,9 +3,14 @@ import React, { useState, useRef, useEffect } from 'react'
 import { AlertCircle, KeyRound } from 'lucide-react'
 import { Field } from './Login'
 import { PasswordHint } from './PasswordHint'
+import { stepUpFetch } from '../lib/stepup'
 
 /** Blocking first-login password change (mustChangePassword). Forced flow — the server does not
- *  require the current password. Posts /api/iam/change-password; the server re-issues the cookie.
+ *  require the current password in the BODY, but the route is step-up-protected, so the change is
+ *  still proven with the temporary password (or the second factor) through `stepUpFetch`. `App`
+ *  mounts `StepUpPrompt` beside this screen for exactly that: it is returned before the app tree
+ *  that normally carries the prompter. Posts /api/iam/change-password; the server re-issues the
+ *  cookie.
  *  `onDone` re-runs the IAM gate (used both after a successful change and after logout). */
 export function ChangePassword({ onDone }: { onDone: () => void }) {
   const [password, setPassword] = useState('')
@@ -32,7 +37,7 @@ export function ChangePassword({ onDone }: { onDone: () => void }) {
     if (disabled) return
     setSubmitting(true); setError(null)
     try {
-      const res = await fetch('/api/iam/change-password', {
+      const res = await stepUpFetch('/api/iam/change-password', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ newPassword: password }),
       })

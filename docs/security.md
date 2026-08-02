@@ -113,10 +113,17 @@ from the database on every request**, so a permission change takes effect on the
 on the next login.
 
 **Step-up** (`/api/iam/stepup`) covers what a session cannot: proof that the person is still
-there. Deleting an account or team, editing an account (role and memberships live there), and
-minting, rotating or revoking a machine token each require a five-minute grant obtained with the
-password or a TOTP code, presented in `X-Stepup`. It travels in a header rather than a cookie
-deliberately — a cookie would ride along automatically, which is the property being avoided.
+there. Creating, editing or deleting an account (role and memberships live there — it is where a
+session becomes an owner), deleting a team, and changing a password each require a five-minute
+grant obtained with the password or a TOTP code, presented in `X-Stepup`. It travels in a header
+rather than a cookie deliberately — a cookie would ride along automatically, which is the property
+being avoided.
+
+The list is short by decision. Enrolling a machine, minting or rotating its token and registering
+a repository are **not** gated: they are routine work on a growing fleet, reversible by revoking
+the token they mint, and bounded by the account they belong to — while a prompt met daily is one
+people learn to clear without reading, which is paid for by the three prompts that matter.
+`stepup.test.ts` asserts the table exactly, so it cannot grow by accident.
 
 Three tokens are signed with the same key over similar payloads — session, MFA challenge,
 step-up grant — and only **domain separation** stops one being replayed as another. There is a

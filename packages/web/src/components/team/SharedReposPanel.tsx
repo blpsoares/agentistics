@@ -1,5 +1,5 @@
 import React, { useState, type CSSProperties } from 'react'
-import { Loader2, EyeOff, Check, ChevronDown, ChevronRight } from 'lucide-react'
+import { Loader2, Check, ChevronDown, ChevronRight } from 'lucide-react'
 import type { SessionMeta, ModelUsage, ShareSource, SiblingRuleFact } from '@agentistics/core'
 import { NO_REPO_KEY, fmtCost } from '@agentistics/core'
 import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
@@ -8,6 +8,7 @@ import { blendedCostPerToken } from '../../hooks/useData'
 import { Section, ConfirmModal } from '../../pages/settings/primitives'
 import Drawer from '../../pages/settings/Drawer'
 import { drawerBtn } from './ConnectionCardParts'
+import { buildRestrictionTable, type RestrictionRow } from './restrictionTable'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { COPY, PLURAL_COPY, interpolate } from './copy'
 import type { CardState } from './cardState'
@@ -200,6 +201,8 @@ export function SharedReposPanel({
         <ReadView
           targets={targets}
           projectTargets={projectTargets}
+          sources={sources ?? []}
+          siblingRules={siblingRules}
           storedDenied={storedRepoKeys}
           storedProjectPaths={storedProjectPaths}
           mode={storedMode}
@@ -321,24 +324,50 @@ export function buildConfirmMessage(
  * chips invert to what IS listed — shared-positive, never a "hidden" chip for an allowlist, which
  * would read backwards (everything not listed is what's hidden, and that set is usually huge).
  */
-/** Fix (product owner live test): a hidden repo/project used to render as an amber-filled chip,
- *  the same tone `EditView`'s locked-row copy uses — a hidden entry needed its own, clearly
- *  negative treatment. Outlined (transparent fill, red border) rather than filled, reusing the
- *  app's existing danger variable (`--accent-red`, the same one `ConnectionCard`'s broken-endpoint
- *  state uses) rather than a new hex value; the `EyeOff` icon stays so meaning is never carried by
- *  colour alone. Exported so `SharedReposPanel.test.ts` can assert on it directly. */
-export function hiddenChipStyle(): CSSProperties {
-  return {
-    display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: '100%', padding: '2px 8px', borderRadius: 999,
-    background: 'transparent', border: '1px solid var(--accent-red)',
-    color: 'var(--accent-red)', fontSize: 11, fontWeight: 600,
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-  }
+/**
+ * Fix (product owner live test, second half): the hidden entries used to be red outlined chips —
+ * one undifferentiated blob in which a repository and a project looked the same, and which never
+ * answered the question he actually asked: **where else is this restriction applied?**
+ *
+ * They are now ROWS built by `buildRestrictionTable` — the SAME builder the notices modal uses,
+ * asked its narrower `scope: 'selfRestricted'` question. One builder, two surfaces: the two views
+ * disagreeing about what is hidden would be worse than either.
+ *
+ * The colour is gone with the chips. Everything in this block is here because the user chose it,
+ * and colour must mark what needs attention, not decorate a list of deliberate choices. A row with
+ * no sibling information says so IN WORDS — an empty cell would read as "nowhere else", which is a
+ * claim this machine cannot make (see `siblingWithholdBestEffort`, folded into the caveats below).
+ */
+export function hiddenRowLabel(
+  row: RestrictionRow, targets: ShareTarget[], projectTargets: ProjectTarget[], lang: 'pt' | 'en',
+): string {
+  if (row.kind === 'none') return COPY.noRepoTitle[lang]
+  if (row.kind === 'project') return projectTargets.find(p => p.key === row.value)?.name ?? row.value
+  return targets.find(t => t.key === row.value)?.name ?? row.value
 }
 
-export function ReadView({ targets, projectTargets, storedDenied, storedProjectPaths, mode, sessions, status, lang, otelEnabled }: {
+/**
+ * The "where else is this restriction applied" line. A row with no sibling information says so IN
+ * WORDS: an empty cell would read as "nowhere else", which is a claim this machine cannot make —
+ * it knows only what its siblings announced to it, and only since the encrypted channel existed
+ * (`siblingWithholdBestEffort`, folded into the caveats below).
+ */
+export function hiddenRowElsewhere(row: RestrictionRow, lang: 'pt' | 'en'): string {
+  const elsewhere = row.restrictedBy.filter(m => !m.self)
+  if (elsewhere.length === 0) return COPY.rowNoOtherMachine[lang]
+  const names = elsewhere.map(m => m.machineName || COPY.peerUnnamed[lang]).join(', ')
+  return `${COPY.colRestrictedOn[lang]}: ${names}`
+}
+
+export function ReadView({ targets, projectTargets, sources, siblingRules, storedDenied, storedProjectPaths, mode, sessions, status, lang, otelEnabled }: {
   targets: ShareTarget[]
   projectTargets: ProjectTarget[]
+  /** The connection's stored rules VERBATIM — the same value the notices modal feeds
+   *  `buildRestrictionTable`, so the two surfaces cannot disagree about what is hidden. */
+  sources: ShareSource[]
+  /** What each sibling machine last announced about its OWN rules — the "where else" column's
+   *  only sound source (`envelope-inbox.ts`), and the reason the table is best-effort. */
+  siblingRules?: SiblingRuleFact[]
   storedDenied: Set<string>
   storedProjectPaths: Set<string>
   mode: ShareMode
@@ -361,6 +390,17 @@ export function ReadView({ targets, projectTargets, storedDenied, storedProjectP
     return { key: path, label: t ? t.name : path, title: path }
   })
   const chips = [...repoChips, ...projectChips].sort((a, b) => a.label.localeCompare(b.label))
+
+  // The denylist read view's rows, from the SAME builder the notices modal uses — asked its
+  // narrower question (`scope: 'selfRestricted'`: what THIS machine hides from THIS central), so a
+  // sibling's own restriction is never listed here as something this machine is withholding.
+  const hiddenRows = buildRestrictionTable({
+    self: { shareMode: mode, sources },
+    selfLabel: COPY.peersSelf[lang],
+    siblings: siblingRules ?? [],
+    localProjects: projectTargets.map(p => p.path),
+    scope: 'selfRestricted',
+  }).rows
 
   if (mode === 'allowlist') {
     return (
@@ -394,16 +434,35 @@ export function ReadView({ targets, projectTargets, storedDenied, storedProjectP
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {chips.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent-red)', letterSpacing: '0.02em' }}>
-            {interpolate(COPY.hiddenBlockTitle[lang], { n: chips.length })}
+      {hiddenRows.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', letterSpacing: '0.02em' }}>
+            {interpolate(COPY.hiddenBlockTitle[lang], { n: hiddenRows.length })}
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {chips.map(c => (
-              <span key={c.key} title={c.title} style={hiddenChipStyle()}>
-                <EyeOff size={10} style={{ flexShrink: 0 }} />{c.label}
-              </span>
+          {/* Stacked rows, never a table: this block lives inside a card that must hold at 390px,
+             and the page body may never scroll sideways. Every value wraps inside its own box. */}
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {hiddenRows.map((row, i) => (
+              <div
+                key={row.key}
+                style={{
+                  display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0,
+                  padding: '6px 0', borderTop: i === 0 ? undefined : '1px solid var(--border)',
+                }}
+              >
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 6, minWidth: 0 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>
+                    {hiddenRowLabel(row, targets, projectTargets, lang)}
+                  </span>
+                  {/* The dimension, in words: a repo and a project are different things. */}
+                  <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+                    {row.kind === 'project' ? COPY.rowTagProject[lang] : COPY.rowTagRepo[lang]}
+                  </span>
+                </div>
+                <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)', overflowWrap: 'anywhere' }}>
+                  {hiddenRowElsewhere(row, lang)}
+                </span>
+              </div>
             ))}
           </div>
         </div>
@@ -415,6 +474,9 @@ export function ReadView({ targets, projectTargets, storedDenied, storedProjectP
       </div>
       <Caveats lang={lang}>
         <div>{COPY.newRepoNote[lang]}</div>
+        {/* Qualifies the "restricted on" column directly above: this machine knows only what its
+           siblings announced to it, and only since the encrypted channel existed. */}
+        {hiddenRows.length > 0 && <div>{COPY.siblingWithholdBestEffort[lang]}</div>}
         {hasAnyRule && stats && (
           <div>{interpolate(COPY.statsNote[lang], { boundary: stats.boundary, n: stats.n })}</div>
         )}

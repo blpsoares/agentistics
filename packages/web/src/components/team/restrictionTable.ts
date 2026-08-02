@@ -77,6 +77,17 @@ export interface RestrictionTableInput {
   siblings: readonly SiblingRuleFact[]
   /** This machine's known project paths — what makes a project row actionable here. */
   localProjects?: readonly string[]
+  /**
+   * WHICH rows the caller is asking for. `'all'` (default) is the notices modal's question — every
+   * bucket ANYBODY withholds, including the ones only a sibling hides, since those are the ones
+   * carrying a decision. `'selfRestricted'` is the connection card's narrower question — what THIS
+   * machine hides from THIS central — because that block is titled with what this machine is
+   * withholding, and listing a sibling's own restriction there would claim something untrue.
+   *
+   * A parameter, deliberately, and not a second builder: two surfaces disagreeing about what is
+   * hidden would be worse than either one of them.
+   */
+  scope?: 'all' | 'selfRestricted'
 }
 
 const SELF_ID = ''
@@ -118,7 +129,7 @@ function localSourceFor(
 }
 
 export function buildRestrictionTable(input: RestrictionTableInput): RestrictionTable {
-  const { self, selfLabel, siblings, localProjects = [] } = input
+  const { self, selfLabel, siblings, localProjects = [], scope = 'all' } = input
 
   // The row universe: every bucket ANYBODY named. A bucket nobody named cannot be a row — see the
   // allowlist note in the module docstring.
@@ -142,6 +153,9 @@ export function buildRestrictionTable(input: RestrictionTableInput): Restriction
     const selfRestricts = !bucketSharedBy(bucket, self)
     const withholding = siblingsWithholding(siblings, bucket)
     if (!selfRestricts && withholding.length === 0) continue
+    // The card's narrower question. Applied HERE rather than by filtering the finished table, so
+    // a scoped row is the same row — same machine columns, same actionability — never a rebuilt one.
+    if (scope === 'selfRestricted' && !selfRestricts) continue
 
     const withheldIds = new Set(withholding.map(w => w.machineId))
     const restrictedBy: RestrictionMachine[] = [
