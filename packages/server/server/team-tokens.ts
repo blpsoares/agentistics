@@ -183,10 +183,25 @@ export async function revokeToken(id: string): Promise<boolean> {
   return result.deletedCount > 0
 }
 
+/** What a rotation actually moved. Reported so the audit event can be truthful about it — in
+ *  particular about the one thing a rotation DESTROYS (see `envelopesDropped`). */
+export interface RotationResult {
+  /** The new plaintext token, shown once. */
+  token: string
+  sessions: number
+  statsMoved: boolean
+  workflows: number
+  tags: number
+  keyMoved: boolean
+  /** Sealed envelopes addressed to the old id, deleted because no id can ever open them again.
+   *  See `rotate-identity.ts` — the recipient is inside the seal, so this is a loss, not a move. */
+  envelopesDropped: number
+}
+
 /**
  * Rotate a member's token: mint a fresh token while preserving all of the member's
- * history. Returns the new plaintext token (shown once), or `null` if no token with
- * `oldId` exists.
+ * history. Returns what moved (and the new plaintext token, shown once), or `null` if no
+ * token with `oldId` exists.
  *
  * The member's identity key is the token hash (`memberId`), so rotating the token
  * changes that key. To keep history, every doc keyed by the old id is migrated to the
@@ -194,9 +209,16 @@ export async function revokeToken(id: string): Promise<boolean> {
  *   - `sessions`     — each TeamSessionDoc is re-inserted with the new memberId and a
  *                      recomputed _id (teamDocId), then the old docs are removed.
  *   - `memberStats`  — the per-member aggregate (keyed by _id = memberId) is copied.
+ *   - `workflows`    — same shape as sessions (`teamWorkflowDocId` embeds the memberId).
+ *   - `tags`         — a `machine` source stores this id; re-pointed, or the tag empties.
+ *   - `machineKeys`  — the machine's published envelope key moves with it.
+ *   - `envelopes`    — inbound mail is dropped (undeliverable), outbound is left sealed.
  *   - `tokens`       — the token doc is replaced (new hash id, same metadata).
+ *
+ * `rotate-identity.ts` holds the full enumeration of what is keyed by the machine id, what is
+ * only keyed by something that LOOKS like it, and why sibling pins are deliberately not carried.
  */
-export async function rotateToken(oldId: string): Promise<string | null> {
+export async function rotateToken(oldId: string): Promise<RotationResult | null> {
   const col = await getTokensCollection()
   const doc = await col.findOne({ _id: oldId })
   if (!doc) return null
@@ -227,6 +249,16 @@ export async function rotateToken(oldId: string): Promise<string | null> {
     await memberStats.deleteOne({ _id: oldId })
   }
 
+  // Migrate the collections that were added AFTER this function and never taught about it.
+  // Best-effort each: a rotation that has already re-keyed the sessions must not be abandoned
+  // half-done because one later collection is unavailable.
+  const [workflows, tags, envelopes] = await Promise.all([
+    import('./team-workflows').then(m => m.rekeyMemberWorkflows(oldId, newId)).catch(() => 0),
+    import('./tags-store').then(m => m.retargetMachineTagSources(oldId, newId)).catch(() => 0),
+    import('./envelope-store').then(m => m.rekeyMachineEnvelopes(oldId, newId))
+      .catch(() => ({ keyMoved: false, envelopesDropped: 0 })),
+  ])
+
   // Replace the token doc (new hash id, same metadata) — preserve team + owner assignment so
   // rotating a machine's token keeps its teams/owners (previously these were silently dropped).
   await col.insertOne({
@@ -235,7 +267,15 @@ export async function rotateToken(oldId: string): Promise<string | null> {
   })
   await col.deleteOne({ _id: oldId })
 
-  return token
+  return {
+    token,
+    sessions: oldSessions.length,
+    statsMoved: !!statsDoc,
+    workflows,
+    tags,
+    keyMoved: envelopes.keyMoved,
+    envelopesDropped: envelopes.envelopesDropped,
+  }
 }
 
 /**

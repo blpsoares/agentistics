@@ -100,6 +100,29 @@ export async function deleteMemberWorkflows(memberId: string): Promise<number> {
   }
 }
 
+/**
+ * Carry a member's workflow runs across a TOKEN ROTATION, exactly as rotateToken carries their
+ * sessions: `memberId` is rewritten and `_id` recomputed, because the id embeds the member.
+ *
+ * This collection was added after `rotateToken` and was never taught about it, so a rotation
+ * silently stranded every stored run under an id no token maps to — the same bug as the orphaned
+ * envelope key, with a different collection name. Returns how many runs moved.
+ */
+export async function rekeyMemberWorkflows(oldId: string, newId: string): Promise<number> {
+  if (!oldId || !newId || oldId === newId) return 0
+  const col = await getWorkflowsCollection()
+  const docs = await col.find({ memberId: oldId }).toArray()
+  if (docs.length === 0) return 0
+  const migrated = docs.map(d => ({
+    ...d,
+    memberId: newId,
+    _id: teamWorkflowDocId(d.org, newId, d.runId),
+  }))
+  await col.insertMany(migrated, { ordered: false }).catch(() => {})
+  await col.deleteMany({ memberId: oldId })
+  return migrated.length
+}
+
 /** Delete this member's workflow runs for the named sessions. Scoped by memberId AND sessionId:
  *  a run is identified by `org:memberId:runId`, so an unscoped sessionId delete would reach
  *  another member's runs for a session id that happens to collide. Returns the count deleted. */

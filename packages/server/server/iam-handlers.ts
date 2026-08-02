@@ -1028,10 +1028,20 @@ export async function handleMachines(req: Request, ip = 'unknown'): Promise<Resp
       const machine = (await listMachines()).find(m => m.id === rotateId)
       if (!machine) return json({ error: 'machine not found' }, 404)
       if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
-      const token = await rotateToken(rotateId)
-      if (token === null) return json({ error: 'machine not found' }, 404)
-      void writeAudit({ action: 'token.rotate', ip, actorId: principal.accountId, targetId: rotateId })
-      return json({ token: packConnectToken(token, (await getCentralConfig()).publicUrl) }, 200)
+      const rotated = await rotateToken(rotateId)
+      if (rotated === null) return json({ error: 'machine not found' }, 404)
+      // The audit says what MOVED and what was lost: `envelopesDropped` is undelivered sealed mail
+      // that no id can open again (the recipient is inside the seal), so it is destroyed by the
+      // rotation, not migrated by it. An audit that only recorded the happy half would be a
+      // record of a promise, not of what happened.
+      void writeAudit({
+        action: 'token.rotate', ip, actorId: principal.accountId, targetId: rotateId,
+        meta: {
+          sessions: rotated.sessions, statsMoved: rotated.statsMoved, workflows: rotated.workflows,
+          tags: rotated.tags, keyMoved: rotated.keyMoved, envelopesDropped: rotated.envelopesDropped,
+        },
+      })
+      return json({ token: packConnectToken(rotated.token, (await getCentralConfig()).publicUrl) }, 200)
     }
     // Reassign a machine to another team (scoped): { reassignId, teamId }. Must manage BOTH the
     // machine's current team and the target team. Used by the Teams page to attach a machine.
