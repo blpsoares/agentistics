@@ -363,6 +363,31 @@ recipient is silently skipped rather than named, because naming it would answer 
 belong to my account". Retention is bounded by age (in step with the recipient's freshness window) and per-recipient
 count, and revoking a machine's token drops its published key and all of its mail. The private key
 never leaves the machine, never enters a log, an audit event or any response body.
+
+**Rotating a token is a change of identity, and is treated as one.** `memberId = sha256(token)`, so
+rotation renames the machine in every collection keyed by that id. `rotateToken` carries the
+history across — sessions, memberStats, workflows, the tags pinned to the machine, and the
+published envelope key — and the enumeration of what is keyed by a machine id lives in
+`rotate-identity.ts`. Two things it deliberately does **not** do:
+
+- **It never re-addresses a sealed envelope.** The whole header is the GCM AAD and `open` compares
+  every routing field against what the transport claimed. Mail addressed to the old id therefore
+  yields `recipient_mismatch` no matter who relays it, so it is **deleted** rather than left to
+  expire (the audit event reports the count — it is a loss, not a move). Mail *sent* by the old id
+  still opens exactly as sealed and is left untouched; re-stamping its sender would turn a true,
+  deliverable announcement into `sender_mismatch`. The loss is bounded: every message is a full
+  snapshot that its sender re-announces on its next rules change, and facts already collected live
+  in the machine's own inbox and survive.
+- **It never carries a sibling's pin across.** To a sibling the rotated machine is a machine it has
+  never seen: it pins on first sight and **announces** it, exactly as above. Continuity cannot be
+  established here without a claim the central could forge — a "formerly `<oldId>`" field is a
+  central assertion by construction, and "the key is the same, so the machine is the same" is no
+  better, because a public key is public: a central can list an invented machine carrying a key it
+  copied from a real one, and treating a familiar key as proof of continuity would let it suppress
+  the very announcement that defends against fabricated peers. A sound proof exists in principle
+  (the old private key signing the new id) but rotation is initiated on the central and the machine
+  learns its new id only afterwards, so it cannot sign it in advance. The rotation dialog says the
+  siblings will see a new machine instead of implying they will not.
 `GET /api/team/proposals` returns a sibling's full source list, so it is registered in
 `capability-guard.ts` and is unreachable on an internet-exposed instance.
 

@@ -72,7 +72,12 @@ const COPY = {
   revokeConfirmTitle: { en: 'Remove this machine?',              pt: 'Remover esta máquina?' },
   revokeConfirmBody:  { en: 'This revokes the token and deletes ALL of this machine\'s data on the central. The machine will be disconnected.', pt: 'Isso revoga o token e apaga TODOS os dados dessa máquina na central. A máquina será desconectada.' },
   rotateConfirmTitle: { en: 'Rotate token?',                     pt: 'Rotacionar token?' },
-  rotateConfirmBody:  { en: 'This machine\'s current token stops working; it will need the new token. History is preserved.', pt: 'O token atual desta máquina para de funcionar; ela precisará do novo token. O histórico é preservado.' },
+  // Says what a rotation does AND what it costs. "History is preserved" alone was true of the
+  // sessions and silently false of the machine's identity: memberId is derived from the token, so
+  // to the account's other machines the rotated machine is a machine they have never seen — they
+  // pin its key on first sight and announce it, by design. Any sealed message still waiting for
+  // the old identity cannot be re-addressed (the recipient is inside the seal) and is dropped.
+  rotateConfirmBody:  { en: 'This machine\'s current token stops working; it will need the new token. History is preserved — sessions, stats, workflows and tags move with it. Its identity here is derived from the token, so the account\'s other machines will see it as a new machine and announce it; any sealed message still waiting for it is lost.', pt: 'O token atual desta máquina para de funcionar; ela precisará do novo token. O histórico é preservado — sessões, estatísticas, workflows e tags acompanham a máquina. A identidade dela aqui vem do token, então as outras máquinas da conta a verão como uma máquina nova e a anunciarão; qualquer mensagem selada ainda à espera dela é perdida.' },
 } satisfies Record<string, { en: string; pt: string }>
 
 function t(key: keyof typeof COPY, lang: 'en' | 'pt'): string {

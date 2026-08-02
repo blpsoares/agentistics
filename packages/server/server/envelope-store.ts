@@ -25,6 +25,7 @@ import { randomBytes } from 'node:crypto'
 import type { Collection } from 'mongodb'
 import { getMongoDb } from './mongo'
 import { fromBsonDate } from './mongo-dates'
+import { planEnvelopeRotation } from './rotate-identity'
 
 export interface MachineKeyDoc {
   _id: string
@@ -158,6 +159,53 @@ export async function forgetMachineKeys(machineId: string): Promise<void> {
     keys.deleteOne({ _id: machineId }),
     envelopes.deleteMany({ $or: [{ senderMachineId: machineId }, { recipientMachineId: machineId }] }),
   ])
+}
+
+/**
+ * Carry a machine's envelope identity across a TOKEN ROTATION.
+ *
+ * A rotation replaces the credential, and the machine id IS the hash of that credential — so
+ * without this the published key orphans under an id no token maps to and the mailbox becomes
+ * undeliverable, on an operation whose dialog promises history is preserved.
+ *
+ * The key row MOVES: it is the same machine's own key, and republishing it under the new id is
+ * what the machine would do on its next sync anyway — doing it here just closes the window in
+ * which the directory disagrees with the tokens collection. It asserts nothing to a sibling: the
+ * sibling still sees an id it has never seen and still pins it afresh, with the announcement that
+ * pin always carries.
+ *
+ * The mailbox is decided by the pure `planEnvelopeRotation` — inbound mail is undeliverable and is
+ * dropped, outbound mail is still sealed correctly and is left exactly as it is. Read the docblock
+ * there before changing this: re-addressing is not a missing feature, it is a destroyed seal.
+ */
+export async function rekeyMachineEnvelopes(oldId: string, newId: string): Promise<{ keyMoved: boolean; envelopesDropped: number }> {
+  if (!oldId || !newId || oldId === newId) return { keyMoved: false, envelopesDropped: 0 }
+  const [keys, envelopes] = await Promise.all([keysCollection(), envelopesCollection()])
+
+  let keyMoved = false
+  const key = await keys.findOne({ _id: oldId })
+  if (key) {
+    await keys.updateOne(
+      { _id: newId },
+      { $set: { publicKey: key.publicKey, updatedAt: key.updatedAt } },
+      { upsert: true },
+    )
+    await keys.deleteOne({ _id: oldId })
+    keyMoved = true
+  }
+
+  const pending = await envelopes
+    .find({ $or: [{ senderMachineId: oldId }, { recipientMachineId: oldId }] }, { projection: { _id: 1, senderMachineId: 1, recipientMachineId: 1 } })
+    .toArray()
+  const plan = planEnvelopeRotation(oldId, pending.map(d => ({
+    id: d._id, senderMachineId: d.senderMachineId, recipientMachineId: d.recipientMachineId,
+  })))
+  let envelopesDropped = 0
+  if (plan.drop.length > 0) {
+    const res = await envelopes.deleteMany({ _id: { $in: plan.drop } })
+    envelopesDropped = res.deletedCount ?? 0
+  }
+  return { keyMoved, envelopesDropped }
 }
 
 /** Acknowledge and delete. Scoped to the RECIPIENT: a machine can only ever delete its own mail,

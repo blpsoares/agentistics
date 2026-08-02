@@ -11,6 +11,7 @@ import { randomBytes } from 'node:crypto'
 import type { Collection } from 'mongodb'
 import { getMongoDb } from './mongo'
 import type { TagSource, TagWindow } from './tags-resolve'
+import { retargetMachineSources } from './rotate-identity'
 
 export interface TagDoc {
   _id: string
@@ -90,6 +91,33 @@ export async function updateTag(id: string, patch: {
     Object.keys($unset).length ? { $set, $unset } : { $set },
   )
   return res.matchedCount > 0
+}
+
+/**
+ * Re-point every tag that names a machine whose token was just rotated.
+ *
+ * A `machine` source stores the memberId (the token hash), so without this a rotation silently
+ * empties every tag pinned to that machine — the tag keeps its name and its card, and reports a
+ * fraction of itself, which is worse than an error. `filters` carry the same source shape and are
+ * migrated with `sources`. The pure `retargetMachineSources` decides; in particular it matches on
+ * the source TYPE as well as the value, so an `account` or `team` source that happens to carry the
+ * same string is never dragged along. Returns how many tags changed.
+ */
+export async function retargetMachineTagSources(oldId: string, newId: string): Promise<number> {
+  if (!oldId || !newId || oldId === newId) return 0
+  const col = await getTagsCollection()
+  const docs = await col.find({ $or: [{ 'sources.value': oldId }, { 'filters.value': oldId }] }).toArray()
+  let changed = 0
+  for (const doc of docs) {
+    const sources = retargetMachineSources(doc.sources ?? [], oldId, newId)
+    const filters = doc.filters ? retargetMachineSources(doc.filters, oldId, newId) : undefined
+    if (sources === doc.sources && (filters === undefined || filters === doc.filters)) continue
+    await col.updateOne({ _id: doc._id }, {
+      $set: { sources, ...(filters ? { filters } : {}), updatedAt: new Date() },
+    })
+    changed++
+  }
+  return changed
 }
 
 export async function deleteTag(id: string): Promise<boolean> {

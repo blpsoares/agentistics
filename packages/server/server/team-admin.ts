@@ -179,7 +179,8 @@ export async function handleRevokeToken(req: Request): Promise<Response> {
 
 /**
  * Rotate a member's token by its hash id. Mints a fresh token and migrates the
- * member's history (sessions + stats) to the new identity key.
+ * member's history (sessions, stats, workflows, tags, and the sealed-envelope key) to the new
+ * identity key. See `rotateToken` for the full list, including the one thing it cannot carry.
  * Body: { id: string }  — `id` is the SHA-256 hash of the current token.
  * Response: { token: string }  — the new plaintext token; store it now, it is not saved.
  * Returns 404 { error: 'not found' } if no token with that id exists.
@@ -206,14 +207,14 @@ export async function handleRotateToken(req: Request): Promise<Response> {
   }
 
   try {
-    const token = await rotateToken(id)
-    if (token === null) {
+    const rotated = await rotateToken(id)
+    if (rotated === null) {
       return new Response(JSON.stringify({ error: 'not found' }), {
         status: 404,
         headers: JSON_CT,
       })
     }
-    return new Response(JSON.stringify({ token }), {
+    return new Response(JSON.stringify({ token: rotated.token }), {
       status: 200,
       headers: JSON_CT,
     })
