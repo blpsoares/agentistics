@@ -1102,6 +1102,13 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
             <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
               {pt ? 'Este valor não será exibido novamente.' : 'This value will not be shown again.'}
             </div>
+            {/* The consequence nobody would guess: this machine's id on the central IS the hash of
+                its token, so rotating renames it. Its history follows, its identity does not. */}
+            <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+              {pt
+                ? 'O histórico acompanhou a máquina — sessões, estatísticas, workflows e tags. A identidade dela aqui vem do token, então as outras máquinas da conta a verão como uma máquina nova e a anunciarão.'
+                : 'History moved with the machine — sessions, stats, workflows and tags. Its identity here is derived from the token, so the account\'s other machines will see it as a new machine and announce it.'}
+            </div>
 
             {/* Rotated token */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
