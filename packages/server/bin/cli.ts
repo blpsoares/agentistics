@@ -99,12 +99,18 @@ Control center:
     Non-interactive stdin runs like 'agentop server'.
 
 Restart:
-  agentop restart [server|watch|central|--all] [--rebuild]
+  agentop restart [server|watch|central|--all] [--rebuild] [-y|-n] [--cache]
     Restart a running mode so it picks up new code (after an upgrade/pull) or config.
     server/watch bounce the systemd user service; central restarts its container.
     --all bounces every service currently up (local + central + machine), non-interactively.
     --rebuild recreates the Docker image/container (central + machine) instead of just bouncing
     it — use it to pick up new code in Docker deployments (native server: use bun bin / upgrade).
+    A --rebuild builds the image from SCRATCH (no Docker cache), so it cannot hand you back the
+    image it just replaced. That is slow — several minutes — so:
+      --cache      reuse Docker's layer cache instead (the fast path)
+      -y / --yes   re-run the central's interactive setup, without being asked
+      -n / --no    do not re-run it, without being asked (a rebuild's default when it has no
+                   terminal to ask on). Passing both -y and -n is refused.
 
 Setup:
   agentop setup
@@ -113,6 +119,9 @@ Setup:
 
 Central:
   agentop central <up|init|down|logs|status|restart|pull|setup-token|reset-password>
+    \`up\` accepts -y/--yes or -n/--no (answer "re-run interactive setup?" up front, for
+    unattended runs; both together is refused) and --no-cache/--cache (build the image from
+    scratch, or reuse Docker's layer cache — cached by default on a plain \`up\`).
     Manage the team central via Docker. In a repo checkout it uses central.sh; from the
     standalone binary it pulls the published image (ghcr.io/blpsoares/agentistics) and
     materializes a compose in ~/.agentistics/central — no clone required.
@@ -348,7 +357,21 @@ if (command === 'central') {
     console.log(HELP)
     process.exit(1)
   }
-  const code = await runCentral(action, args.slice(1))
+  // `up` takes the rebuild flags; every other action forwards its argv untouched (reset-password
+  // has its own --email/--password, and -n there must stay reset-password's business).
+  let extra = args.slice(1)
+  if (action === 'up') {
+    const { parseRebuildFlags, centralUpArgs } = await import('../server/rebuild-flags.ts')
+    const parsed = parseRebuildFlags(extra)
+    if (!parsed.ok) {
+      const { cliStrings } = await import('../server/cli-i18n.ts')
+      const { resolveLang } = await import('../server/cli-lang.ts')
+      console.error(cliStrings(await resolveLang()).flagConflict(parsed.conflict[0], parsed.conflict[1]))
+      process.exit(1)
+    }
+    extra = [...centralUpArgs(parsed.flags), ...parsed.rest]
+  }
+  const code = await runCentral(action, extra)
   process.exit(code)
 }
 
@@ -566,20 +589,32 @@ if (command === 'status') {
 }
 
 if (command === 'restart') {
-  // `--rebuild` recreates Docker images/containers (central + machine) instead of just bouncing.
+  // `--rebuild` recreates Docker images/containers (central + machine) instead of just bouncing,
+  // from scratch unless `--cache` says otherwise; `-y`/`-n` answer the central's setup prompt.
   const rebuild = args.includes('--rebuild')
-  const positional = args.filter(a => !a.startsWith('-'))
+  const { parseRebuildFlags, centralRebuildArgs } = await import('../server/rebuild-flags.ts')
+  const parsed = parseRebuildFlags(args.filter(a => a !== '--rebuild' && a !== '--all'))
+  if (!parsed.ok) {
+    const { cliStrings } = await import('../server/cli-i18n.ts')
+    const { resolveLang } = await import('../server/cli-lang.ts')
+    console.error(cliStrings(await resolveLang()).flagConflict(parsed.conflict[0], parsed.conflict[1]))
+    process.exit(1)
+  }
+  const flags = parsed.flags
+  const positional = parsed.rest.filter(a => !a.startsWith('-'))
   const modeArg = positional[0] ?? (args.includes('--all') ? 'all' : 'server')
   // `agentop restart --all [--rebuild]` — bounce (or rebuild) every service currently up.
   if (modeArg === 'all') {
     const { restartAllServices } = await import('../server/cli-start.ts')
-    process.exit(await restartAllServices(rebuild))
+    process.exit(await restartAllServices(rebuild, flags))
   }
   // The central runs in Docker — delegate to its own compose. `up` rebuilds/pulls + recreates;
   // `restart` just bounces the running container.
   if (modeArg === 'central') {
     const { runCentral } = await import('../server/cli-central.ts')
-    const code = await runCentral(rebuild ? 'up' : 'restart', [])
+    const code = rebuild
+      ? await runCentral('up', centralRebuildArgs(flags))
+      : await runCentral('restart', [])
     process.exit(code)
   }
   const { restartAutostart, isAutostartMode } = await import('../server/autostart.ts')
@@ -592,7 +627,7 @@ if (command === 'restart') {
   // is running (and rebuilds first when asked); `watch` has only the unit form.
   if (modeArg === 'server') {
     const { restartNativeServer } = await import('../server/cli-start.ts')
-    const r = await restartNativeServer(rebuild)
+    const r = await restartNativeServer(rebuild, flags)
     process.stdout.write(r.message + '\n')
     process.exit(r.ok ? 0 : 1)
   }

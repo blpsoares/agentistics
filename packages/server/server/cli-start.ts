@@ -54,6 +54,12 @@ import { PORT, WEB_PORT } from './config'
 import { readPreferences, writePreferences, resolveArchiveMode, type ArchiveMode } from './preferences'
 import { centralStartPlan, runCentral, type CentralStartPlan } from './cli-central'
 import { onOutputLine, publishLines, streamCommand } from './cli-stream'
+import {
+  centralRebuildArgs,
+  composeRebuildCommands,
+  rebuildFlags,
+  type RebuildFlags,
+} from './rebuild-flags'
 // The pure line decoder, by its own subpath: `@agentistics/tui/control` pulls in Ink and React, and
 // this module is loaded by every `agentop` subcommand.
 import { createLineDecoder } from '@agentistics/tui/control/stream'
@@ -734,6 +740,8 @@ export async function rebuildNativeBinary(mode: RunMode = {}): Promise<'built' |
 /** What a restart is doing, and how it is allowed to talk. */
 interface RestartMode extends RunMode {
   rebuild?: boolean
+  /** What the user said about the setup prompt and the Docker cache (`rebuild-flags.ts`). */
+  flags?: RebuildFlags
 }
 
 async function restartLocalSvc(s: CliStrings, mode: RestartMode = {}): Promise<void> {
@@ -761,21 +769,37 @@ async function restartLocalSvc(s: CliStrings, mode: RestartMode = {}): Promise<v
 async function restartCentralSvc(s: CliStrings, mode: RestartMode = {}): Promise<void> {
   process.stdout.write(`  ${D}${mode.rebuild ? s.rebuildingCentral : s.restartingCentral}${R}\n`)
   // `up` rebuilds/pulls the image and recreates; `restart` just bounces the running container.
-  // Neither asks anything on a central that is already RUNNING — which is the only way to get
-  // here — so both are safe to stream: central.env exists, so `central.sh up` skips its question.
-  await runCentral(mode.rebuild ? 'up' : 'restart', [], { streamed: mode.stream })
+  // A rebuild states its answer to central.sh's setup prompt rather than relying on a piped child
+  // happening to fail `[ -t 0 ]`, and rebuilds from scratch unless `--cache` was asked for.
+  if (!mode.rebuild) {
+    await runCentral('restart', [], { streamed: mode.stream })
+    return
+  }
+  const flags = rebuildFlags(mode.flags ?? {})
+  if (flags.cache === 'fresh') process.stdout.write(`  ${D}${s.rebuildNoCache}${R}\n`)
+  await runCentral('up', centralRebuildArgs(mode.flags ?? {}, { streamed: mode.stream }), {
+    streamed: mode.stream,
+  })
 }
 async function restartMachineSvc(s: CliStrings, mode: RestartMode = {}): Promise<void> {
   process.stdout.write(`  ${D}${mode.rebuild ? s.rebuildingMachine : s.restartingMachine}${R}\n`)
   if (mode.rebuild) {
     const compose = machineComposePath()
     if (await Bun.file(compose).exists()) {
-      const cmd = ['docker', 'compose', '-f', compose, 'up', '-d', '--build']
-      if (mode.stream) await streamCommand(cmd)
-      else await new Promise<void>(resolve => {
-        const child = spawn(cmd[0]!, cmd.slice(1), { stdio: 'inherit' })
-        child.on('exit', () => resolve())
-      })
+      const flags = rebuildFlags(mode.flags ?? {})
+      if (flags.cache === 'fresh') process.stdout.write(`  ${D}${s.rebuildNoCache}${R}\n`)
+      // A cacheless rebuild is `build --no-cache` THEN `up` — compose's `up` has no --no-cache.
+      // A failed build stops there: recreating on top of it would serve the OLD image while
+      // reporting a rebuild.
+      for (const cmd of composeRebuildCommands(compose, flags)) {
+        const code = mode.stream
+          ? await streamCommand(cmd)
+          : await new Promise<number>(resolve => {
+              const child = spawn(cmd[0]!, cmd.slice(1), { stdio: 'inherit' })
+              child.on('exit', c => resolve(c ?? 1))
+            })
+        if (code !== 0) break
+      }
       return
     }
     process.stderr.write(`  ${YE}${s.noComposeFrom(process.cwd())}${R}\n`)
@@ -814,7 +838,10 @@ async function restartRuntimes(
  * cockpit uses — and a server that is not running at all is reported as such instead of being
  * silently "restarted".
  */
-export async function restartNativeServer(rebuild = false): Promise<{ ok: boolean; message: string }> {
+export async function restartNativeServer(
+  rebuild = false,
+  flags: RebuildFlags = {},
+): Promise<{ ok: boolean; message: string }> {
   const s = cliStrings(await resolveLang())
   const { unitInstalled, restartAutostart } = await import('./autostart')
   if (await unitInstalled('server')) {
@@ -828,11 +855,11 @@ export async function restartNativeServer(rebuild = false): Promise<{ ok: boolea
   if (!(await isRuntimeUp('local'))) {
     return { ok: false, message: s.nothingRunning }
   }
-  await restartLocalSvc(s, { rebuild })
+  await restartLocalSvc(s, { rebuild, flags })
   return { ok: true, message: s.restartedDone }
 }
 
-export async function restartAllServices(rebuild = false): Promise<number> {
+export async function restartAllServices(rebuild = false, flags: RebuildFlags = {}): Promise<number> {
   const s = cliStrings(await resolveLang())
   const targets = await runningRuntimes()
   if (targets.length === 0) {
@@ -840,7 +867,7 @@ export async function restartAllServices(rebuild = false): Promise<number> {
     return 0
   }
   // No stream: this is a plain command on the user's own terminal, and inherited output is right.
-  await restartRuntimes(s, targets, { rebuild })
+  await restartRuntimes(s, targets, { rebuild, flags })
   process.stdout.write(`\n  ${GR}${s.restartedAll}${R}\n`)
   return 0
 }
