@@ -1,10 +1,11 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
+import { Info } from 'lucide-react'
 import type { SessionMeta, ModelUsage, ShareSource, SiblingRuleFact } from '@agentistics/core'
 import type { ArchiveMode } from '../ArchiveConsentModal'
 import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
 import { COPY, interpolate } from './copy'
-import { relTime, resolveRepoPanelMode, type CardState } from './cardState'
+import { relTime, resolveRepoPanelMode, type CardState, type CardTone } from './cardState'
 import type { ApplyPhase } from './repoPanelState'
 import type { ShareMode } from './sharePanelState'
 import type { ConnectionStatusEntry, ResyncProgress } from './statusTypes'
@@ -51,6 +52,93 @@ export function drawerBtn(isMobile: boolean, variant: 'primary' | 'secondary'): 
       ? { border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)' }
       : { border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)' }),
   }
+}
+
+/**
+ * The one place a tone becomes a colour on this card. `resolveCardStatusStyle` decides the
+ * SEVERITY; nothing in the JSX below may decide it from a state name.
+ *
+ * The fault border is deliberately mixed with the neutral border rather than drawn in the flat
+ * accent: the brief asks for a hint, not an alarm — the dot is the alarm.
+ */
+export function toneColor(tone: CardTone): string {
+  return {
+    ok: 'var(--accent-green)', warn: 'var(--anthropic-orange)',
+    error: 'var(--accent-red)', unknown: 'var(--text-tertiary)',
+  }[tone]
+}
+
+export function toneBorderColor(tone: CardTone | null): string {
+  if (tone === null) return 'var(--border)'
+  return `color-mix(in srgb, ${toneColor(tone)} 45%, var(--border))`
+}
+
+/** The "i" itself — a real 44px touch target on mobile, aria-labelled, never a bare glyph. */
+export function StatusInfoButton({ open, lang, isMobile, onToggle }: {
+  open: boolean; lang: 'pt' | 'en'; isMobile: boolean; onToggle: () => void
+}) {
+  const size = isMobile ? 44 : 26
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      aria-label={COPY.statusInfoBtn[lang]}
+      title={COPY.statusInfoBtn[lang]}
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        width: size, height: size, minWidth: size, minHeight: size, marginRight: 8,
+        borderRadius: 999, cursor: 'pointer', fontFamily: 'inherit',
+        border: `1px solid ${toneBorderColor('error')}`,
+        background: open ? 'color-mix(in srgb, var(--accent-red) 10%, transparent)' : 'transparent',
+        color: 'var(--accent-red)',
+      }}
+    >
+      <Info size={14} />
+    </button>
+  )
+}
+
+/**
+ * What the "i" reveals: which central, what the state is, and what to do about it. Rendered under
+ * the header row (never inside the expand button — a button inside a button is invalid), so it is
+ * readable on a COLLAPSED card: the state it explains is visible there too.
+ *
+ * Only ever mounted for the states `resolveCardStatusStyle` marks `info` — the two faults. The
+ * fallback branch below is the compiler's, not a third case.
+ */
+export function StatusInfoPanel({ state, central, endpoint, lang }: {
+  state: CardState; central: string; endpoint: string; lang: 'pt' | 'en'
+}) {
+  const unauthorized = state === 'unauthorized'
+  const stateWord = unauthorized ? COPY.unauthorized[lang] : COPY.reconnecting[lang]
+  const help = unauthorized ? COPY.authHelp[lang] : interpolate(COPY.offlineHelp[lang], { endpoint })
+  return (
+    <div
+      role="status"
+      style={{
+        margin: '0 14px 12px', padding: '10px 12px', borderRadius: 7,
+        border: `1px solid ${toneBorderColor('error')}`,
+        background: 'color-mix(in srgb, var(--accent-red) 7%, transparent)',
+        display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11.5, lineHeight: 1.5,
+      }}
+    >
+      <InfoRow label={COPY.statusInfoCentral[lang]} value={`${central} · ${endpoint}`} />
+      <InfoRow label={COPY.statusInfoState[lang]} value={stateWord} tone />
+      <InfoRow label={COPY.statusInfoWhat[lang]} value={help} />
+    </div>
+  )
+}
+
+/** Label above value: a 390px card has no room for a two-column pair, and the page body must never
+ *  scroll sideways — every value wraps inside its own box. */
+function InfoRow({ label, value, tone }: { label: string; value: string; tone?: boolean }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+      <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>{label}</span>
+      <span style={{ color: tone ? 'var(--accent-red)' : 'var(--text-secondary)', overflowWrap: 'anywhere' }}>{value}</span>
+    </div>
+  )
 }
 
 export function StatusLine({ state, status, lang }: { state: CardState; status: ConnectionStatusEntry | undefined; lang: 'pt' | 'en' }) {

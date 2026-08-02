@@ -41,9 +41,42 @@ export function resolveCardState(status: ConnectionStatusEntry | undefined): Car
   return 'connecting'
 }
 
-export const DOT: Record<CardState, 'ok' | 'warn' | 'error' | 'unknown'> = {
+/** The four severities the card can be in — the same vocabulary `StatusDot` already speaks. */
+export type CardTone = 'ok' | 'warn' | 'error' | 'unknown'
+
+/**
+ * The ONE severity per state. The dot, the border and the informational "i" are all read off it,
+ * which is the point: the card used to paint an orange border for `offline` alone, nothing at all
+ * for `unauthorized` (a strictly worse state) and nothing for `resyncing` despite it sharing
+ * `offline`'s tone — three severities, three unrelated treatments, no rule.
+ *
+ * `offline` is an `error`, not a `warn`: a central this machine cannot reach is a fault, and the
+ * product decision is that a fault shows a RED dot. `resyncing` keeps `warn` because work in
+ * progress is not a fault — and the header renders a spinner in its place anyway.
+ */
+export const TONE: Record<CardState, CardTone> = {
   checking: 'unknown', connecting: 'unknown', noIdentity: 'unknown',
-  connected: 'ok', offline: 'warn', unauthorized: 'error', resyncing: 'warn',
+  connected: 'ok', resyncing: 'warn', offline: 'error', unauthorized: 'error',
+}
+
+export interface CardStatusStyle {
+  tone: CardTone
+  /** The dot beside the name — the channel the status travels on. */
+  dot: CardTone
+  /** The tone of the card's status border, or `null` for none at all. Never a colour the dot does
+   *  not also have: the border is a quieter second reading of the SAME severity, never its own
+   *  signal. Quiet is the default — only a fault earns one. */
+  border: CardTone | null
+  /** Whether the card offers the informational affordance that says WHICH central, WHAT state and
+   *  what can be done about it. Shown exactly where a border is: it is the answer to "why is this
+   *  card red", which the card had no way of giving. */
+  info: boolean
+}
+
+export function resolveCardStatusStyle(state: CardState): CardStatusStyle {
+  const tone = TONE[state]
+  const fault = tone === 'error'
+  return { tone, dot: tone, border: fault ? tone : null, info: fault }
 }
 
 /** What occupies the repo-panel slot for a given card state. Pure and exported so the two rules

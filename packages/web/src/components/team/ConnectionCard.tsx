@@ -13,11 +13,12 @@ import { resolveCardIdentity } from './cardIdentity'
 import type { ConnectionStatusEntry } from './statusTypes'
 import {
   isBrokenEndpoint, resolveCardState, resolveRulePill, showsApplyQueuedBanner, resolveWritesDisabled,
-  showsElsewhereWarning, elsewhereLine, DOT,
+  showsElsewhereWarning, elsewhereLine, resolveCardStatusStyle,
 } from './cardState'
 import { resolveCardActionsHidden, type ApplyPhase } from './repoPanelState'
 import {
   DisconnectButton, mobileBtn, StatusLine, ResyncStrip, RepoPanelSlot,
+  StatusInfoButton, StatusInfoPanel, toneBorderColor,
 } from './ConnectionCardParts'
 import { PeersSection } from './PeersSection'
 import { NoticesModal } from './NoticesModal'
@@ -93,6 +94,9 @@ export function ConnectionCard({
   // owns it, and hides Disconnect / Sync now for as long as it is true.
   const [repoEditing, setRepoEditing] = useState(false)
   const [noticesOpen, setNoticesOpen] = useState(false)
+  // The status "i" is a per-card disclosure, closed by default: quiet is the default, and a panel
+  // that opened itself would be the alarm the border deliberately is not.
+  const [infoOpen, setInfoOpen] = useState(false)
   // Runs when the deep link names THIS card, and runs AGAIN each time it names it again — which
   // is why the prop is a sequence. Not a one-shot ref: the panel clears the query as soon as it
   // reads it, so a fresh `focusNoticesSeq` is itself the event.
@@ -164,11 +168,13 @@ export function ConnectionCard({
   }
 
   // A connection whose endpoint cannot be parsed offers Disconnect only — nothing else here may
-  // ever call `new URL()` on it. `hostOf` already guarantees this never throws.
+  // ever call `new URL()` on it. `hostOf` already guarantees this never throws. Its frame is the
+  // same discreet fault border every other fault gets: the card already states the problem in
+  // words, so the frame does not need to shout it too.
   if (brokenEndpoint) {
     return (
       <div style={{
-        border: '1px solid var(--accent-red)', borderRadius: 10, padding: 14,
+        border: `1px solid ${toneBorderColor('error')}`, borderRadius: 10, padding: 14,
         display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--bg-card)',
       }}>
         <div style={{ fontSize: 13, color: 'var(--text-primary)', fontWeight: 600 }}>{centralLabel}</div>
@@ -197,10 +203,13 @@ export function ConnectionCard({
   // COLLAPSED card, not buried three sections into the expanded one. Its count is the whole state,
   // and a changed key colours it as an alarm rather than a decision.
   const notices = noticeSummary(proposals, keyWarnings)
+  // The dot is the channel; a fault adds a discreet border in that SAME severity plus the "i" that
+  // says what the status is. Decided once, in `cardState.ts` — never from an `if` on a state name.
+  const statusStyle = resolveCardStatusStyle(state)
 
   return (
     <div style={{
-      border: `1px solid ${state === 'offline' ? 'var(--anthropic-orange)' : 'var(--border)'}`,
+      border: `1px solid ${toneBorderColor(statusStyle.border)}`,
       borderRadius: 10, background: 'var(--bg-card)', overflow: 'hidden',
     }}>
       <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -215,7 +224,7 @@ export function ConnectionCard({
       >
         {state === 'resyncing'
           ? <Loader2 size={10} style={{ color: 'var(--anthropic-orange)', animation: 'spin 1s linear infinite', flexShrink: 0 }} />
-          : <StatusDot state={DOT[state]} />}
+          : <StatusDot state={statusStyle.dot} />}
         <div style={{ minWidth: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
           {/* The card's subject is the CONNECTION, so its title is the central: the local nickname
              if one was ever set (CLI `--label`, or an older config), else the endpoint host. The
@@ -270,6 +279,14 @@ export function ConnectionCard({
         )}
         {expanded ? <ChevronDown size={20} style={{ flexShrink: 0 }} /> : <ChevronRight size={20} style={{ flexShrink: 0 }} />}
       </button>
+      {statusStyle.info && (
+        <StatusInfoButton
+          open={infoOpen}
+          lang={lang}
+          isMobile={isMobile}
+          onToggle={() => setInfoOpen(v => !v)}
+        />
+      )}
       {notices.total > 0 && onDismissProposal && (
         <button
           type="button"
@@ -290,6 +307,10 @@ export function ConnectionCard({
         </button>
       )}
       </div>
+
+      {statusStyle.info && infoOpen && (
+        <StatusInfoPanel state={state} central={names.central} endpoint={conn.endpoint} lang={lang} />
+      )}
 
       {expanded && (
         <div style={{ padding: '0 14px 14px', display: 'flex', flexDirection: 'column', gap: 12 }}>

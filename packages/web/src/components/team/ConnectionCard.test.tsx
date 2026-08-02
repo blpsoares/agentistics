@@ -3,6 +3,7 @@ import { NO_REPO_KEY } from '@agentistics/core'
 import {
   resolveCardState, resolveRepoPanelMode, showsApplyQueuedBanner, isBrokenEndpoint,
   resolveWritesDisabled, resolveRulePill, showsElsewhereWarning, elsewhereLine,
+  resolveCardStatusStyle, TONE, type CardState,
 } from './cardState'
 import { canEditRepos, type ApplyPhase } from './repoPanelState'
 import { resolvePanelBranch } from './ConnectionsPanel'
@@ -153,6 +154,73 @@ test('resolveWritesDisabled closes for every write-blocking reason, and only tho
   expect(resolveWritesDisabled('connected', false, false, 'submitting')).toBe(true)
   expect(resolveWritesDisabled('offline', false, false, 'idle')).toBe(false)
   expect(resolveWritesDisabled('connected', false, false, 'error')).toBe(false)
+})
+
+// --- the card's status signalling: one severity behind the dot, the border and the "i" ----------
+
+/**
+ * The whole set, listed once. Three states of different severity used to get three unrelated
+ * treatments: `offline` alone painted an orange border, `unauthorized` (strictly worse) painted
+ * none, and `resyncing` shared offline's tone while painting nothing either. The rule now is
+ * severity-derived, so these assertions are about the RULE, not about one state's name.
+ */
+const ALL_STATES: CardState[] = [
+  'checking', 'connecting', 'noIdentity', 'connected', 'offline', 'unauthorized', 'resyncing',
+]
+
+test('the state table and the tone table cover exactly the same states', () => {
+  // A state added without a tone would fall through to `undefined` and render an uncoloured dot.
+  expect(Object.keys(TONE).sort()).toEqual([...ALL_STATES].sort())
+})
+
+test('an unreachable central gets the RED dot, a border in that same tone, and the "i"', () => {
+  expect(resolveCardStatusStyle('offline')).toEqual({ tone: 'error', dot: 'error', border: 'error', info: true })
+})
+
+test('a rejected token is at least as severe as an unreachable one — the same treatment, not a quieter one', () => {
+  expect(resolveCardStatusStyle('unauthorized')).toEqual({ tone: 'error', dot: 'error', border: 'error', info: true })
+})
+
+test('the ordinary case is quiet: the dot carries the status and the card draws no status border', () => {
+  for (const state of ['connected', 'checking', 'connecting', 'noIdentity'] as const) {
+    const style = resolveCardStatusStyle(state)
+    expect(style.border).toBeNull()
+    expect(style.info).toBe(false)
+  }
+  expect(resolveCardStatusStyle('connected').dot).toBe('ok')
+  expect(resolveCardStatusStyle('checking').dot).toBe('unknown')
+})
+
+test('work in progress is not a fault: a running resync stays quiet, however long it takes', () => {
+  const style = resolveCardStatusStyle('resyncing')
+  expect(style.tone).toBe('warn')
+  expect(style.border).toBeNull()
+  expect(style.info).toBe(false)
+})
+
+test('the border tone is never a colour the dot does not have, and only a fault earns one', () => {
+  let bordered = 0
+  for (const state of ALL_STATES) {
+    const style = resolveCardStatusStyle(state)
+    expect(style.dot).toBe(style.tone)
+    if (style.border !== null) {
+      expect(style.border).toBe(style.tone)
+      expect(style.tone).toBe('error')
+      bordered++
+    }
+  }
+  // Exactly the two fault states, so a future state cannot quietly join them unnoticed.
+  expect(bordered).toBe(2)
+})
+
+test('the "i" appears exactly where a border does — it is the answer to "why is this card red"', () => {
+  let asserted = 0
+  for (const state of ALL_STATES) {
+    const style = resolveCardStatusStyle(state)
+    expect(style.info).toBe(style.border !== null)
+    asserted++
+  }
+  expect(asserted).toBe(ALL_STATES.length)
 })
 
 // --- the collapsed card's rules pill (review Important 3) ---------------------------------------
