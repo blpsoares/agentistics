@@ -180,16 +180,13 @@ describe('data scoping (BOLA)', () => {
 })
 
 describe('step-up ("sudo mode") coverage', () => {
-  it('protects every operation that destroys data or mints a credential', () => {
+  it('protects where a session becomes an owner, and the password every session rests on', () => {
     for (const [method, path] of [
-      ['DELETE', '/api/iam/accounts/abc'],
+      ['POST', '/api/iam/accounts'],
       ['PATCH', '/api/iam/accounts/abc'],
+      ['DELETE', '/api/iam/accounts/abc'],
       ['DELETE', '/api/iam/teams/t1'],
-      ['POST', '/api/team/tokens'],
-      ['POST', '/api/team/tokens/rotate'],
-      ['DELETE', '/api/team/tokens'],
-      ['POST', '/api/team/repos'],
-      ['DELETE', '/api/team/repos/x'],
+      ['POST', '/api/iam/change-password'],
     ] as const) {
       expect(requiresStepUp(method, path)).toBe(true)
     }
@@ -202,6 +199,20 @@ describe('step-up ("sudo mode") coverage', () => {
       ['GET', '/api/data'],
       ['POST', '/api/tags'],
       ['PUT', '/api/preferences'],
+    ] as const) {
+      expect(requiresStepUp(method, path)).toBe(false)
+    }
+  })
+
+  it('leaves enrolling a machine, a token and a repository alone — routine work, not damage', () => {
+    // Ruled deliberately: the prompt on these was pure friction on a growing fleet, and a prompt
+    // people clear on sight weakens the three that remain. `stepup.test.ts` pins the exact table.
+    for (const [method, path] of [
+      ['POST', '/api/iam/machines'],
+      ['DELETE', '/api/iam/machines'],
+      ['POST', '/api/team/tokens'],
+      ['POST', '/api/team/tokens/rotate'],
+      ['POST', '/api/team/repos'],
     ] as const) {
       expect(requiresStepUp(method, path)).toBe(false)
     }

@@ -3,7 +3,6 @@ import { GitBranch, Plus, Trash2, Copy, CheckCheck, AlertCircle, RefreshCw, Zap,
 import { repoShortName } from '@agentistics/core'
 import { copyText } from '../lib/clipboard'
 import { useIsMobile } from '../hooks/useIsMobile'
-import { stepUpFetch } from '../lib/stepup'
 
 export interface RepoInfo {
   remote: string
@@ -118,7 +117,7 @@ export function TeamRepos({ lang }: Props) {
     if (!url.trim() || registering) return
     setRegistering(true); setRegErr(null); setResult(null)
     try {
-      const res = await stepUpFetch('/api/team/repos', {
+      const res = await fetch('/api/team/repos', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url.trim() }),
       })
@@ -135,7 +134,7 @@ export function TeamRepos({ lang }: Props) {
     if (!window.confirm(t('removeConfirm', lang))) return
     setRemoving(r => ({ ...r, [remote]: true }))
     try {
-      await stepUpFetch('/api/team/repos', {
+      await fetch('/api/team/repos', {
         method: 'DELETE', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ remote }),
       })

@@ -608,9 +608,13 @@ absence was a real finding.
 - **Rate-limit anything that can be guessed.** `rate-limit.ts` keys hard blocks per IP and soft
   backoff per account — per-account lockout must stay soft, or it becomes a DoS against a
   colleague.
-- **Destructive operations require step-up.** Anything that deletes an account or team, edits an
-  account (role and memberships live there) or mints/rotates/revokes a credential must be listed
-  in `stepup.ts`; the web side calls `stepUpFetch`, never bare `fetch`. Reads stay on `fetch`.
+- **Step-up gates escalation, not paperwork.** `PROTECTED` in `stepup.ts` is deliberately three
+  entries: editing/creating/deleting an ACCOUNT (role and memberships live there — it is where a
+  session becomes an owner), deleting a TEAM, and CHANGING A PASSWORD. Enrolling a machine, a
+  token or a repository is routine work and is NOT gated — a prompt people meet daily is a prompt
+  they clear without reading, and every other prompt pays for it. `stepup.test.ts` asserts the
+  table EXACTLY, so adding an entry is a product decision, not a drive-by. Those three call
+  `stepUpFetch` on the web side, never bare `fetch`; everything else, reads included, uses `fetch`.
 - **`agentop doctor --exposed` must pass before exposing anything.** A check that could not be
   verified reports `fail`, never a reassuring `pass`.
 ## Terminal UI (`packages/tui`)

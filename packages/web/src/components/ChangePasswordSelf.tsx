@@ -4,8 +4,12 @@ import { AlertCircle, KeyRound, X, CheckCircle } from 'lucide-react'
 import type { Lang } from '@agentistics/core'
 import { Field } from './Login'
 import { PasswordHint } from './PasswordHint'
+import { stepUpFetch } from '../lib/stepup'
 
-/** Self-service, dismissible change-password modal (requires the current password).
+/** Self-service, dismissible change-password modal (requires the current password, and — through
+ *  `stepUpFetch` — a fresh step-up grant: for an MFA-enrolled account that means the CODE, which
+ *  is the whole point of gating this route. A thief holding the browser profile usually holds the
+ *  password too).
  *  Posts /api/iam/change-password { currentPassword, newPassword }; the server re-issues the
  *  session cookie, so no reload is needed. Escape / backdrop / close button dismiss it. */
 export function ChangePasswordSelf({ lang, onClose }: { lang: Lang; onClose: () => void }) {
@@ -33,7 +37,7 @@ export function ChangePasswordSelf({ lang, onClose }: { lang: Lang; onClose: () 
     if (disabled) return
     setSubmitting(true); setError(null)
     try {
-      const res = await fetch('/api/iam/change-password', {
+      const res = await stepUpFetch('/api/iam/change-password', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ currentPassword: current, newPassword: password }),
       })

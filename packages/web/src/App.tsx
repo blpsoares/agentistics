@@ -2004,7 +2004,18 @@ export default function AppLayout() {
     if (iam === undefined) return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
     if (iam.needsBootstrap) return <OwnerSetup lang={lang} onDone={() => { reloadIam(); refetch() }} />
     if (!iam.authed) return <Login onAuthed={() => { reloadIam(); refetch() }} />
-    if (iam.account?.mustChangePassword) return <ChangePassword onDone={() => { reloadIam(); refetch() }} />
+    // Changing a password is step-up-protected (`server/stepup.ts`), and this screen is returned
+    // BEFORE the app tree that mounts the prompter at the root — so it mounts its own. Without it
+    // the forced first-login change would answer 403 with nobody able to answer the challenge,
+    // which is a lockout on the one screen a new account cannot get past.
+    if (iam.account?.mustChangePassword) {
+      return (
+        <>
+          <ChangePassword onDone={() => { reloadIam(); refetch() }} />
+          <StepUpPrompt lang={lang} />
+        </>
+      )
+    }
     // An owner owes a second factor. The gate in index.ts is already refusing everything else,
     // so this is not an extra restriction — it is the screen that says WHY, and the only way the
     // owner can satisfy it. It also carries the recovery codes that make the account

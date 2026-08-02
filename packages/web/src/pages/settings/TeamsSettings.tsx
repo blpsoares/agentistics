@@ -145,7 +145,7 @@ export default function TeamsSettings() {
       }
       // Reassign chosen machines sequentially.
       for (const machineId of newMachineIds) {
-        const r = await stepUpFetch('/api/iam/machines', {
+        const r = await fetch('/api/iam/machines', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ reassignId: machineId, addTeamId: newId }),
         })
@@ -233,7 +233,7 @@ export default function TeamsSettings() {
 
   async function removeMachineFromTeam(machineId: string) {
     if (!manageTeamId) return
-    const res = await stepUpFetch('/api/iam/machines', {
+    const res = await fetch('/api/iam/machines', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reassignId: machineId, removeTeamId: manageTeamId }),
@@ -246,7 +246,7 @@ export default function TeamsSettings() {
   async function addMachinesToTeam() {
     if (addMachineIds.length === 0 || !manageTeamId) return
     for (const machineId of addMachineIds) {
-      const res = await stepUpFetch('/api/iam/machines', {
+      const res = await fetch('/api/iam/machines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reassignId: machineId, addTeamId: manageTeamId }),
