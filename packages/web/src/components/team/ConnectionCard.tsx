@@ -141,20 +141,26 @@ export function ConnectionCard({
   const state = resolveCardState(status)
   const brokenEndpoint = isBrokenEndpoint(conn.endpoint)
   const host = hostOf(conn.endpoint)
-  // The typing target of the disconnect confirmation, deliberately the PLAIN name (never the
-  // `host · user` disambiguation `names.central` may carry) — it has to be typeable on a phone.
-  const centralLabel = conn.label ?? host
 
   // Which name goes where is decided in ONE pure place — see `cardIdentity.ts`. The old inline
   // ternary here preferred `conn.label`, a local nickname, over `identity.machineName`, the name
   // the CENTRAL assigned this machine: the machine appeared to have renamed itself.
+  //
+  // The org comes from the probe when the card has been expanded, else from the status poll — the
+  // same value, and the poll is what lets a COLLAPSED card carry the org name too.
+  const org = identity?.org || status?.org
   const names = resolveCardIdentity({
     machineName: identity?.machineName,
     label: conn.label,
+    org,
     host,
     user: conn.user,
     duplicateHost,
   })
+  // The typing target of the disconnect confirmation: the PLAIN name (never the `name · user`
+  // disambiguation `names.central` may carry) — it has to be typeable on a phone, and it must be
+  // the name the card is actually titled with, or the dialog asks for a word that is not on screen.
+  const centralLabel = names.centralSource === 'org' ? (org ?? '').trim() : (conn.label ?? host)
 
   async function handleSyncNow() {
     if (syncing) return

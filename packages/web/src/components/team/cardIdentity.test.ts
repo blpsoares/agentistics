@@ -64,6 +64,54 @@ test('an explicit nickname wins over the duplicate-host disambiguation — the u
   expect(id.central).toBe('Client B')
 })
 
+/**
+ * The central's line is the ORG when there is one — "siths" is what a person calls that central;
+ * `100.109.247.39:48080` is where it happens to answer. The nickname still wins (it is the user's
+ * own explicit naming), and the DEFAULT placeholder never does: `TEAM_ORG` defaults to the literal
+ * string `default`, so adopting it blindly would title a whole fleet of centrals "default" —
+ * strictly worse than the addresses it replaced.
+ */
+test('the central is named by its ORG, not by the address it answers on', () => {
+  const id = resolveCardIdentity({ ...base, machineName: 'desktop-1', org: 'siths', user: 'lucas' })
+  expect(id.central).toBe('siths')
+  expect(id.centralSource).toBe('org')
+})
+
+test('the nickname still wins over the org — the user named that central themselves', () => {
+  const id = resolveCardIdentity({ ...base, org: 'siths', label: 'Client B' })
+  expect(id.central).toBe('Client B')
+  expect(id.centralSource).toBe('label')
+})
+
+test('the "default" org placeholder is not a name — a fleet of centrals must stay distinguishable', () => {
+  for (const org of ['default', 'DEFAULT', '  default  ']) {
+    const id = resolveCardIdentity({ ...base, org })
+    expect(id.central).toBe('central.example:48080')
+    expect(id.centralSource).toBe('host')
+  }
+})
+
+test('an absent or blank org falls back to the host, never to an empty title', () => {
+  expect(resolveCardIdentity({ ...base, org: '   ' }).central).toBe('central.example:48080')
+  expect(resolveCardIdentity({ ...base }).centralSource).toBe('host')
+})
+
+test('two connections to the same host are still told apart, now under the org name', () => {
+  const id = resolveCardIdentity({ ...base, duplicateHost: true, org: 'siths', user: 'lucas' })
+  expect(id.central).toBe('siths · lucas')
+  expect(id.centralSource).toBe('org')
+})
+
+test('naming the central by its org never touches the machine name, which is the central\'s to assign', () => {
+  const id = resolveCardIdentity({ ...base, org: 'siths', machineName: 'desktop-1' })
+  expect(id.machine).toBe('desktop-1')
+  expect(id.machineSource).toBe('central')
+  // …and with no central-assigned name it is still the HOST, never the org.
+  const pending = resolveCardIdentity({ ...base, org: 'siths' })
+  expect(pending.machine).toBe('central.example:48080')
+  expect(pending.machineSource).toBe('host')
+})
+
 test('the user is the account, reported separately from the machine, blank when unresolved', () => {
   expect(resolveCardIdentity({ ...base, machineName: 'desktop-1', user: 'lucas' }).user).toBe('lucas')
   expect(resolveCardIdentity({ ...base, machineName: 'desktop-1' }).user).toBe('')
