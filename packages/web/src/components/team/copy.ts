@@ -508,28 +508,39 @@ export const COPY = {
     en: 'Dismiss',
     pt: 'Dispensar',
   },
+  // "Machines that receive your rules" read as "these machines take on your rules" — the ONE thing
+  // this channel is built never to do. What travels is a NOTICE: the other machine raises a
+  // proposal its own owner may apply or ignore, and `proposalNotApplied` is the promise. The
+  // heading is what gets read, so the heading itself must not assert application — a disclaimer
+  // underneath does not repair a heading that already said the opposite.
   peersTitle: {
-    en: 'Machines that receive your rules',
-    pt: 'Máquinas que recebem suas regras',
+    en: 'Machines told when you change these rules',
+    pt: 'Máquinas avisadas quando você muda estas regras',
   },
+  // Named the mechanism ("the central hands over these keys", "fingerprint") to a person who has
+  // never read the threat model — the owner's question was literally "what is this fingerprint?".
+  // Says the PURPOSE instead: the same code on both screens is how you confirm a machine is yours,
+  // and it is the one check that does not rest on trusting the central (which can publish a key it
+  // controls under any machine id — docs/security.md). One sentence: this block is already long.
   peersBody: {
-    en: 'The central hands over these keys. If you do not recognise a machine, compare its fingerprint with the one that machine shows for itself.',
-    pt: 'A central fornece essas chaves. Se você não reconhece uma máquina, compare a impressão digital com a que aquela máquina mostra de si mesma.',
+    en: 'Each machine shows this same code for itself. If the two match, the machine really is yours — the one check that does not depend on the central.',
+    pt: 'Cada máquina mostra este mesmo código para si própria. Se os dois batem, a máquina é mesmo sua — a única checagem que não depende da central.',
   },
-  // The collapsed line: the FACT, one row. The explanation and the fingerprints live behind it —
-  // they are a verification tool used once, not standing information.
+  // The collapsed line: the FACT, one row. The explanation and the codes live behind it — they are
+  // a verification tool used once, not standing information. It carries the not-applied promise
+  // itself, because on a collapsed card this row is the whole of what gets read.
   peersCount: {
-    en: '{n} machine(s) receive your rules',
-    pt: '{n} máquina(s) recebem suas regras',
+    en: '{n} machine(s) told when you change these rules — nothing is applied there',
+    pt: '{n} máquina(s) avisada(s) quando você muda estas regras — nada é aplicado lá',
   },
   peersShow: {
-    en: 'Fingerprints',
-    pt: 'Impressões digitais',
+    en: 'Check they are yours',
+    pt: 'Conferir se são suas',
   },
   // A machine the central never named. It used to fall back to a slice of the machine id — which is
   // `sha256(token)`: derived from a credential, meaningless to a person, and another machine's
-  // internals on this machine's card. The fingerprint beside it is what identifies it for the one
-  // purpose this list serves.
+  // internals on this machine's card. The code beside it is what identifies it for the one purpose
+  // this list serves.
   peerUnnamed: {
     en: 'Unnamed machine',
     pt: 'Máquina sem nome',
@@ -538,9 +549,12 @@ export const COPY = {
     en: 'Machine',
     pt: 'Máquina',
   },
+  // The column header. "Fingerprint" is the mechanism's name, not the user's word for it, and a
+  // column that reintroduces the jargon undoes the sentence above it. The key name stays as-is —
+  // it is referenced by tests and components; only the rendered word changed.
   peersColFingerprint: {
-    en: 'Fingerprint',
-    pt: 'Impressão digital',
+    en: 'Code',
+    pt: 'Código',
   },
   peersSelf: {
     en: 'This machine',
@@ -571,8 +585,8 @@ export const COPY = {
     pt: 'A chave de uma máquina mudou — as mensagens dela não foram abertas',
   },
   keyChangedBody: {
-    en: 'The key published for {name} is not the one this machine pinned — a reinstall and a substituted key look the same from here, so nothing from it was decrypted. Compare the fingerprints on both machines.',
-    pt: 'A chave publicada para {name} não é a que esta máquina fixou — uma reinstalação e uma chave substituída são indistinguíveis daqui, então nada dela foi descriptografado. Compare as impressões digitais nas duas máquinas.',
+    en: 'The key published for {name} is not the one this machine pinned — a reinstall and a substituted key look the same from here, so nothing from it was decrypted. Compare the code shown for it on both machines.',
+    pt: 'A chave publicada para {name} não é a que esta máquina fixou — uma reinstalação e uma chave substituída são indistinguíveis daqui, então nada dela foi descriptografado. Compare o código mostrado para ela nas duas máquinas.',
   },
   keyChangedDismiss: {
     en: 'I checked — clear this warning',

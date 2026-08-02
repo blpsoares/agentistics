@@ -190,6 +190,57 @@ describe('the notices copy', () => {
   })
 })
 
+describe('the peers block says what actually happens, and what to do about it', () => {
+  // Defect 1. "Machines that receive your rules" reads as "these machines take on your rules" —
+  // the one thing this feature is built never to do. Sealed announcements raise a PROPOSAL on the
+  // other machine and nothing more. The heading is what gets read, so the heading itself must not
+  // assert application; a disclaimer underneath does not repair it.
+  it('never says the other machines RECEIVE your rules', () => {
+    for (const key of ['peersTitle', 'peersCount'] as const) {
+      expect(`${key}|${/receiv/i.test(COPY[key].en)}`).toBe(`${key}|false`)
+      expect(`${key}|${/receb/i.test(COPY[key].pt)}`).toBe(`${key}|false`)
+    }
+    // Same failure mode, same fix: the notification fired when a new peer is pinned.
+    const pinned = NOTIFICATION_TEXT['member.peer_pinned']!
+    expect(/receiv/i.test(`${pinned.en.title} ${pinned.en.message}`)).toBe(false)
+    expect(/receb/i.test(`${pinned.pt.title} ${pinned.pt.message}`)).toBe(false)
+  })
+
+  it('states in the collapsed row itself that nothing is applied there', () => {
+    expect(COPY.peersCount.en).toContain('nothing is applied there')
+    expect(COPY.peersCount.pt).toContain('nada é aplicado lá')
+    // The promise this whole channel rests on, still stated verbatim where the decision is made.
+    expect(COPY.proposalNotApplied.en).toContain('Nothing has changed on this machine')
+  })
+
+  // Defect 2. "Fingerprints" / "the central hands over these keys" names the mechanism to a user
+  // who has never read the threat model. The block must name the PURPOSE — a short code the same
+  // machine shows for itself, so comparing the two on both screens proves the machine is yours and
+  // not one the central invented. Short: the label plus one sentence.
+  it('names the purpose of the code, never the crypto mechanism', () => {
+    for (const key of ['peersShow', 'peersBody', 'peersColFingerprint'] as const) {
+      expect(`${key}|${/fingerprint/i.test(COPY[key].en)}`).toBe(`${key}|false`)
+      expect(`${key}|${/impress[ãa]o|impress[õo]es/i.test(COPY[key].pt)}`).toBe(`${key}|false`)
+    }
+    expect(/\bkeys\b/i.test(COPY.peersBody.en)).toBe(false)
+    expect(/\bchaves\b/i.test(COPY.peersBody.pt)).toBe(false)
+  })
+
+  it('makes the check DOABLE — the same code on the other machine, and it needs no trust in the central', () => {
+    expect(COPY.peersBody.en).toMatch(/code/i)
+    expect(COPY.peersBody.pt).toMatch(/c[óo]digo/i)
+    // What to do with it: compare, and what it settles.
+    expect(COPY.peersBody.en).toMatch(/match|compare/i)
+    expect(COPY.peersBody.pt).toMatch(/bat[ea]|compar/i)
+    // The one verification that does not require trusting the central — worth its one clause.
+    expect(COPY.peersBody.en).toMatch(/central/i)
+    expect(COPY.peersBody.pt).toMatch(/central/i)
+    // Still short: the owner has said twice this area has too much text.
+    expect(COPY.peersBody.en.length).toBeLessThan(200)
+    expect(COPY.peersBody.pt.length).toBeLessThan(200)
+  })
+})
+
 describe('notificationLink — a decision must be one click away', () => {
   it('sends the proposal notification to that connection\'s notices', () => {
     expect(notificationLink({ code: 'member.rules_proposed', meta: { connectionId: 'c_1' } }))

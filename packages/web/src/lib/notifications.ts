@@ -63,13 +63,15 @@ export const NOTIFICATION_TEXT: Record<string, { pt: Localized; en: Localized }>
     pt: { title: 'Outra máquina sua restringiu repositórios', message: '{name} enviou {count} proposta(s) de regra para {central}. Nada mudou aqui — abra a conexão para decidir.' },
     en: { title: 'Another of your machines restricted repositories', message: '{name} sent {count} rule proposal(s) for {central}. Nothing changed here — open the connection to decide.' },
   },
+  // Same failure mode COPY.peersTitle had: "will receive your rules" reads as "will apply them".
+  // A newly pinned machine is only TOLD when these rules change; whoever owns it decides.
   'member.peer_pinned': {
-    pt: { title: 'Nova máquina receberá suas regras', message: '{count} nova(s) máquina(s) da sua conta em {central} passará(ão) a receber suas regras de compartilhamento: {name}. Se você não reconhece, confira as impressões digitais nas configurações da conexão.' },
-    en: { title: 'A new machine will receive your rules', message: '{count} new machine(s) of your account on {central} will now receive your sharing rules: {name}. If you do not recognise it, check the fingerprints in the connection settings.' },
+    pt: { title: 'Nova máquina será avisada das suas regras', message: '{count} nova(s) máquina(s) da sua conta em {central} passará(ão) a ser avisada(s) quando você mudar suas regras de compartilhamento — nada é aplicado lá: {name}. Se você não reconhece, confira o código nas configurações da conexão.' },
+    en: { title: 'A new machine will be told about your rules', message: '{count} new machine(s) of your account on {central} will now be told when you change your sharing rules — nothing is applied there: {name}. If you do not recognise it, check the code in the connection settings.' },
   },
   'member.peer_key_changed': {
-    pt: { title: 'A chave de uma máquina mudou', message: 'A chave publicada para {name} em {central} não é a que esta máquina fixou. Nada foi descriptografado. Compare as impressões digitais nas duas máquinas.' },
-    en: { title: "A machine's key changed", message: 'The key published for {name} on {central} is not the one this machine pinned. Nothing was decrypted. Compare the fingerprints on both machines.' },
+    pt: { title: 'A chave de uma máquina mudou', message: 'A chave publicada para {name} em {central} não é a que esta máquina fixou. Nada foi descriptografado. Compare o código mostrado para ela nas duas máquinas.' },
+    en: { title: "A machine's key changed", message: 'The key published for {name} on {central} is not the one this machine pinned. Nothing was decrypted. Compare the code shown for it on both machines.' },
   },
   'member.resync_started': {
     pt: { title: 'Removendo dados da central', message: 'Removendo {count} sessão(ões) de {central} conforme as novas regras de repositório.' },
