@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   parseRebuildFlags,
   centralUpArgs,
+  centralRebuildArgs,
   rebuildFlags,
   composeRebuildCommands,
 } from './rebuild-flags'
@@ -83,6 +84,21 @@ describe('rebuildFlags', () => {
 
   test('an explicit --cache survives the default', () => {
     expect(rebuildFlags({ cache: 'reuse' }).cache).toBe('reuse')
+  })
+})
+
+describe('centralRebuildArgs', () => {
+  test('a streamed rebuild answers the prompt EXPLICITLY — it has no terminal to ask on', () => {
+    expect(centralRebuildArgs({}, { streamed: true })).toEqual(['--no', '--no-cache'])
+  })
+
+  test('on a real terminal an unasked question is still the user’s to answer', () => {
+    expect(centralRebuildArgs({})).toEqual(['--no-cache'])
+  })
+
+  test('what the user said wins over the streamed default', () => {
+    expect(centralRebuildArgs({ setup: 'yes' }, { streamed: true })).toEqual(['--yes', '--no-cache'])
+    expect(centralRebuildArgs({ cache: 'reuse' }, { streamed: true })).toEqual(['--no', '--cache'])
   })
 })
 

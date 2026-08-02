@@ -89,6 +89,20 @@ export function centralUpArgs(flags: RebuildFlags): string[] {
   return out
 }
 
+/**
+ * The flags a REBUILD hands `central.sh up`.
+ *
+ * A streamed run is the control center's: its child is piped and gets no stdin, so the prompt was
+ * only ever skipped because `[ -t 0 ]` happened to be false. It states the answer instead — the
+ * accident is not a contract, and `-n` is the honest one (a rebuild is not a request to re-run the
+ * setup wizard). On a real terminal an unasked question stays the user's to answer, exactly as
+ * before. The cache choice defaults to a full build either way.
+ */
+export function centralRebuildArgs(flags: RebuildFlags, opts: { streamed?: boolean } = {}): string[] {
+  const setup = flags.setup ?? (opts.streamed ? 'no' : undefined)
+  return centralUpArgs(rebuildFlags({ ...flags, setup }))
+}
+
 /** The same flags, read as a REBUILD: no cache unless the user explicitly asked to reuse it. */
 export function rebuildFlags(flags: RebuildFlags): RebuildFlags & { cache: CacheChoice } {
   return { ...flags, cache: flags.cache ?? 'fresh' }

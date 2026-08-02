@@ -53,6 +53,10 @@ export interface CliStrings {
   rebuildingLocal: string
   localRebuildHint: string
   localRebuildFailed: string
+  /** `-y` with `-n`, or `--cache` with `--no-cache`: say which two, and refuse. */
+  flagConflict: (a: string, b: string) => string
+  /** Said whenever a rebuild starts a cacheless build — the slow path must never be a surprise. */
+  rebuildNoCache: string
   restartedAll: string
   restartedDone: string
   noComposeFrom: (dir: string) => string
@@ -224,6 +228,8 @@ const EN: CliStrings = {
   rebuildingLocal: 'rebuilding the native server (bun run bin)…',
   localRebuildHint: '--rebuild needs the repo to rebuild the native server. Run this from the agentistics checkout, or `agentop upgrade`. Restarting the existing build.',
   localRebuildFailed: 'native rebuild failed — restarting the existing build.',
+  flagConflict: (a, b) => `${a} and ${b} contradict each other — pass one.`,
+  rebuildNoCache: 'building from scratch (no Docker cache) — this takes several minutes. Pass --cache to reuse it.',
   restartedAll: 'restarted all running services.',
   restartedDone: 'service restarted.',
   noComposeFrom: (dir) => `couldn't find docker-compose.machine.yml in ${dir}.`,
@@ -353,6 +359,8 @@ const PT: CliStrings = {
   rebuildingLocal: 'reconstruindo o server nativo (bun run bin)…',
   localRebuildHint: '--rebuild precisa do repo para reconstruir o server nativo. Rode de dentro do checkout do agentistics, ou use `agentop upgrade`. Reiniciando o build atual.',
   localRebuildFailed: 'falha ao reconstruir o server nativo — reiniciando o build atual.',
+  flagConflict: (a, b) => `${a} e ${b} se contradizem — passe apenas um.`,
+  rebuildNoCache: 'buildando do zero (sem cache do Docker) — leva vários minutos. Use --cache para reaproveitá-lo.',
   restartedAll: 'todos os serviços no ar foram reiniciados.',
   restartedDone: 'serviço reiniciado.',
   noComposeFrom: (dir) => `não achei docker-compose.machine.yml em ${dir}.`,

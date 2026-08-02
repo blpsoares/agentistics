@@ -27,6 +27,7 @@ import { dirname, join, resolve } from 'path'
 import { version as APP_VERSION } from '../../../package.json'
 import { input, confirm, select } from './cli-ui'
 import { createChunkSink, pumpStream } from './cli-stream'
+import { parseRebuildFlags } from './rebuild-flags'
 
 /** The central.sh subcommands this handler forwards / implements. */
 export const CENTRAL_ACTIONS = ['up', 'init', 'down', 'logs', 'status', 'restart', 'pull', 'setup-token', 'reset-password'] as const
@@ -612,12 +613,23 @@ async function runCentralStandalone(action: CentralAction, extraArgs: string[] =
   }
 
   // On `up`, ensure central.env exists (prompt if TTY) BEFORE deciding Docker vs native.
+  // `-y` / `-n` answer that question up front — the same words central.sh takes on the repo path,
+  // so `agentop central up -n` is unattended wherever it lands. (The cache flags mean nothing
+  // here: this path PULLS the published image, it never builds one.)
   if (action === 'up') {
+    const parsed = parseRebuildFlags(extraArgs)
+    const answer = parsed.ok ? parsed.flags.setup : undefined
     if (!existsSync(envFile)) {
+      if (answer === 'no') {
+        process.stderr.write(`${envFile} not found, and -n says not to create it. Run \`agentop central init\` first.\n`)
+        return 1
+      }
       if (!isTTY) { process.stderr.write(`${envFile} not found and stdin is not a TTY — run \`agentop central init\` first.\n`); return 1 }
       process.stdout.write(`${envFile} not found — let's create it.\n`)
       await initEnv(envFile)
-    } else if (isTTY) {
+    } else if (answer === 'yes') {
+      await initEnv(envFile)
+    } else if (!answer && isTTY) {
       const rerun = await confirm(`${envFile} exists. Re-run interactive setup?`, false)
       if (rerun) await initEnv(envFile)
     }
