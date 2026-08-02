@@ -96,6 +96,32 @@ export function noticeSummary(
 }
 
 /**
+ * A request, arriving from the bell's deep link, to open one connection's notices.
+ *
+ * It carries a SEQUENCE because it is an EVENT, not a state. The panel used to store the focused
+ * connection id and never clear it: the card's "focused?" prop went true once and stayed true, so
+ * the second bell click for that same connection changed nothing anywhere — no state change, no
+ * effect, no modal. The user's report ("the bell notification opened nothing") is that second
+ * click, and every one after it.
+ */
+export interface NoticeFocus {
+  connId: string
+  /** Strictly increasing. Distinct per request, which is what makes a repeat OBSERVABLE. */
+  seq: number
+}
+
+/** PURE. Fold a new deep-link request into the previous one. */
+export function nextNoticeFocus(prev: NoticeFocus | null, connId: string): NoticeFocus {
+  return { connId, seq: (prev?.seq ?? 0) + 1 }
+}
+
+/** PURE. The request's sequence AS SEEN BY one card — `0` when the request is for another card (or
+ *  there is none), which is the value a card treats as "never asked". */
+export function noticeFocusSeq(focus: NoticeFocus | null, connId: string): number {
+  return focus && focus.connId === connId ? focus.seq : 0
+}
+
+/**
  * What "Apply here" would do to THIS connection — the narrowing-only merge plus everything the
  * modal has to state. The connection's own stored rules are the baseline; `shareMode` absent reads
  * as `'denylist'`, like every other reader in this codebase.

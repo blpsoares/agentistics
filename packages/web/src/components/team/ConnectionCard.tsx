@@ -59,15 +59,19 @@ export interface ConnectionCardProps {
   selfFingerprint?: string
   onDismissProposal?: (connId: string, body: { proposalId?: string; keyWarningMachineId?: string }) => Promise<void>
   /** Arrived here from the bell (`notificationLink`): open this card AND its notices modal, so a
-   *  notification about a decision reaches that decision in one click. */
-  focusNotices?: boolean
+   *  notification about a decision reaches that decision in one click.
+   *
+   *  A SEQUENCE, not a boolean (`noticeFocusSeq`): `0` is "never asked", and every later request —
+   *  including a second one for this same card — is a strictly greater number. A boolean latched
+   *  true after the first deep link, and every bell click after that opened nothing. */
+  focusNoticesSeq?: number
 }
 
 export function ConnectionCard({
   conn, status, archiveMode, shareTargets, projectTargets, sessions, modelUsage, otelEnabled, duplicateHost, lang,
   onDisconnect, onSyncNow, onApplyRules,
   proposals = [], keyWarnings = [], peers = [], siblingRules = [], selfFingerprint = '', onDismissProposal,
-  focusNotices = false,
+  focusNoticesSeq = 0,
 }: ConnectionCardProps) {
   const isMobile = useIsMobile()
   const [expanded, setExpanded] = useState(false)
@@ -89,13 +93,14 @@ export function ConnectionCard({
   // owns it, and hides Disconnect / Sync now for as long as it is true.
   const [repoEditing, setRepoEditing] = useState(false)
   const [noticesOpen, setNoticesOpen] = useState(false)
-  // Runs when the deep link names THIS card. Not a one-shot ref: the panel clears the query as
-  // soon as it reads it, so `focusNotices` going true is itself the single event.
+  // Runs when the deep link names THIS card, and runs AGAIN each time it names it again — which
+  // is why the prop is a sequence. Not a one-shot ref: the panel clears the query as soon as it
+  // reads it, so a fresh `focusNoticesSeq` is itself the event.
   useEffect(() => {
-    if (!focusNotices) return
+    if (!focusNoticesSeq) return
     setExpanded(true)
     setNoticesOpen(true)
-  }, [focusNotices])
+  }, [focusNoticesSeq])
 
   const resyncSeenRef = useRef(false)
   const statusRef = useRef(status)
