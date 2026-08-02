@@ -8,8 +8,16 @@
 #
 # Usage: ./central.sh <command>
 #
-#   up        Ensure central.env exists (offer interactive setup), then build
+#   up [options]
+#             Ensure central.env exists (offer interactive setup), then build
 #             and (re)create the containers.                      [most common]
+#             Options (answer the prompts up front, for unattended runs):
+#               -y, --yes    re-run the interactive setup, without asking
+#               -n, --no     do NOT re-run it, without asking
+#               --no-cache   build the image from scratch (slow: a full install +
+#                            build inside the container). The rebuild paths
+#                            (`agentop restart … --rebuild`) pass this by default.
+#               --cache      reuse Docker's layer cache — the fast path
 #   init      (Re)generate central.env interactively — asks each value and can
 #             auto-generate the secrets with openssl.
 #   restart   Restart the app container WITHOUT rebuilding
@@ -297,10 +305,53 @@ case "$cmd" in
     init_env
     ;;
   up)
+    # Flags, so an unattended rebuild never stops on a question. The `agentop` side resolves them
+    # (rebuild-flags.ts) and hands this script an already-decided answer; the same words work by
+    # hand. Unset means "ask, as before" for the setup prompt and "cached build" for the image —
+    # a plain `up` must not start doing full no-cache builds.
+    setup_answer=""
+    build_cache=""
+    shift || true
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -y|--yes)
+          if [ "$setup_answer" = "no" ]; then
+            echo "-y and -n contradict each other — pass one." >&2; exit 1
+          fi
+          setup_answer="yes" ;;
+        -n|--no)
+          if [ "$setup_answer" = "yes" ]; then
+            echo "-y and -n contradict each other — pass one." >&2; exit 1
+          fi
+          setup_answer="no" ;;
+        --cache)
+          if [ "$build_cache" = "fresh" ]; then
+            echo "--cache and --no-cache contradict each other — pass one." >&2; exit 1
+          fi
+          build_cache="reuse" ;;
+        --no-cache)
+          if [ "$build_cache" = "reuse" ]; then
+            echo "--cache and --no-cache contradict each other — pass one." >&2; exit 1
+          fi
+          build_cache="fresh" ;;
+        *)
+          echo "Unknown option for up: $1" >&2
+          echo "Run './central.sh help' for usage." >&2
+          exit 1 ;;
+      esac
+      shift
+    done
+
     if [ ! -f "$ENV_FILE" ]; then
+      if [ "$setup_answer" = "no" ]; then
+        echo "$ENV_FILE not found, and -n says not to create it. Run './central.sh init' first." >&2
+        exit 1
+      fi
       echo "$ENV_FILE not found — let's create it."
       init_env
-    elif [ -t 0 ]; then
+    elif [ "$setup_answer" = "yes" ]; then
+      init_env
+    elif [ -z "$setup_answer" ] && [ -t 0 ]; then
       reply=""
       read -rp "$ENV_FILE exists. Re-run interactive setup? [y/N]: " reply || true
       case "$reply" in [yY]*) init_env ;; esac
@@ -321,7 +372,16 @@ case "$cmd" in
       echo "          BIND_IP=100.x.y.z      # or just your Tailscale address"
       echo
     fi
-    compose build
+    if [ "$build_cache" = "fresh" ]; then
+      echo
+      echo "  Building the image FROM SCRATCH (--no-cache): a full dependency install and frontend"
+      echo "  build inside the container, so this takes several minutes. Pass --cache to reuse"
+      echo "  Docker's layer cache when you only want the container recreated."
+      echo
+      compose build --no-cache
+    else
+      compose build
+    fi
     migrate_volume_ownership
     compose up -d --force-recreate --remove-orphans
     echo
