@@ -49,7 +49,12 @@ export function validateOwnerInput(
   const email = typeof b.email === 'string' ? b.email.trim() : ''
   const password = typeof b.password === 'string' ? b.password : ''
   const confirm = typeof b.confirm === 'string' ? b.confirm : ''
-  const token = typeof b.token === 'string' ? b.token : ''
+  // TRIMMED, unlike `password`/`confirm`. The setup token is a hex string the operator copies out
+  // of a terminal, which is exactly where a trailing newline or space rides along on a paste — and
+  // whitespace can never be part of a hex token, so trimming can only ever help. Untrimmed, the
+  // hash simply does not match and the user is told "invalid setup token" about a token that IS
+  // valid, with nothing on screen or in the log to distinguish it from a wrong one.
+  const token = typeof b.token === 'string' ? b.token.trim() : ''
   if (!token) return { ok: false, error: 'missing bootstrap token' }
   if (!name) return { ok: false, error: 'name is required' }
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { ok: false, error: 'valid email is required' }
