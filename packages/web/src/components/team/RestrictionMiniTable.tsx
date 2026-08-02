@@ -102,33 +102,53 @@ export function restrictionMiniTable(p: RestrictionMiniTableProps): React.ReactE
           </div>
         )
         : (
-          // The horizontal escape hatch lives HERE, on the table's own box — never on the page
-          // body, which may not scroll sideways at any width.
-          <div style={{ overflowX: 'auto', minWidth: 0 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, tableLayout: 'fixed' }}>
-              <thead>
-                <tr>
-                  {th(COPY.colHiddenWhat[lang], '42%')}
-                  {th(COPY.colHiddenOn[lang], '29%')}
-                  {th(COPY.colStillSharedOn[lang], '29%')}
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map(row => (
-                  <tr key={row.key} style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                    {td(<>
-                      <span style={{ fontWeight: 600, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>
-                        {labelOf(row)}
-                      </span>
-                      {' '}
-                      <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>{dimensionWord(row, lang)}</span>
-                    </>, 'what')}
-                    {td(machinesCell({ machines: row.restrictedBy, lang, cellMax, empty: COPY.rowNoOtherMachine[lang], noteWhenOnlySelf: COPY.rowNoOtherMachine[lang] }), 'on')}
-                    {td(machinesCell({ machines: row.sharedBy, lang, cellMax, empty: COPY.rowSharedNowhere[lang] }), 'shared')}
+          // The FRAME is what turns three aligned columns into one object on the card. Without it
+          // the table was a set of styled rows floating on the card's own background, which is the
+          // "it does not look like a table" complaint, twice.
+          <div style={TABLE_FRAME}>
+            {/* The horizontal escape hatch lives HERE, on the table's own box — never on the page
+                body, which may not scroll sideways at any width. */}
+            <div style={{ overflowX: 'auto', minWidth: 0 }}>
+              <table style={{
+                width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed',
+                fontSize: 12, lineHeight: 1.45,
+                // Below this the three columns crush into unreadable slivers; the box above
+                // scrolls instead, which is what an escape hatch is for.
+                minWidth: 440,
+              }}>
+                <thead>
+                  <tr>
+                    {th(COPY.colHiddenWhat[lang], '44%')}
+                    {th(COPY.colHiddenOn[lang], '28%')}
+                    {th(COPY.colStillSharedOn[lang], '28%')}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {shown.map((row, i) => (
+                    // Hairlines, and ONLY hairlines — a zebra on top of them is two separators
+                    // doing one job and reads as noise. The first row is already separated by the
+                    // header's own rule, so it takes none.
+                    <tr key={row.key} style={i === 0 ? undefined : { borderTop: '1px solid var(--border-subtle)' }}>
+                      {td(<>
+                        <span style={{
+                          display: 'block', fontWeight: 600, color: 'var(--text-primary)',
+                          overflowWrap: 'anywhere',
+                        }}>
+                          {labelOf(row)}
+                        </span>
+                        {/* The dimension in words, kept from the previous round: a repository and
+                            a project correlate across machines by different keys and are not
+                            interchangeable. As a chip it also gives the column a second rank the
+                            eye can follow down the page. */}
+                        <span style={DIMENSION_CHIP}>{dimensionWord(row, lang)}</span>
+                      </>, 'what')}
+                      {td(machinesCell({ machines: row.restrictedBy, lang, cellMax, empty: COPY.rowNoOtherMachine[lang], noteWhenOnlySelf: COPY.rowNoOtherMachine[lang] }), 'on')}
+                      {td(machinesCell({ machines: row.sharedBy, lang, cellMax, empty: COPY.rowSharedNowhere[lang] }), 'shared')}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
@@ -211,7 +231,12 @@ function machinesCell(o: {
       {extra > 0 && (
         // The full list stays reachable — a cell that drops names without saying so is the one
         // failure mode this column is not allowed to have.
-        <span title={names.join(', ')} style={{ color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
+        <span title={names.join(', ')} style={{
+          color: 'var(--text-tertiary)', whiteSpace: 'nowrap',
+          // The one place digits stack down a column, so the "+9" and the "+12" of two rows line
+          // up instead of jittering.
+          fontVariantNumeric: 'tabular-nums',
+        }}>
           {' '}{interpolate(COPY.moreMachines[lang], { n: extra })}
         </span>
       )}
@@ -240,18 +265,50 @@ function stackedField(o: {
   )
 }
 
+/**
+ * The frame. `overflow: hidden` is what makes the header band's corners follow the radius — a
+ * square-cornered band inside a rounded box reads as a mistake rather than as a table.
+ */
+const TABLE_FRAME: React.CSSProperties = {
+  border: '1px solid var(--border)',
+  borderRadius: 8,
+  overflow: 'hidden',
+  background: 'var(--bg-card)',
+  minWidth: 0,
+}
+
+/** The dimension word, as a quiet chip on its own line under the name. */
+const DIMENSION_CHIP: React.CSSProperties = {
+  display: 'inline-block', marginTop: 3,
+  padding: '0 5px', borderRadius: 4,
+  border: '1px solid var(--border-subtle)',
+  fontSize: 9.5, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase',
+  color: 'var(--text-tertiary)', whiteSpace: 'nowrap',
+}
+
+/**
+ * A header cell — the single strongest signal that something is a table, which is exactly what it
+ * was not doing: 10px tertiary text on the card's own background, separated from the first row by
+ * nothing. It now has its OWN ground and a rule under it, so it reads as a band rather than as a
+ * slightly paler first row.
+ */
 function th(label: string, width: string): React.ReactElement {
   return (
-    <th style={{
-      width, textAlign: 'left', padding: '0 6px 5px 0', fontSize: 10,
-      fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase',
+    <th scope="col" style={{
+      width, textAlign: 'left', padding: '7px 12px',
+      fontSize: 10, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase',
       color: 'var(--text-tertiary)',
+      background: 'color-mix(in srgb, var(--text-primary) 5%, transparent)',
+      borderBottom: '1px solid var(--border)',
+      whiteSpace: 'nowrap',
     }}>{label}</th>
   )
 }
 
+/** A body cell. The padding is the "not cramped" half of the complaint; `top` keeps a wrapped
+ *  machine list aligned with the name it belongs to instead of floating in the middle of the row. */
 function td(children: React.ReactNode, key: string): React.ReactElement {
-  return <td key={key} style={{ padding: '6px 6px 6px 0', verticalAlign: 'top', minWidth: 0 }}>{children}</td>
+  return <td key={key} style={{ padding: '9px 12px', verticalAlign: 'top', minWidth: 0 }}>{children}</td>
 }
 
 function pagerBtn(isMobile: boolean, disabled: boolean): React.CSSProperties {

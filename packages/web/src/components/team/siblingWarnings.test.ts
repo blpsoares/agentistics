@@ -216,19 +216,8 @@ test('the best-effort caveat travels WITH the sentence, wherever the sentence go
 test('the badge cannot widen its row — a long machine list must not scroll a 390px card', () => {
   // The row is `flexWrap: 'wrap'` and `#root` is `overflow-x: clip`, so text that refused to break
   // would not produce a scrollbar — it would silently vanish off the right edge, which is worse.
-  // The disclosure is now positioned out of flow (`.ag-hint-body`, index.css), so the row only
-  // ever contains the icon; the body still has to wrap inside its own box.
-  const el = WithheldBadge({
-    machines: [m('a-very-long-machine-name-from-somebody-elses-desk'), m('another-extremely-long-one')],
-    lang: 'en', dimension: 'project',
-  })
-  const body = findNode(el, n => n.props.className === 'ag-hint-body')
-  expect(body).not.toBeNull()
-  const style = body!.props.style as Record<string, unknown>
-  expect(style.overflowWrap).toBe('anywhere')
-  expect(style.maxWidth).toBe('100%')
-  expect(Object.keys(style).some(k => k === 'width' || k === 'minWidth')).toBe(false)
-
+  // The disclosure is positioned out of flow (`.ag-hint-body`, index.css), so the row only ever
+  // contains the icon.
   const css = readFileSync(join(import.meta.dir, '../../index.css'), 'utf8')
   // Out of flow, or it is still a row-widening block of text.
   expect(css).toContain('.ag-hint-body')
@@ -237,6 +226,59 @@ test('the badge cannot widen its row — a long machine list must not scroll a 3
   expect(css).toContain('.ag-hint:focus-within > .ag-hint-body')
   // 44px touch target, and only on mobile.
   expect(/@media \(max-width: 767px\)\s*\{[^@]*min-height:\s*44px/.test(css)).toBe(true)
+})
+
+/** The `.ag-hint-body` rule block, as written in index.css (the base one, outside any @media). */
+function hintBodyRule(css: string): string {
+  const at = css.indexOf('.ag-hint-body {')
+  expect(at).toBeGreaterThan(-1)
+  return css.slice(at, css.indexOf('}', at))
+}
+
+test('the bubble resolves to a READABLE width — never one column of single letters', () => {
+  // THE DEFECT. Out of flow was right; unsized was not. An absolutely positioned box with no
+  // width is shrink-to-fit, and `max-width: 100%` on it resolves against its containing block —
+  // `.ag-hint`, an inline-flex wrapper the size of a 13px icon. Cap ~17px, and with
+  // `overflow-wrap: anywhere` the browser is not merely allowed but REQUIRED to break inside a
+  // word: the sentence rendered as a vertical column of one letter per line.
+  const el = WithheldBadge({
+    machines: [m('a-very-long-machine-name-from-somebody-elses-desk'), m('another-extremely-long-one')],
+    lang: 'en', dimension: 'project',
+  })
+  const body = findNode(el, n => n.props.className === 'ag-hint-body')
+  expect(body).not.toBeNull()
+  const style = (body!.props.style ?? {}) as Record<string, unknown>
+  // Nothing inline may re-introduce either half of that: the width belongs to the CSS rule, which
+  // is the only place that can state it against the VIEWPORT rather than against the icon.
+  expect(style.maxWidth).toBeUndefined()
+  expect(style.overflowWrap).toBeUndefined()
+
+  const rule = hintBodyRule(readFileSync(join(import.meta.dir, '../../index.css'), 'utf8'))
+  // A floor in `ch` or `rem`: enough columns that a word fits on a line at all.
+  expect(/min-width:\s*\d+(\.\d+)?(ch|rem)/.test(rule)).toBe(true)
+  // …and a ceiling measured against the VIEWPORT, so it is a bubble and not a paragraph.
+  expect(/max-width:\s*min\([^)]*(vw|100vw|calc)/.test(rule)).toBe(true)
+  expect(/white-space:\s*normal/.test(rule)).toBe(true)
+  // `overflow-wrap` INHERITS. Stating it here is what stops an ancestor's `anywhere` — the row
+  // labels use it — from reaching in and breaking the sentence mid-word again.
+  expect(/overflow-wrap:\s*break-word/.test(rule)).toBe(true)
+  expect(/word-break:\s*normal/.test(rule)).toBe(true)
+})
+
+test('the bubble opens INWARD from whichever edge it is near, at every width', () => {
+  // A bubble that opens off-screen is the same bug wearing a different hat: `#root` is
+  // `overflow-x: clip` on mobile, so it does not even leave a scrollbar behind — it vanishes.
+  // The badge sits at the LEFT of its (wrapped) row, so it is anchored left on BOTH branches; the
+  // mobile rule used to flip it to `right: 0`, which pushed the box off the left edge instead.
+  const css = readFileSync(join(import.meta.dir, '../../index.css'), 'utf8')
+  // index.css holds several `@media (max-width: 767px)` blocks; the bubble's override is the LAST
+  // `.ag-hint-body` rule in the file, which is the one inside it.
+  const at = css.lastIndexOf('.ag-hint-body')
+  expect(at).toBeGreaterThan(css.indexOf('.ag-hint-body'))
+  const mobileBody = css.slice(at, css.indexOf('}', at))
+  expect(/right:\s*0/.test(mobileBody)).toBe(false)
+  // Whatever it caps at, it must leave the viewport's own gutter free of the box.
+  expect(/max-width:\s*calc\(100vw/.test(mobileBody)).toBe(true)
 })
 
 // --- the project dimension across machines -------------------------------------------------------

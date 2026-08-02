@@ -63,15 +63,13 @@ export function WithheldBadge({ machines, lang, dimension }: {
       >
         <Info size={13} />
       </button>
-      <span
-        className="ag-hint-body"
-        role="tooltip"
-        // The row is `flexWrap: 'wrap'` and `#root` is `overflow-x: clip`, so text that refused to
-        // break would not produce a scrollbar — it would silently vanish off the right edge. The
-        // body is positioned out of flow (index.css), so it can no longer widen its row at all,
-        // but it still has to wrap inside its own box on a 390px screen.
-        style={{ overflowWrap: 'anywhere', maxWidth: '100%' }}
-      >
+      {/* The bubble is sized ENTIRELY by `.ag-hint-body` (index.css) and carries no inline style.
+          That is the fix, not a tidy-up: `max-width: 100%` here resolved against `.ag-hint` — an
+          inline-flex wrapper the width of a 13px icon — so the box capped at ~17px, and the
+          inherited `overflow-wrap: anywhere` then broke inside words to fit it. The sentence came
+          out as a vertical column of single letters. A width can only be stated against the
+          VIEWPORT, and the stylesheet is the only place that can see one. */}
+      <span className="ag-hint-body" role="tooltip">
         <span style={{ display: 'block', color: 'var(--anthropic-orange)', fontWeight: 600 }}>{sentence}</span>
         {/* Load-bearing: an absent warning is never proof that no machine restricts this row. */}
         <span style={{ display: 'block', marginTop: 4, color: 'var(--text-tertiary)' }}>{caveat}</span>
