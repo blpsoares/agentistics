@@ -2,7 +2,8 @@ import { test, expect, describe, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildConfirmMessage, ReadView } from './SharedReposPanel'
-import { COPY } from './copy'
+import { MaximizedRestrictions } from './RestrictionMiniTable'
+import { COPY, interpolate } from './copy'
 import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
 import { NO_REPO_KEY, type SiblingRuleFact } from '@agentistics/core'
 
@@ -138,23 +139,40 @@ test('a hidden entry states WHAT it is: the name and its dimension, never one un
   expect(printed).toContain(COPY.rowTagProject.en)
 })
 
-test('a hidden entry names the OTHER machines the same restriction is applied on', () => {
+test('a hidden entry separates the machines that HIDE it from the ones that still share it', () => {
   const printed = texts(denylistView({
     siblingRules: [
       sibling({ machineId: 'm1', machineName: 'Alienware', sources: [{ type: 'repo', value: repoTarget.key }] }),
       sibling({ machineId: 'm2', machineName: 'Laptop B', sources: [] }),
     ],
   }))
-  const line = printed.join(' | ')
-  expect(line).toContain(COPY.colRestrictedOn.en)
-  expect(line).toContain('Alienware')
-  // …and never a machine that does NOT restrict it: that would be the opposite claim.
-  expect(line).not.toContain('Laptop B')
+  // The table's two machine columns, by name — not a single "elsewhere" sentence.
+  expect(printed).toContain(COPY.colHiddenWhat.en)
+  expect(printed).toContain(COPY.colHiddenOn.en)
+  expect(printed).toContain(COPY.colStillSharedOn.en)
+
+  // Cell-scoped, not line-scoped: the whole point is that the two machines land in DIFFERENT
+  // cells. Asserting against the concatenated row would pass even if they were swapped.
+  const hiddenCell = printed.find(t => t.includes('Alienware'))
+  expect(hiddenCell).toBeDefined()
+  // The machine that restricts it is in the "hidden on" cell, together with this machine…
+  expect(hiddenCell).toContain(COPY.peersSelf.en)
+  // …and the machine that does NOT restrict it is never in that cell — the opposite claim.
+  expect(hiddenCell).not.toContain('Laptop B')
+  // It is not dropped either: it belongs to the other column, which is new information the
+  // stacked rows could not carry at all.
+  const sharedCell = printed.find(t => t.includes('Laptop B'))
+  expect(sharedCell).toBeDefined()
+  expect(sharedCell).not.toContain('Alienware')
 })
 
 test('a row with no sibling information SAYS so — an empty cell would read as "nowhere else"', () => {
+  // In this scope THIS machine is always in the "hidden on" cell, so a cell reading only "This
+  // machine" would silently imply no other machine of yours restricts it. It cannot: it knows only
+  // what siblings announced. The words have to be there.
   const printed = texts(denylistView({ siblingRules: [] }))
   expect(printed).toContain(COPY.rowNoOtherMachine.en)
+  expect(texts(denylistView({ siblingRules: [], lang: 'pt' }))).toContain(COPY.rowNoOtherMachine.pt)
 })
 
 test('nothing in the block is alarm-coloured: every entry is there because the user chose it', () => {
@@ -225,5 +243,109 @@ describe('the rules editor is the drawer, not a bespoke inline panel', () => {
     expect(src).not.toContain('EyeOff')
     // The honesty guard the sibling column needs, stated where it qualifies something.
     expect(src).toContain('COPY.siblingWithholdBestEffort[lang]')
+  })
+})
+
+// --- the hidden block is a TABLE, with two sizes ------------------------------------------------
+
+/** A denylist view holding `n` hidden repositories, so paging has something to page. */
+function manyHidden(n: number, over: Partial<Parameters<typeof ReadView>[0]> = {}) {
+  const targets = Array.from({ length: n }, (_, i) => ({
+    // Zero-padded so lexicographic order (which the block sorts by) matches numeric order —
+    // otherwise `r10` sorts between `r1` and `r2` and the page boundaries are meaningless.
+    ...repoTarget, key: `github.com/acme/r${String(i).padStart(2, '0')}`, name: `acme/r${String(i).padStart(2, '0')}`,
+  }))
+  return ReadView({
+    targets, projectTargets: [],
+    sources: targets.map(t => ({ type: 'repo' as const, value: t.key })),
+    storedDenied: new Set(targets.map(t => t.key)), storedProjectPaths: new Set(),
+    mode: 'denylist', sessions: [], status: undefined, lang: 'en', otelEnabled: false,
+    siblingRules: [],
+    ...over,
+  })
+}
+
+test('the inline preview shows five rows and pages the rest — it never dumps the whole list into a card', () => {
+  const printed = texts(manyHidden(13)).join(' | ')
+  expect(printed).toContain('acme/r00')
+  expect(printed).toContain('acme/r04')
+  // Row six onwards is on the next page, not in the card.
+  expect(printed).not.toContain('acme/r05')
+  expect(printed).toContain(interpolate(COPY.tablePageOf.en, { page: 1, total: 3 }))
+})
+
+test('a list that fits on one page renders no pager at all', () => {
+  const printed = texts(manyHidden(3)).join(' | ')
+  expect(printed).toContain('acme/r02')
+  expect(printed).not.toContain('Page 1 of 1')
+})
+
+test('the caller may drive the page, and the window follows', () => {
+  const page2 = texts(manyHidden(13, {
+    table: { page: 1, size: 5, onPage: () => {}, onSize: () => {}, onMaximize: () => {} },
+  })).join(' | ')
+  expect(page2).toContain('acme/r05')
+  expect(page2).toContain('acme/r09')
+  expect(page2).not.toContain('acme/r00')
+  expect(page2).not.toContain('acme/r10')
+})
+
+test('the maximize affordance appears only when the caller can act on it', () => {
+  // Without table state (a bare render) there is nothing to open, so the button must not be a
+  // dead control sitting on the card.
+  expect(texts(manyHidden(13)).join(' | ')).not.toContain(COPY.tableMaximize.en)
+  const withState = texts(manyHidden(13, {
+    table: { page: 0, size: 5, onPage: () => {}, onSize: () => {}, onMaximize: () => {} },
+  })).join(' | ')
+  expect(withState).toContain(COPY.tableMaximize.en)
+})
+
+test('the maximized view is a dialog that says how to leave, and carries the caveat with it', () => {
+  const el = MaximizedRestrictions({
+    rows: [], labelOf: () => 'x', lang: 'en', isMobile: false,
+    page: 0, size: 10, onPage: () => {}, onSize: () => {}, onClose: () => {},
+  })
+  const props = (el as { props: Record<string, unknown> }).props
+  expect(props.role).toBe('dialog')
+  expect(props['aria-modal']).toBe('true')
+  const printed = texts(el).join(' | ')
+  expect(printed).toContain(COPY.tableRestore.en)
+  // The best-effort clause qualifies both machine columns and must travel with the table.
+  expect(printed).toContain(COPY.siblingWithholdBestEffort.en)
+})
+
+describe('the table\'s two sizes and its keyboard/mobile behaviour', () => {
+  const src = readFileSync(join(import.meta.dir, 'SharedReposPanel.tsx'), 'utf8')
+  const table = readFileSync(join(import.meta.dir, 'RestrictionMiniTable.tsx'), 'utf8')
+
+  it('esc dismisses the maximized view and focus returns where it came from', () => {
+    expect(src).toContain("e.key === 'Escape'")
+    // Not merely closed: a keyboard user dropped at the top of the document has lost their place.
+    expect(src).toContain('maximizeOrigin.current?.focus?.()')
+    expect(src).toContain('document.activeElement')
+  })
+
+  it('entering and leaving the maximized view re-seeds a size that mode actually offers', () => {
+    // Inline stops at 15 and maximized starts at 10; carrying a size across would leave the select
+    // showing a value it does not list (and, worse, 50 rows inside a card).
+    expect(src).toContain('PAGE_SIZE_OPTIONS.maximized[0]')
+    expect(src).toContain('PAGE_SIZE_OPTIONS.inline[0]')
+  })
+
+  it('a phone gets stacked cards, and the sideways scroll belongs to the table, never the page', () => {
+    expect(table).toContain('isMobile')
+    // The <table> element is desktop-only…
+    expect(/isMobile\s*\n?\s*\?/.test(table)).toBe(true)
+    // …and its overflow box is on the table's own container.
+    expect(table).toContain("overflowX: 'auto'")
+    // Touch targets on every control the phone can reach.
+    expect(table.match(/minHeight: isMobile \? 44/g)?.length).toBeGreaterThanOrEqual(2)
+    // A <select> under 16px zooms iOS Safari and breaks the sticky header.
+    expect(table).toContain('fontSize: isMobile ? 16')
+  })
+
+  it('still one builder — the maximized view does not re-derive what is hidden', () => {
+    expect(src.match(/buildRestrictionTable/g)?.length).toBeGreaterThanOrEqual(2)
+    expect(src.match(/scope: 'selfRestricted'/g)?.length).toBeGreaterThanOrEqual(2)
   })
 })

@@ -132,7 +132,7 @@ packages/web/src/ (React + Vite, port 47292 in dev)
       ├── PreferencesModal.tsx  → unified Settings modal with tabs: Preferences / Live / Install (Environment tab removed)
       ├── TeamLogin.tsx / TeamMembers.tsx / TeamSettings.tsx → central: password login, members panel (mint/rotate/revoke/rename + presence), team settings (interval/express, offline-data policy)
   ├── TeamRepos.tsx         → central admin panel rendered in its own **"GitHub Repositories"** Settings tab (central-only, separate from the Team tab): register/unregister repos (POST/DELETE /api/team/repos) + generates a ready-to-paste GitHub Actions workflow snippet + `gh` setup commands with the minted CI token
-      ├── team/restrictionTable.ts + NoticesModal.tsx → the notices modal is a TABLE of what is NOT shared with this central: rows are the restricted repositories/projects, cells name the machines that withhold each one (this machine included) and the ones that still share it. Built from the standing FACTS (`siblingRules`) plus this machine's live rules, so a dismissed proposal never erases a row; `bucketSharedBy` / `siblingsWithholding` / `planProposalApply` do all the arithmetic. Apply is per ROW (that same narrowing-only merge asked of a one-source denial) as well as per machine; a PROJECT row is actionable only when exactly one local project carries that folder name — a rule must name the exact path it denies. Allowlist machines withhold everything no row can name, so they are stated in words. **The connection card's own hidden block is the SAME builder** (`SharedReposPanel`'s `ReadView`), asked its narrower `scope: 'selfRestricted'` question — what THIS machine hides from THIS central — so the two surfaces can never disagree about what is hidden; it replaced red outlined chips that flattened repos and projects into one blob and never said where else a restriction was applied. A row with no sibling information says so IN WORDS (an empty cell reads as "nowhere else", a claim this machine cannot make), and the block carries no alarm colour: everything in it is there because the user chose it
+      ├── team/restrictionTable.ts + NoticesModal.tsx → the notices modal is a TABLE of what is NOT shared with this central: rows are the restricted repositories/projects, cells name the machines that withhold each one (this machine included) and the ones that still share it. Built from the standing FACTS (`siblingRules`) plus this machine's live rules, so a dismissed proposal never erases a row; `bucketSharedBy` / `siblingsWithholding` / `planProposalApply` do all the arithmetic. Apply is per ROW (that same narrowing-only merge asked of a one-source denial) as well as per machine; a PROJECT row is actionable only when exactly one local project carries that folder name — a rule must name the exact path it denies. Allowlist machines withhold everything no row can name, so they are stated in words. **The connection card's own hidden block is the SAME builder** (`SharedReposPanel`'s `ReadView`), asked its narrower `scope: 'selfRestricted'` question — what THIS machine hides from THIS central — so the two surfaces can never disagree about what is hidden; it replaced red outlined chips that flattened repos and projects into one blob and never said where else a restriction was applied. It renders through `RestrictionMiniTable.tsx` as a REAL table of three columns — **what** (name + the dimension in words), **hidden on**, **still shared on** — and no more: session counts and last-active describe the project's activity rather than the restriction, and the picker one click away already shows them. Paging is the pure, tested `tablePaging.ts` (`resolvePaging` CLAMPS both page and size on every render, so a page left pointing past the end after a rule is lifted corrects itself; `PAGE_SIZE_OPTIONS` are owned by the MODE — inline 5/10/15 inside a card that must hold at 390px, maximized 10/25/50 — and a size from the other mode narrows rather than widens). The maximized view is the same table in a dialog: `esc` closes it and focus returns to the control that opened it. The table and its cells are **plain functions, not components** (`restrictionMiniTable({…})`), so the tree stays inline in `ReadView`'s and the block's content remains reachable to the tests that walk it. A row with no sibling information says so IN WORDS, and so does a "hidden on" cell holding only this machine (an empty or self-only cell reads as "nowhere else", a claim this machine cannot make); `machineCell` truncates with a truthful `+N` rather than silently dropping names; and the block carries no alarm colour: everything in it is there because the user chose it. The marker for "withheld" wherever it appears is the shared `withheldStyle.ts` token — a WEAK red, never `var(--accent-red)` itself, which is the fault colour `offline`/`unauthorized`/a broken connection use on the same card
       ├── team/siblingWarnings.ts + SiblingWithheldBadge.tsx → the REVERSE sharing warning at the point of decision, in the rules picker: a per-row badge naming the sibling machines that withhold a row (readable BEFORE the switch is flipped) plus a `role="status"` block listing exactly the rows this edit STARTS sharing (the draft's was-off-now-on set). It **warns, never blocks**, and it always renders the best-effort caveat beside the list — this machine knows only what siblings announced to it, so **an absent warning is never proof that no machine restricts a repository**. The projects tab additionally carries the folder-name caveat and shows the sibling's own path, and its copy says **"a project with this name"** — never "this project", which would assert an identity a basename match never established
       ├── DeployCentral.tsx / PresenceFilter.tsx / MemberConnectionStatus.tsx → central deploy help, online/offline member filter, member-side connection pill
       └── NotificationToasts.tsx / NotificationBell.tsx / UpdateModal.tsx → auto-dismiss toasts, header bell (history + unread badge), mode-aware upgrade modal
@@ -191,9 +191,13 @@ clean and is then silently missing from half the product.
    models to `MODEL_PRICING` with **verified rates and a dated source comment**. Never guess a rate:
    a wrong price is worse than a missing one, and a missing one is visible — Settings → Pricing
    lists any model of yours that no source can price.
-6. **Live sessions** (`live-sessions.ts`) — add the process name to `PROCESS_HARNESS`; if the CLI
-   keeps its session file open, add a pattern to `FD_SESSION_PATTERNS` for exact identity; if it
-   resumes by id, add the flag to `ID_FLAGS` and the command to `RESUME_BY_HARNESS`
+6. **Live sessions** (`live-sessions.ts`) — add the process name to `PROCESS_HARNESS`, **and, if
+   the CLI is installed as a `#!/usr/bin/env node` shim, its package path to `SCRIPT_HARNESS`**:
+   such a process's `comm` and exe basename are both `node`, so name matching alone never sees it.
+   `codex` and `gemini` were invisible for exactly this reason — check `readlink -f $(command -v
+   <cli>)` rather than assuming a native binary, and re-check it when upstream changes packaging.
+   If the CLI keeps its session file open, add a pattern to `FD_SESSION_PATTERNS` for exact
+   identity; if it resumes by id, add the flag to `ID_FLAGS` and the command to `RESUME_BY_HARNESS`
    (`web/src/lib/resumeCommand.ts`) — verified from the tool's own `--help`, never guessed.
 7. **Frontend** — `HARNESS_LABELS`, `HARNESS_COLORS`, `HARNESS_PROVIDERS` and a full `HARNESS_INFO`
    entry (EN + PT) in `web/src/lib/harness.ts`.
@@ -890,6 +894,33 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
 - **Session sources**: `_source: 'meta'` sessions are the most complete; `'jsonl'` and `'subdir'` are fallbacks with partial data (no git line counts, no cache tokens)
 - **Binary mode**: `agentop server` sets `SERVE_STATIC=1`; `index.ts` then binds **two ports with one shared request handler** — `PORT` (47291) is the api + mcp endpoint, `WEB_PORT` (47292) serves the web dashboard (the URL you open). Same handler → the SPA on 47292 makes same-origin `/api/*` calls that resolve locally, so 91 stays api+mcp and 92 is the dashboard. The startup log lists `web` (92) above `api` (91)
 - **Machine in Docker**: `docker-compose.machine.yml` (repo root) runs a solo/member machine in a container — reuses the central image (minus Mongo/central mode), mounts the host harness dirs read-only + `~/.agentistics` read-write, host networking. Offered as the `docker` option in the control center's Services tab. Run the machine in Docker **or** natively, never both
+- **Live sessions are host-process detection, and every layer must stay honest about it.**
+  `live-sessions.ts` reads `/proc` on the machine serving the request; a central never does this
+  for members (it has no visibility into them) — members report their own snapshot over the
+  reverse-channel WebSocket, filtered by that connection's sharing rules exactly like their
+  metrics, so **a repository a member withholds does not appear on the central either**. Rules:
+  - **A process cwd is matched against `sessionAtCwd`, which accepts EITHER `current_cwd` or
+    `project_path` — never `sessionCwd()`.** The two disagree precisely in the worktree case this
+    repo mandates: `claude` is launched at the repo root and its kernel cwd stays there, while the
+    session records the worktree as `current_cwd`. Matching the more specific one alone matched
+    NEITHER end and reported every session closed. It stays EXACT on both paths — a prefix test
+    would let a process in `$HOME` claim every session on the machine.
+  - **An empty list is never rendered as a zero when detection is impossible.** `scanProcesses`
+    returns a `LiveUnavailableReason` (not Linux, no `/proc`, a container that cannot see the host,
+    one whose uid cannot read a host cwd, or the capability being off) and `liveEmptyNotice`
+    (`web/src/lib/sessionLive.ts`, pure, EN+PT) is the ONE place that turns it into a sentence —
+    the same N/A-versus-a-confident-0 rule `HARNESS_CAPABILITIES` applies to metrics.
+  - **A container needs `pid: host` AND the host user's uid.** `pid: host` alone yields the process
+    list but `/proc/<pid>/cwd` is ptrace-gated, and the image runs as uid 10001 while the
+    assistants run as the host user. `docker-compose.machine.yml` sets `pid: host` and documents
+    the `user:` line as a deliberate opt-in that trades the hardening for the feature.
+    `docker-compose.yml` (the central) deliberately has NO `pid: host` — its own processes are not
+    what anyone is asking about.
+  - **The /proc read is gated by `CAPS.localProcesses` inside the handler** (`readLocalLiveSnapshot`
+    in `index.ts`), NOT by registering the path in `capability-guard.ts`: `/api/live-sessions` also
+    carries the members' self-reported snapshots on a central, and a blanket 403 would take the
+    central's "Open now" down with the host read. `capability-guard.test.ts` pins that exemption
+    and asserts the module has exactly one import site.
 - **`packages/server/server/embedded-dist.generated.ts`** is in `.gitignore` — auto-generated, never commit it
 - **`packages/server/` modules** are server-only — never import them from `packages/web/src/` (Vite would try to bundle them and fail on Node/Bun APIs)
 - **`@agentistics/core`** is the shared package — import types, pricing, and formatters from there; never duplicate them inline

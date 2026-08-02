@@ -188,7 +188,7 @@ export function EditView({
 
       <div style={{
         display: 'flex', flexDirection: 'column', gap: 10,
-        ...(isMobile ? {} : { maxHeight: 360, overflowY: 'auto' }),
+        ...pickerListStyle(isMobile),
       }}>
         {blocked.length > 0 && <RowGroup label={interpolate(COPY.groupBlocked[lang], { n: grouped.blocked.length })} rows={blocked} lang={lang} mode={mode} partialRepoKeys={partialRepoKeys} withheldBy={withheldBy} onToggleRow={onToggleRow} />}
         {shared.length > 0 && <RowGroup label={interpolate(COPY.groupShared[lang], { n: grouped.shared.length })} rows={shared} lang={lang} mode={mode} partialRepoKeys={partialRepoKeys} withheldBy={withheldBy} onToggleRow={onToggleRow} />}
@@ -232,6 +232,56 @@ export function EditView({
   )
 }
 
+/**
+ * The scrolling region the row list lives in.
+ *
+ * It used to be `maxHeight: 360` on desktop — a constant, inside a drawer panel that is
+ * `height: 100%`. The list therefore stopped at 360px no matter how tall the drawer was: the row
+ * at the boundary was cut through the middle of its text and the space BELOW the cut stayed empty,
+ * so the cut read as the end of the list rather than as more content. Two nested scrollers (the
+ * panel and this box) made it worse, because the outer one absorbed the drag.
+ *
+ * Now it is relative to the viewport and it can shrink: `minHeight: 0` is what lets a flex child
+ * scroll instead of pushing its parent open, and `scrollbarGutter: 'stable'` keeps the track
+ * reserved so a partially visible row always sits next to a visible scrollbar.
+ *
+ * Mobile gets NO box at all. The row cap (`MOBILE_ROW_CAP`) plus "show all" already bound the list
+ * there, and a nested scroller inside a full-screen drawer is a region a thumb cannot reliably
+ * grab — the drawer's own body scrolls instead.
+ */
+export function pickerListStyle(isMobile: boolean): {
+  maxHeight?: string
+  overflowY?: 'auto'
+  minHeight?: number
+  scrollbarGutter?: 'stable'
+} {
+  if (isMobile) return {}
+  return { maxHeight: 'min(48vh, 520px)', overflowY: 'auto', minHeight: 0, scrollbarGutter: 'stable' }
+}
+
+/**
+ * The hairline between two rows of a group.
+ *
+ * A row is a name, a sessions/last-active line and sometimes a warning — three lines with no
+ * boundary between them and the next row, so the eye could not tell where one item ended. The rule
+ * goes on the TOP of every row but the first, so a group never ends in a rule pointing at nothing,
+ * and a one-row group draws none at all.
+ *
+ * `--border-subtle` on purpose: the group headings (BLOCKED / SHARED) are what divide the list into
+ * sections, and a rule as strong as those would compete with them instead of subdividing them.
+ */
+export function rowDivider(index: number, total: number): { borderTop?: string; paddingTop?: number } {
+  if (index === 0 || total <= 1) return {}
+  return { borderTop: '1px solid var(--border-subtle)', paddingTop: 8 }
+}
+
+/** The row's full identity, kept reachable after the host pill was dropped from the face of it.
+ *  `name` is `org/repo`, which two different hosts can both carry — the title is where that stays
+ *  distinguishable. The no-repository bucket has no key worth showing. */
+export function rowTitle(t: { kind: string; key: string; name: string }): string {
+  return t.kind === 'none' ? t.name : t.key
+}
+
 function RowGroup({ label, rows, lang, mode, partialRepoKeys, withheldBy, onToggleRow }: {
   label: string
   rows: EffectiveRow[]
@@ -247,7 +297,7 @@ function RowGroup({ label, rows, lang, mode, partialRepoKeys, withheldBy, onTogg
       <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.05em', textTransform: 'uppercase', margin: '2px 0 2px' }}>
         {label}
       </div>
-      {rows.map(r => {
+      {rows.map((r, i) => {
         const t = r.target
         const partial = !r.denied && partialRepoKeys.has(t.key)
         // A locked row in the unattributed bucket gets its OWN sentence: `mixedRepoWarn` describes
@@ -269,7 +319,14 @@ function RowGroup({ label, rows, lang, mode, partialRepoKeys, withheldBy, onTogg
           // `overflow-x: clip` on `#root` then hides it entirely rather than causing a real
           // horizontal scrollbar, so the badge silently vanishes instead of wrapping onto its own
           // line beneath the switch.
-          <div key={t.key} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <div
+            key={t.key}
+            title={rowTitle(t)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+              ...rowDivider(i, rows.length),
+            }}
+          >
             <RowSwitch
               on={!r.denied}
               onToggle={() => onToggleRow(t, r.denied)}
@@ -279,12 +336,6 @@ function RowGroup({ label, rows, lang, mode, partialRepoKeys, withheldBy, onTogg
               disabled={r.locked}
               dimmed={r.denied}
             />
-            {t.host && (
-              <span style={{
-                flexShrink: 0, fontSize: 10, padding: '2px 6px', borderRadius: 999,
-                background: 'var(--bg-elevated)', color: 'var(--text-tertiary)', border: '1px solid var(--border)',
-              }}>{t.host}</span>
-            )}
             <WithheldBadge machines={withheldBy?.get(t.key)} lang={lang} dimension="repo" />
           </div>
         )
@@ -360,7 +411,7 @@ export function ProjectEditView({
 
       <div style={{
         display: 'flex', flexDirection: 'column', gap: 10,
-        ...(isMobile ? {} : { maxHeight: 360, overflowY: 'auto' }),
+        ...pickerListStyle(isMobile),
       }}>
         {blocked.length > 0 && <ProjectRowGroup label={interpolate(COPY.groupBlocked[lang], { n: grouped.blocked.length })} rows={blocked} lang={lang} withheldBy={withheldBy} onToggleRow={onToggleRow} />}
         {shared.length > 0 && <ProjectRowGroup label={interpolate(COPY.groupShared[lang], { n: grouped.shared.length })} rows={shared} lang={lang} withheldBy={withheldBy} onToggleRow={onToggleRow} />}
@@ -408,7 +459,7 @@ function ProjectRowGroup({ label, rows, lang, withheldBy, onToggleRow }: {
       <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.05em', textTransform: 'uppercase', margin: '2px 0 2px' }}>
         {label}
       </div>
-      {rows.map(r => {
+      {rows.map((r, i) => {
         const t = r.target
         // `repoKey` is '' for a project in the unattributed bucket, and those rows became lockable
         // when the bucket itself did — so `lockedByRepo` would render "Blocked by repository "
@@ -420,7 +471,14 @@ function ProjectRowGroup({ label, rows, lang, withheldBy, onToggleRow }: {
               : COPY.lockedNoRepoWarn[lang])
           : `${interpolate(plural(PLURAL_COPY.sessionsN[lang], t.sessions), { n: t.sessions })}${t.lastActive ? ` · ${interpolate(COPY.lastActiveT[lang], { t: relTime(t.lastActive, pt) })}` : ''}`
         return (
-          <div key={t.key} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <div
+            key={t.key}
+            title={t.key}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+              ...rowDivider(i, rows.length),
+            }}
+          >
             <RowSwitch
               on={!r.denied}
               onToggle={() => onToggleRow(t, r.denied)}

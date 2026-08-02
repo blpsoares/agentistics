@@ -1,4 +1,6 @@
 import { test, expect } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { NO_REPO_KEY } from '@agentistics/core'
 import {
   resolveCardState, resolveRepoPanelMode, showsApplyQueuedBanner, isBrokenEndpoint,
@@ -269,4 +271,50 @@ test('the no-repo bucket uses its label, never a bare sentinel key', () => {
   const line = elsewhereLine({ repo: NO_REPO_KEY, machines: ['laptop-b'] }, 'no linked repository')
   expect(line).toBe('no linked repository — laptop-b')
   expect(line).not.toContain(NO_REPO_KEY)
+})
+
+// --- the disclosure caret ------------------------------------------------------------------------
+
+test('the accordion caret carries a theme token — an uncoloured icon renders black on the dark card', () => {
+  const src = readFileSync(join(import.meta.dir, 'ConnectionCard.tsx'), 'utf8')
+  const at = src.indexOf('? <ChevronDown')
+  expect(at).toBeGreaterThan(-1)
+  const caret = src.slice(at, src.indexOf('/>}', src.indexOf('ChevronRight', at)) + 3)
+  expect(caret).toContain('ChevronDown')
+  expect(caret).toContain('ChevronRight')
+  // The wrapping button is `background: transparent` and sets no `color`, so the icon inherited
+  // nothing and fell through to the browser default — black, invisible on the dark ground. This is
+  // a MISSING token, which is why it read as broken rather than merely off-palette.
+  expect(caret).toContain("color: 'var(--text-primary)'")
+  // Both states, or the card changes colour when you open it.
+  expect(caret.match(/var\(--text-primary\)/g)?.length).toBe(2)
+  // Structure, not a call to action: the accent is already spent on the notices button, "Add
+  // central" and the active-state cues on this same card.
+  expect(caret).not.toContain('anthropic-orange')
+  // Never a literal — the token is what makes it resolve under light as well as dark.
+  expect(caret).not.toContain('#fff')
+  expect(caret).not.toContain('white')
+})
+
+test('every disclosure caret on these surfaces resolves to a token, none to the browser default', () => {
+  // A caret that is one colour in one block and another two blocks down is the same inconsistency
+  // the row dividers were added to fix. The siblings inherit from a button that sets `color`;
+  // this asserts that inheritance still exists rather than assuming it.
+  const sites = [
+    ['./PeersSection.tsx', 'var(--text-secondary)'],
+    ['./SharedReposPanel.tsx', 'var(--text-tertiary)'],
+    ['./SharedReposEditView.tsx', 'var(--text-tertiary)'],
+  ] as const
+  let checked = 0
+  for (const [file, token] of sites) {
+    const src = readFileSync(new URL(file, import.meta.url), 'utf8')
+    // The caret sits inside a button whose style names a colour; find that button's declaration.
+    const idx = src.search(/\{(open|showStale) \? <ChevronDown/)
+    expect(idx).toBeGreaterThan(-1)
+    const before = src.slice(Math.max(0, idx - 420), idx)
+    expect(before).toContain(`color: '${token}'`)
+    checked++
+  }
+  expect(checked).toBe(sites.length)
+  expect(checked).toBe(3)
 })

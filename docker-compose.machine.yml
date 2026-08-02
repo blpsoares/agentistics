@@ -37,4 +37,19 @@ services:
     # Host networking so the member reaches the central (localhost or a tailnet address) and opens
     # the reverse-channel WebSocket, and so the web (47292) + api (47291) land directly on the host.
     network_mode: host
+    # Live sessions are detected by reading /proc. A container has its OWN pid namespace, so
+    # without this it sees only itself and "Open now" is structurally empty — an assistant running
+    # on the host is not merely absent, it is unobservable. `network_mode: host` does not help:
+    # the pid namespace is a separate isolation.
+    pid: host
+    # `pid: host` alone is NOT sufficient, and this is the part that surprises. The process LIST
+    # becomes visible, but `/proc/<pid>/cwd` and `/proc/<pid>/fd` are ptrace-gated: reading another
+    # user's links needs a matching uid or CAP_SYS_PTRACE. The image runs as uid 10001 (see
+    # Dockerfile) while the assistants run as the host user (usually 1000), so every cwd readlink
+    # fails and the panel stays empty. The dashboard now SAYS so rather than showing a confident
+    # zero — but to actually detect sessions, run the container as the host user by uncommenting
+    # the line below (set the ids to `id -u` / `id -g` if yours are not 1000). This trades the
+    # image's unprivileged-user hardening for the feature; that is a deliberate choice, not a
+    # default.
+    # user: "${AGENTISTICS_HOST_UID:-1000}:${AGENTISTICS_HOST_GID:-1000}"
     restart: unless-stopped

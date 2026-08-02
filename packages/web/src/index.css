@@ -298,3 +298,73 @@ html, body {
 @media (min-width: 860px)  { .ag-grid.cols-4, .ag-grid.cols-5, .ag-grid.cols-6 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (min-width: 1160px) { .ag-grid.cols-5, .ag-grid.cols-6 { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 @media (min-width: 1460px) { .ag-grid.cols-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+
+/* --- .ag-hint: an informational icon that discloses its sentence on demand ----------------------
+ *
+ * Used by the sharing picker's reverse-warning (SiblingWithheldBadge.tsx), which used to be an
+ * orange pill of text under the row and read as a label describing the row rather than a caution
+ * about it. The icon is the standing signal; the sentence appears on hover, on keyboard focus, and
+ * on tap — `:focus-within` covers the last two, so no JavaScript state is involved.
+ *
+ * The body is absolutely positioned, so it can never widen or reflow the row it belongs to.
+ */
+.ag-hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ag-hint-btn {
+  /* Always visible: this replaces something louder and must still be noticed BEFORE the switch
+   * beside it is flipped. Opacity is a hover affordance, never a way to hide it. */
+  opacity: 0.85;
+}
+
+.ag-hint-btn:hover,
+.ag-hint-btn:focus-visible {
+  opacity: 1;
+}
+
+.ag-hint-body {
+  position: absolute;
+  z-index: 40;
+  left: 0;
+  top: calc(100% + 6px);
+  width: max-content;
+  max-width: min(280px, 78vw);
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  font-size: 11.5px;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  /* `visibility` rather than `display`, so the box is measurable and transitions cleanly. */
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+
+.ag-hint:hover > .ag-hint-body,
+.ag-hint:focus-within > .ag-hint-body {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* Near the right edge the box would otherwise push the page wide; anchor it to the right instead.
+ * `#root` is `overflow-x: clip` on mobile, so an overflowing tooltip would silently disappear. */
+@media (max-width: 767px) {
+  .ag-hint-btn {
+    /* Touch target — 44px is the MOBILE number and is applied only here. */
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .ag-hint-body {
+    left: auto;
+    right: 0;
+    max-width: 78vw;
+  }
+}

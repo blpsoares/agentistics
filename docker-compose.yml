@@ -39,6 +39,14 @@ services:
       # tunnel or a local reverse proxy needs. Set BIND_IP=0.0.0.0 deliberately for LAN access —
       # a fresh install should never land on the network by accident.
       - "${BIND_IP:-127.0.0.1}:${APP_PORT:-48080}:47291"
+    # NOTE — deliberately NO `pid: host` here, unlike docker-compose.machine.yml. A central does
+    # not detect live sessions by reading /proc: it has no visibility into a member's machine at
+    # all, so members report their own snapshots over the reverse-channel WebSocket
+    # (team-agent-client.ts → team-live.ts). Giving the central the host pid namespace would only
+    # expose the aggregator box's own processes, which nobody is asking about, at the cost of the
+    # hardening below. A central's "Open now" being empty is a MEMBER-side question — check that
+    # the member's own panel works and that its sharing rules do not withhold the repository.
+    #
     # Hardening: unprivileged user, immutable root filesystem, no capabilities, no privilege
     # escalation. The only writable paths are the data volume and a small tmpfs.
     user: "10001:10001"

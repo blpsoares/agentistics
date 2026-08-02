@@ -1,5 +1,7 @@
 import { readdir, readlink, readFile } from 'fs/promises'
-import type { HarnessId, SessionMeta } from '@agentistics/core'
+import type { HarnessId, LiveUnavailableReason, SessionMeta } from '@agentistics/core'
+
+export type { LiveUnavailableReason }
 
 /** Backstop for a process that is alive, was used, and then abandoned for a very long time without
  *  ever exiting. The primary rule below (activity must post-date the process) does the real work;
@@ -31,10 +33,29 @@ function lastActivityMs(s: SessionMeta): number {
 
 /** Where a session IS, which is not always the project it belongs to: a session that moved into a
  *  git worktree keeps `project_path` at the directory it was opened in (so the worktree's work
- *  still counts as the same project) while its process runs in the worktree. The process cwd is
- *  matched against this, and against this alone — a moved session is in one place, not two. */
+ *  still counts as the same project) while the session records the worktree as `current_cwd`.
+ *  For DISPLAY, one of the two has to win and the more specific one does. Matching a process is a
+ *  different question with a different answer — use `sessionAtCwd`, which accepts either. */
 export function sessionCwd(s: SessionMeta): string {
   return s.current_cwd || s.project_path
+}
+
+/**
+ * Is this session sitting in the directory a process is running in?
+ *
+ * BOTH directories count, and that is the whole point. A worktree session has two of them and the
+ * process only ever has one — measured on a real machine, `claude` was launched at the repo root
+ * (its kernel cwd stays there for the life of the process) while the session recorded
+ * `current_cwd` = the worktree it moved into. Matching `sessionCwd()` alone — i.e. `current_cwd`
+ * whenever it exists — therefore matched NEITHER end: the process was at `/repo` and the only
+ * directory the session offered was `/repo/.claude/worktrees/…`. Every session of a workflow
+ * CLAUDE.md itself mandates (one worktree per session) was reported closed while plainly open.
+ *
+ * Deliberately EXACT on each of the two paths, never a prefix test: a process sitting in `$HOME`
+ * would otherwise claim every session on the machine.
+ */
+export function sessionAtCwd(s: SessionMeta, cwd: string): boolean {
+  return s.current_cwd === cwd || s.project_path === cwd
 }
 
 /** Process name (`/proc/<pid>/comm`) → the harness it belongs to. `comm` is truncated to 15 chars
@@ -60,6 +81,83 @@ export function harnessOf(comm: string, exePath: string | undefined): HarnessId 
   if (!exePath) return undefined
   const base = exePath.slice(exePath.lastIndexOf('/') + 1)
   return PROCESS_HARNESS[base]
+}
+
+/** Interpreters a harness may be installed as a script for. Their `comm` and their exe basename
+ *  are the RUNTIME's name, so neither says anything about which tool is running. */
+const JS_RUNTIMES = new Set(['node', 'node.exe', 'bun', 'bun.exe', 'deno', 'deno.exe'])
+
+/**
+ * Script path fragment → harness, for harnesses shipped as `#!/usr/bin/env node` shims.
+ *
+ * Taken from the real installs, never guessed: `codex` resolves to
+ * `…/node_modules/@openai/codex/bin/codex.js` and `gemini` to
+ * `…/node_modules/@google/gemini-cli/bundle/gemini.js`. Both therefore ran as `node`, matched
+ * nothing, and were invisible to live detection — the "N harnesses" half of the report. The
+ * npm-published names of the harnesses that currently ship a native binary here are included too,
+ * because a native install is a packaging choice that upstream can reverse at any release.
+ *
+ * Matched on the PACKAGE path, not the basename: a user's own `gemini.js` is not the Gemini CLI.
+ */
+const SCRIPT_HARNESS: ReadonlyArray<readonly [string, HarnessId]> = [
+  ['/@openai/codex', 'codex'],
+  ['/@google/gemini-cli', 'gemini'],
+  ['/@github/copilot', 'copilot'],
+  ['/@anthropic-ai/claude-code', 'claude'],
+  ['/kimi-code', 'kimi'],
+  ['/@moonshotai/kimi', 'kimi'],
+]
+
+/**
+ * The harness a process belongs to, from every signal the kernel offers: `comm`, the executable's
+ * basename, and — when those name a JS runtime — the script in argv.
+ *
+ * Pure, so the packaging rules above are testable without a `/proc` to read.
+ */
+export function harnessOfProcess(
+  comm: string,
+  exePath: string | undefined,
+  argv: readonly string[],
+): HarnessId | undefined {
+  const direct = harnessOf(comm, exePath)
+  if (direct) return direct
+  const exeBase = exePath ? exePath.slice(exePath.lastIndexOf('/') + 1) : ''
+  if (!JS_RUNTIMES.has(comm) && !JS_RUNTIMES.has(exeBase)) return undefined
+  // argv[0] is the runtime; the script is what follows. Scan the rest so a `node --flag script`
+  // invocation is still identified.
+  for (const arg of argv.slice(1)) {
+    if (arg.startsWith('-')) continue
+    for (const [fragment, harness] of SCRIPT_HARNESS) {
+      if (arg.includes(fragment)) return harness
+    }
+  }
+  return undefined
+}
+
+/**
+ * Pure: decide whether an empty scan means "nobody is working" or "this configuration structurally
+ * cannot see the host's processes".
+ *
+ * An empty list rendered as an empty panel is the confident `0` CLAUDE.md forbids for harness
+ * capabilities, and it is worse here: a containerized machine or central has NO way to observe a
+ * host process, so the panel was permanently, silently wrong.
+ */
+export function detectionUnavailable(o: {
+  platform: string
+  procReadable: boolean
+  /** Processes visible besides this one's own. A container without `pid: host` sees only itself. */
+  foreignPids: number
+  /** A process was identified as a harness but its cwd link could not be read. */
+  cwdDenied: boolean
+}): LiveUnavailableReason | null {
+  if (o.platform !== 'linux') return 'not-linux'
+  if (!o.procReadable) return 'no-proc'
+  if (o.foreignPids === 0) return 'container-isolated'
+  // Reading `/proc/<pid>/cwd` of another user's process needs a matching uid or CAP_SYS_PTRACE.
+  // The container image runs as uid 10001 while the host user is typically 1000, so `pid: host`
+  // on its own yields a full process list whose cwds are all unreadable.
+  if (o.cwdDenied) return 'permission-denied'
+  return null
 }
 
 /** Where each harness keeps a session file open while it is running. An fd pointing into that path
@@ -162,31 +260,56 @@ export function sessionIdFromArgv(argv: string[]): string | undefined {
 
 /** Read every running harness process (Linux /proc only): which harness it is, its cwd, the session
  *  it resumed when argv says so, and when it started. [] on non-Linux hosts or unreadable /proc. */
-export async function harnessProcesses(): Promise<HarnessProcess[]> {
-  if (process.platform !== 'linux') return []
+export async function scanProcesses(): Promise<{
+  procs: HarnessProcess[]
+  unavailable: LiveUnavailableReason | null
+}> {
+  if (process.platform !== 'linux') {
+    return { procs: [], unavailable: detectionUnavailable({ platform: process.platform, procReadable: false, foreignPids: 0, cwdDenied: false }) }
+  }
   let pids: string[]
-  try { pids = await readdir('/proc') } catch { return [] }
+  try { pids = await readdir('/proc') } catch {
+    return { procs: [], unavailable: 'no-proc' }
+  }
   const btimeSec = await bootTimeSec()
   const hz = 100 // USER_HZ is 100 on every Linux this runs on; only used to scale start ticks.
   const procs: HarnessProcess[] = []
-  await Promise.all(pids.filter(p => /^\d+$/.test(p)).map(async pid => {
+  const numeric = pids.filter(p => /^\d+$/.test(p))
+  const own = String(process.pid)
+  // A container without `pid: host` sees only its own process tree, so this is what separates
+  // "nothing is running" from "this configuration cannot see the host at all".
+  const foreignPids = numeric.filter(p => p !== own).length
+  let cwdDenied = false
+  await Promise.all(numeric.map(async pid => {
     try {
       const comm = (await readFile(`/proc/${pid}/comm`, 'utf-8')).trim()
       const exePath = await readlink(`/proc/${pid}/exe`).catch(() => undefined)
-      const harness = harnessOf(comm, exePath)
-      if (!harness) return
-      const cwd = await readlink(`/proc/${pid}/cwd`)
-      if (!cwd) return
-      // argv is NUL-separated; a trailing NUL yields an empty last element.
+      // argv is NUL-separated; a trailing NUL yields an empty last element. Read BEFORE the
+      // harness test now, because a script-installed harness is identified from argv.
       const argv = (await readFile(`/proc/${pid}/cmdline`, 'utf-8').catch(() => ''))
         .split('\0').filter(Boolean)
+      const harness = harnessOfProcess(comm, exePath, argv)
+      if (!harness) return
+      // A harness we could identify but whose cwd we may not read is the signature of a container
+      // running under a uid that cannot ptrace the host user — record it rather than skipping in
+      // silence, or the panel reports an empty, confident zero.
+      const cwd = await readlink(`/proc/${pid}/cwd`).catch(() => { cwdDenied = true; return '' })
+      if (!cwd) return
       const startedMs = await processStartMs(pid, btimeSec, hz)
       // An open session file beats argv: it is what the process is writing to right now.
       const sessionId = (await sessionIdFromFds(pid, harness)) ?? sessionIdFromArgv(argv)
       procs.push({ harness, cwd, sessionId, startedMs })
     } catch { /* process exited or not ours — ignore */ }
   }))
-  return procs
+  const unavailable = procs.length > 0
+    ? null
+    : detectionUnavailable({ platform: 'linux', procReadable: true, foreignPids, cwdDenied })
+  return { procs, unavailable }
+}
+
+/** Read every running harness process (Linux /proc only). [] on non-Linux or unreadable /proc. */
+export async function harnessProcesses(): Promise<HarnessProcess[]> {
+  return (await scanProcesses()).procs
 }
 
 /** Back-compat: the cwds of running `claude` processes only. Prefer `harnessProcesses()`. */
@@ -267,7 +390,7 @@ export function resolveOpenSessionIds(
   for (const group of groups.values()) {
     const { harness, cwd } = group[0]!
     const candidates = sessions
-      .filter(s => s.harness === harness && sessionCwd(s) === cwd && !open.has(s.session_id))
+      .filter(s => s.harness === harness && sessionAtCwd(s, cwd) && !open.has(s.session_id))
       .filter(isFresh)
       .sort((a, b) => lastActivityMs(b) - lastActivityMs(a))
     // Strictest bound first, so the newest process claims the newest session it could be driving
@@ -307,6 +430,9 @@ export interface LiveSnapshot {
   liveSessionIds: string[]
   /** Running assistants that could not be matched to any persisted session. */
   liveProcesses: UnmatchedProcess[]
+  /** Set when this configuration cannot observe host processes AT ALL. An empty list then means
+   *  "we cannot know", not "nobody is working", and the UI must say which. */
+  liveUnavailable?: LiveUnavailableReason
 }
 
 /** Split the running processes into "drives a known session" and "running but nothing on disk yet".
@@ -322,14 +448,14 @@ export function resolveLiveSnapshot(
   // A process is "accounted for" when one of the open sessions could plausibly be the one it drives:
   // its own id, or — for an anonymous process — an open session of the same harness and project.
   // Counting per group keeps three panels in one project from being covered by a single session.
-  const remaining = new Map<string, number>()
-  for (const id of open) {
-    const s = sessions.find(x => x.session_id === id)
-    if (s) {
-      const key = `${s.harness} ${sessionCwd(s)}`
-      remaining.set(key, (remaining.get(key) ?? 0) + 1)
-    }
-  }
+  // Accounted for by the SAME predicate that opened them (`sessionAtCwd`), never by a key built
+  // from `sessionCwd()`. A worktree session offers two directories and the process has one, so a
+  // string key made them disagree: the session showed as live AND its process was reported again
+  // as an unmatched "starting" card — the one open assistant counted twice.
+  const openSessions = [...open]
+    .map(id => sessions.find(x => x.session_id === id))
+    .filter((s): s is SessionMeta => !!s)
+  const claimed = new Set<string>()
 
   const known = new Set(sessions.map(s => s.session_id))
   const graceFloor = nowMs - LIVE_STARTUP_GRACE_MIN * 60_000
@@ -340,9 +466,11 @@ export function resolveLiveSnapshot(
     // was made above with better evidence than "a process exists" — re-surfacing it here would put
     // the restored-but-unused panels straight back into the list.
     if (p.sessionId && known.has(p.sessionId)) continue
-    const key = `${p.harness} ${p.cwd}`
-    const left = remaining.get(key) ?? 0
-    if (!p.sessionId && left > 0) { remaining.set(key, left - 1); continue }
+    if (!p.sessionId) {
+      const match = openSessions.find(s =>
+        !claimed.has(s.session_id) && s.harness === p.harness && sessionAtCwd(s, p.cwd))
+      if (match) { claimed.add(match.session_id); continue }
+    }
     // Nothing on disk to attribute. That is only believable while the assistant is still starting
     // up; a process running for hours with no conversation to show is idle or leaked, not warming up.
     if ((p.startedMs ?? 0) < graceFloor) continue
@@ -358,5 +486,7 @@ export function resolveLiveSnapshot(
 
 /** Read the processes and produce the full snapshot in one call. */
 export async function getLiveSnapshot(sessions: SessionMeta[]): Promise<LiveSnapshot> {
-  return resolveLiveSnapshot(await harnessProcesses(), sessions)
+  const { procs, unavailable } = await scanProcesses()
+  const snap = resolveLiveSnapshot(procs, sessions)
+  return unavailable ? { ...snap, liveUnavailable: unavailable } : snap
 }

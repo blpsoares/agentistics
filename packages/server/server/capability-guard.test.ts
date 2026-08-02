@@ -2,7 +2,8 @@
  * capability-guard.test.ts — the route→capability mapping and the 403 it produces.
  * Pure: every case passes an explicit Capabilities object, never the runtime singleton.
  */
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { routeCapability, capabilityDenied } from './capability-guard'
 import { capabilitiesFor } from './exposure'
 
@@ -74,4 +75,21 @@ describe('capabilityDenied', () => {
     expect(capabilityDenied('localTranscripts', publicCaps)).not.toBeNull()
     expect(capabilityDenied('mcpAdmin', publicCaps)).not.toBeNull()
   })
+})
+
+test('/api/live-sessions is deliberately NOT blanket-guarded, and the reason is load-bearing', () => {
+  // The route has two halves. Its LOCAL half reads /proc and IS gated — by `CAPS.localProcesses`,
+  // inside the handler (`readLocalLiveSnapshot` in index.ts). Its other half, on a central, is the
+  // members' own self-reported snapshots: not this host's state, and the whole reason the panel
+  // exists there. Registering the path here would return 403 for both and take the central's
+  // "Open now" down with the /proc read. If this ever becomes a single-purpose host route,
+  // register it — until then the guard must stay silent about it on purpose.
+  expect(routeCapability('/api/live-sessions')).toBeNull()
+  const src = readFileSync(new URL('./index.ts', import.meta.url), 'utf-8')
+  expect(src).toContain('CAPS.localProcesses')
+  // The gate must be the ONLY way into the /proc reader, or it is trivially bypassed by the next
+  // route that wants a live snapshot. One import site = one place the capability is checked.
+  expect(src.match(/import\('\.\/live-sessions'\)/g)?.length).toBe(1)
+  const helper = src.slice(src.indexOf('async function readLocalLiveSnapshot'))
+  expect(helper.indexOf('CAPS.localProcesses')).toBeLessThan(helper.indexOf("import('./live-sessions')"))
 })

@@ -1,4 +1,4 @@
-import React, { useState, type CSSProperties } from 'react'
+import React, { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { Loader2, Check, ChevronDown, ChevronRight } from 'lucide-react'
 import type { SessionMeta, ModelUsage, ShareSource, SiblingRuleFact } from '@agentistics/core'
 import { NO_REPO_KEY, fmtCost } from '@agentistics/core'
@@ -9,6 +9,8 @@ import { Section, ConfirmModal } from '../../pages/settings/primitives'
 import Drawer from '../../pages/settings/Drawer'
 import { drawerBtn } from './ConnectionCardParts'
 import { buildRestrictionTable, type RestrictionRow } from './restrictionTable'
+import { restrictionMiniTable, MaximizedRestrictions } from './RestrictionMiniTable'
+import { PAGE_SIZE_OPTIONS } from './tablePaging'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { COPY, PLURAL_COPY, interpolate } from './copy'
 import type { CardState } from './cardState'
@@ -129,6 +131,49 @@ export function SharedReposPanel({
     onEditingChange(false)
   }
 
+  // --- the hidden-restrictions table ---------------------------------------------------------
+  // Page and size live HERE, not in the table, because the same table is rendered twice (inline in
+  // the card and maximized full-screen) and the two must not each keep their own idea of where the
+  // user is. `resolvePaging` clamps both on every render, so a page left pointing past the end
+  // after a rule is lifted corrects itself instead of rendering an empty table.
+  const [tablePage, setTablePage] = useState(0)
+  const [tableSize, setTableSize] = useState(PAGE_SIZE_OPTIONS.inline[0]!)
+  const [maximized, setMaximized] = useState(false)
+  // Focus must return to the control that opened the overlay, or a keyboard user is dropped at the
+  // top of the document with no idea where they were.
+  const maximizeOrigin = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    if (!maximized) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMaximized() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+
+  function openMaximized() {
+    maximizeOrigin.current = document.activeElement as HTMLElement | null
+    // The two modes offer different sizes, so entering with an inline size would leave the
+    // maximized view on a value it does not list. `resolvePaging` snaps it; seeding it here means
+    // the select shows the right value on the very first frame.
+    setTableSize(PAGE_SIZE_OPTIONS.maximized[0]!)
+    setTablePage(0)
+    setMaximized(true)
+  }
+  function closeMaximized() {
+    setMaximized(false)
+    setTableSize(PAGE_SIZE_OPTIONS.inline[0]!)
+    setTablePage(0)
+    maximizeOrigin.current?.focus?.()
+  }
+
+  const tableProps = {
+    page: tablePage,
+    size: tableSize,
+    onPage: setTablePage,
+    onSize: (n: number) => { setTableSize(n); setTablePage(0) },
+    onMaximize: openMaximized,
+  }
+
   const draftDenied = draft ?? storedRepoKeys
   const projectDraftDenied = projectDraft ?? storedProjectPaths
   const effectiveMode = modeDraft ?? storedMode
@@ -210,8 +255,30 @@ export function SharedReposPanel({
           status={status}
           lang={lang}
           otelEnabled={otelEnabled}
+          isMobile={isMobile}
+          table={tableProps}
         />
       </Section>
+
+      {maximized && (
+        <MaximizedRestrictions
+          rows={buildRestrictionTable({
+            self: { shareMode: storedMode, sources: sources ?? [] },
+            selfLabel: COPY.peersSelf[lang],
+            siblings: siblingRules ?? [],
+            localProjects: projectTargets.map(pt => pt.path),
+            scope: 'selfRestricted',
+          }).rows}
+          labelOf={row => hiddenRowLabel(row, targets, projectTargets, lang)}
+          lang={lang}
+          isMobile={isMobile}
+          page={tablePage}
+          size={tableSize}
+          onPage={setTablePage}
+          onSize={(n: number) => { setTableSize(n); setTablePage(0) }}
+          onClose={closeMaximized}
+        />
+      )}
 
       <Drawer
         open={editing}
@@ -346,20 +413,7 @@ export function hiddenRowLabel(
   return targets.find(t => t.key === row.value)?.name ?? row.value
 }
 
-/**
- * The "where else is this restriction applied" line. A row with no sibling information says so IN
- * WORDS: an empty cell would read as "nowhere else", which is a claim this machine cannot make —
- * it knows only what its siblings announced to it, and only since the encrypted channel existed
- * (`siblingWithholdBestEffort`, folded into the caveats below).
- */
-export function hiddenRowElsewhere(row: RestrictionRow, lang: 'pt' | 'en'): string {
-  const elsewhere = row.restrictedBy.filter(m => !m.self)
-  if (elsewhere.length === 0) return COPY.rowNoOtherMachine[lang]
-  const names = elsewhere.map(m => m.machineName || COPY.peerUnnamed[lang]).join(', ')
-  return `${COPY.colRestrictedOn[lang]}: ${names}`
-}
-
-export function ReadView({ targets, projectTargets, sources, siblingRules, storedDenied, storedProjectPaths, mode, sessions, status, lang, otelEnabled }: {
+export function ReadView({ targets, projectTargets, sources, siblingRules, storedDenied, storedProjectPaths, mode, sessions, status, lang, otelEnabled, isMobile = false, table }: {
   targets: ShareTarget[]
   projectTargets: ProjectTarget[]
   /** The connection's stored rules VERBATIM — the same value the notices modal feeds
@@ -375,6 +429,18 @@ export function ReadView({ targets, projectTargets, sources, siblingRules, store
   status: ConnectionStatusEntry | undefined
   lang: 'pt' | 'en'
   otelEnabled: boolean
+  isMobile?: boolean
+  /** Paging state for the hidden-restrictions table. OPTIONAL, and the whole reason this component
+   *  stays hook-free: the state lives in `SharedReposPanel`, which also drives the maximized view,
+   *  so both renderings of the table read one source of truth. Absent = first page, smallest size,
+   *  no maximize affordance — which is exactly what a test calling `ReadView` directly wants. */
+  table?: {
+    page: number
+    size: number
+    onPage: (p: number) => void
+    onSize: (n: number) => void
+    onMaximize: () => void
+  }
 }) {
   const stats = statsCopyVars(status?.boundary ?? null, status?.prehistorySessions ?? null, lang)
   const summary = computeSharedSummary(sessions, projectTargets, mode, storedDenied, storedProjectPaths)
@@ -439,32 +505,22 @@ export function ReadView({ targets, projectTargets, sources, siblingRules, store
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', letterSpacing: '0.02em' }}>
             {interpolate(COPY.hiddenBlockTitle[lang], { n: hiddenRows.length })}
           </div>
-          {/* Stacked rows, never a table: this block lives inside a card that must hold at 390px,
-             and the page body may never scroll sideways. Every value wraps inside its own box. */}
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {hiddenRows.map((row, i) => (
-              <div
-                key={row.key}
-                style={{
-                  display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0,
-                  padding: '6px 0', borderTop: i === 0 ? undefined : '1px solid var(--border)',
-                }}
-              >
-                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 6, minWidth: 0 }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>
-                    {hiddenRowLabel(row, targets, projectTargets, lang)}
-                  </span>
-                  {/* The dimension, in words: a repo and a project are different things. */}
-                  <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>
-                    {row.kind === 'project' ? COPY.rowTagProject[lang] : COPY.rowTagRepo[lang]}
-                  </span>
-                </div>
-                <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)', overflowWrap: 'anywhere' }}>
-                  {hiddenRowElsewhere(row, lang)}
-                </span>
-              </div>
-            ))}
-          </div>
+          {/* A real table — the block is titled with a question ("what is hidden from this
+             central") that stacked rows could not answer at a glance. The renderer degrades to
+             stacked CARDS on a phone and keeps its own horizontal scroll box on desktop, so the
+             page body never scrolls sideways. */}
+          {restrictionMiniTable({
+            rows: hiddenRows,
+            labelOf: row => hiddenRowLabel(row, targets, projectTargets, lang),
+            lang,
+            mode: 'inline',
+            isMobile,
+            page: table?.page ?? 0,
+            size: table?.size ?? PAGE_SIZE_OPTIONS.inline[0]!,
+            onPage: table?.onPage ?? (() => {}),
+            onSize: table?.onSize ?? (() => {}),
+            ...(table ? { onMaximize: table.onMaximize } : {}),
+          })}
         </div>
       )}
       <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>

@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test'
 import {
   resolveOpenSessionIds, resolveLiveSnapshot, sessionIdFromArgv, harnessOf, sessionIdFromFdPaths,
-  LIVE_ACTIVITY_WINDOW_MIN, LIVE_STARTUP_GRACE_MIN,
+  LIVE_ACTIVITY_WINDOW_MIN, LIVE_STARTUP_GRACE_MIN, harnessOfProcess, detectionUnavailable,
 } from './live-sessions'
 import type { HarnessId, SessionMeta } from '@agentistics/core'
 
@@ -316,4 +316,67 @@ test('an open session file names the session outright', () => {
   // Nothing to match, and harnesses that keep no session file open.
   expect(sessionIdFromFdPaths(['/home/u/.copilot/session-store.db'], 'copilot')).toBeUndefined()
   expect(sessionIdFromFdPaths(['/anything'], 'claude')).toBeUndefined()
+})
+
+// --- the worktree case that actually happens ----------------------------------------------------
+
+test('a session that moved into a worktree is still matched by its process at the launch directory', () => {
+  // Measured on a real machine: `claude` was launched at the repo root and its kernel cwd STAYS
+  // there, while the session records current_cwd = the worktree it moved into. Matching the
+  // process against current_cwd ALONE (the previous rule) therefore reported nothing open at all —
+  // and CLAUDE.md mandates exactly this one-worktree-per-session workflow, so it hit every session.
+  const moved = { ...s('moved', '/repo', minsAgo(1)), current_cwd: '/repo/.claude/worktrees/livefix' }
+  const proc = { harness: 'claude' as HarnessId, cwd: '/repo', startedMs: 0 }
+  expect(resolveOpenSessionIds([proc], [moved], NOW)).toEqual(new Set(['moved']))
+})
+
+test('a moved session is still claimable from the worktree side too', () => {
+  const wt = '/repo/.claude/worktrees/livefix'
+  const moved = { ...s('moved', '/repo', minsAgo(1)), current_cwd: wt }
+  const proc = { harness: 'claude' as HarnessId, cwd: wt, startedMs: 0 }
+  expect(resolveOpenSessionIds([proc], [moved], NOW)).toEqual(new Set(['moved']))
+})
+
+test('matching both directories still refuses an unrelated one', () => {
+  const moved = { ...s('moved', '/repo', minsAgo(1)), current_cwd: '/repo/wt' }
+  const proc = { harness: 'claude' as HarnessId, cwd: '/somewhere/else', startedMs: 0 }
+  expect(resolveOpenSessionIds([proc], [moved], NOW).size).toBe(0)
+})
+
+// --- harnesses installed as node scripts --------------------------------------------------------
+
+test('a harness installed as a node script is identified from its script path', () => {
+  // Verified from the real installs on this machine: `codex` and `gemini` are
+  // `#!/usr/bin/env node` shims, so comm is `node` and the exe basename is `node` — both lookups
+  // miss and the process was invisible. This is the "N harnesses" half of the report.
+  const codex = '/home/u/.bun/install/global/node_modules/@openai/codex/bin/codex.js'
+  const gemini = '/home/u/.bun/install/global/node_modules/@google/gemini-cli/bundle/gemini.js'
+  expect(harnessOfProcess('node', '/usr/bin/node', ['node', codex])).toBe('codex')
+  expect(harnessOfProcess('node', '/usr/bin/node', ['node', gemini])).toBe('gemini')
+})
+
+test('a native harness binary is still identified, even when its exe basename is a version', () => {
+  // The real claude install resolves to .../claude/versions/2.1.220 — the basename is a version
+  // number, so comm is the only signal that works.
+  expect(harnessOfProcess('claude', '/home/u/.local/share/claude/versions/2.1.220', ['claude']))
+    .toBe('claude')
+})
+
+test('an ordinary node process is not mistaken for a harness', () => {
+  expect(harnessOfProcess('node', '/usr/bin/node', ['node', '/srv/app/server.js'])).toBeUndefined()
+  expect(harnessOfProcess('node', '/usr/bin/node', ['node'])).toBeUndefined()
+  expect(harnessOfProcess('bash', '/usr/bin/bash', ['bash'])).toBeUndefined()
+})
+
+// --- honest unavailability ----------------------------------------------------------------------
+
+test('an empty scan is reported as impossible only when it genuinely is', () => {
+  const base = { platform: 'linux', procReadable: true, foreignPids: 40, cwdDenied: false }
+  expect(detectionUnavailable(base)).toBeNull()
+  expect(detectionUnavailable({ ...base, platform: 'darwin' })).toBe('not-linux')
+  expect(detectionUnavailable({ ...base, procReadable: false })).toBe('no-proc')
+  // A container without `pid: host` sees only its own processes.
+  expect(detectionUnavailable({ ...base, foreignPids: 0 })).toBe('container-isolated')
+  // pid: host, but the container's uid cannot ptrace the host user's processes.
+  expect(detectionUnavailable({ ...base, cwdDenied: true })).toBe('permission-denied')
 })

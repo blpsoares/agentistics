@@ -31,6 +31,11 @@ export interface Capabilities {
   localChat: boolean
   /** GET /api/{claude,codex,gemini,copilot,nay}-sessions — reads host transcripts. */
   localTranscripts: boolean
+  /** GET /api/live-sessions' LOCAL half — reads /proc: which assistants run on the host and in
+   *  which directories. A cwd is usually a repository name, so this is host state even though it
+   *  is not a transcript. The route is NOT registered in capability-guard, because on a central it
+   *  also serves members' self-reported snapshots, which stay available when this is off. */
+  localProcesses: boolean
   /** POST /api/mcp-action — mutates the host's ~/.claude.json. */
   mcpAdmin: boolean
   /** Owner accounts must have TOTP enrolled before they can use the instance. */
@@ -51,6 +56,7 @@ export function capabilitiesFor(profile: ExposureProfile, env: ExposureEnv): Cap
       localShell: true,
       localChat: true,
       localTranscripts: true,
+      localProcesses: true,
       mcpAdmin: true,
       // Required on EVERY profile, not only `public`. Two reasons, and neither is about the
       // network: an owner account can reach every team's data and every admin route, and — since
@@ -66,6 +72,9 @@ export function capabilitiesFor(profile: ExposureProfile, env: ExposureEnv): Cap
       localShell: env.allowLocalShell,
       localChat: env.allowLocalShell,
       localTranscripts: env.allowLocalShell,
+      // A LAN central is normally the aggregator, not a workstation; its own /proc says nothing
+      // useful and its members report their own. Follows the same opt-in as the other host powers.
+      localProcesses: env.allowLocalShell,
       mcpAdmin: env.allowLocalShell,
       requireMfaForOwner: true,
       requireSecureCookies: env.tls,
@@ -75,6 +84,7 @@ export function capabilitiesFor(profile: ExposureProfile, env: ExposureEnv): Cap
     localShell: false,
     localChat: false,
     localTranscripts: false,
+    localProcesses: false,
     mcpAdmin: false,
     requireMfaForOwner: true,
     requireSecureCookies: true,

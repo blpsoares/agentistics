@@ -59,13 +59,17 @@ export function Drawer({ open, title, onClose, children, footer, dirty = false, 
           borderLeft: isMobile ? 'none' : '1px solid var(--border)',
           boxShadow: '-12px 0 40px rgba(0,0,0,0.35)',
           display: 'flex', flexDirection: 'column',
-          overflowY: 'auto',
+          // The PANEL is the frame and must not scroll: it and the list below it were two nested
+          // scrollers, and the outer one absorbed the drag while the inner one was capped at a
+          // fixed height, leaving dead space under a row cut in half. Only the body moves now, so
+          // the title bar and the footer actions genuinely stay put.
+          overflow: 'hidden',
         }}
       >
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '16px 18px', borderBottom: '1px solid var(--border)',
-          position: 'sticky', top: 0, background: 'var(--bg-card)', zIndex: 1,
+          background: 'var(--bg-card)', zIndex: 1, flexShrink: 0,
         }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</div>
           <button
@@ -79,12 +83,17 @@ export function Drawer({ open, title, onClose, children, footer, dirty = false, 
             <X size={18} />
           </button>
         </div>
-        <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12, flex: 1 }}>
+        {/* `minHeight: 0` is what lets this shrink below its content and scroll, instead of
+            pushing the panel open and taking the footer off the bottom of the screen. */}
+        <div style={{
+          padding: 18, display: 'flex', flexDirection: 'column', gap: 12,
+          flex: 1, minHeight: 0, overflowY: 'auto',
+        }}>
           {children}
         </div>
         {footer && (
           <div style={{
-            position: 'sticky', bottom: 0, zIndex: 1,
+            zIndex: 1, flexShrink: 0,
             padding: '12px 18px', borderTop: '1px solid var(--border)', background: 'var(--bg-card)',
             display: 'flex', gap: 8, justifyContent: 'flex-end',
           }}>

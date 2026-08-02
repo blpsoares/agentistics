@@ -8,6 +8,7 @@ import { hostOf, plural } from '../../lib/shareRepos'
 import { StatusDot, ConfirmModal } from '../../pages/settings/primitives'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { COPY, PLURAL_COPY, interpolate } from './copy'
+import { withheldMarkStyle } from './withheldStyle'
 import { ConnectionIdentity, type ProbedIdentity } from './ConnectionIdentity'
 import { resolveCardIdentity } from './cardIdentity'
 import type { ConnectionStatusEntry } from './statusTypes'
@@ -272,8 +273,8 @@ export function ConnectionCard({
             display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999,
             background: rulePill.tone === 'allow'
               ? 'color-mix(in srgb, var(--accent-green) 15%, transparent)'
-              : 'color-mix(in srgb, var(--anthropic-orange) 15%, transparent)',
-            color: rulePill.tone === 'allow' ? 'var(--accent-green)' : 'var(--anthropic-orange)',
+              : withheldMarkStyle().background,
+            color: rulePill.tone === 'allow' ? 'var(--accent-green)' : withheldMarkStyle().color,
             fontSize: 11, fontWeight: 700, flexShrink: 0,
           }}>
             {rulePill.tone === 'allow' ? <Check size={11} /> : <EyeOff size={11} />}
@@ -283,7 +284,14 @@ export function ConnectionCard({
             )}
           </span>
         )}
-        {expanded ? <ChevronDown size={20} style={{ flexShrink: 0 }} /> : <ChevronRight size={20} style={{ flexShrink: 0 }} />}
+        {/* The caret needs its OWN colour: the wrapping button is `background: transparent` and
+            sets none, so an uncoloured icon inherited nothing and fell through to the browser
+            default — black, and invisible on the dark card. It takes the PRIMARY text token, not
+            the accent: a disclosure arrow is structure, and the accent on this card is already
+            spent on the notices button and the things that should actually be clicked. */}
+        {expanded
+          ? <ChevronDown size={20} style={{ flexShrink: 0, color: 'var(--text-primary)' }} />
+          : <ChevronRight size={20} style={{ flexShrink: 0, color: 'var(--text-primary)' }} />}
       </button>
       {statusStyle.info && (
         <StatusInfoButton

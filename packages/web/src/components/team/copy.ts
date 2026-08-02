@@ -137,7 +137,9 @@ export const COPY = {
   },
   lastActiveT: {
     en: 'last active {t}',
-    pt: 'ativo há {t}',
+    // NOT 'ativo há {t}': relTime already returns 'há 1d' in PT, so the preposition belongs to the
+    // time, not to this row — the template carried it too and rendered 'ativo há há 1d'.
+    pt: 'ativo {t}',
   },
   centralsN: {
     en: '{n} centrals',
@@ -481,6 +483,54 @@ export const COPY = {
   rowNoOtherMachine: {
     en: 'No other machine of yours has announced this restriction',
     pt: 'Nenhuma outra máquina sua anunciou esta restrição',
+  },
+  // --- the card's hidden-restrictions table -------------------------------------------------
+  colHiddenWhat: {
+    en: 'What',
+    pt: 'O que',
+  },
+  colHiddenOn: {
+    en: 'Hidden on',
+    pt: 'Oculto em',
+  },
+  colStillSharedOn: {
+    en: 'Still shared on',
+    pt: 'Ainda compartilhado em',
+  },
+  // The overflow marker on a machine cell. A cell that silently dropped names would be worse than
+  // one that admits it is partial.
+  moreMachines: {
+    en: '+{n} more',
+    pt: '+{n}',
+  },
+  // A row nothing still shares — as far as this machine was told, which is what the caveat says.
+  rowSharedNowhere: {
+    en: 'No machine reported sharing it',
+    pt: 'Nenhuma máquina relatou compartilhar',
+  },
+  tableMaximize: {
+    en: 'Expand table',
+    pt: 'Expandir tabela',
+  },
+  tableRestore: {
+    en: 'Close',
+    pt: 'Fechar',
+  },
+  tablePerPage: {
+    en: 'per page',
+    pt: 'por página',
+  },
+  tablePageOf: {
+    en: 'Page {page} of {total}',
+    pt: 'Página {page} de {total}',
+  },
+  tablePrev: {
+    en: 'Previous page',
+    pt: 'Página anterior',
+  },
+  tableNext: {
+    en: 'Next page',
+    pt: 'Próxima página',
   },
   rowTagRepo: {
     en: 'repo',
