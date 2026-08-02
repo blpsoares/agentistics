@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { validateAccountDraft, showsTeamlessHint, type AccountDraft } from './accountForm'
+import { validateAccountDraft, showsTeamlessHint, initialMembershipRows, type AccountDraft } from './accountForm'
 import { canCreateAccountWith, type IamScope } from '@agentistics/core'
 
 const owner: IamScope = { role: 'owner', memberships: [] }
@@ -84,6 +84,37 @@ test('the teamless hint stays away for an owner-TYPE account (it has every team 
 test('a manager is never shown the hint — they are shown the error instead', () => {
   expect(showsTeamlessHint(draft({ scope: manager, memberships: [] }))).toBe(false)
   expect(validateAccountDraft(draft({ scope: manager, memberships: [] }))).toBe('team-required')
+})
+
+test('the org team is pre-selected when the form opens', () => {
+  expect(initialMembershipRows(owner, [{ _id: 'A' }, { _id: 'ORG', orgTeam: true }]))
+    .toEqual([{ teamId: 'ORG', role: 'user' }])
+})
+
+test('a manager gets the org team pre-selected too — when it is one they may assign', () => {
+  expect(initialMembershipRows(manager, [{ _id: 'ORG', orgTeam: true }]))
+    .toEqual([{ teamId: 'ORG', role: 'user' }])
+  // Scoped out (not among the teams they manage) → no row naming it.
+  expect(initialMembershipRows(manager, [{ _id: 'T1' }]))
+    .toEqual([{ teamId: '', role: 'user' }])
+})
+
+test('with no org team an OWNER opens on no membership row at all', () => {
+  expect(initialMembershipRows(owner, [{ _id: 'A' }, { _id: 'B' }])).toEqual([])
+  expect(initialMembershipRows(owner, [])).toEqual([])
+})
+
+test('with no org team a MANAGER opens on the one blank row they must fill', () => {
+  expect(initialMembershipRows(manager, [{ _id: 'T1' }])).toEqual([{ teamId: '', role: 'user' }])
+})
+
+test('pre-selected is not forced: the seeded org row can be cleared back to a valid teamless draft', () => {
+  const seeded = initialMembershipRows(owner, [{ _id: 'ORG', orgTeam: true }])
+  expect(validateAccountDraft(draft({ scope: owner, memberships: seeded }))).toBeNull()
+  const cleared = seeded.slice(1)
+  expect(cleared).toEqual([])
+  expect(validateAccountDraft(draft({ scope: owner, memberships: cleared }))).toBeNull()
+  expect(showsTeamlessHint(draft({ scope: owner, memberships: cleared }))).toBe(true)
 })
 
 type IamMembershipList = AccountDraft['memberships']

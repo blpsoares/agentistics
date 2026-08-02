@@ -42,6 +42,36 @@ export function validateAccountDraft(d: AccountDraft): AccountDraftIssue | null 
  * An owner-TYPE account is excluded: an owner has full access to every team by definition, so
  * "belongs to no team" says nothing about it. The drawer already explains that case in its own words.
  */
+/** The slice of a team this form reads. `orgTeam` marks the one first-boot created for the org. */
+export interface AssignableTeam {
+  _id: string
+  orgTeam?: boolean
+}
+
+/**
+ * The membership rows a freshly-opened create drawer starts with.
+ *
+ *   - The organisation's team, when this principal can actually assign it — the convenience the
+ *     org team exists for. PRE-SELECTED, never forced: the row has a bin like any other, and with
+ *     it removed an owner creates a teamless account exactly as before.
+ *   - Otherwise NOTHING for an owner. A form that opens on a blank team row implies a team is
+ *     expected, and for an owner none is.
+ *   - Otherwise one blank row for everyone else, who must fill it: a manager may only create
+ *     accounts inside a team they manage.
+ *
+ * `assignableTeams` is already scoped by the caller (an owner sees every team, a manager only the
+ * ones they manage), so an org team a manager does not manage is simply not among them and is not
+ * pre-selected — the form never seeds a row the server would refuse.
+ */
+export function initialMembershipRows(
+  scope: IamScope,
+  assignableTeams: AssignableTeam[],
+): IamMembership[] {
+  const org = assignableTeams.find(t => t.orgTeam)
+  if (org) return [{ teamId: org._id, role: 'user' }]
+  return scope.role === 'owner' ? [] : [{ teamId: '', role: 'user' }]
+}
+
 export function showsTeamlessHint(d: AccountDraft): boolean {
   if (d.accountType === 'owner') return false
   if (!isOwnerOnlyAccount(d.memberships)) return false

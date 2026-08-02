@@ -9,10 +9,12 @@ import { Drawer } from './Drawer'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { stepUpFetch } from '../../lib/stepup'
 import { Revealable, REVEAL_PAD } from '../../components/PasswordReveal'
-import { validateAccountDraft, showsTeamlessHint, type AccountDraft } from './accountForm'
+import { validateAccountDraft, showsTeamlessHint, initialMembershipRows, type AccountDraft } from './accountForm'
 import type { IamScope } from '@agentistics/core'
 
-interface Team { _id: string; name: string }
+/** `orgTeam` marks the single team a central creates for its organisation at bootstrap — the one
+ *  the create drawer pre-selects. It is provenance, not a kind: the team is ordinary otherwise. */
+interface Team { _id: string; name: string; orgTeam?: boolean }
 interface Membership { teamId: string; role: 'manager' | 'user' }
 interface Account { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: Membership[] }
 interface MachineRow { name: string; teamId: string }
@@ -245,11 +247,8 @@ export default function UsersSettings() {
   const [confirmReset, setConfirmReset] = useState(false)
 
   function openAccountDrawer() {
-    // An owner opens on NO row at all — a form that starts with a blank team row implies a team is
-    // expected, and for an owner none is. A manager, who must place the account inside a team they
-    // manage, opens on the one row they have to fill.
     setAn(''); setAe(''); setAp(''); setAccountType('member')
-    setRows(viewerIsOwner ? [] : [{ teamId: '', role: 'user' }])
+    setRows(initialMembershipRows(viewerScope, assignableTeams))
     setMachineRows([]); setNewTagIds([]); setAccountErr(null)
     setMustChange(true); setPwVisible(false); setCreated(null); setCopied(null); setCopyFailed(null)
     setAccountOpen(true)

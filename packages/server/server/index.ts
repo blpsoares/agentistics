@@ -1371,7 +1371,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     if (url.pathname === '/api/iam/bootstrap' && req.method === 'POST') {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
       const { handleBootstrap } = await import('./iam-handlers')
-      const res = await handleBootstrap(req)
+      const res = await handleBootstrap(req, { ip: clientIp })
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })

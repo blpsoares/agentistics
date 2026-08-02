@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto'
 import { hasAnyOwner, countOwners, createAccount, findAccountByEmail, updateAccount, getAccount, listAccounts, deleteAccount, bumpSessionVersion } from './accounts'
 import { hashPassword, verifyPassword } from './passwords'
 import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from './bootstrap'
-import { listTeams, createTeam, getTeam, deleteTeam } from './teams'
+import { listTeams, createTeam, createOrgTeam, getTeam, deleteTeam } from './teams'
 import { backfillTokenTeamIds, listMachines, mintMachineToken, mintMachine, machineUserFor, revokeToken, rotateToken, setMachineTeams, setMachineTeamsAndExclusions, setMachineLabel, setMachineOwners, detachTeamFromAllMachines, detachAccountFromAllMachines } from './team-tokens'
 import { getCentralConfig } from './central-config'
 import { packConnectToken } from '@agentistics/core'
@@ -21,7 +21,7 @@ import {
   verifyMfaChallenge,
   MFA_CHALLENGE_TTL_MS,
 } from './auth'
-import { TEAM_SESSION_SECRET } from './config'
+import { TEAM_SESSION_SECRET, TEAM_ORG } from './config'
 import { CAPS } from './exposure'
 import { generateSecret, otpauthUri, verifyTotp, generateRecoveryCodes, hashRecoveryCode, totpSkewSteps, TOTP_STEP_SECONDS } from './totp'
 import { getMfa, isMfaEnabled, enableMfa, disableMfa, consumeRecoveryCode } from './mfa-store'
@@ -54,10 +54,11 @@ export async function handleIamStatus(): Promise<Response> {
 /**
  * POST /api/iam/bootstrap
  * Body: { token, name, email, password, confirm }
- * Creates the first owner (if none exists), seeds the Default team, backfills teamId,
- * consumes the token, and logs the caller in (principal session cookie).
+ * Creates the first owner (if none exists), creates the organisation's (empty) team, backfills
+ * teamId, consumes the token, and logs the caller in (principal session cookie).
  */
-export async function handleBootstrap(req: Request): Promise<Response> {
+export async function handleBootstrap(req: Request, hooks: { ip?: string } = {}): Promise<Response> {
+  const ip = hooks.ip ?? 'unknown'
   if (await hasAnyOwner()) return json({ ok: false, error: 'already set up' }, 409)
 
   const parsedBody = await readJsonLimited<unknown>(req, LIMITS.bodyBytes)
@@ -84,6 +85,22 @@ export async function handleBootstrap(req: Request): Promise<Response> {
 
   // No Default team is seeded — machines/accounts start with no team (loose) and are assigned to
   // real teams explicitly. Backfills only normalize legacy shapes.
+  //
+  // The organisation does get ONE team, named after TEAM_ORG and EMPTY — not even the owner just
+  // created joins it. It is a starting point the account form pre-selects, never a team anyone is
+  // put in; see org-team.ts for why the difference is the whole point. Nothing is created for the
+  // `default` placeholder org, and nothing is created if this central already has a team.
+  const orgTeam = await createOrgTeam(TEAM_ORG, account._id)
+  if (orgTeam) {
+    void writeAudit({
+      action: 'team.create',
+      actorId: account._id,
+      targetId: orgTeam._id,
+      ip,
+      meta: { name: orgTeam.name, source: 'bootstrap-org' },
+    })
+  }
+
   await backfillTokenTeamIds()
   await backfillRepoTeamIds()
   await consumeBootstrapToken(new Date())
