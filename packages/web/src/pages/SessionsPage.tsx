@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Clock, Radio, Copy, Check } from 'lucide-react'
-import type { HarnessId, LiveProcess, SessionMeta } from '@agentistics/core'
+import type { HarnessId, LiveProcess, LiveUnavailableReason, SessionMeta } from '@agentistics/core'
 import { sessionLabel } from '@agentistics/core'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../lib/harness'
 import type { AppContext } from '../lib/app-context'
 import { Section } from '../components/Section'
 import { RecentSessions } from '../components/RecentSessions'
-import { lastActivityMs } from '../lib/sessionLive'
+import { lastActivityMs, liveEmptyNotice } from '../lib/sessionLive'
 import { resumeCommand } from '../lib/resumeCommand'
 
 const LIVE_POLL_MS = 4000
@@ -21,6 +21,9 @@ export default function SessionsPage() {
   // opening/closing a `claude` tab fires none — so poll the lightweight endpoint directly.
   const [liveIdList, setLiveIdList] = useState<string[]>(data.liveSessionIds ?? [])
   const [liveProcs, setLiveProcs] = useState<LiveProcess[]>(data.liveProcesses ?? [])
+  // Why the list is empty, when it is empty because it CANNOT be filled. Never a bare zero.
+  const [liveUnavailable, setLiveUnavailable] =
+    useState<LiveUnavailableReason | undefined>(data.liveUnavailable)
   // Polls on a central too: members report their own open assistants over the reverse channel and
   // the endpoint merges them in, so "Open now" is live for the whole team, not just this machine.
   useEffect(() => {
@@ -29,12 +32,19 @@ export default function SessionsPage() {
       try {
         const res = await fetch('/api/live-sessions')
         if (!res.ok) return
-        const json = await res.json() as { liveSessionIds?: string[]; liveProcesses?: LiveProcess[] }
+        const json = await res.json() as {
+          liveSessionIds?: string[]
+          liveProcesses?: LiveProcess[]
+          liveUnavailable?: LiveUnavailableReason
+        }
         if (!alive) return
         if (Array.isArray(json.liveSessionIds)) setLiveIdList(json.liveSessionIds)
         // Always assign: an emptied list means the assistant finished starting up (or exited), and
         // keeping the previous one would leave a ghost "starting" row on screen forever.
         setLiveProcs(Array.isArray(json.liveProcesses) ? json.liveProcesses : [])
+        // Absent means detection works — assign either way, or a transient failure would pin the
+        // explanation on screen after the cause was fixed.
+        setLiveUnavailable(json.liveUnavailable)
       } catch { /* transient — keep last known */ }
     }
     poll()
@@ -53,6 +63,7 @@ export default function SessionsPage() {
     [data.sessions, liveIds],
   )
   const liveCount = live.length + liveProcs.length
+  const notice = liveEmptyNotice({ count: liveCount, central: isCentral, unavailable: liveUnavailable, lang: pt ? 'pt' : 'en' })
 
   return (
     <>
@@ -62,8 +73,11 @@ export default function SessionsPage() {
           /proc; on a central it is the members' own reports arriving over the reverse channel,
           already scoped server-side to the members this principal may see. */}
       <Section flashId="live-sessions" title={<><Radio size={14} /> {pt ? 'Abertas agora' : 'Open now'} {liveCount > 0 && <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>({liveCount})</span>}</>}>
-        {liveCount === 0
-          ? <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>{pt ? 'Nenhuma sessão aberta agora.' : 'No sessions open right now.'}</div>
+        {notice
+          ? <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <span>{notice.title}</span>
+              {notice.detail && <span style={{ fontSize: 12, lineHeight: 1.5, maxWidth: '68ch' }}>{notice.detail}</span>}
+            </div>
           : <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {live.map(s => <LiveCard key={s.session_id} s={s} pt={pt} central={isCentral} onOpen={() => setSelectedSession(s)} />)}
               {liveProcs.map((p, i) => <StartingCard key={`${p.harness}-${p.cwd}-${i}`} p={p} pt={pt} />)}

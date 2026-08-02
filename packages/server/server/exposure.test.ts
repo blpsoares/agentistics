@@ -2,7 +2,7 @@
  * exposure.test.ts — unit tests for the pure profile/capability resolution.
  * No filesystem, no env mutation: every case is a plain input object.
  */
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, test } from 'bun:test'
 import { resolveProfile, capabilitiesFor, type ExposureEnv } from './exposure'
 
 const base: ExposureEnv = { central: false, exposure: undefined, allowLocalShell: false, tls: false }
@@ -84,4 +84,15 @@ describe('capabilitiesFor', () => {
     expect(capabilitiesFor('lan', { ...base, central: true }).requireSecureCookies).toBe(false)
     expect(capabilitiesFor('lan', { ...base, central: true, tls: true }).requireSecureCookies).toBe(true)
   })
+})
+
+test('reading the host process list follows the other local powers, never wider', () => {
+  const env = { central: false, exposure: undefined, allowLocalShell: false, tls: false }
+  // A solo workstation is the case live sessions exist for.
+  expect(capabilitiesFor('local', env).localProcesses).toBe(true)
+  // A LAN central is an aggregator; its own /proc is opt-in like every other host power.
+  expect(capabilitiesFor('lan', env).localProcesses).toBe(false)
+  expect(capabilitiesFor('lan', { ...env, allowLocalShell: true }).localProcesses).toBe(true)
+  // Never on a published instance — a process cwd is usually a repository name.
+  expect(capabilitiesFor('public', { ...env, allowLocalShell: true }).localProcesses).toBe(false)
 })

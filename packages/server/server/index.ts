@@ -3,7 +3,7 @@
 import { readFile } from 'node:fs/promises'
 import { PORT, WEB_PORT, TEAM_CENTRAL, TEAM_PASSWORD, TEAM_ORG, INGEST_ONLY } from './config'
 import type { Server, ServerWebSocket } from 'bun'
-import type { LiveProcess } from '@agentistics/core'
+import type { LiveProcess, LiveUnavailableReason, SessionMeta } from '@agentistics/core'
 import { getRates } from './rates'
 import { getVersionInfo, startVersionRecheck } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
@@ -26,6 +26,34 @@ import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
 import { handleLogout, handleSession, getPrincipal, getPrincipalSession, makePrincipalSessionCookieHeader, SESSION_REFRESH_MS } from './auth'
 import { routeCapability, capabilityDenied } from './capability-guard'
+
+/**
+ * The LOCAL half of a live snapshot: which assistants are running on THIS host.
+ *
+ * Reads /proc, so it is gated on `CAPS.localProcesses` — a process cwd is usually a repository
+ * name, and an exposed instance has no business reporting the host's directories. It is gated HERE
+ * rather than in `capability-guard.ts` on purpose: `/api/live-sessions` and `/api/data` also carry
+ * the members' OWN self-reported snapshots on a central, which are not this host's state and must
+ * keep working when local power is revoked. Blanket-guarding the paths would have taken the
+ * central's "Open now" panel down with them.
+ *
+ * Never throws: a failed read degrades to "unavailable", never to a confident empty list.
+ */
+async function readLocalLiveSnapshot(sessions: SessionMeta[]): Promise<{
+  liveSessionIds: string[]
+  liveProcesses: LiveProcess[]
+  liveUnavailable?: LiveUnavailableReason
+}> {
+  if (!CAPS.localProcesses) {
+    return { liveSessionIds: [], liveProcesses: [], liveUnavailable: 'capability-off' }
+  }
+  try {
+    const { getLiveSnapshot } = await import('./live-sessions')
+    return await getLiveSnapshot(sessions)
+  } catch {
+    return { liveSessionIds: [], liveProcesses: [], liveUnavailable: 'no-proc' }
+  }
+}
 import { AUTH_PUBLIC, isAdminPath, MFA_EXEMPT } from './index-routes'
 import { CAPS, PROFILE } from './exposure'
 import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
@@ -1173,9 +1201,10 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     if (url.pathname === '/api/live-sessions' && req.method === 'GET') {
       try {
         const data = await buildApiResponse()
-        const { getLiveSnapshot } = await import('./live-sessions')
-        const snapshot = await getLiveSnapshot(data.sessions)
-          .catch(() => ({ liveSessionIds: [] as string[], liveProcesses: [] as LiveProcess[] }))
+        // The LOCAL half reads /proc. On a profile that has revoked host power it is skipped
+        // entirely — but the route still answers, because on a central its other half is the
+        // members' own self-reported snapshots, which are not host state and stay available.
+        const snapshot = await readLocalLiveSnapshot(data.sessions)
         // Same member merge as /api/data — this is the endpoint the Sessions page polls, so
         // without it a central's "Open now" would only ever move on a full data rebuild.
         if (TEAM_CENTRAL) {
@@ -1239,9 +1268,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         }
         // Live open-session detection — computed per request (not part of the cached build)
         // so it reflects `claude` processes in real time.
-        const { getLiveSnapshot } = await import('./live-sessions')
-        let { liveSessionIds, liveProcesses } = await getLiveSnapshot(data.sessions)
-          .catch(() => ({ liveSessionIds: [] as string[], liveProcesses: [] as LiveProcess[] }))
+        const local = await readLocalLiveSnapshot(data.sessions)
+        let { liveSessionIds, liveProcesses } = local
+        const liveUnavailable = local.liveUnavailable
         // Central: members report their own open assistants over the reverse channel, because
         // getLiveSnapshot reads /proc and a member's processes are not on this machine. Scoped to
         // the members whose sessions survived the scoping above, so a principal never learns that
@@ -1258,7 +1287,10 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             liveProcesses = [...liveProcesses, ...team.liveProcesses]
           } catch { /* best-effort — the local snapshot still stands */ }
         }
-        return new Response(JSON.stringify({ ...data, liveSessionIds, liveProcesses, ...extra }), {
+        return new Response(JSON.stringify({
+          ...data, liveSessionIds, liveProcesses,
+          ...(liveUnavailable ? { liveUnavailable } : {}), ...extra,
+        }), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })

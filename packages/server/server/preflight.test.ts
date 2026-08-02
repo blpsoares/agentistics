@@ -7,6 +7,7 @@ const good: PreflightInput = {
     localShell: false,
     localChat: false,
     localTranscripts: false,
+    localProcesses: false,
     mcpAdmin: false,
     requireMfaForOwner: true,
     requireSecureCookies: true,

@@ -391,7 +391,26 @@ export interface AppData {
   /** Assistants running right now that have no persisted session yet (e.g. an agy that has not
    *  completed its first turn). Carries no metrics — there is nothing measured yet. */
   liveProcesses?: LiveProcess[]
+  /** Why this machine cannot observe running assistants AT ALL. Set only when detection is
+   *  structurally impossible here (not Linux, no /proc, a container that cannot see the host's
+   *  processes, or one whose uid may not read their cwd). An empty list then means "we cannot
+   *  know" rather than "nobody is working", and the UI must say which — the same
+   *  N/A-versus-a-confident-0 rule `HARNESS_CAPABILITIES` applies to metrics. */
+  liveUnavailable?: LiveUnavailableReason
 }
+
+/** Why live-session detection cannot work in this configuration. */
+export type LiveUnavailableReason =
+  /** Not a Linux host — /proc is the only process source this reads. */
+  | 'not-linux'
+  /** /proc is absent or unreadable. */
+  | 'no-proc'
+  /** A container that cannot see the host's processes (no `pid: host`). */
+  | 'container-isolated'
+  /** The host's processes are visible but their cwd may not be read (uid mismatch). */
+  | 'permission-denied'
+  /** This exposure profile has revoked local host power (`CAPS.localProcesses`). */
+  | 'capability-off'
 
 /** An empty statsCache with all zero/neutral fields. Pure. */
 export function emptyStatsCache(): StatsCache {
