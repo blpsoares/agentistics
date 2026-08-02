@@ -733,6 +733,12 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     // Hide empty runs (0 agents) — including any persisted before extraction started dropping
     // them — so the Dynamic Workflows view never shows "0 agents · nothing ran" skeletons.
     let workflows: WorkflowRun[] = [...workflowsById.values()].filter(r => r.agents.length > 0)
+    // Declared here rather than beside the adapter loop below because the consolidate gap-fill
+    // revives sessions of EVERY harness, and a harness present only in the store must still
+    // reach `AppData.harnesses` — that list is what gates the harness selector and the Compare
+    // page. Consolidate mode exists precisely because the harnesses delete their own transcripts,
+    // so "its raw files are gone" is the normal case, not an edge one.
+    const harnessSet = new Set<HarnessId>(['claude'])
     if (mode === 'consolidate') {
       const stored = await loadConsolidated()
       const liveIds = new Set(sessions.map(s => s.session_id))
@@ -740,6 +746,7 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       for (const [id, s] of stored) {
         if (liveIds.has(id)) continue
         sessions.push(s)
+        harnessSet.add(s.harness)
         const existing = projByPath.get(s.project_path)
         if (existing) {
           existing.sessions.push({ sessionId: id, created: s.start_time })
@@ -783,7 +790,6 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     // --- Other harnesses (Codex, …): append their normalized sessions ---
     // MUST run AFTER supplementStatsCache so non-Claude sessions never corrupt Claude totals.
     const { getEnabledAdapters } = await import('./adapters/types')
-    const harnessSet = new Set<HarnessId>(['claude'])
     const extraHarnessSessions: SessionMeta[] = []
     for (const adapter of await getEnabledAdapters()) {
       if (adapter.id === 'claude') continue // already loaded above
