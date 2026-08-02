@@ -34,10 +34,16 @@ export interface PeerFingerprint {
   fingerprint: string
 }
 
-/** PURE. What to call a peer in the fingerprint list. Falls back to a short id only when there is
- *  genuinely no name — asking a user to "recognise" a token-hash prefix is asking nothing. */
-export function peerLabel(peer: PeerFingerprint): string {
-  return peer.machineName || peer.machineId.slice(0, 12)
+/**
+ * PURE. What to call a peer in the fingerprint list.
+ *
+ * NEVER the machine id. That value is `sha256(token)` — derived from a credential, meaningless to
+ * a person, and another machine's internals rendered on this machine's card. An unnamed machine is
+ * a fact and is said in words; the fingerprint beside it is what actually identifies it for the one
+ * purpose this list serves.
+ */
+export function peerLabel(peer: PeerFingerprint, lang: 'pt' | 'en'): string {
+  return peer.machineName || COPY.peerUnnamed[lang]
 }
 
 /** Anything older than this is called out on the card. A rules change is a human-speed event, so a

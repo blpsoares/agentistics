@@ -40,7 +40,8 @@ export function WithheldBadge({ machines, lang, dimension }: {
         border: '1px solid color-mix(in srgb, var(--anthropic-orange) 35%, transparent)',
       }}
     >
-      {interpolate(row[lang], { machines: machines.map(m => m.name).join(', ') })}
+      {/* A machine the central never named renders as words, never as a blank or an id. */}
+      {interpolate(row[lang], { machines: machines.map(m => m.name || COPY.peerUnnamed[lang]).join(', ') })}
     </span>
   )
 }

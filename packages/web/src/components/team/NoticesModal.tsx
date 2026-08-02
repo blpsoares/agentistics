@@ -104,7 +104,7 @@ export function NoticesModal({
             >
               <strong style={{ fontSize: 12 }}>{COPY.keyChangedTitle[lang]}</strong>
               <span style={{ color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
-                {interpolate(COPY.keyChangedBody[lang], { name: w.machineName })}
+                {interpolate(COPY.keyChangedBody[lang], { name: w.machineName || COPY.peerUnnamed[lang] })}
               </span>
               <button
                 type="button"
@@ -133,7 +133,7 @@ export function NoticesModal({
                 }}
               >
                 <strong style={{ fontSize: 12.5, color: 'var(--text-primary)' }}>
-                  {interpolate(COPY.proposalTitle[lang], { name: p.fromMachineName })}
+                  {interpolate(COPY.proposalTitle[lang], { name: p.fromMachineName || COPY.peerUnnamed[lang] })}
                 </strong>
 
                 {/* The diff against YOUR rules — the only thing that answers "what happens if I

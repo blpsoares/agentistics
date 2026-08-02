@@ -101,13 +101,14 @@ describe('the peer-pinned notification', () => {
 
 describe('peerLabel — the fingerprint list must name machines, not hashes', () => {
   it('uses the machine name the central gave it', () => {
-    expect(peerLabel({ machineId: 'a'.repeat(64), machineName: 'Laptop B', fingerprint: 'x' })).toBe('Laptop B')
+    expect(peerLabel({ machineId: 'a'.repeat(64), machineName: 'Laptop B', fingerprint: 'x' }, 'en')).toBe('Laptop B')
   })
 
-  it('falls back to a short id only when there is genuinely no name', () => {
-    // "If you do not recognise a machine, compare its fingerprint" asks nothing of a user who is
-    // shown a token-hash prefix, so this is the last resort, not the default.
-    expect(peerLabel({ machineId: 'abcdef0123456789', machineName: '', fingerprint: 'x' })).toBe('abcdef012345')
+  it('never falls back to the machine id — that is sha256(token), not a name', () => {
+    // "If you do not recognise a machine, compare its fingerprint" asks nothing of a user shown a
+    // token-hash prefix, and the id is another machine's internals on this machine's card.
+    expect(peerLabel({ machineId: 'abcdef0123456789', machineName: '', fingerprint: 'x' }, 'en'))
+      .toBe('Unnamed machine')
   })
 })
 
@@ -218,4 +219,73 @@ describe('the decluttered card', () => {
     expect(src).toMatch(/<Caveats[\s\S]*COPY\.ciNote[\s\S]*<\/Caveats>/)
     expect(src.indexOf('COPY.otelWarn')).toBeGreaterThan(src.indexOf('</Caveats>'))
   })
+})
+
+describe('another machine\'s id is never shown', () => {
+  it('peerLabel says "unnamed machine" instead of a slice of sha256(token)', () => {
+    const id = 'a'.repeat(64)
+    const label = peerLabel({ machineId: id, machineName: '', fingerprint: 'ab cd' }, 'en')
+    expect(label).not.toContain(id.slice(0, 8))
+    expect(label).toBe('Unnamed machine')
+    expect(peerLabel({ machineId: id, machineName: '', fingerprint: 'x' }, 'pt')).toBe('Máquina sem nome')
+  })
+
+  it('still prefers the name the central gave it', () => {
+    expect(peerLabel({ machineId: 'x', machineName: 'Laptop B', fingerprint: 'y' }, 'en')).toBe('Laptop B')
+  })
+
+  it('the peers surface renders no machineId as text — only as a React key', () => {
+    const src = readFileSync(join(import.meta.dir, 'PeersSection.tsx'), 'utf8')
+    let occurrences = 0
+    for (const m of src.matchAll(/machineId/g)) {
+      occurrences++
+      const line = src.slice(src.lastIndexOf('\n', m.index) + 1, src.indexOf('\n', m.index))
+      // The ONLY admissible use: it identifies the row to React. Never a rendered value.
+      expect(`${line.trim()}|${/\bkey[=:]\s*[^,]*machineId/.test(line)}`).toBe(`${line.trim()}|true`)
+    }
+    // Not vacuous: the file does still use the id (as the key), so the loop has something to check.
+    expect(occurrences).toBeGreaterThan(0)
+    expect(src).not.toMatch(/title=\{[^}]*machineId/)
+    expect(src).not.toMatch(/aria-label=\{[^}]*machineId/)
+  })
+
+  it('the fingerprint column is monospaced and tabular, so two of them can be compared by eye', () => {
+    const src = readFileSync(join(import.meta.dir, 'PeersSection.tsx'), 'utf8')
+    expect(src).toContain('tabular-nums')
+    expect(src).toContain('monospace')
+    // A table, not a run-on line per machine.
+    expect(src).toContain('<table')
+    expect(src).not.toContain('<ul')
+  })
+})
+
+describe('an unnamed machine is said in words, everywhere it is named', () => {
+  it('the bell fills {name} with words, never a raw placeholder and never an id', () => {
+    for (const code of ['member.rules_proposed', 'member.peer_pinned', 'member.peer_key_changed']) {
+      for (const lang of ['en', 'pt'] as const) {
+        const text = resolveNotification(
+          { id: '1', type: 'info', code, meta: { central: 'acme', count: 1 }, ts: 0, read: false },
+          lang,
+        )
+        expect(`${code}|${lang}|${text.message!.includes('{name}')}`).toBe(`${code}|${lang}|false`)
+        expect(text.message).toContain(lang === 'pt' ? 'sem nome' : 'unnamed machine')
+      }
+    }
+  })
+
+  it('the modal and the reverse-warning badge fall back to the same words', () => {
+    const modal = readFileSync(join(import.meta.dir, 'NoticesModal.tsx'), 'utf8')
+    expect(modal).toContain('w.machineName || COPY.peerUnnamed[lang]')
+    expect(modal).toContain('p.fromMachineName || COPY.peerUnnamed[lang]')
+    const badge = readFileSync(join(import.meta.dir, 'SiblingWithheldBadge.tsx'), 'utf8')
+    expect(badge).toContain('m.name || COPY.peerUnnamed[lang]')
+  })
+
+  for (const key of ['peerUnnamed', 'peersColMachine', 'peersColFingerprint'] as const) {
+    it(`${key} exists in EN and PT`, () => {
+      expect(COPY[key].en.length).toBeGreaterThan(0)
+      expect(COPY[key].pt.length).toBeGreaterThan(0)
+      expect(COPY[key].en).not.toBe(COPY[key].pt)
+    })
+  }
 })

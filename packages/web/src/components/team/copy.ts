@@ -437,6 +437,22 @@ export const COPY = {
     en: 'Fingerprints',
     pt: 'Impressões digitais',
   },
+  // A machine the central never named. It used to fall back to a slice of the machine id — which is
+  // `sha256(token)`: derived from a credential, meaningless to a person, and another machine's
+  // internals on this machine's card. The fingerprint beside it is what identifies it for the one
+  // purpose this list serves.
+  peerUnnamed: {
+    en: 'Unnamed machine',
+    pt: 'Máquina sem nome',
+  },
+  peersColMachine: {
+    en: 'Machine',
+    pt: 'Máquina',
+  },
+  peersColFingerprint: {
+    en: 'Fingerprint',
+    pt: 'Impressão digital',
+  },
   peersSelf: {
     en: 'This machine',
     pt: 'Esta máquina',

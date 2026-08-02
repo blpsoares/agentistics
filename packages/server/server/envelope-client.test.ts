@@ -583,3 +583,27 @@ describe('an announcement that adds nothing is not a proposal — the apply ping
     expect(res.proposals).toBe(1)
   })
 })
+
+describe('a machine id is never dressed up as a machine name', () => {
+  it('parsePeers leaves an unnamed peer unnamed rather than naming it after its id', () => {
+    // `machineId` is sha256(token). Defaulting the NAME to it put a credential-derived string on
+    // the connection card — meaningless to a person, and another machine's internals. An unnamed
+    // machine is a fact; the UI says so in words.
+    const peers = parsePeers({ peers: [{ machineId: 'a'.repeat(64), publicKey: 'k' }] })
+    expect(peers).toHaveLength(1)
+    expect(peers[0]!.machineName).toBe('')
+  })
+
+  it('a proposal and its fact from an unnamed sender carry no id in the name field', async () => {
+    const envelope = await sealedFromPeer(RULES_MSG)
+    const central = fakeCentral({
+      peers: [{ machineId: PEER_ID, publicKey: PEER.publicKey }],
+      inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }],
+    })
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: () => {} })
+    expect(res.proposals).toBe(1)
+    const inbox = await readInbox(CONN_ID)
+    expect(inbox.proposals[0]!.fromMachineName).toBe('')
+    expect(inbox.siblingRules[0]!.machineName).toBe('')
+  })
+})

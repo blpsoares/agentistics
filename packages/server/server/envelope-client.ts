@@ -91,7 +91,11 @@ export function parsePeers(raw: unknown): PeerKey[] {
     if (typeof o.publicKey !== 'string' || o.publicKey === '') continue
     out.push({
       machineId: o.machineId,
-      machineName: typeof o.machineName === 'string' && o.machineName ? o.machineName : o.machineId,
+      // NEVER the id as a name. `machineId` is sha256(token) — derived from a credential and
+      // meaningless to a person — and a name defaulted to it is how it reached the connection card
+      // in the first place. An unnamed machine stays unnamed; the UI says so in words, beside the
+      // fingerprint that actually identifies it.
+      machineName: typeof o.machineName === 'string' ? o.machineName : '',
       publicKey: o.publicKey,
     })
   }
@@ -333,7 +337,7 @@ export async function receiveEnvelopes(
     // Belt and braces on top of the AAD binding: the payload names the central it is about, and a
     // payload that disagrees with the connection it arrived on is not a message for this central.
     if (message.instanceId !== instanceId) { refused++; continue }
-    const machineName = names.get(header.senderMachineId) ?? header.senderMachineId
+    const machineName = names.get(header.senderMachineId) ?? ''
     // AN ANNOUNCEMENT THAT WOULD ADD NOTHING HERE IS NOT A PROPOSAL. Applying one changes this
     // machine's rules, which announces them back — so a sibling that applied this machine's
     // proposal immediately offers it straight back, and each click starts the round trip again.
@@ -371,7 +375,7 @@ export async function receiveEnvelopes(
   }
 
   for (const machineId of changed) {
-    warnings.push({ machineId, machineName: names.get(machineId) ?? machineId, at: now.toISOString() })
+    warnings.push({ machineId, machineName: names.get(machineId) ?? '', at: now.toISOString() })
   }
 
   const nextProposals = mergeProposals(state.proposals, fresh)
