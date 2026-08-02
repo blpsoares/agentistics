@@ -45,6 +45,11 @@ export interface TeamDoc {
   name: string
   createdAt: Date
   createdBy?: string
+  /** Set on the ONE team first-boot creates for the organisation (`org-team.ts`). It marks where
+   *  the team came from, so the account form can pre-select it — never what the team IS: it is an
+   *  ordinary team in every other respect, renameable and deletable, and it keeps this mark after
+   *  a rename because the mark is a provenance, not the name. */
+  orgTeam?: boolean
 }
 
 /** Canonical email form for storage + uniqueness + lookup. */

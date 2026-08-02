@@ -836,6 +836,30 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   side is updated. Because the period is per tag, `makeTagFilter` evaluates tag by tag; the old
   flattened source union cannot express it.
 - **Tags are aggregate-only and explicitly shared** — a tag's visibility is the explicit `sharedWith` account list (plus its creator and every owner) and is **never** derived from teams; **anyone signed in may create a tag** — the role difference is REACH, not permission: writing requires that the principal can already see **every** one of its sources (`canWriteTagSources`, re-checked on edit), so an owner reaches anything, a manager what their teams reach, and a plain user only what their own account owns, otherwise a tag becomes a privilege-escalation path; and tag responses return **only counts and sums** — never session rows, transcripts or agent metrics — with keys the viewer cannot see collapsed into an "other" bucket. Tag math runs server-side against the unscoped session set, per-session (never from `stats-cache.json`).
+- **A team is a SCOPE KEY, never a label — and an account may have none.** `canCreateAccount` /
+  `canDeleteAccount` / `accountVisibleTo` / `teamVisibleTo` (`iam-view.ts`) all read memberships,
+  and **being in a team IS seeing it** — there is no separate view grant. Consequences:
+  - **An owner may create an account with NO team**; a manager may not. For the manager the
+    requirement is the boundary itself: an account placed outside their teams is one they created
+    and cannot then see or manage. The rule is stated ONCE, in `canCreateAccountWith`
+    (`@agentistics/core/iam.ts`) — `iam-view.ts` delegates to it and the create form
+    (`web/src/pages/settings/accountForm.ts`) calls the same function, with a cross-check test,
+    because the browser copy had drifted stricter than the server and refused an owner something
+    the server always allowed. A teamless account is invisible to and unmanageable by every
+    manager (owner-administered only); the form says so as a **hint** and never blocks.
+  - **There is deliberately NO team everybody joins.** A universal team was considered and
+    rejected: it would make every user see the team and its roster, make any manager of it manage
+    the whole company, and make any tag shared with it shared with everyone. Do not reintroduce one.
+  - **First boot creates ONE team named after `TEAM_ORG`, and creates it EMPTY** (`org-team.ts`'s
+    pure `planOrgTeam` decides; `createOrgTeam` in `teams.ts` does the IO, audited as
+    `team.create`). Nobody is auto-joined — creating the team is the convenience, populating it is
+    what would rebuild the universal team above. Nothing is created for the literal placeholder org
+    `default` (the same `isNamedOrg` from `@agentistics/core/org.ts` the connection card's title
+    uses), and nothing is created when the central already has any team, which is what makes it
+    idempotent across reboots. **It never auto-renames**: the guard is "does ANY team exist", not
+    "a team by this name", so changing the org config later leaves the team as it is. The
+    `TeamDoc.orgTeam` mark is provenance only — the account form pre-selects that team, and
+    pre-selected is not forced (the row is removable, and clearing it yields a teamless account).
 - **A date is NEVER stored as a string in Mongo.** Every persisted timestamp is a BSON `Date`;
   the WIRE shape stays an ISO string (JSON has no date type and the frontend does `parseISO`), so
   the conversion lives at the persistence boundary and nowhere else — `mongo-dates.ts`. Rules:

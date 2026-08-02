@@ -22,6 +22,8 @@
  * conflated string.
  */
 
+import { isNamedOrg } from '@agentistics/core'
+
 export interface CardIdentityInput {
   /** The name the CENTRAL gave this machine (probe → `whoami`). Absent until the probe resolves. */
   machineName?: string
@@ -62,13 +64,11 @@ function clean(s: string | undefined): string {
  * without anyone having chosen it. Titling every card "default" would make a fleet of centrals
  * indistinguishable — strictly worse than the addresses the org replaces — so the placeholder is
  * not treated as a name at all. Case-folded: the same non-choice typed in capitals is still one.
+ *
+ * `isNamedOrg` now lives in `@agentistics/core/org`, because the central asks the same question
+ * when it decides whether to create a team named after the organisation. One placeholder rule,
+ * two readers.
  */
-const PLACEHOLDER_ORG = 'default'
-
-function isNamedOrg(org: string): boolean {
-  return org !== '' && org.toLowerCase() !== PLACEHOLDER_ORG
-}
-
 export function resolveCardIdentity(input: CardIdentityInput): CardIdentity {
   const machineName = clean(input.machineName)
   const label = clean(input.label)

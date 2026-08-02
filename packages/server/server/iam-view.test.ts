@@ -76,6 +76,12 @@ test('canCreateAccount (member membership scope): owner any; manager only user-r
   expect(canCreateAccount(mgrA, [])).toBe(false)
 })
 
+test('canCreateAccount: an owner may create an account belonging to NO team', () => {
+  // The server has always allowed this; the create form used to refuse it. Pinned here so the
+  // authority cannot quietly grow the requirement the form has now dropped.
+  expect(canCreateAccount(owner, [])).toBe(true)
+})
+
 test('canDeleteAccount: owner deletes anyone (last-owner guarded in handler); manager only managed user-members', () => {
   expect(canDeleteAccount(owner, acc('o2', { role: 'owner' }))).toBe(true)  // owner deletes owner
   expect(canDeleteAccount(owner, acc('u1', { memberships: [{ teamId: 'B', role: 'user' }] }))).toBe(true)
