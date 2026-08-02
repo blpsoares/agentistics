@@ -382,9 +382,18 @@ export async function receiveEnvelopes(
   const nextWarnings = mergeKeyWarnings(state.keyWarnings, warnings)
   const nextDigests = recordOpened(state.openedDigests, openedNow)
   const nextFacts = mergeSiblingFacts(state.siblingRules, facts).slice(0, MAX_SIBLING_RULES)
-  const addedProposals = nextProposals.length - state.proposals.length
+  // Count the freshly decrypted proposals that SURVIVED the merge, never the length difference:
+  // a proposal supersedes its own sender's previous one, so a second announcement from the same
+  // machine leaves the list exactly as long as it was — and that is the announcement most worth
+  // telling the user about.
+  const freshIds = new Set(fresh.map(p => p.id))
+  const addedProposals = nextProposals.filter(p => freshIds.has(p.id)).length
   const addedWarnings = nextWarnings.length - state.keyWarnings.length
-  if (addedProposals !== 0 || addedWarnings !== 0 || openedNow.length > 0) {
+  // The list can also CHANGE without changing length (the supersede case), so the write condition
+  // is "the stored row ids are not the same ones", not a count.
+  const proposalsChanged = nextProposals.length !== state.proposals.length
+    || nextProposals.some((p, i) => p.id !== state.proposals[i]?.id)
+  if (proposalsChanged || addedWarnings !== 0 || openedNow.length > 0) {
     await writeInbox(conn.id, {
       proposals: nextProposals, keyWarnings: nextWarnings, openedDigests: nextDigests,
       siblingRules: nextFacts,

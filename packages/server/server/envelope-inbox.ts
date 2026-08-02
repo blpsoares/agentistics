@@ -15,7 +15,8 @@
  * (`envelope-keys.ts`). Those envelopes are never decrypted and are surfaced as an explicit alarm —
  * a reinstall and a central substituting a key are indistinguishable from here.
  */
-import type { ShareSource, SiblingRuleFact } from '@agentistics/core'
+import type { ShareSource, SiblingRuleFact, AnnouncedRules } from '@agentistics/core'
+import { proposalAddsNothing } from '@agentistics/core'
 import { envelopeInboxFile } from './config'
 import { safeReadJson } from './utils'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -104,13 +105,56 @@ export function recordOpened(existing: readonly string[], digests: readonly stri
 
 /**
  * PURE. Merge freshly decrypted proposals into the stored ones: newest first, deduplicated by
- * envelope id, capped. A repeat of an id already present is DROPPED rather than refreshed — the
- * user's decision not to act on a proposal must not be undone by the sender re-sending it.
+ * envelope id, SUPERSEDED per sending machine, capped. A repeat of an id already present is
+ * DROPPED rather than refreshed — the user's decision not to act on a proposal must not be undone
+ * by the sender re-sending it.
+ *
+ * SUPERSEDE PER MACHINE, for the same reason `mergeSiblingFacts` does it: each envelope carries a
+ * machine's WHOLE rule set, so a newer announcement from that machine does not add a second
+ * decision, it replaces the one that was pending. Two cards titled "Alienware restricted
+ * repositories for this central" is that bug, and the older of the two is stale by construction.
+ *
+ * Order is ARRIVAL order — fresh first, then the stored list, newest first — and never the sender's
+ * `at`: that is the sender's clock, display-only everywhere else in this channel, and a peer whose
+ * clock ran backwards must not be able to make its stale rules outrank its current ones.
  */
 export function mergeProposals(existing: readonly Proposal[], incoming: readonly Proposal[]): Proposal[] {
   const seen = new Set(existing.map(p => p.id))
   const fresh = incoming.filter(p => !seen.has(p.id))
-  return [...fresh, ...existing].slice(0, MAX_PROPOSALS)
+  const byMachine = new Set<string>()
+  const out: Proposal[] = []
+  for (const p of [...fresh, ...existing]) {
+    // A proposal with no sender id cannot be superseded by anything — it is kept on its own id.
+    if (p.fromMachineId) {
+      if (byMachine.has(p.fromMachineId)) continue
+      byMachine.add(p.fromMachineId)
+    }
+    out.push(p)
+  }
+  return out.slice(0, MAX_PROPOSALS)
+}
+
+/**
+ * PURE. The proposals that are still PENDING against the connection's CURRENT rules.
+ *
+ * `proposalAddsNothing` is checked when an envelope arrives, which decides whether it was ever a
+ * decision. It cannot decide whether it still is one: applying a proposal — or restricting the same
+ * rows by hand a week later — leaves the stored offer in place, arguing with itself ("this machine
+ * already restricts everything this proposal asks for") beside an Apply button that would do
+ * nothing. So the same arithmetic runs on the READ, against the rules as they are now.
+ *
+ * FILTERED, NEVER DELETED, and the asymmetry with `mergeProposals` is the point. A proposal
+ * superseded by its own sender is stale by construction — no later state makes it true again — and
+ * is dropped from the store. "Nothing left to apply" is a statement about the RECIPIENT's rules,
+ * which the user can lift at any time; a sibling only re-announces when ITS rules change, so
+ * deleting a satisfied proposal would silently spend the offer that lifting a local restriction
+ * ought to bring back.
+ */
+export function selectLiveProposals(
+  proposals: readonly Proposal[],
+  current: AnnouncedRules,
+): Proposal[] {
+  return proposals.filter(p => !proposalAddsNothing(current, { shareMode: p.shareMode, sources: p.sources }))
 }
 
 /** PURE. One warning per peer machine — a poll every few minutes must not become a warning list. */

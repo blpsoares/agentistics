@@ -186,6 +186,29 @@ describe('receiveEnvelopes', () => {
     expect(notes).toEqual(['member.peer_pinned', 'member.rules_proposed'])
   })
 
+  it('a machine that announces AGAIN still raises a notification, though it supersedes its own card', async () => {
+    // Supersede-per-machine keeps the list one row long, so counting the LENGTH difference would
+    // make the second announcement — the one that actually changed what the sibling hides —
+    // silent. The user is told about the message, not about the row count.
+    await writeInbox(CONN_ID, {
+      proposals: [{
+        id: 'e0', fromMachineId: PEER_ID, fromMachineName: 'laptop-b', shareMode: 'denylist',
+        sources: [{ type: 'repo', value: 'github.com/acme/web' }], at: 'a', receivedAt: 'r',
+      }],
+      keyWarnings: [], openedDigests: [], siblingRules: [],
+    })
+    await pinPeerKey(CONN_ID, PEER_ID, PEER.publicKey)
+    const envelope = await sealedFromPeer(RULES_MSG)
+    const central = fakeCentral({ inbox: [{ id: 'e1', senderMachineId: PEER_ID, envelope }] })
+    const notes: string[] = []
+    const res = await receiveEnvelopes(conn(), INSTANCE, { fetch: central.fetch, notify: n => notes.push(n.code) })
+
+    expect(res.proposals).toBe(1)
+    expect(notes).toEqual(['member.rules_proposed'])
+    const inbox = await readInbox(CONN_ID)
+    expect(inbox.proposals.map(p => p.id)).toEqual(['e1'])
+  })
+
   it('refuses a sender whose key changed, warns, and does NOT acknowledge the envelope', async () => {
     // The peer was pinned to a different key first; the directory now advertises a new one.
     await pinPeerKey(CONN_ID, PEER_ID, generateMachineKeypair().publicKey)
@@ -260,6 +283,28 @@ describe('inbox merging', () => {
   const p = (id: string): Proposal => ({
     id, fromMachineId: 'm', fromMachineName: 'm', shareMode: 'denylist', sources: [], at: 'a', receivedAt: 'r',
   })
+  const from = (id: string, machineId: string): Proposal => ({ ...p(id), fromMachineId: machineId })
+
+  it('supersedes an older proposal from the SAME machine — each message is a full snapshot', () => {
+    // The owner's screenshot: two cards titled "Alienware restricted repositories for this
+    // central". A machine's announcement is its WHOLE rule set, so the moment a newer one arrives
+    // the older one is not a second decision, it is a stale copy of the same one.
+    const merged = mergeProposals([from('old', 'alienware')], [from('new', 'alienware')])
+    expect(merged.map(x => x.id)).toEqual(['new'])
+  })
+
+  it('supersedes across a re-read of the store too, not only within one fetch', () => {
+    const merged = mergeProposals(
+      [from('newer', 'alienware'), from('older', 'alienware')],
+      [],
+    )
+    expect(merged.map(x => x.id)).toEqual(['newer'])
+  })
+
+  it('never collapses proposals from DIFFERENT machines', () => {
+    const merged = mergeProposals([from('a', 'm1')], [from('b', 'm2')])
+    expect(merged.map(x => x.id).sort()).toEqual(['a', 'b'])
+  })
 
   it('deduplicates a proposal that is still in the list', () => {
     // NOTE: this is the "still present" case only. The DISMISSAL case cannot be expressed here —
@@ -269,8 +314,10 @@ describe('inbox merging', () => {
   })
 
   it('puts fresh proposals first and caps the list', () => {
-    const existing = Array.from({ length: MAX_PROPOSALS }, (_, i) => p(`old${i}`))
-    const merged = mergeProposals(existing, [p('new')])
+    // One machine per row: with supersede-per-machine in force, a list this long can only be built
+    // by that many DISTINCT siblings, and the cap is the backstop behind that.
+    const existing = Array.from({ length: MAX_PROPOSALS }, (_, i) => from(`old${i}`, `m${i}`))
+    const merged = mergeProposals(existing, [from('new', 'fresh')])
     expect(merged[0]!.id).toBe('new')
     expect(merged).toHaveLength(MAX_PROPOSALS)
   })

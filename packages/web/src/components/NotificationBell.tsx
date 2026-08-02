@@ -116,18 +116,26 @@ export function NotificationBell({ lang, buttonStyle }: Props) {
               const link = notificationLink(n)
               const go = () => { if (!link) return; setOpen(false); navigate(link) }
               return (
-                <div key={n.id} style={{
-                  display: 'flex', alignItems: 'flex-start', gap: 9,
-                  padding: '10px 12px', borderBottom: '1px solid var(--border)',
-                }}>
+                // THE WHOLE ROW is the link, not a box inside it. The handler used to sit on the
+                // inner text block, so a click on the row's padding, its icon or the timestamp
+                // column did nothing at all — a link whose hit area is a subset of what looks like
+                // the link reads as "clicking the notification does nothing".
+                <div
+                  key={n.id}
+                  role={link ? 'button' : undefined}
+                  tabIndex={link ? 0 : undefined}
+                  onClick={link ? go : undefined}
+                  onKeyDown={link ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go() } }) : undefined}
+                  onMouseEnter={link ? (e => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-elevated)' }) : undefined}
+                  onMouseLeave={link ? (e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent' }) : undefined}
+                  style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 9,
+                    padding: '10px 12px', borderBottom: '1px solid var(--border)',
+                    background: 'transparent', cursor: link ? 'pointer' : undefined,
+                  }}
+                >
                   <Icon size={15} color={color} style={{ flexShrink: 0, marginTop: 1 }} />
-                  <div
-                    role={link ? 'button' : undefined}
-                    tabIndex={link ? 0 : undefined}
-                    onClick={link ? go : undefined}
-                    onKeyDown={link ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go() } }) : undefined}
-                    style={{ minWidth: 0, flex: 1, cursor: link ? 'pointer' : undefined }}
-                  >
+                  <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</div>
                     {message && (
                       <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 2, lineHeight: 1.45, wordBreak: 'break-word' }}>
@@ -146,7 +154,9 @@ export function NotificationBell({ lang, buttonStyle }: Props) {
                         mobile too, where hover does not exist, and the hit area is a full 44px
                         there (the icon stays small — only the touch target grows). */}
                     <button
-                      onClick={() => dismissNotification(n.id)}
+                      // The row navigates, so its own controls must not: without this, removing a
+                      // notification would also open whatever it linked to.
+                      onClick={e => { e.stopPropagation(); dismissNotification(n.id) }}
                       title={pt ? 'Remover notificação' : 'Remove notification'}
                       aria-label={pt ? 'Remover notificação' : 'Remove notification'}
                       style={{

@@ -138,4 +138,76 @@ describe('GET /api/team/proposals — the response shape is declared, not spread
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  it('does not return a proposal this machine already satisfies', async () => {
+    // The owner's screenshot: a card reading "this machine already restricts everything this
+    // proposal asks for" beside a live Apply button. `proposalAddsNothing` is evaluated when the
+    // envelope ARRIVES; applying it (or restricting the same rows by hand afterwards) is what
+    // makes the stored offer dead, and the read path is the only place that can notice.
+    const { mkdtemp, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = await mkdtemp(join(tmpdir(), 'agentistics-proposals-dead-'))
+    try {
+      const { __setTeamConnDirForTests } = await import('./config')
+      __setTeamConnDirForTests(dir)
+      const { writeInbox } = await import('./envelope-inbox')
+      const { handleProposals } = await import('./envelope-proposals')
+      const connId = 'c_dddddddddddd'
+      const dead = {
+        id: 'e-dead', fromMachineId: 'peer-1', fromMachineName: 'Alienware',
+        shareMode: 'denylist' as const, sources: [{ type: 'repo' as const, value: 'github.com/acme/api' }],
+        at: '2026-07-31T10:00:00.000Z', receivedAt: '2026-07-31T10:00:05.000Z',
+      }
+      const live = {
+        ...dead, id: 'e-live', fromMachineId: 'peer-2', fromMachineName: 'Laptop B',
+        sources: [{ type: 'repo' as const, value: 'github.com/acme/secret' }],
+      }
+      await writeInbox(connId, { proposals: [dead, live], keyWarnings: [], openedDigests: [], siblingRules: [] })
+
+      const res = await handleProposals(new Request('http://localhost/api/team/proposals'), {
+        readPreferences: async () => ({ team: { mode: 'member' as const, connections: [{
+          id: connId, endpoint: 'https://c.example', org: 'default', user: 'me', token: 't',
+          deniedRepos: [], shareMode: 'denylist' as const,
+          // Already denied here — exactly what the dead proposal asks for.
+          sources: [{ type: 'repo' as const, value: 'github.com/acme/api' }],
+        }] } }),
+      })
+      const body = await res.json() as { connections: { proposals: { id: string }[]; siblingRules: unknown[] }[] }
+      expect(body.connections[0]!.proposals.map(p => p.id)).toEqual(['e-live'])
+      // Filtered on the READ, never deleted: the store still holds it, so lifting the local
+      // restriction makes the sibling's standing offer live again — a sibling only re-announces
+      // when ITS OWN rules change, so a deletion here would lose it for good.
+      const { readInbox } = await import('./envelope-inbox')
+      expect((await readInbox(connId)).proposals.map(p => p.id)).toEqual(['e-dead', 'e-live'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('selectLiveProposals — a proposal with nothing left to apply is not pending', () => {
+  it('drops the satisfied ones and keeps the rest', async () => {
+    const { selectLiveProposals } = await import('./envelope-inbox')
+    const base = {
+      fromMachineName: 'Alienware', at: 'a', receivedAt: 'r', shareMode: 'denylist' as const,
+    }
+    const proposals = [
+      { ...base, id: 'dead', fromMachineId: 'm1', sources: [{ type: 'repo' as const, value: 'github.com/acme/api' }] },
+      { ...base, id: 'live', fromMachineId: 'm2', sources: [{ type: 'repo' as const, value: 'github.com/acme/web' }] },
+    ]
+    const live = selectLiveProposals(proposals, {
+      shareMode: 'denylist', sources: [{ type: 'repo', value: 'github.com/acme/api' }],
+    })
+    expect(live.map(p => p.id)).toEqual(['live'])
+  })
+
+  it('an EMPTY rule set leaves every proposal pending', async () => {
+    const { selectLiveProposals } = await import('./envelope-inbox')
+    const p = {
+      id: 'x', fromMachineId: 'm1', fromMachineName: 'A', shareMode: 'denylist' as const,
+      sources: [{ type: 'repo' as const, value: 'github.com/acme/api' }], at: 'a', receivedAt: 'r',
+    }
+    expect(selectLiveProposals([p], { shareMode: 'denylist', sources: [] })).toEqual([p])
+  })
 })

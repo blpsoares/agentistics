@@ -12,6 +12,7 @@ import { ConnectionCard } from './ConnectionCard'
 import { AddCentralDrawer } from './AddCentralDrawer'
 import type { ShareMode } from './sharePanelState'
 import type { TeamStatusResponse, ConnectionStatusEntry } from './statusTypes'
+import { nextNoticeFocus, noticeFocusSeq, type NoticeFocus } from './proposalNotices'
 import type { ProposalView, KeyWarningView, PeerFingerprint } from './proposalNotices'
 
 /** `GET /api/team/proposals` — this machine's own decrypted sealed-envelope inbox, same-origin. */
@@ -100,14 +101,16 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
   const [statusResp, setStatusResp] = useState<TeamStatusResponse | null>(null)
   const [addOpen, setAddOpen] = useState(false)
   // The bell's deep link (`notificationLink`): `?conn=<id>&notices=1` opens THAT card with its
-  // notices modal up. Read once into state and the query dropped, so a later manual close is not
-  // undone by the URL still asking for it.
+  // notices modal up. Read into state and the query dropped, so a later manual close is not undone
+  // by the URL still asking for it — but stored as a SEQUENCED REQUEST (`nextNoticeFocus`), never
+  // as a latched id: arriving again for the same connection has to be a new event, or the second
+  // bell click changes no state anywhere and opens nothing.
   const [searchParams, setSearchParams] = useSearchParams()
-  const [focusConnId, setFocusConnId] = useState<string | null>(null)
+  const [focus, setFocus] = useState<NoticeFocus | null>(null)
   useEffect(() => {
     const id = searchParams.get('conn')
     if (!id || searchParams.get('notices') !== '1') return
-    setFocusConnId(id)
+    setFocus(prev => nextNoticeFocus(prev, id))
     const next = new URLSearchParams(searchParams)
     next.delete('conn')
     next.delete('notices')
@@ -369,7 +372,7 @@ export function ConnectionsPanel({ sessions, projects, modelUsage, lang, onConne
               siblingRules={inboxById[conn.id]?.siblingRules ?? []}
               selfFingerprint={proposalsResp?.me?.fingerprint ?? ''}
               onDismissProposal={handleDismissProposal}
-              focusNotices={focusConnId === conn.id}
+              focusNoticesSeq={noticeFocusSeq(focus, conn.id)}
             />
           ))}
         </div>

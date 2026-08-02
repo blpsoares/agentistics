@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { COPY } from './copy'
 import { NO_REPO_KEY } from '@agentistics/core'
 import { describeSources, proposalAge, peerLabel, PROPOSAL_STALE_MS } from './proposalNotices'
-import { noticeSummary, proposalPlan } from './proposalNotices'
+import { noticeSummary, proposalPlan, nextNoticeFocus, noticeFocusSeq } from './proposalNotices'
 import { NOTIFICATION_TEXT, resolveNotification, notificationLink } from '../../lib/notifications'
 
 describe('describeSources', () => {
@@ -168,9 +168,13 @@ describe('the notices modal wiring — the regression that started all this', ()
 
 describe('the notices copy', () => {
   for (const key of [
-    'noticesBtn', 'noticesTitle', 'noticesEmpty', 'proposalWouldHide', 'proposalNothingToApply',
+    'noticesBtn', 'noticesTitle', 'noticesEmpty', 'proposalWouldHide',
     'proposalWouldWiden', 'proposalWidensUnlisted', 'proposalHidesUnlisted', 'proposalPartlyRestricts',
     'peersCount', 'peersShow',
+    // The table that replaced the wall of per-proposal prose.
+    'restrictionsTitle', 'restrictionsSubtitle', 'restrictionsEmpty', 'colBucket', 'colRestrictedOn',
+    'colAction', 'rowSharedOn', 'rowAppliedHere', 'rowNoLocalProject', 'restrictionsAllowlistNote',
+    'proposalStripTitle', 'proposalApplyAll',
   ] as const) {
     it(`${key} exists in EN and PT`, () => {
       expect(COPY[key].en.length).toBeGreaterThan(0)
@@ -196,6 +200,44 @@ describe('notificationLink — a decision must be one click away', () => {
     expect(notificationLink({ code: 'member.reconnected', meta: { connectionId: 'c_1' } })).toBeNull()
     expect(notificationLink({ code: 'member.rules_proposed', meta: {} })).toBeNull()
     expect(notificationLink({ code: undefined, meta: undefined })).toBeNull()
+  })
+})
+
+describe('nextNoticeFocus — the bell must open the notices EVERY time, not once', () => {
+  it('a second request for the SAME connection is a new request', () => {
+    // The bug the owner hit: the panel stored the focused connection id and nothing ever cleared
+    // it, so the card's "focused?" prop went true once and stayed true. Clicking the bell again
+    // changed no state anywhere — no re-render, no effect, no modal. A deep link is an EVENT; a
+    // latched boolean cannot represent the second one.
+    const first = nextNoticeFocus(null, 'c_1')
+    const second = nextNoticeFocus(first, 'c_1')
+    expect(second.connId).toBe('c_1')
+    expect(second.seq).toBeGreaterThan(first.seq)
+  })
+
+  it('switching connections is a new request too', () => {
+    const a = nextNoticeFocus(null, 'c_1')
+    const b = nextNoticeFocus(a, 'c_2')
+    expect(b.connId).toBe('c_2')
+    expect(b.seq).toBeGreaterThan(a.seq)
+  })
+
+  it('a card is focused only when the request names it', () => {
+    const req = nextNoticeFocus(null, 'c_1')
+    expect(noticeFocusSeq(req, 'c_1')).toBe(req.seq)
+    expect(noticeFocusSeq(req, 'c_2')).toBe(0)
+    expect(noticeFocusSeq(null, 'c_1')).toBe(0)
+  })
+
+  it('the whole notification row is the link, not a box inside it', () => {
+    // A row that navigates must be clickable across its own surface: the handler used to sit on an
+    // inner `flex: 1` div, so the row's padding, its icon and the timestamp column did nothing.
+    const src = readFileSync(join(import.meta.dir, '../NotificationBell.tsx'), 'utf8')
+    const rowStart = src.indexOf('notes.map(n =>')
+    const row = src.slice(rowStart, src.indexOf('</div>', src.indexOf('<Icon')))
+    expect(row).toContain('onClick={link ? go : undefined}')
+    // …and the per-row delete button must not navigate on its way out.
+    expect(src).toContain('stopPropagation')
   })
 })
 
