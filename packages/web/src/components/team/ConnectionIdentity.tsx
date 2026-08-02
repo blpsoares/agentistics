@@ -70,10 +70,12 @@ export function ConnectionIdentity({
       .finally(() => setLoading(false))
   }
 
+  // Two columns, not six stacked rows: the values are short, the card is wide, and the machine and
+  // the user are what a person opening this card is looking for. The token row is GONE — it showed
+  // dots and said nothing. URL and latency are reference and sit below, the URL full-width because
+  // it is the only long value here.
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
-      <Row label={COPY.identityUrl[lang]} value={<span style={{ wordBreak: 'break-all' }}>{endpoint}</span>} />
-      <Row label={COPY.identityToken[lang]} value="••••••••" />
       {loading && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-tertiary)' }}>
           <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />
@@ -81,21 +83,22 @@ export function ConnectionIdentity({
         </div>
       )}
       {!loading && identity?.ok && (
-        <>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '8px 16px' }}>
           {/* Read-only, and said so: the central assigns this name and nothing on this machine may
-             write it. The whole point of the row is that it is NOT the local nickname. */}
+             write it. */}
           {identity.machineName && (
-            <Row
+            <Cell
               label={COPY.identityMachineName[lang]}
               hint={COPY.machineNameByCentral[lang]}
-              value={<span style={{ overflowWrap: 'anywhere' }}>{identity.machineName}</span>}
+              value={identity.machineName}
             />
           )}
-          <Row label={COPY.identityUser[lang]} value={identity.user || '—'} />
-          <Row label={COPY.identityOrg[lang]} value={identity.org || '—'} />
-          {identity.latencyMs != null && <Row label={COPY.identityLatency[lang]} value={`${identity.latencyMs}ms`} />}
-        </>
+          <Cell label={COPY.identityUser[lang]} value={identity.user || '—'} />
+          {identity.org && <Cell label={COPY.identityOrg[lang]} value={identity.org} />}
+          {identity.latencyMs != null && <Cell label={COPY.identityLatency[lang]} value={`${identity.latencyMs}ms`} />}
+        </div>
       )}
+      <Cell label={COPY.identityUrl[lang]} value={endpoint} full />
       {!loading && identity && !identity.ok && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#ef4444' }}>
           <span>{identity.error ?? COPY.couldNotIdentify[lang]}</span>
@@ -117,11 +120,12 @@ export function ConnectionIdentity({
   )
 }
 
-function Row({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) {
+/** Label above value, so a narrow column never squeezes the value into two characters. */
+function Cell({ label, value, hint, full }: { label: string; value: React.ReactNode; hint?: string; full?: boolean }) {
   return (
-    <div title={hint} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 12 }}>
-      <span style={{ color: 'var(--text-tertiary)', flexShrink: 0, minWidth: 70 }}>{label}</span>
-      <span style={{ color: 'var(--text-secondary)', minWidth: 0, flex: 1 }}>{value}</span>
+    <div title={hint} style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0, gridColumn: full ? '1 / -1' : undefined }}>
+      <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>{label}</span>
+      <span style={{ fontSize: 12, color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>{value}</span>
     </div>
   )
 }

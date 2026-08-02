@@ -203,7 +203,7 @@ export function ConnectionCard({
         type="button"
         onClick={() => setExpanded(v => !v)}
         style={{
-          display: 'flex', alignItems: 'center', gap: 10, width: '100%', minHeight: 56,
+          display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 auto', minWidth: 0, minHeight: 56,
           padding: '10px 14px', border: 'none', background: 'transparent', cursor: 'pointer',
           textAlign: 'left', fontFamily: 'inherit', flexWrap: 'wrap',
         }}

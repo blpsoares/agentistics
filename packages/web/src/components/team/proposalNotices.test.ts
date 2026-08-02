@@ -189,3 +189,25 @@ describe('notificationLink — a decision must be one click away', () => {
     expect(notificationLink({ code: undefined, meta: undefined })).toBeNull()
   })
 })
+
+describe('the decluttered card', () => {
+  it('the identity block no longer prints a token row of dots', () => {
+    const src = readFileSync(join(import.meta.dir, 'ConnectionIdentity.tsx'), 'utf8')
+    expect(src).not.toContain('••••••••')
+    // Two columns, not six stacked rows.
+    expect(src).toContain('repeat(auto-fit, minmax(150px, 1fr))')
+  })
+
+  it('the fingerprints are behind a disclosure, and their explanation travels with them', () => {
+    const src = readFileSync(join(import.meta.dir, 'PeersSection.tsx'), 'utf8')
+    expect(src).toContain('useState(false)')
+    // The explanation sits INSIDE the opened block, never as preamble above the toggle.
+    expect(src.indexOf('COPY.peersBody')).toBeGreaterThan(src.indexOf('{open && ('))
+  })
+
+  it('the standing caveats fold, but the live OTel warning does not', () => {
+    const src = readFileSync(join(import.meta.dir, 'SharedReposPanel.tsx'), 'utf8')
+    expect(src).toMatch(/<Caveats[\s\S]*COPY\.ciNote[\s\S]*<\/Caveats>/)
+    expect(src.indexOf('COPY.otelWarn')).toBeGreaterThan(src.indexOf('</Caveats>'))
+  })
+})

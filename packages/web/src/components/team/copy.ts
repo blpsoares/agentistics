@@ -360,6 +360,14 @@ export const COPY = {
   },
   // The card's notices affordance and the modal behind it. The card STATES the state; the
   // explanation and the decision live in the modal.
+  // The read view's three standing caveats (new repositories, the attribution boundary, CI) are
+  // precise and stay verbatim — they just stop being four stacked tertiary lines on a card whose
+  // job is "what am I sharing". The OTel warning is NOT in here: a warning behind a disclosure is
+  // a warning nobody reads.
+  caveatsToggle: {
+    en: 'What these rules do and do not cover',
+    pt: 'O que estas regras cobrem e não cobrem',
+  },
   noticesBtn: {
     en: 'Notices',
     pt: 'Avisos',
