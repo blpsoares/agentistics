@@ -157,6 +157,47 @@ describe('buildRestrictionTable — rows are what is NOT shared, and where', () 
     expect(src).not.toContain('proposalNothingToApply')
   })
 
+  /**
+   * The CARD's hidden block asks the SAME builder a narrower question — "what does THIS machine
+   * hide, and where else is that restriction applied?" — instead of carrying a second
+   * implementation. Two surfaces disagreeing about what is hidden would be worse than either.
+   */
+  it('scope "selfRestricted" keeps only the rows this machine hides, and nothing else changes', () => {
+    const input = {
+      self: { shareMode: 'denylist' as const, sources: [{ type: 'repo' as const, value: 'github.com/acme/api' }] },
+      selfLabel: 'This machine',
+      siblings: [
+        sibling({ machineId: 'm1', machineName: 'Alienware', sources: [{ type: 'repo', value: 'github.com/acme/api' }] }),
+        sibling({ machineId: 'm2', machineName: 'Laptop B', sources: [{ type: 'repo', value: 'github.com/acme/secret' }] }),
+      ],
+    }
+    // Unscoped (the notices modal): every bucket ANYBODY withholds.
+    expect(buildRestrictionTable(input).rows.map(r => r.value).sort())
+      .toEqual(['github.com/acme/api', 'github.com/acme/secret'])
+    // Scoped (the card): only what this machine hides from this central — a sibling's own
+    // restriction is not something this card may claim to be hiding.
+    const scoped = buildRestrictionTable({ ...input, scope: 'selfRestricted' })
+    expect(scoped.rows.map(r => r.value)).toEqual(['github.com/acme/api'])
+    // The kept row is the SAME row, sibling column and all — narrowed, never rebuilt.
+    expect(scoped.rows[0]!.restrictedBy.map(m => m.machineName)).toEqual(['This machine', 'Alienware'])
+    expect(scoped.rows[0]!.selfRestricts).toBe(true)
+  })
+
+  it('scope "selfRestricted" still answers when no sibling has announced anything', () => {
+    const scoped = buildRestrictionTable({
+      self: { shareMode: 'denylist', sources: [{ type: 'project', value: '/home/me/api' }, { type: 'none', value: '' }] },
+      selfLabel: 'This machine',
+      siblings: [],
+      scope: 'selfRestricted',
+    })
+    expect(scoped.rows.map(r => r.kind).sort()).toEqual(['none', 'project'])
+    // Every row names this machine and no other — the block above the table says so in words.
+    for (const row of scoped.rows) {
+      expect(row.restrictedBy.map(m => m.self)).toEqual([true])
+    }
+    expect(scoped.rows).toHaveLength(2)
+  })
+
   it('is total — junk sources and an empty account produce an empty table, never a throw', () => {
     const table = buildRestrictionTable({
       self: { shareMode: 'denylist', sources: [{ type: 'repo', value: '' }, { type: 'project', value: '' }] },

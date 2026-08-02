@@ -475,6 +475,13 @@ export const COPY = {
     en: 'No project with this name here',
     pt: 'Nenhum projeto com este nome aqui',
   },
+  // The card's hidden rows: what this machine knows about the OTHER machines, stated in words
+  // rather than left as an empty cell — "nothing announced" is not "nowhere else", and only the
+  // first of those two is something this machine can honestly say.
+  rowNoOtherMachine: {
+    en: 'No other machine of yours has announced this restriction',
+    pt: 'Nenhuma outra máquina sua anunciou esta restrição',
+  },
   rowTagRepo: {
     en: 'repo',
     pt: 'repo',
