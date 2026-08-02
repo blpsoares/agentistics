@@ -25,6 +25,8 @@ import { join } from 'node:path'
 import { createHmac } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 
+type StorageState = Awaited<ReturnType<BrowserContext['storageState']>>
+
 const MACHINE_URL = process.env.MACHINE_URL ?? 'http://localhost:47392'
 const CENTRAL_URL = process.env.CENTRAL_URL ?? 'http://localhost:48090'
 const CENTRAL_EMAIL = process.env.CENTRAL_EMAIL ?? 'ana@northwind.example'
@@ -130,7 +132,7 @@ async function record(
   name: string,
   viewport: { width: number; height: number },
   drive: (page: Page, context: BrowserContext) => Promise<void>,
-  init?: (context: BrowserContext) => Promise<void>,
+  opts: { storageState?: StorageState } = {},
 ): Promise<void> {
   if (ONLY && ONLY !== name) return
   const dir = join(OUT_DIR, `.video-${name}`)
@@ -142,6 +144,11 @@ async function record(
     deviceScaleFactor: 1,
     recordVideo: { dir, size: viewport },
     colorScheme: 'dark',
+    // Signing in is setup, not content: it belongs to `central-login`, and
+    // leaving it at the head of the tour spends most of a 20s loop on a
+    // password field. Handing over an already-authenticated state also avoids
+    // trimming by a guessed duration, which changes with the machine.
+    ...(opts.storageState ? { storageState: opts.storageState } : {}),
   })
   // The first-run "install the app" modal dims the whole page behind it, so a
   // recording that meets it is a recording of a dimmed dashboard. It is keyed on
@@ -150,7 +157,6 @@ async function record(
   await context.addInitScript(() => {
     try { localStorage.setItem('agentistics-install-dismissed', 'true') } catch { /* ignore */ }
   })
-  await init?.(context)
   const page = await context.newPage()
   try {
     await drive(page, context)
@@ -165,9 +171,14 @@ async function record(
   await rename(join(dir, files[0]!), webm)
   await rm(dir, { recursive: true, force: true })
 
-  toGif(webm, join(OUT_DIR, `${name}.gif`), viewport.width)
+  toGif(webm, join(OUT_DIR, `${name}.gif`), viewport.width, SKIP_SECONDS[name] ?? 0)
   console.log(`  ${name}.gif`)
 }
+
+/** Seconds to drop from the FRONT of a clip, for a flow whose opening is setup
+ *  rather than content. Prefer `storageState` (below) where the setup is a
+ *  login: trimming guesses at a duration that changes with the machine. */
+const SKIP_SECONDS: Record<string, number> = {}
 
 /** Two passes: one to compute a palette from the whole clip, one to apply it.
  *  A single-pass gif quantizes per frame and the UI's flat panels band badly.
@@ -177,14 +188,16 @@ async function record(
  *  dashboard is mostly flat panels on a dark background, so 128 colours is
  *  indistinguishable here, and a coarse ordered dither compresses far better
  *  than a fine one because neighbouring frames stay identical. */
-function toGif(webm: string, gif: string, sourceWidth: number): void {
+function toGif(webm: string, gif: string, sourceWidth: number, skipSeconds = 0): void {
   const width = sourceWidth > 900 ? 900 : sourceWidth
   const filters = `fps=10,scale=${width}:-1:flags=lanczos`
   const palette = `${gif}.png`
+  // `-ss` before `-i` seeks, so the skipped part costs nothing to decode.
+  const seek = skipSeconds > 0 ? ['-ss', String(skipSeconds)] : []
   const limit = ['-t', '20'] // no single loop runs longer than 20s
-  spawnSync('ffmpeg', ['-y', '-loglevel', 'error', ...limit, '-i', webm,
+  spawnSync('ffmpeg', ['-y', '-loglevel', 'error', ...seek, ...limit, '-i', webm,
     '-vf', `${filters},palettegen=max_colors=128:stats_mode=diff`, palette])
-  spawnSync('ffmpeg', ['-y', '-loglevel', 'error', ...limit, '-i', webm, '-i', palette,
+  spawnSync('ffmpeg', ['-y', '-loglevel', 'error', ...seek, ...limit, '-i', webm, '-i', palette,
     '-lavfi', `${filters}[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`, gif])
   spawnSync('rm', ['-f', palette])
 }
@@ -219,6 +232,24 @@ async function loginToCentral(page: Page): Promise<void> {
     await wait(3500)
   }
   await ready(page)
+}
+
+/** Sign in ONCE, in a context that is not being recorded, and keep the session
+ *  so every central flow can start already authenticated. */
+async function centralSession(browser: Browser): Promise<StorageState | undefined> {
+  if (!CENTRAL_PASSWORD) return undefined
+  const context = await browser.newContext({ viewport: DESKTOP, colorScheme: 'dark' })
+  const page = await context.newPage()
+  try {
+    await loginToCentral(page)
+    const state = await context.storageState()
+    await context.close()
+    return state
+  } catch (err) {
+    console.warn(`  central login failed: ${String(err).slice(0, 160)}`)
+    await context.close()
+    return undefined
+  }
 }
 
 async function run(): Promise<void> {
@@ -285,11 +316,15 @@ async function run(): Promise<void> {
     await wait(2500)
   })
 
+  const session = await centralSession(browser)
+
   await record(browser, 'central-dashboard', DESKTOP, async page => {
-    await loginToCentral(page)
+    await page.goto(CENTRAL_URL, { waitUntil: 'load' })
+    await ready(page)
+    await wait(2400)
     await hop(page, 800)
     await hop(page, 1600)
-  })
+  }, { storageState: session })
 
   await browser.close()
   console.log(`\ngifs in ${OUT_DIR}`)

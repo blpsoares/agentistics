@@ -25,7 +25,7 @@ agentop --version    # print version (and a notice if an update exists)
 
 | Command | Purpose |
 |---------|---------|
-| [`start`](#start) | Interactive launcher — pick mode + how to run (foreground / bg / Docker / boot) |
+| [`start`](#start) | The control center — services, setup, logs, commands, help (same as bare `agentop`) |
 | [`setup`](#setup) | Interactive first-run wizard (solo / central / member) |
 | [`server`](#server) | Start the web dashboard + api + Nay + background daemon (non-interactive) |
 | [`restart`](#restart) | Restart a running mode so it picks up new code / config |
@@ -39,72 +39,99 @@ agentop --version    # print version (and a notice if an update exists)
 | [`upgrade`](#upgrade) | Upgrade `agentop` to the latest release |
 | [`check-update`](#check-update) | Print an "update available" banner, else stay silent |
 | [`doctor`](#doctor) | Run the exposure preflight before publishing a central |
+| [`setup-token`](#setup-token) | Reissue a central's one-time owner setup token |
+| [`reset-password`](#reset-password) | Reset an account's password from the host (locked-out owner) |
 
-Running **bare `agentop`** on an interactive terminal, on a machine that isn't
-configured yet, launches the [`setup`](#setup) wizard. Otherwise it prints help.
+Running **bare `agentop`** on an interactive terminal opens the
+[control center](#start). Without a terminal it prints this help; `--help` always prints it.
 
 ---
 
 ## `start`
 
-The interactive launcher — a **re-runnable control panel** with **arrow-key navigation** (↑/↓ +
-Enter; you only type in text fields like an endpoint or token). **English by default, with a pt-BR
-toggle.** It prints a banner and a two-part status, then a menu. Run it as often as you like; it
-always reflects the current state.
+The **control center** — one full-screen application, in the terminal's *alternate buffer*, so it
+adds nothing to your scrollback no matter how long you use it. Bare `agentop` opens the same thing.
 
 ```bash
+agentop                      # the usual way in
 agentop start
 agentop start --lang pt      # force Portuguese for this run
 ```
 
 ```
-  ▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀ ▀█▀ █ █▀▀ █▀
-  █▀█ █▄█ ██▄ █░▀█ ░█░ █ ▄█ ░█░ █ █▄▄ ▄█
-  AI coding-assistant analytics · agentop
-  ──────────────────────────────────────
-  config   member — sends metrics to a central at http://host:48080
-  running  ● agentistics    (this machine)   http://localhost:47292
-           ● agentistics central    (docker)
-  ──────────────────────────────────────
+ ▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀ ▀█▀ █ █▀▀ █▀
+ █▀█ █▄█ ██▄ █░▀█ ░█░ █ ▄█ ░█░ █ █▄▄ ▄█                           member · v1.7.3 · ● 1.7.4
 
-  What would you like to start?
-  ❯ agentistics            this machine
-    agentistics central    team aggregator · :48080
-    Disconnect from the central    back to solo
-    Stop a running service…
-    Switch to Português
-    Quit
+  services   setup   logs   commands   help   contribute
+ ━━━━━━━━━━
+ ╭─ services ─────────────────────────────╮╭─ config ─────────────────────────────────────╮
+ │ ❯ agentistics         native ● up      ││   mode     member                            │
+ │   agentistics central        ○ stopped ││   endpoint http://198.51.100.199:48080       │
+ │                                        ││   history  consolidate                       │
+ │                                        ││   language English                           │
+ ╰────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+ ╭─ agentistics ────────────────────────────────────────────────────────────────── native ╮
+ │ native · pid 48213 · up 2h13m                                                          │
+ │                                                                                        │
+ │ RUNTIMES ───────────────────────────────────────────────────────────────────────────── │
+ │ native   ● up · pid 48213 · up 2h13m                                                   │
+ │ docker   ○ stopped                                                                     │
+ │                                                                                        │
+ │ ADDRESSES ──────────────────────────────────────────────────────────────────────────── │
+ │ web      http://localhost:47292                                                        │
+ │ api      http://localhost:47291                                                        │
+ │                                                                                        │
+ │ MACHINE ────────────────────────────────────────────────────────────────────────────── │
+ │ boot     starts at boot                                                                │
+ │ history  consolidate                                                                   │
+ │ endpoint http://198.51.100.199:48080                                                   │
+ │   Restart   Rebuild & restart   Stop   Open in browser                                 │
+ ╰────────────────────────────────────────────────────────────────────────────────────────╯
+
+ q quit  ·  ←→ screens  ·  tab pane  ·  ↑↓ move  ·  enter actions  ·  s stop  ·  R restart
 ```
 
 **Naming:** `agentistics` is the per-machine app; `agentistics central` is the team aggregator.
 Both serve a web dashboard, so neither is labelled "the dashboard".
 
-The status is split in two, because they're independent:
+### The screens
 
-- **config** — what your preferences say: `solo` (nothing leaves), `member — sends metrics to a
-  central at <url>`, or `central` (this machine hosts one).
-- **running** — what's actually up right now, detected live: `agentistics` (native local server),
-  an `agentistics central` container, and/or an `agentistics` machine container. A machine can be
-  several at once.
+Move between them with **`←` / `→`** — there are no digit shortcuts for screens, so the digits
+always belong to whatever list is drawing them.
 
-Menu:
+| Screen | What it is for |
+|---|---|
+| **services** | The cockpit: start / stop / restart, connect to or leave a central, enable a boot service |
+| **setup** | The same solo / central / member wizard as [`setup`](#setup), plus the history-preservation consent |
+| **logs** | A tailing viewer, one source per running service |
+| **commands** | The cheat sheet — every command, without leaving the app |
+| **help** · **contribute** | What the keys do, and how to contribute |
 
-- **agentistics** → choose how to run: **Foreground** / **Background** / **Docker**. Starting while
-  one is already up warns you and offers to **kill it and start fresh**. Background/central starts
-  then offer to also **start on boot** (systemd).
-- **agentistics central** → builds & starts the aggregator (Docker, bundles MongoDB, `:48080`).
-- **Connect to a central** (or **Disconnect** when already a member) — become/stop being a member;
-  you can also do this from the web UI (**Settings → Team**).
-- **Stop a running service…** (shown only when something is up) lists exactly what's running and
-  lets you take down one — or **Everything**.
-- **Switch to Português / English** — flips the language and persists it (shared with the web
-  `lang` preference).
+### The services screen
+
+The services list is the **selection**; the pane below is a view *of* it, so moving the cursor
+repaints it. `tab` cycles the panes (services → config → actions) and the actions are
+**focus-scoped**: with a service selected they act on *that* service, which is why there is no
+"stop which?" submenu.
+
+- **One row per logical service, never per runtime.** `agentistics` run natively and the same
+  program in a container are two *runtimes* of one service. A running service therefore offers no
+  "start" at all — it offers **Restart**, **Rebuild & restart** (only where a rebuild could actually
+  work here), **Stop** and **Open in browser**. A stopped one is dimmed and offers only the starts
+  this machine can perform.
+- **A service running under BOTH runtimes says so**, in colour, with a word — and its verbs split
+  into `Stop (native)` / `Stop (docker)`. They read the same files and fight over the same port, so
+  the conflict is never normalised away by showing just one.
+- **A long action streams into the detail pane**, titled with the verb you pressed, while the lists
+  stay standing beside it. `esc` puts the facts back.
 - The **Docker** option mounts the host's harness dirs read-only — run the machine in Docker **or**
   natively, not both. See [Machine in Docker](DEPLOY.md#machine-in-docker).
-- **Non-interactive stdin** (a pipe or a systemd unit) skips the panel and behaves exactly like
-  [`server`](#server).
 
-Ctrl-C is non-destructive — it aborts without starting anything.
+The footer always names the keys that work *in the current focus*; it is the only documentation the
+screen has, so a hint for a key that does nothing there is a bug.
+
+**Non-interactive stdin** (a pipe, a systemd unit) skips all of this and behaves exactly like
+[`server`](#server). `q` leaves without starting anything.
 
 ---
 
@@ -114,16 +141,32 @@ Restart a running mode so it picks up new code (after an `upgrade` / `git pull`)
 config. Defaults to `server`.
 
 ```bash
-agentop restart            # = restart server
-agentop restart server     # bounce the systemd user service (agentop-server)
-agentop restart watch      # bounce the watch service
-agentop restart central    # rebuild + restart the central's Docker container
+agentop restart                      # = restart server
+agentop restart server               # bounce the systemd user service (agentop-server)
+agentop restart watch                # bounce the watch service
+agentop restart central              # bounce the central's container
+agentop restart --all                # bounce every service currently up
+agentop restart central --rebuild    # rebuild the image first, then restart
+agentop restart central --rebuild --cache -n   # …reusing the layer cache, answering the prompt
 ```
 
 `server`/`watch` bounce the installed [systemd user service](#autostart) — if none is installed it
-tells you to run it in the foreground or enable autostart first. `central` delegates to
-`central.sh restart`; to also pick up **code** changes on a central, use `agentop central up`
-(rebuilds the image) instead.
+tells you to run it in the foreground or enable autostart first. `--all` bounces everything that is
+up (local + central + machine), non-interactively.
+
+**`--rebuild` is a FULL rebuild.** The Docker paths pass `--no-cache`, because a cached build can
+hand you back the very image it was asked to replace — which is the one failure mode a rebuild
+exists to prevent. That takes several minutes, and the command says so on the way in:
+
+| Flag | Effect |
+|---|---|
+| `--cache` | Reuse Docker's layer cache instead — the fast path |
+| `--no-cache` | The default for a rebuild; stated explicitly |
+| `-y` / `--yes` | Re-run the central's interactive setup, without being asked |
+| `-n` / `--no` | Do **not** re-run it — the default when there is no terminal to ask on |
+
+Passing `-y` with `-n` (or `--cache` with `--no-cache`) is **refused**, not silently resolved. A
+plain `agentop central up` is not a rebuild and keeps its cached build.
 
 ---
 
@@ -172,11 +215,29 @@ everything in one process. Binds two ports: the **web dashboard on 47292** (open
 ```bash
 agentop server              # web: http://localhost:47292 · api/mcp: http://localhost:47291
 agentop server --port 4000  # api on 4000, web on 4001
+agentop server --bg         # detached, logging to ~/.agentistics
+agentop server --central    # run a central natively, no Docker
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port <n>` | `47291` | The **api + mcp** port; the web dashboard is served on this + 1 (default 47292) |
+| `--bg` | off | Start detached in the background; logs go to `~/.agentistics` |
+| `--central` | off | Run this process as a **team central**, natively — see below |
+
+### `--central` — a central without Docker
+
+Runs the same server with `AGENTISTICS_TEAM_CENTRAL=1`, loading `central.env` (searched in
+`$AGENTISTICS_CENTRAL_ENV`, `./central.env`, then `~/.agentistics/central.env`) for the secrets and
+the database URL.
+
+There is **no bundled MongoDB on this path** — set `MONGO_URL` to an external cluster (Atlas, or a
+`mongod` you run yourself). For the all-in-one flow with Mongo included, use
+[`agentop central up`](#central) instead.
+
+> **`AGENTISTICS_TEAM_PASSWORD` in `central.env` selects the legacy shared-password login and masks
+> the accounts sign-in.** If you want accounts, remove it — the central will otherwise serve the old
+> "team password" screen with no error anywhere.
 
 ---
 
@@ -474,3 +535,44 @@ What it checks:
 
 A check that could not be verified — the database was unreachable, say — reports a **failure**,
 not a reassuring pass. See [exposure.md](exposure.md) for the full deployment runbook.
+
+---
+
+## `setup-token`
+
+Reissues a central's **one-time owner setup token** — the token first boot prints, and which the
+dashboard asks for when it creates the first owner account.
+
+```bash
+agentop central setup-token      # from anywhere
+./central.sh setup-token         # from a checkout
+```
+
+Use it when the boot that printed the token has scrolled away or its log rotated. It is **refused
+once an owner exists**: past that point the way back in is [`reset-password`](#reset-password), not
+a fresh setup token.
+
+Run it **where the central runs** — inside the container/host serving it, not on a member.
+
+---
+
+## `reset-password`
+
+Resets an account's password from the host. This is the **only way back in for a locked-out last
+owner**, so it deliberately requires shell access to the machine running the central.
+
+```bash
+agentop central reset-password                              # list the accounts
+agentop central reset-password --email ana@example.com      # prompts for the new password
+agentop central reset-password --email ana@example.com --password '<new>' --clear-mfa
+```
+
+| Flag | Effect |
+|---|---|
+| `--email <address>` | Which account. Omit to list them |
+| `--password <new>` | Set it non-interactively (subject to the password policy) |
+| `--clear-mfa` | Also drop the enrolled second factor — for a lost authenticator |
+
+Every reset is written to the audit log. `--clear-mfa` removes a security control, so on a public
+profile treat it as a break-glass action and re-enrol immediately: `owner-mfa` is one of the checks
+[`doctor --exposed`](#doctor) fails on.

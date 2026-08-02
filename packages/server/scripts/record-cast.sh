@@ -53,14 +53,30 @@ trap cleanup EXIT
 # host, the cwd, the git branch and — with the common work setups — an e-mail
 # address on screen, and it reappears the moment the recorded program exits. A
 # published GIF cannot be taken back, so the prompt is replaced, not trusted.
+#
+# The demo HOME, the ports and the binary's directory all go on the SESSION's
+# shell, never on the command we type. Two reasons, both of them things that end
+# up in a published file: the pane inherits the tmux server's environment, so
+# setting HOME anywhere else leaves the recorded program reading the operator's
+# real config; and a typed `env HOME=/home/<user>/… /home/<user>/…/agentop start`
+# puts that user's name and directory layout on screen for the first seconds of
+# every recording. What gets typed is just `agentop start`.
 tmux new-session -d -s "$SESSION" -x "$COLS" -y "$ROWS" \
-  "env -u PROMPT_COMMAND -u STARSHIP_SHELL PS1='$ ' bash --noprofile --norc"
+  "env -u PROMPT_COMMAND -u STARSHIP_SHELL COLORTERM=truecolor FORCE_COLOR=3 \
+   HOME='${HOME_DIR:-$HOME}' PATH='${BIN_DIR:-$HOME/.local/bin}:/usr/local/bin:/usr/bin:/bin' \
+   ${EXTRA_ENV:-} PS1='$ ' bash --noprofile --norc"
 tmux set-option -t "$SESSION" status off
+# TRUECOLOR, or the recording is the wrong colour. The TUI paints in 24-bit hex
+# (#f59e0b amber); inside tmux the default TERM advertises only 256 colours, so
+# Ink downsamples it to the nearest ANSI index — plain yellow — and the whole
+# wordmark comes out a different colour from the one users actually see.
+tmux set-option -t "$SESSION" default-terminal "tmux-256color"
+tmux set-option -ga terminal-overrides ",*:Tc"
 tmux send-keys -t "$SESSION" "clear" Enter
 
 # asciinema records the read-only attach. `-q` keeps its own banner out of the
 # cast; the attach ends when we kill the session, which ends the recording.
-env HOME="${HOME_DIR:-$HOME}" asciinema rec -q \
+asciinema rec -q \
   --cols "$COLS" --rows "$ROWS" \
   -c "tmux attach -t $SESSION -r" \
   "$OUT_DIR/$NAME.cast" &
@@ -68,7 +84,7 @@ REC_PID=$!
 
 sleep_ms 600  # let the recorder attach before anything happens on screen
 
-tmux send-keys -t "$SESSION" "clear && ${EXTRA_ENV:-} $CMD" Enter
+tmux send-keys -t "$SESSION" "$CMD" Enter
 sleep_ms "$SETTLE_MS"
 
 while [ $# -gt 0 ]; do
