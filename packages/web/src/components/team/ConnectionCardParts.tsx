@@ -39,6 +39,20 @@ export function mobileBtn(disabled: boolean, danger: boolean, isMobile: boolean)
   }
 }
 
+/** The drawer action-bar button (primary = the commit, secondary = back/cancel). Shared by the
+ *  add-central wizard and the sharing-rules drawer so the two cannot drift apart. */
+export function drawerBtn(isMobile: boolean, variant: 'primary' | 'secondary'): React.CSSProperties {
+  return {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+    padding: isMobile ? '0 14px' : '8px 14px', minHeight: isMobile ? 44 : undefined,
+    width: isMobile ? '100%' : undefined,
+    borderRadius: 7, fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer',
+    ...(variant === 'primary'
+      ? { border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)' }
+      : { border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)' }),
+  }
+}
+
 export function StatusLine({ state, status, lang }: { state: CardState; status: ConnectionStatusEntry | undefined; lang: 'pt' | 'en' }) {
   const pt = lang === 'pt'
   let text: React.ReactNode

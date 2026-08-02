@@ -6,6 +6,8 @@ import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
 import { plural } from '../../lib/shareRepos'
 import { blendedCostPerToken } from '../../hooks/useData'
 import { Section, ConfirmModal } from '../../pages/settings/primitives'
+import Drawer from '../../pages/settings/Drawer'
+import { drawerBtn } from './ConnectionCardParts'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { COPY, PLURAL_COPY, interpolate } from './copy'
 import type { CardState } from './cardState'
@@ -183,13 +185,49 @@ export function SharedReposPanel({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <Section
         title={COPY.sharedRepos[lang]}
-        editing={editing}
+        // The editor is the DRAWER below — the same right-side panel the add-central wizard uses,
+        // with the same picker, the same reverse-warning badges and the same caveat. The section
+        // therefore never enters its own inline edit mode: one picker, one behaviour, one place to
+        // fix a bug. `editChildren` stays required by `Section`'s contract and is never rendered.
+        editing={false}
         onEdit={startEdit}
         onCancel={cancelEdit}
         onSave={attemptSave}
         canEdit={canEditRepos(cardState, phase)}
         labels={{ edit: COPY.editRules[lang], save: COPY.saveRules[lang], cancel: COPY.cancel[lang] }}
-        editChildren={
+        editChildren={null}
+      >
+        <ReadView
+          targets={targets}
+          projectTargets={projectTargets}
+          storedDenied={storedRepoKeys}
+          storedProjectPaths={storedProjectPaths}
+          mode={storedMode}
+          sessions={sessions}
+          status={status}
+          lang={lang}
+          otelEnabled={otelEnabled}
+        />
+      </Section>
+
+      <Drawer
+        open={editing}
+        title={COPY.sharedRepos[lang]}
+        onClose={cancelEdit}
+        dirty={dirty}
+        lang={lang}
+        footer={
+          <>
+            <button type="button" onClick={cancelEdit} style={drawerBtn(isMobile, 'secondary')}>
+              {COPY.cancel[lang]}
+            </button>
+            <button type="button" onClick={attemptSave} style={drawerBtn(isMobile, 'primary')}>
+              <Check size={14} /> {COPY.saveRules[lang]}
+            </button>
+          </>
+        }
+      >
+        {editing && (
           <SharingRulesPicker
             mode={effectiveMode}
             onModeChange={setModeDraft}
@@ -223,20 +261,8 @@ export function SharedReposPanel({
             onShareAllProjects={() => setProjectDraft(shareAllProjectsDraft(projectTargets))}
             onBlockAllProjects={() => setProjectDraft(blockAllProjectsDraft(projectTargets))}
           />
-        }
-      >
-        <ReadView
-          targets={targets}
-          projectTargets={projectTargets}
-          storedDenied={storedRepoKeys}
-          storedProjectPaths={storedProjectPaths}
-          mode={storedMode}
-          sessions={sessions}
-          status={status}
-          lang={lang}
-          otelEnabled={otelEnabled}
-        />
-      </Section>
+        )}
+      </Drawer>
 
       {banner && <ApplyBanner banner={banner} status={status} lang={lang} />}
 

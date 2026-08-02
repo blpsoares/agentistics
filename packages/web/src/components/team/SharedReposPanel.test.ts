@@ -1,4 +1,6 @@
-import { test, expect } from 'bun:test'
+import { test, expect, describe, it } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { buildConfirmMessage, hiddenChipStyle, ReadView } from './SharedReposPanel'
 import { COPY } from './copy'
 import type { ShareTarget, ProjectTarget } from '../../lib/shareRepos'
@@ -141,4 +143,24 @@ test('a project-dimension hidden entry gets the same red/outlined treatment as a
   for (const span of spans) {
     expect(span.props.style).toEqual(hiddenChipStyle())
   }
+})
+
+describe('the rules editor is the drawer, not a bespoke inline panel', () => {
+  const src = readFileSync(join(import.meta.dir, 'SharedReposPanel.tsx'), 'utf8')
+
+  it('renders the picker inside the same right-side Drawer the add-central wizard uses', () => {
+    expect(src).toContain("import Drawer from '../../pages/settings/Drawer'")
+    expect(src).toMatch(/<Drawer[\s\S]*<SharingRulesPicker/)
+  })
+
+  it('has no inline edit mode left — Section never renders an editor of its own here', () => {
+    // The duplicate is deleted, not merely bypassed: `editing` may not reach Section, or the panel
+    // would have two editors again the first time someone "restores" the prop.
+    expect(src).toContain('editing={false}')
+    expect(src).toContain('editChildren={null}')
+  })
+
+  it('the drawer guards unsaved rules on close, like every other drawer', () => {
+    expect(src).toMatch(/dirty=\{dirty\}/)
+  })
 })
