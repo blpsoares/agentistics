@@ -401,6 +401,18 @@ jobs:
     name: Publish @agentistics/mcp to npm
     runs-on: ubuntu-latest
     needs: build
+    # Trusted publishing: npm verifies THIS workflow's OIDC identity instead of a
+    # stored credential, so there is no NPM_TOKEN to rotate. `id-token: write` is
+    # what lets the runner mint that token — without it npm falls back to looking
+    # for a credential and the publish fails as unauthenticated.
+    #
+    # The trusted publisher is configured per package on npmjs.com and pins the
+    # repository AND this workflow's FILE NAME. Renaming this file, or moving the
+    # publish into a different workflow, breaks the publish until the npm-side
+    # configuration is updated to match.
+    permissions:
+      contents: read
+      id-token: write
     if: |
       github.ref == 'refs/heads/main' &&
       needs.build.outputs.skip != 'true' &&
@@ -429,14 +441,28 @@ jobs:
             fs.writeFileSync('packages/mcp/package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
 
+      # Trusted publishing needs a recent npm CLI; the runner's bundled one is
+      # older than the release that added OIDC support, and an old CLI fails by
+      # looking for a credential rather than by saying the feature is missing.
+      - name: Setup Node + npm
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          # Deliberately NO registry-url: it writes an .npmrc expecting
+          # NODE_AUTH_TOKEN, and a credential present alongside OIDC is what
+          # makes npm authenticate as the token instead of as this workflow.
+      - name: Upgrade npm to a trusted-publishing build
+        run: npm install -g npm@latest
+
       - name: Publish to npm
         working-directory: packages/mcp
+        # No token, and no ~/.npmrc: npm mints its own short-lived credential
+        # from the runner's OIDC identity. Provenance is attached automatically
+        # on this path, so `--provenance` is not passed by hand.
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          npm --version
           bun run build
           npm publish --access public
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   # Build & push the central (Team Mode aggregator) image to GHCR so `agentop central`
   # can run from any machine WITHOUT cloning the repo — the CLI materializes a compose
